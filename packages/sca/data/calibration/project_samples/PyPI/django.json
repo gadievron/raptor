@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-28T20:30:25Z",
+    "fetched_at": "2026-09-01T11:16:53Z",
     "git_ref": "4.2.7",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of django",
@@ -42,6 +42,7 @@
       "cvss_score": 5.3,
       "dep_name": "black",
       "dep_version": "23.3.0",
+      "direct": true,
       "ecosystem": "PyPI",
       "epss": 0.00979,
       "exploit_evidence": {
@@ -51,8 +52,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:PyPI:black:23.3.0:GHSA-fj7x-q9j7-g6q6",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:pypi/black@23.3.0",
       "raptor_risk_estimate": 19.03485055298531,
       "reachability": {
@@ -82,7 +88,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -110,6 +121,7 @@
       "cvss_score": 9.8,
       "dep_name": "black",
       "dep_version": "23.3.0",
+      "direct": true,
       "ecosystem": "PyPI",
       "epss": 0.0046,
       "exploit_evidence": {
@@ -119,8 +131,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:PyPI:black:23.3.0:PYSEC-2026-2120",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:pypi/black@23.3.0",
       "raptor_risk_estimate": 12.108254005339486,
       "reachability": {
@@ -149,7 +166,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -180,6 +202,7 @@
       "cvss_score": 7.5,
       "dep_name": "black",
       "dep_version": "23.3.0",
+      "direct": true,
       "ecosystem": "PyPI",
       "epss": 0.00621,
       "exploit_evidence": {
@@ -189,8 +212,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:PyPI:black:23.3.0:PYSEC-2026-2121",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:pypi/black@23.3.0",
       "raptor_risk_estimate": 9.285475897484353,
       "reachability": {
@@ -219,7 +247,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -244,13 +277,17 @@
           "https://github.com/pypa/setuptools/commit/250a6d17978f9f6ac3ac887091f2d32886fbbb0b",
           "https://github.com/pypa/advisory-database/tree/main/vulns/setuptools/PYSEC-2025-49.yaml"
         ],
-        "severity": null,
-        "severity_fallback": "high",
+        "severity": {
+          "score": 7.7,
+          "severity": "high",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N/E:P"
+        },
         "summary": "setuptools has a path traversal vulnerability in PackageIndex.download that leads to Arbitrary File Write"
       },
-      "cvss_score": null,
+      "cvss_score": 7.7,
       "dep_name": "setuptools",
       "dep_version": "40.8.0",
+      "direct": true,
       "ecosystem": "PyPI",
       "epss": 0.01503,
       "exploit_evidence": {
@@ -260,8 +297,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:PyPI:setuptools:40.8.0:GHSA-5rjg-fvgr-3xxf",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:pypi/setuptools@40.8.0",
       "raptor_risk_estimate": 28.107298136908806,
       "reachability": {
@@ -278,8 +320,8 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 70.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 77.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.406969809,
         "exploit_evidence_multiplier": 1.0,
@@ -294,7 +336,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -329,6 +376,7 @@
       "cvss_score": 8.8,
       "dep_name": "setuptools",
       "dep_version": "40.8.0",
+      "direct": true,
       "ecosystem": "PyPI",
       "epss": 0.01939,
       "exploit_evidence": {
@@ -338,8 +386,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:PyPI:setuptools:40.8.0:GHSA-cx63-2mw6-8hw5",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:pypi/setuptools@40.8.0",
       "raptor_risk_estimate": 23.397111073159593,
       "reachability": {
@@ -372,7 +425,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -408,6 +466,7 @@
       "cvss_score": 6.1,
       "dep_name": "setuptools",
       "dep_version": "40.8.0",
+      "direct": true,
       "ecosystem": "PyPI",
       "epss": 0.00405,
       "exploit_evidence": {
@@ -417,8 +476,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:PyPI:setuptools:40.8.0:GHSA-h35f-9h28-mq5c",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:pypi/setuptools@40.8.0",
       "raptor_risk_estimate": 20.826687781556092,
       "reachability": {
@@ -451,7 +515,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -477,15 +546,16 @@
           "https://security.netapp.com/advisory/ntap-20240621-0006"
         ],
         "severity": {
-          "score": 7.5,
+          "score": 8.7,
           "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:L/SI:L/SA:N"
         },
         "summary": "pypa/setuptools vulnerable to Regular Expression Denial of Service (ReDoS)"
       },
-      "cvss_score": 7.5,
+      "cvss_score": 8.7,
       "dep_name": "setuptools",
       "dep_version": "40.8.0",
+      "direct": true,
       "ecosystem": "PyPI",
       "epss": 0.02617,
       "exploit_evidence": {
@@ -495,10 +565,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:PyPI:setuptools:40.8.0:GHSA-r9hx-vwmv-q579",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:pypi/setuptools@40.8.0",
-      "raptor_risk_estimate": 13.965777460406247,
+      "raptor_risk_estimate": 16.200301854071245,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -513,13 +588,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
+        "cvss_base": 86.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.412654551,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.965777460406247,
+        "final": 16.200301854071245,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -528,7 +603,621 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "cwe_ids": [
+          "CWE-770"
+        ],
+        "fixed_versions": [
+          "0.5.4"
+        ],
+        "id": "GHSA-27jp-wm6q-gp25",
+        "modified": "2026-02-19T02:59:07.083683+00:00",
+        "published": "2026-02-13T16:16:11+00:00",
+        "references": [
+          "https://github.com/andialbrecht/sqlparse/security/advisories/GHSA-27jp-wm6q-gp25",
+          "https://github.com/andialbrecht/sqlparse/commit/40ed3aa958657fa4a82055927fa9de70ab903360",
+          "https://github.com/andialbrecht/sqlparse",
+          "https://github.com/andialbrecht/sqlparse/releases/tag/0.5.4"
+        ],
+        "severity": {
+          "score": 6.9,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N"
+        },
+        "summary": "sqlparse: formatting list of tuples leads to denial of service"
+      },
+      "cvss_score": 6.9,
+      "dep_name": "sqlparse",
+      "dep_version": "0.3.1",
+      "direct": true,
+      "ecosystem": "PyPI",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:PyPI:sqlparse:0.3.1:GHSA-27jp-wm6q-gp25",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:pypi/sqlparse@0.3.1",
+      "raptor_risk_estimate": 20.377118812499997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "django/db/backends/base/operations.py:6",
+          "django/db/backends/mysql/introspection.py:3",
+          "django/db/backends/sqlite3/introspection.py:3"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 69.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 20.377118812499997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-4340",
+          "PYSEC-2026-1940"
+        ],
+        "cwe_ids": [
+          "CWE-674"
+        ],
+        "fixed_versions": [
+          "0.5.0"
+        ],
+        "id": "GHSA-2m57-hf25-phgg",
+        "modified": "2026-07-08T06:52:51.577227+00:00",
+        "published": "2024-04-15T20:21:25+00:00",
+        "references": [
+          "https://github.com/andialbrecht/sqlparse/security/advisories/GHSA-2m57-hf25-phgg",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-4340",
+          "https://github.com/andialbrecht/sqlparse/commit/b4a39d9850969b4e1d6940d32094ee0b42a2cf03",
+          "https://github.com/andialbrecht/sqlparse",
+          "https://research.jfrog.com/vulnerabilities/sqlparse-stack-exhaustion-dos-jfsa-2024-001031292"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "sqlparse parsing heavily nested list leads to Denial of Service"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "sqlparse",
+      "dep_version": "0.3.1",
+      "direct": true,
+      "ecosystem": "PyPI",
+      "epss": 0.03237,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:PyPI:sqlparse:0.3.1:GHSA-2m57-hf25-phgg",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:pypi/sqlparse@0.3.1",
+      "raptor_risk_estimate": 28.718425274619523,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "django/db/backends/base/operations.py:6",
+          "django/db/backends/mysql/introspection.py:3",
+          "django/db/backends/sqlite3/introspection.py:3"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.415818411,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 28.718425274619523,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-59894",
+          "PYSEC-2026-3696"
+        ],
+        "cwe_ids": [
+          "CWE-94"
+        ],
+        "fixed_versions": [
+          "0.6.0"
+        ],
+        "id": "GHSA-3496-9g83-7v6x",
+        "modified": "2026-08-19T12:55:45.434556+00:00",
+        "published": "2026-08-17T17:20:11+00:00",
+        "references": [
+          "https://github.com/andialbrecht/sqlparse/security/advisories/GHSA-3496-9g83-7v6x",
+          "https://github.com/andialbrecht/sqlparse/commit/53ff44b53e27cff78259acc1af015506fea60f63",
+          "https://github.com/andialbrecht/sqlparse"
+        ],
+        "severity": {
+          "score": 6.2,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:P/VC:N/VI:N/VA:N/SC:H/SI:H/SA:L"
+        },
+        "summary": "sqlparse: Generated Python and PHP snippets allow SQL string breakout through unescaped backslashes"
+      },
+      "cvss_score": 6.2,
+      "dep_name": "sqlparse",
+      "dep_version": "0.3.1",
+      "direct": true,
+      "ecosystem": "PyPI",
+      "epss": 0.00129,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:PyPI:sqlparse:0.3.1:GHSA-3496-9g83-7v6x",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:pypi/sqlparse@0.3.1",
+      "raptor_risk_estimate": 11.189832974542497,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "django/db/backends/base/operations.py:6",
+          "django/db/backends/mysql/introspection.py:3",
+          "django/db/backends/sqlite3/introspection.py:3"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 62.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.39995828699999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.189832974542497,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-71491",
+          "PYSEC-2026-3697"
+        ],
+        "cwe_ids": [
+          "CWE-400",
+          "CWE-407"
+        ],
+        "fixed_versions": [
+          "0.6.0"
+        ],
+        "id": "GHSA-f2ff-p2ww-7p4p",
+        "modified": "2026-08-19T12:55:28.873898+00:00",
+        "published": "2026-08-17T17:21:00+00:00",
+        "references": [
+          "https://github.com/andialbrecht/sqlparse/security/advisories/GHSA-f2ff-p2ww-7p4p",
+          "https://github.com/andialbrecht/sqlparse/commit/ef2012a5eeb491e604dea2b00d516904a3830c87",
+          "https://github.com/andialbrecht/sqlparse"
+        ],
+        "severity": {
+          "score": 8.7,
+          "severity": "high",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
+        },
+        "summary": "sqlparse: Quadratic O(n²) DoS in group_comments"
+      },
+      "cvss_score": 8.7,
+      "dep_name": "sqlparse",
+      "dep_version": "0.3.1",
+      "direct": true,
+      "ecosystem": "PyPI",
+      "epss": 0.00263,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:PyPI:sqlparse:0.3.1:GHSA-f2ff-p2ww-7p4p",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:pypi/sqlparse@0.3.1",
+      "raptor_risk_estimate": 15.728707611528746,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "django/db/backends/base/operations.py:6",
+          "django/db/backends/mysql/introspection.py:3",
+          "django/db/backends/sqlite3/introspection.py:3"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 86.99999999999999,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400642089,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 15.728707611528746,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-59893",
+          "PYSEC-2026-3698"
+        ],
+        "cwe_ids": [
+          "CWE-1333"
+        ],
+        "fixed_versions": [
+          "0.6.0"
+        ],
+        "id": "GHSA-prg7-hcfm-mfcr",
+        "modified": "2026-08-19T12:55:36.174756+00:00",
+        "published": "2026-08-17T17:49:55+00:00",
+        "references": [
+          "https://github.com/andialbrecht/sqlparse/security/advisories/GHSA-prg7-hcfm-mfcr",
+          "https://github.com/andialbrecht/sqlparse/commit/d1d80602741f77ec78e5a04ce4719244cf32352e",
+          "https://github.com/andialbrecht/sqlparse"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "sqlparse: Inefficient Regex Handling of Dollar-Quoted SQL Literals Leads to ReDoS (Denial of Service)"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "sqlparse",
+      "dep_version": "0.3.1",
+      "direct": true,
+      "ecosystem": "PyPI",
+      "epss": 0.00279,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:PyPI:sqlparse:0.3.1:GHSA-prg7-hcfm-mfcr",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:pypi/sqlparse@0.3.1",
+      "raptor_risk_estimate": 27.675914274995353,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "django/db/backends/base/operations.py:6",
+          "django/db/backends/mysql/introspection.py:3",
+          "django/db/backends/sqlite3/introspection.py:3"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.40072373699999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 27.675914274995353,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-54284",
+          "PYSEC-2026-3699"
+        ],
+        "cwe_ids": [
+          "CWE-1333",
+          "CWE-407"
+        ],
+        "fixed_versions": [
+          "0.6.0"
+        ],
+        "id": "GHSA-pwgv-4x5q-6m9f",
+        "modified": "2026-08-19T12:55:43.519384+00:00",
+        "published": "2026-08-17T17:49:47+00:00",
+        "references": [
+          "https://github.com/andialbrecht/sqlparse/security/advisories/GHSA-pwgv-4x5q-6m9f",
+          "https://github.com/andialbrecht/sqlparse/commit/939b129e24c0ad5d51368b1aa72fffcaca76f06f",
+          "https://github.com/andialbrecht/sqlparse"
+        ],
+        "severity": {
+          "score": 8.7,
+          "severity": "high",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
+        },
+        "summary": "sqlparse: TokenList.__init__ materializes O(subtree) value per group, causing CPU DoS before depth/token caps trigger"
+      },
+      "cvss_score": 8.7,
+      "dep_name": "sqlparse",
+      "dep_version": "0.3.1",
+      "direct": true,
+      "ecosystem": "PyPI",
+      "epss": 0.00263,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:PyPI:sqlparse:0.3.1:GHSA-pwgv-4x5q-6m9f",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:pypi/sqlparse@0.3.1",
+      "raptor_risk_estimate": 30.14417666557736,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "django/db/backends/base/operations.py:6",
+          "django/db/backends/mysql/introspection.py:3",
+          "django/db/backends/sqlite3/introspection.py:3"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 86.99999999999999,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400642089,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 30.14417666557736,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2023-30608",
+          "PYSEC-2023-87"
+        ],
+        "cwe_ids": [
+          "CWE-1333"
+        ],
+        "fixed_versions": [
+          "0.4.4"
+        ],
+        "id": "GHSA-rrm6-wvj7-cwh2",
+        "modified": "2025-11-04T17:36:56.468880+00:00",
+        "published": "2023-04-21T20:24:21+00:00",
+        "references": [
+          "https://github.com/andialbrecht/sqlparse/security/advisories/GHSA-rrm6-wvj7-cwh2",
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-30608",
+          "https://github.com/andialbrecht/sqlparse/commit/c457abd5f097dd13fb21543381e7cfafe7d31cfb",
+          "https://github.com/andialbrecht/sqlparse/commit/e75e35869473832a1eb67772b1adfee2db11b85a",
+          "https://github.com/andialbrecht/sqlparse"
+        ],
+        "severity": {
+          "score": 6.9,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
+        },
+        "summary": "sqlparse contains a regular expression that is vulnerable to Regular Expression Denial of Service"
+      },
+      "cvss_score": 6.9,
+      "dep_name": "sqlparse",
+      "dep_version": "0.3.1",
+      "direct": true,
+      "ecosystem": "PyPI",
+      "epss": 0.0098,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:PyPI:sqlparse:0.3.1:GHSA-rrm6-wvj7-cwh2",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:pypi/sqlparse@0.3.1",
+      "raptor_risk_estimate": 12.588415143074998,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "django/db/backends/base/operations.py:6",
+          "django/db/backends/mysql/introspection.py:3",
+          "django/db/backends/sqlite3/introspection.py:3"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 69.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.40430094,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 12.588415143074998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     }
   ]
 }

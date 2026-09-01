@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-28T20:34:36Z",
+    "fetched_at": "2026-09-01T11:28:03Z",
     "git_ref": "3.1.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of identityserver4-3.1",
@@ -41,6 +41,7 @@
       "cvss_score": 7.5,
       "dep_name": "AutoMapper",
       "dep_version": "9.0.0",
+      "direct": true,
       "ecosystem": "NuGet",
       "epss": 0.00542,
       "exploit_evidence": {
@@ -50,8 +51,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:NuGet:AutoMapper:9.0.0:GHSA-rvv3-g6hj-g44x",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:nuget/AutoMapper@9.0.0",
       "raptor_risk_estimate": 20.86296424888012,
       "reachability": {
@@ -61,11 +67,11 @@
           "reason": "namespace prefix matches package id"
         },
         "evidence": [
-          "src/EntityFramework.Storage/src/Mappers/IdentityResourceMapperProfile.cs:6",
-          "src/EntityFramework.Storage/src/Mappers/ClientMappers.cs:3",
-          "src/EntityFramework.Storage/src/Mappers/IdentityResourceMappers.cs:3",
           "src/EntityFramework.Storage/src/Mappers/ApiResourceMapperProfile.cs:6",
+          "src/EntityFramework.Storage/src/Mappers/ApiResourceMappers.cs:3",
           "src/EntityFramework.Storage/src/Mappers/ClientMapperProfile.cs:7",
+          "src/EntityFramework.Storage/src/Mappers/ClientMappers.cs:3",
+          "src/EntityFramework.Storage/src/Mappers/IdentityResourceMapperProfile.cs:6",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -88,7 +94,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -107,15 +118,16 @@
           "https://github.com/IdentityServer/IdentityServer4"
         ],
         "severity": {
-          "score": 4.7,
+          "score": 5.1,
           "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:N/A:N"
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:L/VI:N/VA:N/SC:L/SI:N/SA:N"
         },
         "summary": "IdentityServer Open Redirect vulnerability"
       },
-      "cvss_score": 4.7,
+      "cvss_score": 5.1,
       "dep_name": "IdentityServer4",
-      "dep_version": "3.0.1",
+      "dep_version": "2.3.0",
+      "direct": true,
       "ecosystem": "NuGet",
       "epss": null,
       "exploit_evidence": {
@@ -125,10 +137,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
-      "finding_id": "sca:vuln:NuGet:IdentityServer4:3.0.1:GHSA-55p7-v223-x366",
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:NuGet:IdentityServer4:2.3.0:GHSA-55p7-v223-x366",
       "in_kev": false,
-      "purl": "pkg:nuget/IdentityServer4@3.0.1",
-      "raptor_risk_estimate": 13.880066437499998,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:nuget/IdentityServer4@2.3.0",
+      "raptor_risk_estimate": 15.061348687499999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -136,24 +153,24 @@
           "reason": "namespace prefix matches package id"
         },
         "evidence": [
-          "src/IdentityServer4/src/IdentityServerTools.cs:3",
-          "src/IdentityServer4/src/Constants.cs:6",
-          "src/IdentityServer4/src/Validation/ITokenRevocationRequestValidator.cs:7",
-          "src/IdentityServer4/src/Validation/ISecretValidator.cs:3",
-          "src/IdentityServer4/src/Validation/ITokenValidator.cs:6",
+          "samples/KeyManagement/FileSystem/Config.cs:3",
+          "samples/KeyManagement/database/EF/Config.cs:3",
+          "samples/Quickstarts/1_ClientCredentials/src/IdentityServer/Config.cs:3",
+          "samples/Quickstarts/2_InteractiveAspNetCore/src/IdentityServer/Config.cs:6",
+          "samples/Quickstarts/2_InteractiveAspNetCore/src/IdentityServer/Quickstart/Account/AccountController.cs:8",
           "... (+947 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 47.0,
+        "cvss_base": 51.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.880066437499998,
+        "final": 15.061348687499999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -162,7 +179,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -190,15 +212,16 @@
           "https://github.com/DuendeSoftware/IdentityServer/commit/765116a2d4fb0671b6eba015e698533900c61c8e"
         ],
         "severity": {
-          "score": 4.7,
+          "score": 5.1,
           "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:N/A:N"
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:L/VI:N/VA:N/SC:L/SI:N/SA:N"
         },
         "summary": "IdentityServer Open Redirect vulnerability"
       },
-      "cvss_score": 4.7,
+      "cvss_score": 5.1,
       "dep_name": "IdentityServer4",
-      "dep_version": "3.0.1",
+      "dep_version": "2.3.0",
+      "direct": true,
       "ecosystem": "NuGet",
       "epss": 0.00534,
       "exploit_evidence": {
@@ -208,10 +231,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
-      "finding_id": "sca:vuln:NuGet:IdentityServer4:3.0.1:GHSA-ff4q-64jc-gx98",
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:NuGet:IdentityServer4:2.3.0:GHSA-ff4q-64jc-gx98",
       "in_kev": false,
-      "purl": "pkg:nuget/IdentityServer4@3.0.1",
-      "raptor_risk_estimate": 8.526447761167498,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:nuget/IdentityServer4@2.3.0",
+      "raptor_risk_estimate": 9.2521028897775,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -219,24 +247,24 @@
           "reason": "namespace prefix matches package id"
         },
         "evidence": [
-          "src/IdentityServer4/src/IdentityServerTools.cs:3",
-          "src/IdentityServer4/src/Constants.cs:6",
-          "src/IdentityServer4/src/Validation/ITokenRevocationRequestValidator.cs:7",
-          "src/IdentityServer4/src/Validation/ISecretValidator.cs:3",
-          "src/IdentityServer4/src/Validation/ITokenValidator.cs:6",
+          "samples/KeyManagement/FileSystem/Config.cs:3",
+          "samples/KeyManagement/database/EF/Config.cs:3",
+          "samples/Quickstarts/1_ClientCredentials/src/IdentityServer/Config.cs:3",
+          "samples/Quickstarts/2_InteractiveAspNetCore/src/IdentityServer/Config.cs:6",
+          "samples/Quickstarts/2_InteractiveAspNetCore/src/IdentityServer/Quickstart/Account/AccountController.cs:8",
           "... (+947 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 47.0,
+        "cvss_base": 51.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.40202500199999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.526447761167498,
+        "final": 9.2521028897775,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -245,7 +273,370 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "cwe_ids": [
+          "CWE-601"
+        ],
+        "fixed_versions": [],
+        "id": "GHSA-55p7-v223-x366",
+        "modified": "2024-11-30T05:42:13.333343+00:00",
+        "published": "2024-07-31T19:57:33+00:00",
+        "references": [
+          "https://github.com/DuendeSoftware/IdentityServer/security/advisories/GHSA-ff4q-64jc-gx98",
+          "https://github.com/IdentityServer/IdentityServer4/security/advisories/GHSA-55p7-v223-x366",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-39694",
+          "https://github.com/IdentityServer/IdentityServer4"
+        ],
+        "severity": {
+          "score": 5.1,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:L/VI:N/VA:N/SC:L/SI:N/SA:N"
+        },
+        "summary": "IdentityServer Open Redirect vulnerability"
+      },
+      "cvss_score": 5.1,
+      "dep_name": "IdentityServer4",
+      "dep_version": "2.3.2",
+      "direct": true,
+      "ecosystem": "NuGet",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:NuGet:IdentityServer4:2.3.2:GHSA-55p7-v223-x366",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:nuget/IdentityServer4@2.3.2",
+      "raptor_risk_estimate": 15.061348687499999,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "namespace prefix matches package id"
+        },
+        "evidence": [
+          "samples/KeyManagement/FileSystem/Config.cs:3",
+          "samples/KeyManagement/database/EF/Config.cs:3",
+          "samples/Quickstarts/1_ClientCredentials/src/IdentityServer/Config.cs:3",
+          "samples/Quickstarts/2_InteractiveAspNetCore/src/IdentityServer/Config.cs:6",
+          "samples/Quickstarts/2_InteractiveAspNetCore/src/IdentityServer/Quickstart/Account/AccountController.cs:8",
+          "... (+947 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 51.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 15.061348687499999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-39694"
+        ],
+        "cwe_ids": [
+          "CWE-601"
+        ],
+        "fixed_versions": [
+          "7.0.6",
+          "6.3.10",
+          "6.2.5",
+          "6.1.8",
+          "6.0.5"
+        ],
+        "id": "GHSA-ff4q-64jc-gx98",
+        "modified": "2024-07-31T20:13:36.853973+00:00",
+        "published": "2024-07-31T15:28:54+00:00",
+        "references": [
+          "https://github.com/DuendeSoftware/IdentityServer/security/advisories/GHSA-ff4q-64jc-gx98",
+          "https://github.com/IdentityServer/IdentityServer4/security/advisories/GHSA-55p7-v223-x366",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-39694",
+          "https://github.com/DuendeSoftware/IdentityServer/commit/269ca2171fe1e901c87f2f0797bbc7c230db87c6",
+          "https://github.com/DuendeSoftware/IdentityServer/commit/765116a2d4fb0671b6eba015e698533900c61c8e"
+        ],
+        "severity": {
+          "score": 5.1,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:L/VI:N/VA:N/SC:L/SI:N/SA:N"
+        },
+        "summary": "IdentityServer Open Redirect vulnerability"
+      },
+      "cvss_score": 5.1,
+      "dep_name": "IdentityServer4",
+      "dep_version": "2.3.2",
+      "direct": true,
+      "ecosystem": "NuGet",
+      "epss": 0.00534,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:NuGet:IdentityServer4:2.3.2:GHSA-ff4q-64jc-gx98",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:nuget/IdentityServer4@2.3.2",
+      "raptor_risk_estimate": 9.2521028897775,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "namespace prefix matches package id"
+        },
+        "evidence": [
+          "samples/KeyManagement/FileSystem/Config.cs:3",
+          "samples/KeyManagement/database/EF/Config.cs:3",
+          "samples/Quickstarts/1_ClientCredentials/src/IdentityServer/Config.cs:3",
+          "samples/Quickstarts/2_InteractiveAspNetCore/src/IdentityServer/Config.cs:6",
+          "samples/Quickstarts/2_InteractiveAspNetCore/src/IdentityServer/Quickstart/Account/AccountController.cs:8",
+          "... (+947 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 51.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.40202500199999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.2521028897775,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "cwe_ids": [
+          "CWE-601"
+        ],
+        "fixed_versions": [],
+        "id": "GHSA-55p7-v223-x366",
+        "modified": "2024-11-30T05:42:13.333343+00:00",
+        "published": "2024-07-31T19:57:33+00:00",
+        "references": [
+          "https://github.com/DuendeSoftware/IdentityServer/security/advisories/GHSA-ff4q-64jc-gx98",
+          "https://github.com/IdentityServer/IdentityServer4/security/advisories/GHSA-55p7-v223-x366",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-39694",
+          "https://github.com/IdentityServer/IdentityServer4"
+        ],
+        "severity": {
+          "score": 5.1,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:L/VI:N/VA:N/SC:L/SI:N/SA:N"
+        },
+        "summary": "IdentityServer Open Redirect vulnerability"
+      },
+      "cvss_score": 5.1,
+      "dep_name": "IdentityServer4",
+      "dep_version": "3.0.1",
+      "direct": true,
+      "ecosystem": "NuGet",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:NuGet:IdentityServer4:3.0.1:GHSA-55p7-v223-x366",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:nuget/IdentityServer4@3.0.1",
+      "raptor_risk_estimate": 15.061348687499999,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "namespace prefix matches package id"
+        },
+        "evidence": [
+          "samples/KeyManagement/FileSystem/Config.cs:3",
+          "samples/KeyManagement/database/EF/Config.cs:3",
+          "samples/Quickstarts/1_ClientCredentials/src/IdentityServer/Config.cs:3",
+          "samples/Quickstarts/2_InteractiveAspNetCore/src/IdentityServer/Config.cs:6",
+          "samples/Quickstarts/2_InteractiveAspNetCore/src/IdentityServer/Quickstart/Account/AccountController.cs:8",
+          "... (+947 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 51.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 15.061348687499999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-39694"
+        ],
+        "cwe_ids": [
+          "CWE-601"
+        ],
+        "fixed_versions": [
+          "7.0.6",
+          "6.3.10",
+          "6.2.5",
+          "6.1.8",
+          "6.0.5"
+        ],
+        "id": "GHSA-ff4q-64jc-gx98",
+        "modified": "2024-07-31T20:13:36.853973+00:00",
+        "published": "2024-07-31T15:28:54+00:00",
+        "references": [
+          "https://github.com/DuendeSoftware/IdentityServer/security/advisories/GHSA-ff4q-64jc-gx98",
+          "https://github.com/IdentityServer/IdentityServer4/security/advisories/GHSA-55p7-v223-x366",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-39694",
+          "https://github.com/DuendeSoftware/IdentityServer/commit/269ca2171fe1e901c87f2f0797bbc7c230db87c6",
+          "https://github.com/DuendeSoftware/IdentityServer/commit/765116a2d4fb0671b6eba015e698533900c61c8e"
+        ],
+        "severity": {
+          "score": 5.1,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:L/VI:N/VA:N/SC:L/SI:N/SA:N"
+        },
+        "summary": "IdentityServer Open Redirect vulnerability"
+      },
+      "cvss_score": 5.1,
+      "dep_name": "IdentityServer4",
+      "dep_version": "3.0.1",
+      "direct": true,
+      "ecosystem": "NuGet",
+      "epss": 0.00534,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:NuGet:IdentityServer4:3.0.1:GHSA-ff4q-64jc-gx98",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:nuget/IdentityServer4@3.0.1",
+      "raptor_risk_estimate": 9.2521028897775,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "namespace prefix matches package id"
+        },
+        "evidence": [
+          "samples/KeyManagement/FileSystem/Config.cs:3",
+          "samples/KeyManagement/database/EF/Config.cs:3",
+          "samples/Quickstarts/1_ClientCredentials/src/IdentityServer/Config.cs:3",
+          "samples/Quickstarts/2_InteractiveAspNetCore/src/IdentityServer/Config.cs:6",
+          "samples/Quickstarts/2_InteractiveAspNetCore/src/IdentityServer/Quickstart/Account/AccountController.cs:8",
+          "... (+947 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 51.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.40202500199999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.2521028897775,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -278,6 +669,7 @@
       "cvss_score": 5.5,
       "dep_name": "Microsoft.AspNetCore.Authentication.JwtBearer",
       "dep_version": "3.0.0",
+      "direct": true,
       "ecosystem": "NuGet",
       "epss": 0.01209,
       "exploit_evidence": {
@@ -287,8 +679,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:NuGet:Microsoft.AspNetCore.Authentication.JwtBearer:3.0.0:GHSA-q7cg-43mg-qp69",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:nuget/Microsoft.AspNetCore.Authentication.JwtBearer@3.0.0",
       "raptor_risk_estimate": 6.82781233709417,
       "reachability": {
@@ -317,7 +714,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -350,6 +752,7 @@
       "cvss_score": 7.5,
       "dep_name": "Newtonsoft.Json",
       "dep_version": "12.0.2",
+      "direct": true,
       "ecosystem": "NuGet",
       "epss": 0.32908,
       "exploit_evidence": {
@@ -359,8 +762,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:NuGet:Newtonsoft.Json:12.0.2:GHSA-5crp-9r3c-p9vr",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:nuget/Newtonsoft.Json@12.0.2",
       "raptor_risk_estimate": 39.17560711026815,
       "reachability": {
@@ -370,11 +778,11 @@
           "reason": "namespace prefix matches package id"
         },
         "evidence": [
-          "src/IdentityServer4/src/Validation/Default/X509ThumbprintSecretValidator.cs:8",
-          "src/IdentityServer4/src/Validation/Default/JwtRequestValidator.cs:17",
-          "src/IdentityServer4/src/Validation/Default/X509NameSecretValidator.cs:8",
-          "src/IdentityServer4/src/Configuration/CryptoHelper.cs:3",
-          "src/IdentityServer4/src/Configuration/DependencyInjection/BuilderExtensions/Crypto.cs:10",
+          "samples/Clients/src/ConsoleClientCredentialsFlow/Program.cs:3",
+          "samples/Clients/src/ConsoleClientCredentialsFlowCallingIdentityServerApi/Program.cs:3",
+          "samples/Clients/src/ConsoleClientCredentialsFlowPostBody/Program.cs:3",
+          "samples/Clients/src/ConsoleCustomGrant/Program.cs:3",
+          "samples/Clients/src/ConsoleDeviceFlow/Program.cs:4",
           "... (+63 more)"
         ],
         "verdict": "imported"
@@ -397,7 +805,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -433,6 +846,7 @@
       "cvss_score": 6.8,
       "dep_name": "System.IdentityModel.Tokens.Jwt",
       "dep_version": "5.6.0",
+      "direct": true,
       "ecosystem": "NuGet",
       "epss": 0.02892,
       "exploit_evidence": {
@@ -442,8 +856,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:NuGet:System.IdentityModel.Tokens.Jwt:5.6.0:GHSA-59j7-ghrg-fj52",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:nuget/System.IdentityModel.Tokens.Jwt@5.6.0",
       "raptor_risk_estimate": 12.705365925059999,
       "reachability": {
@@ -453,11 +872,11 @@
           "reason": "namespace prefix matches package id"
         },
         "evidence": [
-          "src/IdentityServer4/src/Validation/Default/JwtRequestValidator.cs:7",
-          "src/IdentityServer4/src/Validation/Default/JwtBearerClientAssertionSecretParser.cs:8",
-          "src/IdentityServer4/src/Validation/Default/PrivateKeyJwtSecretValidator.cs:7",
-          "src/IdentityServer4/src/Validation/Default/TokenValidator.cs:15",
-          "src/IdentityServer4/src/Extensions/TokenExtensions.cs:12",
+          "samples/Clients/src/ConsolePrivateKeyJwtClient/Program.cs:7",
+          "samples/Clients/src/MvcAutomaticTokenManagement/Startup.cs:7",
+          "samples/Clients/src/MvcCode/Startup.cs:8",
+          "samples/Clients/src/MvcHybrid/Startup.cs:4",
+          "samples/Clients/src/MvcHybridAutomaticRefresh/Startup.cs:4",
           "... (+19 more)"
         ],
         "verdict": "imported"
@@ -479,7 +898,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -506,15 +930,16 @@
           "https://github.com/juliangruber/brace-expansion/commit/835d6be91201122d9adffb0c0c8c094189ace265"
         ],
         "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          "score": 7.7,
+          "severity": "high",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N/E:P/S:N/AU:Y/R:U/V:D/RE:M/U:Amber"
         },
         "summary": "brace-expansion: DoS via exponential-time expansion of consecutive non-expanding {} groups"
       },
-      "cvss_score": 5.3,
+      "cvss_score": 7.7,
       "dep_name": "brace-expansion",
       "dep_version": "1.1.11",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.00364,
       "exploit_evidence": {
@@ -524,10 +949,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:brace-expansion:1.1.11:GHSA-3jxr-9vmj-r5cp",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/brace-expansion@1.1.11",
-      "raptor_risk_estimate": 6.509557134139851,
+      "raptor_risk_estimate": 9.457281119410728,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -539,22 +969,27 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 53.0,
+        "cvss_base": 77.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.401157492,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.509557134139851,
+        "final": 9.457281119410728,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -590,6 +1025,7 @@
       "cvss_score": 6.5,
       "dep_name": "brace-expansion",
       "dep_version": "1.1.11",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.0043,
       "exploit_evidence": {
@@ -599,8 +1035,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:brace-expansion:1.1.11:GHSA-f886-m6hf-6m8v",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/brace-expansion@1.1.11",
       "raptor_risk_estimate": 7.990121730238218,
       "reachability": {
@@ -629,7 +1070,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -666,6 +1112,7 @@
       "cvss_score": 7.5,
       "dep_name": "brace-expansion",
       "dep_version": "1.1.11",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.00466,
       "exploit_evidence": {
@@ -675,8 +1122,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:brace-expansion:1.1.11:GHSA-mh99-v99m-4gvg",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/brace-expansion@1.1.11",
       "raptor_risk_estimate": 9.223589648957832,
       "reachability": {
@@ -705,7 +1157,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -742,6 +1199,7 @@
       "cvss_score": 7.5,
       "dep_name": "brace-expansion",
       "dep_version": "1.1.11",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.00623,
       "exploit_evidence": {
@@ -751,8 +1209,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:brace-expansion:1.1.11:GHSA-rgw5-rvv9-x895",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/brace-expansion@1.1.11",
       "raptor_risk_estimate": 18.860090255318696,
       "reachability": {
@@ -782,7 +1245,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -818,8 +1286,9 @@
       "cvss_score": 3.1,
       "dep_name": "brace-expansion",
       "dep_version": "1.1.11",
+      "direct": true,
       "ecosystem": "npm",
-      "epss": 0.00501,
+      "epss": 0.00532,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -827,10 +1296,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:brace-expansion:1.1.11:GHSA-v6h2-p8h4-qcjw",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/brace-expansion@1.1.11",
-      "raptor_risk_estimate": 14.147946612982516,
+      "raptor_risk_estimate": 14.153516027798245,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -845,10 +1319,10 @@
         "cvss_base": 31.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401856603,
+        "epss_multiplier": 0.402014796,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.147946612982516,
+        "final": 14.153516027798245,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -858,7 +1332,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -892,6 +1371,7 @@
       "cvss_score": 7.5,
       "dep_name": "braces",
       "dep_version": "2.3.2",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.01471,
       "exploit_evidence": {
@@ -901,8 +1381,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:braces:2.3.2:GHSA-grv7-fg5c-xmjg",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/braces@2.3.2",
       "raptor_risk_estimate": 9.341353923087992,
       "reachability": {
@@ -931,7 +1416,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -955,6 +1445,7 @@
       "cvss_score": null,
       "dep_name": "clean-css",
       "dep_version": "3.4.28",
+      "direct": true,
       "ecosystem": "npm",
       "epss": null,
       "exploit_evidence": {
@@ -964,8 +1455,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:clean-css:3.4.28:GHSA-wxhq-pm8v-cw75",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/clean-css@3.4.28",
       "raptor_risk_estimate": 8.014881938024999,
       "reachability": {
@@ -994,7 +1490,98 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-45822"
+        ],
+        "cwe_ids": [
+          "CWE-1176",
+          "CWE-400",
+          "CWE-405",
+          "CWE-407"
+        ],
+        "fixed_versions": [
+          "0.5.0"
+        ],
+        "id": "GHSA-vcc3-ghjq-m6fr",
+        "modified": "2026-08-31T22:15:30.642633+00:00",
+        "published": "2026-08-31T22:10:20+00:00",
+        "references": [
+          "https://github.com/SamVerschueren/decode-uri-component/security/advisories/GHSA-vcc3-ghjq-m6fr",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-45822",
+          "https://github.com/SamVerschueren/decode-uri-component/commit/fa479dafeede7bedf04e5c89aa78f2a78c664005",
+          "https://github.com/SamVerschueren/decode-uri-component",
+          "https://github.com/SamVerschueren/decode-uri-component/blob/00662938dc7c6241547ae8abce7785cc13ffd3f6/index.js"
+        ],
+        "severity": {
+          "score": 6.6,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N/E:U/S:N/AU:Y/R:U/V:D/RE:M/U:Amber"
+        },
+        "summary": "decode-uri-component: Denial of service via exponential decoding of malformed percent-encoded input"
+      },
+      "cvss_score": 6.6,
+      "dep_name": "decode-uri-component",
+      "dep_version": "0.2.0",
+      "direct": true,
+      "ecosystem": "npm",
+      "epss": 0.00507,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:decode-uri-component:0.2.0:GHSA-vcc3-ghjq-m6fr",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/decode-uri-component@0.2.0",
+      "raptor_risk_estimate": 8.120986687113353,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'decode-uri-component' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 65.99999999999999,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.40188722099999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.120986687113353,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1027,6 +1614,7 @@
       "cvss_score": 7.5,
       "dep_name": "decode-uri-component",
       "dep_version": "0.2.0",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.24928,
       "exploit_evidence": {
@@ -1036,8 +1624,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:decode-uri-component:0.2.0:GHSA-w573-4hg7-7wgq",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/decode-uri-component@0.2.0",
       "raptor_risk_estimate": 18.53646582923612,
       "reachability": {
@@ -1067,7 +1660,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1101,6 +1699,7 @@
       "cvss_score": 5.3,
       "dep_name": "hosted-git-info",
       "dep_version": "2.7.1",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.03612,
       "exploit_evidence": {
@@ -1110,8 +1709,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:hosted-git-info:2.7.1:GHSA-43f8-2h32-f4cj",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/hosted-git-info@2.7.1",
       "raptor_risk_estimate": 6.778511206522762,
       "reachability": {
@@ -1140,7 +1744,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1173,6 +1782,7 @@
       "cvss_score": 7.3,
       "dep_name": "ini",
       "dep_version": "1.3.5",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.03612,
       "exploit_evidence": {
@@ -1182,8 +1792,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:ini:1.3.5:GHSA-qqgx-2p2h-9c37",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/ini@1.3.5",
       "raptor_risk_estimate": 9.336439963701162,
       "reachability": {
@@ -1212,7 +1827,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1245,6 +1865,7 @@
       "cvss_score": 7.5,
       "dep_name": "kind-of",
       "dep_version": "6.0.2",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.02342,
       "exploit_evidence": {
@@ -1254,8 +1875,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:kind-of:6.0.2:GHSA-6c8f-qphg-qjgp",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/kind-of@6.0.2",
       "raptor_risk_estimate": 9.443416294000794,
       "reachability": {
@@ -1284,7 +1910,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1320,6 +1951,7 @@
       "cvss_score": 7.2,
       "dep_name": "lodash.template",
       "dep_version": "2.4.1",
+      "direct": false,
       "ecosystem": "npm",
       "epss": 0.21333,
       "exploit_evidence": {
@@ -1329,8 +1961,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:lodash.template:2.4.1:GHSA-35jh-r3h4-6jhm",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/lodash.template@2.4.1",
       "raptor_risk_estimate": 7.841400638885863,
       "reachability": {
@@ -1359,7 +1996,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1395,6 +2037,7 @@
       "cvss_score": 7.2,
       "dep_name": "lodash.template",
       "dep_version": "3.6.2",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.21333,
       "exploit_evidence": {
@@ -1404,8 +2047,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:lodash.template:3.6.2:GHSA-35jh-r3h4-6jhm",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/lodash.template@3.6.2",
       "raptor_risk_estimate": 11.202000912694091,
       "reachability": {
@@ -1434,7 +2082,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1470,6 +2123,7 @@
       "cvss_score": 7.2,
       "dep_name": "lodash",
       "dep_version": "1.0.2",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.21333,
       "exploit_evidence": {
@@ -1479,8 +2133,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:lodash:1.0.2:GHSA-35jh-r3h4-6jhm",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/lodash@1.0.2",
       "raptor_risk_estimate": 11.202000912694091,
       "reachability": {
@@ -1509,7 +2168,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1538,6 +2202,7 @@
       "cvss_score": null,
       "dep_name": "lodash",
       "dep_version": "1.0.2",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.01553,
       "exploit_evidence": {
@@ -1547,8 +2212,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:lodash:1.0.2:GHSA-4xc9-xhrj-v574",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/lodash@1.0.2",
       "raptor_risk_estimate": 4.987180026895976,
       "reachability": {
@@ -1577,7 +2247,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1611,6 +2286,7 @@
       "cvss_score": 6.5,
       "dep_name": "lodash",
       "dep_version": "1.0.2",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.01591,
       "exploit_evidence": {
@@ -1620,8 +2296,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:lodash:1.0.2:GHSA-f23m-r3pf-42rh",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/lodash@1.0.2",
       "raptor_risk_estimate": 8.108026618427042,
       "reachability": {
@@ -1650,7 +2331,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1684,6 +2370,7 @@
       "cvss_score": 6.5,
       "dep_name": "lodash",
       "dep_version": "1.0.2",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.02384,
       "exploit_evidence": {
@@ -1693,8 +2380,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:lodash:1.0.2:GHSA-fvqr-27wr-82fm",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/lodash@1.0.2",
       "raptor_risk_estimate": 8.188559414580128,
       "reachability": {
@@ -1723,7 +2415,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1760,6 +2457,7 @@
       "cvss_score": 9.1,
       "dep_name": "lodash",
       "dep_version": "1.0.2",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.05006,
       "exploit_evidence": {
@@ -1769,8 +2467,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:lodash:1.0.2:GHSA-jf85-cpcp-j695",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/lodash@1.0.2",
       "raptor_risk_estimate": 11.836769798468614,
       "reachability": {
@@ -1799,7 +2502,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1832,6 +2540,7 @@
       "cvss_score": 5.3,
       "dep_name": "micromatch",
       "dep_version": "3.1.10",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.01429,
       "exploit_evidence": {
@@ -1841,8 +2550,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:micromatch:3.1.10:GHSA-952p-6rrq-rcjv",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/micromatch@3.1.10",
       "raptor_risk_estimate": 6.597745584597918,
       "reachability": {
@@ -1871,7 +2585,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1910,6 +2629,7 @@
       "cvss_score": 7.5,
       "dep_name": "minimatch",
       "dep_version": "0.2.14",
+      "direct": false,
       "ecosystem": "npm",
       "epss": 0.00472,
       "exploit_evidence": {
@@ -1919,8 +2639,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:minimatch:0.2.14:GHSA-23c5-xmqv-rm74",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/minimatch@0.2.14",
       "raptor_risk_estimate": 9.899915560676167,
       "reachability": {
@@ -1950,7 +2675,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1979,13 +2709,17 @@
           "https://github.com/isaacs/minimatch/commit/2e111f3a79abc00fa73110195de2c0f2351904f5",
           "https://github.com/isaacs/minimatch"
         ],
-        "severity": null,
-        "severity_fallback": "high",
+        "severity": {
+          "score": 8.7,
+          "severity": "high",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
+        },
         "summary": "minimatch has a ReDoS via repeated wildcards with non-matching literal in pattern"
       },
-      "cvss_score": null,
+      "cvss_score": 8.7,
       "dep_name": "minimatch",
       "dep_version": "0.2.14",
+      "direct": false,
       "ecosystem": "npm",
       "epss": 0.00519,
       "exploit_evidence": {
@@ -1995,10 +2729,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:minimatch:0.2.14:GHSA-3ppc-4f35-3m26",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/minimatch@0.2.14",
-      "raptor_risk_estimate": 6.030136067434088,
+      "raptor_risk_estimate": 7.494597683810937,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2010,13 +2749,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 70.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 86.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.401948457,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.030136067434088,
+        "final": 7.494597683810937,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2025,7 +2764,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2064,6 +2808,7 @@
       "cvss_score": 7.5,
       "dep_name": "minimatch",
       "dep_version": "0.2.14",
+      "direct": false,
       "ecosystem": "npm",
       "epss": 0.00517,
       "exploit_evidence": {
@@ -2073,8 +2818,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:minimatch:0.2.14:GHSA-7r86-cg39-jmmj",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/minimatch@0.2.14",
       "raptor_risk_estimate": 9.90557480476312,
       "reachability": {
@@ -2104,7 +2854,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2138,6 +2893,7 @@
       "cvss_score": 7.5,
       "dep_name": "minimatch",
       "dep_version": "0.2.14",
+      "direct": false,
       "ecosystem": "npm",
       "epss": 0.01816,
       "exploit_evidence": {
@@ -2147,8 +2903,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:minimatch:0.2.14:GHSA-f8q6-p94x-37v3",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/minimatch@0.2.14",
       "raptor_risk_estimate": 6.567246325467496,
       "reachability": {
@@ -2177,7 +2938,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2208,8 +2974,9 @@
       "cvss_score": 7.5,
       "dep_name": "minimatch",
       "dep_version": "0.2.14",
+      "direct": false,
       "ecosystem": "npm",
-      "epss": 0.01699,
+      "epss": 0.01743,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2217,10 +2984,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:minimatch:0.2.14:GHSA-hxm2-r34f-qmc5",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/minimatch@0.2.14",
-      "raptor_risk_estimate": 6.557649415963755,
+      "raptor_risk_estimate": 6.561258510136102,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2235,10 +3007,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.407969997,
+        "epss_multiplier": 0.408194529,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.557649415963755,
+        "final": 6.561258510136102,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2247,7 +3019,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2286,6 +3063,7 @@
       "cvss_score": 7.5,
       "dep_name": "minimatch",
       "dep_version": "2.0.10",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.00472,
       "exploit_evidence": {
@@ -2295,8 +3073,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:minimatch:2.0.10:GHSA-23c5-xmqv-rm74",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/minimatch@2.0.10",
       "raptor_risk_estimate": 14.142736515251668,
       "reachability": {
@@ -2326,7 +3109,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2355,13 +3143,17 @@
           "https://github.com/isaacs/minimatch/commit/2e111f3a79abc00fa73110195de2c0f2351904f5",
           "https://github.com/isaacs/minimatch"
         ],
-        "severity": null,
-        "severity_fallback": "high",
+        "severity": {
+          "score": 8.7,
+          "severity": "high",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
+        },
         "summary": "minimatch has a ReDoS via repeated wildcards with non-matching literal in pattern"
       },
-      "cvss_score": null,
+      "cvss_score": 8.7,
       "dep_name": "minimatch",
       "dep_version": "2.0.10",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.00519,
       "exploit_evidence": {
@@ -2371,10 +3163,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:minimatch:2.0.10:GHSA-3ppc-4f35-3m26",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/minimatch@2.0.10",
-      "raptor_risk_estimate": 8.614480096334413,
+      "raptor_risk_estimate": 10.70656811972991,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2386,13 +3183,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 70.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 86.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.401948457,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.614480096334413,
+        "final": 10.70656811972991,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2401,7 +3198,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2440,6 +3242,7 @@
       "cvss_score": 7.5,
       "dep_name": "minimatch",
       "dep_version": "2.0.10",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.00517,
       "exploit_evidence": {
@@ -2449,8 +3252,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:minimatch:2.0.10:GHSA-7r86-cg39-jmmj",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/minimatch@2.0.10",
       "raptor_risk_estimate": 14.150821149661601,
       "reachability": {
@@ -2480,7 +3288,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2514,6 +3327,7 @@
       "cvss_score": 7.5,
       "dep_name": "minimatch",
       "dep_version": "2.0.10",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.01816,
       "exploit_evidence": {
@@ -2523,8 +3337,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:minimatch:2.0.10:GHSA-f8q6-p94x-37v3",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/minimatch@2.0.10",
       "raptor_risk_estimate": 9.381780464953566,
       "reachability": {
@@ -2553,7 +3372,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2584,8 +3408,9 @@
       "cvss_score": 7.5,
       "dep_name": "minimatch",
       "dep_version": "2.0.10",
+      "direct": true,
       "ecosystem": "npm",
-      "epss": 0.01699,
+      "epss": 0.01743,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2593,10 +3418,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:minimatch:2.0.10:GHSA-hxm2-r34f-qmc5",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/minimatch@2.0.10",
-      "raptor_risk_estimate": 9.368070594233936,
+      "raptor_risk_estimate": 9.373226443051577,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2611,10 +3441,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.407969997,
+        "epss_multiplier": 0.408194529,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.368070594233936,
+        "final": 9.373226443051577,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2623,7 +3453,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2657,6 +3492,7 @@
       "cvss_score": 5.6,
       "dep_name": "minimist",
       "dep_version": "0.0.8",
+      "direct": false,
       "ecosystem": "npm",
       "epss": 0.01931,
       "exploit_evidence": {
@@ -2666,8 +3502,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:minimist:0.0.8:GHSA-vh95-rmgr-6w4m",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/minimist@0.0.8",
       "raptor_risk_estimate": 4.91058712497631,
       "reachability": {
@@ -2696,7 +3537,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2730,6 +3576,7 @@
       "cvss_score": 9.8,
       "dep_name": "minimist",
       "dep_version": "0.0.8",
+      "direct": false,
       "ecosystem": "npm",
       "epss": 0.04581,
       "exploit_evidence": {
@@ -2739,8 +3586,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:minimist:0.0.8:GHSA-xvch-5gv4-984h",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/minimist@0.0.8",
       "raptor_risk_estimate": 8.877552243423256,
       "reachability": {
@@ -2769,7 +3621,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2803,6 +3660,7 @@
       "cvss_score": 5.6,
       "dep_name": "minimist",
       "dep_version": "0.2.0",
+      "direct": false,
       "ecosystem": "npm",
       "epss": 0.01931,
       "exploit_evidence": {
@@ -2812,8 +3670,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:minimist:0.2.0:GHSA-vh95-rmgr-6w4m",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/minimist@0.2.0",
       "raptor_risk_estimate": 4.91058712497631,
       "reachability": {
@@ -2842,7 +3705,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2876,6 +3744,7 @@
       "cvss_score": 9.8,
       "dep_name": "minimist",
       "dep_version": "0.2.0",
+      "direct": false,
       "ecosystem": "npm",
       "epss": 0.04581,
       "exploit_evidence": {
@@ -2885,8 +3754,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:minimist:0.2.0:GHSA-xvch-5gv4-984h",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/minimist@0.2.0",
       "raptor_risk_estimate": 8.877552243423256,
       "reachability": {
@@ -2915,7 +3789,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2949,6 +3828,7 @@
       "cvss_score": 5.6,
       "dep_name": "minimist",
       "dep_version": "1.2.0",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.01931,
       "exploit_evidence": {
@@ -2958,8 +3838,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:minimist:1.2.0:GHSA-vh95-rmgr-6w4m",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/minimist@1.2.0",
       "raptor_risk_estimate": 7.015124464251872,
       "reachability": {
@@ -2988,7 +3873,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3022,6 +3912,7 @@
       "cvss_score": 9.8,
       "dep_name": "minimist",
       "dep_version": "1.2.0",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.04581,
       "exploit_evidence": {
@@ -3031,8 +3922,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:minimist:1.2.0:GHSA-xvch-5gv4-984h",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/minimist@1.2.0",
       "raptor_risk_estimate": 12.682217490604653,
       "reachability": {
@@ -3061,7 +3957,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3095,6 +3996,7 @@
       "cvss_score": 9.8,
       "dep_name": "mixin-deep",
       "dep_version": "1.3.1",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.03508,
       "exploit_evidence": {
@@ -3104,8 +4006,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:mixin-deep:1.3.1:GHSA-fhjf-83wg-r2j9",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/mixin-deep@1.3.1",
       "raptor_risk_estimate": 12.517927149219808,
       "reachability": {
@@ -3134,7 +4041,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3167,6 +4079,7 @@
       "cvss_score": 5.3,
       "dep_name": "path-parse",
       "dep_version": "1.0.6",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.02218,
       "exploit_evidence": {
@@ -3176,8 +4089,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:path-parse:1.0.6:GHSA-hj48-42vr-x3v9",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/path-parse@1.0.6",
       "raptor_risk_estimate": 6.663079563387978,
       "reachability": {
@@ -3206,7 +4124,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3241,6 +4164,7 @@
       "cvss_score": 7.5,
       "dep_name": "semver",
       "dep_version": "4.3.6",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.02761,
       "exploit_evidence": {
@@ -3250,8 +4174,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:semver:4.3.6:GHSA-c2qf-rxjj-qqgw",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/semver@4.3.6",
       "raptor_risk_estimate": 19.37134061706062,
       "reachability": {
@@ -3281,7 +4210,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3315,6 +4249,7 @@
       "cvss_score": 9.8,
       "dep_name": "set-value",
       "dep_version": "0.4.3",
+      "direct": false,
       "ecosystem": "npm",
       "epss": 0.02475,
       "exploit_evidence": {
@@ -3324,8 +4259,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:set-value:0.4.3:GHSA-4g88-fppr-53pp",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/set-value@0.4.3",
       "raptor_risk_estimate": 8.651832931895262,
       "reachability": {
@@ -3354,7 +4294,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3391,6 +4336,7 @@
       "cvss_score": 7.3,
       "dep_name": "set-value",
       "dep_version": "0.4.3",
+      "direct": false,
       "ecosystem": "npm",
       "epss": 0.02457,
       "exploit_evidence": {
@@ -3400,8 +4346,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:set-value:0.4.3:GHSA-4jqc-8m5r-9rpr",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/set-value@0.4.3",
       "raptor_risk_estimate": 6.443295618487345,
       "reachability": {
@@ -3430,7 +4381,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3464,6 +4420,7 @@
       "cvss_score": 9.8,
       "dep_name": "set-value",
       "dep_version": "2.0.0",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.02475,
       "exploit_evidence": {
@@ -3473,8 +4430,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:set-value:2.0.0:GHSA-4g88-fppr-53pp",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/set-value@2.0.0",
       "raptor_risk_estimate": 12.359761331278948,
       "reachability": {
@@ -3503,7 +4465,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3540,6 +4507,7 @@
       "cvss_score": 7.3,
       "dep_name": "set-value",
       "dep_version": "2.0.0",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.02457,
       "exploit_evidence": {
@@ -3549,8 +4517,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:set-value:2.0.0:GHSA-4jqc-8m5r-9rpr",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/set-value@2.0.0",
       "raptor_risk_estimate": 9.204708026410492,
       "reachability": {
@@ -3579,7 +4552,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3613,6 +4591,7 @@
       "cvss_score": 7.5,
       "dep_name": "trim-newlines",
       "dep_version": "1.0.0",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.02901,
       "exploit_evidence": {
@@ -3622,8 +4601,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:trim-newlines:1.0.0:GHSA-7p7h-4mm5-852v",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/trim-newlines@1.0.0",
       "raptor_risk_estimate": 9.508919009661248,
       "reachability": {
@@ -3652,7 +4636,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3687,6 +4676,7 @@
       "cvss_score": 9.8,
       "dep_name": "uglify-js",
       "dep_version": "2.4.19",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.03559,
       "exploit_evidence": {
@@ -3696,8 +4686,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:uglify-js:2.4.19:GHSA-34r7-q49f-h37c",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/uglify-js@2.4.19",
       "raptor_risk_estimate": 12.525735916610888,
       "reachability": {
@@ -3726,7 +4721,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3759,8 +4759,9 @@
       "cvss_score": 7.5,
       "dep_name": "uglify-js",
       "dep_version": "2.4.19",
+      "direct": true,
       "ecosystem": "npm",
-      "epss": 0.02206,
+      "epss": 0.02358,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3768,10 +4769,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:uglify-js:2.4.19:GHSA-c9f4-xj24-8jqx",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/uglify-js@2.4.19",
-      "raptor_risk_estimate": 9.427480034019002,
+      "raptor_risk_estimate": 9.445291148116299,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3786,10 +4792,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.410557218,
+        "epss_multiplier": 0.41133287399999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.427480034019002,
+        "final": 9.445291148116299,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3798,7 +4804,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3835,6 +4846,7 @@
       "cvss_score": 7.5,
       "dep_name": "uuid",
       "dep_version": "1.4.2",
+      "direct": true,
       "ecosystem": "npm",
       "epss": 0.0035,
       "exploit_evidence": {
@@ -3844,8 +4856,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:npm:uuid:1.4.2:GHSA-w5hq-g745-h8pq",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:npm/uuid@1.4.2",
       "raptor_risk_estimate": 18.794808988360998,
       "reachability": {
@@ -3875,7 +4892,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     }
   ]
 }

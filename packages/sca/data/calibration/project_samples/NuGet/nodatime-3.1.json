@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-28T20:35:09Z",
+    "fetched_at": "2026-09-01T11:30:22Z",
     "git_ref": "3.1.9",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of nodatime-3.1",
@@ -39,6 +39,7 @@
       "cvss_score": 5.9,
       "dep_name": "SharpCompress",
       "dep_version": "0.29.0",
+      "direct": true,
       "ecosystem": "NuGet",
       "epss": 0.00313,
       "exploit_evidence": {
@@ -48,8 +49,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:NuGet:SharpCompress:0.29.0:GHSA-6c8g-7p36-r338",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:nuget/SharpCompress@0.29.0",
       "raptor_risk_estimate": 20.802326942185207,
       "reachability": {
@@ -81,7 +87,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     }
   ]
 }

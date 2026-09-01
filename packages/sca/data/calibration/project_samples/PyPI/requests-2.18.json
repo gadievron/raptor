@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-28T20:30:53Z",
+    "fetched_at": "2026-09-01T11:17:51Z",
     "git_ref": "v2.18.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of requests-2.18",
@@ -41,6 +41,7 @@
       "cvss_score": 6.8,
       "dep_name": "pytest",
       "dep_version": "2.8.0",
+      "direct": true,
       "ecosystem": "PyPI",
       "epss": 0.00143,
       "exploit_evidence": {
@@ -50,8 +51,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:PyPI:pytest:2.8.0:GHSA-6w46-j5rx-g56g",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:pypi/pytest@2.8.0",
       "raptor_risk_estimate": 12.274912234364999,
       "reachability": {
@@ -82,7 +88,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -107,13 +118,17 @@
           "https://github.com/pypa/setuptools/commit/250a6d17978f9f6ac3ac887091f2d32886fbbb0b",
           "https://github.com/pypa/advisory-database/tree/main/vulns/setuptools/PYSEC-2025-49.yaml"
         ],
-        "severity": null,
-        "severity_fallback": "high",
+        "severity": {
+          "score": 7.7,
+          "severity": "high",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N/E:P"
+        },
         "summary": "setuptools has a path traversal vulnerability in PackageIndex.download that leads to Arbitrary File Write"
       },
-      "cvss_score": null,
+      "cvss_score": 7.7,
       "dep_name": "setuptools",
       "dep_version": "18.5",
+      "direct": true,
       "ecosystem": "PyPI",
       "epss": 0.01503,
       "exploit_evidence": {
@@ -123,8 +138,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:PyPI:setuptools:18.5:GHSA-5rjg-fvgr-3xxf",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:pypi/setuptools@18.5",
       "raptor_risk_estimate": 28.107298136908806,
       "reachability": {
@@ -141,8 +161,8 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 70.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 77.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.406969809,
         "exploit_evidence_multiplier": 1.0,
@@ -157,7 +177,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -192,6 +217,7 @@
       "cvss_score": 8.8,
       "dep_name": "setuptools",
       "dep_version": "18.5",
+      "direct": true,
       "ecosystem": "PyPI",
       "epss": 0.01939,
       "exploit_evidence": {
@@ -201,8 +227,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:PyPI:setuptools:18.5:GHSA-cx63-2mw6-8hw5",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:pypi/setuptools@18.5",
       "raptor_risk_estimate": 23.397111073159593,
       "reachability": {
@@ -235,7 +266,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -271,6 +307,7 @@
       "cvss_score": 6.1,
       "dep_name": "setuptools",
       "dep_version": "18.5",
+      "direct": true,
       "ecosystem": "PyPI",
       "epss": 0.00405,
       "exploit_evidence": {
@@ -280,8 +317,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:PyPI:setuptools:18.5:GHSA-h35f-9h28-mq5c",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:pypi/setuptools@18.5",
       "raptor_risk_estimate": 20.826687781556092,
       "reachability": {
@@ -314,7 +356,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -340,15 +387,16 @@
           "https://security.netapp.com/advisory/ntap-20240621-0006"
         ],
         "severity": {
-          "score": 7.5,
+          "score": 8.7,
           "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:L/SI:L/SA:N"
         },
         "summary": "pypa/setuptools vulnerable to Regular Expression Denial of Service (ReDoS)"
       },
-      "cvss_score": 7.5,
+      "cvss_score": 8.7,
       "dep_name": "setuptools",
       "dep_version": "18.5",
+      "direct": true,
       "ecosystem": "PyPI",
       "epss": 0.02617,
       "exploit_evidence": {
@@ -358,10 +406,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:PyPI:setuptools:18.5:GHSA-r9hx-vwmv-q579",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:pypi/setuptools@18.5",
-      "raptor_risk_estimate": 13.965777460406247,
+      "raptor_risk_estimate": 16.200301854071245,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -376,13 +429,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
+        "cvss_base": 86.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.412654551,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.965777460406247,
+        "final": 16.200301854071245,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -391,7 +444,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     }
   ]
 }
