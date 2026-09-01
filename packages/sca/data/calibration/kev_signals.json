@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-28T20:29:42Z",
+    "fetched_at": "2026-09-01T10:44:52Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -11773,6 +11773,20 @@
       "product": "LoadMaster",
       "ransomware_use": false,
       "vendor": "Progress"
+    },
+    "CVE-2026-81578": {
+      "date_added": "2026-08-31",
+      "kev": true,
+      "product": "NG/MF",
+      "ransomware_use": false,
+      "vendor": "PaperCut"
+    },
+    "CVE-2026-82078": {
+      "date_added": "2026-08-31",
+      "kev": true,
+      "product": "NG/MF",
+      "ransomware_use": false,
+      "vendor": "PaperCut"
     },
     "CVE-2026-8398": {
       "date_added": "2026-05-27",
