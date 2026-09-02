@@ -3,9 +3,96 @@ name = "raptor"
 version = "3.0.0"
 requires-python = ">=3.10,<4.0"
 license = "MIT"
+dependencies = [
+    "defusedxml==0.7.1",
+    "instructor==1.15.4",
+    "openai==2.30.0",
+    "packaging==25.0",
+    "pydantic==2.13.4",
+    "pyelftools==0.33",
+    "pyyaml==6.0.3",
+    "requests==2.34.2",
+    "tabulate==0.10.0",
+    "typer==0.25.1",
+    "urllib3==2.7.0",
+]
 
-# This is deliberately not a packaging migration. Runtime and development
-# dependencies still live in requirements.txt / requirements-dev.txt.
+# The dev group is uv's default local/CI environment. Keep all direct
+# dependencies exactly pinned so upgrades remain isolated and bisectable.
+[dependency-groups]
+lint = [
+    "mypy==2.1.0",
+    "ruff==0.15.12",
+]
+test = [
+    "beautifulsoup4==4.15.0",
+    "gcovr==8.6",
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    "pytest-split==0.11.0",
+    "pytest-xdist==3.8.0",
+    { include-group = "smt" },
+]
+# 4.15.5+ requires glibc 2.38 on aarch64; the containers use bookworm 2.36.
+smt = ["z3-solver==4.15.4.0"]
+grammars = [
+    "tree-sitter==0.25.2",
+    "tree-sitter-c==0.24.2",
+    "tree-sitter-c-sharp==0.23.5",
+    "tree-sitter-cpp==0.23.4",
+    "tree-sitter-go==0.25.0",
+    "tree-sitter-java==0.23.5",
+    "tree-sitter-javascript==0.25.0",
+    "tree-sitter-kotlin==1.1.0",
+    "tree-sitter-lua==0.5.0",
+    "tree-sitter-php==0.24.1",
+    "tree-sitter-python==0.25.0",
+    "tree-sitter-ruby==0.23.1",
+    "tree-sitter-rust==0.24.2",
+    "tree-sitter-scala==0.26.0",
+    "tree-sitter-swift==0.7.3",
+    "tree-sitter-typescript==0.23.2",
+]
+dev = [
+    { include-group = "grammars" },
+    { include-group = "lint" },
+    { include-group = "test" },
+]
+tools = ["semgrep==1.173.0"]
+llm-providers = [
+    "anthropic==0.103.1",
+    "google-genai==2.4.0",
+]
+bedrock = ["botocore==1.43.16"]
+http2 = ["h2==4.4.1"]
+web = [
+    "beautifulsoup4==4.15.0",
+    "playwright==1.60.0",
+]
+sage = [
+    "httpx==0.28.1",
+    "sage-agent-sdk==11.17.11",
+]
+binary = [
+    "pyghidra==3.1.0",
+    "r2pipe==1.9.8",
+]
+frida = ["frida==16.7.19"]
+sarif = ["jsonschema==4.25.1"]
+sca = [
+    "cvss==3.6",
+    "tomli==2.4.1; python_version < '3.11'",
+]
+performance = ["orjson==3.11.9"]
+devcontainer = [
+    { include-group = "bedrock" },
+    { include-group = "binary" },
+    { include-group = "frida" },
+    { include-group = "llm-providers" },
+    { include-group = "sage" },
+    { include-group = "sarif" },
+    { include-group = "web" },
+]
 
 [tool.ruff]
 target-version = "py310"

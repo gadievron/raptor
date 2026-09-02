@@ -76,16 +76,18 @@ jobs:
         with:
           persist-credentials: false
       - name: Reconcile deps
-        # Skip if the image's baked requirements match the checkout.
-        # pip must resolve every package to verify satisfaction (~10-15s);
+        # Skip if the image's baked lockfile matches the checkout.
         # the hash check short-circuits that on the common path.
         run: |
           if [ -f /etc/raptor-ci-deps.hash ] && \
              sha256sum -c /etc/raptor-ci-deps.hash --status; then
             echo "Image deps match checkout — skipping reconcile"
           else
-            echo "Hash mismatch or missing — running pip install"
-            pip install --no-cache-dir -r requirements-dev.txt
+            echo "Hash mismatch or missing — running uv sync"
+            if ! command -v uv >/dev/null 2>&1; then
+              python -m pip install --no-cache-dir uv==0.12.6
+            fi
+            uv sync --locked
           fi
       - name: Run tests
         env:
@@ -96,10 +98,10 @@ jobs:
           RAPTOR_RANDOMISE_TESTS: ${{ github.run_id }}
         run: |
           set -f  # word-split $PYTEST_EXTRA without glob expansion
-          python -m pytest $TEST_PATH $PYTEST_EXTRA
+          uv run --locked python -m pytest $TEST_PATH $PYTEST_EXTRA
 
-  # Fallback path: fork PRs can't pull the private image, so install into
-  # the runner's system Python (uv's cache keyed on requirements*.txt).
+  # Fallback path: fork PRs can't pull the private image, so sync the
+  # project environment on the runner (uv's cache keyed on uv.lock).
   runner:
     if: ${{ !inputs.use_container }}
     runs-on: ubuntu-latest
@@ -128,12 +130,9 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: "uv.lock"
       - name: Install deps
-        # --system installs into the setup-python interpreter so the test
-        # step's `python` resolves the deps without venv activation,
-        # matching the image path's "system Python, no venv" model.
-        run: uv pip install --system -r requirements-dev.txt
+        run: uv sync --locked
       - name: Run tests
         env:
           TEST_PATH: ${{ inputs.test_path }}
@@ -143,4 +142,4 @@ jobs:
           RAPTOR_RANDOMISE_TESTS: ${{ github.run_id }}
         run: |
           set -f  # word-split $PYTEST_EXTRA without glob expansion
-          python -m pytest $TEST_PATH $PYTEST_EXTRA
+          uv run --locked python -m pytest $TEST_PATH $PYTEST_EXTRA

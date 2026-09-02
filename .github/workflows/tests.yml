@@ -280,21 +280,19 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: "uv.lock"
 
       - name: Restore venv from cache
         id: venv-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
 
       - name: Create venv and install deps
         if: steps.venv-cache.outputs.cache-hit != 'true'
         run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
+          uv sync --locked
 
       - name: Verify venv exists
         run: test -d "$VENV_PATH" || (echo "venv missing at $VENV_PATH" && exit 1)
@@ -304,7 +302,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
 
   # Fast tier: everything under core/ and packages/ except the two
   # heavyweight subdirs that get their own jobs (sandbox, exploit_feasibility).
@@ -363,7 +361,7 @@ jobs:
       #   2. Retry with restore-keys -- 30s backoff + prefix-match
       #      fallback so a transient 429 OR an evicted exact-key
       #      both recover by reusing a slightly older venv.
-      #   3. Rebuild -- install uv + ``uv pip install``.  Last-resort
+      #   3. Rebuild -- install uv + ``uv sync``. Last-resort
       #      backstop; runs only if all restore attempts failed.
       - name: Stagger cache restore (avoid 429 thundering herd)
         run: sleep $((RANDOM % 8))
@@ -374,7 +372,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
           fail-on-cache-miss: true
 
       - name: Backoff before retry
@@ -388,7 +386,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
           restore-keys: |
             venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
 
@@ -399,9 +397,7 @@ jobs:
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
         run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
+          uv sync --locked
 
       - name: Restore venv permissions and fix symlinks
         run: |
@@ -509,7 +505,7 @@ jobs:
       #   2. Retry with restore-keys -- 30s backoff + prefix-match
       #      fallback so a transient 429 OR an evicted exact-key
       #      both recover by reusing a slightly older venv.
-      #   3. Rebuild -- install uv + ``uv pip install``.  Last-resort
+      #   3. Rebuild -- install uv + ``uv sync``. Last-resort
       #      backstop; runs only if all restore attempts failed.
       - name: Stagger cache restore (avoid 429 thundering herd)
         run: sleep $((RANDOM % 8))
@@ -520,7 +516,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
           fail-on-cache-miss: true
 
       - name: Backoff before retry
@@ -534,7 +530,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
           restore-keys: |
             venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
 
@@ -545,9 +541,7 @@ jobs:
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
         run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
+          uv sync --locked
 
       - name: Restore venv permissions and fix symlinks
         run: |
@@ -619,7 +613,7 @@ jobs:
       #   2. Retry with restore-keys -- 30s backoff + prefix-match
       #      fallback so a transient 429 OR an evicted exact-key
       #      both recover by reusing a slightly older venv.
-      #   3. Rebuild -- install uv + ``uv pip install``.  Last-resort
+      #   3. Rebuild -- install uv + ``uv sync``. Last-resort
       #      backstop; runs only if all restore attempts failed.
       - name: Stagger cache restore (avoid 429 thundering herd)
         run: sleep $((RANDOM % 8))
@@ -630,7 +624,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
           fail-on-cache-miss: true
 
       - name: Backoff before retry
@@ -644,7 +638,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
           restore-keys: |
             venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
 
@@ -655,9 +649,7 @@ jobs:
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
         run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
+          uv sync --locked
 
       - name: Restore venv permissions and fix symlinks
         run: |
@@ -710,28 +702,26 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: "uv.lock"
 
       - name: Restore venv from cache
         id: venv-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
 
       - name: Create venv and install deps
         if: steps.venv-cache.outputs.cache-hit != 'true'
         run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
+          uv sync --locked
 
       - name: Save venv to cache
         if: steps.venv-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
 
       - name: Run sandbox tests (macOS)
         env:
@@ -786,7 +776,7 @@ jobs:
       #   2. Retry with restore-keys -- 30s backoff + prefix-match
       #      fallback so a transient 429 OR an evicted exact-key
       #      both recover by reusing a slightly older venv.
-      #   3. Rebuild -- install uv + ``uv pip install``.  Last-resort
+      #   3. Rebuild -- install uv + ``uv sync``. Last-resort
       #      backstop; runs only if all restore attempts failed.
       - name: Stagger cache restore (avoid 429 thundering herd)
         run: sleep $((RANDOM % 8))
@@ -797,7 +787,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
           fail-on-cache-miss: true
 
       - name: Backoff before retry
@@ -811,7 +801,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
           restore-keys: |
             venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
 
@@ -822,9 +812,7 @@ jobs:
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
         run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
+          uv sync --locked
 
       - name: Restore venv permissions and fix symlinks
         run: |
@@ -1086,4 +1074,3 @@ jobs:
           done
           [ "$ok" -eq 1 ] || exit 1
           echo "All tiers passed or were legitimately skipped."
-

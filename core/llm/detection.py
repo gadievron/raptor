@@ -51,7 +51,7 @@ except ImportError as _e:
 try:
     # Probe botocore, not boto3: everything RAPTOR needs for Bedrock
     # SigV4 (the dispatcher's signer in core/llm/dispatcher/auth.py)
-    # imports botocore only, and requirements.txt ships botocore
+    # imports botocore only, and the uv bedrock group ships botocore
     # without boto3. Probing boto3 here made a botocore-only install
     # fail detection while the actual signing path worked.
     import botocore as _botocore_module  # noqa: F401 — availability probe
@@ -1002,7 +1002,7 @@ def _warn_unusable_keys() -> None:
             if not available:
                 logger.warning(
                     f"{env_var} is set but the {sdk_name} SDK is not installed. "
-                    f"Install with: pip install {sdk_name.split(' or ')[0]}"
+                    "Install with: uv sync --locked --group llm-providers"
                 )
 
     # Bedrock: warn ONLY when the operator has set an explicit opt-in
@@ -1020,6 +1020,6 @@ def _warn_unusable_keys() -> None:
                 "A Bedrock opt-in signal (AWS_BEARER_TOKEN_BEDROCK or a "
                 "RAPTOR_BEDROCK_* env var) is set but neither the dispatcher "
                 "(RAPTOR_LLM_SOCKET) nor botocore is available for Bedrock "
-                "calls.  Install botocore (pip install botocore; boto3 "
+                "calls. Install botocore with the uv bedrock dependency group; boto3 "
                 "also includes it) or run via the RAPTOR dispatcher."
             )

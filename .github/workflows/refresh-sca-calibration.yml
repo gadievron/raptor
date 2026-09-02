@@ -56,11 +56,9 @@ jobs:
 
       - name: Install minimal deps
         run: |
-          python -m pip install --upgrade pip==26.1.1
-          # The build script needs only urllib3 (the core.http
-          # backend). The validate step runs on the stdlib + the
-          # bundled corpus — no pytest required. Keep this fast.
-          pip install 'urllib3==2.7.0,<3.0'
+          python -m pip install uv==0.12.6
+          uv sync --locked --no-dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Refresh corpus
         # ``-v`` emits per-source ``updated/unchanged`` (and

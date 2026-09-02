@@ -130,8 +130,8 @@ jobs:
           python3 .github/scripts/check_canonical_json.py
 
   # Optional-dependency import lint: test files importing modules that
-  # ship commented out in requirements.txt (anthropic SDK, botocore,
-  # tree-sitter grammar wheels, ...) must guard them — importorskip,
+  # live in non-default dependency groups (anthropic SDK, botocore,
+  # etc.) must guard them — importorskip,
   # try/except ImportError, a sys.modules stub, or a skipif naming the
   # module. Unguarded imports pass on provisioned developer hosts and
   # fail on bare CI (the 2026-08 environment-parity failure class).

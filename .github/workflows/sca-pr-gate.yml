@@ -93,8 +93,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip==26.1.1
-          pip install -r requirements.txt
+          python -m pip install uv==0.12.6
+          uv sync --locked --no-dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Scan PR head
         run: bin/raptor-sca . --out /tmp/sca-pr --no-image-scanning

@@ -568,7 +568,7 @@ idle connections, 100 total. Tune with `RAPTOR_HTTP_KEEPALIVE_S`,
 `RAPTOR_HTTP_MAX_KEEPALIVE`, `RAPTOR_HTTP_MAX_CONNECTIONS`.
 
 `RAPTOR_HTTP2=1` opts the pooled transports into HTTP/2 (requires
-`pip install h2`; warns once and stays on HTTP/1.1 when missing).
+sync the `http2` dependency group; warns once and stays on HTTP/1.1 when missing).
 All concurrent calls then multiplex over a single connection — one
 CONNECT chain and one TLS handshake total, which is the biggest
 wall-clock win for high-concurrency runs behind chained proxies.

@@ -116,17 +116,10 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: "uv.lock"
 
       - name: Install ruff
-        run: |
-          # Install only ruff (not full requirements-dev.txt) to keep
-          # this job fast and to avoid pulling pytest et al. just to
-          # lint. ruff is pinned to 0.15.12 in requirements-dev.txt —
-          # grep + uv pip install keeps a single source of truth.
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv pip install "$(grep -E '^ruff==' requirements-dev.txt)"
+        run: uv sync --locked --only-group lint
 
       - name: Compute changed Python files
         id: changed
@@ -191,13 +184,10 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: "uv.lock"
 
       - name: Install ruff
-        run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv pip install "$(grep -E '^ruff==' requirements-dev.txt)"
+        run: uv sync --locked --only-group lint
 
       - name: Run ruff (full tree)
         run: |

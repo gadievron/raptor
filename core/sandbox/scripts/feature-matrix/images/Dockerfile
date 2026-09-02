@@ -59,7 +59,7 @@ USER runner
 ENV HOME=/home/runner
 ENV PATH="/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
 RUN mkdir -p /home/runner/work/raptor/raptor
-COPY --chown=runner:runner requirements.txt requirements-dev.txt /home/runner/work/raptor/raptor/
+COPY --chown=runner:runner pyproject.toml uv.lock /home/runner/work/raptor/raptor/
 WORKDIR /home/runner/work/raptor/raptor
-RUN "$MATRIX_PY" -m venv .venv \
-    && .venv/bin/pip install --no-cache-dir -r requirements-dev.txt
+RUN "$MATRIX_PY" -m pip install --no-cache-dir uv==0.12.6 \
+    && "$MATRIX_PY" -m uv sync --locked --python "$MATRIX_PY"

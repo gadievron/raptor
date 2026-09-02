@@ -333,8 +333,8 @@ def test_result_is_immutable():
 
 class TestSameFileBareNameResolution:
     def _c_inv(self, path: str, source: str) -> dict:
-        # tree-sitter-c isn't declared in requirements.txt (only in a
-        # comment) so CI venvs may not have it. Skip the C-flavoured
+        # tree-sitter-c can be omitted from lean production environments.
+        # Skip the C-flavoured
         # tests when the grammar isn't importable rather than failing
         # — the same mechanism the inventory builder uses to degrade
         # gracefully when the dep is absent.

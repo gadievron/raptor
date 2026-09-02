@@ -16,7 +16,7 @@ import pytest
 
 # Same probe-and-skipif pattern as
 # core/llm/dispatcher/tests/test_bedrock_signing.py: botocore is an
-# optional dependency (commented out in requirements.txt), so tests
+# optional dependency (the non-default uv bedrock group), so tests
 # that assert on the REAL host install must skip where it's absent.
 try:
     import botocore  # noqa: F401
@@ -536,7 +536,7 @@ def test_botocore_only_environment_is_detected(
     monkeypatch, _restore_detection_module,
 ):
     """A botocore install WITHOUT boto3 (the shape the optional
-    ``requirements.txt`` line installs) satisfies the SigV4 signer
+    dependency-group installs) satisfies the SigV4 signer
     (core/llm/dispatcher/auth.py), which imports botocore only —
     detection must reach the same verdict in that environment.
     Regression: the probe used to `import boto3`, so a botocore-only

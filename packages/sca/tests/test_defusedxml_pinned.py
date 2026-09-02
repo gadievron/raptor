@@ -18,7 +18,7 @@ def test_sca_pom_parser_uses_defusedxml():
     assert pom_parser._AVAILABLE, (
         "packages.sca.parsers.pom fell back to xml.etree.ElementTree "
         "because defusedxml is not installed. Pin "
-        "``defusedxml==0.7.1`` in requirements.txt — billion-laughs "
+        "``defusedxml==0.7.1`` in pyproject.toml — billion-laughs "
         "payloads (CWE-776) expand on the stdlib parser."
     )
 
