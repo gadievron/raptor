@@ -104,6 +104,6 @@ depth, including the cost model and the finding lifecycle.
 ## Dependencies
 
 Python 3.10+ and the tools listed in [dependencies](dependencies.md).
-Install Python packages with `pip install -r requirements.txt`; external
+Install Python packages with `uv sync --locked --no-dev`; external
 tools (Semgrep, CodeQL, AFL++, ...) are installed separately and probed
 at runtime -- `python3 raptor.py doctor` reports what is missing.

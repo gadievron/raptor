@@ -2,7 +2,7 @@
 
 This is the honest version of how RAPTOR checks its own code.
 
-Some of these things genuinely block a PR. Some just run on a timer and tell us when things are drifting. That distinction matters: having a dependency in `requirements-dev.txt` is not the same as having a control that stops bad code getting merged.
+Some of these things genuinely block a PR. Some just run on a timer and tell us when things are drifting. That distinction matters: having a dependency in the `dev` group is not the same as having a control that stops bad code getting merged.
 
 This page is split into:
 
@@ -87,7 +87,7 @@ not baseline.
 
 | Tool | Current state |
 |---|---|
-| `mypy` | Pinned in `requirements-dev.txt`, but there is no CI job running it yet |
+| `mypy` | Pinned in the `lint` dependency group, but there is no CI job running it yet |
 | Python 3.10 floor (runtime) | The README states Python 3.10+. Ruff's `target-version = "py310"` (root `pyproject.toml`) enforces this at the syntax level on every lint run, but the CI test suite executes on a single recent interpreter — 3.10-only API regressions would not be caught by tests |
 | Ruff formatter | Ruff linting is enforced; `ruff format` is not |
 | Semgrep self-scan | RAPTOR ships and uses Semgrep for target analysis, but the repo does not currently have a dedicated Semgrep-against-RAPTOR CI workflow |

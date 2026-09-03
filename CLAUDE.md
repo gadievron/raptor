@@ -402,7 +402,7 @@ print(format_analysis_summary(result, verbose=True))
 
 **The `exploitation_paths` section tells you if code execution is actually possible** given the system's mitigations (glibc version, RELRO, etc.).
 
-**SMT integration (optional, requires `pip install z3-solver`):**
+**SMT integration (optional, requires the uv `smt` dependency group):**
 
 Two places Z3 is used — both degrade gracefully when absent:
 

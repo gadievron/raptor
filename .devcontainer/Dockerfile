@@ -72,7 +72,7 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 # SEMGREP (static-analysis, scan, raptor-scan, agentic commands)
 # ============================================================================
 
-RUN pip install --no-cache-dir semgrep==1.172.0
+RUN pip install --no-cache-dir uv==0.12.6
 
 # ============================================================================
 # RR DEBUGGER (rr-debugger skill, crash-analysis agents)
@@ -116,17 +116,18 @@ RUN mkdir -p /opt/codeql \
 # PYTHON DEPENDENCIES
 # ============================================================================
 
-COPY requirements.txt requirements-dev.txt /tmp/
-# Also copy package-specific requirements so they can be installed explicitly if desired
-COPY packages/web/requirements.txt /tmp/packages-web-requirements.txt
+COPY pyproject.toml uv.lock /tmp/raptor-project/
 
-RUN pip install --no-cache-dir -r /tmp/requirements-dev.txt
-
-# Install web package dependencies (includes playwright)
-RUN pip install --no-cache-dir -r /tmp/packages-web-requirements.txt
+ENV UV_PROJECT_ENVIRONMENT=/opt/raptor-venv
+ENV VIRTUAL_ENV=/opt/raptor-venv
+ENV PATH="/opt/raptor-venv/bin:/opt/codeql:/workspaces/raptor/bin:${PATH}"
+RUN uv sync --project /tmp/raptor-project --locked \
+        --group devcontainer --group tools \
+    && chown -R vscode:vscode /opt/raptor-venv
 
 # Install Playwright browser + system deps via Playwright's own dep installer.
 # Replaces a hand-rolled apt list that drifted out of sync with upstream Chromium deps.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN apt-get update \
     && python -m playwright install --with-deps chromium \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -156,7 +157,6 @@ RUN npm install -g yarn@1.22.22 pnpm@11.8.0
 # ENVIRONMENT CONFIGURATION
 # ============================================================================
 
-ENV PATH="/opt/codeql:/workspaces/raptor/bin:${PATH}"
 ENV GIT_TERMINAL_PROMPT=0
 ENV PYTHONUNBUFFERED=1
 # Ensure python can import repo packages when container runs
