@@ -27,10 +27,12 @@ what the prompt says, and what happens with the artefacts afterwards
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -259,6 +261,7 @@ class SkillDispatchResult:
     skipped_reason: str | None = None
     run_dir: Path | None = None
     duration_s: float = 0.0
+    cost_usd: float = 0.0
 
 
 class StageError(Exception):
@@ -612,7 +615,10 @@ def run_skill_dispatch(
                       *(str(d) for d in context_dirs), str(run_dir)),
             budget_usd=budget_usd,
             timeout_s=timeout_s,
-            capture_json_envelope=False,
+            # Capture the CLI envelope so the parent workflow can account for
+            # this pass's real spend.  The model's final text is replayed
+            # below; tools still stream through Claude internally.
+            capture_json_envelope=True,
         )
         # env: proxy mode hands the child a credential-FREE env whose
         # only auth is the scoped dispatcher token; env mode keeps the
@@ -679,6 +685,7 @@ def run_skill_dispatch(
                         system_prompt_file=_sys_prompt_path,
                     ),
                     text=True,
+                    capture_output=True,
                     **stdin_kwargs,
                     timeout=timeout_s,
                     target=str(target), output=str(run_dir),
@@ -732,6 +739,24 @@ def run_skill_dispatch(
                     ),
                     caller_label=caller_label,
                 )
+            cc_cost_usd = 0.0
+            stdout = proc.stdout or ""
+            stderr = proc.stderr or ""
+            if stdout:
+                try:
+                    envelope = json.loads(stdout)
+                except (TypeError, json.JSONDecodeError):
+                    print(stdout, end="" if stdout.endswith("\n") else "\n")
+                else:
+                    raw_cost = envelope.get("total_cost_usd")
+                    if isinstance(raw_cost, (int, float)):
+                        cc_cost_usd = float(raw_cost)
+                    final_text = envelope.get("result")
+                    if isinstance(final_text, str) and final_text:
+                        print(final_text)
+            if stderr:
+                print(stderr, file=sys.stderr,
+                      end="" if stderr.endswith("\n") else "\n")
         except subprocess.TimeoutExpired:
             lifecycle_settled = True
             fail_lifecycle(run_dir, f"timeout after {timeout_s}s")
@@ -770,7 +795,8 @@ def run_skill_dispatch(
             return SkillDispatchResult(
                 ran=False,
                 skipped_reason=f"subprocess returned {proc.returncode}",
-                run_dir=run_dir, duration_s=time.monotonic() - t0)
+                run_dir=run_dir, duration_s=time.monotonic() - t0,
+                cost_usd=cc_cost_usd)
 
         if validate_outputs is not None:
             error = validate_outputs(run_dir)
@@ -780,13 +806,15 @@ def run_skill_dispatch(
                 logger.warning("%s: %s", log_label, error)
                 return SkillDispatchResult(
                     ran=False, skipped_reason=error, run_dir=run_dir,
-                    duration_s=time.monotonic() - t0)
+                    duration_s=time.monotonic() - t0,
+                    cost_usd=cc_cost_usd)
 
         complete_lifecycle(run_dir)
         lifecycle_settled = True
 
         return SkillDispatchResult(ran=True, run_dir=run_dir,
-                                   duration_s=time.monotonic() - t0)
+                                   duration_s=time.monotonic() - t0,
+                                   cost_usd=cc_cost_usd)
 
     except Exception:
         # Make sure the lifecycle is marked failed before propagating.

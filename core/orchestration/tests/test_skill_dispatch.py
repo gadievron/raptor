@@ -7,6 +7,7 @@ contract: gate order, StageError abort, output validation, truncation
 policy, and the settled-lifecycle pattern.
 """
 
+import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -266,6 +267,17 @@ class DispatchFlowTests(unittest.TestCase):
             run_dir = Path(tmp) / "run"
             result = _run(tmp, run_dir, validate_outputs=lambda d: None)
         self.assertTrue(result.ran)
+
+    def test_json_envelope_cost_is_returned(self):
+        def _sandbox(cmd, *args, **kwargs):
+            return _ok(stdout=(
+                '{"result":"done","total_cost_usd":1.2345}'
+            ))
+
+        with TemporaryDirectory() as tmp:
+            result = _run(tmp, Path(tmp) / "run", sandbox=_sandbox)
+        self.assertTrue(result.ran)
+        self.assertEqual(result.cost_usd, 1.2345)
 
     def test_keyboard_interrupt_marks_lifecycle_failed(self):
         with TemporaryDirectory() as tmp:

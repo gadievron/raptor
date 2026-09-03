@@ -1153,7 +1153,13 @@ def _normalize_schema(schema: dict[str, Any]) -> dict[str, Any]:
     Returns the schema unchanged if already in JSON Schema format.
     """
     if "properties" in schema:
-        return schema  # Already JSON Schema
+        # ``properties`` without a top-level object type is valid JSON
+        # Schema, but Claude Code validates with AJV strictTypes and rejects
+        # it. Preserve complete schemas unchanged and complete this common
+        # partial form at the provider-independent normalization boundary.
+        if "type" in schema:
+            return schema
+        return {"type": "object", **schema}
 
     type_aliases = {
         "bool": "boolean", "str": "string", "int": "integer",
@@ -1204,7 +1210,11 @@ def _normalize_schema(schema: dict[str, Any]) -> dict[str, Any]:
         desc_lower = str(field_desc).lower()
         if "optional" not in desc_lower and "or null" not in desc_lower:
             required.append(field_name)
-    return {"properties": properties, "required": required}
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+    }
 
 
 def _schema_to_gemini(schema: dict[str, Any]) -> dict[str, Any]:
@@ -4262,12 +4272,19 @@ class ClaudeCodeLLMProvider(LLMProvider):
         # converts into a `--system-prompt-file` flag).
         call_timeout = self._effective_timeout_s(kwargs.pop("timeout_s", None))
 
+        # Consumers may use RAPTOR's compact schema form, for example
+        # {"reasoning": "string", "verdict": "string"}.  Claude Code's
+        # --json-schema flag accepts JSON Schema only, so normalise before
+        # crossing the subprocess boundary.  Other native structured-output
+        # providers already do this at their respective boundaries.
+        normalized_schema = _normalize_schema(schema)
+
         cc_config = CCDispatchConfig(
             claude_bin=self._claude_bin,
             tools="",                                # see generate() comment
             budget_usd=self._budget_usd,
             timeout_s=call_timeout,
-            json_schema=schema,
+            json_schema=normalized_schema,
             capture_json_envelope=False,
             stream_json=True,
             system_prompt=system_prompt,

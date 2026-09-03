@@ -66,7 +66,6 @@ class TestBuildCCCommand:
         idx = cmd.index("--json-schema")
         assert json.loads(cmd[idx + 1]) == schema
 
-
 class TestSystemPromptArgvHygiene:
     """System prompts must never ride argv in-repo: argv is
     world-readable via /proc/<pid>/cmdline on multi-user hosts, and
