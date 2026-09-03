@@ -18,7 +18,11 @@ RUN rm -f /etc/apt/sources.list.d/yarn.list \
 # Organized by component that needs them
 # ============================================================================
 
-RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
+# The base image ships an unused yarn apt repo whose signing key has rotated,
+# which breaks `apt-get update` (NO_PUBKEY / repository not signed). RAPTOR
+# installs Node via nodesource + npm and never uses yarn, so remove the repo.
+RUN rm -f /etc/apt/sources.list.d/yarn.list \
+    && apt-get update && export DEBIAN_FRONTEND=noninteractive \
     && apt-get install -y --no-install-recommends \
     #
     # --- Core Tools (all scripts, packages) ---
