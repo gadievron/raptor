@@ -181,6 +181,7 @@ class TestRunScaSubprocess:
         proxy_hosts = captured_kwargs.get("proxy_hosts", [])
         assert set(SCA_ALLOWED_HOSTS) <= set(proxy_hosts)
         assert captured_kwargs.get("caller_label") == "sca-agent"
+        assert captured_kwargs.get("cwd") == str(tmp_path / "out")
 
     def test_passes_sandbox_args(self, tmp_path):
         """Extra --sandbox / --audit flags are forwarded to the command."""

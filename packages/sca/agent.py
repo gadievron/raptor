@@ -160,6 +160,11 @@ def run_sca_subprocess(
             caller_label="sca-agent",
             target=str(target),
             output=str(output_dir),
+            # Keep every relative cache/output path beneath the directory
+            # Landlock grants writable.  Inheriting the launcher's cwd made
+            # the child resolve ``out/llm_cache`` beside the target run and
+            # fail with EACCES before dependency analysis completed.
+            cwd=str(output_dir),
             writable_paths=[str(log_dir)],
             env=env if env is not None else RaptorConfig.get_safe_env(),
             env_caller_filtered=True,

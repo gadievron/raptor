@@ -3212,6 +3212,7 @@ Examples:
     # PHASE 1b: SOFTWARE COMPOSITION ANALYSIS
     # ========================================================================
     sca_metrics = {}
+    mechanical_sca_error = None
     sca_out = out_dir / "sca"
     try:
         from packages.sca.agent import _find_sca_agent, run_sca_subprocess
@@ -3236,7 +3237,7 @@ Examples:
             # Route via sandbox egress proxy so SCA's HTTP calls are
             # hostname-allowlisted when --sandbox is active. The allowlist
             # is SCA_ALLOWED_HOSTS (vuln feeds + registries + archives).
-            rc, sca_stdout, _sca_stderr = run_sca_subprocess(
+            rc, sca_stdout, sca_stderr = run_sca_subprocess(
                 sca_agent,
                 original_repo_path,
                 sca_out,
@@ -3301,11 +3302,20 @@ Examples:
                 except Exception:
                     logger.debug("SAGE SCA store skipped", exc_info=True)
             else:
-                logger.warning("SCA failed (rc=%d) — continuing without dep findings", rc)
+                detail = (sca_stderr or "").strip()[-1000:]
+                mechanical_sca_error = (
+                    f"SCA subprocess exited {rc}"
+                    + (f": {detail}" if detail else "")
+                )
+                logger.warning(
+                    "SCA failed (rc=%d) — continuing without dep findings: %s",
+                    rc, detail or "no stderr captured",
+                )
                 sca_findings_count = 0
         except Exception as e:  # noqa: BLE001
             print(f"⚠️  SCA failed: {e}", file=sys.stderr)
             logger.warning("SCA failed — continuing without dep findings: %s", e)
+            mechanical_sca_error = f"{type(e).__name__}: {e}"
             sca_findings_count = 0
     else:
         sca_findings_count = 0
