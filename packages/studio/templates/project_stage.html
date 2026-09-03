@@ -1,0 +1,95 @@
+{% extends "project_base.html" %}
+{#- Generic per-stage page. Used by Understand / Scan / Validate / Fuzz /
+    Crash analysis / OSS forensics. Shows runs for the stage or an empty
+    state with the CLI command that would produce them.
+
+    Callers pass:
+      stage_key     machine name (understand, scan, validate, fuzz, …)
+      stage_label   human name
+      stage_desc    one-liner
+      stage_runs    list of RaptorRun for this stage
+      cli_hint      dict with {command, explanation} for the empty state
+    -#}
+
+{% block breadcrumb_tail %}
+  <span class="sep">›</span>
+  <span class="current">{{ stage_label }}</span>
+{% endblock %}
+
+{% block project_content %}
+
+<div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;">
+  <div>
+    <h1 style="margin: 0; font-size: 22px; letter-spacing: -0.01em;">{{ stage_label }}</h1>
+    <div style="color: var(--fg2); font-size: 13px; margin-top: 4px;">{{ stage_desc }}</div>
+  </div>
+  <div style="display: flex; gap: 8px; align-items: center;">
+    {% if stage_runs %}
+    <span class="badge b-ok">{{ stage_runs|length }} run{{ 's' if stage_runs|length != 1 else '' }}</span>
+    {% else %}
+    <span class="badge b-neutral">no runs yet</span>
+    {% endif %}
+    {% if is_runnable %}
+    <a href="/projects/{{ project.name }}/{{ stage_key }}/new" class="btn btn-p">+ New run</a>
+    {% endif %}
+  </div>
+</div>
+
+{% if stage_runs %}
+<div class="card" style="padding: 0;">
+  <table>
+    <thead>
+      <tr>
+        <th>Run</th>
+        <th>Command</th>
+        <th>Timestamp</th>
+        <th>Status</th>
+        <th>Findings</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in stage_runs %}
+      <tr>
+        <td class="mono" style="font-size: 12px;">
+          <a href="/projects/{{ project.name }}/runs/{{ r.name }}">{{ r.name }}</a>
+        </td>
+        <td class="mono" style="font-size: 11px; color: var(--fg2); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ r.command }}">{{ r.command }}</td>
+        <td class="mono" style="font-size: 12px; color: var(--fg3);">{{ r.timestamp }}</td>
+        <td>
+          {% if r.status == "completed" %}<span class="badge b-ok">complete</span>
+          {% elif r.status == "running" %}<span class="badge b-running">running</span>
+          {% elif r.status == "failed" %}<span class="badge b-failed">failed</span>
+          {% else %}<span class="badge b-neutral">{{ r.status }}</span>{% endif %}
+        </td>
+        <td>{{ r.findings()|length }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="card empty" style="text-align: left; padding: 32px;">
+  <div style="max-width: 640px; margin: 0 auto;">
+    <div class="icon" style="text-align: center; opacity: 0.5;">○</div>
+    <p style="text-align: center; color: var(--fg2); font-size: 14px; margin-top: 0;">
+      No <strong style="color: var(--fg);">{{ stage_label|lower }}</strong> runs yet for this project.
+    </p>
+    {% if cli_hint %}
+    <div style="margin-top: 20px; padding: 16px; background: var(--bg3); border-radius: 6px; border: 1px solid var(--border);">
+      <div style="font-size: 11px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin-bottom: 8px;">From the raptor CLI</div>
+      <pre style="margin: 0; padding: 0; background: transparent; font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--fg); white-space: pre-wrap; word-break: break-all;">{{ cli_hint.command }}</pre>
+      {% if cli_hint.explanation %}
+      <div style="margin-top: 10px; font-size: 12px; color: var(--fg2);">{{ cli_hint.explanation }}</div>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if is_runnable %}
+    <p style="text-align: center; font-size: 12px; color: var(--fg3); margin-top: 20px; margin-bottom: 0;">
+      Or <a href="/projects/{{ project.name }}/{{ stage_key }}/new" style="color: var(--accent);">start one from the UI →</a>
+    </p>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

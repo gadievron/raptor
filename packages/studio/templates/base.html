@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ app_title }}{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="/static/velociraptor.png">
+<style>
+/* Vulngraph-derived CSS grammar, retargeted for raptor's terminal heritage.
+   Visual identity deferred; palette is placeholder. */
+:root {
+  --bg:       #ffffff;
+  --bg2:      #f7f7f8;
+  --bg3:      #efeff2;
+  --fg:       #17181b;
+  --fg2:      #55585e;
+  --fg3:      #86898f;
+  --border:   #dcdee2;
+  --border-l: #e7e8ec;
+  --accent:   #ff6b3d;
+  --accent-r: rgba(255,107,61,0.15);
+  --crit:     #d32f2f;
+  --high:     #ea580c;
+  --med:      #ca8a04;
+  --low:      #16a34a;
+  --info:     #2563eb;
+}
+[data-theme="dark"] {
+  --bg:       #0c0d10;
+  --bg2:      #15171c;
+  --bg3:      #1c1f26;
+  --fg:       #e6e7ea;
+  --fg2:      #a8abb3;
+  --fg3:      #70757e;
+  --border:   #262a33;
+  --border-l: #1f232b;
+  --accent:   #ff8a63;
+  --accent-r: rgba(255,138,99,0.18);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: "Inter", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.45;
+}
+code, pre, .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Top nav */
+nav.top {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; gap: 20px;
+  height: 56px; padding: 0 24px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+}
+nav.top .brand {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 15px; letter-spacing: -0.01em;
+}
+nav.top .brand .wordmark        { font-weight: 400; color: var(--fg); }
+nav.top .brand .wordmark strong { font-weight: 700; }
+nav.top .brand .mark {
+  width: 32px; height: 32px;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+nav.top .brand .mark img {
+  width: 100%; height: 100%;
+  object-fit: contain;
+  /* PNG has white background; it visually fades against the near-white
+     light theme. In dark mode we invert so white→black (fades against the
+     dark bg) and the gray raptor becomes near-white. */
+  image-rendering: pixelated;
+}
+[data-theme="dark"] nav.top .brand .mark img {
+  filter: invert(1);
+}
+nav.top .links { display: flex; gap: 16px; }
+nav.top .links a {
+  color: var(--fg2); font-size: 14px; font-weight: 500;
+  padding: 6px 0;
+}
+nav.top .links a:hover { color: var(--fg); text-decoration: none; }
+nav.top .links a.active { color: var(--fg); }
+nav.top .spacer { flex: 1; }
+/* Top-right version pill + theme toggle — matched to vulngraph's design. */
+nav.top .version {
+  font-size: 11px; color: var(--fg3); font-weight: 500;
+  padding: 0 10px; display: flex; align-items: center; gap: 6px;
+}
+nav.top .version .dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #16a34a;   /* green — worker alive */
+  display: inline-block;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.12);
+}
+nav.top .theme-toggle {
+  width: 36px; height: 36px; border-radius: 8px;
+  background: var(--bg3); border: 1px solid var(--border);
+  color: var(--fg2); cursor: pointer; font-size: 15px;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: all 0.15s ease;
+  padding: 0; font-family: inherit;
+}
+nav.top .theme-toggle:hover {
+  color: var(--accent); border-color: var(--accent);
+}
+
+/* Layout */
+.container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+.page-head { margin: 0 0 20px; }
+.page-head h1 { font-size: 22px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.01em; }
+.page-head .sub { color: var(--fg2); font-size: 13px; }
+
+/* Cards */
+.card {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 20px;
+}
+.card h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
+.grid { display: grid; gap: 16px; }
+.g4 { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.g3 { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.g2 { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+
+/* KPI */
+.kpi { display: flex; flex-direction: column; gap: 4px; }
+.kpi .num {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 28px; font-weight: 600; letter-spacing: -0.01em;
+}
+.kpi .label { color: var(--fg3); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* Badges */
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 10px;
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.b-critical { background: rgba(211,47,47,0.15); color: var(--crit); }
+.b-high     { background: rgba(234,88,12,0.15);  color: var(--high); }
+.b-medium   { background: rgba(202,138,4,0.15);  color: var(--med); }
+.b-low      { background: rgba(22,163,74,0.15);  color: var(--low); }
+.b-info     { background: rgba(37,99,235,0.15);  color: var(--info); }
+.b-ok       { background: rgba(22,163,74,0.15);  color: var(--low); }
+.b-running  { background: var(--accent-r); color: var(--accent); }
+.b-failed   { background: rgba(211,47,47,0.15); color: var(--crit); }
+.b-neutral  { background: var(--bg3); color: var(--fg2); }
+
+/* Tables */
+table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+}
+thead th {
+  text-align: left; font-weight: 600; font-size: 11px;
+  color: var(--fg3); text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+  background: var(--bg3);
+}
+tbody td {
+  padding: 10px 12px; border-bottom: 1px solid var(--border-l);
+  vertical-align: top;
+}
+tbody tr:hover { background: var(--bg3); }
+tbody tr:last-child td { border-bottom: none; }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 12px; border-radius: 6px;
+  background: var(--bg3); color: var(--fg); border: 1px solid var(--border);
+  font-family: inherit; font-size: 13px; font-weight: 500;
+  cursor: pointer; text-decoration: none;
+}
+.btn:hover { border-color: var(--fg3); text-decoration: none; }
+.btn-p { background: var(--accent); color: white; border-color: var(--accent); }
+.btn-p:hover { filter: brightness(1.05); border-color: var(--accent); }
+
+/* Empty state */
+.empty {
+  text-align: center; padding: 48px 24px; color: var(--fg2);
+}
+.empty .icon { font-size: 32px; opacity: 0.5; margin-bottom: 8px; }
+.empty code {
+  background: var(--bg3); padding: 2px 6px; border-radius: 4px;
+  font-size: 12px; color: var(--fg);
+}
+
+/* Confidence bar */
+.conf-bar {
+  display: inline-block; width: 52px; height: 5px;
+  background: var(--bg3); border-radius: 3px; overflow: hidden;
+  vertical-align: middle;
+}
+.conf-bar span { display: block; height: 100%; background: var(--accent); }
+
+/* Expandable rows */
+tr.expander { cursor: pointer; }
+tr.detail { display: none; }
+tr.detail.open { display: table-row; }
+tr.detail td {
+  background: var(--bg3);
+  padding: 16px; border-bottom: 1px solid var(--border);
+}
+tr.detail pre {
+  margin: 0; padding: 12px; background: var(--bg);
+  border: 1px solid var(--border-l); border-radius: 6px;
+  max-height: 240px; overflow: auto; font-size: 12px;
+}
+
+/* Footer */
+footer.foot {
+  padding: 24px; text-align: center;
+  color: var(--fg3); font-size: 12px;
+}
+
+/* Rendered markdown blocks (reports, hypotheses, verification).
+   Kept deliberately restrained so they don't overshadow the UI chrome. */
+.markdown-body {
+  font-size: 13px; line-height: 1.55; color: var(--fg);
+}
+.markdown-body > *:first-child { margin-top: 0; }
+.markdown-body > *:last-child { margin-bottom: 0; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3 {
+  margin: 14px 0 6px; font-weight: 700; letter-spacing: -0.01em;
+}
+.markdown-body h1 { font-size: 18px; }
+.markdown-body h2 { font-size: 15px; }
+.markdown-body h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg2); }
+.markdown-body h4, .markdown-body h5, .markdown-body h6 { font-size: 12px; color: var(--fg2); margin: 10px 0 4px; }
+.markdown-body p { margin: 6px 0; }
+.markdown-body ul, .markdown-body ol { margin: 6px 0; padding-left: 22px; }
+.markdown-body li { margin: 2px 0; }
+.markdown-body code {
+  font-family: "JetBrains Mono", monospace; font-size: 11px;
+  background: var(--bg3); color: var(--fg); padding: 1px 5px; border-radius: 3px;
+}
+.markdown-body pre {
+  background: var(--bg3); border: 1px solid var(--border-l);
+  padding: 10px 12px; border-radius: 6px; margin: 8px 0;
+  max-height: 360px; overflow: auto;
+}
+.markdown-body pre code { background: transparent; padding: 0; font-size: 11px; }
+.markdown-body blockquote {
+  border-left: 3px solid var(--border); padding: 2px 0 2px 12px;
+  margin: 8px 0; color: var(--fg2);
+}
+.markdown-body table {
+  border-collapse: collapse; width: auto; margin: 10px 0;
+  font-size: 12px;
+}
+.markdown-body th, .markdown-body td {
+  padding: 6px 10px; border-bottom: 1px solid var(--border-l);
+  text-align: left;
+}
+.markdown-body th {
+  background: var(--bg3); font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em; font-size: 11px;
+}
+.markdown-body a { color: var(--accent); }
+.markdown-body hr { border: 0; border-top: 1px solid var(--border-l); margin: 14px 0; }
+</style>
+</head>
+<body>
+<nav class="top">
+  <div class="brand">
+    <span class="mark"><img src="/static/velociraptor.png" alt="raptorstudio"></span>
+    <span class="wordmark"><strong>raptor</strong>studio</span>
+  </div>
+  <div class="links">
+    <a href="/"{% if request.url.path == "/" %} class="active"{% endif %}>Dashboard</a>
+    <a href="/projects"{% if request.url.path.startswith("/projects") %} class="active"{% endif %}>Projects</a>
+    <a href="/personas"{% if request.url.path.startswith("/personas") %} class="active"{% endif %}>Personas</a>
+    <a href="/settings"{% if request.url.path.startswith("/settings") %} class="active"{% endif %}>Settings</a>
+  </div>
+  <div class="spacer"></div>
+  {% if raptor_version %}
+  <span class="version" title="raptor version (from $RAPTOR_HOME/core/config.py)"><span class="dot"></span>v{{ raptor_version }}</span>
+  {% endif %}
+  <button class="theme-toggle" id="theme-btn" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle dark / light mode">◐</button>
+</nav>
+
+<main class="container">
+  {% block content %}{% endblock %}
+</main>
+
+<footer class="foot">
+  <span class="mono">{{ app_tagline }}</span>
+  <span style="margin-left: 16px; color: var(--border);">·</span>
+  <a href="/glossary" style="margin-left: 16px; color: var(--fg3); font-size: 11px;">Glossary</a>
+</footer>
+
+<script>
+function toggleTheme() {
+  const root = document.documentElement;
+  const cur = root.getAttribute("data-theme") || "dark";
+  const next = cur === "dark" ? "light" : "dark";
+  root.setAttribute("data-theme", next);
+  try { localStorage.setItem("raptor-studio-theme", next); } catch(e) {}
+  const btn = document.getElementById("theme-btn");
+  if (btn) btn.textContent = next === "dark" ? "☾" : "◐";
+}
+(function() {
+  try {
+    const saved = localStorage.getItem("raptor-studio-theme");
+    if (saved) document.documentElement.setAttribute("data-theme", saved);
+  } catch(e) {}
+  // Sync the toggle icon to the current theme on load.
+  const cur = document.documentElement.getAttribute("data-theme") || "dark";
+  const btn = document.getElementById("theme-btn");
+  if (btn) btn.textContent = cur === "dark" ? "☾" : "◐";
+})();
+function toggleRow(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle("open");
+}
+</script>
+{% include "_fs_picker.html" %}
+</body>
+</html>
