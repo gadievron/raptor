@@ -1563,12 +1563,72 @@ def run_audit_postpass(args: argparse.Namespace, target: Path, out_dir: Path) ->
             for key in ("findings_count", "gaps_remaining"):
                 if isinstance(report.get(key), int):
                     phase[key] = report[key]
+            completeness = report.get("completeness")
+            if isinstance(completeness, dict):
+                phase["completeness"] = completeness
+                phase["partial"] = bool(completeness.get("partial"))
+
+        # The reconciled audit ledger is authoritative. Audit can spend most
+        # of the workflow budget, so excluding it makes the parent total
+        # materially misleading.
+        cost_breakdown = load_json(audit_dir / "cost-breakdown.json")
+        if isinstance(cost_breakdown, dict):
+            totals = cost_breakdown.get("totals")
+            if isinstance(totals, dict):
+                spend = totals.get("total_spend_usd")
+                if isinstance(spend, (int, float)):
+                    phase["cost_usd"] = float(spend)
         return phase
     except Exception as e:
         logger.exception("audit post-pass crashed unexpectedly")
         phase["skipped_reason"] = f"unexpected {type(e).__name__}: {e}"
         phase.setdefault("duration_seconds", round(time.time() - t0, 1))
         return phase
+
+
+def _workflow_cost_summary(
+    orchestration_result: dict | None,
+    audit_postpass: dict | None,
+    prepass_result=None,
+    postpass_result=None,
+) -> dict:
+    """Combine every paid phase into one operator-facing total."""
+    by_phase: dict[str, float] = {}
+
+    orchestration = (
+        orchestration_result.get("orchestration", {})
+        if isinstance(orchestration_result, dict) else {}
+    )
+    main_cost = orchestration.get("cost", {})
+    if isinstance(main_cost, dict):
+        value = main_cost.get("total_cost")
+        if isinstance(value, (int, float)) and value > 0:
+            by_phase["analysis"] = float(value)
+
+    for name, result in (("understand", prepass_result),
+                         ("validate", postpass_result)):
+        value = getattr(result, "cost_usd", 0.0) if result else 0.0
+        if isinstance(value, (int, float)) and value > 0:
+            by_phase[name] = float(value)
+
+    audit_cost = (
+        audit_postpass.get("cost_usd", 0.0)
+        if isinstance(audit_postpass, dict) else 0.0
+    )
+    if isinstance(audit_cost, (int, float)) and audit_cost > 0:
+        by_phase["audit"] = float(audit_cost)
+
+    summary = {
+        "total_cost": round(sum(by_phase.values()), 4),
+        "cost_by_phase": by_phase,
+    }
+    # Retain the useful token/model detail from the main analysis ledger while
+    # making clear that its dollar subtotal is only one workflow phase.
+    if isinstance(main_cost, dict):
+        for key in ("thinking_tokens", "cost_by_model"):
+            if key in main_cost:
+                summary[key] = main_cost[key]
+    return summary
 
 
 def main() -> int:
@@ -3890,10 +3950,15 @@ Examples:
                 "to review the residual."
             )
 
+    workflow_cost = _workflow_cost_summary(
+        orchestration_result, audit_postpass, prepass_result, postpass_result,
+    )
+
     final_report = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "repository": str(original_repo_path),
         "duration_seconds": workflow_duration,
+        "cost": workflow_cost,
         "tools_used": {
             "semgrep": not args.codeql_only,
             "codeql": args.codeql or args.codeql_only,
@@ -4323,27 +4388,37 @@ Examples:
     )
     from core.reporting.formatting import format_elapsed
     print(f"   Duration: {format_elapsed(workflow_duration)}")
-    if orchestration_result:
-        cost_summary = orchestration_result.get("orchestration", {}).get("cost", {})
-        cost = cost_summary.get("total_cost", 0)
-        if cost > 0:
-            thinking = cost_summary.get("thinking_tokens", 0)
-            cost_str = f"   Cost: ${cost:.2f}"
-            if thinking > 0:
-                cost_str += f" ({thinking:,} thinking tokens)"
-            print(cost_str)
-            # Per-model breakdown if multiple models used
-            by_model = cost_summary.get("cost_by_model", {})
-            if len(by_model) > 1:
-                for model, mcost in by_model.items():
-                    print(f"     {model}: ${mcost:.2f}")
+    # Gated on spend, not on the orchestrator: the understand / validate /
+    # audit passes cost money in --sequential runs too, where
+    # orchestration_result is None.
+    cost_summary = final_report.get("cost", {})
+    cost = cost_summary.get("total_cost", 0)
+    if cost > 0:
+        thinking = cost_summary.get("thinking_tokens", 0)
+        cost_str = f"   Cost: ${cost:.2f}"
+        if thinking > 0:
+            cost_str += f" ({thinking:,} thinking tokens)"
+        print(cost_str)
+        by_phase = cost_summary.get("cost_by_phase", {})
+        if len(by_phase) > 1:
+            for phase_name, phase_cost in by_phase.items():
+                print(f"     {phase_name}: ${phase_cost:.2f}")
+        # Per-model breakdown if multiple models used. Only the analysis
+        # ledger has one, so it stays sourced from the orchestration block.
+        by_model = (
+            orchestration_result.get("orchestration", {}).get("cost", {})
+            .get("cost_by_model", {}) if orchestration_result else {}
+        )
+        if len(by_model) > 1:
+            for model, mcost in by_model.items():
+                print(f"     {model}: ${mcost:.2f}")
         # Fast-tier scorecard savings — surface concrete behaviour
         # of the prefilter (full ANALYSE calls skipped on findings
         # the cheap tier confidently classified as FPs and the
         # scorecard trusted).
         short_circuits = orchestration_result.get("orchestration", {}).get(
             "fast_tier_short_circuits", 0
-        )
+        ) if orchestration_result else 0
         if short_circuits > 0:
             plural = "s" if short_circuits != 1 else ""
             print(f"   Fast-tier saved: {short_circuits} full ANALYSE call{plural}")
@@ -4489,7 +4564,7 @@ Examples:
         extra_summary["Exploits generated"] = exploits_count
     if patches_count > 0:
         extra_summary["Patches generated"] = patches_count
-    cost_summary = orch_phase.get("cost", {})
+    cost_summary = final_report.get("cost", {})
     cost = cost_summary.get("total_cost", 0)
     if cost > 0:
         extra_summary["Cost"] = f"${cost:.2f}"

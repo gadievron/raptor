@@ -21,6 +21,7 @@ from raptor_agentic import (
     _audit_run_status,
     _build_audit_postpass_cmd,
     _discover_codeql_dbs,
+    _workflow_cost_summary,
     run_audit_postpass,
 )
 
@@ -236,6 +237,25 @@ class TestRunAuditPostpass:
         assert tail["deferred"] == ["validate", "feedback"]
         assert tail["parent_run"] == str(out_dir)
 
+    def test_success_reads_completeness_and_reconciled_cost(
+        self, tmp_path, _postpass_env,
+    ):
+        audit_dir, _calls, _fails = _postpass_env
+        save_json(audit_dir / "audit-report.json", {
+            "stats": {},
+            "completeness": {"partial": True, "run_status": "completed"},
+        })
+        save_json(audit_dir / "cost-breakdown.json", {
+            "totals": {"total_spend_usd": 69.1884},
+        })
+        out_dir = tmp_path / "agentic_out"
+        out_dir.mkdir()
+
+        phase = run_audit_postpass(_args(), tmp_path / "target", out_dir)
+
+        assert phase["partial"] is True
+        assert phase["cost_usd"] == 69.1884
+
     def test_failure_backstops_lifecycle(self, tmp_path, _postpass_env):
         audit_dir, calls, fails = _postpass_env
         calls["rc"] = 2
@@ -283,6 +303,33 @@ class TestRunAuditPostpass:
         phase = run_audit_postpass(_args(), tmp_path, tmp_path)
         assert phase["completed"] is False
         assert phase["skipped_reason"] == "lifecycle start failed"
+
+
+class TestWorkflowCostSummary:
+    def test_combines_analysis_passes_and_audit(self):
+        class PassResult:
+            def __init__(self, cost):
+                self.cost_usd = cost
+
+        summary = _workflow_cost_summary(
+            {"orchestration": {"cost": {
+                "total_cost": 17.24,
+                "thinking_tokens": 123,
+                "cost_by_model": {"model-a": 17.24},
+            }}},
+            {"cost_usd": 69.1884},
+            PassResult(2.0),
+            PassResult(3.0),
+        )
+
+        assert summary["total_cost"] == 91.4284
+        assert summary["cost_by_phase"] == {
+            "analysis": 17.24,
+            "understand": 2.0,
+            "validate": 3.0,
+            "audit": 69.1884,
+        }
+        assert summary["thinking_tokens"] == 123
 
 
 class TestReportSection:

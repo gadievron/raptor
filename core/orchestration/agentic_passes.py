@@ -90,6 +90,7 @@ class PrepassResult:
     context_map_path: Path | None = None
     checklist_enriched: bool = False          # priority markers written to agentic checklist?
     duration_s: float = 0.0
+    cost_usd: float = 0.0
 
 
 @dataclass
@@ -101,6 +102,7 @@ class PostpassResult:
     validate_dir: Path | None = None
     report_path: Path | None = None
     duration_s: float = 0.0
+    cost_usd: float = 0.0
 
 
 @dataclass
@@ -201,7 +203,8 @@ def _run_understand_prepass_unsafe(
         return PrepassResult(ran=False,
                              skipped_reason=dispatch.skipped_reason,
                              understand_dir=dispatch.run_dir,
-                             duration_s=dispatch.duration_s)
+                             duration_s=dispatch.duration_s,
+                             cost_usd=dispatch.cost_usd)
 
     context_map = dispatch.run_dir / "context-map.json"
 
@@ -226,6 +229,7 @@ def _run_understand_prepass_unsafe(
         context_map_path=context_map,
         checklist_enriched=enriched,
         duration_s=dispatch.duration_s,
+        cost_usd=dispatch.cost_usd,
     )
 
 
@@ -401,14 +405,16 @@ def _run_validate_postpass_unsafe(
                               selected_count=len(selected) + len(audit_selected),
                               validate_dir=dispatch.run_dir,
                               skipped_reason=dispatch.skipped_reason,
-                              duration_s=dispatch.duration_s)
+                              duration_s=dispatch.duration_s,
+                              cost_usd=dispatch.cost_usd)
 
     report_path = dispatch.run_dir / "validation-report.md"
     return PostpassResult(ran=True,
                           selected_count=len(selected) + len(audit_selected),
                           validate_dir=dispatch.run_dir,
                           report_path=report_path if report_path.exists() else None,
-                          duration_s=dispatch.duration_s)
+                          duration_s=dispatch.duration_s,
+                          cost_usd=dispatch.cost_usd)
 
 
 def _provision_understand_checklist(target: Path, agentic_out_dir: Path,

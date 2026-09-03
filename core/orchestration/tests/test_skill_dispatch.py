@@ -7,7 +7,10 @@ contract: gate order, StageError abort, output validation, truncation
 policy, and the settled-lifecycle pattern.
 """
 
+import contextlib
+import io
 import os
+import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -278,6 +281,46 @@ class DispatchFlowTests(unittest.TestCase):
             result = _run(tmp, Path(tmp) / "run", sandbox=_sandbox)
         self.assertTrue(result.ran)
         self.assertEqual(result.cost_usd, 1.2345)
+
+    def test_timeout_reports_partial_spend_and_output(self):
+        """A pass killed at the deadline still charged the operator, and
+        CPython hands the partial output back as BYTES on the exception
+        even in text mode."""
+        def _sandbox(cmd, *args, **kwargs):
+            raise subprocess.TimeoutExpired(
+                cmd, 60,
+                output=b'{"result":"partial work","total_cost_usd":0.75}',
+                stderr=b"cc: deadline\n",
+            )
+
+        with TemporaryDirectory() as tmp:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                result = _run(tmp, Path(tmp) / "run", sandbox=_sandbox)
+        self.assertFalse(result.ran)
+        self.assertEqual(result.skipped_reason, "timeout after 60s")
+        self.assertEqual(result.cost_usd, 0.75)
+        self.assertIn("partial work", out.getvalue())
+
+    def test_timeout_with_unparseable_output_is_echoed_verbatim(self):
+        def _sandbox(cmd, *args, **kwargs):
+            raise subprocess.TimeoutExpired(
+                cmd, 60, output='{"result":"truncated mid-wr')
+
+        with TemporaryDirectory() as tmp:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                result = _run(tmp, Path(tmp) / "run", sandbox=_sandbox)
+        self.assertFalse(result.ran)
+        self.assertEqual(result.cost_usd, 0.0)
+        self.assertIn("truncated mid-wr", out.getvalue())
+
+    def test_timeout_without_any_output_is_quiet(self):
+        def _sandbox(cmd, *args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd, 60)
+
+        with TemporaryDirectory() as tmp:
+            result = _run(tmp, Path(tmp) / "run", sandbox=_sandbox)
+        self.assertFalse(result.ran)
+        self.assertEqual(result.cost_usd, 0.0)
 
     def test_keyboard_interrupt_marks_lifecycle_failed(self):
         with TemporaryDirectory() as tmp:

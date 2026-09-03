@@ -264,6 +264,56 @@ class SkillDispatchResult:
     cost_usd: float = 0.0
 
 
+def _decode_stream(raw: str | bytes | None) -> str:
+    """Normalise a captured stream to text.
+
+    ``subprocess.run(text=True)`` decodes on the happy path, but the
+    ``TimeoutExpired`` it raises carries the partial output as RAW BYTES
+    (CPython builds the exception inside ``Popen._communicate``, before
+    the text-mode decode). Both shapes reach the replay below.
+    """
+    if raw is None:
+        return ""
+    if isinstance(raw, (bytes, bytearray)):
+        return raw.decode("utf-8", errors="replace")
+    return raw
+
+
+def _replay_cc_output(raw_stdout: str | bytes | None,
+                      raw_stderr: str | bytes | None) -> float:
+    """Replay a captured Claude Code dispatch to the operator's console
+    and return the spend the CLI reported.
+
+    stdout is the ``--output-format json`` envelope: the model's final
+    text goes to stdout, ``total_cost_usd`` becomes the pass's cost. A
+    stdout that doesn't parse (a child killed mid-write, a CLI error
+    printed outside the envelope) is echoed verbatim rather than
+    swallowed — losing it would leave the operator with no record of a
+    pass that already charged them.
+    """
+    cost_usd = 0.0
+    stdout = _decode_stream(raw_stdout)
+    stderr = _decode_stream(raw_stderr)
+    if stdout:
+        try:
+            envelope = json.loads(stdout)
+        except (TypeError, json.JSONDecodeError):
+            envelope = None
+        if isinstance(envelope, dict):
+            raw_cost = envelope.get("total_cost_usd")
+            if isinstance(raw_cost, (int, float)):
+                cost_usd = float(raw_cost)
+            final_text = envelope.get("result")
+            if isinstance(final_text, str) and final_text:
+                print(final_text)
+        else:
+            print(stdout, end="" if stdout.endswith("\n") else "\n")
+    if stderr:
+        print(stderr, file=sys.stderr,
+              end="" if stderr.endswith("\n") else "\n")
+    return cost_usd
+
+
 class StageError(Exception):
     """Raised by a caller's ``stage`` callback to abort the dispatch
     with a specific reason (the lifecycle is marked failed with it)."""
@@ -739,31 +789,22 @@ def run_skill_dispatch(
                     ),
                     caller_label=caller_label,
                 )
-            cc_cost_usd = 0.0
-            stdout = proc.stdout or ""
-            stderr = proc.stderr or ""
-            if stdout:
-                try:
-                    envelope = json.loads(stdout)
-                except (TypeError, json.JSONDecodeError):
-                    print(stdout, end="" if stdout.endswith("\n") else "\n")
-                else:
-                    raw_cost = envelope.get("total_cost_usd")
-                    if isinstance(raw_cost, (int, float)):
-                        cc_cost_usd = float(raw_cost)
-                    final_text = envelope.get("result")
-                    if isinstance(final_text, str) and final_text:
-                        print(final_text)
-            if stderr:
-                print(stderr, file=sys.stderr,
-                      end="" if stderr.endswith("\n") else "\n")
-        except subprocess.TimeoutExpired:
+            cc_cost_usd = _replay_cc_output(proc.stdout, proc.stderr)
+        except subprocess.TimeoutExpired as e:
+            # A pass that ran until the deadline still spent money, and
+            # whatever the CLI managed to emit is the operator's only
+            # window into what it was doing. Replay both before failing:
+            # `--output-format json` buffers everything to the end, so a
+            # killed child usually leaves a truncated envelope — the
+            # replay falls back to printing it raw.
+            cc_cost_usd = _replay_cc_output(e.stdout, e.stderr)
             lifecycle_settled = True
             fail_lifecycle(run_dir, f"timeout after {timeout_s}s")
             logger.warning("%s timed out after %ds", log_label, timeout_s)
             return SkillDispatchResult(
                 ran=False, skipped_reason=f"timeout after {timeout_s}s",
-                run_dir=run_dir, duration_s=time.monotonic() - t0)
+                run_dir=run_dir, duration_s=time.monotonic() - t0,
+                cost_usd=cc_cost_usd)
         except OSError as e:
             lifecycle_settled = True
             fail_lifecycle(run_dir, f"launch failed: {e}")
