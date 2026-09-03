@@ -574,7 +574,10 @@ class ValidatePostpassTests(unittest.TestCase):
                 {"finding_id": "FINDING-F3", "is_exploitable": False, "confidence": "low"},
             ])
             validate_dir = tmp / "validate_run"
-            dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
+            dispatcher = _make_lifecycle_dispatcher(
+                start_dir=validate_dir,
+                claude_writes={"findings.json": "[]"},
+            )
             with _patch_passes(dispatcher) as mock_run:
                 result = run_validate_postpass(
                     target=tmp, agentic_out_dir=tmp, analysis_report=report,
@@ -603,6 +606,22 @@ class ValidatePostpassTests(unittest.TestCase):
             self.assertNotIn("FINDING-F2", prompt)
             self.assertNotIn("FINDING-F3", prompt)
 
+    def test_successful_process_without_findings_is_a_failed_postpass(self):
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            report = self._make_report(
+                tmp, [{"finding_id": "FINDING-F1", "is_exploitable": True}],
+            )
+            validate_dir = tmp / "validate_run"
+            dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
+            with _patch_passes(dispatcher):
+                result = run_validate_postpass(
+                    target=tmp, agentic_out_dir=tmp, analysis_report=report,
+                    claude_bin="/fake/claude",
+                )
+            self.assertFalse(result.ran)
+            self.assertIn("findings.json missing", result.skipped_reason)
+
     def test_validate_dispatch_uses_sandbox_with_egress_proxy(self):
         with TemporaryDirectory() as tmp:
             tmp = Path(tmp)
@@ -610,7 +629,10 @@ class ValidatePostpassTests(unittest.TestCase):
                 {"finding_id": "FINDING-F1", "is_exploitable": True},
             ])
             validate_dir = tmp / "validate_run"
-            dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
+            dispatcher = _make_lifecycle_dispatcher(
+                start_dir=validate_dir,
+                claude_writes={"findings.json": "[]"},
+            )
             sandbox_calls = []
 
             def _sandbox_capture(cmd, *args, **kwargs):
@@ -676,7 +698,10 @@ class ValidatePostpassTests(unittest.TestCase):
                     for i in range(_MAX_VALIDATE_FINDINGS + 10)]
             report = self._make_report(tmp, many)
             validate_dir = tmp / "validate_run"
-            dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
+            dispatcher = _make_lifecycle_dispatcher(
+                start_dir=validate_dir,
+                claude_writes={"findings.json": "[]"},
+            )
             with _patch_passes(dispatcher):
                 result = run_validate_postpass(
                     target=tmp, agentic_out_dir=tmp, analysis_report=report,
@@ -819,7 +844,10 @@ class NaNScoreTests(unittest.TestCase):
             import json as _json
             report.write_text(_json.dumps({"results": findings}))
             validate_dir = tmp / "validate_run"
-            dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
+            dispatcher = _make_lifecycle_dispatcher(
+                start_dir=validate_dir,
+                claude_writes={"findings.json": "[]"},
+            )
             with _patch_passes(dispatcher):
                 result = run_validate_postpass(
                     target=tmp, agentic_out_dir=tmp, analysis_report=report,
@@ -951,7 +979,10 @@ class SortKeyTypeSafetyTests(unittest.TestCase):
             report = tmp / "report.json"
             report.write_text(json.dumps({"results": findings}))
             validate_dir = tmp / "validate_run"
-            dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
+            dispatcher = _make_lifecycle_dispatcher(
+                start_dir=validate_dir,
+                claude_writes={"findings.json": "[]"},
+            )
             with _patch_passes(dispatcher):
                 # Must not raise — backstop would catch it but the user would
                 # see "unexpected ValueError" instead of a clean post-pass.

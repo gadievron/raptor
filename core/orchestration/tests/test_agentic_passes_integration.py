@@ -340,7 +340,10 @@ class PostpassIntegrationTests(unittest.TestCase):
             ])
             sub_disp2, sbx_disp2 = _selective_subprocess(
                 real_subprocess_run,
-                claude_writes={"validation-report.md": "# Validation\n"},
+                claude_writes={
+                    "validation-report.md": "# Validation\n",
+                    "findings.json": "[]",
+                },
             )
             with env_patch, \
                  patch("core.orchestration.skill_dispatch.subprocess.run",

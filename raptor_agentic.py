@@ -1258,6 +1258,18 @@ def _should_run_mechanical_sca(sca_agent, deep_sca_requested: bool) -> bool:
     return bool(sca_agent) and not deep_sca_requested
 
 
+def _sca_mode(deep_sca_requested: bool, mechanical_sca_ran: bool) -> str:
+    """Which dependency-analysis mode the run actually used.
+
+    ``"none"`` matters: with no SCA agent installed neither phase runs,
+    and reporting ``"mechanical"`` there described a phase that never
+    existed.
+    """
+    if deep_sca_requested:
+        return "deep"
+    return "mechanical" if mechanical_sca_ran else "none"
+
+
 def _build_completion_manifest(orch_meta, import_result, import_sarif_files,
                                reanalyze_dir=None):
     manifest = {
@@ -3274,6 +3286,13 @@ Examples:
     sca_metrics = {}
     mechanical_sca_error = None
     sca_out = out_dir / "sca"
+    # Artefact pointers for whichever SCA mode actually runs (mechanical
+    # here, deep in PHASE 1b below). They are declared once, at the first
+    # phase that can set them, and MUST NOT be re-initialised later: a
+    # second `= None` between the producer and the consumer silently drops
+    # the mechanical run's findings out of validation and the report.
+    sca_findings_path = None
+    sca_report_path = None
     try:
         from packages.sca.agent import _find_sca_agent, run_sca_subprocess
         sca_agent = _find_sca_agent()
@@ -3319,6 +3338,8 @@ Examples:
                         break
                 sca_findings_count = sca_metrics.get("vuln_findings", 0) + \
                                      sca_metrics.get("supply_chain_findings", 0)
+                sca_findings_path = sca_out / "findings.json"
+                sca_report_path = sca_out / "report.md"
                 print("\n✓ SCA complete:")
                 print(f"  - Dependencies: {sca_metrics.get('deps_analysed', 0)}")
                 print(f"  - Vulnerability findings: {sca_metrics.get('vuln_findings', 0)}")
@@ -3328,7 +3349,6 @@ Examples:
                 # SAGE: store SCA vulnerability findings for cross-run learning
                 try:
                     from core.sage.hooks import store_sca_outcomes
-                    sca_findings_path = sca_out / "findings.json"
                     if sca_findings_path.exists():
                         import json as _sca_json
                         sca_data = _sca_json.loads(
@@ -3475,7 +3495,6 @@ Examples:
     # PHASE 1b: SCA — DEPENDENCY ANALYSIS (opt-in via --sca)
     # ========================================================================
     sca_result = None
-    sca_findings_path = None
     if args.sca:
         print("\n" + "=" * 70)
         print("SCA — DEPENDENCY ANALYSIS")
@@ -3497,6 +3516,7 @@ Examples:
                 options=sca_options,
             )
             sca_findings_path = sca_deep_out / "findings.json"
+            sca_report_path = sca_deep_out / "report.md"
 
             print("\n✓ SCA complete:")
             print(f"  - Dependencies analysed: {sca_result.deps_analysed}")
@@ -3950,9 +3970,21 @@ Examples:
                 "to review the residual."
             )
 
+    effective_analysis = dict(orchestration_result or analysis or {})
+    dataflow_result = effective_analysis.get("dataflow_validation")
+    if isinstance(dataflow_result, dict):
+        validated_count = dataflow_result.get("n_validated")
+        if isinstance(validated_count, int):
+            # The orchestrator's legacy scalar can remain zero even after the
+            # IRIS stage validates eligible paths. Its structured telemetry is
+            # the authoritative result rendered elsewhere in the report.
+            effective_analysis["dataflow_validated"] = validated_count
     workflow_cost = _workflow_cost_summary(
         orchestration_result, audit_postpass, prepass_result, postpass_result,
     )
+    mechanical_sca_completed = bool(run_mechanical_sca and sca_metrics)
+    deep_sca_completed = sca_result is not None
+    sca_completed = mechanical_sca_completed or deep_sca_completed
 
     final_report = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -3962,7 +3994,7 @@ Examples:
         "tools_used": {
             "semgrep": not args.codeql_only,
             "codeql": args.codeql or args.codeql_only,
-            "sca": bool(sca_agent and sca_metrics),
+            "sca": sca_completed,
         },
         "phases": {
             "scanning": {
@@ -3982,12 +4014,14 @@ Examples:
             },
             "threat_model": threat_model_phase,
             "sca": {
-                "enabled": args.sca,
-                "completed": sca_result is not None,
-                "deps_analysed": sca_result.deps_analysed if sca_result else 0,
-                "vuln_findings": sca_result.vuln_findings if sca_result else 0,
-                "hygiene_findings": sca_result.hygiene_findings if sca_result else 0,
-                "supply_chain_findings": sca_result.supply_chain_findings if sca_result else 0,
+                "enabled": bool(run_mechanical_sca or args.sca),
+                "completed": sca_completed,
+                "mode": _sca_mode(args.sca, run_mechanical_sca),
+                "skipped_reason": mechanical_sca_error,
+                "deps_analysed": sca_result.deps_analysed if sca_result else sca_metrics.get("deps_analysed", 0),
+                "vuln_findings": sca_result.vuln_findings if sca_result else sca_metrics.get("vuln_findings", 0),
+                "hygiene_findings": sca_result.hygiene_findings if sca_result else sca_metrics.get("hygiene_findings", 0),
+                "supply_chain_findings": sca_result.supply_chain_findings if sca_result else sca_metrics.get("supply_chain_findings", 0),
                 "llm_reviews": sca_result.llm_reviews_run if sca_result else 0,
                 "triage_run": sca_result.triage_run if sca_result else False,
             },
@@ -3999,18 +4033,25 @@ Examples:
                 "noise_reduction_percent": ((total_findings - validated_findings) / total_findings * 100) if total_findings > 0 else 0,
             },
             "autonomous_analysis": {
-                "completed": bool(analysis),
+                "completed": bool(effective_analysis),
                 "skipped": not llm_env.llm_available,
-                "exploitable": analysis.get('exploitable', 0),
-                "exploits_generated": analysis.get('exploits_generated', 0),
-                "patches_generated": analysis.get('patches_generated', 0),
-                "dataflow_validated": analysis.get('dataflow_validated', 0) if (args.codeql or args.codeql_only) else 0,
+                "exploitable": effective_analysis.get('exploitable', 0),
+                "exploits_generated": effective_analysis.get('exploits_generated', 0),
+                "patches_generated": effective_analysis.get('patches_generated', 0),
+                "dataflow_validated": effective_analysis.get('dataflow_validated', 0) if (args.codeql or args.codeql_only) else 0,
             },
             "orchestration": orchestration_result.get("orchestration", {}) if orchestration_result else {
                 "completed": False,
                 "mode": "none",
             },
             "audit": audit_postpass,
+            "validation_postpass": {
+                "enabled": bool(args.validate),
+                "completed": bool(postpass_result and postpass_result.ran),
+                "selected_count": postpass_result.selected_count if postpass_result else 0,
+                "skipped_reason": postpass_result.skipped_reason if postpass_result else None,
+                "cost_usd": postpass_result.cost_usd if postpass_result else 0.0,
+            },
         },
         "outputs": {
             "sarif_files": [str(f) for f in sarif_files],
@@ -4023,7 +4064,7 @@ Examples:
             "threat_model_summary": str(out_dir / "threat-model-summary.json") if threat_model_phase.get("completed") else None,
             "threat_model_candidates": threat_model_phase.get("candidate_sarif"),
             "sca_findings": str(sca_findings_path) if sca_findings_path and sca_findings_path.exists() else None,
-            "sca_report": str(out_dir / "sca" / "report.md") if sca_result else None,
+            "sca_report": str(sca_report_path) if sca_report_path and sca_report_path.exists() else None,
             "validation_report": str(out_dir / "validation" / "findings.json") if validation_result else None,
             "autonomous_report": str(analysis_report) if analysis_report and analysis_report.exists() else None,
             "orchestrated_report": str(out_dir / "orchestrated_report.json") if orchestration_result else None,

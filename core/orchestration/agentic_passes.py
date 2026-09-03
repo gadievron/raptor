@@ -399,6 +399,10 @@ def _run_validate_postpass_unsafe(
         context_dirs=(agentic_out_dir,),
         preflight=_preflight,
         stage=_stage,
+        validate_outputs=lambda validate_dir: (
+            None if (validate_dir / "findings.json").is_file()
+            else "findings.json missing after validate run"
+        ),
     )
     if not dispatch.ran:
         return PostpassResult(ran=False,

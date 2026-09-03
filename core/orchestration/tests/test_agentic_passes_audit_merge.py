@@ -122,7 +122,12 @@ class MergedSelectionTests(unittest.TestCase):
             ])
             audit_dir = self._make_audit_dir(tmp, 2)
             validate_dir = tmp / "validate_run"
-            dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
+            # The post-pass now asserts findings.json exists before
+            # calling the run a success — the stub must produce it.
+            dispatcher = _make_lifecycle_dispatcher(
+                start_dir=validate_dir,
+                claude_writes={"findings.json": "[]"},
+            )
             with _patch_passes(dispatcher):
                 result = run_validate_postpass(
                     target=tmp, agentic_out_dir=tmp, analysis_report=report,
@@ -144,7 +149,12 @@ class MergedSelectionTests(unittest.TestCase):
             tmp = Path(tmp)
             audit_dir = self._make_audit_dir(tmp, 1)
             validate_dir = tmp / "validate_run"
-            dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
+            # The post-pass now asserts findings.json exists before
+            # calling the run a success — the stub must produce it.
+            dispatcher = _make_lifecycle_dispatcher(
+                start_dir=validate_dir,
+                claude_writes={"findings.json": "[]"},
+            )
             with _patch_passes(dispatcher):
                 result = run_validate_postpass(
                     target=tmp, agentic_out_dir=tmp,
@@ -175,7 +185,12 @@ class MergedSelectionTests(unittest.TestCase):
             ])
             audit_dir = self._make_audit_dir(tmp, 3)
             validate_dir = tmp / "validate_run"
-            dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
+            # The post-pass now asserts findings.json exists before
+            # calling the run a success — the stub must produce it.
+            dispatcher = _make_lifecycle_dispatcher(
+                start_dir=validate_dir,
+                claude_writes={"findings.json": "[]"},
+            )
             old_cap = agentic_passes._MAX_VALIDATE_FINDINGS
             agentic_passes._MAX_VALIDATE_FINDINGS = 4
             try:
