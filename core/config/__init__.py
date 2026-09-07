@@ -73,7 +73,7 @@ class RaptorConfig:
     # commits past a release never masquerades as that clean release. It falls
     # back to ``VERSION`` when there is no usable git checkout (archive,
     # exported copy, git absent).
-    VERSION = "3.0.0"
+    VERSION = "3.1.0"
 
     @classmethod
     def effective_version(cls) -> str:
