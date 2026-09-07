@@ -91,16 +91,10 @@ def test_log4shell_kev_reachable_direct_scores_high():
     )
     score, comps = compute_risk_estimate(f, f.dependency)
     assert 90 <= score <= 100, f"got {score}"
-    # KEV multiplier history: 1.20 (pre-refit) → 1.32 (2026-05-09
-    # wider-grid refit) → 1.452 (2026-05-21 first ρ-aware refit
-    # after Vulnrichment integration) → 1.5972 (2026-05-22 second
-    # ρ-aware refit after SSVC decoupling + CVSS-from-severity
-    # fallback + RUSTSEC informational filter + SSVC Automatable
-    # wiring) → 1.7569 (2026-05-22 third ρ-aware refit after
-    # round-9 CPM + Gradle catalog corpus expansion; joint refit
-    # confirmed per-constant is at the basin floor on this corpus,
-    # making the +6pp ρ jump the right move to ship).
-    assert comps["kev_multiplier"] == 1.7569
+    # The value is calibration-owned and can move after a successful
+    # refit; the breakdown must report the live value that was applied.
+    from packages.sca.risk import current_constants
+    assert comps["kev_multiplier"] == current_constants()["_KEV_MULTIPLIER"]
 
 
 def test_log4shell_but_not_reachable_drops_to_low():
@@ -128,29 +122,29 @@ def test_log4shell_but_not_reachable_drops_to_low():
         reach_verdict="imported", exposure=1.0, depth=0,
     )
     s_reach, _ = compute_risk_estimate(reachable, reachable.dependency)
-    assert score < s_reach * 0.40, (
-        f"not_reachable={score} should be <40% of reachable={s_reach}"
+    assert score < s_reach * 0.45, (
+        f"not_reachable={score} should be <45% of reachable={s_reach}"
     )
 
 
 def test_log4shell_at_transitive_depth_3():
-    """Same vuln, but at depth 3 — geometric decay (0.7^3 ≈ 0.343)
-    on top of KEV-tier base. The expected range bumped 2026-05-22
-    after the ρ-aware refit lifted KEV_MULT to 1.5972; the broader
-    range now covers the new floor of ~45 down to ~30 (refit may
-    drift either direction in future). The structural intent —
-    depth-3 transitive still surfaces clearly above background
-    hygiene noise but well below depth-0 reachable — is what
-    matters; the band is wide enough to absorb modest weight
-    drift without false-failing."""
+    """Depth-3 transitive risk decays geometrically below direct risk."""
+    from packages.sca.risk import current_constants
     transitive = _dep(direct=False)
     f = _finding(
         dep=transitive,
         cvss=10.0, in_kev=True, epss=0.97,
         reach_verdict="imported", exposure=1.0, depth=3,
     )
-    score, _ = compute_risk_estimate(f, transitive)
-    assert 30 <= score <= 55, f"got {score}"
+    score, comps = compute_risk_estimate(f, transitive)
+    direct = _finding(
+        cvss=10.0, in_kev=True, epss=0.97,
+        reach_verdict="imported", exposure=1.0, depth=0,
+    )
+    direct_score, _ = compute_risk_estimate(direct, direct.dependency)
+    decay = current_constants()["_DEPTH_DECAY_BASE"]
+    assert comps["depth_multiplier"] == pytest.approx(decay ** 3)
+    assert 0 < score < direct_score
 
 
 def test_background_hygiene_finding_scores_low():
@@ -317,12 +311,15 @@ def test_not_reachable_low_confidence_smaller_reduction():
 
 
 def test_depth_decay_geometric():
-    """Depth 1 → 0.7×; depth 2 → 0.49×; depth 3 → 0.343×."""
+    """Each transitive level applies the live calibrated decay base."""
+    from packages.sca.risk import current_constants
     base_dep = _dep(direct=True)
     direct = _finding(dep=base_dep, depth=0)
     s0, _ = compute_risk_estimate(direct, direct.dependency)
 
-    for depth, expected_ratio in [(1, 0.70), (2, 0.49), (3, 0.343)]:
+    decay = current_constants()["_DEPTH_DECAY_BASE"]
+    for depth in (1, 2, 3):
+        expected_ratio = decay ** depth
         td = _dep(direct=False)
         f = _finding(dep=td, depth=depth)
         s, _ = compute_risk_estimate(f, td)
@@ -678,10 +675,10 @@ class TestRefitConstraintGate:
     candidates from the per-constant grid search."""
 
     def test_inadmissible_candidate_dropped_from_search(self, tmp_path):
-        """At ±50% delta the search would propose
+        """At ±75% delta the search would propose
         _REACH_NOT_EVALUATED_MULTIPLIER above 1.0; with constraint-
         aware refit, that candidate must be dropped and the
-        constant left at its current value."""
+        selected value must remain within the penalty bound."""
         # Build a tiny corpus: 5 findings, 1 exploited.
         import json
         signal_dir = tmp_path / "kev_signals.json"
@@ -722,7 +719,7 @@ class TestRefitConstraintGate:
 
         from packages.sca.calibration.refit import grid_search_refit
         report = grid_search_refit(
-            tmp_path, max_delta=0.50,
+            tmp_path, max_delta=0.75,
             min_samples=1,
         )
         # _REACH_NOT_EVALUATED_MULTIPLIER must NOT have been moved

@@ -94,7 +94,8 @@ def test_joint_strictly_better_stays_joint_proposed(
     the joint values (not the single-pass ones)."""
     _tiny_corpus(tmp_path)
     from packages.sca.risk import current_constants
-    kev_cur = current_constants()["_KEV_FLOOR"]
+    constants = current_constants()
+    kev_cur = constants["_KEV_FLOOR"]
 
     def _metric(
         samples: list, *, overrides: dict | None = None,
@@ -117,9 +118,13 @@ def test_joint_strictly_better_stays_joint_proposed(
         out_path=tmp_path / "joint.json",
     )
     assert report.status == "proposed"
-    assert report.proposed_values.get("_KEV_FLOOR") == pytest.approx(
-        kev_cur * 0.9,
-    )
+    proposed = report.proposed_values.get("_KEV_FLOOR")
+    assert proposed is not None
+    # The metric rewards lowering KEV_FLOOR, but the joint search must
+    # respect the cross-constraint that it stays at or above the exploit-
+    # evidence floor. A refit may move that floor, so do not pin the old
+    # assumption that the exact -10% bracket edge is admissible.
+    assert constants["_EXPLOIT_EVIDENCE_FLOOR"] <= proposed < kev_cur
 
 
 def test_joint_rejected_when_single_pass_also_failed_gate(
