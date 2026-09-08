@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-09-01T10:44:52Z",
+    "fetched_at": "2026-09-08T10:15:53Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -1656,7 +1656,7 @@
       "date_added": "2022-03-03",
       "kev": true,
       "product": "Flash Player",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Adobe"
     },
     "CVE-2016-4171": {
@@ -7102,7 +7102,7 @@
       "date_added": "2022-09-14",
       "kev": true,
       "product": "Windows",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Microsoft"
     },
     "CVE-2022-38028": {
@@ -11557,6 +11557,13 @@
       "ransomware_use": false,
       "vendor": "SimpleHelp "
     },
+    "CVE-2026-48710": {
+      "date_added": "2026-09-02",
+      "kev": true,
+      "product": "Starlette",
+      "ransomware_use": false,
+      "vendor": "Kludex"
+    },
     "CVE-2026-48907": {
       "date_added": "2026-06-16",
       "kev": true,
@@ -11577,6 +11584,13 @@
       "product": "iCagenda",
       "ransomware_use": false,
       "vendor": "iCagenda"
+    },
+    "CVE-2026-49869": {
+      "date_added": "2026-09-02",
+      "kev": true,
+      "product": "Kestra OSS",
+      "ransomware_use": false,
+      "vendor": "Kestra"
     },
     "CVE-2026-50522": {
       "date_added": "2026-07-22",
@@ -11668,6 +11682,13 @@
       "product": "VMware vCenter",
       "ransomware_use": false,
       "vendor": "Broadcom"
+    },
+    "CVE-2026-59822": {
+      "date_added": "2026-09-02",
+      "kev": true,
+      "product": "LiteLLM",
+      "ransomware_use": false,
+      "vendor": "BerriAI"
     },
     "CVE-2026-60004": {
       "date_added": "2026-08-25",
@@ -11788,6 +11809,27 @@
       "ransomware_use": false,
       "vendor": "PaperCut"
     },
+    "CVE-2026-82329": {
+      "date_added": "2026-09-02",
+      "kev": true,
+      "product": "Artifactory",
+      "ransomware_use": false,
+      "vendor": "JFrog"
+    },
+    "CVE-2026-83548": {
+      "date_added": "2026-09-02",
+      "kev": true,
+      "product": "SMA1000 Appliances",
+      "ransomware_use": false,
+      "vendor": "SonicWall"
+    },
+    "CVE-2026-83549": {
+      "date_added": "2026-09-02",
+      "kev": true,
+      "product": "SMA1000 Appliances",
+      "ransomware_use": false,
+      "vendor": "SonicWall"
+    },
     "CVE-2026-8398": {
       "date_added": "2026-05-27",
       "kev": true,
@@ -11802,6 +11844,13 @@
       "ransomware_use": false,
       "vendor": "Citrix"
     },
+    "CVE-2026-85046": {
+      "date_added": "2026-09-04",
+      "kev": true,
+      "product": "Chromium V8",
+      "ransomware_use": false,
+      "vendor": "Google"
+    },
     "CVE-2026-9082": {
       "date_added": "2026-05-22",
       "kev": true,
@@ -11815,6 +11864,13 @@
       "product": "Langflow",
       "ransomware_use": false,
       "vendor": "IBM"
+    },
+    "CVE-2026-9586": {
+      "date_added": "2026-09-02",
+      "kev": true,
+      "product": "Switchvox",
+      "ransomware_use": false,
+      "vendor": "Sangoma"
     }
   }
 }
