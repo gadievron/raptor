@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+import pytest
+
 
 # packages/llm_analysis/tests/test_prep_only.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
@@ -62,3 +64,47 @@ class TestPrepOnlyFlag:
 
         args_no_flag = ap.parse_args(["--repo", "./target", "--sarif", "test.sarif"])
         assert args_no_flag.prep_only is False
+
+    def test_sequential_copilot_blocks_untrusted_agent_config(
+        self, tmp_path, monkeypatch,
+    ):
+        from core.llm.config import LLMConfig, ModelConfig
+        from core.security.cc_trust import set_trust_override
+        from packages.llm_analysis.agent import (
+            AgentCLITrustError,
+            AutonomousSecurityAgentV2,
+        )
+
+        (tmp_path / "AGENTS.md").write_text(
+            "target-owned instructions",
+            encoding="utf-8",
+        )
+        availability = MagicMock(
+            external_llm=False,
+            claude_code=False,
+            copilot_cli=True,
+            llm_available=True,
+        )
+        config = LLMConfig(
+            primary_model=ModelConfig(
+                provider="copilot-cli",
+                model_name="gpt-5.6-sol",
+            ),
+            fallback_models=[],
+            specialized_models={},
+        )
+        set_trust_override(False)
+        monkeypatch.setenv("RAPTOR_AGENT_CLI", "copilot")
+        with patch(
+            "packages.llm_analysis.agent.detect_llm_availability",
+            return_value=availability,
+        ), patch(
+            "packages.llm_analysis.agent.LLMClient",
+            side_effect=AssertionError("blocked client was constructed"),
+        ), pytest.raises(AgentCLITrustError, match="trust check"):
+            AutonomousSecurityAgentV2(
+                repo_path=tmp_path,
+                out_dir=tmp_path / "out",
+                llm_config=config,
+                prep_only=False,
+            )

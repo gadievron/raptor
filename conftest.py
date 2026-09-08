@@ -75,10 +75,10 @@ os.environ.setdefault(
     str(Path(_conftest_dir) / ".pytest-no-operator-models.json"),
 )
 
-# The claude CLI transport is the models.json analog for hosts running
-# inside (or alongside) a live claude session: with ``CLAUDECODE`` set
-# or ``claude`` on PATH, ``LLMClient()`` happily selects the
-# claudecode transport, and any test that reaches a real dispatch —
+# Agent CLI transports are the models.json analog for hosts running
+# inside (or alongside) a live Claude/Copilot session: availability
+# detection can select a keyless CLI transport, and any test that reaches
+# a real dispatch —
 # observed: run_orchestrator's IRIS refine loop building its
 # "library callers and tests" fallback client — spawns the OPERATOR'S
 # live CLI and spends real model budget as a side effect of running a
@@ -96,6 +96,7 @@ os.environ.setdefault(
 # cc_spawn_machinery_enabled fixture below.
 if os.environ.get("RAPTOR_TEST_LIVE_LLM") != "1":
     os.environ["RAPTOR_CC_TRANSPORT_DISABLED"] = "1"
+    os.environ["RAPTOR_COPILOT_TRANSPORT_DISABLED"] = "1"
 
 # Semgrep phones home on any invocation (semgrep.dev version check,
 # anonymous metrics) unless suppressed; tests that shell out to a real
@@ -355,6 +356,12 @@ def cc_spawn_machinery_enabled(monkeypatch):
     fixture must never dispatch the real CLI (declare fakes in the
     module docstring)."""
     monkeypatch.delenv("RAPTOR_CC_TRANSPORT_DISABLED", raising=False)
+
+
+@pytest.fixture
+def copilot_spawn_machinery_enabled(monkeypatch):
+    """Enable test-local fake Copilot spawn machinery without live calls."""
+    monkeypatch.setenv("RAPTOR_COPILOT_TRANSPORT_DISABLED", "0")
 
 
 _SESSIONS_DIR_SEQ = _itertools.count()

@@ -2,6 +2,8 @@
 
 import importlib.machinery
 import importlib.util
+import io
+import json
 import os
 import subprocess
 import sys
@@ -108,6 +110,58 @@ class TestToolFailureMarker(unittest.TestCase):
                 sys.argv = ["hook", "tool-failure"]
                 _hook_mod.main()
             self.assertFalse((run / FAILURE_MARKER).exists())
+
+    def test_ignores_non_raptor_copilot_shell_failure(self):
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            run = _make_running_run(out, "scan-001", "scan")
+            payload = {
+                "toolName": "bash",
+                "toolArgs": {"command": "git status"},
+            }
+            with patch.object(_hook_mod, "REPO_ROOT", Path(tmp)), \
+                 patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), \
+                 patch("core.run.metadata._get_session_pid",
+                       return_value=SESSION_PID):
+                sys.argv = ["hook", "tool-failure"]
+                _hook_mod.main()
+            self.assertFalse((run / FAILURE_MARKER).exists())
+
+    def test_accepts_copilot_tool_args_for_raptor_command(self):
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            run = _make_running_run(out, "scan-001", "scan")
+            payload = {
+                "toolName": "shell",
+                "toolArgs": {
+                    "command": "libexec/raptor-agentic --repo /tmp/target",
+                },
+            }
+            with patch.object(_hook_mod, "REPO_ROOT", Path(tmp)), \
+                 patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), \
+                 patch("core.run.metadata._get_session_pid",
+                       return_value=SESSION_PID):
+                sys.argv = ["hook", "tool-failure"]
+                _hook_mod.main()
+            self.assertTrue((run / FAILURE_MARKER).exists())
+
+    def test_accepts_claude_tool_input_for_absolute_raptor_command(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out = root / "out"
+            run = _make_running_run(out, "scan-001", "scan")
+            program = root / "libexec" / "raptor-agentic"
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {"command": f"{program} --repo /tmp/target"},
+            }
+            with patch.object(_hook_mod, "REPO_ROOT", root), \
+                 patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), \
+                 patch("core.run.metadata._get_session_pid",
+                       return_value=SESSION_PID):
+                sys.argv = ["hook", "tool-failure"]
+                _hook_mod.main()
+            self.assertTrue((run / FAILURE_MARKER).exists())
 
 
 class TestStopHook(unittest.TestCase):

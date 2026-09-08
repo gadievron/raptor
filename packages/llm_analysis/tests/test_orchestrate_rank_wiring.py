@@ -1,18 +1,18 @@
 """orchestrate()-level wiring test for the opt-in ranking stage.
 
-Drives the real orchestrate() far enough to cross the ranking
-insertion point, then exits deterministically via the blocked-CC
-path (block_cc_dispatch=True, llm_config=None) — no model, no
-subprocess. This pins the wiring contract: the stage runs only when
-rank_findings=True, and it receives the FULL pre-cap findings list
-(rank-then-spend requires ranking before the max_findings cut, which
-sits between the ranking call and the dispatch exit we use here).
+Drives the real orchestrate() far enough to cross the ranking insertion
+point, then exits deterministically when the mocked external client is
+constructed. This pins the wiring contract: the stage runs only when
+rank_findings=True, and it receives the FULL pre-cap findings list.
 """
 
 from __future__ import annotations
 
 import json
 
+import pytest
+
+from core.llm.config import LLMConfig, ModelConfig
 from packages.llm_analysis.orchestrator import orchestrate
 
 
@@ -41,8 +41,20 @@ def _quiet_preseeds(monkeypatch, tmp_path):
     monkeypatch.setenv("RAPTOR_DIR", str(tmp_path))
 
 
+def _external_config():
+    return LLMConfig(
+        primary_model=ModelConfig(
+            provider="anthropic",
+            model_name="test-ranking-model",
+            max_context=32_000,
+        ),
+        fallback_models=[],
+        specialized_models={},
+    )
+
+
 def test_rank_stage_receives_full_precap_findings(
-    monkeypatch, tmp_path, capsys,
+    monkeypatch, tmp_path,
 ):
     calls = {}
 
@@ -55,26 +67,27 @@ def test_rank_stage_receives_full_precap_findings(
         "packages.llm_analysis.rank_stage.rank_findings_for_analysis",
         fake_rank,
     )
-    report = _write_prep_report(tmp_path, n=4)
-    result = orchestrate(
-        prep_report_path=report,
-        repo_path=tmp_path,
-        out_dir=tmp_path,
-        max_findings=2,          # cap sits AFTER the ranking call
-        llm_config=None,
-        block_cc_dispatch=True,  # deterministic exit after the stage
-        rank_findings=True,
+    monkeypatch.setattr(
+        "core.llm.client.LLMClient",
+        lambda config: (_ for _ in ()).throw(
+            RuntimeError("stop after ranking"),
+        ),
     )
-    assert result is None
-    # Anchor: the run exited via the intended blocked-CC path — i.e.
-    # it got PAST the ranking insertion point and the cap, not out of
-    # an earlier report-parse/empty-findings return.
-    assert "CC dispatch blocked" in capsys.readouterr().err
+    report = _write_prep_report(tmp_path, n=4)
+    with pytest.raises(RuntimeError, match="stop after ranking"):
+        orchestrate(
+            prep_report_path=report,
+            repo_path=tmp_path,
+            out_dir=tmp_path,
+            max_findings=2,          # cap sits AFTER the ranking call
+            llm_config=_external_config(),
+            rank_findings=True,
+        )
     # The stage saw every finding, in input order, before the cap.
     assert calls["ids"] == ["f0", "f1", "f2", "f3"]
 
 
-def test_rank_stage_not_invoked_by_default(monkeypatch, tmp_path, capsys):
+def test_rank_stage_not_invoked_by_default(monkeypatch, tmp_path):
     def fail_rank(*args, **kwargs):
         raise AssertionError("ranking stage must not run without opt-in")
 
@@ -83,16 +96,17 @@ def test_rank_stage_not_invoked_by_default(monkeypatch, tmp_path, capsys):
         "packages.llm_analysis.rank_stage.rank_findings_for_analysis",
         fail_rank,
     )
-    report = _write_prep_report(tmp_path, n=4)
-    result = orchestrate(
-        prep_report_path=report,
-        repo_path=tmp_path,
-        out_dir=tmp_path,
-        llm_config=None,
-        block_cc_dispatch=True,
+    monkeypatch.setattr(
+        "core.llm.client.LLMClient",
+        lambda config: (_ for _ in ()).throw(
+            RuntimeError("stop after skipped ranking stage"),
+        ),
     )
-    assert result is None
-    # Anchor: the run crossed the (skipped) insertion point and died
-    # on the blocked-CC exit, not on an earlier degenerate return —
-    # otherwise this test proves nothing about the opt-in gate.
-    assert "CC dispatch blocked" in capsys.readouterr().err
+    report = _write_prep_report(tmp_path, n=4)
+    with pytest.raises(RuntimeError, match="skipped ranking stage"):
+        orchestrate(
+            prep_report_path=report,
+            repo_path=tmp_path,
+            out_dir=tmp_path,
+            llm_config=_external_config(),
+        )

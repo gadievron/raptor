@@ -515,7 +515,10 @@ class CrashAnalysisAgent:
         # Detect LLM availability and choose provider
         availability = detect_llm_availability()
 
-        if availability.external_llm:
+        if (
+            availability.external_llm
+            or getattr(availability, "copilot_cli", False) is True
+        ):
             self.llm_config = llm_config or LLMConfig()
             self.llm = LLMClient(self.llm_config)
 

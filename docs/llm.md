@@ -6,7 +6,7 @@ model selection, multi-model workflows, and cost management.
 
 ## Supported Providers
 
-Eight providers are supported. RAPTOR probes for configured providers in this order
+Ten providers are supported. RAPTOR probes for configured providers in this order
 and uses the first one found (the resumable Claude Code variant is never
 auto-selected — pick it explicitly in `models.json`):
 
@@ -20,11 +20,16 @@ auto-selected — pick it explicitly in `models.json`):
 | Ollama | None (local) | `openai` | auto-detected |
 | Claude Code | None (`claude` CLI on PATH) | None | (session model) |
 | Claude Code (resumable) | None (`claude` CLI on PATH) | None | (session model) |
+| Copilot CLI | None (`copilot` CLI on PATH) | None | `gpt-5.6-sol` |
+| Copilot CLI (resumable) | None (`copilot` CLI on PATH) | None | `gpt-5.6-sol` |
 
 `claudecode-resumable` (`"provider": "claudecode-resumable"` in
 `models.json`) reuses one Claude Code session across calls via
 `--resume`, so turn 2+ pays near-zero input cost on long multi-turn
 workloads; a stale session resets and retries as fresh.
+
+Copilot parity transport names are `copilotcli` and
+`copilotcli-resumable` (same semantics as the claudecode pair).
 
 See [dependencies](dependencies.md) for SDK installation.
 
@@ -119,6 +124,117 @@ mode-0700 neutral working directory — which also means no project
 CLAUDE.md, settings, or hooks are loaded. User-level settings still
 load (some installs carry backend selection there); restricting
 `--setting-sources` further is deliberately NOT done for that reason.
+
+### GitHub Copilot CLI transport
+
+Copilot is an **opt-in end-to-end** launcher path: `raptor --copilot`.
+Claude remains the default when the flag is omitted.
+
+Top-level interactive launch behavior on `--copilot`:
+
+- Default model is `gpt-5.6-sol` (unless `--model` is passed).
+- No billed preflight model call is run at launch; compatibility checks use
+  local `copilot --help` capability probing only.
+- No launcher-level auto-retry is injected.
+- `--continue` leaves the resumed interactive model untouched. Because
+  Copilot does not expose that stored model to the launcher, separate internal
+  prompt-mode calls use `--model auto` and disable RAPTOR's model-substitution
+  chain rather than falsely reporting the default Sol model.
+
+Internal Copilot dispatch fallback policy is availability-only. With no explicit
+model pin, fallback candidates are ordered:
+`gpt-5.3-codex`, `claude-fable-5.1`, `claude-fable-5`, then other active
+non-retired Claude-family models in RAPTOR's model catalog. Passing explicit
+`--model` disables this automatic fallback behavior.
+
+Configured external API providers still take priority for analysis dispatch.
+If every external analysis call fails, RAPTOR falls back to the selected agent
+CLI (`copilotcli` in Copilot mode, `claudecode` in Claude mode) only when the
+target passes that CLI's repository trust gate.
+
+Model naming note: Copilot CLI uses dotted aliases (for example
+`claude-fable-5.1`), while RAPTOR's canonical catalog IDs use dash-separated
+patch segments (`claude-fable-5-1`). RAPTOR normalizes both spellings.
+
+Usage accounting surfaces both:
+
+- Copilot-native usage (`premium_request_cost`, `nano_aiu`, request counts) —
+  authoritative and model-dependent
+- RAPTOR token-estimated USD (for cross-provider budget comparability only)
+
+Do not assume a fixed premium-request or AI-unit multiplier across models.
+Use the native Copilot usage fields as the billing source of truth.
+
+`RAPTOR_COPILOT_MAX_AI_CREDITS` is applied only when explicitly set/passed; it
+is not auto-injected by launcher defaults.
+
+#### Copilot operator knobs (env)
+
+| Variable | Effect |
+|---|---|
+| `RAPTOR_COPILOT_TRANSPORT_DISABLED` | Refuse billed Copilot subprocess calls (detect/config still work) |
+| `RAPTOR_COPILOT_STREAM_STDOUT_CAP` | Stdout retention cap for streamed Copilot JSON output (default 64 MiB) |
+| `RAPTOR_COPILOT_STREAM_STDERR_CAP` | Stderr retention cap for streamed Copilot JSON output (default 8 MiB) |
+| `RAPTOR_COPILOT_MODEL` | Launcher export of selected/default Copilot model (`gpt-5.6-sol` for new sessions, explicit `--model`, or `auto` for separate internal calls during `--continue`) |
+| `RAPTOR_COPILOT_MODEL_EXPLICIT` | Launcher export (`0` only for a new-session default; `1` for an explicit pin or resume-safe `auto`) used by fallback policy |
+| `RAPTOR_COPILOT_FALLBACK_MODELS` | Optional comma-separated replacement for the catalog-derived internal fallback sequence |
+| `RAPTOR_COPILOT_MAX_AI_CREDITS` | Applies `--max-ai-credits` only when explicitly set by caller/config |
+| `RAPTOR_COPILOT_AUTH_SOCKET` | Launcher-created private token relay for trusted RAPTOR descendants when Copilot auth came only from the environment; stripped from target processes |
+
+#### Copilot security posture
+
+Two distinct Copilot execution paths are used:
+
+- **Pure provider calls** (analysis dispatch) run as trusted Copilot CLI
+  subprocesses with no usable internal tools. RAPTOR uses this as a pure
+  model substrate, not as an in-process shell runner.
+- **Unattended skill/build command children** run with Copilot MXC policy
+  enabled (`--experimental --sandbox`) and a run-local private HOME.
+
+For MXC command children, RAPTOR stages a private sandbox policy
+(`.copilot-home/settings.json`) with:
+
+- `allowBypass=false`
+- `allowDevToolAccess=false`
+- `auth.git=false`, `auth.gh=false`
+- exact `filesystem.readwritePaths` / `filesystem.readonlyPaths`
+- `--disallow-temp-dir` so Copilot does not add an implicit system-temp grant
+- `network.allowOutbound=false`, `network.allowLocalNetwork=false`
+- exact tool allowlist (`--available-tools` + `--allow-tool`)
+- secret token handoff only via
+  `--secret-env-vars=COPILOT_GITHUB_TOKEN,GH_TOKEN,GITHUB_TOKEN,RAPTOR_SESSION_TOKEN`
+
+Interactive launch pre-approves only the reviewed high-level RAPTOR wrappers.
+Internal execution shims such as `raptor-pid1-shim` and
+`raptor-seatbelt-shim` are never covered by a wildcard shell grant.
+
+On Linux, environment-only Copilot authentication is relayed to nested trusted
+RAPTOR entrypoints through a mode-0600 Unix socket. The broker verifies peer
+UID, launcher ancestry, exact interpreter identity, and an exact RAPTOR
+entrypoint allowlist before returning the token. Target environments and
+non-LLM helper children strip the socket and token variables.
+
+Before any Copilot child receives a target through `--add-dir`, the selected
+agent trust gate checks for target-owned instructions and executable/model
+configuration. `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`,
+`.github/copilot-instructions.md`, `.github/agents`, `.github/skills`,
+`.github/hooks`, `.claude/agents`, `.claude/commands`, `.claude/skills`, and
+workspace MCP files block unattended dispatch by default. `--trust-repo`
+overrides this only after the operator has reviewed those files.
+Launcher trust is persisted with the canonical target path in the authenticated
+session registry; it never grants trust to another target, and an explicit
+`--no-trust-repo` remains authoritative.
+
+The outer RAPTOR Linux mount/network sandbox and Copilot MXC are not layered
+on the same child process in this path (MXC cannot nest there). Copilot model
+traffic remains allowed; model-directed shell/tool commands are confined by
+the MXC policy and have no outbound or local-network access.
+
+The per-call Copilot workspace (private HOME, selected-agent instructions,
+session database, logs, and transcript) is removed on every return/exception
+path. Run output retains only `copilot-usage.json` and the normalized
+`copilot-transport-usage.json`. Copilot's extracted public runtime package is
+cached separately under `~/.cache/raptor/copilot-cli/`.
 
 ## Quick Start
 
@@ -359,7 +475,7 @@ Entry fields:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `provider` | No | Inferred from model name if unambiguous (`claude-*` = anthropic, `gpt-*` = openai, `us.anthropic.*` / `anthropic.*` = bedrock) |
-| `model` | Mostly | Model identifier. Anthropic aliases auto-resolve to dated snapshots. Optional for `bedrock` (backfilled — see Minimal Configuration) and `claudecode` (session default). |
+| `model` | Mostly | Model identifier. Anthropic aliases auto-resolve to dated snapshots. Optional for `bedrock` (backfilled — see Minimal Configuration), `claudecode` (session default), and `copilotcli` (launcher default is `gpt-5.6-sol`). |
 | `api_key` | No | Falls back to provider env var. Not needed for Bedrock SigV4 (the dispatcher signs) or claudecode (the CLI authenticates itself). |
 | `role` | No | `analysis`, `code`, `consensus`, `fallback`, `judge`, `aggregate` |
 | `max_context` | No | Context window size (tokens) |
@@ -373,6 +489,10 @@ A `{"provider": "claudecode", "role": "fallback"}` entry declares the
 Claude Code CLI transport as an explicit safety net behind an API
 primary — resolvable whenever the `claude` binary is installed.
 
+Likewise, `{"provider": "copilotcli", "role": "fallback"}` declares the
+Copilot CLI safety net (opt-in launcher path uses provider names
+`copilotcli` / `copilotcli-resumable`).
+
 ### Model Selection Logic
 
 1. `--model <name>` on CLI pins a specific model (bypasses auto-selection).
@@ -383,6 +503,10 @@ primary — resolvable whenever the `claude` binary is installed.
 3. Provider auto-detect: first configured provider in the default order wins.
 4. Shorthand resolution: bare tokens like `haiku`, `opus`, `sonnet` match against
    configured model names. Ambiguous matches raise an error.
+
+Copilot transport is deliberate opt-in (`raptor --copilot` for interactive
+sessions, or explicit `copilotcli` provider entries) rather than API-key
+auto-detect.
 
 ### Fast-Tier Models
 
@@ -661,6 +785,11 @@ behavior, and credential-isolation details — is
 | `RAPTOR_CC_MAX_WORKERS` | Claude Code subprocess concurrency cap (default 4) |
 | `RAPTOR_CC_EFFORT` / `RAPTOR_CC_FALLBACK_MODEL` | Claude Code child effort / fallback model |
 | `RAPTOR_CC_PROBE_WARM` | `0` skips the run-start probe warm |
+| `RAPTOR_COPILOT_TRANSPORT_DISABLED` | Refuse billed Copilot subprocess calls |
+| `RAPTOR_COPILOT_STREAM_STDOUT_CAP` / `RAPTOR_COPILOT_STREAM_STDERR_CAP` | Copilot subprocess retention caps (stdout/stderr) |
+| `RAPTOR_COPILOT_MODEL` / `RAPTOR_COPILOT_MODEL_EXPLICIT` | Launcher-exported Copilot model selection state |
+| `RAPTOR_COPILOT_FALLBACK_MODELS` | Optional comma-separated internal fallback override |
+| `RAPTOR_COPILOT_MAX_AI_CREDITS` | Copilot `--max-ai-credits` ceiling (explicit use only) |
 | `RAPTOR_LLM_CACHE` | `off` disables the LLM response cache entirely |
 | `RAPTOR_LLM_CACHE_TTL_S` | LLM response cache TTL override (default 24 h) |
 | `RAPTOR_HTTP_KEEPALIVE_S` | SDK transport idle keepalive expiry (default 60) |

@@ -188,9 +188,16 @@ fi
 
 # Extract file path from hook payload (JSON on stdin)
 if [ "$HAVE_JQ" = "1" ]; then
-    FILE_PATH=$(jq -r '.tool_input.file_path // empty' 2>/dev/null) || true
+    FILE_PATH=$(jq -r '
+        .tool_input.file_path
+        // .tool_input.path
+        // .toolArgs.path
+        // empty
+    ' 2>/dev/null) || true
 else
-    FILE_PATH=$(python3 "$HELPER" get - tool_input.file_path 2>/dev/null) || true
+    FILE_PATH=$(python3 "$HELPER" get-first - \
+        tool_input.file_path tool_input.path toolArgs.path \
+        2>/dev/null) || true
 fi
 [ -z "$FILE_PATH" ] && exit 0
 

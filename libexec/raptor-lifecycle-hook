@@ -3,7 +3,7 @@
 # (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Lifecycle hooks: auto-complete/fail runs left in 'running' state.
 
-Called by Claude Code hooks, NOT by the LLM.
+Called by Claude Code or GitHub Copilot CLI hooks, NOT by the LLM.
 
 Modes:
   stop          — complete orphaned single-call runs (tool_pid dead)
@@ -20,6 +20,8 @@ The LLM's explicit complete/fail always takes priority (status is
 already not-running, so hooks skip).
 """
 import sys
+import json
+import shlex
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]  # raptor/
@@ -61,6 +63,57 @@ _MAX_META_BYTES = 8 * 1024 * 1024
 _MULTI_TURN_COMMANDS = frozenset({"validate", "understand", "audit"})
 
 
+def _failed_raptor_command() -> bool:
+    """Whether the hook payload describes a failed RAPTOR shell command.
+
+    Claude and Copilot use different key casing, so accept both payload
+    shapes. Direct/manual callers and older runtimes that provide no readable
+    stdin preserve the historical behavior and mark the failure.
+    """
+    try:
+        raw = sys.stdin.read()
+    except (OSError, ValueError):
+        return True
+    if not raw.strip():
+        return True
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+
+    tool_name = payload.get("tool_name") or payload.get("toolName")
+    if not isinstance(tool_name, str) or tool_name.lower() not in {
+        "bash", "shell",
+    }:
+        return False
+    tool_input = payload.get("tool_input")
+    if tool_input is None:
+        tool_input = payload.get("toolInput")
+    if tool_input is None:
+        tool_input = payload.get("toolArgs")
+    if not isinstance(tool_input, dict):
+        return False
+    command = tool_input.get("command")
+    if not isinstance(command, str) or not command.strip():
+        return False
+    try:
+        argv = shlex.split(command, posix=True)
+    except ValueError:
+        return False
+    if not argv:
+        return False
+    program = argv[0]
+    if program.startswith("libexec/raptor-"):
+        return True
+    try:
+        return Path(program).resolve().parent == REPO_ROOT / "libexec" \
+            and Path(program).name.startswith("raptor-")
+    except OSError:
+        return False
+
+
 def main():
     if len(sys.argv) < 2 or sys.argv[1] not in ("stop", "session-end", "tool-failure"):
         print(f"Usage: {Path(__file__).name} stop|session-end|tool-failure",
@@ -68,6 +121,8 @@ def main():
         sys.exit(1)
 
     event = sys.argv[1]
+    if event == "tool-failure" and not _failed_raptor_command():
+        return
 
     from core.json import load_json
     from core.run.metadata import (
@@ -81,9 +136,9 @@ def main():
     session_pid = _get_session_pid()
     if session_pid is None:
         # Pre-fix this branch returned silently. The hook is
-        # registered against three Claude Code events
+        # registered against three agent CLI events
         # (Stop/SessionEnd/PostToolUseFailure); a None result here
-        # means we could NOT walk up to a `claude` parent process
+        # means we could NOT resolve an owning agent CLI process
         # — typically because the operator invoked the hook
         # directly, ran it under a non-Claude harness, or the
         # process tree was rewritten by a container init that
@@ -98,7 +153,7 @@ def main():
         # nothing to do; failing here would surface in Claude Code
         # as a hook error and confuse the operator).
         sys.stderr.write(
-            f"raptor-lifecycle-hook[{event}]: no claude-code ancestor "
+            f"raptor-lifecycle-hook[{event}]: no agent CLI session "
             f"in pid tree from pid {os.getpid()}; nothing to do\n"
         )
         return

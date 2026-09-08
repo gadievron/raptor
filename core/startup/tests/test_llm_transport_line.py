@@ -72,8 +72,13 @@ def test_none_when_seam_resolves_nothing(isolated_home, monkeypatch) -> None:
     assert startup_init._resolve_primary_transport() is None
 
 
-def test_claudecode_providers_map_to_none(isolated_home, monkeypatch) -> None:
-    for provider in ("claudecode", "claudecode-resumable"):
+def test_agent_cli_providers_map_to_none(isolated_home, monkeypatch) -> None:
+    for provider in (
+        "claudecode",
+        "claudecode-resumable",
+        "copilotcli",
+        "copilotcli-resumable",
+    ):
         monkeypatch.setattr(
             llm_config, "_get_default_primary_model",
             lambda prefer=None, *, offline=False, _p=provider:
@@ -172,6 +177,25 @@ def test_check_llm_keeps_no_external_when_seam_empty(
     )
     lines, _warnings = startup_init.check_llm()
     assert lines == ["   llm: no external LLM configured"]
+
+
+def test_check_llm_shows_selected_copilot(
+    isolated_home, monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        startup_init, "_resolve_primary_transport", lambda: None,
+    )
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda binary: "/usr/bin/copilot" if binary == "copilot" else None,
+    )
+    monkeypatch.setenv("RAPTOR_AGENT_CLI", "copilot")
+    monkeypatch.setenv("RAPTOR_COPILOT_MODEL", "gpt-5.6-sol")
+    lines, _warnings = startup_init.check_llm()
+    assert lines == [
+        "   llm: no external LLM configured",
+        "        copilot cli ✓ (selected, gpt-5.6-sol)",
+    ]
 
 
 def test_check_llm_parses_commented_models_json(

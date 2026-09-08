@@ -50,7 +50,7 @@ overview:
 | `/cve-env` | Pre-patch CVE environment build + verify |
 | `/analyze` | LLM analysis of existing SARIF |
 | `/ask` | Free-form prompt to any configured model |
-| `/version` | Show version |
+| `/raptor-version` | Show RAPTOR version (`/version` remains a Claude-only alias) |
 
 
 ## Feature Guides

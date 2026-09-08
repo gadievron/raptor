@@ -452,8 +452,8 @@ def _resolve_primary_transport() -> tuple[str, str, str] | None:
     agreeing with what a run will actually resolve outranks the
     sub-second import.
 
-    Claude Code providers map to ``None`` — the banner reports CC on
-    its own dedicated line and "external LLM" excludes it.
+    Agent CLI providers map to ``None`` — the banner reports them on
+    dedicated lines and "external LLM" excludes them.
 
     Returns ``(provider, model_name, auth_source)`` or ``None`` when
     resolution genuinely finds no external provider.
@@ -463,7 +463,7 @@ def _resolve_primary_transport() -> tuple[str, str, str] | None:
         mc = _get_default_primary_model(offline=True)
     except Exception:  # noqa: BLE001 — banner must render regardless
         return None
-    if mc is None or mc.provider.startswith("claudecode"):
+    if mc is None or mc.provider.startswith(("claudecode", "copilotcli")):
         return None
     if mc.provider == "bedrock":
         src = _bedrock_auth_source(bool(mc.api_key))
@@ -654,6 +654,15 @@ def check_llm() -> tuple[list, list]:
 
         if shutil.which("claude"):
             lines.append("        claude code ✓")
+        if shutil.which("copilot"):
+            selected = os.getenv("RAPTOR_AGENT_CLI") == "copilot"
+            model = os.getenv("RAPTOR_COPILOT_MODEL", "").strip()
+            suffix = (
+                f" (selected, {model})"
+                if selected and model
+                else " (selected)" if selected else ""
+            )
+            lines.append(f"        copilot cli ✓{suffix}")
 
     except Exception as e:  # noqa: BLE001
         lines.append("   llm: detection error")

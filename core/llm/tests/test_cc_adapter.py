@@ -116,7 +116,10 @@ class TestSystemPromptArgvHygiene:
         secret = "SYSPROMPT-SENTINEL " + "y" * 8000
         stub = tmp_path / "claude"
         stub.write_text(
-            "#!/bin/sh\ntr '\\0' ' ' < /proc/self/cmdline\n",
+            f"#!{sys.executable}\n"
+            "from pathlib import Path\n"
+            "print(Path('/proc/self/cmdline').read_bytes()"
+            ".replace(b'\\0', b' ').decode())\n",
             encoding="utf-8",
         )
         stub.chmod(0o755)

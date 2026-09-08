@@ -68,9 +68,15 @@ class LLMAvailability:
     Single source of truth — no caller should check env vars,
     PATH, or Ollama endpoints directly.
     """
-    external_llm: bool  # An LLM reachable via SDK (cloud keys, Ollama, config file)
+    external_llm: bool  # An LLM reachable by Python orchestration
     claude_code: bool   # Claude Code is available (running inside it, or installed on PATH)
     llm_available: bool  # Someone will do the reasoning work (external_llm or claude_code)
+    copilot_cli: bool = False  # Selected Copilot CLI transport is usable
+
+    @property
+    def agent_cli_available(self) -> bool:
+        """Whether the selected interactive agent has an LLM transport."""
+        return self.claude_code or self.copilot_cli
 
 
 def _validate_ollama_url(url: str) -> str:
@@ -553,6 +559,9 @@ def _models_config_path() -> Path:
 _CLI_TRANSPORT_PROVIDERS = frozenset({
     "claudecode", "claudecode-resumable",
     "claude-code", "claude-code-resumable", "claude_code",
+    "copilotcli", "copilotcli-resumable",
+    "copilot-cli", "copilot-cli-resumable",
+    "copilot_cli", "copilot_cli_resumable",
 })
 
 
@@ -963,19 +972,28 @@ def detect_llm_availability() -> LLMAvailability:
     in_claude_code = bool(os.getenv("CLAUDECODE"))
     claude_on_path = shutil.which("claude") is not None
     claude_code = in_claude_code or claude_on_path
+    copilot_cli = (
+        os.getenv("RAPTOR_AGENT_CLI", "").strip().lower() == "copilot"
+        and shutil.which("copilot") is not None
+    )
 
     external_llm = (
-        has_cloud_keys or has_config_file or has_ollama or has_dispatcher_route
+        has_cloud_keys or has_config_file or has_ollama
+        or has_dispatcher_route
     )
 
     availability = LLMAvailability(
         external_llm=external_llm,
         claude_code=claude_code,
-        llm_available=external_llm or claude_code,
+        llm_available=external_llm or claude_code or copilot_cli,
+        copilot_cli=copilot_cli,
     )
 
     logger.debug(
-        "LLM availability: external_llm=%s, claude_code=%s, llm_available=%s", availability.external_llm, availability.claude_code, availability.llm_available
+        "LLM availability: external_llm=%s, claude_code=%s, "
+        "copilot_cli=%s, llm_available=%s",
+        availability.external_llm, availability.claude_code,
+        availability.copilot_cli, availability.llm_available,
     )
 
     # Warn about specific misconfigurations

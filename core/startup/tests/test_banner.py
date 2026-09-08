@@ -9,7 +9,10 @@ from core.startup import banner
 
 
 def _version_line(text: str) -> str:
-    return next(ln for ln in text.splitlines() if "Based on Claude Code" in ln)
+    return next(
+        ln for ln in text.splitlines()
+        if "Claude Code / GitHub Copilot CLI" in ln
+    )
 
 
 def test_injects_version_with_leading_v_and_preserves_box_width():

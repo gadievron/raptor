@@ -79,6 +79,27 @@ class TestDispatchTask:
         assert processed["analysed_by"] == "test-model"
         assert processed["duration_seconds"] == 5.0
 
+    def test_process_result_surfaces_native_usage_and_attempts(self):
+        task = DispatchTask()
+        result = DispatchResult(
+            result={"is_true_positive": True},
+            native_usage={"premium_request_cost": 15},
+            attempted_models=(
+                "gpt-5.6-sol",
+                "gpt-5.3-codex",
+                "claude-fable-5.1",
+            ),
+        )
+        processed = task.process_result({}, result)
+        assert processed["native_usage"] == {
+            "premium_request_cost": 15,
+        }
+        assert processed["attempted_models"] == [
+            "gpt-5.6-sol",
+            "gpt-5.3-codex",
+            "claude-fable-5.1",
+        ]
+
     def test_process_result_omits_quality_on_happy_path(self):
         # quality defaults to 1.0; happy path must NOT pollute every
         # result dict with a "quality" field. gh #549.

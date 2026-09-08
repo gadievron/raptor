@@ -1370,15 +1370,17 @@ Natural-language routing: when the user says "ask gemini...", "ask claude...", "
 
 ---
 
-### /version
+### /raptor-version
 
 Print the running RAPTOR framework version.
 
 ```
-/version
+/raptor-version
 ```
 
-No flags.  Version is derived at render time via `git describe`.
+No flags. Version is derived at render time via `git describe`. Claude Code
+also accepts the legacy `/version` alias; GitHub Copilot CLI reserves that name
+for its own version command.
 
 ---
 

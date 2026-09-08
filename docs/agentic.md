@@ -190,13 +190,19 @@ kill the run.  Existing project threat models are preserved unless
 
 ## LLM dispatch
 
-Findings are dispatched for analysis one of two ways:
+Findings are dispatched for analysis one of three ways:
 
-- **Claude Code on PATH** -- spawns `claude -p` sub-agents in separate
-  processes (parallel by default; `--sequential` forces one at a time).
+- **Selected agent CLI** -- Claude Code remains the default; a
+  `raptor --copilot` session uses the `copilotcli` transport for internal
+  analysis instead of spawning standalone Claude.
 - **External LLM configured** -- dispatches via API calls using the provider
-  configured in `models.json` or environment variables.  When both are
-  available, the external LLM is preferred; Claude Code is the fallback.
+  configured in `models.json` or environment variables.
+- **Prep-only/manual** -- used when no analysis transport is available.
+
+When both an external provider and the selected agent CLI are available, the
+external provider is preferred and the selected CLI is the trust-gated
+fallback. `--sequential` uses the same provider and trust rules as the parallel
+orchestrator.
 
 If **neither** is available, the pipeline produces prep-only output (scan,
 dedup, prep, dataflow -- no analysis).  In that mode the findings sit in

@@ -541,7 +541,7 @@ class RaptorConfig:
         # Both are validated by get_out_dir() (refuses system paths)
         # so an attacker setting them gains nothing beyond what they
         # already had with same-UID write access to ~/raptor-out.
-        "RAPTOR_OUT_DIR", "RAPTOR_DIR",
+        "RAPTOR_OUT_DIR", "RAPTOR_DIR", "RAPTOR_AGENT_CLI",
         #   RAPTOR_TARGET_KIND  operator's target-classification override
         #                    (auto|library|hybrid|application). Must survive
         #                    the subprocess boundary so an inventory rebuilt in
@@ -585,6 +585,11 @@ class RaptorConfig:
         # on the keep-trust dispatch arm, which retains the full set
         # by contract.
         "RAPTOR_DIR", "RAPTOR_OUT_DIR", "RAPTOR_TARGET_KIND",
+        "RAPTOR_AGENT_CLI",
+        "RAPTOR_COPILOT_MODEL", "RAPTOR_COPILOT_MODEL_EXPLICIT",
+        "RAPTOR_COPILOT_FALLBACK_MODELS",
+        "RAPTOR_COPILOT_MAX_AI_CREDITS",
+        "RAPTOR_COPILOT_AUTH_SOCKET",
     })
 
     # CI markers ride the allowlist: RAPTOR's own interactivity gate
@@ -631,6 +636,11 @@ class RaptorConfig:
         # whole-process-tree hermeticity guarantee hold through
         # get_safe_env() children too.
         "RAPTOR_CC_TRANSPORT_DISABLED",
+        "RAPTOR_COPILOT_TRANSPORT_DISABLED",
+        "RAPTOR_COPILOT_MODEL", "RAPTOR_COPILOT_MODEL_EXPLICIT",
+        "RAPTOR_COPILOT_FALLBACK_MODELS",
+        "RAPTOR_COPILOT_MAX_AI_CREDITS",
+        "RAPTOR_COPILOT_AUTH_SOCKET",
     })
 
     # Environment variables that can be exploited for command injection or
@@ -1189,6 +1199,7 @@ class RaptorConfig:
     LLM_ROUTING_ENV_PREFIXES = (
         "RAPTOR_BEDROCK_",
         "RAPTOR_CC_",
+        "RAPTOR_COPILOT_",
     )
 
     @staticmethod
@@ -1282,7 +1293,14 @@ class RaptorConfig:
         """
         drop = set(RaptorConfig.LLM_API_KEY_VARS)
         drop.update(RaptorConfig.LLM_ROUTING_ENV_VARS)
-        drop.update(("RAPTOR_LLM_SOCKET", "RAPTOR_LLM_TOKEN_FD"))
+        drop.update((
+            "RAPTOR_LLM_SOCKET",
+            "RAPTOR_LLM_TOKEN_FD",
+            "COPILOT_GITHUB_TOKEN",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "RAPTOR_COPILOT_AUTH_SOCKET",
+        ))
         prefixes = RaptorConfig.LLM_ROUTING_ENV_PREFIXES
         for name in [k for k in env
                      if k in drop or k.startswith(prefixes)]:
@@ -1294,6 +1312,7 @@ class RaptorConfig:
         # on PATH and CLAUDECODE — the switch is the layer that makes
         # such a bug loud and spend-free instead of live.
         env["RAPTOR_CC_TRANSPORT_DISABLED"] = "1"
+        env["RAPTOR_COPILOT_TRANSPORT_DISABLED"] = "1"
         return env
 
     @staticmethod

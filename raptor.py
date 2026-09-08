@@ -1566,7 +1566,13 @@ def main():
     # codeql/agentic handlers re-inject it for their children.
     global _TRUST_REPO_SEEN, _NO_TRUST_REPO_SEEN
     if "--no-trust-repo" in sys.argv:
+        from core.security.cc_trust import set_trust_override
+        from core.security.codeql_trust import (
+            set_trust_override as _ql_set_trust_override,
+        )
         _NO_TRUST_REPO_SEEN = True
+        set_trust_override(False)
+        _ql_set_trust_override(False)
         sys.argv = [a for a in sys.argv if a != "--no-trust-repo"]
     if "--trust-repo" in sys.argv:
         from core.security.cc_trust import set_trust_override

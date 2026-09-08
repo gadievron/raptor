@@ -1181,7 +1181,11 @@ class LLMClient:
         # Once per PROCESS, not per client: transports that spawn a
         # client per call (claude CLI) otherwise print this banner on
         # every worker call.
-        if not availability.external_llm and not _transport_banner_shown():
+        if (
+            not availability.external_llm
+            and getattr(availability, "copilot_cli", False) is not True
+            and not _transport_banner_shown()
+        ):
             primary = self.config.primary_model
             if primary is not None and primary.provider.startswith("claudecode"):
                 # Say WHY the CLI transport won. "No external LLM
@@ -1343,7 +1347,11 @@ class LLMClient:
     def recommended_max_workers(self) -> int:
         """Safe concurrency cap derived from the primary model's RPM."""
         from core.llm.concurrency import derive_max_workers
-        return derive_max_workers(self.model_name)
+        primary = self.config.primary_model
+        return derive_max_workers(
+            self.model_name,
+            provider=primary.provider if primary else None,
+        )
 
     @property
     def scorecard(self):
@@ -1968,8 +1976,8 @@ class LLMClient:
 
     def _get_cached_structured_response(
         self, cache_key: str,
-    ) -> tuple[dict[str, Any], str] | None:
-        """Retrieve cached (result_dict, raw) tuple if available."""
+    ) -> tuple[dict[str, Any], str, dict[str, Any]] | None:
+        """Retrieve cached result, raw response, and provenance metadata."""
         if not self.config.enable_caching:
             return None
 
@@ -1991,7 +1999,7 @@ class LLMClient:
             logger.debug("Structured cache stale (TTL): %s", cache_key)
             return None
         logger.debug("Structured cache hit: %s", cache_key)
-        return data["result"], data["raw"]
+        return data["result"], data["raw"], data
 
     def _save_structured_to_cache(
         self, cache_key: str, response: "StructuredResponse",
@@ -2012,6 +2020,7 @@ class LLMClient:
                 "raw": response.raw,
                 "model": response.model,
                 "provider": response.provider,
+                "resolved_model": response.resolved_model,
                 "tokens_used": response.tokens_used,
                 "timestamp": time.time(),
             }), mode=0o600)
@@ -2887,7 +2896,11 @@ class LLMClient:
         with self._key_lock(cache_key):
             cached = self._get_cached_structured_response(cache_key)
             if cached is not None:
-                cached_result, cached_raw = cached
+                if len(cached) == 2:
+                    cached_result, cached_raw = cached
+                    cached_meta = {}
+                else:
+                    cached_result, cached_raw, cached_meta = cached
                 # Strict schema floor applies to cache replays too —
                 # entries written before the floor existed (or by an
                 # older RAPTOR) may carry smuggled fields. Treat a
@@ -2922,15 +2935,22 @@ class LLMClient:
                     raw=cached_raw,
                     cost=0.0,
                     tokens_used=0,
-                    model=model_config.model_name,
+                    model=(
+                        cached_meta.get("model")
+                        or model_config.model_name
+                    ),
                     # Lowercase — same normalisation as generate()'s
                     # cached path (see the comment there): a mixed-case
                     # LLMConfig provider would otherwise split
                     # cached/fresh responses into separate buckets for
                     # consumers grouping by provider.
-                    provider=model_config.provider.lower(),
+                    provider=str(
+                        cached_meta.get("provider")
+                        or model_config.provider
+                    ).lower(),
                     duration=0.0,
                     cached=True,
+                    resolved_model=cached_meta.get("resolved_model"),
                 )
 
             # Try models in order (same tier only: local→local, cloud→cloud)
@@ -3014,6 +3034,8 @@ class LLMClient:
                             provider, "total_input_tokens")
                         out_before = _safe_counter(
                             provider, "total_output_tokens")
+                        thinking_before = _safe_counter(
+                            provider, "total_thinking_tokens")
                         cread_before = _safe_counter(
                             provider, "total_cache_read_tokens")
                         cwrite_before = _safe_counter(
@@ -3060,6 +3082,10 @@ class LLMClient:
                             0, _safe_counter(
                                 provider, "total_output_tokens",
                             ) - out_before)
+                        thinking_delta = max(
+                            0, _safe_counter(
+                                provider, "total_thinking_tokens",
+                            ) - thinking_before)
                         cread_delta = max(
                             0, _safe_counter(
                                 provider, "total_cache_read_tokens",
@@ -3091,6 +3117,8 @@ class LLMClient:
                                 result_tuple, "input_tokens", 0) or 0)
                             out_delta = int(getattr(
                                 result_tuple, "output_tokens", 0) or 0)
+                            thinking_delta = int(getattr(
+                                result_tuple, "thinking_tokens", 0) or 0)
                             cread_delta = int(getattr(
                                 result_tuple, "cache_read_tokens", 0) or 0)
                             cwrite_delta = int(getattr(
@@ -3138,30 +3166,41 @@ class LLMClient:
                         # (StructuredResponse carries it; a bare-tuple return
                         # yields None — alias-only, never guessed).
                         resolved = getattr(result_tuple, "resolved_model", None)
+                        actual_model = (
+                            getattr(result_tuple, "model", "")
+                            or model.model_name
+                        )
+                        actual_provider = str(
+                            getattr(result_tuple, "provider", "")
+                            or model.provider
+                        ).lower()
                         structured_response = StructuredResponse(
                             result=result_dict,
                             raw=raw,
                             cost=cost_delta,
                             tokens_used=tokens_delta,
-                            model=model.model_name,
-                            # Lowercase — keeps cached and fresh
-                            # structured responses in the same
-                            # provider bucket (matches the providers'
-                            # own ``config.provider.lower()``).
-                            provider=model.provider.lower(),
+                            model=actual_model,
+                            provider=actual_provider,
                             duration=duration,
                             resolved_model=resolved,
                             input_tokens=in_delta,
                             output_tokens=out_delta,
+                            thinking_tokens=thinking_delta,
                             cache_read_tokens=cread_delta,
                             cache_write_tokens=cwrite_delta,
+                            native_usage=dict(getattr(
+                                result_tuple, "native_usage", {},
+                            ) or {}),
+                            attempted_models=tuple(getattr(
+                                result_tuple, "attempted_models", (),
+                            ) or ()),
                         )
                         self._record_fired_model(
-                            model.provider, model.model_name, resolved,
+                            actual_provider, actual_model, resolved,
                             "primary" if model_idx == 0 else "fallback",
                         )
                         self._record_usage(
-                            model.model_name,
+                            actual_model,
                             cost=cost_delta,
                             tokens=tokens_delta,
                             input_tokens=in_delta,
@@ -3173,8 +3212,8 @@ class LLMClient:
                             event="call",
                             disposition="ok",
                             call_class=call_class,
-                            provider=model.provider.lower(),
-                            model=model.model_name,
+                            provider=actual_provider,
+                            model=actual_model,
                             structured=True,
                             attempt=attempt + 1,
                             timeout_retries=timeout_failures,
@@ -3189,7 +3228,10 @@ class LLMClient:
                         # Schema reliability signal — the response parsed and
                         # matched the schema (otherwise we'd be in the except
                         # branch). Recorded under _structured at flush time.
-                        self._record_schema_validity(model.model_name, success=True)
+                        self._record_schema_validity(
+                            actual_model,
+                            success=True,
+                        )
                         # Cache before returning so repeated identical calls
                         # short-circuit the provider entirely. Cache key is
                         # tied to model_config (the first-choice model), so
@@ -3401,4 +3443,3 @@ class LLMClient:
             if self.cache_tamper_events:
                 stats["cache_tamper_events"] = self.cache_tamper_events
             return stats
-

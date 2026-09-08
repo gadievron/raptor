@@ -49,6 +49,10 @@ from packages.llm_analysis.cc_dispatch import _safe_id
 logger = get_logger()
 
 
+class AgentCLITrustError(RuntimeError):
+    """Raised when sequential analysis would use a blocked agent CLI."""
+
+
 def _file_matches_globs(file_path: str, globs: list[str]) -> bool:
     """True if ``file_path`` matches any glob in ``globs`` (fnmatch OR)."""
     import fnmatch as _fnmatch
@@ -851,9 +855,69 @@ class AutonomousSecurityAgentV2:
             self.llm_config = None
             self.llm = ClaudeCodeProvider()
             logger.debug("Prep mode: %s → %s", repo_path, out_dir)
-        elif availability.external_llm:
+        elif (
+            availability.external_llm
+            or getattr(availability, "copilot_cli", False) is True
+        ):
             # External LLM configured — use LLMClient
-            self.llm_config = llm_config or LLMConfig()
+            from core.llm.config import (
+                configured_agent_cli_models,
+                filter_agent_cli_models,
+            )
+
+            selected_agent_cli = (
+                os.environ.get("RAPTOR_AGENT_CLI", "claude").strip().lower()
+                or "claude"
+            )
+            candidate_config = llm_config or LLMConfig()
+            candidate_config, mismatched = filter_agent_cli_models(
+                candidate_config,
+                selected_agent_cli=selected_agent_cli,
+                allow_selected_agent_cli=True,
+            )
+            if candidate_config is None:
+                msg = (
+                    f"{selected_agent_cli} mode refuses the configured "
+                    "non-selected agent CLI primary"
+                )
+                raise AgentCLITrustError(msg)
+            if mismatched:
+                logger.warning(
+                    "Sequential analysis disabled non-selected agent-CLI "
+                    "routes: %s",
+                    ", ".join(
+                        f"{model.provider}/{model.model_name}"
+                        for model in mismatched
+                    ),
+                )
+
+            cli_models = configured_agent_cli_models(candidate_config)
+            if cli_models:
+                from core.security.cc_trust import (
+                    check_repo_agent_cli_trust,
+                )
+
+                blocked = check_repo_agent_cli_trust(repo_path)
+                candidate_config, blocked_models = filter_agent_cli_models(
+                    candidate_config,
+                    selected_agent_cli=selected_agent_cli,
+                    allow_selected_agent_cli=not blocked,
+                )
+                if candidate_config is None:
+                    raise AgentCLITrustError(
+                        "target repo failed the selected-agent trust check"
+                    )
+                if blocked_models:
+                    logger.warning(
+                        "Sequential analysis disabled untrusted agent-CLI "
+                        "fallbacks: %s",
+                        ", ".join(
+                            f"{model.provider}/{model.model_name}"
+                            for model in blocked_models
+                        ),
+                    )
+
+            self.llm_config = candidate_config
             self.llm = LLMClient(self.llm_config)
 
             logger.info("RAPTOR Autonomous Security Agent initialised")
@@ -3691,6 +3755,11 @@ def main() -> None:
              "findings for external orchestration",
     )
     ap.add_argument(
+        "--trust-repo",
+        action="store_true",
+        help="Trust target-owned agent CLI configuration for this process.",
+    )
+    ap.add_argument(
         "--max-parallel", type=int, default=0,
         help="Max parallel dispatch threads (0 = auto from model RPM)",
     )
@@ -3748,6 +3817,10 @@ def main() -> None:
     if not args.sarif and not args.findings:
         ap.error("Either --sarif or --findings is required")
 
+    if args.trust_repo:
+        from core.security.cc_trust import set_trust_override
+        set_trust_override(True)
+
     _has_role_flags = any([
         getattr(args, "model", []),
         getattr(args, "consensus", None),
@@ -3802,24 +3875,28 @@ def main() -> None:
 
     # When role flags are present, force prep-only then hand off to orchestrator
     prep_only = args.prep_only or _has_role_flags
-    agent = AutonomousSecurityAgentV2(
-        repo_path, out_dir,
-        prep_only=prep_only,
-        synthesise_checkers=not args.no_checker_synthesis,
-        refine_checkers=not args.no_checker_refinement,
-        verify_exploits=not args.no_verify_exploits,
-        judge_intent=not args.no_judge_intent,
-        record_witnesses=not args.no_record_witnesses,
-        use_verified_exemplars=not args.no_verified_exemplars,
-        generate_exploits=not args.no_exploits,
-        generate_patches=not args.no_patches,
-        execute_exploits=execute_exploits,
-        # Sequential-path IRIS gate — the orchestrated path receives
-        # the same flags via orchestrate() below; without this the
-        # flags were silent no-ops on plain /analyze runs.
-        deep_validate=args.deep_validate,
-        deep_validate_disabled=args.no_deep_validate,
-    )
+    try:
+        agent = AutonomousSecurityAgentV2(
+            repo_path, out_dir,
+            prep_only=prep_only,
+            synthesise_checkers=not args.no_checker_synthesis,
+            refine_checkers=not args.no_checker_refinement,
+            verify_exploits=not args.no_verify_exploits,
+            judge_intent=not args.no_judge_intent,
+            record_witnesses=not args.no_record_witnesses,
+            use_verified_exemplars=not args.no_verified_exemplars,
+            generate_exploits=not args.no_exploits,
+            generate_patches=not args.no_patches,
+            execute_exploits=execute_exploits,
+            # Sequential-path IRIS gate — the orchestrated path receives
+            # the same flags via orchestrate() below; without this the
+            # flags were silent no-ops on plain /analyze runs.
+            deep_validate=args.deep_validate,
+            deep_validate_disabled=args.no_deep_validate,
+        )
+    except AgentCLITrustError as exc:
+        print(f"✗ Agent CLI dispatch blocked: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
 
     # Load checklist for metadata lookup
     checklist = None

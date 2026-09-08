@@ -1,11 +1,14 @@
 ---
 description: Show the running RAPTOR framework version
 dispatch: python3 raptor.py --version
+exclude_from_listing: true
 ---
 
-# /version - RAPTOR Version
+# /version - RAPTOR Version (Claude compatibility alias)
 
 Reports the version of RAPTOR the current session is running.
+
+GitHub Copilot CLI reserves `/version`; use `/raptor-version` there.
 
 Execute: `python3 raptor.py --version`
 

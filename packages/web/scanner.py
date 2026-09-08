@@ -2275,9 +2275,15 @@ class WebScanner:
             findings_input = self.out_dir / "web_findings_for_validation.json"
             self._save_artifact(findings_input, {"results": findings_for_validate})
 
-            claude_bin = shutil.which("claude")
-            if not claude_bin:
-                logger.info("Phase 7a: claude not on PATH -- skipping /validate")
+            selected_agent = os.environ.get("RAPTOR_AGENT_CLI", "claude")
+            agent_bin = shutil.which(
+                "copilot" if selected_agent == "copilot" else "claude"
+            )
+            if not agent_bin:
+                logger.info(
+                    "Phase 7a: selected agent CLI not on PATH -- "
+                    "skipping /validate",
+                )
                 return findings
 
             from core.orchestration.agentic_passes import run_validate_postpass
@@ -2285,7 +2291,9 @@ class WebScanner:
                 target=Path(self.base_url),
                 agentic_out_dir=self.out_dir,
                 analysis_report=findings_input,
-                claude_bin=claude_bin,
+                # Copilot mode resolves its binary through the shared
+                # dispatcher; the legacy argument remains Claude-specific.
+                claude_bin=agent_bin if selected_agent == "claude" else None,
             )
             if result.ran:
                 logger.info("Phase 7a: /validate complete")

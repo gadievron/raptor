@@ -21,6 +21,10 @@ visible error):
       Parse JSON from *file* (``-`` = stdin) and print the string
       value at *dotted.key* (missing / non-string prints nothing).
 
+  get-first <file|-> <dotted.key> [<dotted.key> ...]
+      Parse once and print the first present scalar. Used for the
+      Claude/Copilot hook-payload compatibility ladder.
+
   append <manifest> <line>
       Append one line with O_NOFOLLOW|O_APPEND, mode 0600 — the
       symlink-refusing append documented in the Python twin
@@ -34,19 +38,35 @@ import sys
 
 
 def _get(src: str, key: str) -> None:
+    cur = _lookup(src, key)
+    _print_scalar(cur)
+
+
+def _load(src: str):
     try:
         if src == "-":
-            data = json.load(sys.stdin)
+            return json.load(sys.stdin)
         else:
             with open(src, encoding="utf-8") as fh:
-                data = json.load(fh)
+                return json.load(fh)
     except (OSError, ValueError, UnicodeDecodeError):
-        return
+        return None
+
+
+def _lookup_data(data, key: str):
     cur = data
     for part in key.split("."):
         if not isinstance(cur, dict):
-            return
+            return None
         cur = cur.get(part)
+    return cur
+
+
+def _lookup(src: str, key: str):
+    return _lookup_data(_load(src), key)
+
+
+def _print_scalar(cur) -> None:
     # Scalars, not only strings: .raptor-run.json records session_pid
     # as a JSON int — printing nothing for it silently killed the
     # whole no-jq attribution path (owner comparison never matched).
@@ -57,6 +77,15 @@ def _get(src: str, key: str) -> None:
         print("true" if cur else "false")
     elif isinstance(cur, (int, float)):
         print(cur)
+
+
+def _get_first(src: str, keys: list[str]) -> None:
+    data = _load(src)
+    for key in keys:
+        value = _lookup_data(data, key)
+        if value not in (None, ""):
+            _print_scalar(value)
+            return
 
 
 def _append(manifest: str, line: str) -> None:
@@ -75,6 +104,8 @@ def _append(manifest: str, line: str) -> None:
 def main(argv: list[str]) -> int:
     if len(argv) == 3 and argv[0] == "get":
         _get(argv[1], argv[2])
+    elif len(argv) >= 4 and argv[0] == "get-first":
+        _get_first(argv[1], argv[2:])
     elif len(argv) == 3 and argv[0] == "append":
         _append(argv[1], argv[2])
     return 0

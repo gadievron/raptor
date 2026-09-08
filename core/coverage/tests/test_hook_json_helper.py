@@ -48,6 +48,36 @@ class TestGet:
         assert proc.returncode == 0
         assert proc.stdout.strip() == "/a/b.py"
 
+    def test_get_first_supports_copilot_path(self):
+        payload = json.dumps({
+            "tool_input": {"path": "/tmp/copilot.py"},
+        })
+        proc = _helper(
+            "get-first",
+            "-",
+            "tool_input.file_path",
+            "tool_input.path",
+            "toolArgs.path",
+            stdin=payload,
+        )
+        assert proc.returncode == 0
+        assert proc.stdout.strip() == "/tmp/copilot.py"
+
+    def test_get_first_supports_native_tool_args(self):
+        payload = json.dumps({
+            "toolArgs": {"path": "/tmp/native.py"},
+        })
+        proc = _helper(
+            "get-first",
+            "-",
+            "tool_input.file_path",
+            "tool_input.path",
+            "toolArgs.path",
+            stdin=payload,
+        )
+        assert proc.returncode == 0
+        assert proc.stdout.strip() == "/tmp/native.py"
+
     def test_missing_key_prints_nothing(self, tmp_path):
         f = tmp_path / "p.json"
         f.write_text(json.dumps({"other": "x"}))

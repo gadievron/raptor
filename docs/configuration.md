@@ -12,6 +12,12 @@ See [LLM Providers](llm.md) — covers `models.json` format and location,
 provider API keys, model selection, budget cap (`--max-cost-usd`), and
 cost tracking.
 
+Interactive launcher defaults: `raptor` starts Claude Code; `raptor --copilot`
+opts into end-to-end Copilot CLI. Copilot's launcher default model is
+`gpt-5.6-sol`; explicit `--model` pins it. Transport-specific knobs
+(`RAPTOR_CC_*`, `RAPTOR_COPILOT_*`) are documented in
+[Environment Variables](environment.md).
+
 
 ## tuning.json — resource tuning
 

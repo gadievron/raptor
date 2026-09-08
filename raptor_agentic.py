@@ -37,7 +37,7 @@ from core.logging import CONSOLE_LOG_LEVELS, configure_run_logging, get_logger
 from core.run.safe_io import safe_run_mkdir
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
-from core.security.cc_trust import check_repo_claude_trust, set_trust_override
+from core.security.cc_trust import check_repo_agent_cli_trust, set_trust_override
 
 logger = get_logger()
 
@@ -502,6 +502,8 @@ def run_command_streaming(
     cmd: list,
     description: str,
     timeout: int = 1800,
+    *,
+    relay_copilot_auth: bool = False,
 ) -> tuple[int, str, str]:
     """
     Run a command and stream output in real-time while also capturing it.
@@ -517,6 +519,9 @@ def run_command_streaming(
             to Ctrl-C if the subprocess hangs. Operator-overridable via
             the ``--phase-timeout`` CLI flag for kernel-scale targets
             where the analysis subprocess can take hours.
+        relay_copilot_auth: Resolve Copilot auth in this trusted parent and
+            pass one consolidated token to a RAPTOR-owned child. Never use
+            for target-executed commands.
 
     Returns:
         Tuple of (return_code, stdout, stderr)
@@ -580,6 +585,18 @@ def run_command_streaming(
     # and flags only; API keys stay OUT of this env by design
     # (Phase B relays the dispatcher session instead).
     child_env.update(RaptorConfig.llm_routing_env())
+    if relay_copilot_auth:
+        from core.llm.copilot_adapter import (
+            resolve_copilot_github_token,
+        )
+
+        copilot_token = resolve_copilot_github_token(mint=True)
+        if copilot_token:
+            child_env["COPILOT_GITHUB_TOKEN"] = copilot_token
+        for host_var in ("GH_HOST", "COPILOT_GH_HOST"):
+            host = os.environ.get(host_var, "").strip()
+            if host:
+                child_env[host_var] = host
     child_pass_fds: list[int] = []
     if os.environ.get("RAPTOR_LLM_SOCKET"):
         try:
@@ -607,6 +624,8 @@ def run_command_streaming(
         token_fd = None
 
     process = None
+    stdout_thread = None
+    stderr_thread = None
     try:
         process = subprocess.Popen(
             cmd,
@@ -691,6 +710,9 @@ def run_command_streaming(
         # macOS with zombie children that keep the pipe FD alive).
         # 5s is plenty after process.wait() returned — by then the
         # OS has flushed everything that's coming.
+        # Kill any background descendants before joining: a successful
+        # leader exit does not imply its process group is empty.
+        _kill_process_tree(process)
         stdout_thread.join(timeout=5)
         stderr_thread.join(timeout=5)
 
@@ -742,6 +764,22 @@ def run_command_streaming(
                 _kill_process_tree(process)
                 process.wait(timeout=5)
         return -1, "", str(e)
+    except BaseException:
+        if token_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(token_fd)
+        if process is not None:
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                _kill_process_tree(process)
+                process.wait(timeout=5)
+            for pipe in (process.stdout, process.stderr):
+                if pipe is not None:
+                    with contextlib.suppress(OSError, ValueError):
+                        pipe.close()
+        for thread in (stdout_thread, stderr_thread):
+            if thread is not None:
+                thread.join(timeout=5)
+        raise
 
 
 def _prepare_fuzz_crashes_for_validate(
@@ -1439,15 +1477,19 @@ def _gap_audit_skip_reason(args: argparse.Namespace, llm_env, *, block_cc_dispat
     """
     if (args.model or []) or llm_env.external_llm:
         return None
-    if not llm_env.claude_code:
+    agent_cli_available = (
+        llm_env.claude_code
+        or getattr(llm_env, "copilot_cli", False) is True
+    )
+    if not agent_cli_available:
         return (
             "no LLM available — configure an API key, pass --model, "
-            "or install Claude Code"
+            "or install the selected agent CLI"
         )
     if block_cc_dispatch:
         return (
-            "no external LLM and the target repo failed the Claude "
-            "Code trust check — the claudecode transport will not "
+            "no external LLM and the target repo failed the agent "
+            "CLI trust check — the selected CLI transport will not "
             "dispatch against an untrusted repo (pass --model, or "
             "review with /audit --local)"
         )
@@ -2289,7 +2331,11 @@ Examples:
     # in-process consumer (cc_trust, codeql_trust, build_detector, ...)
     # agrees on the operator's intent. New checks added here must keep
     # this list in sync.
-    if getattr(args, "trust_repo", False):
+    if getattr(args, "no_trust_repo", False):
+        set_trust_override(False)
+        from core.security.codeql_trust import set_trust_override as _ql_set
+        _ql_set(False)
+    elif getattr(args, "trust_repo", False):
         set_trust_override(True)
         from core.security.codeql_trust import set_trust_override as _ql_set
         _ql_set(True)
@@ -2625,10 +2671,10 @@ Examples:
     # Early loud warning only — the verdict is NOT threaded through the
     # phases. Scanning/analysis runs untrusted target code and LLM-driven
     # sessions that can write .claude/settings.json / .mcp.json mid-run,
-    # so each CC dispatch site below re-invokes check_repo_claude_trust
+    # so each agent CLI dispatch site below re-invokes the trust gate
     # immediately before dispatching (the scan cache is keyed on a
     # config-file fingerprint, so an unchanged repo re-checks for free).
-    check_repo_claude_trust(original_repo_path)
+    check_repo_agent_cli_trust(original_repo_path)
 
     # ========================================================================
     # PHASE 1: CODE SCANNING (Semgrep + CodeQL)
@@ -2685,7 +2731,7 @@ Examples:
             target=original_repo_path,
             agentic_out_dir=out_dir,
             # Re-check at dispatch time — the pre-scan verdict may be stale.
-            block_cc_dispatch=check_repo_claude_trust(original_repo_path),
+            block_cc_dispatch=check_repo_agent_cli_trust(original_repo_path),
         )
         if prepass_result.ran:
             logger.info(
@@ -3598,6 +3644,11 @@ Examples:
             analysis_cmd.append("--no-exploits")
         if args.no_patches:
             analysis_cmd.append("--no-patches")
+        # The child performs its own fresh target-config scan immediately
+        # before constructing a CLI-backed provider. Propagate only the
+        # explicit/project-derived operator override, never a cached verdict.
+        if args.trust_repo:
+            analysis_cmd.append("--trust-repo")
         # P9 execution-oracle flags ride the analysis subprocess; the
         # child resolves them against the project 'dynamic' trust
         # marker (explicit flag > marker > off).
@@ -3607,12 +3658,21 @@ Examples:
             analysis_cmd.append("--no-execute-exploits")
 
         # Phase 3 preps data; Phase 4 handles LLM work (unless --sequential)
-        if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:
+        if (
+            llm_env.claude_code
+            or getattr(llm_env, "copilot_cli", False) is True
+            or llm_env.external_llm
+        ) and not args.sequential:
             analysis_cmd.append("--prep-only")
 
         rc, _stdout, stderr = run_command_streaming(
             analysis_cmd, "Preparing findings for analysis",
             timeout=args.phase_timeout,
+            relay_copilot_auth=(
+                args.sequential
+                and os.environ.get("RAPTOR_AGENT_CLI", "").strip().lower()
+                == "copilot"
+            ),
         )
 
         if rc == SANDBOX_ENGAGE_EXIT_CODE:
@@ -3694,7 +3754,11 @@ Examples:
             "(Phase 4 orchestration is skipped)",
             file=sys.stderr,
         )
-    if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:
+    if (
+        llm_env.claude_code
+        or getattr(llm_env, "copilot_cli", False) is True
+        or llm_env.external_llm
+    ) and not args.sequential:
         print("\n" + "=" * 70)
         print("ANALYSING", flush=True)
         print("=" * 70)
@@ -3710,7 +3774,10 @@ Examples:
                 consensus=getattr(args, "consensus", None),
                 judge=getattr(args, "judge", None),
                 aggregate=getattr(args, "aggregate", None),
-                auto_detect=llm_env.external_llm,
+                auto_detect=(
+                    llm_env.external_llm
+                    or getattr(llm_env, "copilot_cli", False) is True
+                ),
             )
             if llm_config and getattr(args, "max_cost_usd", None) is not None:
                 llm_config.max_cost_per_scan = args.max_cost_usd
@@ -3728,7 +3795,7 @@ Examples:
                 llm_config=llm_config,
                 # Re-check at dispatch time — scanning phases ran untrusted
                 # target code after the pre-scan; the verdict may be stale.
-                block_cc_dispatch=check_repo_claude_trust(original_repo_path),
+                block_cc_dispatch=check_repo_agent_cli_trust(original_repo_path),
                 accept_weakened_defenses=args.accept_weakened_defenses,
                 dataflow_validation_enabled=not getattr(args, "no_validate_dataflow", False),
                 deep_validate=getattr(args, "deep_validate", False),
@@ -3782,7 +3849,7 @@ Examples:
             args, llm_env,
             # Re-check at dispatch time — the pre-scan verdict may be
             # stale (scanning ran untrusted target code since).
-            block_cc_dispatch=check_repo_claude_trust(original_repo_path),
+            block_cc_dispatch=check_repo_agent_cli_trust(original_repo_path),
         )
         if _audit_skip is None:
             audit_postpass = run_audit_postpass(
@@ -3828,7 +3895,7 @@ Examples:
             agentic_out_dir=out_dir,
             analysis_report=validate_input_report,
             # Re-check at dispatch time — the pre-scan verdict may be stale.
-            block_cc_dispatch=check_repo_claude_trust(original_repo_path),
+            block_cc_dispatch=check_repo_agent_cli_trust(original_repo_path),
             allow_unreachable=getattr(args, "allow_unreachable", False),
             # --gap-audit: the sibling audit run's findings join the
             # selection, so one validate pass covers both pipelines.
@@ -4405,6 +4472,8 @@ Examples:
             via = orch.get("analysis_model") or "external LLM"
         elif mode == "cc_fallback":
             via = "Claude Code (fallback)"
+        elif mode == "copilot_fallback":
+            via = "GitHub Copilot CLI (fallback)"
         else:
             via = mode
         n = orch.get('findings_analysed', 0)
@@ -4429,6 +4498,8 @@ Examples:
         via = orch_phase.get("analysis_model") or "external LLM"
     elif mode == "cc_fallback":
         via = "Claude Code (fallback)"
+    elif mode == "copilot_fallback":
+        via = "GitHub Copilot CLI (fallback)"
     else:
         via = None
 

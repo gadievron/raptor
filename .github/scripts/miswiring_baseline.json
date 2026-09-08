@@ -154,6 +154,9 @@
     "artifacts:write_only_artifact::.line-check.json": {
       "note": "operator-facing sidecar next to a crash-analysis report (blamed_lines.check_report): the same summary dict is returned in-process and stamped into the report .md; the sidecar exists for humans/jq, same class as suppressions.jsonl"
     },
+    "artifacts:write_only_artifact::.agent.md": {
+      "note": "private per-call Copilot selected-agent definition: written under the disposable workspace, consumed by the external Copilot CLI via --agent, then deleted on exit; the Python artifact indexer cannot observe that external reader"
+    },
     "artifacts:write_only_artifact::.model.yml": {
       "note": "CodeQL data-extension model written into the generated extension pack (core/dataflow/extension_pack.py); consumed by the external codeql CLI when the pack is loaded, not by repo python"
     },
@@ -225,6 +228,9 @@
     },
     "artifacts:write_only_artifact::cc-proxy-spend.json": {
       "note": "operator-facing per-run settlement record (reconciled credential-proxy token spend vs budget), same class as suppressions.jsonl: consumed by humans/jq from the run dir, deliberately not by production code."
+    },
+    "artifacts:write_only_artifact::copilot-transport-usage.json": {
+      "note": "operator-facing per-run Copilot transport record: selected/attempted models, native premium-request/AIU usage, estimated USD, and any terminal error; consumed by humans/jq from the run dir, same class as cc-proxy-spend.json"
     },
     "artifacts:write_only_artifact::census.json": {
       "note": "raptor-recall-measure census subcommand output: machine-readable dual of census.md, for humans/jq; the rendered markdown is also printed to stdout, same class as suppressions.jsonl"

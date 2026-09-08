@@ -17,11 +17,11 @@ libexec/raptor-self-test
 ```
 
 The default tier makes **no LLM calls**: children run with a scrubbed
-environment (API keys, dispatcher socket, Ollama, and the `claude` CLI
-all hidden) plus an isolated `HOME`, so it never touches your real
-`~/.raptor`, project registry, or caches.  Everything runs in a
-temporary scratch directory that is deleted on success (kept on failure,
-or with `--keep`).  It exercises the command surface end to end:
+environment (API keys, dispatcher socket, Ollama, and selected agent CLI
+credentials/transport state hidden) plus an isolated `HOME`, so it never
+touches your real `~/.raptor`, project registry, or caches.  Everything
+runs in a temporary scratch directory that is deleted on success (kept on
+failure, or with `--keep`).  It exercises the command surface end to end:
 doctor, describe, scan, CodeQL scan-only, SCA, agentic (no-LLM paths),
 fuzz plan-only, exploit feasibility, project and run lifecycle,
 annotate, diagram, review, coverage, and the audit mechanical sweep.
@@ -136,7 +136,7 @@ to file-path heuristics on the workspace prefix above.
 | "Container/namespace escape technique" (unshare, setns, pivot/mount) from RAPTOR processes | Expected — sandbox construction, not escape |
 | "Debugger/ptrace activity" during crash analysis or sandbox audit | Expected |
 | "Suspicious script interpreter" on files under the scanned repo or sandbox view | Investigate — this is target code; treat as real until triaged |
-| Anything network-shaped not going through the configured egress proxy | Investigate — RAPTOR's sandboxed children are network-denied by default |
+| Anything network-shaped not going through the configured egress proxy | Investigate — RAPTOR core-sandboxed children are network-denied by default (Copilot MXC command children are a separate path; model traffic remains allowed) |
 
 If your EDR supports it, prefer alert *annotation* (mark as expected,
 keep recording) over suppression for everything except the temp-path
@@ -177,6 +177,99 @@ the path explicitly.
 
 
 ## LLM providers
+
+### Copilot CLI not found or launch rejected
+
+`raptor --copilot` requires a local `copilot` binary. If missing, the
+launcher fails early with an install link. If present but missing required
+features (interactive/model/plugin selection, prompt-mode JSON and usage
+output, private agents, exact tool allow/deny, secret env stripping, or
+`--experimental --sandbox` parsing), update Copilot CLI:
+
+```bash
+copilot update
+```
+
+Then retry:
+
+```bash
+raptor --copilot
+```
+
+The same launch is also refused when the target contains agent configuration
+that Copilot may load as trusted context through `--add-dir` (including
+`AGENTS.md`, `.github/agents`, `.github/skills`, `.github/hooks`, or workspace
+MCP files). Review the reported paths; if they are expected and trusted, rerun
+with:
+
+```bash
+raptor --copilot --trust-repo <target>
+```
+
+### Copilot transport disabled by environment
+
+If runs fail immediately with "Copilot CLI transport disabled", check
+`RAPTOR_COPILOT_TRANSPORT_DISABLED`. Any non-empty value other than `0`
+refuses billed Copilot subprocess calls by design.
+
+### Copilot chose a fallback model unexpectedly
+
+Automatic Copilot fallback is availability-only and runs only when the model
+is **not** explicitly pinned. If you need one exact model, pass `--model`
+with `--copilot`; this disables automatic fallback attempts for that run.
+
+For `raptor --copilot --continue`, the interactive session keeps its stored
+model. Copilot does not expose that model to the launcher, so separate internal
+prompt-mode calls use Copilot `auto` with RAPTOR's substitution chain disabled.
+
+### Copilot did not fallback after a failure
+
+Fallback triggers only for model-unavailable/overloaded classes. Generic
+execution failures (timeouts, malformed output, policy/tool failures) do not
+advance to the next model.
+
+### Copilot budget cap not applied
+
+`--max-ai-credits` is only added when an explicit budget is provided
+(`RAPTOR_COPILOT_MAX_AI_CREDITS` or caller configuration). Launcher defaults
+do not inject a Copilot credit cap.
+
+### Copilot native cost looks different from token-estimated USD
+
+This is expected. `premium_request_cost`/`nano_aiu` are Copilot-native,
+authoritative, and model-dependent. RAPTOR's USD number is a separate
+token-estimated cross-provider comparison metric. Do not apply a fixed
+request/AI-unit-to-USD multiplier across models.
+
+### Missing Copilot repo hooks/custom instructions in subprocess runs
+
+RAPTOR intentionally launches Copilot subprocesses in a constrained mode
+(`--no-custom-instructions`, prompt-mode extensions/hooks/workspace MCP off)
+so transport behavior is deterministic and bounded. This is expected.
+
+### Copilot child commands are not in the outer RAPTOR mount/network sandbox
+
+For unattended Copilot skill/build command children, RAPTOR uses Copilot's MXC
+policy mode (`--experimental --sandbox`) in a private run-local HOME. That MXC
+policy is the confinement boundary for model-directed tool/shell commands on
+that path.
+
+RAPTOR's outer Linux mount/network sandbox is not layered around the same
+child process there (MXC cannot nest in that setup), so do not expect
+double-nested containment markers.
+
+### Copilot child still made model network calls
+
+Expected: Copilot model traffic remains allowed. The confinement boundary in
+this path is on model-directed command/tool execution via MXC policy, not a
+full network-deny wrapper around the Copilot client process. MXC sets
+`network.allowOutbound=false` and `network.allowLocalNetwork=false` for the
+model-directed commands themselves.
+
+The run retains only `copilot-usage.json` and
+`copilot-transport-usage.json`; the private Copilot HOME, session transcript,
+logs, and selected-agent file are deleted after each child exits. The public
+extracted runtime cache is reused from `~/.cache/raptor/copilot-cli/`.
 
 ### Rate limiting (HTTP 429)
 

@@ -396,7 +396,12 @@ def main() -> int:
             else ("_RAPTOR_STATUS_FD", "_RAPTOR_DEATH_FD",
                   "_RAPTOR_TRUSTED", "CLAUDECODE",
                   "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
-                  "RAPTOR_DIR", "RAPTOR_OUT_DIR", "RAPTOR_TARGET_KIND")
+                  "RAPTOR_DIR", "RAPTOR_OUT_DIR", "RAPTOR_TARGET_KIND",
+                  "RAPTOR_AGENT_CLI", "RAPTOR_COPILOT_MODEL",
+                  "RAPTOR_COPILOT_MODEL_EXPLICIT",
+                  "RAPTOR_COPILOT_FALLBACK_MODELS",
+                  "RAPTOR_COPILOT_MAX_AI_CREDITS",
+                  "RAPTOR_COPILOT_AUTH_SOCKET")
         )
         for _m in _strip:
             os.environ.pop(_m, None)

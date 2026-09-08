@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -96,3 +97,25 @@ def test_benign_path_roundtrips_and_extends_path(
 def test_import_does_not_leak_test_module(session_init):
     # exec_module registers nothing in sys.modules by default; keep it so.
     assert "raptor_session_init_under_test" not in sys.modules
+
+
+def test_copilot_banner_uses_additional_context(
+    session_init, monkeypatch, capsys,
+):
+    monkeypatch.setenv("RAPTOR_AGENT_CLI", "copilot")
+    session_init.emit_banner("banner text\n")
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "hookSpecificOutput": {
+            "hookEventName": "sessionStart",
+            "additionalContext": "banner text\n",
+        },
+    }
+
+
+def test_claude_banner_remains_plain_text(
+    session_init, monkeypatch, capsys,
+):
+    monkeypatch.setenv("RAPTOR_AGENT_CLI", "claude")
+    session_init.emit_banner("banner text")
+    assert capsys.readouterr().out == "banner text\n"

@@ -19,6 +19,7 @@ Covers:
 
 from __future__ import annotations
 
+import io
 import os
 import subprocess
 import sys
@@ -182,6 +183,29 @@ class TestRelayFailureFallback:
         assert rc == 0
         assert not get_llm_env.called
 
+    def test_trusted_child_receives_consolidated_copilot_token(
+        self, monkeypatch,
+    ):
+        agentic = _import_agentic()
+        monkeypatch.setenv("RAPTOR_AGENT_CLI", "copilot")
+        with patch(
+            "core.llm.copilot_adapter.resolve_copilot_github_token",
+            return_value="copilot-test-token",
+        ):
+            rc, _stdout, _stderr = agentic.run_command_streaming(
+                [
+                    sys.executable,
+                    "-c",
+                    "import os, sys; "
+                    "sys.exit(0 if os.environ.get("
+                    "'COPILOT_GITHUB_TOKEN') == 'copilot-test-token' else 4)",
+                ],
+                "copilot auth relay",
+                timeout=60,
+                relay_copilot_auth=True,
+            )
+        assert rc == 0
+
     def test_failed_spawn_closes_relayed_token_fd(self, monkeypatch):
         agentic = _import_agentic()
         monkeypatch.setenv("RAPTOR_LLM_SOCKET", "/nonexistent.sock")
@@ -197,6 +221,71 @@ class TestRelayFailureFallback:
         # Popen itself raised (one leaked fd per failed spawn otherwise).
         with pytest.raises(OSError):
             os.fstat(r)
+
+    def test_keyboard_interrupt_kills_streaming_child(self):
+        agentic = _import_agentic()
+        killed = []
+
+        class FakeProcess:
+            pid = 4242
+            returncode = None
+            stdout = io.StringIO("")
+            stderr = io.StringIO("")
+            waits = 0
+
+            def wait(self, timeout=None):
+                self.waits += 1
+                if self.waits == 1:
+                    raise KeyboardInterrupt
+                self.returncode = -9
+                return self.returncode
+
+        process = FakeProcess()
+        with patch.object(
+            agentic.subprocess,
+            "Popen",
+            return_value=process,
+        ), patch.object(
+            agentic,
+            "_kill_process_tree",
+            side_effect=lambda proc: killed.append(proc),
+        ), pytest.raises(KeyboardInterrupt):
+            agentic.run_command_streaming(
+                ["ignored"],
+                "interrupt probe",
+                timeout=60,
+            )
+
+        assert killed == [process]
+        assert process.waits == 2
+
+    def test_successful_streaming_command_reaps_background_child(self):
+        agentic = _import_agentic()
+        rc, stdout, _stderr = agentic.run_command_streaming(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import subprocess;"
+                    "p=subprocess.Popen(['sleep','30']);"
+                    "print(p.pid, flush=True)"
+                ),
+            ],
+            "background-child probe",
+            timeout=60,
+        )
+
+        assert rc == 0
+        child_pid = int(stdout.strip())
+        for _ in range(20):
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            os.kill(child_pid, 9)
+            pytest.fail("background child survived successful phase exit")
 
 
 # ---------------------------------------------------------------------------

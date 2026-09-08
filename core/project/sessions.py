@@ -1,7 +1,8 @@
-"""Session registry — which sessions have which project active.
+"""Session registry — which agent CLI sessions have which project active.
 
 ``~/.local/share/raptor/sessions.d/<pid>`` maps a live Claude Code
-session to its project state, written by the launcher at exec time
+or GitHub Copilot CLI session to its project state, written by the launcher
+at exec time
 (bash — see bin/raptor) and by ``/project use`` (here). Each entry is
 KEY=VALUE lines so both writers speak the same format.
 
@@ -24,7 +25,7 @@ Two entry generations coexist:
 Authority demands what the advisory registry never needed:
 
 * **Identity, not just liveness.** A recycled PID backed by another
-  *claude* process passes any comm check by construction. v2 reads
+  agent CLI process passes any comm check by construction. v2 reads
   require the live process's starttime + boot_id to match the stamp,
   and the reader's pid namespace to match ``pidns`` — a reader inside a
   same-kernel container (shared ``$HOME``, shared boot_id, host pids
@@ -37,11 +38,10 @@ Authority demands what the advisory registry never needed:
   ledger read-modify-writes additionally hold a sibling ``.run.lock``
   flock (rename atomicity protects readers, not concurrent writers).
 * **No writer-side comm gate.** The launcher seeds pre-exec while comm
-  is still the shell (pid + starttime survive the exec into claude;
-  comm flips after). The old bash-pid hazard is structurally
-  unreachable: ``resolve_session_pid()`` only returns claude-shaped or
-  token-verified pids. Explicit-pid callers are trusted internal
-  surfaces.
+  is still the shell (pid + starttime survive the exec into the selected
+  agent CLI; comm flips after). The old bash-pid hazard is structurally
+  unreachable: ``resolve_session_pid()`` only returns agent-CLI-shaped or
+  token-verified pids. Explicit-pid callers are trusted internal surfaces.
 
 A sibling file ``sessions.d/<pid>.run`` is the session's RUN LEDGER:
 one line per run — ``<status> <epoch> <run-id> <abs-run-dir>`` with
@@ -80,7 +80,7 @@ ENTRY_VERSION = "2"
 
 #: Env vars exported by the launcher. The PID names the session; the
 #: token must match the entry's ``token`` field for the env path to be
-#: believed (an attacker guessing a live claude PID gains nothing
+#: believed (an attacker guessing a live agent CLI PID gains nothing
 #: without the token, which lives in a 0700 directory).
 ENV_SESSION_PID = "RAPTOR_SESSION_PID"
 ENV_SESSION_TOKEN = "RAPTOR_SESSION_TOKEN"
@@ -93,8 +93,17 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 #: The full v2 key list, shared by both writers (the bash seeder in
 #: bin/raptor mirrors this order). Unknown keys are dropped on rewrite
 #: BY DESIGN — the list is the schema.
-ENTRY_KEYS = ("v", "project", "since", "starttime", "boot_id", "pidns",
-              "token", "seeded_by")
+ENTRY_KEYS = (
+    "v",
+    "project",
+    "since",
+    "starttime",
+    "boot_id",
+    "pidns",
+    "token",
+    "seeded_by",
+    "repo_trusted",
+)
 
 #: Identity keys preserved/refreshed on rewrite (subset of ENTRY_KEYS).
 _IDENTITY_KEYS = ("starttime", "boot_id", "pidns")
@@ -167,9 +176,14 @@ def _comm(pid: int) -> str | None:
         return None
 
 
-def _claude_shaped(comm: str | None) -> bool:
+_AGENT_CLI_COMM_PREFIXES = ("claude", "copilot")
+
+
+def _agent_cli_shaped(comm: str | None) -> bool:
     """ONE comm predicate for walker, liveness, and readers."""
-    return comm is not None and comm.startswith("claude")
+    if comm is None:
+        return False
+    return comm.lower().startswith(_AGENT_CLI_COMM_PREFIXES)
 
 
 def proc_starttime(pid: int) -> str | None:
@@ -277,7 +291,7 @@ def _identity_matches(pid: int, fields: dict[str, str]) -> bool:
         return False
     if _foreign_entry(fields):
         return False
-    if not _pid_running(pid) or not _claude_shaped(_comm(pid)):
+    if not _pid_running(pid) or not _agent_cli_shaped(_comm(pid)):
         return False
     if _sentinel_stamp(fields):
         return True  # off-Linux: liveness-strength
@@ -325,12 +339,12 @@ def _env_session_pid() -> int | None:
 
 
 def _walk_session_pid() -> int | None:
-    """Tree walk: collect ALL claude-shaped ancestors; prefer the one
+    """Tree walk: collect ALL agent-CLI-shaped ancestors; prefer the one
     whose entry PASSES IDENTITY MATCHING (a merely entry-bearing
     recycled pid must not win), else the outermost.
 
-    RAPTOR dispatches nested ``claude -p`` skill children; the nearest
-    claude ancestor of a helper under one of those is the *subagent*,
+    RAPTOR dispatches nested agent CLI skill children; the nearest agent CLI
+    ancestor of a helper under one of those is the *subagent*,
     which owns no entry. Preferring the identity-verified entry-bearing
     (else outermost) ancestor keeps one logical session = one identity.
     """
@@ -344,7 +358,7 @@ def _walk_session_pid() -> int | None:
             break
         if pid <= 1:
             break
-        if _claude_shaped(_comm(pid)):
+        if _agent_cli_shaped(_comm(pid)):
             candidates.append(pid)
     for cand in candidates:  # nearest-first: first with a VALID entry wins
         fields = _parse_entry(SESSIONS_DIR / str(cand))
@@ -357,7 +371,7 @@ def _walk_session_pid() -> int | None:
 
 def resolve_session_pid() -> int | None:
     """The owning session's pid: validated env credential first (works
-    across PID namespaces and beneath nested claude processes), tree
+    across PID namespaces and beneath nested agent CLI processes), tree
     walk second, None outside any session."""
     pid = _env_session_pid()
     if pid is not None:
@@ -372,6 +386,23 @@ def resolve_session_pid() -> int | None:
 def session_pid() -> int | None:
     """Back-compat alias used by the advisory writers."""
     return resolve_session_pid()
+
+
+def session_repo_trusted(repo_path: str | Path) -> bool:
+    """Whether this session asserted trust for exactly ``repo_path``."""
+    pid = resolve_session_pid()
+    if pid is None:
+        return False
+    fields = _parse_entry(SESSIONS_DIR / str(pid))
+    if not fields or not _identity_matches(pid, fields):
+        return False
+    trusted = fields.get("repo_trusted", "")
+    if not trusted:
+        return False
+    try:
+        return Path(trusted).resolve() == Path(repo_path).resolve()
+    except (OSError, ValueError):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +580,7 @@ def _record_session_locked(project: str, pid: int,
                        and fields.get("token") == env_tok)
         fields.pop("token", None)
         fields.pop("seeded_by", None)
+        fields.pop("repo_trusted", None)
         # The token match is the discriminator: a dead predecessor's
         # entry carries a DIFFERENT token than this session's env
         # credential, so a recycled pid can never keep the

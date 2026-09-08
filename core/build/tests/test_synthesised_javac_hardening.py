@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -111,7 +112,7 @@ def test_cc_suggest_flags_passes_read_confinement(tmp_path, monkeypatch):
 
     monkeypatch.setattr(shutil_mod, "which",
                         lambda name: "/usr/bin/claude")
-    monkeypatch.setattr(cc_trust, "check_repo_claude_trust",
+    monkeypatch.setattr(cc_trust, "check_repo_agent_cli_trust",
                         lambda p: False)
     monkeypatch.setattr(cc_adapter, "cc_subprocess_env",
                         lambda **k: {"PATH": "/usr/bin"})
@@ -128,4 +129,71 @@ def test_cc_suggest_flags_passes_read_confinement(tmp_path, monkeypatch):
         )
 
     assert captured.get("restrict_reads") is True
-    assert captured.get("readable_paths") == ["/opt/cc-floor"]
+    readable = captured.get("readable_paths")
+    assert readable[0] == "/opt/cc-floor"
+    assert len(readable) == 2
+    assert Path(readable[1]).name.startswith("cc-sysprompt-")
+
+
+def test_copilot_suggest_flags_uses_copilot_sandbox(
+    tmp_path, monkeypatch,
+):
+    import shutil as shutil_mod
+
+    import core.llm.copilot_adapter as copilot_adapter
+    import core.security.cc_trust as cc_trust
+
+    captured: dict = {}
+
+    def fake_run(cmd, prompt, **kwargs):
+        captured["cmd"] = list(cmd)
+        captured["prompt"] = prompt
+        captured.update(kwargs)
+        usage_path = Path(cmd[cmd.index("--usage-output-file") + 1])
+        usage_path.write_text(
+            '{"currentModel":"gpt-5.6-sol","modelMetrics":{}}\n',
+            encoding="utf-8",
+        )
+        return SimpleNamespace(
+            returncode=0,
+            stdout=(
+                '{"type":"assistant.message","data":'
+                '{"content":"{\\"includes\\":[],\\"defines\\":[]}",'
+                '"model":"gpt-5.6-sol"}}\n'
+                '{"type":"result","exitCode":0}\n'
+            ),
+            stderr="",
+        ), 0.1
+
+    monkeypatch.setenv("RAPTOR_AGENT_CLI", "copilot")
+    monkeypatch.setenv("RAPTOR_COPILOT_TRANSPORT_DISABLED", "0")
+    monkeypatch.setattr(
+        shutil_mod,
+        "which",
+        lambda name: "/usr/bin/copilot" if name == "copilot" else None,
+    )
+    monkeypatch.setattr(
+        cc_trust,
+        "check_repo_agent_cli_trust",
+        lambda path: False,
+    )
+    monkeypatch.setattr(
+        copilot_adapter,
+        "copilot_subprocess_env",
+        lambda **kwargs: {"PATH": "/usr/bin"},
+    )
+    monkeypatch.setattr(
+        copilot_adapter,
+        "execute_copilot_command",
+        fake_run,
+    )
+    BuildDetector(tmp_path)._cc_suggest_flags(
+        [{"file": "a.c", "error": "missing header"}],
+        "cpp",
+    )
+
+    assert captured["cmd"][0] == "/usr/bin/copilot"
+    assert "--no-custom-instructions" in captured["cmd"]
+    assert "--sandbox" in captured["cmd"]
+    assert captured["prompt"]
+    assert captured["cwd"] != str(tmp_path)

@@ -77,7 +77,11 @@ class TestCcFallbackRoleResolution:
         # named model, which the dispatcher maps to a single None
         # (CC) work item per finding.
         assert AnalysisTask().get_models(cc) == []
-        assert cc["consensus_models"] == ["kept"]
+        assert cc["consensus_models"] == []
+        assert cc["code_model"] is None
+        assert cc["judge_models"] == []
+        assert cc["aggregate_models"] == []
+        assert cc["fallback_models"] == []
         # Original untouched.
         assert len(original["analysis_models"]) == 2
 

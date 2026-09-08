@@ -270,6 +270,175 @@ class StageError(Exception):
         self.reason = reason
 
 
+def _copilot_max_ai_credits() -> float | None:
+    raw = os.environ.get("RAPTOR_COPILOT_MAX_AI_CREDITS", "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "RAPTOR_COPILOT_MAX_AI_CREDITS=%r is not numeric; ignoring",
+            raw,
+        )
+        return None
+    if value <= 0:
+        logger.warning(
+            "RAPTOR_COPILOT_MAX_AI_CREDITS must be positive; ignoring",
+        )
+        return None
+    return value
+
+
+def _run_copilot_skill_child(
+    *,
+    copilot_bin: str,
+    prompt: str,
+    tools: str,
+    target: Path,
+    run_dir: Path,
+    context_dirs: Sequence[Path],
+    timeout_s: int,
+    caller_label: str,
+) -> subprocess.CompletedProcess:
+    """Run one sandboxed Copilot skill child with narrow model fallback."""
+    from core.json import load_json, save_json
+    from core.llm.copilot_adapter import (
+        CopilotDispatchConfig,
+        build_copilot_command,
+        configured_copilot_fallback_models,
+        copilot_subprocess_env,
+        disposable_copilot_workspace,
+        execute_copilot_command,
+        is_model_unavailable_error,
+        merge_copilot_attempts,
+        parse_copilot_output,
+        stage_copilot_agent,
+        stage_copilot_sandbox_settings,
+        stage_raptor_workspace_links,
+    )
+    from core.llm.model_data import COPILOT_DEFAULT_MODEL
+
+    model = (
+        os.environ.get("RAPTOR_COPILOT_MODEL", "").strip()
+        or COPILOT_DEFAULT_MODEL
+    )
+    explicit = os.environ.get("RAPTOR_COPILOT_MODEL_EXPLICIT") == "1"
+    candidates = [model]
+    if not explicit:
+        candidates.extend(configured_copilot_fallback_models(model))
+    configured = CopilotDispatchConfig(
+        copilot_bin=copilot_bin,
+        model=model,
+        tools=tools,
+        add_dirs=(
+            str(_RAPTOR_DIR),
+            str(target),
+            *(str(path) for path in context_dirs),
+            str(run_dir),
+        ),
+        timeout_s=timeout_s,
+        max_ai_credits=_copilot_max_ai_credits(),
+        allow_model_fallback=False,
+        sandbox=True,
+    )
+    usage_path = run_dir / "copilot-usage.json"
+    last_proc: subprocess.CompletedProcess | None = None
+    attempted: list[str] = []
+    accumulated = None
+    with disposable_copilot_workspace(run_dir) as workspace:
+        stage_raptor_workspace_links(workspace, _RAPTOR_DIR)
+        stage_copilot_agent(
+            workspace,
+            system_prompt=None,
+            tools=tools,
+        )
+        copilot_home = workspace / ".copilot-home"
+        stage_copilot_sandbox_settings(
+            copilot_home,
+            workspace=run_dir,
+            readonly_paths=(
+                str(_RAPTOR_DIR),
+                str(target),
+                *(str(path) for path in context_dirs),
+            ),
+        )
+        child_env = copilot_subprocess_env(
+            mint_github_token=True,
+            copilot_home=copilot_home,
+        )
+        for candidate in candidates:
+            if candidate in attempted:
+                continue
+            attempted.append(candidate)
+            usage_path.unlink(missing_ok=True)
+            cmd = build_copilot_command(
+                configured,
+                workspace=workspace,
+                usage_path=usage_path,
+                model=candidate,
+            )
+            proc, duration = execute_copilot_command(
+                cmd,
+                prompt,
+                timeout_s=timeout_s,
+                cwd=str(workspace),
+                env=child_env,
+            )
+            last_proc = proc
+            usage = load_json(usage_path, max_bytes=8 * 1024 * 1024)
+            current = parse_copilot_output(
+                proc.stdout or "",
+                proc.stderr or "",
+                returncode=proc.returncode,
+                usage=usage if isinstance(usage, dict) else {},
+                model_hint=candidate,
+                duration_seconds=duration,
+            )
+            parsed = merge_copilot_attempts(accumulated, current)
+            accumulated = parsed
+            if proc.returncode == 0:
+                save_json(run_dir / "copilot-transport-usage.json", {
+                    "model": parsed.model,
+                    "attempted_models": attempted,
+                    "caller_label": caller_label,
+                    "estimated_cost_usd": parsed.estimated_cost_usd,
+                    "native_usage": parsed.native_usage,
+                })
+                return proc
+            if not is_model_unavailable_error(parsed.error):
+                save_json(run_dir / "copilot-transport-usage.json", {
+                    "model": parsed.model,
+                    "attempted_models": attempted,
+                    "caller_label": caller_label,
+                    "estimated_cost_usd": parsed.estimated_cost_usd,
+                    "native_usage": parsed.native_usage,
+                    "error": parsed.error,
+                })
+                return proc
+            logger.warning(
+                "Copilot skill-pass model %s unavailable; trying fallback",
+                candidate,
+            )
+    if last_proc is None:
+        return subprocess.CompletedProcess(
+            [copilot_bin],
+            1,
+            "",
+            "no Copilot model candidates configured",
+        )
+    if accumulated is not None:
+        save_json(run_dir / "copilot-transport-usage.json", {
+            "model": accumulated.model,
+            "attempted_models": attempted,
+            "caller_label": caller_label,
+            "estimated_cost_usd": accumulated.estimated_cost_usd,
+            "native_usage": accumulated.native_usage,
+            "error": accumulated.error,
+        })
+    return last_proc
+
+
 # ---------------------------------------------------------------------------
 # Lifecycle helpers — wrap libexec/raptor-run-lifecycle and raptor-build-checklist.
 # ---------------------------------------------------------------------------
@@ -474,20 +643,21 @@ def run_skill_dispatch(
     build_prompt: Callable[[Path], str],
     block_cc_dispatch: bool = False,
     claude_bin: str | None = None,
+    agent_cli: str | None = None,
+    agent_bin: str | None = None,
     context_dirs: Sequence[Path] = (),
     preflight: Callable[[], str | None] | None = None,
     stage: Callable[[Path], None] | None = None,
     validate_outputs: Callable[[Path], str | None] | None = None,
 ) -> SkillDispatchResult:
-    """Run one lifecycle-managed, sandboxed ``claude -p`` skill pass.
+    """Run one lifecycle-managed, sandboxed agent CLI skill pass.
 
     Gate chain (first hit wins, mirrors the /agentic post-pass order):
 
-    1. ``block_cc_dispatch`` — cc-trust verdict for the target repo
-       (compute via ``core.security.cc_trust.check_repo_claude_trust``);
+    1. ``block_cc_dispatch`` — selected-agent trust verdict for the target;
     2. rule-of-two: human terminal or effective sandbox (per
        ``require_human_or_sandbox_for_agentic_pass(command)``);
-    3. ``claude`` binary on PATH (or explicit ``claude_bin``);
+    3. selected agent binary on PATH (or explicit binary);
     4. caller ``preflight()`` — cheap caller-side checks (report
        exists, selection non-empty); return a skip reason or None.
 
@@ -497,7 +667,7 @@ def run_skill_dispatch(
     ``validate_outputs(run_dir)`` (return an error string to fail the
     run) → lifecycle complete.
 
-    ``context_dirs`` are prior-phase artefact dirs the CC child must
+    ``context_dirs`` are prior-phase artefact dirs the agent child must
     read (e.g. the parent pipeline's out_dir): they are appended to the
     sandbox ``add_dirs`` and ``readable_paths``. ``target`` and the run
     dir are always included.
@@ -508,10 +678,20 @@ def run_skill_dispatch(
     KeyboardInterrupt / SystemExit also mark the lifecycle failed
     ("interrupted") before propagating.
     """
+    selected_agent = (
+        agent_cli or os.environ.get("RAPTOR_AGENT_CLI") or "claude"
+    ).strip().lower()
+    if selected_agent not in ("claude", "copilot"):
+        return SkillDispatchResult(
+            ran=False,
+            skipped_reason=f"unsupported agent CLI: {selected_agent}",
+        )
+
     if block_cc_dispatch:
         return SkillDispatchResult(
             ran=False,
-            skipped_reason="cc_trust blocked dispatch (untrusted target)")
+            skipped_reason="cc_trust/agent CLI trust blocked dispatch "
+            "(untrusted target)")
 
     from core.security.rule_of_two import (
         NonInteractiveError,
@@ -526,19 +706,42 @@ def run_skill_dispatch(
     # `claude -p` spawn that does not pass run_cc_streaming, so it
     # honours the switch itself, joining the gate chain with the same
     # skip shape as the other gates.
-    from core.llm.cc_adapter import cc_transport_disabled, resolve_claude_cli
-    if cc_transport_disabled():
-        return SkillDispatchResult(
-            ran=False,
-            skipped_reason="claude CLI transport disabled "
-            "(RAPTOR_CC_TRANSPORT_DISABLED is set)")
+    if selected_agent == "copilot":
+        from core.llm.copilot_adapter import (
+            copilot_transport_disabled,
+            resolve_copilot_cli,
+        )
 
-    # Realpath at the resolution seam: symlinked installs otherwise
-    # fail the mount-ns visibility check and silently downgrade the
-    # dispatch to Landlock-only (see resolve_claude_cli).
-    claude_bin = resolve_claude_cli(claude_bin)
-    if not claude_bin:
-        return SkillDispatchResult(ran=False, skipped_reason="claude not on PATH")
+        if copilot_transport_disabled():
+            return SkillDispatchResult(
+                ran=False,
+                skipped_reason="Copilot CLI transport disabled "
+                "(RAPTOR_COPILOT_TRANSPORT_DISABLED is set)",
+            )
+        resolved_agent_bin = resolve_copilot_cli(agent_bin)
+        if not resolved_agent_bin:
+            return SkillDispatchResult(
+                ran=False,
+                skipped_reason="copilot not on PATH",
+            )
+    else:
+        from core.llm.cc_adapter import cc_transport_disabled, resolve_claude_cli
+
+        if cc_transport_disabled():
+            return SkillDispatchResult(
+                ran=False,
+                skipped_reason="claude CLI transport disabled "
+                "(RAPTOR_CC_TRANSPORT_DISABLED is set)")
+        # Realpath at the resolution seam: symlinked installs otherwise
+        # fail the mount-ns visibility check and silently downgrade the
+        # dispatch to Landlock-only (see resolve_claude_cli).
+        resolved_agent_bin = resolve_claude_cli(agent_bin or claude_bin)
+        if not resolved_agent_bin:
+            return SkillDispatchResult(
+                ran=False,
+                skipped_reason="claude not on PATH",
+            )
+        claude_bin = resolved_agent_bin
 
     if preflight is not None:
         reason = preflight()
@@ -580,187 +783,166 @@ def run_skill_dispatch(
 
         prompt = build_prompt(run_dir)
 
-        # Credential posture (see _CC_CREDENTIAL_MODE_ENV). Proxy-mode
-        # setup failures FAIL the pass with a clear reason — never a
-        # silent fallback to env credentials.
-        credential_mode = _cc_credential_mode()
-        if credential_mode == "proxy":
+        if selected_agent == "copilot":
             try:
-                cc_proxy_creds = _setup_cc_proxy_credentials(
-                    budget_usd, timeout_s, caller_label,
-                )
-            except (RuntimeError, OSError) as e:
-                lifecycle_settled = True
-                fail_lifecycle(run_dir, f"credential-proxy setup: {e}")
-                logger.warning("%s: credential-proxy setup failed: %s",
-                               log_label, e)
-                return SkillDispatchResult(
-                    ran=False,
-                    skipped_reason=f"credential-proxy setup failed: {e}",
-                    run_dir=run_dir, duration_s=time.monotonic() - t0)
-
-        from core.llm.cc_adapter import (
-            CCDispatchConfig,
-            build_cc_command,
-            cc_subprocess_env,
-            system_prompt_file_for,
-        )
-        dispatch_config = CCDispatchConfig(
-            claude_bin=claude_bin,
-            tools=tools,
-            add_dirs=(str(_RAPTOR_DIR), str(target),
-                      *(str(d) for d in context_dirs), str(run_dir)),
-            budget_usd=budget_usd,
-            timeout_s=timeout_s,
-            capture_json_envelope=False,
-        )
-        # env: proxy mode hands the child a credential-FREE env whose
-        # only auth is the scoped dispatcher token; env mode keeps the
-        # backend overlay (CLAUDE_CODE_*/ANTHROPIC_*/AWS_*) so a
-        # Bedrock/Vertex-backed CLI child can authenticate itself. The
-        # sandbox's proxy env still overrides HTTPS_PROXY either way.
-        if cc_proxy_creds is not None:
-            child_env = cc_subprocess_env(
-                credential_mode="proxy",
-                proxy_base_url=cc_proxy_creds.base_url,
-                proxy_auth_token=cc_proxy_creds.token,
-            )
-        else:
-            child_env = cc_subprocess_env(mint_aws_credentials=True)
-        # Prompt transport differs by credential posture. Proxy mode
-        # MUST use ``stdin=<file>``: only the fork spawn backend runs
-        # the dispatcher bridge inside the child's netns, and that
-        # backend cannot plumb ``input=`` — passing it silently routes
-        # the dispatch down the unshare-CLI fallback whose empty netns
-        # has no forwarder (the child would have no network at all).
-        # The prompt can embed operator context and excerpts of the
-        # scanned source, so it must not persist on disk: it goes into
-        # a 0600 tempfile (mkstemp) that is unlinked before the child
-        # is spawned — the only remaining reference is the open fd the
-        # spawn backend dup2s onto the child's stdin, and the inode
-        # dies when both sides close it.
-        stdin_kwargs: dict
-        prompt_fh = None
-        if cc_proxy_creds is not None:
-            fd, tmp_prompt_path = tempfile.mkstemp(prefix="cc-prompt-")
-            try:
-                os.unlink(tmp_prompt_path)
-                prompt_fh = os.fdopen(fd, "w+b")
-            except OSError:
-                os.close(fd)
-                raise
-            prompt_fh.write(prompt.encode("utf-8"))
-            prompt_fh.flush()
-            prompt_fh.seek(0)
-            stdin_kwargs = {"stdin": prompt_fh}
-        else:
-            stdin_kwargs = {"input": prompt}
-        try:
-            # Sandboxed Claude Code dispatch with restrict_reads=True.
-            # See cc_dispatch.py for rationale; this site adds
-            # str(_RAPTOR_DIR) on top of the calibrated/default
-            # readable_paths so the LLM-directed Bash tool can invoke
-            # libexec helpers (which live under RAPTOR_DIR), plus the
-            # caller's context_dirs holding prior phases' artefacts.
-            # target + run_dir are auto-allowlisted via the
-            # target=/output= positional args; $HOME secrets stay
-            # denied.
-            #
-            # System prompt (when the config carries one) rides a 0600
-            # tempfile + --system-prompt-file — never in the child's
-            # world-readable /proc/<pid>/cmdline (see
-            # build_cc_command's hygiene contract). Spawn AND wait stay
-            # inside the CM; the file path joins readable_paths because
-            # TMPDIR is outside the sandbox's read allowlist.
-            with system_prompt_file_for(dispatch_config) as _sys_prompt_path:
-                proc = run_untrusted_networked(
-                    build_cc_command(
-                        dispatch_config,
-                        system_prompt_file=_sys_prompt_path,
-                    ),
-                    text=True,
-                    **stdin_kwargs,
-                    timeout=timeout_s,
-                    target=str(target), output=str(run_dir),
-                    # Explicit cwd: the claude CLI treats its working
-                    # directory as a project root (CLAUDE.md, .claude
-                    # settings, workspace-trust posture). Inheriting the
-                    # parent's cwd handed the child whatever project the
-                    # OPERATOR happened to be sitting in — an untrusted
-                    # workspace whose permission rules the CLI loudly
-                    # ignores. The run dir is RAPTOR-owned, carries no
-                    # project config, and is already writable via
-                    # output=; tool grants come from --allowed-tools.
-                    cwd=str(run_dir),
-                    # env-mode children get mint_aws_credentials=True:
-                    # sandboxed — Landlock denies ~/.aws and the egress
-                    # allowlist has no IMDS route, so on IAM-role Bedrock
-                    # hosts their own AWS credential chain is dead ("Could
-                    # not load credentials from any providers", rc=1); the
-                    # parent resolves the chain and attaches frozen session
-                    # credentials at its trust boundary. Proxy-mode
-                    # children carry no credentials at all (see above).
-                    env=child_env,
-                    # Trust-marker propagation: this child is RAPTOR's own
-                    # claude binary running a skill pass on the same
-                    # operator-approved run (gated above by cc-trust +
-                    # rule-of-two). Its job is to drive libexec/ helpers
-                    # (raptor-validation-helper, raptor-run-lifecycle)
-                    # whose preamble refuses callers without CLAUDECODE /
-                    # _RAPTOR_TRUSTED — the default marker strip left the
-                    # validate post-pass child looking untrusted (rc=1,
-                    # A4). A parent that holds no marker propagates
-                    # nothing: an untrusted parent stays refused.
-                    keep_trust_markers=True,
-                    readable_paths=(
-                        [str(_RAPTOR_DIR)]
-                        + [str(d) for d in context_dirs]
-                        + _readable_paths_for_cc_dispatch(claude_bin)
-                        + ([str(_sys_prompt_path)]
-                           if _sys_prompt_path is not None else [])
-                    ),
-                    # Proxy mode: loopback-only allowlist (deny-all remote —
-                    # the child talks solely to the bridged dispatcher).
-                    proxy_hosts=_proxy_hosts_for_cc_dispatch(
-                        claude_bin, credential_mode=credential_mode,
-                    ),
-                    # Proxy mode: relay in-netns 127.0.0.1:<port> to the
-                    # dispatcher UDS so the CLI's ANTHROPIC_BASE_URL works
-                    # inside the empty network namespace.
-                    loopback_unix_bridges=(
-                        cc_proxy_creds.bridges if cc_proxy_creds else None
-                    ),
+                proc = _run_copilot_skill_child(
+                    copilot_bin=resolved_agent_bin,
+                    prompt=prompt,
+                    tools=tools,
+                    target=target,
+                    run_dir=run_dir,
+                    context_dirs=context_dirs,
+                    timeout_s=timeout_s,
                     caller_label=caller_label,
                 )
-        except subprocess.TimeoutExpired:
-            lifecycle_settled = True
-            fail_lifecycle(run_dir, f"timeout after {timeout_s}s")
-            logger.warning("%s timed out after %ds", log_label, timeout_s)
-            return SkillDispatchResult(
-                ran=False, skipped_reason=f"timeout after {timeout_s}s",
-                run_dir=run_dir, duration_s=time.monotonic() - t0)
-        except OSError as e:
-            lifecycle_settled = True
-            fail_lifecycle(run_dir, f"launch failed: {e}")
-            logger.warning("%s failed to launch: %s", log_label, e)
-            return SkillDispatchResult(
-                ran=False, skipped_reason=f"launch failed: {e}",
-                run_dir=run_dir, duration_s=time.monotonic() - t0)
-        except _SandboxSetupError as e:
-            # BaseException by design ("fail loud") — convert to a
-            # clean pass failure here because the callers' never-raise
-            # backstops only catch Exception, and a credential-proxy
-            # bridge that cannot engage must fail THIS pass, not crash
-            # the whole pipeline.
-            lifecycle_settled = True
-            fail_lifecycle(run_dir, f"sandbox setup failed: {e}")
-            logger.warning("%s sandbox setup failed: %s", log_label, e)
-            return SkillDispatchResult(
-                ran=False, skipped_reason=f"sandbox setup failed: {e}",
-                run_dir=run_dir, duration_s=time.monotonic() - t0)
-        finally:
-            if prompt_fh is not None:
-                prompt_fh.close()
+            except subprocess.TimeoutExpired:
+                lifecycle_settled = True
+                fail_lifecycle(run_dir, f"timeout after {timeout_s}s")
+                return SkillDispatchResult(
+                    ran=False,
+                    skipped_reason=f"timeout after {timeout_s}s",
+                    run_dir=run_dir,
+                    duration_s=time.monotonic() - t0,
+                )
+            except (OSError, ValueError) as exc:
+                lifecycle_settled = True
+                fail_lifecycle(run_dir, f"launch failed: {exc}")
+                return SkillDispatchResult(
+                    ran=False,
+                    skipped_reason=f"launch failed: {exc}",
+                    run_dir=run_dir,
+                    duration_s=time.monotonic() - t0,
+                )
+            except _SandboxSetupError as exc:
+                lifecycle_settled = True
+                fail_lifecycle(run_dir, f"sandbox setup failed: {exc}")
+                return SkillDispatchResult(
+                    ran=False,
+                    skipped_reason=f"sandbox setup failed: {exc}",
+                    run_dir=run_dir,
+                    duration_s=time.monotonic() - t0,
+                )
+        else:
+            # Credential posture (see _CC_CREDENTIAL_MODE_ENV). Proxy-mode
+            # setup failures FAIL the pass with a clear reason — never a
+            # silent fallback to env credentials.
+            credential_mode = _cc_credential_mode()
+            if credential_mode == "proxy":
+                try:
+                    cc_proxy_creds = _setup_cc_proxy_credentials(
+                        budget_usd, timeout_s, caller_label,
+                    )
+                except (RuntimeError, OSError) as e:
+                    lifecycle_settled = True
+                    fail_lifecycle(run_dir, f"credential-proxy setup: {e}")
+                    logger.warning("%s: credential-proxy setup failed: %s",
+                                   log_label, e)
+                    return SkillDispatchResult(
+                        ran=False,
+                        skipped_reason=f"credential-proxy setup failed: {e}",
+                        run_dir=run_dir, duration_s=time.monotonic() - t0)
+
+            from core.llm.cc_adapter import (
+                CCDispatchConfig,
+                build_cc_command,
+                cc_subprocess_env,
+                system_prompt_file_for,
+            )
+            dispatch_config = CCDispatchConfig(
+                claude_bin=claude_bin,
+                tools=tools,
+                add_dirs=(str(_RAPTOR_DIR), str(target),
+                          *(str(d) for d in context_dirs), str(run_dir)),
+                budget_usd=budget_usd,
+                timeout_s=timeout_s,
+                capture_json_envelope=False,
+            )
+            # env: proxy mode hands the child a credential-FREE env whose
+            # only auth is the scoped dispatcher token; env mode keeps the
+            # backend overlay (CLAUDE_CODE_*/ANTHROPIC_*/AWS_*).
+            if cc_proxy_creds is not None:
+                child_env = cc_subprocess_env(
+                    credential_mode="proxy",
+                    proxy_base_url=cc_proxy_creds.base_url,
+                    proxy_auth_token=cc_proxy_creds.token,
+                )
+            else:
+                child_env = cc_subprocess_env(mint_aws_credentials=True)
+            # Proxy mode must use stdin=<file>: only the fork backend runs
+            # the dispatcher bridge inside the child network namespace.
+            stdin_kwargs: dict
+            prompt_fh = None
+            if cc_proxy_creds is not None:
+                fd, tmp_prompt_path = tempfile.mkstemp(prefix="cc-prompt-")
+                try:
+                    os.unlink(tmp_prompt_path)
+                    prompt_fh = os.fdopen(fd, "w+b")
+                except OSError:
+                    os.close(fd)
+                    raise
+                prompt_fh.write(prompt.encode("utf-8"))
+                prompt_fh.flush()
+                prompt_fh.seek(0)
+                stdin_kwargs = {"stdin": prompt_fh}
+            else:
+                stdin_kwargs = {"input": prompt}
+            try:
+                with system_prompt_file_for(dispatch_config) as _sys_prompt_path:
+                    proc = run_untrusted_networked(
+                        build_cc_command(
+                            dispatch_config,
+                            system_prompt_file=_sys_prompt_path,
+                        ),
+                        text=True,
+                        **stdin_kwargs,
+                        timeout=timeout_s,
+                        target=str(target),
+                        output=str(run_dir),
+                        cwd=str(run_dir),
+                        env=child_env,
+                        keep_trust_markers=True,
+                        readable_paths=(
+                            [str(_RAPTOR_DIR)]
+                            + [str(d) for d in context_dirs]
+                            + _readable_paths_for_cc_dispatch(claude_bin)
+                            + (
+                                [str(_sys_prompt_path)]
+                                if _sys_prompt_path is not None else []
+                            )
+                        ),
+                        proxy_hosts=_proxy_hosts_for_cc_dispatch(
+                            claude_bin,
+                            credential_mode=credential_mode,
+                        ),
+                        loopback_unix_bridges=(
+                            cc_proxy_creds.bridges if cc_proxy_creds else None
+                        ),
+                        caller_label=caller_label,
+                    )
+            except subprocess.TimeoutExpired:
+                lifecycle_settled = True
+                fail_lifecycle(run_dir, f"timeout after {timeout_s}s")
+                logger.warning("%s timed out after %ds", log_label, timeout_s)
+                return SkillDispatchResult(
+                    ran=False, skipped_reason=f"timeout after {timeout_s}s",
+                    run_dir=run_dir, duration_s=time.monotonic() - t0)
+            except OSError as e:
+                lifecycle_settled = True
+                fail_lifecycle(run_dir, f"launch failed: {e}")
+                logger.warning("%s failed to launch: %s", log_label, e)
+                return SkillDispatchResult(
+                    ran=False, skipped_reason=f"launch failed: {e}",
+                    run_dir=run_dir, duration_s=time.monotonic() - t0)
+            except _SandboxSetupError as e:
+                lifecycle_settled = True
+                fail_lifecycle(run_dir, f"sandbox setup failed: {e}")
+                logger.warning("%s sandbox setup failed: %s", log_label, e)
+                return SkillDispatchResult(
+                    ran=False, skipped_reason=f"sandbox setup failed: {e}",
+                    run_dir=run_dir, duration_s=time.monotonic() - t0)
+            finally:
+                if prompt_fh is not None:
+                    prompt_fh.close()
 
         if proc.returncode != 0:
             lifecycle_settled = True

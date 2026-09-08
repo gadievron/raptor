@@ -64,17 +64,17 @@ _logger = logging.getLogger(__name__)
 
 # Process-wide trust override. Set by entry points via set_trust_override()
 # when --trust-repo is parsed. Not an env var (see module docstring).
-_trust_override_set = False
+_trust_override_set: bool | None = None
 
 
-def set_trust_override(val: bool) -> None:
+def set_trust_override(val: bool | None) -> None:
     """Set process-wide trust override. Call once from each entry point
     that parses --trust-repo. Idempotent."""
     global _trust_override_set
-    _trust_override_set = bool(val)
+    _trust_override_set = None if val is None else bool(val)
 
 
-def is_trust_overridden() -> bool:
+def is_trust_overridden(repo_path: str | Path | None = None) -> bool:
     """Return the current process-wide trust override.
 
     Public reader for the flag set by :func:`set_trust_override`.
@@ -85,7 +85,15 @@ def is_trust_overridden() -> bool:
     Returns True when the operator opted into trust via the CLI
     (``--trust-repo``); False by the default-strict posture.
     """
-    return _trust_override_set
+    if _trust_override_set is not None:
+        return _trust_override_set
+    if repo_path is None:
+        return False
+    try:
+        from core.project.sessions import session_repo_trusted
+        return session_repo_trusted(repo_path)
+    except Exception:  # noqa: BLE001 — trust lookup fails closed
+        return False
 
 
 @dataclass
@@ -579,7 +587,7 @@ def check_repo_claude_trust(repo_path: str, trust_override: bool | None = None) 
     except (ValueError, OSError):
         return False
     if trust_override is None:
-        trust_override = _trust_override_set
+        trust_override = is_trust_overridden(resolved)
     scans, any_blocking = _scan_cached(resolved,
                                        _read_config_state(Path(resolved)))
     # Print side-effects live OUTSIDE the cache. Pre-fix the print() calls
@@ -593,6 +601,135 @@ def check_repo_claude_trust(repo_path: str, trust_override: bool | None = None) 
         target = Path(resolved)
         _render_scan_report(target, scans, any_blocking, trust_override)
     return any_blocking and not trust_override
+
+
+_COPILOT_TRUSTED_FILES = (
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
+    ".github/copilot-instructions.md",
+    ".github/copilot-mcp.json",
+    ".vscode/mcp.json",
+)
+
+_COPILOT_TRUSTED_DIRS = (
+    ".github/agents",
+    ".github/skills",
+    ".github/hooks",
+    ".claude/agents",
+    ".claude/commands",
+    ".claude/skills",
+)
+
+
+def _symlink_target(path: Path) -> str:
+    try:
+        return os.readlink(path)
+    except OSError:
+        return "<unreadable>"
+
+
+def _copilot_config_scans(target: Path) -> tuple[FileScan, ...]:
+    """Target-owned configuration Copilot may trust through ``--add-dir``.
+
+    Internal Copilot children use ``--no-custom-instructions`` and disable
+    prompt-mode hooks/extensions/workspace MCP, but skills and agents from an
+    additional directory are still a moving compatibility surface. Treat any
+    present trusted configuration as blocking unless the operator explicitly
+    supplied ``--trust-repo``.
+    """
+    if target == _RAPTOR_DIR:
+        return ()
+    scans: list[FileScan] = []
+    for relative in _COPILOT_TRUSTED_FILES:
+        path = target / relative
+        try:
+            st = os.lstat(path)
+        except OSError:
+            continue
+        finding = (
+            Finding(
+                "symlink",
+                _truncate(_symlink_target(path), limit=120),
+                True,
+            )
+            if stat.S_ISLNK(st.st_mode)
+            else Finding("trusted Copilot config", "present", True)
+        )
+        scans.append(FileScan(path=path, findings=[finding]))
+
+    for relative in _COPILOT_TRUSTED_DIRS:
+        path = target / relative
+        try:
+            st = os.lstat(path)
+        except OSError:
+            continue
+        if stat.S_ISLNK(st.st_mode):
+            scans.append(FileScan(
+                path=path,
+                findings=[
+                    Finding(
+                        "symlink",
+                        _truncate(_symlink_target(path), limit=120),
+                        True,
+                    ),
+                ],
+            ))
+            continue
+        if not stat.S_ISDIR(st.st_mode):
+            scans.append(FileScan(
+                path=path,
+                findings=[Finding("(malformed)", "treated as dangerous", True)],
+            ))
+            continue
+        try:
+            with os.scandir(path) as entries:
+                has_entries = next(entries, None) is not None
+        except OSError:
+            has_entries = True
+        if has_entries:
+            scans.append(FileScan(
+                path=path,
+                findings=[Finding("trusted Copilot config", "directory present", True)],
+            ))
+    return tuple(scans)
+
+
+def check_repo_agent_cli_trust(
+    repo_path: str,
+    *,
+    agent_cli: str | None = None,
+    trust_override: bool | None = None,
+) -> bool:
+    """Selected-agent trust gate, preserving the Claude API.
+
+    Claude checks retain their existing behavior. Copilot additionally blocks
+    target-owned instruction, skill, agent, hook, and workspace-MCP surfaces
+    that ``--add-dir`` may load outside RAPTOR's untrusted-content envelope.
+    """
+    blocked = check_repo_claude_trust(
+        repo_path,
+        trust_override=trust_override,
+    )
+    selected = (agent_cli or os.environ.get("RAPTOR_AGENT_CLI") or "claude")
+    if selected != "copilot" or not repo_path:
+        return blocked
+    try:
+        target = Path(repo_path).resolve()
+    except (OSError, ValueError):
+        return blocked
+    effective_override = (
+        is_trust_overridden(target)
+        if trust_override is None else trust_override
+    )
+    scans = _copilot_config_scans(target)
+    if scans:
+        _render_agent_cli_scan_report(
+            target,
+            scans,
+            trust_override=effective_override,
+        )
+    return blocked or (bool(scans) and not effective_override)
 
 
 def _config_candidates(target: Path) -> list[tuple[str, Path]]:
@@ -718,3 +855,25 @@ def _render_scan_report(target: Path, scans, any_blocking: bool,
         label_w = max(len(f.label) for f in fs.findings) + 2
         for f in fs.findings:
             print(f"    {f.label:<{label_w}}{f.value}")
+
+
+def _render_agent_cli_scan_report(
+    target: Path,
+    scans: tuple[FileScan, ...],
+    *,
+    trust_override: bool,
+) -> None:
+    suffix = " (trust override active)" if trust_override else ""
+    print(
+        f"raptor: {_safe(str(target))} has target-owned Copilot config"
+        f"{suffix}:"
+    )
+    for scan in scans:
+        try:
+            relative = scan.path.relative_to(target)
+        except ValueError:
+            relative = scan.path
+        print(f"  {_safe(str(relative))}")
+        width = max(len(finding.label) for finding in scan.findings) + 2
+        for finding in scan.findings:
+            print(f"    {finding.label:<{width}}{finding.value}")

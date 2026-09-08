@@ -55,6 +55,40 @@ def _make_stub_claude(tmp_path: Path) -> Path:
         "#!/usr/bin/env bash\n"
         "echo STUB_CLAUDE_RAN\n"
         'echo "CALLER_DIR_SEEN=${RAPTOR_CALLER_DIR:-}"\n'
+        'echo "AGENT_CLI_SEEN=${RAPTOR_AGENT_CLI:-}"\n'
+        'printf \'ARG:%s\\n\' "$@"\n',
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    return stub_dir
+
+
+def _make_stub_copilot(tmp_path: Path) -> Path:
+    """A fake ``copilot`` that exposes the required help and final argv."""
+    stub_dir = tmp_path / "stub-bin"
+    stub_dir.mkdir(exist_ok=True)
+    stub = stub_dir / "copilot"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "${1:-}" = "--help" ]; then\n'
+        '  if [ "${STUB_COPILOT_INCOMPLETE_HELP:-}" = "1" ]; then\n'
+        "    printf '%s\\n' --model --continue\n"
+        "  else\n"
+        "    printf '%s\\n' --plugin-dir --model --continue --interactive "
+        "--agent --available-tools --allow-tool --deny-tool "
+        "--disable-builtin-mcps --no-custom-instructions --no-ask-user "
+        "--secret-env-vars --output-format --stream --usage-output-file "
+        "--experimental --disallow-temp-dir --no-auto-update "
+        "--no-remote-export\n"
+        "  fi\n"
+        "  exit 0\n"
+        "fi\n"
+        "echo STUB_COPILOT_RAN\n"
+        'echo "CALLER_DIR_SEEN=${RAPTOR_CALLER_DIR:-}"\n'
+        'echo "AGENT_CLI_SEEN=${RAPTOR_AGENT_CLI:-}"\n'
+        'echo "COPILOT_MODEL_SEEN=${RAPTOR_COPILOT_MODEL:-}"\n'
+        'echo "COPILOT_MODEL_EXPLICIT_SEEN=${RAPTOR_COPILOT_MODEL_EXPLICIT:-}"\n'
+        'echo "COPILOT_AUTH_SOCKET_SEEN=${RAPTOR_COPILOT_AUTH_SOCKET:-}"\n'
         'printf \'ARG:%s\\n\' "$@"\n',
         encoding="utf-8",
     )
@@ -70,6 +104,7 @@ def _launch(
     extra_env: dict | None = None,
 ) -> subprocess.CompletedProcess:
     stub_dir = _make_stub_claude(tmp_path)
+    _make_stub_copilot(tmp_path)
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     tmpdir = tmp_path / "tmp"
@@ -119,6 +154,145 @@ def test_caller_dir_plain_path_allowed(tmp_path):
         if "CALLER_DIR_SEEN=" in ln
     ]
     assert seen and seen[0] == str(plain), r.stdout
+
+
+# ---------------------------------------------------------------------------
+# Agent CLI selection and argument mapping
+# ---------------------------------------------------------------------------
+
+
+def _args(stdout: str) -> list[str]:
+    return [line.removeprefix("ARG:") for line in stdout.splitlines()
+            if line.startswith("ARG:")]
+
+
+def test_launcher_keeps_claude_as_default(tmp_path):
+    r = _launch(tmp_path)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "STUB_CLAUDE_RAN" in r.stdout
+    assert "STUB_COPILOT_RAN" not in r.stdout
+    assert "AGENT_CLI_SEEN=claude" in r.stdout
+
+
+def test_copilot_launcher_uses_default_model_and_interactive_prompt(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    r = _launch(tmp_path, "--copilot", str(target))
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "STUB_COPILOT_RAN" in r.stdout
+    assert "STUB_CLAUDE_RAN" not in r.stdout
+    assert "AGENT_CLI_SEEN=copilot" in r.stdout
+    assert "COPILOT_MODEL_SEEN=gpt-5.6-sol" in r.stdout
+    assert "COPILOT_MODEL_EXPLICIT_SEEN=0" in r.stdout
+    args = _args(r.stdout)
+    assert "--model" in args
+    assert args[args.index("--model") + 1] == "gpt-5.6-sol"
+    assert "--interactive" in args
+    assert args[args.index("--interactive") + 1] == f"/raptor {target}"
+    assert "--plugin-dir" in args
+    assert str(REPO_ROOT / "plugins" / "coverage") in args
+    assert (
+        "--secret-env-vars=COPILOT_GITHUB_TOKEN,GH_TOKEN,GITHUB_TOKEN,"
+        "RAPTOR_SESSION_TOKEN"
+    ) in args
+    assert "--allow-tool=shell(libexec/raptor-agentic:*)" in args
+    assert "--allow-tool=shell(libexec/raptor-pid1-shim:*)" not in args
+    assert "--allow-tool=shell(libexec/raptor-seatbelt-shim:*)" not in args
+    assert "--allow-tool=shell(libexec/raptor-*:*)" not in args
+
+
+def test_copilot_launcher_honours_explicit_model_and_verbose(tmp_path):
+    r = _launch(
+        tmp_path,
+        "--copilot",
+        "--model=claude-fable-5.1",
+        "--verbose",
+    )
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "COPILOT_MODEL_SEEN=claude-fable-5.1" in r.stdout
+    assert "COPILOT_MODEL_EXPLICIT_SEEN=1" in r.stdout
+    args = _args(r.stdout)
+    assert args.count("--model") == 1
+    assert args[args.index("--model") + 1] == "claude-fable-5.1"
+    assert args[args.index("--log-level") + 1] == "debug"
+
+
+def test_copilot_launcher_starts_env_token_broker(tmp_path):
+    token = "github_pat_test_only"
+    r = _launch(
+        tmp_path,
+        "--copilot",
+        extra_env={"COPILOT_GITHUB_TOKEN": token},
+    )
+
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    socket_lines = [
+        line.removeprefix("COPILOT_AUTH_SOCKET_SEEN=")
+        for line in r.stdout.splitlines()
+        if line.startswith("COPILOT_AUTH_SOCKET_SEEN=")
+    ]
+    assert socket_lines and socket_lines[0]
+    assert token not in r.stdout
+    assert token not in r.stderr
+
+
+def test_copilot_continue_does_not_override_resumed_model(tmp_path):
+    r = _launch(tmp_path, "--copilot", "--continue")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "COPILOT_MODEL_SEEN=auto" in r.stdout
+    assert "COPILOT_MODEL_EXPLICIT_SEEN=1" in r.stdout
+    args = _args(r.stdout)
+    assert "--continue" in args
+    assert "--interactive" not in args
+    assert "--model" not in args
+
+
+def test_copilot_launcher_rejects_incompatible_cli(tmp_path):
+    r = _launch(
+        tmp_path,
+        "--copilot",
+        extra_env={"STUB_COPILOT_INCOMPLETE_HELP": "1"},
+    )
+    assert r.returncode == 1
+    assert "lacks required flag --plugin-dir" in r.stderr
+    assert "copilot update" in r.stderr
+    assert "STUB_COPILOT_RAN" not in r.stdout
+
+
+def test_copilot_launcher_blocks_target_owned_agent_config(tmp_path):
+    target = tmp_path / "target-with-agent-config"
+    target.mkdir()
+    (target / "AGENTS.md").write_text("target instructions", encoding="utf-8")
+    r = _launch(tmp_path, "--copilot", str(target))
+    assert r.returncode == 2
+    assert "target-owned Copilot config" in r.stdout
+    assert "STUB_COPILOT_RAN" not in r.stdout
+
+
+def test_copilot_launcher_trust_override_allows_agent_config(tmp_path):
+    target = tmp_path / "trusted-target"
+    target.mkdir()
+    (target / "AGENTS.md").write_text("trusted instructions", encoding="utf-8")
+    r = _launch(tmp_path, "--copilot", "--trust-repo", str(target))
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "trust override active" in r.stdout
+    assert "STUB_COPILOT_RAN" in r.stdout
+    args = _args(r.stdout)
+    assert args[args.index("--interactive") + 1] == (
+        f"/raptor {target} --trust-repo"
+    )
+    entries = [
+        path
+        for path in (
+            tmp_path / "home" / ".local" / "share" / "raptor" / "sessions.d"
+        ).glob("[0-9]*")
+        if path.name.isdigit()
+    ]
+    assert entries
+    assert (
+        f"repo_trusted={target}"
+        in entries[0].read_text(encoding="utf-8")
+    )
 
 
 # ---------------------------------------------------------------------------

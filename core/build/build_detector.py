@@ -1524,7 +1524,7 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
         return failures
 
     def _cc_suggest_flags(self, failures: list, language: str) -> dict | None:
-        """Ask CC to suggest -I and -D flags to fix compilation failures.
+        """Ask the selected agent CLI for safe compiler-flag suggestions.
 
         Security model:
         - CC has read-only access (--allowed-tools Read,Grep,Glob)
@@ -1534,8 +1534,10 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
         - Invalid/malicious flags are silently rejected
         """
         import shutil as _shutil
-        claude_bin = _shutil.which("claude")
-        if not claude_bin:
+        selected_agent = os.environ.get("RAPTOR_AGENT_CLI", "claude")
+        binary_name = "copilot" if selected_agent == "copilot" else "claude"
+        agent_bin = _shutil.which(binary_name)
+        if not agent_bin:
             return None
         # Path allowlist for the resolved claude binary. `which` walks
         # PATH, which an untrusted target repo could influence —
@@ -1546,7 +1548,7 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
         # `claude` shim in the target repo doesn't get executed under
         # CC's allowlisted-tool model.
         try:
-            real_claude = os.path.realpath(claude_bin)
+            real_agent = os.path.realpath(agent_bin)
         except OSError:
             return None
         allowed_prefixes = (
@@ -1559,11 +1561,15 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
             "/home/linuxbrew/.linuxbrew/bin/",
             "/opt/homebrew/bin/",
         )
-        if not any(real_claude.startswith(p) for p in allowed_prefixes):
+        if not any(real_agent.startswith(p) for p in allowed_prefixes):
             logger.info(
-                "  Skipping CC flag inference — `claude` resolves to %r which is outside the install-location allowlist. If this is a legitimate location, add it to _cc_suggest_flags' `allowed_prefixes`.", real_claude
+                "  Skipping agent flag inference — `%s` resolves to %r "
+                "outside the install-location allowlist.",
+                binary_name,
+                real_agent,
             )
             return None
+        agent_bin = real_agent
 
         failure_sample = "\n".join(
             f"- {f['file']}: {f['error']}" for f in failures[:15]
@@ -1604,30 +1610,153 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
         )
         prompt = next(m.content for m in bundle.messages if m.role == "user")
 
-        from core.security.cc_trust import check_repo_claude_trust
-        if check_repo_claude_trust(str(self.repo_path)):
-            logger.info("  Skipping CC flag inference — target repo has dangerous "
-                        "Claude Code config (see earlier warning). "
+        from core.security.cc_trust import check_repo_agent_cli_trust
+        if check_repo_agent_cli_trust(str(self.repo_path)):
+            logger.info("  Skipping agent flag inference — target repo has "
+                        "dangerous agent CLI config (see earlier warning). "
                         "Pass --trust-repo to override.")
             return None
 
         try:
-            logger.info("  Asking Claude Code for additional compiler flags...")
-            from core.llm.cc_adapter import (
-                CCDispatchConfig,
-                build_cc_command,
-                cc_subprocess_env,
-                strip_json_fences,
-                system_prompt_file_for,
+            logger.info(
+                "  Asking %s for additional compiler flags...",
+                "GitHub Copilot CLI" if selected_agent == "copilot"
+                else "Claude Code",
             )
-            config = CCDispatchConfig(
-                claude_bin=claude_bin,
-                tools="Read,Grep,Glob",
-                add_dirs=(str(self.repo_path),),
-                budget_usd="2.00",
-                timeout_s=180,
-                capture_json_envelope=False,
-            )
+            from core.llm.cc_adapter import strip_json_fences
+            if selected_agent == "copilot":
+                from core.json import load_json
+                from core.llm.copilot_adapter import (
+                    CopilotDispatchConfig,
+                    build_copilot_command,
+                    configured_copilot_fallback_models,
+                    copilot_subprocess_env,
+                    copilot_transport_disabled,
+                    execute_copilot_command,
+                    is_model_unavailable_error,
+                    parse_copilot_output,
+                    stage_copilot_agent,
+                    stage_copilot_sandbox_settings,
+                )
+                from core.llm.model_data import COPILOT_DEFAULT_MODEL
+                from core.run.scratch import scratch_dir
+
+                if copilot_transport_disabled():
+                    return None
+
+                model = (
+                    os.environ.get("RAPTOR_COPILOT_MODEL", "").strip()
+                    or COPILOT_DEFAULT_MODEL
+                )
+                explicit = (
+                    os.environ.get("RAPTOR_COPILOT_MODEL_EXPLICIT") == "1"
+                )
+                candidates = [model]
+                if not explicit:
+                    candidates.extend(
+                        configured_copilot_fallback_models(model),
+                    )
+                max_credits = None
+                raw_credits = os.environ.get(
+                    "RAPTOR_COPILOT_MAX_AI_CREDITS", "",
+                ).strip()
+                if raw_credits:
+                    try:
+                        parsed_credits = float(raw_credits)
+                    except ValueError:
+                        parsed_credits = 0.0
+                    if parsed_credits > 0:
+                        max_credits = parsed_credits
+
+                result = None
+                with scratch_dir("raptor-copilot-build-") as raw_workspace:
+                    workspace = Path(raw_workspace)
+                    config = CopilotDispatchConfig(
+                        copilot_bin=agent_bin,
+                        model=model,
+                        tools="Read,Grep,Glob",
+                        add_dirs=(str(self.repo_path),),
+                        system_prompt=system,
+                        timeout_s=180,
+                        max_ai_credits=max_credits,
+                        allow_model_fallback=False,
+                        sandbox=True,
+                    )
+                    stage_copilot_agent(
+                        workspace,
+                        system_prompt=system,
+                        tools=config.tools,
+                    )
+                    copilot_home = workspace / ".copilot-home"
+                    copilot_home.mkdir(mode=0o700, exist_ok=True)
+                    (workspace / "node-compile-cache").mkdir(
+                        mode=0o700,
+                        exist_ok=True,
+                    )
+                    stage_copilot_sandbox_settings(
+                        copilot_home,
+                        workspace=workspace,
+                        readonly_paths=(str(self.repo_path),),
+                    )
+                    child_env = copilot_subprocess_env(
+                        mint_github_token=True,
+                        copilot_home=copilot_home,
+                    )
+                    usage_path = workspace / "usage.json"
+                    attempted: set[str] = set()
+                    for candidate in candidates:
+                        if candidate in attempted:
+                            continue
+                        attempted.add(candidate)
+                        usage_path.unlink(missing_ok=True)
+                        result, duration = execute_copilot_command(
+                            build_copilot_command(
+                                config,
+                                workspace=workspace,
+                                usage_path=usage_path,
+                                model=candidate,
+                            ),
+                            prompt,
+                            timeout_s=180,
+                            cwd=str(workspace),
+                            env=child_env,
+                        )
+                        usage = load_json(
+                            usage_path,
+                            max_bytes=8 * 1024 * 1024,
+                        )
+                        parsed = parse_copilot_output(
+                            result.stdout or "",
+                            result.stderr or "",
+                            returncode=result.returncode,
+                            usage=usage if isinstance(usage, dict) else {},
+                            model_hint=candidate,
+                            duration_seconds=duration,
+                        )
+                        if result.returncode == 0:
+                            result.stdout = parsed.content
+                            break
+                        if not is_model_unavailable_error(parsed.error):
+                            break
+                if result is None:
+                    return None
+            else:
+                claude_bin = agent_bin
+                from core.llm.cc_adapter import (
+                    CCDispatchConfig,
+                    build_cc_command,
+                    cc_subprocess_env,
+                    system_prompt_file_for,
+                )
+                config = CCDispatchConfig(
+                    claude_bin=claude_bin,
+                    tools="Read,Grep,Glob",
+                    add_dirs=(str(self.repo_path),),
+                    budget_usd="2.00",
+                    timeout_s=180,
+                    capture_json_envelope=False,
+                    system_prompt=system,
+                )
             repo_path = str(self.repo_path)
             # Route hostname allowlist through cc_proxy_hosts so this
             # site picks up the same calibrate-aware policy as
@@ -1637,10 +1766,11 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
             # which silently broke Bedrock / Vertex / Azure /
             # custom-endpoint setups. The downstream client is
             # ``claude`` either way, so the policy is identical.
-            from core.llm.cc_proxy_hosts import (
-                proxy_hosts_for_cc_dispatch,
-                readable_paths_for_cc_dispatch,
-            )
+            if selected_agent == "claude":
+                from core.llm.cc_proxy_hosts import (
+                    proxy_hosts_for_cc_dispatch,
+                    readable_paths_for_cc_dispatch,
+                )
             # env: backend overlay (CLAUDE_CODE_*/ANTHROPIC_*/AWS_*) so a
             # Bedrock/Vertex-backed CLI child can authenticate; the
             # sandbox's proxy env still overrides HTTPS_PROXY.
@@ -1652,43 +1782,32 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
             # stay inside the CM; the file path joins readable_paths
             # because restrict_reads=True keeps TMPDIR outside the
             # sandbox's read allowlist.
-            with system_prompt_file_for(config) as _sys_prompt_path:
-                readable_paths = readable_paths_for_cc_dispatch(claude_bin)
-                if _sys_prompt_path is not None:
-                    readable_paths = [*readable_paths, str(_sys_prompt_path)]
-                result = _sandbox_run(
-                    build_cc_command(
-                        config, system_prompt_file=_sys_prompt_path,
-                    ),
-                    target=repo_path, output=repo_path,
-                    # mint_aws_credentials: sandboxed child (see
-                    # cc_adapter._mint_child_aws_credentials) — an IAM-role
-                    # Bedrock host leaves it credential-starved otherwise.
-                    env=cc_subprocess_env(mint_aws_credentials=True),
-                    use_egress_proxy=True,
-                    # The CC child reads the UNTRUSTED repo (add_dirs +
-                    # Read/Grep/Glob) and its prompt embeds untrusted
-                    # compiler stderr — repo content can steer what the
-                    # child does, so this is repo-influenced egress and
-                    # must use the netns tier (00015 doctrine, same as
-                    # the sca agent's CC dispatches). On a netns-less
-                    # host the SandboxSetupError is swallowed by this
-                    # method's except handler and flag inference is
-                    # skipped rather than run through the weaker tier.
-                    require_proxy_netns=True,
-                    proxy_hosts=proxy_hosts_for_cc_dispatch(claude_bin),
-                    # Read confinement, same posture as the other CC
-                    # dispatch sites (skill_dispatch, the sub-agent
-                    # dispatcher): the child carries backend credentials
-                    # in env and reads hostile repo content + compiler
-                    # stderr, so on Landlock-only hosts restrict_reads is
-                    # what keeps prompt-steered Read/Grep/Glob away from
-                    # $HOME and /proc beyond the calibrated CLI floor.
-                    restrict_reads=True,
-                    readable_paths=readable_paths,
-                    caller_label="codeql-build-detect",
-                    input=prompt, capture_output=True, text=True, timeout=180,
-                )
+            if selected_agent == "claude":
+                with system_prompt_file_for(config) as _sys_prompt_path:
+                    readable_paths = readable_paths_for_cc_dispatch(claude_bin)
+                    if _sys_prompt_path is not None:
+                        readable_paths = [
+                            *readable_paths,
+                            str(_sys_prompt_path),
+                        ]
+                    result = _sandbox_run(
+                        build_cc_command(
+                            config, system_prompt_file=_sys_prompt_path,
+                        ),
+                        target=repo_path,
+                        output=repo_path,
+                        env=cc_subprocess_env(mint_aws_credentials=True),
+                        use_egress_proxy=True,
+                        require_proxy_netns=True,
+                        proxy_hosts=proxy_hosts_for_cc_dispatch(claude_bin),
+                        restrict_reads=True,
+                        readable_paths=readable_paths,
+                        caller_label="codeql-build-detect",
+                        input=prompt,
+                        capture_output=True,
+                        text=True,
+                        timeout=180,
+                    )
             if result.returncode != 0 or not result.stdout.strip():
                 return None
 

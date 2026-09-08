@@ -308,10 +308,10 @@ def _dispatch_validate_unsafe(
     # cc-trust gate: refuse to dispatch a Claude Code child against a
     # repo whose .claude/settings / .mcp.json the operator has not
     # trusted for cc dispatch. Same gate the /agentic launcher applies
-    # (check_repo_claude_trust honours the operator's --trust-repo via
+    # (check_repo_agent_cli_trust honours the operator's --trust-repo via
     # set_trust_override). Pre-consolidation the audit handoff had no
     # such gate — an untrusted repo's config reached the CC child.
-    from core.security.cc_trust import check_repo_claude_trust
+    from core.security.cc_trust import check_repo_agent_cli_trust
 
     dispatch = run_skill_dispatch(
         command="validate",
@@ -322,7 +322,7 @@ def _dispatch_validate_unsafe(
         caller_label="audit-validate",
         log_label="validate post-pass",
         build_prompt=_prompt,
-        block_cc_dispatch=check_repo_claude_trust(str(target_path)),
+        block_cc_dispatch=check_repo_agent_cli_trust(str(target_path)),
         context_dirs=(audit_out_dir,),
         stage=_stage,
     )

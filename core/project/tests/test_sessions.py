@@ -38,6 +38,22 @@ DEAD_PID = 999999999
 _REAL_STARTTIME = sessions.proc_starttime
 
 
+@pytest.mark.parametrize(
+    ("comm", "expected"),
+    [
+        ("claude", True),
+        ("claude-code", True),
+        ("copilot", True),
+        ("copilot-agent", True),
+        ("Claude", True),
+        ("python3", False),
+        (None, False),
+    ],
+)
+def test_agent_cli_process_shape(comm, expected):
+    assert sessions._agent_cli_shaped(comm) is expected
+
+
 class _RegistryCase(unittest.TestCase):
     """Shared fixture: isolated SESSIONS_DIR + claude-shaped self.
 
@@ -76,6 +92,16 @@ class SessionsRegistryTest(_RegistryCase):
         self.assertIn("since", entries[os.getpid()])
         self.assertEqual(entries[os.getpid()]["v"], "2")
 
+    def test_copilot_process_is_authoritative(self):
+        with patch.object(
+            sessions,
+            "_comm",
+            lambda pid: "copilot" if pid == os.getpid() else None,
+        ):
+            sessions.record_session("myapp", pid=os.getpid())
+            entries = sessions.read_sessions()
+        self.assertEqual(entries[os.getpid()]["project"], "myapp")
+
     def test_record_stamps_identity(self):
         sessions.record_session("myapp", pid=os.getpid())
         fields = sessions._parse_entry(self.sessions_dir / str(os.getpid()))
@@ -112,6 +138,35 @@ class SessionsRegistryTest(_RegistryCase):
         self.assertEqual(fields["project"], "other")
         self.assertEqual(fields["token"], "ab" * 16)
         self.assertEqual(fields["seeded_by"], "flag")
+
+    def test_session_repo_trust_survives_rebind(self):
+        sessions.record_session(
+            "myapp",
+            pid=os.getpid(),
+            token="ab" * 16,
+            seeded_by="flag",
+        )
+        entry = self.sessions_dir / str(os.getpid())
+        entry.write_text(
+            entry.read_text(encoding="utf-8")
+            + f"repo_trusted={self._tmp.name}\n",
+            encoding="utf-8",
+        )
+        with patch.dict(
+            os.environ,
+            {
+                sessions.ENV_SESSION_PID: str(os.getpid()),
+                sessions.ENV_SESSION_TOKEN: "ab" * 16,
+            },
+        ):
+            self.assertTrue(sessions.session_repo_trusted(self._tmp.name))
+            self.assertFalse(
+                sessions.session_repo_trusted(
+                    str(Path(self._tmp.name).parent),
+                ),
+            )
+            sessions.record_session("other", pid=os.getpid())
+            self.assertTrue(sessions.session_repo_trusted(self._tmp.name))
 
     def test_record_refreshes_stale_identity_stamp(self):
         sessions.record_session("myapp", pid=os.getpid())

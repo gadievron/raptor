@@ -36,6 +36,7 @@ def test_constant_contents():
     assert "_RAPTOR_TRUSTED" in STRIP_SET
     assert "RAPTOR_SESSION_PID" in STRIP_SET
     assert "RAPTOR_SESSION_TOKEN" in STRIP_SET
+    assert "RAPTOR_COPILOT_AUTH_SOCKET" in STRIP_SET
 
 
 def test_session_credential_is_allowlisted_but_stripped():

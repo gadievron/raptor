@@ -350,8 +350,12 @@ class TestGapAuditGate:
     """LLM-availability gate for the post-pass, including the
     claudecode-transport fallback."""
 
-    def _llm_env(self, external=False, cc=False):
-        return argparse.Namespace(external_llm=external, claude_code=cc)
+    def _llm_env(self, external=False, cc=False, copilot=False):
+        return argparse.Namespace(
+            external_llm=external,
+            claude_code=cc,
+            copilot_cli=copilot,
+        )
 
     def test_external_llm_runs(self):
         from raptor_agentic import _gap_audit_skip_reason
@@ -378,6 +382,15 @@ class TestGapAuditGate:
         from raptor_agentic import _gap_audit_skip_reason
         reason = _gap_audit_skip_reason(
             _args(model=[]), self._llm_env(cc=True),
+            block_cc_dispatch=True,
+        )
+        assert reason and "trust check" in reason
+
+    def test_copilot_only_blocked_repo_skips(self):
+        from raptor_agentic import _gap_audit_skip_reason
+        reason = _gap_audit_skip_reason(
+            _args(model=[]),
+            self._llm_env(copilot=True),
             block_cc_dispatch=True,
         )
         assert reason and "trust check" in reason

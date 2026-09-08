@@ -9,7 +9,7 @@
 ║             ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝    ╚═════╝ ╚═╝  ╚═╝            ║
 ║                                                                           ║
 ║             Autonomous Offensive/Defensive Research Framework             ║
-║             Based on Claude Code (v3.1.0)                                 ║
+║             Claude Code / GitHub Copilot CLI - v3.1.0                     ║
 ║                                                                           ║
 ║             Gadi Evron, Daniel Cuthbert, Thomas Dullien (Halvar Flake)    ║
 ║             Michael Bargury, John Cartwright                              ║
@@ -40,7 +40,7 @@
 
 ## What is RAPTOR?
 
-RAPTOR is an autonomous security research framework built on top of Claude Code (but not tied to it -- you can plug in your own analysis layer too). It chains together static analysis, binary analysis, LLM-powered vulnerability validation, exploit generation, and patch writing into a single workflow you can run against a codebase or binary.
+RAPTOR is an autonomous security research framework built on top of a selected agent CLI (Claude Code by default; GitHub Copilot CLI with `raptor --copilot`) and an extensible analysis layer. It chains together static analysis, binary analysis, LLM-powered vulnerability validation, exploit generation, and patch writing into a single workflow you can run against a codebase or binary.
 
 It is not polished software. It was built in free time, held together with enthusiasm and duct tape, and it works well enough that we can't stop using it. If you want to make it better, open a PR.
 
@@ -58,11 +58,12 @@ the code.
 
 ## Prerequisites
 
-- **Claude Code** with an active subscription (Max, Pro, Team, or Enterprise) or an Anthropic API key. This is the orchestration layer -- RAPTOR runs inside a Claude Code session.
+- **Claude Code** with an active subscription (Max, Pro, Team, or Enterprise) or an Anthropic API key (default interactive CLI).
+- **GitHub Copilot CLI** (optional, opt-in via `raptor --copilot`) if you want Copilot as the interactive CLI. Install/setup: https://docs.github.com/copilot/how-tos/copilot-cli
 - **Python 3.10+** and **Node.js 18+**.
 - **Semgrep** (`pip install semgrep`) for static analysis. CodeQL is optional but recommended.
 
-For the analysis dispatch layer (the LLM that analyses individual findings), Claude Code itself handles everything by default -- no extra API keys needed. If you want multi-model analysis (e.g. Claude + GPT + Gemini), you will need API keys for each provider. See [Using a different LLM](#using-a-different-llm) below.
+Claude remains the default launch path (`raptor` with no `--copilot`). For the analysis dispatch layer (the LLM that analyses individual findings), the selected agent CLI transport can handle everything by default with no extra provider API keys. If you want multi-model analysis (e.g. Claude + GPT + Gemini), you will need API keys for each provider. See [Using a different LLM](#using-a-different-llm) below.
 
 ## Quick Start
 
@@ -79,6 +80,9 @@ pip install -r requirements.txt
 # Install Claude Code (if you don't already have it)
 npm install -g @anthropic-ai/claude-code
 
+# Optional: install GitHub Copilot CLI for the opt-in Copilot launch path
+# https://docs.github.com/copilot/how-tos/copilot-cli
+
 # Install Semgrep (required for scanning)
 pip install semgrep
 
@@ -87,15 +91,26 @@ pip install semgrep
 # the repo. (Alternatively, symlink bin/raptor into a directory already on PATH.)
 export PATH="$PATH:$PWD/bin"
 
-# Launch RAPTOR
+# Launch RAPTOR (default: Claude Code)
 raptor
+
+# Opt-in end-to-end Copilot CLI session
+raptor --copilot
+
+# Copilot with an explicit alternative model pin
+raptor --copilot --model gpt-5.3-codex
 ```
 
-The `raptor` launcher is the recommended way to start a session, and it works from any directory -- it resolves the RAPTOR installation, remembers the directory you launched from (so commands like `/scan` default to it), runs the pre-flight trust and project checks, loads the coverage-tracking plugin, and sanitises the environment before handing off to Claude Code. It also takes an optional target path and flags like `--project`, `--continue`, and `--model` -- see `raptor --help`.
+The `raptor` launcher is the recommended way to start a session, and it works from any directory -- it resolves the RAPTOR installation, remembers the directory you launched from (so commands like `/scan` default to it), runs the pre-flight trust and project checks, loads the coverage-tracking plugin, and sanitises the environment before handing off to the selected agent CLI (Claude by default, Copilot with `--copilot`). It also takes an optional target path and flags like `--project`, `--continue`, and `--model` -- see `raptor --help`.
+
+Copilot mode fails closed when the target contains agent configuration that
+Copilot could trust through `--add-dir` (for example `AGENTS.md`,
+`.github/agents`, `.github/skills`, `.github/hooks`, or workspace MCP files).
+Review that configuration before using `--trust-repo` to override the gate.
 
 Running plain `claude` from inside the repo directory also works -- Claude Code picks up RAPTOR's configuration from the checkout -- but you skip everything the launcher does above: no pre-flight checks, no coverage tracking, and commands that default to "the directory you ran this from" can't see it.
 
-**Important:** RAPTOR loads its configuration from the repo directory. If you run `claude` from any other directory, you get plain Claude Code, not RAPTOR. The `raptor` launcher avoids this failure mode entirely.
+**Important:** RAPTOR loads its configuration from the repo directory. If you run the underlying agent CLI from any other directory, you get plain Claude/Copilot behavior, not RAPTOR. The `raptor` launcher avoids this failure mode entirely.
 
 ### Option 2: Run in a container (recommended)
 
@@ -156,7 +171,7 @@ The simplest thing you can do:
 /scan /path/to/code
 ```
 
-This runs Semgrep (plus Coccinelle when `spatch` is installed; add `--codeql` for CodeQL) against the target, deduplicates findings, and writes a SARIF report. No LLM analysis, no API keys beyond Claude Code. Takes a few minutes on a typical repository.
+This runs Semgrep (plus Coccinelle when `spatch` is installed; add `--codeql` for CodeQL) against the target, deduplicates findings, and writes a SARIF report. No LLM analysis, no provider API keys beyond the selected agent CLI transport. Takes a few minutes on a typical repository.
 
 To add LLM-powered validation:
 
@@ -166,13 +181,13 @@ To add LLM-powered validation:
 
 This runs the full pipeline: scan, deduplicate, then send each finding through the validation stages (A-F). On a medium-sized codebase with ~50 findings, expect 10-30 minutes and $2-8 in analysis-layer LLM costs (depending on the model). The default cost cap is $10 per run; adjust with `--max-cost-usd`.
 
-**Cost note:** The Claude Code orchestration layer uses your Claude subscription. The analysis dispatch layer makes separate LLM API calls that are billed per token. If you only use Claude Code as the analysis model (the default), there is no extra cost beyond your subscription. If you configure external models (OpenAI, Gemini, etc.), those API calls are billed to those providers.
+**Cost note:** The selected agent-CLI decision layer uses that CLI's own billing/subscription model (Claude subscription by default; Copilot usage when launched with `--copilot`). The analysis dispatch layer can make separate provider API calls billed per token. Copilot-backed dispatch telemetry reports native usage (`premium_request_cost`, `nano_aiu`) plus token-estimated USD; native Copilot usage is authoritative and model-dependent (do not assume a fixed request/AI-unit multiplier).
 
 ---
 
 ## Security model
 
-RAPTOR runs LLM-generated code and analyses untrusted repositories. Subprocesses that handle untrusted content are sandboxed using Linux namespaces, Landlock, and seccomp. The sandbox blocks network access, restricts filesystem visibility, and limits resource consumption. See `docs/sandbox.md` for the full threat model and configuration.
+RAPTOR runs LLM-generated code and analyses untrusted repositories. Most untrusted tool subprocesses are sandboxed with Linux namespaces, Landlock, and seccomp (`core/sandbox`). Unattended Copilot skill/build command children use Copilot MXC policy mode (`--experimental --sandbox --disallow-temp-dir`) in a private run-local HOME with explicit path/tool policy. Interactive Copilot launch pre-approves only reviewed high-level RAPTOR wrappers—internal execution shims are excluded. These are alternate confinement paths, not nested together on the same child process.
 
 Environment variables that could inject code into the launcher chain are stripped at startup (`core/security/_dangerous_env_strip.sh`). File paths from scanned repositories are never interpolated into shell strings — all subprocess calls use list-based arguments.
 
@@ -386,7 +401,9 @@ Not currently enforced: `mypy` is installed in `requirements-dev.txt` but does n
 
 RAPTOR has two separate model layers, and it is worth knowing how both work before you change anything.
 
-The **orchestration layer** is always Claude Code. The CLAUDE.md, skills, and commands all run as Claude Code instructions. To change which Claude model orchestrates RAPTOR, use Claude Code's `--model` flag or the `/model` command inside a session.
+The **decision/orchestration layer** runs inside the selected agent CLI. Claude remains the default (`raptor`), and Copilot is opt-in (`raptor --copilot`). RAPTOR reuses the same canonical `CLAUDE.md`, commands, skills, agents, settings, and plugin assets on both launch paths.
+
+For Copilot launches, the default model is `gpt-5.6-sol`. Top-level interactive launch does **not** do billed preflight model calls and does **not** inject auto-retry. An explicit `--model` pin disables automatic Copilot fallback. `--continue` leaves the resumed interactive model untouched; separate internal calls use Copilot `auto` because the CLI does not expose the stored session model.
 
 The **analysis dispatch layer** is the LLM that analyses individual vulnerability findings. This is separate from the orchestration layer and can be any supported provider. Configure it in `~/.config/raptor/models.json`:
 
@@ -495,7 +512,7 @@ RAPTOR is two layers.
 
 The **Python execution layer** (`raptor.py`, `packages/`, `core/`, `engine/`) handles the heavy lifting: running Semgrep and CodeQL, managing subprocesses, parsing SARIF, deduplicating findings, dispatching LLM API calls, tracking costs, writing output files. It does not make decisions. It executes.
 
-The **Claude Code decision layer** (`.claude/`, `tiers/`, `CLAUDE.md`) makes the calls: which findings to prioritise, how to interpret results, what the attack scenario is, whether the exploit is realistic. Implemented as Claude Code skills, commands, and agents that load progressively.
+The **agent-CLI decision layer** (`.claude/`, `tiers/`, `CLAUDE.md`) makes the calls: which findings to prioritise, how to interpret results, what the attack scenario is, whether the exploit is realistic. Implemented once as canonical skills, commands, and agents reused by both supported interactive CLIs.
 
 ```
 CLAUDE.md              always loaded -- bootstrap, routing, security rules
@@ -505,7 +522,7 @@ tiers/                 adversarial thinking, recovery, expert personas
 .claude/agents/        specialist sub-agents (offsec, crash analysis, forensics)
 ```
 
-The split means you can run the Python layer from a CI pipeline (`python3 raptor.py scan --repo ...`) and get structured SARIF output without Claude Code, or run it interactively with the full agentic workflow.
+The split means you can run the Python layer from a CI pipeline (`python3 raptor.py scan --repo ...`) and get structured SARIF output without an interactive agent CLI session, or run it interactively with the full agentic workflow.
 
 ---
 
@@ -531,7 +548,7 @@ Fuzzing Strategist                             Corpus design and triage
 Binary Exploitation Specialist                 ROP, heap, and memory corruption
 ```
 
-Tell Claude which one to use, e.g. "Use the Binary Exploitation Specialist".
+Tell the selected agent CLI which one to use, e.g. "Use the Binary Exploitation Specialist".
 
 ---
 
@@ -573,7 +590,7 @@ RAPTOR is open source. Good places to start if you want to contribute:
 - Browser-engine crawling and DOM XSS coverage for the web scanner (Playwright is pinned but unused)
 - SSRF rule coverage for annotation-driven frameworks (Spring `@RequestParam`, FastAPI typed params) — semgrep cannot match these sources, so alternative approaches are welcome
 - YARA signature generation
-- Ports to other AI coding tools (Cursor, Windsurf, Copilot, Cline)
+- Ports to other AI coding tools (Cursor, Windsurf, Cline)
 - Better firmware analysis coverage
 - Anything you think is missing
 

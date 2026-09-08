@@ -14,7 +14,7 @@ security conventions — lives in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 RAPTOR is a Python **execution layer** (scanning, subprocess
 management, SARIF parsing, LLM dispatch, cost tracking — no judgement
-calls) driven by a Claude Code **decision layer** (`.claude/`,
+calls) driven by a selected-agent-CLI **decision layer** (`.claude/`,
 `tiers/`, `CLAUDE.md`) that prioritises findings, interprets results,
 and decides what to do next. The split is deliberate: the Python layer
 runs standalone in CI, the decision layer drives it interactively.
@@ -60,8 +60,8 @@ detail):
 - **`codeql`** — CodeQL database creation, suite execution, and
   dataflow validation (SMT path feasibility plus LLM review).
 - **`llm_analysis`** — LLM exploitability analysis of findings; the
-  orchestrator dispatches `claude -p` sub-agents and correlates
-  multi-model verdicts.
+  orchestrator dispatches selected-agent-CLI subprocess workers and
+  correlates multi-model verdicts.
 - **`exploitability_validation`** — the staged `/validate` pipeline
   proving findings real, reachable, and exploitable.
 - **`fuzzing`** — AFL++ campaign orchestration, corpus management,
@@ -86,6 +86,18 @@ detail):
 The hypothesis-driven audit itself lives in `core/audit/`
 (orchestrator, strategies, gates) because several packages and the
 decision layer share it.
+
+## Selected-agent-CLI parity rules
+
+- Canonical `.claude/` command/skill/agent/settings/plugin assets are shared
+  across interactive launchers. Do **not** duplicate them for Copilot-specific
+  variants.
+- Put launcher-specific behavior in launcher/transport glue (`bin/raptor`,
+  `core/llm/cc_adapter.py`, `core/llm/copilot_adapter.py`) and keep prompt
+  assets single-source.
+- Copilot transport provider naming is `copilotcli` /
+  `copilotcli-resumable`; keep docs and comments consistent with those
+  identifiers when touching transport wiring.
 
 ## engine/: authoring detection rules
 
@@ -159,8 +171,10 @@ What code must **never** assume: that a specific layer engaged on a
 given host — the run's `sandbox_info` stamps (`proxy_enforcement`,
 `mount_ns_degraded`, `degraded_net_deny`, `audit_engaged`) are the
 truth, so read them instead of assuming; that `$HOME`, `/tmp`, or the
-network inside a sandbox are the host's; or that it may bypass
-`core.sandbox` for subprocess work touching untrusted input.
+network inside a sandbox are the host's; or that it may bypass RAPTOR's
+containment wrappers for subprocess work touching untrusted input
+(`core.sandbox` for standard tooling, Copilot MXC helpers for Copilot
+command-mode children).
 
 ## Mechanical gates you will hit
 

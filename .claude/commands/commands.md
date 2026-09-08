@@ -21,12 +21,15 @@ Act on findings: cve-diff, cve-env, exploit, patch.
 Present results: annotate, diagram, review, scorecard.
 
 **Project**
-Manage work: ask, project, sage, version.
+Manage work: ask, project, raptor-version, sage.
 
 After the groups, on a separate line: `- /create-skill — Save approaches as reusable skills (alpha)`
 
 Omit commands flagged as "unavailable" in the most recent startup warnings. Commands flagged as "limited" should still be shown with a note (e.g., `(limited — rr not found)`).
 
-Exclude non-RAPTOR commands (e.g., /commands itself, /help) and internal/duplicate commands (e.g., raptor-scan, raptor-fuzz, raptor-web).
+Exclude non-RAPTOR commands (e.g., /commands itself, /help).
+Exclude internal/duplicate commands (e.g., raptor-scan, raptor-fuzz,
+raptor-web) and compatibility aliases such as version.
+`raptor-version` is the intentional exception: Copilot reserves `/version`.
 
 End with: "Commands with missing dependencies are omitted. Check the startup warnings for details."

@@ -16,6 +16,9 @@ from core.llm.model_data import (
     ANTHROPIC_CACHE_WRITE_1H_MULTIPLIER,
     MODEL_COSTS,
     MODEL_LIMITS,
+    canonical_copilot_model_id,
+    copilot_fallback_models,
+    copilot_model_id,
     context_window_for,
     max_output_for,
     price_for,
@@ -50,6 +53,29 @@ def test_max_output_returns_known() -> None:
 def test_max_output_unknown_raises() -> None:
     with pytest.raises(KeyError, match="unknown model 'mystery'"):
         max_output_for("mystery")
+
+
+def test_copilot_dotted_claude_alias_uses_canonical_catalog() -> None:
+    assert canonical_copilot_model_id("claude-fable-5.1") \
+        == "claude-fable-5-1"
+    assert copilot_model_id("claude-fable-5-1") == "claude-fable-5.1"
+    assert context_window_for("claude-fable-5.1") == 1_000_000
+    assert max_output_for("claude-fable-5.1") == 128_000
+    assert price_for("claude-fable-5.1") == (10.0, 50.0)
+
+
+def test_copilot_fallback_order_is_catalog_driven() -> None:
+    fallbacks = copilot_fallback_models("gpt-5.6-sol")
+    assert fallbacks[:3] == (
+        "gpt-5.3-codex",
+        "claude-fable-5.1",
+        "claude-fable-5",
+    )
+    assert "claude-opus-5" in fallbacks
+    assert "claude-opus-4.8" in fallbacks
+    assert "claude-opus-4.0" not in fallbacks
+    canonical = [canonical_copilot_model_id(model) for model in fallbacks]
+    assert len(canonical) == len(set(canonical))
 
 
 # --- price_for ----------------------------------------------------------

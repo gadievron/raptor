@@ -57,19 +57,19 @@ Claude Code, or run it interactively with the full agentic workflow.  See
 RAPTOR uses LLMs in two distinct roles -- it is worth knowing both before
 changing the configuration.
 
-The **orchestration model** is always Claude Code.  The skills, commands, and
-decision logic all execute inside a Claude Code session.  Change it with Claude
-Code's `--model` flag or the `/model` command.
+The **orchestration model** runs inside the selected agent CLI. Claude Code is
+the default; `raptor --copilot` selects GitHub Copilot CLI end-to-end. Change
+the model with the selected CLI's `--model` support.
 
 The **analysis dispatch model** is the LLM that analyses individual
 vulnerability findings (Stages A--F).  This is a separate call path and can be
 any [supported provider](llm.md): Anthropic, OpenAI, Gemini, Mistral, Bedrock,
-Ollama, or Claude Code itself as a fallback.  Configure it in
+Ollama, or the selected agent CLI as a fallback. Configure it in
 `~/.config/raptor/models.json` or via environment variables.
 
-When no external provider is configured, Claude Code handles both roles.  When
-an external provider is configured, it takes priority for analysis dispatch and
-Claude Code becomes the fallback.
+When no external provider is configured, the selected agent CLI handles both
+roles. When an external provider is configured, it takes priority for analysis
+dispatch and the selected, repository-trusted agent CLI becomes the fallback.
 
 
 ## Cost model

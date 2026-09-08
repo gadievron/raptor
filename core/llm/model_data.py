@@ -5,7 +5,12 @@ Pure data, no logic. Updated during development from provider
 documentation. Changes at a different rate than code — when
 providers update pricing or release new models, edit this file.
 
-Last verified: 2026-08-15.
+Last verified: 2026-09-07.
+
+2026-09-07 — added Claude Fable 5.1 (``claude-fable-5-1``):
+1M context, 128K max output, $10/$50 per MTok input/output. GitHub Copilot
+CLI exposes the same model as ``claude-fable-5.1``; lookup helpers normalize
+that dotted spelling to RAPTOR's canonical hyphenated ID.
 
 2026-08-15 — Gemini refresh from ai.google.dev/gemini-api/docs/pricing.
 Added gemini-3.7-flash, gemini-3.6-flash, gemini-3.5-flash-lite,
@@ -82,6 +87,26 @@ PROVIDER_DEFAULT_MODELS = {
     "mistral":   "mistral-large-latest",
 }
 
+COPILOT_DEFAULT_MODEL = "gpt-5.6-sol"
+COPILOT_FALLBACK_PREFIX = (
+    "gpt-5.3-codex",
+    "claude-fable-5.1",
+    "claude-fable-5",
+)
+
+# Preferred Claude-family fallbacks after the explicit Sol/Codex/Fable prefix.
+# Entries use Copilot-facing spellings. The fallback builder appends any other
+# non-retired Claude model present in MODEL_LIMITS so the policy remains
+# catalog-driven as RAPTOR learns new models.
+COPILOT_CLAUDE_MODEL_PRIORITY = (
+    "claude-opus-5",
+    "claude-opus-4.8",
+    "claude-opus-4.7",
+    "claude-sonnet-5",
+    "claude-sonnet-4.6",
+    "claude-haiku-4.5",
+)
+
 # Fast/cheap-tier model per provider — used as the default for
 # routing-light task types (binary verdicts, classification, severity
 # triage) where a flagship model is overkill. Aim is "good enough"
@@ -116,6 +141,7 @@ PROVIDER_FAST_MODELS = {
 # Thinking/reasoning tokens are billed at the output rate on all providers.
 MODEL_COSTS = {
     # Anthropic — current
+    "claude-fable-5-1":        {"input": 0.010,   "output": 0.050},
     "claude-fable-5":          {"input": 0.010,   "output": 0.050},
     "claude-mythos-5":         {"input": 0.010,   "output": 0.050},
     "claude-opus-5":           {"input": 0.005,   "output": 0.025},
@@ -210,6 +236,7 @@ MODEL_COSTS = {
 #              Large=4, Medium=50, Small=50.
 MODEL_LIMITS = {
     # Anthropic — current
+    "claude-fable-5-1":        {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
     "claude-fable-5":          {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
     "claude-mythos-5":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
     "claude-opus-5":           {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
@@ -360,6 +387,64 @@ def _strip_bedrock_provider(model: str) -> str:
 
 
 _DATED_ALIAS_RE = _re.compile(r"-\d{8}$")
+_COPILOT_CLAUDE_DOTTED_RE = _re.compile(
+    r"^(claude-[a-z0-9-]+)-(\d+)\.(\d+)$",
+    _re.IGNORECASE,
+)
+
+_COPILOT_RETIRED_CLAUDE_MODELS = frozenset({
+    "claude-opus-4-0",
+    "claude-sonnet-4-0",
+})
+
+
+def canonical_copilot_model_id(model: str) -> str:
+    """Map a Copilot-facing model spelling to RAPTOR's canonical ID."""
+    match = _COPILOT_CLAUDE_DOTTED_RE.match(model)
+    if not match:
+        return model
+    return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+
+
+def copilot_model_id(model: str) -> str:
+    """Map a canonical RAPTOR Claude ID to Copilot's dotted spelling."""
+    canonical = canonical_copilot_model_id(model)
+    if not canonical.startswith("claude-"):
+        return canonical
+    match = _re.match(r"^(claude-[a-z0-9-]+)-(\d+)-(\d+)$", canonical)
+    if not match:
+        return canonical
+    return f"{match.group(1)}-{match.group(2)}.{match.group(3)}"
+
+
+def copilot_fallback_models(primary: str | None = None) -> tuple[str, ...]:
+    """Ordered, de-duplicated Copilot fallback candidates.
+
+    The fixed prefix preserves the product policy. Remaining candidates are
+    active/preferred Claude models followed by any other non-retired Claude
+    entry in RAPTOR's catalog.
+    """
+    ordered = [
+        COPILOT_DEFAULT_MODEL,
+        *COPILOT_FALLBACK_PREFIX,
+        *COPILOT_CLAUDE_MODEL_PRIORITY,
+    ]
+    ordered.extend(
+        copilot_model_id(model)
+        for model in MODEL_LIMITS
+        if model.startswith("claude-")
+        and model not in _COPILOT_RETIRED_CLAUDE_MODELS
+    )
+    seen: set[str] = set()
+    result: list[str] = []
+    primary_canonical = canonical_copilot_model_id(primary or "")
+    for candidate in ordered:
+        canonical = canonical_copilot_model_id(candidate)
+        if canonical == primary_canonical or canonical in seen:
+            continue
+        seen.add(canonical)
+        result.append(copilot_model_id(canonical))
+    return tuple(result)
 
 
 def _resolve_model_entry(table: dict, model: str) -> dict | None:
@@ -371,11 +456,16 @@ def _resolve_model_entry(table: dict, model: str) -> dict | None:
     unenforced budget caps, and a 4096-token completion ceiling that
     truncated every thinking-model structured response.
     """
+    canonical = canonical_copilot_model_id(model)
     return (
         table.get(model)
+        or table.get(canonical)
         or table.get(_strip_dated_alias(model))
+        or table.get(_strip_dated_alias(canonical))
         or table.get(_strip_bedrock_prefixes(model))
+        or table.get(_strip_bedrock_prefixes(canonical))
         or table.get(_strip_dated_alias(_strip_bedrock_prefixes(model)))
+        or table.get(_strip_dated_alias(_strip_bedrock_prefixes(canonical)))
     )
 
 
@@ -431,13 +521,7 @@ def context_window_for(model: str) -> int:
     looked up by their bare name — context windows are identical to
     the direct-API form.
     """
-    limits = MODEL_LIMITS.get(model)
-    if limits is None:
-        limits = MODEL_LIMITS.get(_strip_dated_alias(model))
-    if limits is None:
-        limits = MODEL_LIMITS.get(_strip_bedrock_prefixes(model))
-    if limits is None:
-        limits = MODEL_LIMITS.get(_strip_dated_alias(_strip_bedrock_prefixes(model)))
+    limits = _resolve_model_entry(MODEL_LIMITS, model)
     if limits is None:
         msg = f"context_window_for: unknown model {model!r}"
         raise KeyError(msg)
@@ -451,13 +535,7 @@ def max_output_for(model: str) -> int:
 
     Bedrock-prefixed identifiers map to the bare name; output limits
     are identical to the direct-API form."""
-    limits = MODEL_LIMITS.get(model)
-    if limits is None:
-        limits = MODEL_LIMITS.get(_strip_dated_alias(model))
-    if limits is None:
-        limits = MODEL_LIMITS.get(_strip_bedrock_prefixes(model))
-    if limits is None:
-        limits = MODEL_LIMITS.get(_strip_dated_alias(_strip_bedrock_prefixes(model)))
+    limits = _resolve_model_entry(MODEL_LIMITS, model)
     if limits is None:
         msg = f"max_output_for: unknown model {model!r}"
         raise KeyError(msg)
@@ -517,13 +595,7 @@ def rpm_for(model: str, *, default: int = 0) -> int:
     to the actual primary model before lookup.
     """
     model = resolve_model_name(model)
-    limits = MODEL_LIMITS.get(model)
-    if limits is None:
-        limits = MODEL_LIMITS.get(_strip_dated_alias(model))
-    if limits is None:
-        limits = MODEL_LIMITS.get(_strip_bedrock_prefixes(model))
-    if limits is None:
-        limits = MODEL_LIMITS.get(_strip_dated_alias(_strip_bedrock_prefixes(model)))
+    limits = _resolve_model_entry(MODEL_LIMITS, model)
     if limits is None:
         return default
     return limits.get("rpm", default)
@@ -551,18 +623,12 @@ def price_for(
     ``None`` isn't a valid tuple so callers wanting hard errors should
     test the return against ``(0.0, 0.0)`` and act accordingly.
     """
-    cost = MODEL_COSTS.get(model)
-    multiplier = 1.0
-    if cost is None:
-        undated = _strip_dated_alias(model)
-        cost = MODEL_COSTS.get(undated)
-    if cost is None:
-        bare = _strip_bedrock_prefixes(model)
-        if bare != model:
-            cost = MODEL_COSTS.get(bare)
-            if cost is None:
-                cost = MODEL_COSTS.get(_strip_dated_alias(bare))
-            multiplier = _bedrock_cost_multiplier(model)
+    cost = _resolve_model_entry(MODEL_COSTS, model)
+    multiplier = (
+        _bedrock_cost_multiplier(model)
+        if _strip_bedrock_prefixes(model) != model
+        else 1.0
+    )
     if cost is None:
         return default
     return (

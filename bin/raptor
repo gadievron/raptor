@@ -1,11 +1,25 @@
 #!/usr/bin/env bash
 #
-# raptor - launch RAPTOR via Claude Code
+# raptor - launch RAPTOR via Claude Code or GitHub Copilot CLI
 #
 # Install: add this directory to PATH, or symlink to a directory already on PATH.
 #
 
 set -euo pipefail
+
+# Select the interactive agent CLI before PATH hardening so the warning about
+# a world-writable install tree checks the binary we will actually execute.
+# The environment cannot select the CLI: only the explicit launcher flag may
+# change the default, preventing an inherited RAPTOR_* value from silently
+# changing which trusted program is launched.
+RAPTOR_AGENT_CLI="claude"
+for _raptor_arg in "$@"; do
+    if [ "$_raptor_arg" = "--copilot" ]; then
+        RAPTOR_AGENT_CLI="copilot"
+        break
+    fi
+done
+unset _raptor_arg
 
 # ── PATH pre-scrub (shell builtins ONLY; runs before any external
 # command) ──────────────────────────────────────────────────────────
@@ -148,18 +162,18 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
     export PATH
     unset _scrubbed _rest _last _entry _drop_reason _perm
 
-    # Warn (don't drop) when claude resolves under a world-writable
+    # Warn (don't drop) when the selected agent CLI resolves under a world-writable
     # ANCESTOR — the per-entry check above can't see parents.
-    _claude_path="$(command -v claude 2>/dev/null || true)"
-    if [ -n "$_claude_path" ]; then
-        _dir="$(_rp dirname "$_claude_path")"
+    _agent_path="$(command -v "$RAPTOR_AGENT_CLI" 2>/dev/null || true)"
+    if [ -n "$_agent_path" ]; then
+        _dir="$(_rp dirname "$_agent_path")"
         _hops=0
         while [ -n "$_dir" ] && [ "$_dir" != "/" ] && [ "$_hops" -lt 64 ]; do
             _perm="$(_rp stat -Lc '%a' "$_dir" 2>/dev/null \
                      || _rp stat -Lf '%Lp' "$_dir" 2>/dev/null \
                      || echo '')"
             if [ -n "$_perm" ] && [ "$(( 0$_perm & 2 ))" -ne 0 ]; then
-                echo "raptor: WARNING: claude resolves under a world-writable tree: $_claude_path (writable ancestor: $_dir)" >&2
+                echo "raptor: WARNING: $RAPTOR_AGENT_CLI resolves under a world-writable tree: $_agent_path (writable ancestor: $_dir)" >&2
                 break
             fi
             # Parameter expansion, not dirname(1) — no external
@@ -170,7 +184,7 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
         done
         unset _dir _hops _perm
     fi
-    unset _claude_path
+    unset _agent_path
 
     # Per-session TMPDIR: <base>/raptor-<uid>/session-<pid>-<rand>
     # (0700; <base> = RAPTOR_WORK_DIR, else operator TMPDIR, else
@@ -284,9 +298,10 @@ Arguments:
 
 Options:
   -c, --continue     Resume last RAPTOR session
-  -m, --model MODEL  Choose model (opus, sonnet, haiku)
+  -m, --model MODEL  Choose the selected agent CLI model
   -p, --project NAME Set the active project
   -v, --verbose      Verbose output
+  --copilot          Use GitHub Copilot CLI (default: Claude Code)
   --trust-repo       Trust target repo's config (skip safety checks)
   -h, --help         Show this help
 
@@ -303,7 +318,7 @@ Projects:
   raptor project none                  Clear the active project
   raptor project help                  Full subcommand list
 
-Any additional flags are passed through to Claude Code.
+Any additional flags are passed through to the selected agent CLI.
 USAGE
     exit 0
 fi
@@ -355,11 +370,57 @@ if [[ "${1:-}" == "sage-setup" ]]; then
     exec "$RAPTOR_DIR/libexec/raptor-sage-setup" "$@"
 fi
 
-# Claude required for everything else
-if ! command -v claude >/dev/null 2>&1; then
-    echo "raptor: claude not found. Install Claude Code:" >&2
-    echo "  https://docs.anthropic.com/en/docs/claude-code/overview" >&2
+# An agent CLI is required for everything else.
+if ! command -v "$RAPTOR_AGENT_CLI" >/dev/null 2>&1; then
+    if [ "$RAPTOR_AGENT_CLI" = "copilot" ]; then
+        echo "raptor: copilot not found. Install GitHub Copilot CLI:" >&2
+        echo "  https://docs.github.com/copilot/how-tos/copilot-cli" >&2
+    else
+        echo "raptor: claude not found. Install Claude Code:" >&2
+        echo "  https://docs.anthropic.com/en/docs/claude-code/overview" >&2
+    fi
     exit 1
+fi
+AGENT_BIN="$(command -v "$RAPTOR_AGENT_CLI")"
+if command -v realpath >/dev/null 2>&1; then
+    AGENT_BIN="$(_rp realpath "$AGENT_BIN" 2>/dev/null || printf '%s' "$AGENT_BIN")"
+fi
+case "$AGENT_BIN" in
+    /*) ;;
+    *)
+        echo "raptor: refusing PATH-dependent agent CLI resolution: $AGENT_BIN" >&2
+        exit 1
+        ;;
+esac
+
+# Copilot compatibility is capability-gated rather than tied to one patch
+# version. This is a no-model-call check; it only reads the local help surface.
+COPILOT_HELP=""
+if [ "$RAPTOR_AGENT_CLI" = "copilot" ]; then
+    COPILOT_HELP="$("$AGENT_BIN" --help 2>/dev/null || true)"
+    for _required_flag in \
+        "--plugin-dir" "--model" "--continue" "--interactive" \
+        "--agent" "--available-tools" "--allow-tool" "--deny-tool" \
+        "--disable-builtin-mcps" "--no-custom-instructions" \
+        "--no-ask-user" "--secret-env-vars" "--output-format" \
+        "--stream" "--usage-output-file" "--experimental" \
+        "--disallow-temp-dir"; do
+        case "$COPILOT_HELP" in
+            *"$_required_flag"*) ;;
+            *)
+                echo "raptor: installed Copilot CLI lacks required flag $_required_flag" >&2
+                echo "  Update Copilot CLI with: copilot update" >&2
+                exit 1
+                ;;
+        esac
+    done
+    unset _required_flag
+    if ! "$AGENT_BIN" --experimental --sandbox --version \
+            >/dev/null 2>&1; then
+        echo "raptor: installed Copilot CLI lacks usable --sandbox support" >&2
+        echo "  Update Copilot CLI with: copilot update" >&2
+        exit 1
+    fi
 fi
 
 # Export static env vars. RAPTOR_CALLER_DIR = operator's PWD at
@@ -380,19 +441,84 @@ fi
 export RAPTOR_CALLER_DIR="$_caller_dir"
 unset _caller_dir
 export RAPTOR_DIR
+export RAPTOR_AGENT_CLI
 # Trust marker - libexec scripts refuse to run without one of
 # CLAUDECODE or _RAPTOR_TRUSTED. We've just stripped the env, so
 # direct invocation through this launcher is the safe path.
 export _RAPTOR_TRUSTED=1
 
-# Parse RAPTOR-specific args, collect Claude args
+# Parse RAPTOR-specific args, collect selected-agent args.
 STARTUP_ARGS=("--caller-dir" "$RAPTOR_CALLER_DIR")
-CLAUDE_ARGS=("-n" "RAPTOR")
+AGENT_ARGS=("-n" "RAPTOR")
+if [ "$RAPTOR_AGENT_CLI" = "copilot" ]; then
+    case "$COPILOT_HELP" in
+        *"--no-auto-update"*) AGENT_ARGS=("--no-auto-update" "${AGENT_ARGS[@]}") ;;
+    esac
+    case "$COPILOT_HELP" in
+        *"--no-remote-export"*) AGENT_ARGS=("--no-remote-export" "${AGENT_ARGS[@]}") ;;
+    esac
+    # Mirror the repository's Claude permission posture without granting
+    # arbitrary shell access. Unmatched commands still prompt normally.
+    AGENT_ARGS+=(
+        "--secret-env-vars=COPILOT_GITHUB_TOKEN,GH_TOKEN,GITHUB_TOKEN,RAPTOR_SESSION_TOKEN"
+        "--allow-tool=read"
+        "--allow-tool=grep"
+        "--allow-tool=glob"
+        "--allow-tool=shell(libexec/raptor-agentic:*)"
+        "--allow-tool=shell(libexec/raptor-annotate:*)"
+        "--allow-tool=shell(libexec/raptor-audit:*)"
+        "--allow-tool=shell(libexec/raptor-binary:*)"
+        "--allow-tool=shell(libexec/raptor-bq-query:*)"
+        "--allow-tool=shell(libexec/raptor-build-cpg-cache:*)"
+        "--allow-tool=shell(libexec/raptor-build-checklist:*)"
+        "--allow-tool=shell(libexec/raptor-coverage-summary:*)"
+        "--allow-tool=shell(libexec/raptor-cve-diff:*)"
+        "--allow-tool=shell(libexec/raptor-cve-env:*)"
+        "--allow-tool=shell(libexec/raptor-describe:*)"
+        "--allow-tool=shell(libexec/raptor-enrich-context-map:*)"
+        "--allow-tool=shell(libexec/raptor-enrich-context-map-ast-view:*)"
+        "--allow-tool=shell(libexec/raptor-enrich-context-map-callgraph:*)"
+        "--allow-tool=shell(libexec/raptor-enrich-context-map-frida:*)"
+        "--allow-tool=shell(libexec/raptor-enrich-context-map-mitigation:*)"
+        "--allow-tool=shell(libexec/raptor-enrich-context-map-sinks:*)"
+        "--allow-tool=shell(libexec/raptor-enrich-context-map-sites:*)"
+        "--allow-tool=shell(libexec/raptor-enrich-context-map-taint:*)"
+        "--allow-tool=shell(libexec/raptor-enrich-flow-trace-ast-view:*)"
+        "--allow-tool=shell(libexec/raptor-frida:*)"
+        "--allow-tool=shell(libexec/raptor-ghidra:*)"
+        "--allow-tool=shell(libexec/raptor-llm-ask:*)"
+        "--allow-tool=shell(libexec/raptor-llm-scorecard:*)"
+        "--allow-tool=shell(libexec/raptor-normalize-context-map:*)"
+        "--allow-tool=shell(libexec/raptor-pick-strategies:*)"
+        "--allow-tool=shell(libexec/raptor-project-manager:*)"
+        "--allow-tool=shell(libexec/raptor-render-diagrams:*)"
+        "--allow-tool=shell(libexec/raptor-resolve-mode:*)"
+        "--allow-tool=shell(libexec/raptor-run-feasibility:*)"
+        "--allow-tool=shell(libexec/raptor-run-lifecycle:*)"
+        "--allow-tool=shell(libexec/raptor-run-sandboxed:*)"
+        "--allow-tool=shell(libexec/raptor-sage:*)"
+        "--allow-tool=shell(libexec/raptor-sage-setup:*)"
+        "--allow-tool=shell(libexec/raptor-sandbox-summary:*)"
+        "--allow-tool=shell(libexec/raptor-sca-run:*)"
+        "--allow-tool=shell(libexec/raptor-startup-check:*)"
+        "--allow-tool=shell(libexec/raptor-threat-model:*)"
+        "--allow-tool=shell(libexec/raptor-understand:*)"
+        "--allow-tool=shell(libexec/raptor-validate-schema:*)"
+        "--allow-tool=shell(libexec/raptor-validation-helper:*)"
+        "--allow-tool=shell(libexec/raptor-verified-outcomes:*)"
+    )
+fi
 INITIAL_PROMPT="/raptor"
 TARGET=""
 TRUST_REPO_ARG=""
+MODEL_EXPLICIT=0
+SELECTED_MODEL=""
+CONTINUE_SESSION=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --copilot)
+            shift
+            ;;
         -p|--project)
             [[ $# -ge 2 ]] || { echo "raptor: $1 requires a value" >&2; exit 1; }
             STARTUP_ARGS+=("-p" "$2")
@@ -411,17 +537,34 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -c|--continue)
-            CLAUDE_ARGS+=("--continue")
+            AGENT_ARGS+=("--continue")
             INITIAL_PROMPT=""
+            CONTINUE_SESSION=1
             shift
             ;;
         -m|--model)
             [[ $# -ge 2 ]] || { echo "raptor: $1 requires a value" >&2; exit 1; }
-            CLAUDE_ARGS+=("--model" "$2")
+            SELECTED_MODEL="$2"
+            MODEL_EXPLICIT=1
+            AGENT_ARGS+=("--model" "$2")
             shift 2
             ;;
+        --model=*)
+            SELECTED_MODEL="${1#--model=}"
+            [[ -n "$SELECTED_MODEL" ]] || {
+                echo "raptor: --model= requires a value" >&2
+                exit 1
+            }
+            MODEL_EXPLICIT=1
+            AGENT_ARGS+=("--model" "$SELECTED_MODEL")
+            shift
+            ;;
         -v|--verbose)
-            CLAUDE_ARGS+=("--verbose")
+            if [ "$RAPTOR_AGENT_CLI" = "copilot" ]; then
+                AGENT_ARGS+=("--log-level" "debug")
+            else
+                AGENT_ARGS+=("--verbose")
+            fi
             shift
             ;;
         --trust-repo)
@@ -435,7 +578,7 @@ while [[ $# -gt 0 ]]; do
             exec "$0" -h
             ;;
         -*)
-            CLAUDE_ARGS+=("$1")
+            AGENT_ARGS+=("$1")
             shift
             ;;
         *)
@@ -445,6 +588,24 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [ "$RAPTOR_AGENT_CLI" = "copilot" ]; then
+    if [ "$MODEL_EXPLICIT" = "0" ]; then
+        if [ "$CONTINUE_SESSION" = "1" ]; then
+            # Copilot does not expose the resumed session's stored model to
+            # the launcher. Keep the interactive resume untouched, and make
+            # separate internal prompt-mode calls use Copilot's honest
+            # provider-selected model rather than fabricating a Sol identity.
+            SELECTED_MODEL="auto"
+            MODEL_EXPLICIT=1
+        else
+            SELECTED_MODEL="gpt-5.6-sol"
+            AGENT_ARGS+=("--model" "$SELECTED_MODEL")
+        fi
+    fi
+    export RAPTOR_COPILOT_MODEL="$SELECTED_MODEL"
+    export RAPTOR_COPILOT_MODEL_EXPLICIT="$MODEL_EXPLICIT"
+fi
 
 # Build initial prompt: /raptor [target]. Strip control bytes from
 # the operator-supplied TARGET first - an embedded newline would
@@ -456,6 +617,12 @@ if [ "$_target_clean" != "$TARGET" ]; then
 fi
 if [[ -n "$_target_clean" && -n "$INITIAL_PROMPT" ]]; then
     INITIAL_PROMPT="/raptor $_target_clean"
+fi
+if [[ -n "$TRUST_REPO_ARG" && -n "$INITIAL_PROMPT" ]]; then
+    # Carry the operator's explicit assertion through the trusted initial
+    # command channel. Environment variables are deliberately not used for
+    # this authority because target-owned agent settings can inject env.
+    INITIAL_PROMPT="$INITIAL_PROMPT --trust-repo"
 fi
 
 # Resolve which directory the trust check should scan. Built from the
@@ -647,6 +814,9 @@ if _rp mkdir -p -m 700 "$_sessions_dir" 2>/dev/null; then
         [ -n "$_pidns" ] && printf 'pidns=%s\n' "$_pidns"
         [ -n "$RAPTOR_SESSION_TOKEN" ] && printf 'token=%s\n' "$RAPTOR_SESSION_TOKEN"
         printf 'seeded_by=%s\n' "$_seed_by"
+        if [ -n "$TRUST_REPO_ARG" ] && [ -n "$CHECK_TARGET" ]; then
+            printf 'repo_trusted=%s\n' "$CHECK_TARGET"
+        fi
     } > "$_tmp_entry" 2>/dev/null && mv -f "$_tmp_entry" "$_sessions_dir/$$" 2>/dev/null; then
         _rp chmod 600 "$_sessions_dir/$$" 2>/dev/null || true
     else
@@ -668,6 +838,40 @@ if [ -n "$RAPTOR_SESSION_TOKEN" ]; then
 else
     unset RAPTOR_SESSION_TOKEN
 fi
+
+# Environment-only Copilot auth must remain available to trusted RAPTOR
+# grandchildren without exposing the token to arbitrary model-directed tools.
+# Keep the credential in a launcher-bound broker; children receive only the
+# private socket path, and the broker verifies uid, ancestry, and entrypoint.
+if [ "$RAPTOR_AGENT_CLI" = "copilot" ]; then
+    _copilot_auth_token="${COPILOT_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
+    if [ -n "$_copilot_auth_token" ]; then
+        # Unix-domain socket paths are short (typically <=108 bytes), while
+        # pytest/CI TMPDIR values can be deeply nested. Use the sticky system
+        # temp root with a uid+pid name and mode 0600 on the socket itself.
+        _copilot_auth_socket="/tmp/.raptor-copilot-auth-${UID}-$$.sock"
+        printf '%s' "$_copilot_auth_token" |
+            python3 "$RAPTOR_DIR/core/llm/copilot_auth_broker.py" \
+                --socket "$_copilot_auth_socket" \
+                --parent-pid "$$" \
+                --raptor-root "$RAPTOR_DIR" \
+                >/dev/null 2>&1 &
+        _copilot_auth_pid=$!
+        for _broker_wait in {1..50}; do
+            [ -S "$_copilot_auth_socket" ] && break
+            sleep 0.02
+        done
+        if [ -S "$_copilot_auth_socket" ]; then
+            export RAPTOR_COPILOT_AUTH_SOCKET="$_copilot_auth_socket"
+        else
+            kill "$_copilot_auth_pid" 2>/dev/null || true
+            wait "$_copilot_auth_pid" 2>/dev/null || true
+            echo "raptor: warning: Copilot auth relay did not start; nested env-only authentication may be unavailable" >&2
+        fi
+        unset _copilot_auth_socket _copilot_auth_pid _broker_wait
+    fi
+    unset _copilot_auth_token
+fi
 unset _sessions_dir _startup_out _seed_proj _seed_by
 
 # Load coverage tracking plugin if available
@@ -687,14 +891,18 @@ fi
 # model). If the operator pinned ANTHROPIC_MODEL and made no explicit
 # subagent choice, subagents follow the session; an explicit choice
 # is never overridden.
-if [[ -n "${ANTHROPIC_MODEL:-}" && -z "${CLAUDE_CODE_SUBAGENT_MODEL:-}" ]]; then
+if [[ "$RAPTOR_AGENT_CLI" = "claude" && -n "${ANTHROPIC_MODEL:-}" && -z "${CLAUDE_CODE_SUBAGENT_MODEL:-}" ]]; then
     export CLAUDE_CODE_SUBAGENT_MODEL="$ANTHROPIC_MODEL"
 fi
 
-if [[ -n "$INITIAL_PROMPT" ]]; then
+if [[ "$RAPTOR_AGENT_CLI" = "copilot" && -n "$INITIAL_PROMPT" ]]; then
     exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
-        claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}" "$INITIAL_PROMPT"
+        "$AGENT_BIN" "${PLUGIN_ARGS[@]}" "${AGENT_ARGS[@]}" \
+        --interactive "$INITIAL_PROMPT"
+elif [[ -n "$INITIAL_PROMPT" ]]; then
+    exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
+        "$AGENT_BIN" "${PLUGIN_ARGS[@]}" "${AGENT_ARGS[@]}" "$INITIAL_PROMPT"
 else
     exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
-        claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}"
+        "$AGENT_BIN" "${PLUGIN_ARGS[@]}" "${AGENT_ARGS[@]}"
 fi

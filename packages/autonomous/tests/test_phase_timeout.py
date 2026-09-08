@@ -127,6 +127,10 @@ class RunCommandStreamingTimeoutTests(unittest.TestCase):
         import io
 
         class FakePopen:
+            # run_command_streaming now sweeps the successful child's process
+            # group for orphaned descendants. Use a guaranteed-dead pid so the
+            # real helper exercises that cleanup contract harmlessly.
+            pid = 999999999
             returncode = 0
 
             def __init__(self, *a, **kw):

@@ -14,6 +14,7 @@ from .providers import (
     OpenAICompatibleProvider,
     AnthropicProvider,
     GeminiProvider,
+    CopilotCLILLMProvider,
     ClaudeCodeProvider,
     ClaudeCodeLLMProvider,
     ClaudeProvider,
@@ -30,6 +31,13 @@ from .cc_adapter import (
     parse_cc_structured,
     parse_cc_freeform,
 )
+from .copilot_adapter import (
+    CopilotDispatchConfig,
+    CopilotPromptResult,
+    configured_copilot_fallback_models,
+    merge_copilot_attempts,
+    run_copilot_prompt,
+)
 from .client import LLMClient
 from .config import LLMConfig, ModelConfig, ConfigError
 from .detection import LLMAvailability, detect_llm_availability
@@ -37,6 +45,11 @@ from .detection import LLMAvailability, detect_llm_availability
 __all__ = [
     "AnthropicProvider",
     "CCDispatchConfig",
+    "CopilotCLILLMProvider",
+    "CopilotDispatchConfig",
+    "CopilotPromptResult",
+    "configured_copilot_fallback_models",
+    "merge_copilot_attempts",
     "ClaudeCodeLLMProvider",
     "ClaudeCodeProvider",
     "ClaudeProvider",
@@ -58,6 +71,7 @@ __all__ = [
     "extract_envelope_metadata",
     "parse_cc_freeform",
     "parse_cc_structured",
+    "run_copilot_prompt",
     "strip_json_fences",
     "system_prompt_file_for",
 ]

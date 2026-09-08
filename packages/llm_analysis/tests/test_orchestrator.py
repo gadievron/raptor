@@ -222,6 +222,171 @@ class TestOrchestrate:
             )
         assert result is None
 
+    def test_copilot_mode_without_provider_never_resolves_claude(
+        self, tmp_path,
+    ):
+        report = _make_prep_report()
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(report))
+
+        with patch.dict(
+            os.environ,
+            {
+                "RAPTOR_DIR": os.environ["RAPTOR_DIR"],
+                "RAPTOR_AGENT_CLI": "copilot",
+            },
+            clear=True,
+        ), patch(
+            "core.llm.cc_adapter.resolve_claude_cli",
+            side_effect=AssertionError("Claude fallback attempted"),
+        ):
+            result = orchestrate(
+                prep_report_path=report_path,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "orch",
+                llm_config=None,
+            )
+        assert result is None
+
+    def test_copilot_provider_honours_repo_trust_gate(self, tmp_path):
+        from core.llm.config import LLMConfig, ModelConfig
+
+        report = _make_prep_report()
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(report))
+        config = LLMConfig(
+            primary_model=ModelConfig(
+                provider="copilot-cli",
+                model_name="gpt-5.6-sol",
+                max_context=1_050_000,
+                max_tokens=128_000,
+            ),
+            fallback_models=[],
+        )
+        with patch(
+            "core.llm.client.LLMClient",
+            side_effect=AssertionError("blocked provider was constructed"),
+        ), patch(
+            "packages.llm_analysis.rank_stage.rank_findings_for_analysis",
+            side_effect=AssertionError("ranking ran before trust gate"),
+        ):
+            result = orchestrate(
+                prep_report_path=report_path,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "orch",
+                llm_config=config,
+                block_cc_dispatch=True,
+                rank_findings=True,
+            )
+        assert result is None
+
+    def test_external_failure_falls_back_to_selected_copilot(
+        self, tmp_path,
+    ):
+        from core.llm.config import LLMConfig, ModelConfig
+        from core.security.envelope_probe import ProbeResult
+        from packages.llm_analysis.tasks import AnalysisTask
+
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(_make_prep_report()))
+        external = ModelConfig(
+            provider="anthropic",
+            model_name="claude-opus-5",
+            max_context=1_000_000,
+            max_tokens=128_000,
+        )
+        config = LLMConfig(
+            primary_model=external,
+            fallback_models=[],
+            specialized_models={},
+        )
+        copilot = ModelConfig(
+            provider="copilotcli",
+            model_name="gpt-5.6-sol",
+            max_context=1_050_000,
+            max_tokens=128_000,
+        )
+        analysis_calls = 0
+
+        def fake_dispatch(
+            task, findings, dispatch_fn, role_resolution,
+            results_by_id, cost_tracker, max_parallel,
+            prefilter_fn=None,
+        ):
+            nonlocal analysis_calls
+            if type(task) is not AnalysisTask:
+                return []
+            analysis_calls += 1
+            if analysis_calls == 1:
+                return [{
+                    "finding_id": "finding-001",
+                    "error": "provider outage",
+                }]
+            return [_make_cc_result("finding-001")]
+
+        fake_client = MagicMock()
+        fake_client.short_circuits = 0
+        fake_client.get_fired_models.return_value = []
+        fake_copilot_provider = MagicMock()
+        fake_copilot_provider.selected_model = "gpt-5.3-codex"
+        fake_copilot_provider.total_cost = 0.0
+        fake_copilot_provider.total_tokens = 0
+        fake_copilot_provider.total_thinking_tokens = 0
+        fake_copilot_provider.call_count = 1
+        compatible = ProbeResult(
+            compatible=True,
+            valid_json=True,
+            correct_verdict=True,
+            nonce_leaked=False,
+            raw_response="{}",
+        )
+
+        with patch.dict(
+            os.environ,
+            {"RAPTOR_AGENT_CLI": "copilot"},
+        ), patch(
+            "core.llm.client.LLMClient",
+            return_value=fake_client,
+        ), patch(
+            "packages.llm_analysis.dispatch.dispatch_task",
+            side_effect=fake_dispatch,
+        ), patch(
+            "core.security.envelope_probe.probe_envelope_compatibility",
+            return_value=compatible,
+        ), patch(
+            "core.llm.config._build_copilotcli_config",
+            return_value=copilot,
+        ), patch(
+            "core.llm.providers.CopilotCLILLMProvider",
+            return_value=fake_copilot_provider,
+        ) as provider_cls:
+            result = orchestrate(
+                prep_report_path=report_path,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "orch",
+                llm_config=config,
+                no_exploits=True,
+                no_patches=True,
+                dataflow_validation_enabled=False,
+            )
+
+        assert result is not None
+        assert result["orchestration"]["mode"] == "copilot_fallback"
+        assert result["orchestration"]["analysis_model"] == "gpt-5.3-codex"
+        assert result["orchestration"]["analysis_models"] == [
+            "gpt-5.3-codex",
+        ]
+        assert result["orchestration"]["defense_profile"] == "conservative"
+        assert result["orchestration"]["fired_models"] == [{
+            "provider": "copilotcli",
+            "alias": "gpt-5.3-codex",
+            "resolved": "gpt-5.3-codex",
+            "role": "fallback",
+            "calls": 1,
+        }]
+        assert analysis_calls == 2
+        provider_cls.assert_called_once_with(copilot)
+
     def test_corrupt_report(self, tmp_path):
         """Corrupt JSON in Phase 3 report -> returns None."""
         report_path = tmp_path / "report.json"

@@ -401,8 +401,8 @@ class TestDispatchGates:
         # Claude Code child. Now the same gate as /agentic applies.
         self._open_rule_of_two(monkeypatch)
         monkeypatch.setattr(
-            "core.security.cc_trust.check_repo_claude_trust",
-            lambda repo_path, trust_override=None: True,
+            "core.security.cc_trust.check_repo_agent_cli_trust",
+            lambda repo_path, **kwargs: True,
         )
         postpass = _dispatch_validate(
             target_path=tmp_path,
@@ -418,8 +418,8 @@ class TestDispatchGates:
         # check (claude not on PATH here).
         self._open_rule_of_two(monkeypatch)
         monkeypatch.setattr(
-            "core.security.cc_trust.check_repo_claude_trust",
-            lambda repo_path, trust_override=None: False,
+            "core.security.cc_trust.check_repo_agent_cli_trust",
+            lambda repo_path, **kwargs: False,
         )
         monkeypatch.setattr(
             "core.llm.cc_adapter.resolve_claude_cli",
@@ -444,8 +444,8 @@ class TestDispatchGates:
 
         self._open_rule_of_two(monkeypatch)
         monkeypatch.setattr(
-            "core.security.cc_trust.check_repo_claude_trust",
-            lambda repo_path, trust_override=None: False,
+            "core.security.cc_trust.check_repo_agent_cli_trust",
+            lambda repo_path, **kwargs: False,
         )
         monkeypatch.setattr(
             "core.llm.cc_adapter.resolve_claude_cli",

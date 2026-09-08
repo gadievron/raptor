@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# raptor-cc-trust-check — pre-flight check for dangerous Claude Code config
-#                        in the target repo before `exec claude`.
+# raptor-cc-trust-check — pre-flight check for dangerous agent CLI config
+#                        in the target repo before session launch.
 #
 # Invoked by bin/raptor before launching Claude Code. Delegates to
 # core/security/cc_trust.py so the same logic runs from the launcher and
@@ -177,18 +177,21 @@ if ! cd "$RAPTOR_DIR" 2>/dev/null; then
 fi
 set +e
 python3 -I - "$RAPTOR_DIR" "$TARGET" "$TRUST" <<'PY'
+import os
 import sys
 raptor_dir, target, trust_arg = sys.argv[1], sys.argv[2], sys.argv[3]
 sys.path.insert(0, raptor_dir)
 try:
-    from core.security.cc_trust import check_repo_claude_trust, set_trust_override
+    from core.security.cc_trust import check_repo_agent_cli_trust, set_trust_override
 except Exception as e:
     print(f"raptor-cc-trust-check: import failed: {e}", file=sys.stderr)
     sys.exit(3)
 
 if trust_arg == "1":
     set_trust_override(True)
-blocked = check_repo_claude_trust(target)
+blocked = check_repo_agent_cli_trust(
+    target, agent_cli=os.environ.get("RAPTOR_AGENT_CLI"),
+)
 sys.exit(2 if blocked else 0)
 PY
 rc=$?

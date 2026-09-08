@@ -317,6 +317,7 @@ class TestFindClaudeAncestor(unittest.TestCase):
     # pid 100 (test) -> 50 (bash) -> 40 (claude) -> 1 (init)
     _TREE = {100: 50, 50: 40, 40: 1}
     _COMMS = {50: "bash", 40: "claude"}
+    _COPILOT_COMMS = {50: "bash", 40: "copilot"}
     # pid 100 (test) -> 50 (claude subagent) -> 45 (bash)
     #   -> 40 (claude SESSION) -> 1 (init)
     _NESTED_TREE = {100: 50, 50: 45, 45: 40, 40: 1}
@@ -326,6 +327,15 @@ class TestFindClaudeAncestor(unittest.TestCase):
         """The walk returns the nearest ancestor whose comm is claude."""
         from core.run.metadata import _find_claude_ancestor
         with self._patch_tree(self._TREE, self._COMMS):
+            self.assertEqual(_find_claude_ancestor(), 40)
+
+    def test_finds_copilot_ancestor(self):
+        from core.run.metadata import (
+            _find_agent_cli_ancestor,
+            _find_claude_ancestor,
+        )
+        with self._patch_tree(self._TREE, self._COPILOT_COMMS):
+            self.assertEqual(_find_agent_cli_ancestor(), 40)
             self.assertEqual(_find_claude_ancestor(), 40)
 
     def test_stable_across_calls(self):

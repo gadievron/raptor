@@ -109,10 +109,16 @@ _PREFIX_MAP = {
 }
 
 
-def _find_claude_ancestor() -> int | None:
-    """Walk the process tree to find the nearest 'claude' ancestor PID.
+def _agent_cli_shaped(comm: str | None) -> bool:
+    """Delegate process-name checks to the session registry predicate."""
+    from core.project.sessions import _agent_cli_shaped as _shared_predicate
+    return _shared_predicate(comm)
 
-    Returns the PID of the claude process, or None if not found.
+
+def _find_agent_cli_ancestor() -> int | None:
+    """Walk the process tree to find the nearest agent CLI ancestor PID.
+
+    Returns the PID of a Claude Code or GitHub Copilot CLI process, or None.
     Works from any depth: Bash tool calls, hooks, Python subprocesses.
     Uses /proc on Linux, ps(1) on macOS.
     """
@@ -136,9 +142,14 @@ def _find_claude_ancestor() -> int | None:
                     return None
         except OSError:
             return None
-        if comm == "claude":
+        if _agent_cli_shaped(comm):
             return pid
     return None
+
+
+def _find_claude_ancestor() -> int | None:
+    """Back-compat alias for callers using the pre-Copilot helper name."""
+    return _find_agent_cli_ancestor()
 
 
 def _read_comm_ps(pid: int) -> str | None:
@@ -200,15 +211,15 @@ def _get_session_pid() -> int | None:
     Delegates to the ONE shared session resolver
     (``core.project.sessions.resolve_session_pid``: validated
     ``RAPTOR_SESSION_PID`` env credential first — correct beneath
-    nested ``claude -p`` subagents and across PID namespaces — then
-    the claude-ancestor tree walk). Binding readers, run-metadata
+    nested agent CLI subagents and across PID namespaces — then
+    the agent-ancestor tree walk). Binding readers, run-metadata
     recording, the contention gate, and the abandon sweeps must all
     agree on one identity; two resolvers meant a run recorded under a
     subagent pid that the sweeps then judged dead the moment the
     subagent exited.
 
     The CLAUDECODE env + getppid() fallback survives ONLY here — for
-    run-metadata recording in claude-less contexts (bare-shell libexec
+    run-metadata recording in launcher-less contexts (bare-shell libexec
     flows). It is never used for project-binding resolution.
     """
     from core.project.sessions import resolve_session_pid
@@ -224,7 +235,7 @@ def _session_stamp(pid: int) -> dict[str, str]:
     """Identity stamp for *pid*, recorded beside ``session_pid`` in run
     metadata so the liveness verifiers can tell "this exact process"
     from "some process that recycled the PID" — including another real
-    claude session, which every comm check accepts by construction.
+    agent CLI session, which every comm check accepts by construction.
     Keys absent when unreadable (legacy semantics apply on read)."""
     from core.project import sessions as _sessions
     stamp: dict[str, str] = {}
@@ -244,7 +255,7 @@ def _session_alive_for_meta(meta: dict) -> bool:
     """Is the session that owns this run metadata still alive?
 
     Stamped metadata (``session_start`` + ``session_boot_id``) gets the
-    full identity check: a live claude process at the recorded pid with
+    full identity check: a live agent CLI process at the recorded pid with
     a MISMATCHING stamp is a recycled pid — the owner is dead. Foreign
     stamps (other boot / machine / pid namespace) are unverifiable here
     and read as ALIVE — the fail-open direction: sweeps skip rather
@@ -276,19 +287,17 @@ def _pid_alive(pid: int) -> bool:
 
     Returns False for invalid PIDs.
 
-    PID-reuse hazard: a session_pid recorded yesterday (Claude Code
+    PID-reuse hazard: a session_pid recorded yesterday (agent CLI
     session A, PID 12345). Session A exits; the kernel reuses PID
     12345 for an unrelated process (a cron job, an editor, any
     long-lived daemon). Plain `os.kill(pid, 0)` returns True for the
     wrong process. `_cleanup_abandoned` then treats the long-dead
-    Claude Code session as still alive and skips legitimate cleanup
+    agent CLI session as still alive and skips legitimate cleanup
     of its abandoned runs.
 
     Cross-check with `/proc/<pid>/comm` on Linux: if the running
-    process at that PID isn't named `claude` (or a `claude*` variant
-    — `claude-code`, `claude.sh` wrapper, etc.), it's not the
-    session that recorded the run. Treat as dead so cleanup can
-    proceed.
+    process at that PID is not a recognized Claude/Copilot process, it is not
+    the session that recorded the run. Treat as dead so cleanup can proceed.
 
     Falls back to plain `os.kill(pid, 0)` on non-Linux (no /proc) —
     accepts the residual PID-reuse risk on macOS/BSD where the
@@ -307,9 +316,9 @@ def _pid_alive(pid: int) -> bool:
     except PermissionError:
         return True  # alive but owned by another user
 
-    # Process exists at that PID. On Linux, verify it's still a
-    # claude-shaped process — `comm` is the binary basename truncated
-    # to 16 chars (TASK_COMM_LEN), so we substring-match `claude`.
+    # Process exists at that PID. On Linux, verify it is still an
+    # agent-CLI-shaped process. `comm` is the binary basename truncated
+    # to 16 chars (TASK_COMM_LEN), so prefix matching remains stable.
     proc_comm = Path(f"/proc/{pid}/comm")
     if not proc_comm.exists():
         # Non-Linux or `/proc` not mounted — best-effort accept.
@@ -318,7 +327,7 @@ def _pid_alive(pid: int) -> bool:
         comm = proc_comm.read_text(encoding="utf-8", errors="replace").strip().lower()
     except OSError:
         return True
-    return "claude" in comm
+    return _agent_cli_shaped(comm)
 
 
 def _run_recently_active(run_dir: Path) -> bool:
@@ -442,7 +451,7 @@ def _gate_session_alive(pid: int) -> bool:
     ``session_pid=1`` reads as a live session forever, refusing every
     start (and queueing ``--wait`` indefinitely). Here EPERM falls
     through to the ``/proc/<pid>/comm`` cross-check, which is world-
-    readable on Linux — another operator's real claude session still
+    readable on Linux — another operator's real agent CLI session still
     counts as live (contention preserved cross-user), while init or a
     root daemon does not. Without a readable comm (non-Linux), only a
     signallable pid is accepted: unverifiable never blocks a start.
@@ -464,7 +473,7 @@ def _gate_session_alive(pid: int) -> bool:
             encoding="utf-8", errors="replace").strip().lower()
     except OSError:
         return signallable
-    return "claude" in comm
+    return _agent_cli_shaped(comm)
 
 
 def _live_conflicting_run(project_dir: Path, self_dir: Path,
@@ -472,7 +481,7 @@ def _live_conflicting_run(project_dir: Path, self_dir: Path,
     """Find a sibling run that makes a new start contention.
 
     A sibling contends when its metadata says ``status=running`` AND
-    its recorded ``session_pid`` is a live claude session belonging to
+    its recorded ``session_pid`` is a live agent CLI session belonging to
     a DIFFERENT session than ours. Everything else is explicitly not
     contention:
 

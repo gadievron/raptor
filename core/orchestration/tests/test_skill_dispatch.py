@@ -129,6 +129,62 @@ class GateOrderTests(unittest.TestCase):
         self.assertFalse(result.ran)
         self.assertIn("claude not on PATH", result.skipped_reason)
 
+    def test_copilot_missing(self):
+        import os
+
+        with TemporaryDirectory() as tmp, \
+             patch.dict(
+                 os.environ,
+                 {
+                     "RAPTOR_AGENT_CLI": "copilot",
+                     "RAPTOR_COPILOT_TRANSPORT_DISABLED": "0",
+                 },
+             ), \
+             patch(
+                 "core.llm.copilot_adapter.resolve_copilot_cli",
+                 return_value=None,
+             ):
+            result = _run(
+                tmp,
+                Path(tmp) / "run",
+                agent_cli="copilot",
+                agent_bin=None,
+            )
+        self.assertFalse(result.ran)
+        self.assertIn("copilot not on PATH", result.skipped_reason)
+
+    def test_copilot_mode_never_resolves_claude(self):
+        import os
+
+        with TemporaryDirectory() as tmp, \
+             patch.dict(
+                 os.environ,
+                 {
+                     "RAPTOR_AGENT_CLI": "copilot",
+                     "RAPTOR_COPILOT_TRANSPORT_DISABLED": "0",
+                 },
+             ), \
+             patch(
+                 "core.llm.copilot_adapter.resolve_copilot_cli",
+                 return_value="/fake/copilot",
+             ), \
+             patch(
+                 "core.llm.cc_adapter.resolve_claude_cli",
+                 side_effect=AssertionError("Claude resolver called"),
+             ), \
+             patch(
+                 "core.orchestration.skill_dispatch._run_copilot_skill_child",
+                 return_value=_ok(),
+             ) as child:
+            result = _run(
+                tmp,
+                Path(tmp) / "run",
+                agent_cli="copilot",
+                agent_bin="/fake/copilot",
+            )
+        self.assertTrue(result.ran)
+        child.assert_called_once()
+
     def test_symlinked_claude_dispatches_via_realpath(self):
         # The mount-ns visibility check realpaths cmd[0]; execing the
         # symlink silently downgraded isolation. The dispatch must

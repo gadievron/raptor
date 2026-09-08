@@ -13,20 +13,22 @@ import random
 import re
 import threading
 import time
+import contextlib
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from inspect import isclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
+    from .copilot_adapter import CopilotPromptResult
 
 from core.json import dumps_display
 from core.logging import get_logger
 
 from .cc_adapter import strip_json_fences
-from .config import ModelConfig
+from .config import ModelConfig, canonical_agent_cli_provider
 
 # Wire-shape types for tool-use turn primitive. These live in
 # ``core.llm.tool_use.types`` (zero dependencies on this module);
@@ -271,6 +273,11 @@ class LLMResponse:
     # "gemini-2.5-pro-002"). None when the provider doesn't surface it — the
     # provenance manifest then records the alias only, never a guess.
     resolved_model: str | None = None
+    # Provider-native billing/usage data that does not map onto RAPTOR's
+    # cross-provider token/USD fields (e.g. Copilot premium requests and AIU).
+    native_usage: dict[str, Any] = field(default_factory=dict)
+    # Ordered models attempted by a transport-level availability fallback.
+    attempted_models: tuple[str, ...] = ()
 
 
 @dataclass
@@ -299,6 +306,9 @@ class StructuredResponse:
     cache_write_tokens: int = 0
     # Concrete model snapshot the provider served (see LLMResponse.resolved_model).
     resolved_model: str | None = None
+    thinking_tokens: int = 0
+    native_usage: dict[str, Any] = field(default_factory=dict)
+    attempted_models: tuple[str, ...] = ()
 
     def __iter__(self):
         """Allow unpacking as 2-tuple for backwards compatibility."""
@@ -344,6 +354,7 @@ class LLMProvider(ABC):
         self.total_tokens = 0
         self.total_input_tokens = 0
         self.total_output_tokens = 0
+        self.total_thinking_tokens = 0
         self.total_cost = 0.0
         self.call_count = 0
         self.total_duration = 0.0
@@ -560,12 +571,14 @@ class LLMProvider(ABC):
                     input_tokens: int = 0, output_tokens: int = 0,
                     duration: float = 0.0,
                     cache_read_tokens: int = 0,
-                    cache_write_tokens: int = 0) -> None:
+                    cache_write_tokens: int = 0,
+                    thinking_tokens: int = 0) -> None:
         """Track token usage, cost, and call duration (thread-safe)."""
         with self._usage_lock:
             self.total_tokens += tokens
             self.total_input_tokens += input_tokens
             self.total_output_tokens += output_tokens
+            self.total_thinking_tokens += thinking_tokens
             self.total_cache_read_tokens += cache_read_tokens
             self.total_cache_write_tokens += cache_write_tokens
             self.total_cost += (cost or 0.0)
@@ -795,6 +808,7 @@ class LLMProvider(ABC):
     def _structured_fallback(self, prompt: str, schema: dict[str, Any],
                              pydantic_model, system_prompt: str | None = None,
                              timeout_s: float | None = None,
+                             generate_kwargs: dict[str, Any] | None = None,
                              ) -> StructuredResponse:
         """
         Universal fallback: ask for JSON in the prompt, validate
@@ -814,7 +828,12 @@ class LLMProvider(ABC):
         augmented_system = (
             (system_prompt or "") + schema_block
         )
-        response = self.generate(prompt, augmented_system, timeout_s=timeout_s)
+        response = self.generate(
+            prompt,
+            augmented_system,
+            timeout_s=timeout_s,
+            **(generate_kwargs or {}),
+        )
         if response.finish_reason in ("max_tokens", "length"):
             # RuntimeError, not json.JSONDecodeError: the client's
             # retry loop treats JSON decode failures as retryable, but
@@ -848,18 +867,24 @@ class LLMProvider(ABC):
             # self.generate() — surfacing it here adds no double
             # counting; the client stops diffing shared aggregate
             # counters when per-call figures are present).
-            return StructuredResponse(
+            structured = StructuredResponse(
                 result=result_dict,
                 raw=json.dumps(result_dict, indent=2),
                 cost=response.cost,
                 tokens_used=response.tokens_used,
+                model=response.model,
+                provider=response.provider,
                 duration=response.duration,
                 input_tokens=response.input_tokens,
                 output_tokens=response.output_tokens,
                 cache_read_tokens=response.cache_read_tokens,
                 cache_write_tokens=response.cache_write_tokens,
+                thinking_tokens=response.thinking_tokens,
                 resolved_model=response.resolved_model,
+                native_usage=dict(response.native_usage),
+                attempted_models=tuple(response.attempted_models),
             )
+            return structured
         except Exception as e:
             # Pre-fix the logger interpolated `e` directly into the
             # log line. For `pydantic.ValidationError` (the typical
@@ -3980,6 +4005,409 @@ class ClaudeCodeProvider:
         }
 
 
+class CopilotCLILLMProvider(LLMProvider):
+    """GitHub Copilot CLI subprocess transport."""
+
+    is_stub = False
+
+    def __init__(
+        self,
+        config: ModelConfig,
+        *,
+        copilot_bin: str | None = None,
+        timeout_s: int | None = None,
+        resumable: bool = False,
+    ) -> None:
+        super().__init__(config)
+        if copilot_bin is None:
+            from .copilot_adapter import resolve_copilot_cli
+            copilot_bin = resolve_copilot_cli()
+        self._copilot_bin = copilot_bin or "copilot"
+        self._resumable = resumable
+        self._session_id: str | None = None
+        self._session_model: str | None = None
+        self._selected_model: str | None = None
+        self._committed_messages: tuple[Message, ...] = ()
+        self._session_lock = threading.RLock()
+        self.last_native_usage: dict[str, Any] = {}
+        self.last_attempted_models: tuple[str, ...] = ()
+        if timeout_s is not None:
+            self._timeout_s = None if timeout_s <= 0 else timeout_s
+        elif config.timeout is not None:
+            self._timeout_s = None if config.timeout <= 0 else config.timeout
+        else:
+            self._timeout_s = 600
+
+    def reset_session(self) -> None:
+        """Discard resume state so the next call starts a fresh session."""
+        with self._session_lock:
+            self._session_id = None
+            self._session_model = None
+            self._selected_model = None
+            self._committed_messages = ()
+
+    def context_window(self) -> int:
+        return self.config.max_context
+
+    @property
+    def selected_model(self) -> str | None:
+        """Model pinned after the first successful availability resolution."""
+        with self._session_lock:
+            return self._session_model or self._selected_model
+
+    def _effective_timeout_s(self, override: int | None) -> int | None:
+        if override is None:
+            return self._timeout_s
+        return None if override <= 0 else override
+
+    @staticmethod
+    def _automatic_fallback_enabled() -> bool:
+        raw = os.environ.get("RAPTOR_COPILOT_MODEL_EXPLICIT", "")
+        return raw.strip().lower() in ("", "0", "false", "no", "off")
+
+    @staticmethod
+    def _configured_max_ai_credits(
+        override: float | None,
+    ) -> float | None:
+        if override is not None:
+            return override
+        raw = os.environ.get("RAPTOR_COPILOT_MAX_AI_CREDITS", "").strip()
+        if not raw:
+            return None
+        try:
+            value = float(raw)
+        except ValueError:
+            logger.warning(
+                "RAPTOR_COPILOT_MAX_AI_CREDITS=%r is not a number — "
+                "ignoring the ceiling",
+                raw,
+            )
+            return None
+        if value <= 0:
+            logger.warning(
+                "RAPTOR_COPILOT_MAX_AI_CREDITS=%r is not positive — "
+                "ignoring the ceiling",
+                raw,
+            )
+            return None
+        return value
+
+    @staticmethod
+    def _surface_native_usage(response: Any, usage: dict[str, Any]) -> None:
+        """Populate native usage when the shared response type supports it."""
+        if hasattr(response, "native_usage"):
+            response.native_usage = dict(usage)
+
+    @staticmethod
+    def _surface_attempted_models(
+        response: Any,
+        attempted_models: tuple[str, ...],
+    ) -> None:
+        if hasattr(response, "attempted_models"):
+            response.attempted_models = tuple(attempted_models)
+
+    def _dispatch(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        *,
+        timeout_s: int | None,
+        effort: str | None = None,
+        max_ai_credits: float | None = None,
+        sandbox: bool = False,
+        fresh_retry_prompt: str | None = None,
+    ) -> "CopilotPromptResult":
+        from .copilot_adapter import (
+            CopilotDispatchConfig,
+            configured_copilot_fallback_models,
+            is_session_unavailable_error,
+            merge_copilot_attempts,
+            run_copilot_prompt,
+        )
+        from .model_data import copilot_model_id
+
+        dispatch_guard = (
+            self._session_lock
+            if self._resumable else contextlib.nullcontext()
+        )
+        with dispatch_guard:
+            configured_model = copilot_model_id(self.config.model_name)
+            session_id = self._session_id if self._resumable else None
+            model = (
+                self._session_model
+                or self._selected_model
+                or configured_model
+            )
+            allow_fallback = (
+                self._automatic_fallback_enabled()
+                and session_id is None
+                and self._selected_model is None
+            )
+
+            def run_once(
+                *,
+                resume_id: str | None,
+                fallback_enabled: bool,
+                request_prompt: str,
+            ) -> "CopilotPromptResult":
+                return run_copilot_prompt(
+                    CopilotDispatchConfig(
+                        copilot_bin=self._copilot_bin,
+                        model=model,
+                        fallback_models=(
+                            configured_copilot_fallback_models(model)
+                            if fallback_enabled else ()
+                        ),
+                        tools=(),
+                        system_prompt=system_prompt,
+                        timeout_s=timeout_s,
+                        effort=effort,
+                        max_ai_credits=self._configured_max_ai_credits(
+                            max_ai_credits,
+                        ),
+                        session_id=resume_id,
+                        allow_model_fallback=fallback_enabled,
+                        sandbox=sandbox,
+                        mint_github_token=True,
+                    ),
+                    request_prompt,
+                )
+
+            result = run_once(
+                resume_id=session_id,
+                fallback_enabled=allow_fallback,
+                request_prompt=prompt,
+            )
+            if (
+                session_id is not None
+                and is_session_unavailable_error(result.error)
+            ):
+                self._session_id = None
+                self._session_model = None
+                retry = run_once(
+                    resume_id=None,
+                    fallback_enabled=self._automatic_fallback_enabled(),
+                    request_prompt=fresh_retry_prompt or prompt,
+                )
+                attempted = (
+                    tuple(result.attempted_models)
+                    + tuple(retry.attempted_models)
+                )
+                result = merge_copilot_attempts(result, retry)
+                result.attempted_models = attempted
+
+            if self._resumable and result.session_id and not result.error:
+                self._session_id = result.session_id
+                self._session_model = result.model or model
+            if not result.error and result.model:
+                if self._resumable:
+                    self._selected_model = result.model
+                else:
+                    with self._session_lock:
+                        if self._selected_model is None:
+                            self._selected_model = result.model
+            self.last_native_usage = dict(result.native_usage)
+            self.last_attempted_models = tuple(result.attempted_models)
+            return result
+
+    def generate(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        """Dispatch one free-form prompt through Copilot CLI."""
+        import subprocess
+
+        call_timeout = self._effective_timeout_s(kwargs.pop("timeout_s", None))
+        try:
+            result = self._dispatch(
+                prompt,
+                system_prompt,
+                timeout_s=call_timeout,
+                effort=kwargs.pop("effort", None),
+                max_ai_credits=kwargs.pop("max_ai_credits", None),
+                sandbox=bool(kwargs.pop("sandbox", False)),
+                fresh_retry_prompt=kwargs.pop("fresh_retry_prompt", None),
+            )
+        except subprocess.TimeoutExpired as e:
+            msg = f"copilot timed out after {call_timeout}s"
+            raise RuntimeError(msg) from e
+
+        total_tokens = (
+            result.input_tokens
+            + result.output_tokens
+            + result.reasoning_tokens
+        )
+        self.track_usage(
+            tokens=total_tokens,
+            cost=result.estimated_cost_usd,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            cache_read_tokens=result.cache_read_tokens,
+            cache_write_tokens=result.cache_write_tokens,
+            thinking_tokens=result.reasoning_tokens,
+            duration=result.duration_seconds,
+        )
+        if result.error:
+            raise RuntimeError(result.error)
+
+        resolved = result.model or None
+        response = LLMResponse(
+            content=result.content,
+            model=result.model or self.config.model_name,
+            provider="copilotcli",
+            tokens_used=total_tokens,
+            cost=result.estimated_cost_usd,
+            finish_reason="stop",
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            thinking_tokens=result.reasoning_tokens,
+            duration=result.duration_seconds,
+            cache_read_tokens=result.cache_read_tokens,
+            cache_write_tokens=result.cache_write_tokens,
+            resolved_model=resolved,
+        )
+        self._surface_native_usage(response, result.native_usage)
+        self._surface_attempted_models(
+            response, result.attempted_models,
+        )
+        return response
+
+    def generate_structured(
+        self,
+        prompt: str,
+        schema: dict[str, Any],
+        system_prompt: str | None = None,
+        **kwargs: Any,
+    ) -> StructuredResponse:
+        """Generate and validate JSON using the universal fallback."""
+        if self._resumable:
+            with self._session_lock:
+                return self._generate_structured(
+                    prompt,
+                    schema,
+                    system_prompt,
+                    **kwargs,
+                )
+        return self._generate_structured(
+            prompt,
+            schema,
+            system_prompt,
+            **kwargs,
+        )
+
+    def _generate_structured(
+        self,
+        prompt: str,
+        schema: dict[str, Any],
+        system_prompt: str | None,
+        **kwargs: Any,
+    ) -> StructuredResponse:
+        pydantic_model = _dict_schema_to_pydantic(schema)
+        response = self._structured_fallback(
+            prompt,
+            schema,
+            pydantic_model,
+            system_prompt,
+            timeout_s=kwargs.get("timeout_s"),
+            generate_kwargs={
+                key: kwargs[key]
+                for key in ("effort", "max_ai_credits", "sandbox")
+                if key in kwargs
+            },
+        )
+        response.model = response.model or self.config.model_name
+        response.provider = "copilotcli"
+        return response
+
+    def supports_tool_use(self) -> bool:
+        return True
+
+    def supports_prompt_caching(self) -> bool:
+        return False
+
+    def prefers_stable_system_prefix(self) -> bool:
+        return True
+
+    def supports_parallel_tools(self) -> bool:
+        return False
+
+    def turn(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDef],
+        *,
+        system: str | None = None,
+        max_tokens: int = 4096,
+        cache_control: CacheControl = _DEFAULT_CACHE_CONTROL,
+        **provider_specific: Any,
+    ) -> TurnResponse:
+        if self._resumable:
+            with self._session_lock:
+                full_messages = tuple(messages)
+                pending_messages = full_messages
+                committed = self._committed_messages
+                if (
+                    self._session_id
+                    and committed
+                    and len(full_messages) >= len(committed)
+                    and full_messages[:len(committed)] == committed
+                ):
+                    pending_messages = full_messages[len(committed):]
+                elif self._session_id:
+                    self.reset_session()
+
+                tool_protocol = (
+                    self._render_tool_protocol(tools) if tools else ""
+                )
+                sys_combined = "\n\n".join(
+                    item for item in (system, tool_protocol) if item
+                ) or None
+                full_prompt = self._render_messages_as_prompt(full_messages)
+                prompt = self._render_messages_as_prompt(pending_messages)
+                response = self.generate(
+                    prompt or full_prompt,
+                    system_prompt=sys_combined,
+                    max_tokens=max_tokens,
+                    fresh_retry_prompt=full_prompt,
+                    **provider_specific,
+                )
+                text = response.content if response else ""
+                block, stop_reason = self._parse_fallback_response(
+                    text,
+                    tools,
+                )
+                turn_response = TurnResponse(
+                    content=[block],
+                    stop_reason=stop_reason,
+                    input_tokens=getattr(
+                        response, "input_tokens", 0,
+                    ) or 0,
+                    output_tokens=getattr(
+                        response, "output_tokens", 0,
+                    ) or 0,
+                    cost_usd=float(response.cost),
+                )
+                if self._session_id:
+                    self._committed_messages = (
+                        *full_messages,
+                        Message(
+                            role="assistant",
+                            content=list(turn_response.content),
+                        ),
+                    )
+                return turn_response
+        return self._tool_use_fallback(
+            messages,
+            tools,
+            system=system,
+            max_tokens=max_tokens,
+            cache_control=cache_control,
+            **provider_specific,
+        )
+
+
 class ClaudeCodeLLMProvider(LLMProvider):
     """Claude Code subprocess transport as a real :class:`LLMProvider`.
 
@@ -4950,6 +5378,32 @@ def create_provider(config: ModelConfig) -> LLMProvider:
         LLMProvider instance
     """
     provider = config.provider.lower()
+    cli_provider = canonical_agent_cli_provider(provider)
+    selected_agent = os.environ.get("RAPTOR_AGENT_CLI", "").strip().lower()
+    selected_provider = {
+        "claude": "claudecode",
+        "copilot": "copilotcli",
+    }.get(selected_agent)
+    if (
+        cli_provider is not None
+        and selected_provider is not None
+        and cli_provider != selected_provider
+    ):
+        msg = (
+            f"{selected_agent} mode refuses the non-selected "
+            f"{config.provider} agent CLI transport"
+        )
+        raise RuntimeError(msg)
+    if provider in (
+        "copilotcli-resumable",
+        "copilot_cli_resumable",
+        "copilot-cli-resumable",
+        "copilotcli", "copilot_cli", "copilot-cli",
+    ):
+        return CopilotCLILLMProvider(
+            config,
+            resumable=provider.replace("_", "-").endswith("-resumable"),
+        )
     if provider in (
         "claudecode-resumable",
         "claude_code_resumable",

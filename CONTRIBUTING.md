@@ -27,7 +27,8 @@ python -m pytest core/ packages/ -x -q
 Launch RAPTOR itself:
 
 ```bash
-claude    # from the repo root
+raptor                      # default: Claude Code
+raptor --copilot            # opt-in: GitHub Copilot CLI
 ```
 
 
@@ -42,7 +43,7 @@ claude    # from the repo root
   Packages import from `core/` only — no cross-package imports.
 
 - **`libexec/`** — CLI entry points called by the LLM via slash commands.
-  These exist so that Claude Code can invoke them as shell commands. Thin
+  These exist so that the selected agent CLI can invoke them as shell commands. Thin
   wrappers that delegate to `core/` or `packages/`.
 
 No bare `.py` files in `core/` or `packages/` — every module lives in a
@@ -59,8 +60,10 @@ in new dependencies when an existing module covers it.
 - **LLM calls** go through `core/llm/` — never call provider APIs
   directly. This gives you cost tracking, retries, caching, scorecard,
   and multi-provider support for free.
-- **Subprocess execution** goes through `core/sandbox/` — never use
-  `os.system` or bare `subprocess.run`.
+- **Subprocess execution** uses RAPTOR's containment helpers — usually
+  `core/sandbox/`; Copilot command-mode children use the MXC helper path in
+  `core/llm/copilot_adapter.py`. Never use `os.system` or bare
+  `subprocess.run`.
 - **Configuration** goes through `core/config/` — don't invent ad-hoc env
   vars or hardcode values.
 - **Findings** follow the standard schema in `core/models/` — don't invent
@@ -81,6 +84,10 @@ frontmatter field pointing at the CLI entry point. The entry point goes in
 - Set up paths via `Path(__file__).resolve().parents[1]` — don't rely on
   `RAPTOR_DIR`
 - Delegate to `core/` or `packages/` — keep the script thin
+- Keep `.claude/` assets canonical and shared: do **not** duplicate
+  commands/skills/agents/settings/plugins for Copilot-specific variants.
+  CLI-specific differences belong in launcher/transport glue (`bin/raptor`,
+  `core/llm/*_adapter.py`), not duplicate prompt assets.
 
 
 ## Tests
@@ -156,9 +163,11 @@ baseline entries in the same commit.
 RAPTOR scans untrusted repositories. Code that processes untrusted input
 must follow these conventions:
 
-- **Sandbox:** run external tools via `core.sandbox.run` (Linux namespaces,
-  Landlock, seccomp). Don't shell out with `os.system` or unsandboxed
-  `subprocess.run`.
+- **Sandbox:** run external tools via RAPTOR's containment wrappers:
+  `core.sandbox.run` for standard untrusted tool execution (Linux
+  namespaces, Landlock, seccomp), and the Copilot MXC helper path for
+  Copilot command-mode children. Don't shell out with `os.system` or
+  unsandboxed `subprocess.run`.
 - **Clean environment:** use `RaptorConfig.get_safe_env()` when spawning
   subprocesses — it strips everything except an explicit allowlist.
 - **No shell interpolation:** never interpolate file paths from scanned

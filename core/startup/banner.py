@@ -13,7 +13,9 @@ _ASSETS = Path(__file__).resolve().parent / "assets"
 # The banner's version line carries a ``__VERSION__`` placeholder rather than a
 # hardcoded number, so the displayed version is always the live one injected
 # here — never a stale stamp. Matches the box layout the release uses.
-_VERSION_LINE = re.compile(r"(║\s+Based on Claude Code - )\S+[^║]*║")
+_VERSION_LINE = re.compile(
+    r"(║\s+Claude Code / GitHub Copilot CLI - )\S+[^║]*║"
+)
 
 
 def read_logo(version: str = "") -> str:

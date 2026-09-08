@@ -2696,7 +2696,7 @@ def run_validation_pass(
     Steps:
 
       1. Decide whether dispatch mode supports validation. Accepts
-         external_llm, cc_dispatch, cc_fallback. Anything else
+         external_llm, cc_dispatch, cc_fallback, copilot_fallback. Anything else
          (no-LLM mode, etc.) → return None.
       2. Discover a CodeQL database under `out_dir/codeql/`. None means
          no database was built this run; return None and log.
@@ -2715,7 +2715,12 @@ def run_validation_pass(
     own `_resolve_cross_family_checker` while tests can substitute a
     deterministic fake.
     """
-    if dispatch_mode not in ("external_llm", "cc_dispatch", "cc_fallback"):
+    if dispatch_mode not in (
+        "external_llm",
+        "cc_dispatch",
+        "cc_fallback",
+        "copilot_fallback",
+    ):
         return None
 
     codeql_dbs = discover_codeql_databases(out_dir)
@@ -2736,7 +2741,7 @@ def run_validation_pass(
         return None
 
     # Pick the validation model. Cross-family is only attempted in
-    # external_llm mode because cc_dispatch / cc_fallback are subprocess
+    # external_llm mode because agent-CLI dispatch/fallback modes are subprocess
     # invocations of the same Claude binary regardless of the "model"
     # parameter; there's no useful family choice to make.
     validation_model = analysis_model

@@ -62,14 +62,14 @@ _logger = logging.getLogger(__name__)
 # Process-wide trust override
 # ---------------------------------------------------------------------------
 
-_trust_override_set = False
+_trust_override_set: bool | None = None
 
 
-def set_trust_override(val: bool) -> None:
+def set_trust_override(val: bool | None) -> None:
     """Set process-wide trust override. Call once from each entry point
     that parses ``--trust-repo``. Idempotent."""
     global _trust_override_set
-    _trust_override_set = bool(val)
+    _trust_override_set = None if val is None else bool(val)
 
 
 # ---------------------------------------------------------------------------
@@ -509,7 +509,14 @@ def check_repo_codeql_trust(
     except (ValueError, OSError):
         return False
     if trust_override is None:
-        trust_override = _trust_override_set
+        if _trust_override_set is not None:
+            trust_override = _trust_override_set
+        else:
+            try:
+                from core.project.sessions import session_repo_trusted
+                trust_override = session_repo_trusted(resolved)
+            except Exception:  # noqa: BLE001 — trust lookup fails closed
+                trust_override = False
     scans, any_blocking = _scan_repo(resolved)
     if scans:
         target = Path(resolved)

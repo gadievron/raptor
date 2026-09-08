@@ -53,7 +53,7 @@ When a `/command` fires:
 
 **Coverage:** When asked about coverage, run `libexec/raptor-coverage-summary` (no args = active project). Use `--detailed` for per-file table, `--gaps` for unreviewed functions. See `.claude/skills/coverage.md` for mark/unmark and the full API.
 
-**Note:** `/agentic` runs scan → dedup → prep → analysis (with validation methodology). Use `--sequential` to bypass parallel orchestration. Use `--understand` to pre-map the codebase before scanning, `--validate` to run the full validation pipeline on exploitable findings afterwards, and `--gap-audit` to run the /audit orchestrator over the coverage residual (functions no phase reviewed; uses the external LLM, or the claudecode transport when only Claude Code is available; NOT `--audit`, which is the sandbox audit mode). All three flags are opt-in. Multi-model: `--model` is repeatable — multiple models each independently analyse every finding, then results are correlated; `--consensus`, `--judge`, and `--aggregate` add optional review/synthesis models.
+**Note:** `/agentic` runs scan → dedup → prep → analysis (with validation methodology). Use `--sequential` to bypass parallel orchestration. Use `--understand` to pre-map the codebase before scanning, `--validate` to run the full validation pipeline on exploitable findings afterwards, and `--gap-audit` to run the /audit orchestrator over the coverage residual (functions no phase reviewed; uses the external LLM, or the selected agent CLI transport when no external provider is configured — `claudecode` by default launcher path, `copilotcli` on `raptor --copilot`; NOT `--audit`, which is the sandbox audit mode). All three flags are opt-in. Multi-model: `--model` is repeatable — multiple models each independently analyse every finding, then results are correlated; `--consensus`, `--judge`, and `--aggregate` add optional review/synthesis models.
 /sage - SAGE persistent memory: status, recall, browse, store, manage
 /crash-analysis - Autonomous crash root-cause analysis (see below)
 /oss-forensics - GitHub forensic investigation (see below)
@@ -491,7 +491,7 @@ See `tiers/exploit-guidance.md` for detailed constraint tables and technique alt
 
 ## STRUCTURE
 
-Python orchestrates everything. Claude shows results concisely.
+Python orchestrates everything. The selected agent CLI shows results concisely.
 Never circumvent Python execution flow.
 - never disclose remote OLLAMA server location in code, comments, logs etc
 - **Python path safety:** Never add anything to `sys.path` except `os.environ["RAPTOR_DIR"]`. Use the hard lookup (KeyError if unset) — no fallbacks, no `'.'`, no `os.getcwd()`, no hardcoded paths. The `libexec/` scripts handle their own path setup via `Path(__file__).resolve().parents[1]` and do not need `RAPTOR_DIR`.

@@ -39,7 +39,7 @@ By default, `/agentic` scans and analyses findings in isolation. Three optional 
 |------|-------------|
 | `--understand` | Runs `/understand --map` as a proper sibling run, producing `context-map.json` (entry points, trust boundaries, sinks). Two consumers: (a) the agentic checklist gets priority markers, so per-finding analysis prompts say things like *"Architectural role: entry_point"* — improving in-run analysis; (b) any `/validate` against the same target — including this run's `--validate` post-pass — picks the map up via the bridge. |
 | `--validate` | After the agentic pipeline completes, runs `/validate` on findings flagged `is_exploitable: true` or `confidence: "high"`. Creates a sibling validate run; the bridge auto-discovers any `/understand` sibling produced by `--understand`. |
-| `--gap-audit` | After analysis, runs the `/audit` orchestrator over the coverage residual — functions no phase reviewed — as a sibling audit run. Inherits the run's checklist, every CodeQL database the scan phase built (dispatch routes per file language), binaries, and models (2+ models enable the adversarial reviewer); the run's own per-finding analyses ride in as prior claims, never as coverage. Uses the configured external LLM (`--model` or API key); with only Claude Code available it runs on the claudecode transport, gated on the repo trust check. With `--validate`, audit findings join the same validate pass and the validation verdicts feed back into the audit journal; without it, the run ends with a loud UNVALIDATED warning. NOTE: `--audit` (no prefix) is the sandbox audit mode — a different feature. |
+| `--gap-audit` | After analysis, runs the `/audit` orchestrator over the coverage residual — functions no phase reviewed — as a sibling audit run. Inherits the run's checklist, every CodeQL database the scan phase built (dispatch routes per file language), binaries, and models (2+ models enable the adversarial reviewer); the run's own per-finding analyses ride in as prior claims, never as coverage. Uses the configured external LLM (`--model` or API key); with no external provider configured it runs on the selected agent-CLI transport (`claudecode` by default launcher path, `copilotcli` on `raptor --copilot`), gated on the repo trust check. With `--validate`, audit findings join the same validate pass and the validation verdicts feed back into the audit journal; without it, the run ends with a loud UNVALIDATED warning. NOTE: `--audit` (no prefix) is the sandbox audit mode — a different feature. |
 
 `--project <name>` pins the run to a named project regardless of the session's binding or the last-activated default (`--project -` = explicitly projectless; invalid names are a hard error, never a fallback).
 
@@ -67,9 +67,9 @@ Pass the flags straight through to `libexec/raptor-agentic`. The Python layer ow
 
 Findings are dispatched for parallel analysis via one of two paths:
 
-- **Claude Code on PATH**: dispatches `claude -p` sub-agents (separate processes)
+- **Selected agent-CLI transport available**: dispatches subprocess workers (`claude -p` on default launches; Copilot prompt-mode transport on `raptor --copilot`)
 - **External LLM configured**: dispatches via `generate_structured()` API calls
-- **Both available**: uses external LLM, falls back to Claude Code if it fails
+- **Both available**: uses external LLM first, falling back to the selected agent-CLI transport only for model-availability-class failures
 
 Model roles determine which model analyses (analysis), writes code (code),
 provides second opinions (consensus), reviews reasoning (judge), and
@@ -77,7 +77,7 @@ synthesizes multi-model output for downstream use (aggregate).
 See the "Multi-model analysis" section below.
 
 If **neither** is available, the pipeline produces prep-only output. In that case,
-**YOU (Claude Code) are the LLM** — the user may ask you to analyse the findings
+**YOU (the selected agent CLI) are the LLM** — the user may ask you to analyse the findings
 directly in conversation. See the prep_only report mode below for instructions.
 
 Analysis follows the exploitation-validator methodology (Stages A-D):
@@ -109,6 +109,8 @@ Cost tracking is real-time with adaptive budget cutoff.
 ## Multi-model analysis
 
 By default, the primary model is auto-detected from `~/.config/raptor/models.json` or API key env vars (GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, MISTRAL_API_KEY, AWS_BEARER_TOKEN_BEDROCK, local Ollama). Use `--model` to override.
+
+On Copilot transport paths, explicit `--model` also disables automatic model-fallback selection.
 
 `--model` is repeatable. Multiple models each independently analyse every finding (Stages A-D), then results are correlated — agreement matrix, confidence signals, clusters, unique insights. With 3+ analysis models, the auto-loaded default consensus model is skipped (redundant); an explicit `--consensus` flag is always honoured.
 
@@ -156,9 +158,9 @@ Do NOT include raw code from the findings in sub-agent prompts — let each agen
 read the code itself via the Read tool.
 
 **`"mode": "full"`** — An external LLM performed sequential analysis (when
-`--sequential` was used or Claude Code was not available). Present the results.
+`--sequential` was used or the selected agent-CLI transport was not available). Present the results.
 
-**`"mode": "orchestrated"`** — Parallel analysis via external LLM or Claude Code
+**`"mode": "orchestrated"`** — Parallel analysis via external LLM or selected agent-CLI
 sub-agents. Results include per-finding `analysed_by` (which model), `cost_usd`,
 `duration_seconds`, plus `cross_finding_groups` and optional `consensus`,
 `judge` metadata. Present the results to the user.

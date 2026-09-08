@@ -1,4 +1,4 @@
-"""raptor_agentic must re-check repo trust at each CC dispatch site.
+"""raptor_agentic must re-check repo trust at each agent CLI dispatch site.
 
 The pre-scan verdict is computed before phases that RUN the untrusted
 target's code (builds, scanners) and LLM-driven sessions — either can
@@ -7,7 +7,7 @@ pre-scan boolean through the phases therefore dispatches CC on a stale
 verdict. These tests pin the fix:
 
   - structurally: every ``block_cc_dispatch=`` argument in
-    raptor_agentic.py is a fresh ``check_repo_claude_trust(...)`` call,
+    raptor_agentic.py is a fresh ``check_repo_agent_cli_trust(...)`` call,
     evaluated immediately before the dispatch, never a variable
     carrying the pre-scan result;
   - behaviourally: a config write between the pre-scan and a dispatch
@@ -62,15 +62,15 @@ class TestDispatchSitesRecheck:
         )
         for value in sites:
             assert isinstance(value, ast.Call), (
-                "block_cc_dispatch must be a fresh check_repo_claude_trust() "
+                "block_cc_dispatch must be a fresh check_repo_agent_cli_trust() "
                 f"call, not a pre-computed value (got {ast.dump(value)[:80]})"
             )
             func = value.func
             name = func.id if isinstance(func, ast.Name) else getattr(
                 func, "attr", None)
-            assert name == "check_repo_claude_trust", (
+            assert name == "check_repo_agent_cli_trust", (
                 f"block_cc_dispatch fed by {name!r}, expected a fresh "
-                "check_repo_claude_trust() re-check"
+                "check_repo_agent_cli_trust() re-check"
             )
 
     def test_no_stale_boolean_threading(self):
@@ -85,6 +85,10 @@ class TestDispatchSitesRecheck:
                         isinstance(tgt, ast.Name)
                         and tgt.id == "block_cc_dispatch"
                     ), "pre-scan verdict must not be stored and re-used"
+
+    def test_sequential_child_receives_only_the_operator_override(self):
+        src = (_REPO_ROOT / "raptor_agentic.py").read_text(encoding="utf-8")
+        assert 'analysis_cmd.append("--trust-repo")' in src
 
 
 class TestMidRunConfigWrite:

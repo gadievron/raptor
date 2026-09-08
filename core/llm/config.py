@@ -29,6 +29,7 @@ from .detection import (
 
 # Re-export from submodules for backward compatibility
 from .model_data import (
+    COPILOT_DEFAULT_MODEL,
     MODEL_COSTS,
     MODEL_LIMITS,
     PROVIDER_DEFAULT_MODELS,
@@ -58,6 +59,31 @@ _DEFAULT_MAX_CONTEXT_LOCAL: int = 32_000          # local-quant Ollama default
 _DEFAULT_MAX_OUTPUT_FRONTIER: int = 32_000        # frontier output cap
 _DEFAULT_MAX_OUTPUT_USER_CONFIGURED: int = 64_000  # models.json-supplied model output cap
 _DEFAULT_MAX_OUTPUT_LOCAL: int = 4_096            # local quant safe default
+
+_AGENT_CLI_PROVIDER_ALIASES = {
+    "claudecode": "claudecode",
+    "claude-code": "claudecode",
+    "copilotcli": "copilotcli",
+    "copilot-cli": "copilotcli",
+}
+
+
+def canonical_agent_cli_provider(provider: object) -> str | None:
+    """Return the canonical agent-CLI transport family, if any."""
+    normalized = str(provider or "").strip().lower().replace("_", "-")
+    if normalized.endswith("-resumable"):
+        normalized = normalized.removesuffix("-resumable")
+    return _AGENT_CLI_PROVIDER_ALIASES.get(normalized)
+
+
+def selected_agent_cli_provider() -> str | None:
+    """Canonical provider family selected by the launcher, if declared."""
+    selected = os.environ.get("RAPTOR_AGENT_CLI", "").strip().lower()
+    if selected == "copilot":
+        return "copilotcli"
+    if selected == "claude":
+        return "claudecode"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +461,8 @@ def _build_claudecode_config() -> Optional['ModelConfig']:
     billed. Cloud APIs default to 120s in ``ModelConfig`` (well-tuned
     for them); CC's subprocess + structured-output overhead needs more.
     """
+    if os.getenv("RAPTOR_AGENT_CLI", "").strip().lower() == "copilot":
+        return None
     import shutil
     if not shutil.which("claude"):
         return None
@@ -641,6 +669,47 @@ def _build_claudecode_resumable_config() -> Optional['ModelConfig']:
     return replace(base, provider="claudecode-resumable")
 
 
+def _build_copilotcli_config() -> Optional['ModelConfig']:
+    """Copilot CLI transport, auto-selected only by the Copilot launcher."""
+    if os.getenv("RAPTOR_AGENT_CLI", "").strip().lower() != "copilot":
+        return None
+    from core.llm.copilot_adapter import resolve_copilot_cli
+    copilot_bin = resolve_copilot_cli()
+    if not copilot_bin:
+        return None
+    model_name = (
+        os.getenv("RAPTOR_COPILOT_MODEL", "").strip()
+        or COPILOT_DEFAULT_MODEL
+    )
+    from core.llm.model_data import context_window_for, max_output_for
+    try:
+        max_tokens = max_output_for(model_name)
+    except KeyError:
+        max_tokens = _DEFAULT_MAX_OUTPUT_FRONTIER
+    try:
+        max_context = context_window_for(model_name)
+    except KeyError:
+        max_context = _DEFAULT_MAX_CONTEXT_FRONTIER
+    return ModelConfig(
+        provider="copilotcli",
+        model_name=model_name,
+        api_key=None,
+        max_tokens=max_tokens,
+        max_context=max_context,
+        temperature=0.7,
+        timeout=600,
+        cost_per_1k_tokens=0.0,
+    )
+
+
+def _build_copilotcli_resumable_config() -> Optional['ModelConfig']:
+    base = _build_copilotcli_config()
+    if base is None:
+        return None
+    from dataclasses import replace
+    return replace(base, provider="copilotcli-resumable")
+
+
 _PROVIDER_BUILDERS = {
     "anthropic":  _build_anthropic_config,
     "openai":     lambda: _build_openai_compat_config("openai"),
@@ -648,6 +717,8 @@ _PROVIDER_BUILDERS = {
     "mistral":    lambda: _build_openai_compat_config("mistral"),
     "bedrock":    _build_bedrock_config,
     "ollama":     _build_ollama_config,
+    "copilotcli": _build_copilotcli_config,
+    "copilotcli-resumable": _build_copilotcli_resumable_config,
     "claudecode": _build_claudecode_config,
     "claudecode-resumable": _build_claudecode_resumable_config,
 }
@@ -665,10 +736,11 @@ _NETWORK_PROBING_PROVIDERS = frozenset({"ollama"})
 # explicitly via ``AWS_BEARER_TOKEN_BEDROCK`` will hit it before the
 # autodetect falls through to Ollama / Claude Code.  Ollama before
 # claudecode because Ollama is a deliberate operator setup; CC is the
-# absolute last resort.
+# absolute last resort. Copilot CLI is considered only when the launcher
+# selected Copilot mode, and then wins over the Claude CLI fallback.
 _DEFAULT_PROVIDER_ORDER = (
     "anthropic", "openai", "gemini", "mistral", "bedrock",
-    "ollama", "claudecode",
+    "ollama", "copilotcli", "claudecode",
 )
 
 
@@ -888,6 +960,15 @@ def _model_config_from_entry(entry: dict) -> 'ModelConfig':
         # builder would pick — a bare {"provider": "claudecode"} entry
         # is valid config.
         model_name = _resolve_claudecode_model()
+    if not model_name and provider in (
+        "copilotcli", "copilotcli-resumable",
+        "copilot-cli", "copilot-cli-resumable",
+        "copilot_cli", "copilot_cli_resumable",
+    ):
+        model_name = (
+            os.getenv("RAPTOR_COPILOT_MODEL", "").strip()
+            or COPILOT_DEFAULT_MODEL
+        )
 
     # Bedrock: resolve the surface first (the model backfill below is
     # surface-keyed), then backfill a missing model.  Surface ladder:
@@ -938,19 +1019,11 @@ def _model_config_from_entry(entry: dict) -> 'ModelConfig':
     if not api_key and provider == "bedrock":
         api_key = os.getenv("AWS_BEARER_TOKEN_BEDROCK")
 
-    from core.llm.model_data import _strip_dated_alias
-    from core.security.llm_family import bare_model_id as _bare_model_id
-    undated = _strip_dated_alias(model_name)
-    # Peel Bedrock prefixes too (``anthropic.claude-x`` /
-    # ``us.anthropic.claude-x``) so prefixed entries resolve real
-    # catalog limits/costs instead of the 0.005 fallback rate.
-    bare = _bare_model_id(model_name)
-    limits = (MODEL_LIMITS.get(model_name, {})
-              or MODEL_LIMITS.get(undated, {})
-              or MODEL_LIMITS.get(bare, {}))
-    costs = (MODEL_COSTS.get(model_name, {})
-             or MODEL_COSTS.get(undated, {})
-             or MODEL_COSTS.get(bare, {}))
+    from core.llm.model_data import resolve_model_costs, resolve_model_limits
+    # One canonical lookup handles dated aliases, Bedrock-prefixed ids, and
+    # Copilot's dotted Claude spellings (for example claude-fable-5.1).
+    limits = resolve_model_limits(model_name) or {}
+    costs = resolve_model_costs(model_name) or {}
     cost_per_1k = (costs.get("input", 0.005) + costs.get("output", 0.005)) / 2
 
     # Honour the operator-configured remote Ollama host (see
@@ -1090,13 +1163,17 @@ def _entry_auth_resolvable(mc: 'ModelConfig') -> bool:
         return bool(
             os.getenv("AWS_BEARER_TOKEN_BEDROCK")
         ) or bedrock_sigv4_intent()
-    if mc.provider in ("claudecode", "claudecode-resumable"):
+    cli_provider = canonical_agent_cli_provider(mc.provider)
+    if cli_provider == "claudecode":
         # CLI transport authenticates through the installed ``claude``
         # binary's own session — no key to carry.  Lets an operator
         # declare CC as an explicit safety net behind an API primary
         # ({"provider": "claudecode", "role": "fallback"}).
         import shutil
         return shutil.which("claude") is not None
+    if cli_provider == "copilotcli":
+        from core.llm.copilot_adapter import resolve_copilot_cli
+        return resolve_copilot_cli() is not None
     return False
 
 
@@ -1116,11 +1193,15 @@ def _get_default_fallback_models() -> list['ModelConfig']:
     from core.config import RaptorConfig
 
     availability = detect_llm_availability()
-    if not availability.external_llm:
+    if (
+        not availability.external_llm
+        and getattr(availability, "copilot_cli", False) is not True
+    ):
         return []
 
     fallbacks = []
     config_providers = set()  # Track which providers the config covers
+    selected_cli_provider = selected_agent_cli_provider()
 
     # --- Config file entries first ---
     primary = _get_default_primary_model()
@@ -1130,6 +1211,19 @@ def _get_default_fallback_models() -> list['ModelConfig']:
         if not isinstance(entry, dict):
             continue
         provider = entry.get("provider", "")
+        entry_cli_provider = canonical_agent_cli_provider(provider)
+        if (
+            entry_cli_provider is not None
+            and selected_cli_provider is not None
+            and entry_cli_provider != selected_cli_provider
+        ):
+            logger.warning(
+                "Ignoring configured %s fallback because %s is the "
+                "selected agent CLI",
+                provider,
+                os.environ.get("RAPTOR_AGENT_CLI"),
+            )
+            continue
         model_name = entry.get("model", "")
         if not model_name and provider:
             model_name = PROVIDER_DEFAULT_MODELS.get(provider, "")
@@ -1141,7 +1235,7 @@ def _get_default_fallback_models() -> list['ModelConfig']:
         mc = _model_config_from_entry(entry)
         if _entry_auth_resolvable(mc):
             fallbacks.append(mc)
-            config_providers.add(provider)
+            config_providers.add(entry_cli_provider or provider)
 
     # --- Env var fallback for providers not in config ---
     def _is_primary(provider, model):
@@ -1225,6 +1319,22 @@ def _get_default_fallback_models() -> list['ModelConfig']:
                 temperature=0.7,
                 cost_per_1k_tokens=0.0,
             ) for model in ollama_models[:3])
+
+    # Preserve the existing "external provider first, selected agent CLI as
+    # the final keyless fallback" contract in Copilot mode. Repo-aware callers
+    # remove this route when their trust gate blocks agent-CLI dispatch.
+    primary_cli_provider = (
+        canonical_agent_cli_provider(primary.provider)
+        if primary is not None else None
+    )
+    if (
+        selected_cli_provider == "copilotcli"
+        and primary_cli_provider != "copilotcli"
+        and "copilotcli" not in config_providers
+    ):
+        copilot = _build_copilotcli_config()
+        if copilot is not None:
+            fallbacks.append(copilot)
 
     return fallbacks
 
@@ -1790,3 +1900,72 @@ class LLMConfig:
                 return model
         return self.primary_model
 
+
+def configured_agent_cli_models(config: LLMConfig | None) -> tuple[ModelConfig, ...]:
+    """Return every primary/fallback/specialized agent-CLI model."""
+    if config is None:
+        return ()
+    models: list[ModelConfig] = []
+    if config.primary_model is not None:
+        models.append(config.primary_model)
+    models.extend(config.fallback_models or [])
+    models.extend((config.specialized_models or {}).values())
+    return tuple(
+        model
+        for model in models
+        if canonical_agent_cli_provider(model.provider) is not None
+    )
+
+
+def filter_agent_cli_models(
+    config: LLMConfig,
+    *,
+    selected_agent_cli: str,
+    allow_selected_agent_cli: bool,
+) -> tuple[LLMConfig | None, tuple[ModelConfig, ...]]:
+    """Remove untrusted or non-selected agent-CLI routes from a config.
+
+    External API models remain usable when repository trust blocks local
+    agent-CLI execution. A disallowed primary cannot be replaced silently, so
+    ``None`` is returned and the caller must fail loudly.
+    """
+    import copy
+
+    expected = (
+        "copilotcli"
+        if selected_agent_cli.strip().lower() == "copilot"
+        else "claudecode"
+    )
+
+    def allowed(model: ModelConfig) -> bool:
+        provider = canonical_agent_cli_provider(model.provider)
+        if provider is None:
+            return True
+        return allow_selected_agent_cli and provider == expected
+
+    removed: list[ModelConfig] = []
+    primary = config.primary_model
+    if primary is not None and not allowed(primary):
+        removed.append(primary)
+        return None, tuple(removed)
+
+    fallback_models = []
+    for model in config.fallback_models or []:
+        if allowed(model):
+            fallback_models.append(model)
+        else:
+            removed.append(model)
+
+    specialized_models = {}
+    for task_type, model in (config.specialized_models or {}).items():
+        if allowed(model):
+            specialized_models[task_type] = model
+        else:
+            removed.append(model)
+
+    if not removed:
+        return config, ()
+    filtered = copy.copy(config)
+    filtered.fallback_models = fallback_models
+    filtered.specialized_models = specialized_models
+    return filtered, tuple(removed)

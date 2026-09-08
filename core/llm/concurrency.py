@@ -36,6 +36,7 @@ MAX_WORKERS_CAP = 32
 # cache warms after call one. ``RAPTOR_CC_MAX_WORKERS`` overrides;
 # ``tuning.json``'s ``max_llm_workers`` still beats both.
 CC_MAX_WORKERS_DEFAULT = 4
+COPILOT_MAX_WORKERS_DEFAULT = 4
 
 
 def _claudecode_worker_cap() -> int:
@@ -50,6 +51,10 @@ def _claudecode_worker_cap() -> int:
         )
         cap = CC_MAX_WORKERS_DEFAULT
     return max(1, min(cap, MAX_WORKERS_CAP))
+
+
+def _copilot_worker_cap() -> int:
+    return COPILOT_MAX_WORKERS_DEFAULT
 
 
 # Concurrency ceiling when the primary model routes via Bedrock.
@@ -89,7 +94,10 @@ def _is_bedrock_primary(model: str) -> bool:
     return model in ("default", mc.model_name)
 
 
-def _is_claudecode_primary(model: str) -> bool:
+def _is_claudecode_primary(
+    model: str,
+    provider: str | None = None,
+) -> bool:
     """True when *model* is served by the claudecode transport.
 
     The pinned model name is a real backend id (indistinguishable
@@ -97,17 +105,48 @@ def _is_claudecode_primary(model: str) -> bool:
     configured primary provider — same import ``resolve_model_name``
     already uses for ``"default"``.
     """
+    from core.llm.config import canonical_agent_cli_provider
+
+    if canonical_agent_cli_provider(provider) == "claudecode":
+        return True
     try:
         from core.llm.config import _get_default_primary_model
         mc = _get_default_primary_model()
     except Exception:  # noqa: BLE001 — config probing is best-effort
         return False
-    if mc is None or mc.provider != "claudecode":
+    if (
+        mc is None
+        or canonical_agent_cli_provider(mc.provider) != "claudecode"
+    ):
         return False
     return model in ("default", "session-default", mc.model_name)
 
 
-def derive_max_workers(model: str) -> int:
+def _is_copilotcli_primary(
+    model: str,
+    provider: str | None = None,
+) -> bool:
+    from core.llm.config import canonical_agent_cli_provider
+
+    if canonical_agent_cli_provider(provider) == "copilotcli":
+        return True
+    try:
+        from core.llm.config import _get_default_primary_model
+        mc = _get_default_primary_model()
+    except Exception:  # noqa: BLE001 — config probing is best-effort
+        return False
+    if (
+        mc is None
+        or canonical_agent_cli_provider(mc.provider) != "copilotcli"
+    ):
+        return False
+    return model in ("default", mc.model_name)
+
+
+def derive_max_workers(
+    model: str,
+    provider: str | None = None,
+) -> int:
     """Derive a safe ``max_workers`` from the model's RPM limit.
 
     If ``max_llm_workers`` in ``tuning.json`` is set to a number,
@@ -136,12 +175,16 @@ def derive_max_workers(model: str) -> int:
         # its subprocess ceiling. Use the claudecode worker cap as the
         # floor there; every other unknown model keeps the conservative
         # serial fallback.
-        if _is_claudecode_primary(model):
+        if _is_claudecode_primary(model, provider):
             return _claudecode_worker_cap()
+        if _is_copilotcli_primary(model, provider):
+            return _copilot_worker_cap()
         return 1
     workers = max(1, min(rpm // 2, MAX_WORKERS_CAP))
-    if _is_claudecode_primary(model):
+    if _is_claudecode_primary(model, provider):
         workers = min(workers, _claudecode_worker_cap())
+    if _is_copilotcli_primary(model, provider):
+        workers = min(workers, _copilot_worker_cap())
     if _is_bedrock_primary(model):
         # Bedrock quota is per-account-per-region and shared (most
         # visibly with the operator's live Claude Code session) —

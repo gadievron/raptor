@@ -27,6 +27,9 @@ _LLM_AMBIENT = {
     "AWS_REGION": "us-east-1",
     "RAPTOR_BEDROCK_MODEL": "anthropic.claude-opus-4-8",
     "RAPTOR_CC_EFFORT": "high",
+    "COPILOT_GITHUB_TOKEN": "copilot-seam-test",
+    "RAPTOR_COPILOT_AUTH_SOCKET": "/tmp/copilot-seam.sock",
+    "RAPTOR_COPILOT_MODEL": "gpt-5.6-sol",
 }
 
 
@@ -52,6 +55,7 @@ class TestStripLlmEnvVars:
             assert var not in env, f"{var} survived the strip"
         # Interpreter environment is otherwise untouched.
         assert "PATH" in env
+        assert env["RAPTOR_COPILOT_TRANSPORT_DISABLED"] == "1"
 
 
 class TestSmtChildrenCarryNoLlmEnv:
@@ -137,6 +141,7 @@ class TestAgenticPhase3Overlay:
         captured: dict = {}
 
         class FakeProc:
+            pid = 424242
             returncode = 0
             stdout = None
             stderr = None
@@ -152,6 +157,11 @@ class TestAgenticPhase3Overlay:
 
         monkeypatch.setattr(
             raptor_agentic.subprocess, "Popen", FakeProc,
+        )
+        monkeypatch.setattr(
+            raptor_agentic,
+            "_kill_process_tree",
+            lambda process: None,
         )
         rc, _out, _err = raptor_agentic.run_command_streaming(
             ["/bin/true"], "seam test",

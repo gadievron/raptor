@@ -79,7 +79,9 @@ class DispatchResult:
     def __init__(self, result: dict[str, Any], cost: float = 0.0,
                  tokens: int = 0, model: str = "", duration: float = 0.0,
                  quality: float = 1.0, resolved_model: str | None = None,
-                 thinking_tokens: int = 0) -> None:
+                 thinking_tokens: int = 0,
+                 native_usage: dict[str, Any] | None = None,
+                 attempted_models: tuple[str, ...] = ()) -> None:
         self.result = result
         self.cost = cost
         self.tokens = tokens
@@ -95,6 +97,8 @@ class DispatchResult:
         # dict so consensus/judge can record scorecard reliability against the
         # concrete model version, not the drifting alias.
         self.resolved_model = resolved_model
+        self.native_usage = dict(native_usage or {})
+        self.attempted_models = tuple(attempted_models)
 
 
 class DispatchTask:
@@ -165,6 +169,10 @@ class DispatchTask:
             # Concrete snapshot behind the alias — consumed by consensus/judge
             # scorecard recording (model_version) and available to coverage.
             out["resolved_model"] = result.resolved_model
+        if result.native_usage:
+            out["native_usage"] = result.native_usage
+        if result.attempted_models:
+            out["attempted_models"] = list(result.attempted_models)
         # Surface the validator quality score when the response was
         # incomplete. Lets downstream report consumers see *why* a
         # finding is unverdicted (gh #549) — `quality` defaults to 1.0

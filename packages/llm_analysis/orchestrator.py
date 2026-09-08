@@ -6,11 +6,11 @@ Dispatches structured findings from Phase 3 for parallel vulnerability
 analysis, exploit generation, patch creation, consensus, and retry.
 
 Dispatch routing:
-  - External LLM configured: parallel generate_structured() / generate()
-  - No external LLM + claude on PATH: claude -p sub-agents (via cc_dispatch)
+  - LLMConfig provided: parallel generate_structured() / generate()
+  - Claude-default mode with no LLMConfig: claude -p sub-agents
   - Neither: return None (manual review)
 
-If external LLM fails entirely, falls back to CC dispatch automatically.
+External-LLM failure falls back to the selected agent CLI when trusted.
 """
 
 import contextlib
@@ -214,6 +214,11 @@ def _cc_fallback_role_resolution(role_resolution: dict) -> dict:
         **role_resolution,
         "analysis_models": [],
         "analysis_model": None,
+        "code_model": None,
+        "consensus_models": [],
+        "judge_models": [],
+        "aggregate_models": [],
+        "fallback_models": [],
     }
 
 
@@ -612,18 +617,19 @@ def orchestrate(
     checklist: dict[str, Any] | None = None,
     rank_findings: bool = False,
 ) -> dict[str, Any] | None:
-    """Orchestrate vulnerability analysis via external LLM or Claude Code.
+    """Orchestrate vulnerability analysis via configured LLM or agent CLI.
 
     Called from raptor_agentic.py Phase 4. Dispatches findings for parallel
     analysis, runs structural grouping, and optionally runs consensus and
     group analysis.
 
     Dispatch routing:
-    - llm_config provided (external LLM) -> parallel generate_structured()
-    - llm_config None + claude on PATH -> claude -p sub-agents
+    - llm_config provided -> parallel generate_structured()
+    - llm_config None + Claude-default mode -> claude -p sub-agents
     - Neither -> return None
 
-    If external LLM dispatch fails entirely, falls back to CC dispatch.
+    Failed configured dispatch falls back to Claude only in Claude-default
+    mode. Copilot mode never invokes the standalone Claude CLI.
 
     Args:
         prep_report_path: Path to autonomous_analysis_report.json from Phase 3.
@@ -636,10 +642,10 @@ def orchestrate(
         no_exploits: Skip exploit generation.
         no_patches: Skip patch generation.
         llm_config: LLMConfig for external LLM dispatch (None = CC only).
-        block_cc_dispatch: If True and dispatch falls to the CC path
-            (no external LLM), abort and return None instead of
-            spawning claude -p sub-agents. Set when the target repo
-            contains credential helpers in .claude/settings.json.
+        block_cc_dispatch: If True, remove every agent-CLI model from
+            configured fallback/specialized routes and abort when the
+            primary/no-config route would require an agent CLI. Set when
+            the target repo fails the selected-agent trust check.
         accept_weakened_defenses: If True, allow PASSTHROUGH fallback when
             the model fails the envelope probe. If False (default), abort
             orchestration with a clear error instead of silently weakening.
@@ -708,6 +714,69 @@ def orchestrate(
     ]
     if not findings:
         print("\n  No findings to analyse")
+        return None
+
+    selected_agent_cli = (
+        os.environ.get("RAPTOR_AGENT_CLI", "claude").strip().lower()
+        or "claude"
+    )
+    primary_config = (
+        getattr(llm_config, "primary_model", None)
+        if llm_config is not None else None
+    )
+    if primary_config and hasattr(primary_config, "provider"):
+        from core.llm.config import (
+            canonical_agent_cli_provider,
+            filter_agent_cli_models,
+        )
+
+        primary_cli = canonical_agent_cli_provider(
+            primary_config.provider,
+        )
+        filtered_config, removed_cli_models = filter_agent_cli_models(
+            llm_config,
+            selected_agent_cli=selected_agent_cli,
+            allow_selected_agent_cli=not block_cc_dispatch,
+        )
+        if filtered_config is None:
+            if block_cc_dispatch and primary_cli is not None:
+                reason = "target repo failed the selected-agent trust check"
+            else:
+                reason = (
+                    f"{selected_agent_cli} mode does not permit the "
+                    f"{primary_cli or 'configured'} agent CLI transport"
+                )
+            print(
+                f"\n  ✗ Agent CLI dispatch blocked — {reason}",
+                file=sys.stderr,
+            )
+            return None
+        llm_config = filtered_config
+        if removed_cli_models:
+            removed = ", ".join(
+                f"{model.provider}/{model.model_name}"
+                for model in removed_cli_models
+            )
+            why = (
+                "repository trust check failed"
+                if block_cc_dispatch
+                else f"{selected_agent_cli} is the selected agent CLI"
+            )
+            logger.warning(
+                "Disabled agent-CLI routes (%s): %s",
+                why,
+                removed,
+            )
+            print(
+                f"\n  ⚠ Agent CLI fallback disabled ({why}): {removed}",
+                file=sys.stderr,
+            )
+    elif block_cc_dispatch:
+        print(
+            "\n  ✗ Agent CLI dispatch blocked — target repo failed "
+            "the selected-agent trust check",
+            file=sys.stderr,
+        )
         return None
 
     # Reset the per-run defense telemetry singleton. The singleton
@@ -806,9 +875,16 @@ def orchestrate(
     analysis_model_name = analysis_model.model_name if analysis_model else ""
     is_cc_dispatch = not (llm_config and llm_config.primary_model)
 
-    if max_parallel <= 0:
+    max_parallel_was_auto = max_parallel <= 0
+    if max_parallel_was_auto:
         from core.llm.concurrency import derive_max_workers
-        max_parallel = derive_max_workers(analysis_model_name) if analysis_model_name else 3
+        max_parallel = (
+            derive_max_workers(
+                analysis_model_name,
+                provider=analysis_model.provider,
+            )
+            if analysis_model_name and analysis_model else 3
+        )
         logger.info(
             "auto workers: model=%s → max_parallel=%d",
             analysis_model_name or "(cc)", max_parallel,
@@ -868,11 +944,11 @@ def orchestrate(
     dispatch_mode = "none"
     dispatch_fn = None
     start_time = time.monotonic()
-
     # Bound across both dispatch modes so the merged-dict construction
     # below can read ``client.short_circuits`` without NameError on
     # the CC paths (where it stays None and the count is 0).
     client = None
+    fallback_fired_models: list[dict[str, Any]] = []
 
     if llm_config and llm_config.primary_model:
         # External LLM: dispatch via generate_structured/generate
@@ -928,6 +1004,10 @@ def orchestrate(
                     thinking_tokens=getattr(
                         response, "thinking_tokens", 0,
                     ) or 0,
+                    native_usage=getattr(response, "native_usage", {}),
+                    attempted_models=getattr(
+                        response, "attempted_models", (),
+                    ),
                 )
             response = client.generate(
                 prompt=prompt, system_prompt=system_prompt,
@@ -942,14 +1022,32 @@ def orchestrate(
                 thinking_tokens=getattr(
                     response, "thinking_tokens", 0,
                 ) or 0,
+                native_usage=getattr(response, "native_usage", {}),
+                attempted_models=getattr(
+                    response, "attempted_models", (),
+                ),
             )
 
         dispatch_mode = "external_llm"
     else:
         # CC: dispatch via claude -p subprocess
+        if selected_agent_cli == "copilot":
+            print(
+                "\n  ✗ Copilot mode selected, but no usable copilotcli "
+                "provider configuration was resolved",
+                file=sys.stderr,
+            )
+            return None
         if block_cc_dispatch:
-            print("\n  ✗ CC dispatch blocked — target repo contains credential helpers in .claude/settings.json", file=sys.stderr)
-            print("  Use an external LLM (GEMINI_API_KEY, OPENAI_API_KEY) or remove the helpers to enable CC dispatch", file=sys.stderr)
+            print(
+                "\n  ✗ Claude CLI dispatch blocked — target repo failed "
+                "the agent CLI trust check",
+                file=sys.stderr,
+            )
+            print(
+                "  Use an external LLM or pass --trust-repo after review",
+                file=sys.stderr,
+            )
             return None
 
         from core.llm.cc_adapter import resolve_claude_cli
@@ -974,9 +1072,38 @@ def orchestrate(
     # --- Canary probe: verify model handles the defense envelope ---
     # Multi-model: probe each analysis model; use strictest compatible profile.
     profile = CONSERVATIVE
-    _models_to_probe = analysis_models_all if len(analysis_models_all) > 1 else (
-        [analysis_model] if analysis_model else []
+    required_probe_models = (
+        analysis_models_all if len(analysis_models_all) > 1 else
+        ([analysis_model] if analysis_model else [])
     )
+    _models_to_probe = []
+    _probe_keys: set[tuple[str, str]] = set()
+    for candidate in [
+        *required_probe_models,
+        *(
+            list(llm_config.fallback_models or [])
+            if llm_config is not None else []
+        ),
+    ]:
+        if candidate is None:
+            continue
+        key = (
+            str(getattr(candidate, "provider", "")).lower(),
+            str(getattr(candidate, "model_name", "")),
+        )
+        if key in _probe_keys:
+            continue
+        _probe_keys.add(key)
+        _models_to_probe.append(candidate)
+    required_probe_keys = {
+        (
+            str(getattr(candidate, "provider", "")).lower(),
+            str(getattr(candidate, "model_name", "")),
+        )
+        for candidate in required_probe_models
+        if candidate is not None
+    }
+    disabled_fallback_keys: set[tuple[str, str]] = set()
     _probe_failed = False
     if dispatch_fn and _models_to_probe:
         from core.security.envelope_probe import probe_envelope_compatibility
@@ -1027,24 +1154,88 @@ def orchestrate(
         _failed_probe_models: list = []
         for _probe_model in _models_to_probe:
             _pname = _probe_model.model_name if hasattr(_probe_model, "model_name") else str(_probe_model)
+            _pkey = (
+                str(getattr(_probe_model, "provider", "")).lower(),
+                _pname,
+            )
+            _required_probe = _pkey in required_probe_keys
             _pprofile = get_profile_for(_pname)
+            from core.llm.config import canonical_agent_cli_provider
+            if (
+                canonical_agent_cli_provider(
+                    getattr(_probe_model, "provider", ""),
+                ) == "copilotcli"
+                and os.environ.get(
+                    "RAPTOR_COPILOT_MODEL_EXPLICIT", "",
+                ).strip().lower() in ("", "0", "false", "no", "off")
+            ):
+                # The canary call may resolve an unavailable GPT model to a
+                # Claude-family Copilot fallback. Validate the common envelope
+                # against the model that actually answers; the provider pins
+                # that model for the remainder of this run.
+                _pprofile = CONSERVATIVE
             try:
+                original_fallback = (
+                    client.config.enable_fallback
+                    if client is not None else None
+                )
+                if client is not None:
+                    client.config.enable_fallback = False
                 probe_result = probe_envelope_compatibility(
                     _probe_model, _pprofile, dispatch_fn, strict=True,
                 )
             except RuntimeError as _probe_err:
                 defense_telemetry.set_probe_result(_pname, False)
-                _probe_failed = True
-                _failed_probe_models.append((_pname, str(_probe_err)))
+                if _required_probe:
+                    _probe_failed = True
+                    _failed_probe_models.append(
+                        (_pname, str(_probe_err)),
+                    )
+                else:
+                    disabled_fallback_keys.add(_pkey)
+                    logger.warning(
+                        "Disabling unprobeable fallback model %s/%s: %s",
+                        _pkey[0],
+                        _pname,
+                        _probe_err,
+                    )
                 continue
+            finally:
+                if client is not None and original_fallback is not None:
+                    client.config.enable_fallback = original_fallback
             defense_telemetry.set_probe_result(_pname, probe_result.compatible)
             if not probe_result.compatible:
-                _probe_failed = True
-                _failed_probe_models.append((_pname, probe_result.error))
+                if _required_probe:
+                    _probe_failed = True
+                    _failed_probe_models.append(
+                        (_pname, probe_result.error),
+                    )
+                else:
+                    disabled_fallback_keys.add(_pkey)
+                    logger.warning(
+                        "Disabling fallback model %s/%s: envelope probe "
+                        "was incompatible (%s)",
+                        _pkey[0],
+                        _pname,
+                        probe_result.error,
+                    )
                 # Continue probing remaining models so each gets
                 # its own telemetry record.
                 continue
             _probed_profiles.append(_pprofile)
+        if disabled_fallback_keys and llm_config is not None:
+            llm_config.fallback_models = [
+                model
+                for model in llm_config.fallback_models
+                if (
+                    str(model.provider).lower(),
+                    str(model.model_name),
+                ) not in disabled_fallback_keys
+            ]
+            role_resolution = resolve_model_roles(
+                llm_config.primary_model,
+                llm_config.fallback_models,
+            )
         # Intersect profiles for multi-model — AND every boolean
         # so any model that lacks a defence layer disables it
         # globally, matching the comment's "strictest COMPATIBLE
@@ -1135,46 +1326,405 @@ def orchestrate(
             logger.debug("prefilter outcome recording failed",
                          exc_info=True)
 
-    # Fallback: if external LLM failed entirely, try CC
+    # Fallback: if configured LLM failed entirely, use the selected and
+    # trusted agent CLI. Copilot then owns its catalog model fallback chain.
     if (dispatch_mode == "external_llm"
             and analysis_results
             and all("error" in r for r in analysis_results)):
-        from core.llm.cc_adapter import resolve_claude_cli
-        claude_bin = resolve_claude_cli()
-        if claude_bin:
+        if selected_agent_cli == "copilot":
+            from core.llm.config import _build_copilotcli_config
+            from core.llm.providers import CopilotCLILLMProvider
+
+            copilot_config = (
+                None if block_cc_dispatch else _build_copilotcli_config()
+            )
+            if copilot_config is None:
+                logger.warning(
+                    "All external LLM calls failed; Copilot fallback is "
+                    "unavailable or blocked by repository trust",
+                )
+            else:
+                print(
+                    "\n  ⚠️  All external LLM calls failed — falling "
+                    "back to GitHub Copilot CLI",
+                    file=sys.stderr,
+                )
+                copilot_provider = CopilotCLILLMProvider(copilot_config)
+                copilot_fired_entry = {
+                    "provider": "copilotcli",
+                    "alias": copilot_config.model_name,
+                    "resolved": copilot_config.model_name,
+                    "role": "fallback_probe",
+                    "calls": 0,
+                }
+                fallback_fired_models.append(copilot_fired_entry)
+
+                def dispatch_fn(
+                    prompt, schema, system_prompt, temperature, model,
+                ):
+                    if schema:
+                        response = copilot_provider.generate_structured(
+                            prompt,
+                            schema,
+                            system_prompt=system_prompt,
+                            temperature=temperature,
+                            sandbox=True,
+                        )
+                        result = response.result
+                        quality = 1.0
+                        if isinstance(result, dict) and "error" not in result:
+                            from core.llm.response_validation import (
+                                validate_structured_response,
+                            )
+                            validated = validate_structured_response(
+                                result,
+                                schema,
+                            )
+                            result = validated.data
+                            quality = validated.quality
+                        selected = (
+                            copilot_provider.selected_model
+                            or response.model
+                            or copilot_config.model_name
+                        )
+                        copilot_fired_entry.update(
+                            alias=selected,
+                            resolved=selected,
+                            calls=copilot_provider.call_count,
+                        )
+                        return DispatchResult(
+                            result=result,
+                            cost=response.cost,
+                            tokens=response.tokens_used,
+                            model=response.model,
+                            duration=response.duration,
+                            quality=quality,
+                            resolved_model=response.resolved_model,
+                            thinking_tokens=response.thinking_tokens,
+                            native_usage=response.native_usage,
+                            attempted_models=response.attempted_models,
+                        )
+                    response = copilot_provider.generate(
+                        prompt,
+                        system_prompt=system_prompt,
+                        temperature=temperature,
+                        sandbox=True,
+                    )
+                    selected = (
+                        copilot_provider.selected_model
+                        or response.model
+                        or copilot_config.model_name
+                    )
+                    copilot_fired_entry.update(
+                        alias=selected,
+                        resolved=selected,
+                        calls=copilot_provider.call_count,
+                    )
+                    return DispatchResult(
+                        result={"content": response.content},
+                        cost=response.cost,
+                        tokens=response.tokens_used,
+                        model=response.model,
+                        duration=response.duration,
+                        resolved_model=response.resolved_model,
+                        thinking_tokens=response.thinking_tokens,
+                        native_usage=response.native_usage,
+                        attempted_models=response.attempted_models,
+                    )
+
+                from core.security.envelope_probe import (
+                    probe_envelope_compatibility,
+                )
+
+                copilot_profile = CONSERVATIVE
+                copilot_probe_failed = False
+                copilot_probe_error = ""
+                probe_cost_before = copilot_provider.total_cost
+                probe_tokens_before = copilot_provider.total_tokens
+                probe_thinking_before = (
+                    copilot_provider.total_thinking_tokens
+                )
+                try:
+                    probe_result = probe_envelope_compatibility(
+                        copilot_config,
+                        copilot_profile,
+                        dispatch_fn,
+                        strict=True,
+                    )
+                    copilot_probe_failed = not probe_result.compatible
+                    copilot_probe_error = probe_result.error or ""
+                except RuntimeError as exc:
+                    copilot_probe_failed = True
+                    copilot_probe_error = str(exc)
+                finally:
+                    probe_model = (
+                        copilot_provider.selected_model
+                        or copilot_config.model_name
+                    )
+                    copilot_fired_entry.update(
+                        alias=probe_model,
+                        resolved=probe_model,
+                        calls=copilot_provider.call_count,
+                    )
+                    cost_tracker.add_cost(
+                        probe_model,
+                        copilot_provider.total_cost - probe_cost_before,
+                        copilot_provider.total_tokens - probe_tokens_before,
+                        (
+                            copilot_provider.total_thinking_tokens
+                            - probe_thinking_before
+                        ),
+                    )
+                defense_telemetry.set_probe_result(
+                    probe_model,
+                    not copilot_probe_failed,
+                )
+
+                fallback_allowed = not copilot_probe_failed
+                if copilot_probe_failed and not accept_weakened_defenses:
+                    print(
+                        "\n  ✗ Copilot fallback envelope probe failed: "
+                        f"{copilot_probe_error}",
+                        file=sys.stderr,
+                    )
+                elif copilot_probe_failed:
+                    from core.security.rule_of_two import (
+                        NonInteractiveError,
+                        require_interactive_for_weakened_defenses,
+                    )
+                    try:
+                        require_interactive_for_weakened_defenses()
+                    except NonInteractiveError as exc:
+                        print(f"\n  ✗ {exc}", file=sys.stderr)
+                        fallback_allowed = False
+                    else:
+                        copilot_profile = PASSTHROUGH
+                        defense_telemetry.record_weakened_override(
+                            probe_model,
+                            copilot_probe_error,
+                        )
+
+                if fallback_allowed:
+                    from dataclasses import replace
+                    from core.llm.model_data import (
+                        context_window_for,
+                        max_output_for,
+                        resolve_model_costs,
+                    )
+
+                    selected_model = (
+                        copilot_provider.selected_model
+                        or copilot_config.model_name
+                    )
+                    try:
+                        selected_context = context_window_for(
+                            selected_model,
+                        )
+                    except KeyError:
+                        selected_context = copilot_config.max_context
+                    try:
+                        selected_output = max_output_for(selected_model)
+                    except KeyError:
+                        selected_output = copilot_config.max_tokens
+                    selected_costs = (
+                        resolve_model_costs(selected_model) or {}
+                    )
+                    selected_config = replace(
+                        copilot_config,
+                        model_name=selected_model,
+                        max_context=selected_context,
+                        max_tokens=selected_output,
+                        cost_per_1k_tokens=(
+                            selected_costs.get("input", 0.0)
+                            + selected_costs.get("output", 0.0)
+                        ) / 2,
+                    )
+                    role_resolution = resolve_model_roles(
+                        selected_config,
+                        [],
+                    )
+                    analysis_model = selected_config
+                    analysis_model_name = selected_model
+                    profile = copilot_profile
+                    if max_parallel_was_auto:
+                        from core.llm.concurrency import derive_max_workers
+                        max_parallel = derive_max_workers(
+                            selected_model,
+                            provider="copilotcli",
+                        )
+                    dispatch_mode = "copilot_fallback"
+                    copilot_fired_entry["role"] = "fallback"
+                    analysis_results = dispatch_task(
+                        AnalysisTask(
+                            profile=copilot_profile,
+                            allow_unreachable=allow_unreachable,
+                        ),
+                        findings,
+                        dispatch_fn,
+                        role_resolution,
+                        results_by_id,
+                        cost_tracker,
+                        max_parallel,
+                    )
+        else:
+            from core.llm.cc_adapter import resolve_claude_cli
+            from core.llm.config import _build_claudecode_config
+            claude_bin = resolve_claude_cli()
+            claude_config = (
+                None if block_cc_dispatch else _build_claudecode_config()
+            )
+        if (
+            selected_agent_cli != "copilot"
+            and claude_bin
+            and claude_config is not None
+        ):
             print("\n  ⚠️  All external LLM calls failed — falling back to Claude Code", file=sys.stderr)
-            dispatch_mode = "cc_fallback"
+            cc_calls = 0
+            cc_fired_entry = {
+                "provider": "claudecode",
+                "alias": claude_config.model_name,
+                "resolved": claude_config.model_name,
+                "role": "fallback_probe",
+                "calls": 0,
+            }
+            fallback_fired_models.append(cc_fired_entry)
 
             def dispatch_fn(prompt, schema, system_prompt, temperature, model):
+                nonlocal cc_calls
                 # Same dedicated system-prompt channel as the primary
                 # CC dispatch path above — never fold into user content.
-                return invoke_cc_simple(prompt, schema, repo_path, claude_bin,
-                                        out_dir, system_prompt=system_prompt)
+                response = invoke_cc_simple(
+                    prompt,
+                    schema,
+                    repo_path,
+                    claude_bin,
+                    out_dir,
+                    system_prompt=system_prompt,
+                )
+                cc_calls += 1
+                selected = response.model or claude_config.model_name
+                cc_fired_entry.update(
+                    alias=selected,
+                    resolved=selected,
+                    calls=cc_calls,
+                )
+                return response
 
-            # Carry the per-model intersected profile into the
-            # CC-fallback AnalysisTask. Pre-fix `AnalysisTask()`
-            # (no kwargs) used the default CONSERVATIVE profile,
-            # silently losing the defences the prior probe phase
-            # had validated for the actual model being dispatched.
-            # Most CC sub-agents are Claude → ANTHROPIC_CLAUDE
-            # (datamarking + base64_code enabled) so the fallback
-            # path was running with weaker defences than the
-            # primary path even though the same Claude model was
-            # behind it.
-            # Collapse the role resolution to the CC single-model
-            # shape — see _cc_fallback_role_resolution.
-            cc_role_resolution = _cc_fallback_role_resolution(
-                role_resolution,
+            from core.security.envelope_probe import (
+                probe_envelope_compatibility,
             )
-            analysis_results = dispatch_task(
-                AnalysisTask(profile=profile, allow_unreachable=allow_unreachable),
-                findings, dispatch_fn, cc_role_resolution,
-                results_by_id, cost_tracker, max_parallel,
+
+            cc_profile = CONSERVATIVE
+            cc_probe_result: DispatchResult | None = None
+
+            def cc_probe_dispatch(
+                prompt, schema, system_prompt, temperature, model,
+            ):
+                nonlocal cc_probe_result
+                cc_probe_result = dispatch_fn(
+                    prompt,
+                    schema,
+                    system_prompt,
+                    temperature,
+                    model,
+                )
+                return cc_probe_result
+
+            cc_probe_failed = False
+            cc_probe_error = ""
+            try:
+                probe_result = probe_envelope_compatibility(
+                    claude_config,
+                    cc_profile,
+                    cc_probe_dispatch,
+                    strict=True,
+                )
+                cc_probe_failed = not probe_result.compatible
+                cc_probe_error = probe_result.error or ""
+            except RuntimeError as exc:
+                cc_probe_failed = True
+                cc_probe_error = str(exc)
+            defense_telemetry.set_probe_result(
+                (
+                    cc_probe_result.model
+                    if cc_probe_result is not None
+                    and cc_probe_result.model
+                    else claude_config.model_name
+                ),
+                not cc_probe_failed,
             )
-            # Downstream stages (multi-model correlation, collapse
-            # detection) must see the single-contributor reality of
-            # the fallback, not the external panel that never ran.
-            role_resolution = cc_role_resolution
+            if cc_probe_result is not None:
+                cost_tracker.add_cost(
+                    cc_probe_result.model or claude_config.model_name,
+                    cc_probe_result.cost,
+                    cc_probe_result.tokens,
+                    cc_probe_result.thinking_tokens,
+                )
+
+            fallback_allowed = not cc_probe_failed
+            if cc_probe_failed and not accept_weakened_defenses:
+                print(
+                    "\n  ✗ Claude fallback envelope probe failed: "
+                    f"{cc_probe_error}",
+                    file=sys.stderr,
+                )
+            elif cc_probe_failed:
+                from core.security.rule_of_two import (
+                    NonInteractiveError,
+                    require_interactive_for_weakened_defenses,
+                )
+                try:
+                    require_interactive_for_weakened_defenses()
+                except NonInteractiveError as exc:
+                    print(f"\n  ✗ {exc}", file=sys.stderr)
+                    fallback_allowed = False
+                else:
+                    cc_profile = PASSTHROUGH
+                    defense_telemetry.record_weakened_override(
+                        claude_config.model_name,
+                        cc_probe_error,
+                    )
+
+            if fallback_allowed:
+                from dataclasses import replace
+
+                selected_model = (
+                    cc_probe_result.model
+                    if cc_probe_result is not None
+                    and cc_probe_result.model
+                    else claude_config.model_name
+                )
+                selected_config = replace(
+                    claude_config,
+                    model_name=selected_model,
+                )
+                role_resolution = resolve_model_roles(
+                    selected_config,
+                    [],
+                )
+                analysis_model = selected_config
+                analysis_model_name = selected_model
+                profile = cc_profile
+                if max_parallel_was_auto:
+                    from core.llm.concurrency import derive_max_workers
+                    max_parallel = derive_max_workers(
+                        selected_model,
+                        provider="claudecode",
+                    )
+                dispatch_mode = "cc_fallback"
+                cc_fired_entry["role"] = "fallback"
+                analysis_results = dispatch_task(
+                    AnalysisTask(
+                        profile=cc_profile,
+                        allow_unreachable=allow_unreachable,
+                    ),
+                    findings,
+                    dispatch_fn,
+                    role_resolution,
+                    results_by_id,
+                    cost_tracker,
+                    max_parallel,
+                )
 
     # Index results for downstream tasks
     # Multi-model: multiple results per finding — pick best as primary,
@@ -1184,6 +1734,31 @@ def orchestrate(
         fid = r.get("finding_id")
         if fid:
             _multi_results.setdefault(fid, []).append(r)
+
+    actual_analysis_models = list(dict.fromkeys(
+        result.get("analysed_by")
+        for result in analysis_results
+        if "error" not in result and result.get("analysed_by")
+    ))
+    if len(actual_analysis_models) == 1:
+        actual_name = actual_analysis_models[0]
+        if analysis_model is None or analysis_model.model_name != actual_name:
+            configured_models = (
+                llm_config._configured_models()
+                if llm_config is not None
+                and hasattr(llm_config, "_configured_models")
+                else []
+            )
+            actual_config = next(
+                (
+                    model for model in configured_models
+                    if model.model_name == actual_name
+                ),
+                None,
+            )
+            if actual_config is not None:
+                analysis_model = actual_config
+            analysis_model_name = actual_name
 
     n_analysis_models = len(role_resolution.get("analysis_models", []))
     findings_by_id = {f.get("finding_id"): f for f in findings if f.get("finding_id")}
@@ -1735,14 +2310,33 @@ def orchestrate(
     low_confidence = sum(1 for r in per_finding_results if r.get("low_confidence"))
 
     analysis_models_list = role_resolution.get("analysis_models", [])
+    reported_analysis_model = (
+        role_resolution.get("analysis_model").model_name
+        if role_resolution.get("analysis_model") else None
+    )
+    reported_analysis_models = [
+        model.model_name for model in analysis_models_list
+    ]
+    actual_models = list(dict.fromkeys(
+        result.get("analysed_by")
+        for result in analysis_results
+        if "error" not in result and result.get("analysed_by")
+    ))
+    if actual_models:
+        reported_analysis_models = actual_models
+        if len(actual_models) == 1:
+            reported_analysis_model = actual_models[0]
     merged["orchestration"] = {
         "mode": dispatch_mode,
-        "multi_model": len(analysis_models_list) > 1,
-        "analysis_model": (role_resolution.get("analysis_model").model_name
-                          if role_resolution.get("analysis_model")
-                          else ("Claude Code" if is_cc_dispatch else None)),
-        "analysis_models": ([m.model_name for m in analysis_models_list]
-                           or (["Claude Code"] if is_cc_dispatch else [])),
+        "multi_model": len(reported_analysis_models) > 1,
+        "analysis_model": (
+            reported_analysis_model
+            or ("Claude Code" if is_cc_dispatch else None)
+        ),
+        "analysis_models": (
+            reported_analysis_models
+            or (["Claude Code"] if is_cc_dispatch else [])
+        ),
         "defense_profile": profile.name,
         "weakened_defenses": accept_weakened_defenses and profile.name == "passthrough",
         "consensus_models": [m.model_name for m in consensus_models],
@@ -1785,9 +2379,10 @@ def orchestrate(
         # otherwise). Feeds the run provenance manifest. Empty on CC-prep /
         # subprocess-dispatch paths (no in-process client calls) — alias-level
         # attribution still lives in `analysis_models` above.
-        "fired_models": (
-            client.get_fired_models() if client is not None else []
-        ),
+        "fired_models": [
+            *(client.get_fired_models() if client is not None else []),
+            *fallback_fired_models,
+        ],
         "stability_events": n_stability,
     }
 

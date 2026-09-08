@@ -38,7 +38,7 @@ Conventions used below:
 | `RAPTOR_OUT_DIR` | `out/` under the repo | Output-directory root override. Validated fail-closed by `RaptorConfig.get_out_dir()`: refuses paths under `/etc /usr /bin /sbin /boot /dev /proc /sys` (checked on both the literal and symlink-resolved path, component-boundary matched) and refuses paths whose parent does not exist (typo guard). Propagates to children via the safe-env allowlist so `raptor-run-lifecycle` resolves the same directory. |
 | `RAPTOR_CONFIG` | `~/.config/raptor/models.json` | Path to the models config consumed by `core.llm` (`{"models": [...]}` or a bare list; `//` comments allowed). This variable belongs to `core.llm` alone: `packages/exploit_feasibility` historically read the same name for its *analysis-settings* JSON but cut over to `RAPTOR_EF_CONFIG`. Both readers keep schema guards for stale environments: `core.llm` logs an error (once per path) and loads zero models when the file is AnalysisConfig-shaped; `exploit_feasibility`'s `from_file` raises `ValueError` when the file is models-config-shaped. Both messages name the right variable. |
 | `RAPTOR_TARGET_KIND` | auto-detect | Target-classification override: `library`, `hybrid`, or `application` (consumed by `core.inventory.library_detection`; any other value falls through to auto-detection — fail-open to auto). Prefer `/project set target-kind` or the per-run flag; programmatic setting > env > auto. Allowlisted so child inventory rebuilds honour it. |
-| `RAPTOR_SESSION_PID` | set by `bin/raptor` | The launcher session's PID — one half of the session identity credential that lets deep children (skill dispatches, nested `claude -p` subagents, PID-namespace-blind helpers) resolve this session's project binding in `~/.local/share/raptor/sessions.d/`. Validated on every read: digits, the paired token must match the 0700 registry entry (constant-time compare), and the entry's identity stamp (starttime + boot_id + pidns) must match the live process — a recycled or guessed PID resolves nothing. Never set it by hand; stripped from every target-bound sandbox env (`TARGET_ENV_STRIP_SET`). |
+| `RAPTOR_SESSION_PID` | set by `bin/raptor` | The launcher session's PID — one half of the session identity credential that lets deep children (skill dispatches, nested selected-agent-CLI subagents, PID-namespace-blind helpers) resolve this session's project binding in `~/.local/share/raptor/sessions.d/`. Validated on every read: digits, the paired token must match the 0700 registry entry (constant-time compare), and the entry's identity stamp (starttime + boot_id + pidns) must match the live process — a recycled or guessed PID resolves nothing. Never set it by hand; stripped from every target-bound sandbox env (`TARGET_ENV_STRIP_SET`). |
 | `RAPTOR_SESSION_TOKEN` | set by `bin/raptor` | The launcher-minted random token paired with `RAPTOR_SESSION_PID` — makes the env credential unforgeable against env injection (an attacker able to write the 0700 registry already owns every project file, so the pair grants nothing new). Same strip rule: target code never sees it. |
 | `RAPTOR_LOG_FILE_LEVEL` | `INFO` | Level of the per-process JSONL audit-log file handler (`core.logging`). Any `logging` level name, case-insensitive; unknown names fall back to `INFO` rather than erroring during bootstrap. `DEBUG` opts into the full firehose. |
 | `RAPTOR_TMP_REAP_MAX_AGE_H` | `24` (hours) | Age floor for the best-effort sweep of orphaned RAPTOR temp artifacts in `$TMPDIR` (`core.run.tmp_reaper`; known RAPTOR prefixes, a few anchored third-party tool names RAPTOR's own tool runs strand — e.g. `semmleTempDir*`, `scala-repl-pp*` — and the neutral de-branded scratch names (`.scr-*`, `.fp-*`) anchored to their exact random suffix; same-euid, live-process-safe). `0`/negative disables; non-numeric falls back to 24 h (sweep still runs); values below 0.5 h clamp to 30 min with a warning (a shorter floor could reap a live sandbox's scratch between its keepalive refreshes). |
@@ -51,9 +51,9 @@ Conventions used below:
 | `RAPTOR_HITL_TTY_MAX_AGE_S` | `86400` (24 h) | Recency threshold for the human-attended probe (`core.security.rule_of_two`): the controlling TTY must show read activity (atime) within this many seconds for the session to count as human-attended. `<= 0` disables the recency check (pure TTY-presence, the pre-fix behaviour); non-numeric falls back to the default with a warning. |
 | `RAPTOR_SELFTEST_MODEL` | unset | Default for `raptor-self-test --model` (budget-capped LLM cases). Flag > env > RAPTOR's own model resolution. |
 | `RAPTOR_REGISTRY_ALLOW` | unset | Comma-separated registry authorities (URL-ish forms accepted; Docker Hub aliases collapse to `docker.io`) added to the manifest-probe allowlist in `core.container.registry`. By default `docker manifest inspect` probes only the candidate cascade's six public registries; refs carrying any other authority (including agent-influenced `product` strings that smuggle one) classify `denied` without network contact. Explicit ports are part of the authority: `localhost:5000` allowlists exactly that endpoint, and a port-bearing ref (`quay.io:8080/...`) never inherits the bare host's allowlisting. The `CVE_ENV_DENY_REGISTRY` denylist still applies on the cve-env cascade. |
-| `RAPTOR_NONINTERACTIVE` | unset | Explicit non-interactive override for the AskUserQuestion interactivity gate (`core.ux.interactivity`, consulted via `libexec/raptor-may-ask`). Any truthy value forces the `non-interactive` verdict, so sessions apply the documented default behaviour instead of presenting structured operator prompts. Stamped `=1` into every `claude` CLI child RAPTOR spawns (`core.llm.cc_adapter.cc_subprocess_env`) — dispatched sub-agents are unattended by definition. Falsy spellings (`0`, `false`, `no`, `off`) are ignored; without the override the gate falls through to `rule_of_two.is_ci()`, the std-fd TTY predicate, and the rule-of-two human-attendance probe, failing closed. |
+| `RAPTOR_NONINTERACTIVE` | unset | Explicit non-interactive override for the AskUserQuestion interactivity gate (`core.ux.interactivity`, consulted via `libexec/raptor-may-ask`). Any truthy value forces the `non-interactive` verdict, so sessions apply the documented default behaviour instead of presenting structured operator prompts. Stamped `=1` into every selected-agent-CLI child RAPTOR spawns (`core.llm.cc_adapter.cc_subprocess_env`, `core.llm.copilot_adapter.copilot_subprocess_env`) — dispatched sub-agents are unattended by definition. Falsy spellings (`0`, `false`, `no`, `off`) are ignored; without the override the gate falls through to `rule_of_two.is_ci()`, the std-fd TTY predicate, and the rule-of-two human-attendance probe, failing closed. |
 | `RAPTOR_CI` | auto-detected | CI-posture marker for the rule-of-two interactivity gate (`core.security.rule_of_two`). Normally parent-stamped: `get_safe_env()` writes `RAPTOR_CI=1` into every sanitised child env whenever the parent judged itself in CI, so the gate keeps working in children whose scrubbed env lost the vendor markers (`CI`, `GITHUB_ACTIONS`, ...). It is also the first — authoritative — entry in the recognised-marker list, so an operator may set `RAPTOR_CI=1` to force CI posture on any host. The whole marker set is unioned into `SAFE_ENV_ALLOWLIST`, so the verdict survives further spawns. |
-| `RAPTOR_NO_LAUNCHER_HARDENING` | unset | Any non-empty value skips the `bin/raptor` exec-boundary hardening block entirely: the soft core-dump cap, the umask floor (current \| `022`), the PATH scrub (empty / relative / world-writable entries), the world-writable-ancestor warning on the resolved `claude`, and the per-session TMPDIR (creation and stale-sibling sweep). Single opt-out for environments that legitimately violate one of the checks. Fail-closed: unset means hardening runs. |
+| `RAPTOR_NO_LAUNCHER_HARDENING` | unset | Any non-empty value skips the `bin/raptor` exec-boundary hardening block entirely: the soft core-dump cap, the umask floor (current \| `022`), the PATH scrub (empty / relative / world-writable entries), the world-writable-ancestor warning on the resolved selected agent CLI binary (`claude` or `copilot`), and the per-session TMPDIR (creation and stale-sibling sweep). Single opt-out for environments that legitimately violate one of the checks. Fail-closed: unset means hardening runs. |
 | `RAPTOR_ALLOW_UNSAFE_PATH` | unset | Any non-empty value makes the launcher PATH scrub KEEP entries it would otherwise drop (empty, relative, world-writable dirs), each with a stderr warning naming the entry and reason. Escape hatch for hosts where a required tool lives under a loose directory. Only consulted while the hardening block runs (no effect under `RAPTOR_NO_LAUNCHER_HARDENING`). |
 
 ### `RAPTOR_ALLOW_UNSANDBOXED_TOOLS`
@@ -177,6 +177,38 @@ selection.
 | `RAPTOR_CC_STREAM_STDOUT_CAP` | `67108864` (64 MiB) | Retention ceiling (bytes) for a streamed `claude` child's stdout: the drain loop keeps reading past the cap (no pipe deadlock) but retains only the head plus a rolling tail, so a hostile or looping endpoint cannot balloon parent memory; the authoritative stream-json `result` event arrives last and rides the retained tail. Positive integer; zero/negative/non-numeric falls back silently. |
 | `RAPTOR_CC_STREAM_STDERR_CAP` | `8388608` (8 MiB) | Same head-plus-tail retention ceiling for the streamed child's stderr. |
 | `RAPTOR_CC_CREDENTIAL_MODE` | `env` | Credential posture for CC skill-pass children (`/understand` prepass, `/validate` postpass). `env` = current behaviour (backend credential overlay + AWS minting). `proxy` = child env carries ZERO provider credentials; the child authenticates to the local LLM dispatcher with a scoped minted token, sent by the CLI as `ANTHROPIC_AUTH_TOKEN` against the gateway route the CLI's backend mode reads — `ANTHROPIC_BASE_URL` on API installs; `ANTHROPIC_BEDROCK_MANTLE_BASE_URL`/`ANTHROPIC_BEDROCK_BASE_URL` with `CLAUDE_CODE_SKIP_MANTLE_AUTH`/`CLAUDE_CODE_SKIP_BEDROCK_AUTH` on Bedrock installs. The mint's model allowlist comes from the install's pins (`ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`/`ANTHROPIC_DEFAULT_SONNET_MODEL`/`ANTHROPIC_DEFAULT_OPUS_MODEL`, `RAPTOR_CC_MODEL`, `RAPTOR_CC_FALLBACK_MODEL`) (budget = the pass budget, TTL sized to the pass timeout, model allowlist from the install's model pins) and the dispatcher fronts the provider. Requires the dispatcher route + the netns sandbox tier; setup failure fails the pass loudly (never a silent fallback to env credentials). Invalid values warn and use `env`. |
+
+### GitHub Copilot CLI transport (`RAPTOR_COPILOT_*`)
+
+`raptor --copilot` is an explicit opt-in launcher path; default launcher mode is
+still Claude. Top-level launch sets the default Copilot model to `gpt-5.6-sol`
+unless `--model` is passed, and does not run a billed model preflight call.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `RAPTOR_COPILOT_TRANSPORT_DISABLED` | unset | Anything but `0`/empty refuses billed Copilot subprocess spawns at the transport chokepoint (`core.llm.copilot_adapter`) with a named `RuntimeError` — no CLI process, no spend. Detection/config paths still run. |
+| `RAPTOR_COPILOT_STREAM_STDOUT_CAP` | `67108864` (64 MiB) | Retention ceiling for Copilot subprocess stdout capture: keeps bounded head+tail while the drain loop continues, so hostile/looping output cannot balloon parent memory. |
+| `RAPTOR_COPILOT_STREAM_STDERR_CAP` | `8388608` (8 MiB) | Same bounded retention ceiling for Copilot subprocess stderr capture. |
+| `RAPTOR_COPILOT_MODEL` | set by launcher on `--copilot` | Selected Copilot model export (`gpt-5.6-sol` for new sessions, explicit `--model`, or `auto` for separate internal calls during `--continue`; the resumed interactive session itself keeps its stored model). Internal state export, not an operator knob. |
+| `RAPTOR_COPILOT_MODEL_EXPLICIT` | set by launcher on `--copilot` | `0` only for the new-session default; `1` for an explicit pin or resume-safe `auto`. Used by fallback policy to disable RAPTOR model substitution when selection is authoritative. Internal state export. |
+| `RAPTOR_COPILOT_FALLBACK_MODELS` | catalog-derived | Optional comma-separated replacement for the internal fallback sequence. Ignored when an explicit model pin disables automatic fallback. |
+| `RAPTOR_COPILOT_MAX_AI_CREDITS` | unset | Optional explicit `--max-ai-credits` ceiling for Copilot transport calls. Applied only when explicitly provided; launcher defaults do not set it. |
+| `RAPTOR_COPILOT_AUTH_SOCKET` | launcher-managed on Linux when auth is environment-only | Private mode-0600 Unix socket used to relay Copilot auth only to verified RAPTOR descendants. Internal state; stripped from target and non-LLM helper environments. |
+
+Copilot command-mode children used by unattended skill/build paths run with a
+private run-local HOME (`.copilot-home`) and staged MXC policy
+(`--experimental --sandbox --disallow-temp-dir`) in that HOME's `settings.json`
+(`allowBypass=false`, `allowDevToolAccess=false`, auth injection disabled for
+git/gh, explicit read-write/read-only path lists, command network disabled,
+explicit tool allowlist).
+The launcher also protects GitHub tokens and `RAPTOR_SESSION_TOKEN` with
+Copilot's `--secret-env-vars`, so model-directed shell/MCP children cannot read
+either authentication class.
+This is a separate containment mechanism from RAPTOR's outer Linux
+mount/network sandbox: they are not nested together on the same child process.
+The containing per-call workspace is deleted after the child exits; only the
+raw/normalized Copilot usage JSON files remain in the run. The extracted public
+Copilot runtime package is reused from `~/.cache/raptor/copilot-cli/`.
 
 ### Bedrock (`RAPTOR_BEDROCK_*`)
 
@@ -496,10 +528,10 @@ socket), and `AWS_BEARER_TOKEN_BEDROCK` is popped out of the parent's
 ## Transport routing family (`LLM_ROUTING_ENV_VARS`)
 
 Selection flags and *names*, never secrets. Declared in
-`core/config/__init__.py` alongside two prefix families
-(`RAPTOR_BEDROCK_*`, `RAPTOR_CC_*`). Like the credentials, the family
-is not allowlisted for ordinary subprocesses — untrusted code has no
-business knowing the operator's LLM topology.
+`core/config/__init__.py` alongside selected-agent-CLI prefix families
+(`RAPTOR_BEDROCK_*`, `RAPTOR_CC_*`, `RAPTOR_COPILOT_*`). Like the
+credentials, the family is not allowlisted for ordinary subprocesses —
+untrusted code has no business knowing the operator's LLM topology.
 
 Members: `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_MANTLE`,
 `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY`,
@@ -510,8 +542,8 @@ Members: `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_MANTLE`,
 **Spawn behavior** — how the family travels to children:
 
 - `RaptorConfig.llm_routing_env()` collects the members (plus
-  `RAPTOR_BEDROCK_*`/`RAPTOR_CC_*`) present and non-empty in the real
-  environment.
+  `RAPTOR_BEDROCK_*`/`RAPTOR_CC_*`/`RAPTOR_COPILOT_*`) present and
+  non-empty in the real environment.
 - `RaptorConfig.get_llm_env()` = safe env (proxy preserved) + API keys
   + routing family — used when spawning RAPTOR's own LLM-calling
   scripts. Without the family, a spawned child loses the operator's
@@ -529,6 +561,10 @@ Members: `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_MANTLE`,
   snapshot; `AWS_*` is forwarded **only when** `CLAUDE_CODE_USE_BEDROCK`
   is set, so cloud credentials never flow to CLI children on
   non-Bedrock installs.
+- `copilot_subprocess_env()` (`core.llm.copilot_adapter`) is the seam
+  for Copilot CLI children: safe env + `RAPTOR_COPILOT_*` controls +
+  the operator's proxy snapshot; provider API keys are not forwarded to
+  Copilot transport subprocesses.
 - `RaptorConfig.strip_llm_env_vars()` removes keys, the routing
   family, and the dispatcher route pair from RAPTOR's own non-LLM
   helper children that must otherwise mirror the full environment
@@ -564,8 +600,8 @@ RAPTOR-specific behavior:
   `NO_PROXY`/`no_proxy`), then rewrites `HTTPS_PROXY`/`https_proxy`
   in-process to point at the loopback CONNECT proxy;
   the chokepoint chains upstream through the *original* operator
-  proxy. Spawned `claude` CLI children receive the operator snapshot
-  (`operator_proxy_env()`), never RAPTOR's loopback pointer.
+  proxy. Spawned selected-agent-CLI children receive the operator
+  snapshot (`operator_proxy_env()`), never RAPTOR's loopback pointer.
 - **`NO_PROXY` loopback augmentation**: RAPTOR unions the operator's
   `NO_PROXY` with `localhost, 127.0.0.1, ::1, 0.0.0.0,
   169.254.169.254` so loopback sidecars (Ollama, SAGE, Joern) and
@@ -586,6 +622,13 @@ the JVM-installer caveat.
 |----------|--------------------------|
 | `GOOGLE_APPLICATION_CREDENTIALS` | Required for `/oss-forensics` BigQuery; also a Vertex credential path in the LLM key table. Its absence is reported in the startup banner. |
 | `GITHUB_TOKEN` | Used by cve-diff/forensics tooling to raise GitHub API limits; forwarded to the relevant children only. |
+| `GH_HOST` | GitHub host selection override (GitHub CLI / Copilot CLI ecosystem contract). Forwarded to trusted Copilot subprocesses when set so enterprise-hosted installs resolve the same backend host. |
+| `COPILOT_GITHUB_TOKEN` | Copilot CLI automation token. For unattended MXC children RAPTOR resolves the existing Copilot keyring token first (then `gh auth token` as fallback), passes it only to the trusted Copilot process, and names it in `--secret-env-vars` so model-directed shell/MCP children cannot read it. An explicitly exported value takes precedence. |
+| `COPILOT_HOME` | Copilot CLI state root. Pure provider calls use the normal user setting; unattended skill/build children override it to a private run-local `.copilot-home` with a generated no-bypass MXC policy. |
+| `DBUS_SESSION_BUS_ADDRESS` | Read only by the trusted parent-side Linux keyring lookup used to recover the existing Copilot CLI OAuth token. It is not forwarded to the Copilot model/tool child. |
+| `GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS`, `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS`, `GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP` | Force-disabled (`false`) in unattended Copilot subprocesses so target/workspace extensions, hooks, and MCP configuration cannot load outside RAPTOR's trust gate. |
+| `NODE_COMPILE_CACHE` | Redirected to the run-local Copilot workspace for unattended children so the embedded Node runtime never writes the operator's real cache. |
+| `NO_COLOR` | Set to `1` in Copilot subprocesses so machine-parsed JSON/error streams do not contain terminal colour sequences. |
 | `CLAUDE_ENV_FILE` | Claude Code harness contract (set in `.claude/settings.json` to `.claude/raptor.env`): the SessionStart hook writes `RAPTOR_DIR` and a `PATH` extension into that file so every session Bash call inherits them. Not operator-set. |
 | `CLAUDE_CODE_SUBAGENT_MODEL` | `bin/raptor` bridges it from `ANTHROPIC_MODEL` when unset (Bedrock roles entitled for only one model would otherwise 403 on subagents). An explicit operator export is never overridden. |
 | `CLAUDE_SUBAGENT_BG_SHELL_MAX_MS` | Claude Code harness knob: per-SUBAGENT background-shell kill cap in ms (harness default 3,600,000). Read by `core.run.supervisor` so `/audit` can self-bound its wall budget to conclude gracefully inside the cap (cap − 300s, default 3300s; `--no-supervisor-bound` opts out). Non-numeric/non-positive values fall back to the default. See "Running long audits" in [audit.md](audit.md). |
@@ -619,7 +662,7 @@ tier sets.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `RAPTOR_TEST_LIVE_LLM` | unset | Exactly `1` lets a pytest session make live (billed) LLM calls. Otherwise the root `conftest.py` force-sets `RAPTOR_CC_TRANSPORT_DISABLED=1` for the whole session — subprocesses inherit it — so live-LLM invocation from tests is explicit opt-in, never a side effect of running a tier. |
+| `RAPTOR_TEST_LIVE_LLM` | unset | Exactly `1` lets a pytest session make live (billed) LLM calls. Otherwise the root `conftest.py` force-sets both `RAPTOR_CC_TRANSPORT_DISABLED=1` and `RAPTOR_COPILOT_TRANSPORT_DISABLED=1` for the whole session — subprocesses inherit them — so live-LLM invocation from tests is explicit opt-in, never a side effect of running a tier. |
 | `RAPTOR_MAX_TEST_SECONDS` | unset = guard off | Per-test wallclock budget (seconds) for the slow-test guard: a test whose SETUP or CALL phase exceeds it is flagged and the session fails at the end naming the offenders (tests still run to completion — the signal is "this test got slow", not "killed mid-run"). Overruns of *half* the budget get a warn listing only. The default-tier CI matrix sets it; nightly (legitimately slow `slow`/`integration` tests) and local runs leave it unset. |
 | `RAPTOR_MAX_SESSION_SECONDS` | unset = guard off | Per-tier aggregate wallclock tripwire, companion to the per-test guard: catches suite-wide drift no single test explains. Flags at session end, never kills; workflows set it to the tier's measured baseline plus headroom. |
 | `RAPTOR_RANDOMISE_TESTS` | unset | Randomises collected test order so order-dependent failures surface early (no plugin needed). Scope-grouped shuffle: module order, then class-bucket order per module, then items per bucket — bounds expensive module/class fixtures to one setup per session. A numeric value is the seed; any other value hashes to one. Deterministic per seed, and the seed prints in the terminal header for reproduction. |
@@ -656,8 +699,10 @@ setting them manually either does nothing or weakens a boundary.
 |----------|--------|---------|
 | `RAPTOR_DIR` | `bin/raptor` (exported after symlink resolution) | Installation root; RAPTOR's own children derive libexec/tool paths. `get_safe_env()` **re-pins** it to the current tree so a multi-checkout operator's ambient value cannot cross-import trees. The only value ever added to `sys.path`. Stripped from EVERY sandboxed target env by default (member of `TARGET_ENV_STRIP_SET`; the pid1-shim's mirror tuple follows, and `--strip-raptor-dir` survives as an argv-compat no-op) — the checkout path is a pure "inside RAPTOR" tell; only keep-trust dispatch children retain it. |
 | `RAPTOR_CALLER_DIR` | `bin/raptor` | Operator's `$PWD` at launch; default-target resolution for commands run without a path. Refuses control bytes. |
+| `RAPTOR_AGENT_CLI` | `bin/raptor` | Internal launcher-selected transport marker (`claude` by default, `copilot` when launched with `--copilot`). Dispatch uses it to route provider preference (`claudecode`/`claudecode-resumable` vs `copilotcli`/`copilotcli-resumable`). Not an operator tuning control. |
+| `AGENT_ARGS` | `bin/raptor` shell-local array | Selected-agent argv assembled after RAPTOR options are consumed. It is not exported to children. |
 | `_RAPTOR_TRUSTED` | `bin/raptor`, sandbox shims | Trust marker: `libexec/` scripts exit 2 unless it or `CLAUDECODE` is present. Stripped from target-bound envs BY DEFAULT at the sandbox env chokepoint (`TARGET_ENV_STRIP_SET` — trust markers + the session credential; the keep-trust skill dispatch is the only exception) so target-spawned processes cannot invoke libexec as trusted callers. Power users may set `_RAPTOR_TRUSTED=1` to drive libexec scripts directly — with the understanding that it bypasses the dispatch guard. |
-| `CLAUDECODE` | Claude Code | Same trust-marker role, set by the harness for its child processes; allowlisted, stripped from untrusted targets. |
+| `CLAUDECODE` | Claude Code | Claude-specific trust-marker companion to `_RAPTOR_TRUSTED`, set by the Claude harness for its child processes; allowlisted, stripped from untrusted targets. |
 | `_RAPTOR_KEEP_TRUST_MARKERS` | `run_untrusted_networked(keep_trust_markers=True)` | One-hop control flag telling the pid1 shim to keep the markers for RAPTOR's own skill dispatches; popped before the child exec. |
 | `_RAPTOR_ENV_RESTORE` | `core/sandbox/_env_quarantine` (launcher-bound envs only) | JSON payload of quarantined loader variables (`LD_*`/`DYLD_*`/`GCONV_PATH`/`GLIBC_TUNABLES`) so they never load code into the trusted launcher chain; the pid1/seatbelt shims pop it and re-apply the pairs at target exec. RAPTOR-minted: a caller-supplied copy is dropped, never merged, and never reaches a child. |
 | `_RAPTOR_STATUS_FD` | sandbox spawn | fd where the seatbelt shim writes one readiness byte after the profile applies — absence fails loud ("sandbox did not engage"). |

@@ -3,19 +3,21 @@
 # (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """SessionStart hook: env file setup and startup banner.
 
-Called automatically by Claude Code on session start (via .claude/settings.json).
+Called automatically by Claude Code or GitHub Copilot CLI on session start
+(via .claude/settings.json).
 Writes RAPTOR_DIR + PATH to the env file (overwrite, not append) and generates
 the startup banner in .startup-output.
 
-The banner is also printed to stdout on purpose: Claude Code attaches
-SessionStart stdout to the conversation before the first user message, so the
-assistant can render the banner directly without spending a second turn
-reading .startup-output back from disk. The file remains as a fallback for
-older Claude Code versions and direct/manual callers.
+Claude Code consumes the banner as plain SessionStart stdout. Copilot consumes
+the same text through its ``hookSpecificOutput.additionalContext`` JSON field.
+The file remains as a fallback for older runtimes and direct/manual callers.
 
 The launcher seeds the session's project binding (sessions.d) and exports the session credential; the .active symlink is the last-activated default.
 """
 import sys
+import contextlib
+import io
+import json
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -72,18 +74,44 @@ def write_env_file():
     os.environ["RAPTOR_DIR"] = repo_root
 
 
-def generate_banner():
-    """Generate the startup banner and write to .startup-output."""
+def generate_banner() -> str:
+    """Generate, persist, and return the startup banner."""
+    captured = io.StringIO()
     try:
         from core.startup.init import main as init_main
-        init_main()
+        with contextlib.redirect_stdout(captured):
+            init_main()
     except Exception as e:
         # Non-fatal — write a minimal banner
+        output = f"RAPTOR startup error: {e}\n"
         output_file = REPO_ROOT / ".startup-output"
         try:
-            output_file.write_text(f"RAPTOR startup error: {e}\n", encoding="utf-8")
+            output_file.write_text(output, encoding="utf-8")
         except OSError:
             pass
+        return output
+    output = captured.getvalue()
+    if output:
+        return output
+    try:
+        return (REPO_ROOT / ".startup-output").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def emit_banner(banner: str) -> None:
+    """Emit the banner in the selected hook runtime's response format."""
+    if os.environ.get("RAPTOR_AGENT_CLI") == "copilot":
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "sessionStart",
+                "additionalContext": banner,
+            },
+        }))
+        return
+    sys.stdout.write(banner)
+    if banner and not banner.endswith("\n"):
+        sys.stdout.write("\n")
 
 
 def warm_sage_embeddings():
@@ -116,5 +144,5 @@ def warm_sage_embeddings():
 
 if __name__ == "__main__":
     write_env_file()
-    generate_banner()
+    emit_banner(generate_banner())
     warm_sage_embeddings()
