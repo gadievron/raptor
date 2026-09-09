@@ -5,6 +5,8 @@ import importlib.util
 import io
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import unittest
@@ -19,6 +21,15 @@ from core.run.metadata import (
 
 REPO_ROOT = Path(__file__).resolve().parents[3]  # core/run/tests/ → raptor/
 HOOK_SCRIPT = REPO_ROOT / "libexec" / "raptor-lifecycle-hook"
+SETTINGS_FILE = REPO_ROOT / ".claude" / "settings.json"
+
+_DISPATCH_ENV_VARS = (
+    "CLAUDECODE",
+    "_RAPTOR_TRUSTED",
+    "RAPTOR_AGENT_CLI",
+    "RAPTOR_SESSION_PID",
+    "RAPTOR_SESSION_TOKEN",
+)
 
 # Import the hook module despite its hyphenated filename and missing .py ext.
 _loader = importlib.machinery.SourceFileLoader("lifecycle_hook", str(HOOK_SCRIPT))
@@ -55,6 +66,109 @@ def _make_running_run(parent: Path, name: str, command: str,
 
 def _status(d: Path) -> str:
     return load_json(d / RUN_METADATA_FILE).get("status")
+
+
+def _clean_dispatch_env(**updates: str) -> dict[str, str]:
+    env = os.environ.copy()
+    for name in _DISPATCH_ENV_VARS:
+        env.pop(name, None)
+    env.update(updates)
+    return env
+
+
+def _settings_hook_commands() -> tuple[dict, list[tuple[str, str]]]:
+    settings = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    commands = []
+    for event, groups in settings.get("hooks", {}).items():
+        for group in groups:
+            for hook in group.get("hooks", []):
+                command = hook.get("command")
+                if hook.get("type") == "command" and isinstance(command, str):
+                    commands.append((event, command))
+    return settings, commands
+
+
+class TestHookRegistration(unittest.TestCase):
+    """RAPTOR hooks carry trust only on their individual commands."""
+
+    def test_exactly_four_raptor_hooks_have_scoped_trust(self):
+        settings, commands = _settings_hook_commands()
+
+        self.assertNotIn("_RAPTOR_TRUSTED", settings.get("env", {}))
+
+        scoped = []
+        for event, command in commands:
+            argv = shlex.split(command)
+            if any(token.startswith("_RAPTOR_TRUSTED=") for token in argv):
+                scoped.append((event, tuple(argv)))
+
+        self.assertEqual(
+            scoped,
+            [
+                (
+                    "SessionStart",
+                    (
+                        "_RAPTOR_TRUSTED=1",
+                        "$CLAUDE_PROJECT_DIR/libexec/raptor-session-init",
+                    ),
+                ),
+                (
+                    "Stop",
+                    (
+                        "_RAPTOR_TRUSTED=1",
+                        "$CLAUDE_PROJECT_DIR/libexec/raptor-lifecycle-hook",
+                        "stop",
+                    ),
+                ),
+                (
+                    "PostToolUseFailure",
+                    (
+                        "_RAPTOR_TRUSTED=1",
+                        "$CLAUDE_PROJECT_DIR/libexec/raptor-lifecycle-hook",
+                        "tool-failure",
+                    ),
+                ),
+                (
+                    "SessionEnd",
+                    (
+                        "_RAPTOR_TRUSTED=1",
+                        "$CLAUDE_PROJECT_DIR/libexec/raptor-lifecycle-hook",
+                        "session-end",
+                    ),
+                ),
+            ],
+        )
+        self.assertEqual(
+            json.dumps(settings).count("_RAPTOR_TRUSTED"),
+            4,
+            "trust marker must appear only on the four RAPTOR-owned hooks",
+        )
+
+    @unittest.skipUnless(shutil.which("bash"), "bash required")
+    def test_scoped_lifecycle_invocation_is_silent(self):
+        _, commands = _settings_hook_commands()
+        tool_failure_commands = [
+            command for event, command in commands
+            if event == "PostToolUseFailure"
+        ]
+        self.assertEqual(len(tool_failure_commands), 1)
+
+        payload = json.dumps({
+            "toolName": "shell",
+            "toolArgs": {"command": "git status"},
+        })
+        result = subprocess.run(
+            [shutil.which("bash"), "-c", tool_failure_commands[0]],
+            input=payload,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=_clean_dispatch_env(CLAUDE_PROJECT_DIR=str(REPO_ROOT)),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
 
 
 class TestToolFailureMarker(unittest.TestCase):
@@ -534,6 +648,25 @@ class TestMultiTurnGuard(unittest.TestCase):
 
 class TestE2EHookScript(unittest.TestCase):
     """Run the actual hook script as a subprocess."""
+
+    def test_direct_invocation_without_marker_exits_2(self):
+        expected_stderr = (
+            f"{HOOK_SCRIPT}: internal dispatch script.\n"
+            "  Run via 'bin/raptor' instead.\n"
+            "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+        )
+        for event in ("stop", "tool-failure", "session-end"):
+            with self.subTest(event=event):
+                result = subprocess.run(
+                    [sys.executable, str(HOOK_SCRIPT), event],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    env=_clean_dispatch_env(),
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, expected_stderr)
 
     def test_invalid_arg_exits_nonzero(self):
         result = subprocess.run(
