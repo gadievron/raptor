@@ -1,16 +1,34 @@
 # Dependencies
 
-RAPTOR does not bundle external binaries or libraries. Users install them
-separately according to each tool's licence terms. A devcontainer is available
-for those who prefer a batteries-included environment.
+The source checkout does not redistribute external tool archives. Users install
+host tools separately according to each tool's licence and terms.
 
-See also: [README](README.md), [architecture](architecture.md).
+See also: [README](README.md), [Fedora 44 + Copilot](fedora-copilot.md),
+[architecture](architecture.md).
 
 
 ## Python
 
 Python **3.10+** is required. RAPTOR uses PEP 604 union syntax (`X | Y`) at
 function-definition time, which is a syntax error on 3.9 and earlier.
+
+The standard development/Fedora environment pins `z3-solver==4.15.4.0`.
+angr 9.3.4 requires `z3-solver==4.13.0.0`, so host installations must keep
+angr in a separate venv; see
+[angr isolation](fedora-copilot.md#angr-isolation).
+
+
+## Agent CLIs
+
+npm installations of current Claude Code and GitHub Copilot CLI require
+**Node.js 22+**. The Fedora installer reuses an existing Node.js 22+ only when
+npm works, requests Fedora Node.js 24 only when both commands are absent, and
+refuses to mutate an old/incomplete active Node installation automatically.
+
+The Fedora host guide pins Claude Code 2.1.263 and GitHub Copilot CLI 1.0.83.
+Installing either CLI does not authenticate it; account eligibility,
+authentication state, and credentials remain operator-managed. See
+[Fedora 44 + Copilot](fedora-copilot.md).
 
 
 ## Core Tools
@@ -20,7 +38,7 @@ function-definition time, which is a syntax error on 3.9 and earlier.
 | Semgrep | Yes | Static analysis scanning | `pip install semgrep` |
 | Coccinelle (spatch) | No | Semantic patch analysis | `apt install coccinelle` (>=1.3) |
 | CodeQL | No | Deep dataflow analysis | [codeql-cli-binaries](https://github.com/github/codeql-cli-binaries) |
-| Joern | No | CPG dataflow queries (`/audit`, tiered taint sweeps) | [joern.io](https://joern.io) — **v4.0.458 or newer** (first 2026 release; needs a JVM) |
+| Joern | No | CPG dataflow queries (`/audit`, tiered taint sweeps) | [joern.io](https://joern.io) — Fedora host recipe pins **4.0.622** (needs a JVM) |
 | AFL++ | No | Coverage-guided binary fuzzing | `apt install afl++` or `brew install afl++` |
 | GDB | No | Crash analysis (Linux) | `apt install gdb` (pre-installed on most distros) |
 | LLDB | No | Crash analysis (macOS) | Pre-installed with Xcode CLT |
@@ -30,7 +48,7 @@ function-definition time, which is a syntax error on 3.9 and earlier.
 | nm, objdump, readelf | No | Binary analysis (binutils) | Pre-installed on most systems |
 | gcov | No | Code coverage (part of GCC) | Bundled with `gcc` |
 | AddressSanitizer | No | Memory error detection | Built into gcc>=4.8 and clang>=3.1 |
-| BigQuery CLI | No | GitHub Archive forensic queries (`/oss-forensics`) | Requires `GOOGLE_APPLICATION_CREDENTIALS` |
+| BigQuery CLI | No | GitHub Archive forensic queries (`/oss-forensics`) | Included with Google Cloud CLI; requires runtime credentials, a billing project, and least-privilege IAM |
 
 
 ## Python Packages
@@ -62,16 +80,16 @@ Pinned versions are in `requirements.txt`. Install with
 | google-genai | Apache 2.0 | Google Gemini native SDK |
 | botocore | Apache 2.0 | AWS Bedrock SigV4 signing (parent-only, not needed for bearer-token auth) |
 | beautifulsoup4 | MIT | HTML parsing (web scanning) |
-| orjson | Apache 2.0 / MIT | Faster JSON parse and serialise (transparent fallback to stdlib `json`) |
-| pwntools | MIT | Binary exploit analysis (ELF parsing, gadget search) — used if present, not in requirements.txt |
-| r2pipe | LGPL v3 | Python bridge for radare2 (binary disassembly, call-graph extraction, `--binary-edges`) |
+| orjson | MPL-2.0 AND (Apache-2.0 OR MIT) | Faster JSON parse and serialise (transparent fallback to stdlib `json`) |
+| pwntools | Mostly MIT; some bundled GPL/BSD-2-Clause components | Binary exploit analysis (ELF parsing, gadget search) — used if present, not in requirements.txt |
+| r2pipe | MIT | Python bridge for radare2 (binary disassembly, call-graph extraction, `--binary-edges`) |
 | pyghidra | Apache 2.0 | Ghidra bridge — in-process analysis via pyghidra's sandboxed JVM worker |
 | frida | wxWindows | Dynamic instrumentation (Frida validation bridge, coverage bridge) |
 | jsonschema | MIT | SARIF full-schema validation and orchestrated-report contract checking |
 | atheris | Apache 2.0 | Coverage-guided Python fuzzing engine — used if present, not in requirements.txt |
 | playwright | Apache 2.0 | Browser automation for web scanning (commented in requirements.txt) |
 | z3-solver | MIT | SMT-based constraint analysis (one-gadget feasibility, path validation) |
-| angr | BSD | Binary symbolic execution (overflow witnesses, path constraints) — Python >=3.12; conflicts with standalone z3 pin |
+| angr | BSD | Binary symbolic execution (overflow witnesses, path constraints) — Python >=3.12; 9.3.4 requires z3-solver 4.13.0.0 rather than RAPTOR's standard 4.15.4.0 |
 | tree-sitter + grammars | MIT | Rich inventory metadata (decorators, typed params); audit mechanical witnesses (C and Go parsing) — absent grammars degrade to no-witness, never to a wrong verdict |
 | sage-agent-sdk | -- | SAGE persistent memory (see [sage.md](sage.md)) |
 | httpx | BSD | HTTP client used by the SAGE SDK (installed alongside it) |
@@ -86,15 +104,22 @@ and are not linked as libraries. Users should review each tool's licence for
 their use case:
 
 - **Semgrep**: LGPL 2.1
-- **CodeQL**: GitHub CodeQL Terms (free for security research; restrictions on commercial use)
-- **AFL++**: Apache 2.0
+- **CodeQL**: separate
+  [GitHub CodeQL Terms and Conditions](https://github.com/github/codeql-cli-binaries/blob/main/LICENSE.md);
+  review the permitted uses and restrictions for your situation
+- **AFL++**: current upstream project is
+  [AGPL-3.0-or-later](https://github.com/AFLplusplus/AFLplusplus/blob/stable/LICENSING.md);
+  many source files are individually Apache-2.0, while bundled third-party
+  components retain their own licences; consult file-level SPDX notices
 - **GDB / binutils**: GPL v3 (called as external processes, not linked)
 - **radare2**: LGPL v3
 - **rr**: MIT
 - **Z3**: MIT
 
-Python packages carry their own licences (see the table above). All core
-dependencies are MIT or Apache 2.0.
+Python packages carry their own licences (see the table above). The licence
+column summarises upstream package metadata and bundled notices for the
+versions RAPTOR pins; review each distribution's complete licence files and
+dependency tree for your use case.
 
 ## Proxied hosts
 
@@ -112,3 +137,6 @@ jadx) happen outside RAPTOR — export the same proxy variables in the
 installing shell. Note that JVM-based installers (e.g. coursier for
 joern) ignore proxy env vars and need
 `JAVA_TOOL_OPTIONS="-Dhttps.proxyHost=<host> -Dhttps.proxyPort=<port>"`.
+
+For checksum-pinned Fedora host recipes, see
+[Fedora 44 + Copilot](fedora-copilot.md).

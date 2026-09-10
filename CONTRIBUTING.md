@@ -7,6 +7,11 @@ the code was written. For orientation on the internals — layering,
 package map, rule authoring, the sandbox model — see
 [docs/developers.md](docs/developers.md).
 
+Fedora 44 contributors should use the project-venv workflow in
+[docs/fedora-copilot.md](docs/fedora-copilot.md); it avoids modifying Fedora's
+system Python and documents the Node.js 22+ requirement for npm-installed
+agent CLIs.
+
 
 ## Getting started
 

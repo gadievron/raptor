@@ -3,6 +3,7 @@
 **Related documentation:**
 [Sandbox](sandbox.md) |
 [Dependencies](dependencies.md) |
+[Fedora 44 + Copilot](fedora-copilot.md) |
 [LLM Providers](llm.md) |
 [Static Analysis](static-analysis.md)
 
@@ -39,6 +40,82 @@ repeatable), `--json <file>` (machine-readable results),
 passed or were skipped, 1 any failure, 2 usage error.  Run it from a
 RAPTOR session (or with the libexec trust marker set, as for any
 libexec script).
+
+
+## Fedora host installer
+
+### Installer rejects root or sudo
+
+This is intentional when Python setup is enabled. Run the installer as your
+regular user; it invokes `sudo` only for RPM operations and creates the project
+venv as that user:
+
+```bash
+cd "$HOME/src/copilot/raptor"
+./packaging/fedora/install-raptor-fedora-tools.sh --repo "$PWD"
+```
+
+Root invocation is supported only for RPM-only setup:
+
+```bash
+cd "$HOME/src/copilot/raptor"
+sudo ./packaging/fedora/install-raptor-fedora-tools.sh \
+  --repo "$PWD" \
+  --no-python
+```
+
+### Old or incomplete Node.js installation
+
+Full mode needs an active Node.js major version 22 or newer and working npm.
+The installer requests Fedora Node.js 24 only when both commands are absent. It
+does not use `dnf --allowerasing`, remove packages, or change alternatives
+when an older or partial installation is active.
+
+Inspect the active commands and owning RPMs:
+
+```bash
+command -v node || true
+command -v npm || true
+node --version || true
+npm --version || true
+
+node_path="$(command -v node || true)"
+npm_path="$(command -v npm || true)"
+test -z "$node_path" || rpm -qf "$node_path"
+test -z "$npm_path" || rpm -qf "$npm_path"
+```
+
+Remove or switch the reported packages deliberately, then install Fedora's
+Node.js 24 set:
+
+```bash
+sudo dnf remove PACKAGE_NAME...
+sudo dnf install -y nodejs24 nodejs24-bin nodejs24-npm
+node --version
+npm --version
+```
+
+Do not copy the placeholder removal command until you have replaced
+`PACKAGE_NAME...` with the RPM names reported on your host.
+
+### RPM listed as unavailable
+
+The installer filters every requested RPM through `dnf repoquery`. An
+unavailable optional package is reported and omitted. Check enabled
+repositories and architecture, then preview again:
+
+```bash
+dnf repolist
+cd "$HOME/src/copilot/raptor"
+./packaging/fedora/install-raptor-fedora-tools.sh \
+  --repo "$PWD" \
+  --dry-run
+```
+
+Atheris is expected to be skipped outside x86_64. Upstream-only tools such as
+CodeQL, Joern, Ghidra, gcloud, and Ollama are intentionally not installed by
+the Fedora script; use the
+[manual host recipes](fedora-copilot.md#optional-upstream-tools-on-the-fedora-host).
 
 
 ## Sandbox
@@ -194,6 +271,16 @@ Then retry:
 
 ```bash
 raptor --copilot
+```
+
+The npm installation path requires Node.js 22 or later:
+
+```bash
+node --version
+npm --version
+npm install --global --prefix "$HOME/.local" "@github/copilot@1.0.83"
+export PATH="$HOME/.local/bin:$PATH"
+copilot --version
 ```
 
 The same launch is also refused when the target contains agent configuration

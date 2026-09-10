@@ -103,10 +103,10 @@ pyelftools==0.33
 
 # Optional: Binary symbolic execution (core/symbolic — overflow
 # witnesses, path constraints, format-string slot analysis). Heavy
-# (~1 GB installed). Requires Python >=3.12. claripy pins z3-solver==4.13.0.0; RAPTOR's SMT
-# surface (BitVec + Bool) works on both 4.13 and 4.15, so angr and
-# the standalone z3 pin below coexist at runtime.
-# angr==9.3.3
+# (~1 GB installed). Requires Python >=3.12. angr 9.3.4's claripy pins
+# z3-solver==4.13.0.0, which conflicts with the standalone 4.15.4.0
+# pin below. Host installs should isolate angr in a separate venv.
+# angr==9.3.4
 
 # Optional: SMT constraint analysis (one-gadget feasibility, path
 # validation, audit condition witnesses). Capped below 4.15.5 for
@@ -125,12 +125,12 @@ pyelftools==0.33
 # Optional: Dynamic instrumentation (packages/frida — /frida command,
 # Frida validation bridge, coverage bridge). Requires frida-server on
 # the target. Version-locked to the frida-server it pairs with.
-# frida==16.7.19
+# frida==17.17.0
 
 # Optional: SARIF full-schema validation and orchestrated-report
 # contract checking (core/sarif/parser.py). Without it, SARIF
 # validation degrades to structural checks only.
-# jsonschema==4.23.0
+# jsonschema==4.25.1
 
 # Optional: For web scanning package (uncomment to install)
 # beautifulsoup4==4.15.0

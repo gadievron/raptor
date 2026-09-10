@@ -60,10 +60,16 @@ the code.
 
 - **Claude Code** with an active subscription (Max, Pro, Team, or Enterprise) or an Anthropic API key (default interactive CLI).
 - **GitHub Copilot CLI** (optional, opt-in via `raptor --copilot`) if you want Copilot as the interactive CLI. Install/setup: https://docs.github.com/copilot/how-tos/copilot-cli
-- **Python 3.10+** and **Node.js 18+**.
+- **Python 3.10+**. npm-based Claude Code and GitHub Copilot CLI installs
+  require **Node.js 22+**.
 - **Semgrep** (`pip install semgrep`) for static analysis. CodeQL is optional but recommended.
 
 Claude remains the default launch path (`raptor` with no `--copilot`). For the analysis dispatch layer (the LLM that analyses individual findings), the selected agent CLI transport can handle everything by default with no extra provider API keys. If you want multi-model analysis (e.g. Claude + GPT + Gemini), you will need API keys for each provider. See [Using a different LLM](#using-a-different-llm) below.
+
+Fedora 44 users should follow the
+[Fedora 44 + GitHub Copilot CLI host guide](docs/fedora-copilot.md), which
+covers native bootstrap, authentication, platform caveats, and optional
+upstream tools.
 
 ## Quick Start
 
@@ -578,6 +584,7 @@ See `docs/README.md` for the full index. Key guides:
 | `docs/concepts.md` | Core concepts: two-layer model, finding lifecycle, choosing a command |
 | `docs/agentic.md` | Autonomous workflow: `/agentic` pipeline, enrichment flags, multi-model |
 | `docs/sage.md` | SAGE persistent memory: setup, HMAC key, CPU/GPU, use cases |
+| `docs/fedora-copilot.md` | Fedora 44 host setup with GitHub Copilot CLI |
 | `docs/dependencies.md` | External tools, versions, and licences |
 | `tiers/personas/README.md` | Expert persona reference |
 
