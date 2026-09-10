@@ -37,7 +37,7 @@ from core.logging import CONSOLE_LOG_LEVELS, configure_run_logging, get_logger
 from core.run.safe_io import safe_run_mkdir
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
-from core.security.cc_trust import check_repo_agent_cli_trust, set_trust_override
+from core.security.cc_trust import check_repo_agent_cli_trust
 
 logger = get_logger()
 
@@ -2183,9 +2183,9 @@ Examples:
     parser.add_argument(
         "--no-trust-repo",
         action="store_true",
-        help="Keep the strict trust checks for this run, overriding both "
-             "--trust-repo and the active project's 'config' trust marker "
-             "(raptor project trust config).",
+        help="Keep the strict trust checks for this run, overriding "
+             "--trust-repo, the active project's 'config' trust marker, "
+             "and authenticated launcher-session trust.",
     )
 
     # SCA integration
@@ -2319,26 +2319,13 @@ Examples:
     # must steer trust-marker resolution, not the session's
     # ambient project.)
 
-    # Project trust markers (schema v4): resolve the active project's
-    # 'config' / 'build' markers into args.trust_repo / args.traced_build.
-    # Per-run flags always win (negative > positive > marker > off);
-    # a banner line prints when a marker affects this run. Mirrors the
-    # persisted-binaries loading path (binary_oracle_cli).
-    from core.project.trust import apply_project_trust_flags
-    apply_project_trust_flags(args)
-
-    # Propagate --trust-repo to every target-repo trust check so each
-    # in-process consumer (cc_trust, codeql_trust, build_detector, ...)
-    # agrees on the operator's intent. New checks added here must keep
-    # this list in sync.
-    if getattr(args, "no_trust_repo", False):
-        set_trust_override(False)
-        from core.security.codeql_trust import set_trust_override as _ql_set
-        _ql_set(False)
-    elif getattr(args, "trust_repo", False):
-        set_trust_override(True)
-        from core.security.codeql_trust import set_trust_override as _ql_set
-        _ql_set(True)
+    # Resolve project markers and CLI flags to one tri-state, set both
+    # in-process trust gates, and retain the same value for every child.
+    from core.project.trust import (
+        configure_repo_trust_from_args,
+        repo_trust_cli_args,
+    )
+    repo_trust_override = configure_repo_trust_from_args(args)
 
     # --target-kind: translate the operator's choice into RAPTOR_TARGET_KIND
     # (the env override consulted by inventory's library-mode resolver). 'auto'
@@ -3001,6 +2988,7 @@ Examples:
             "--out", str(out_dir / "codeql"),
             *sandbox_passthrough,
         ]
+        codeql_cmd.extend(repo_trust_cli_args(repo_trust_override))
         if args.languages:
             codeql_cmd.extend(["--languages", args.languages])
         if args.traced_build:
@@ -3645,10 +3633,10 @@ Examples:
         if args.no_patches:
             analysis_cmd.append("--no-patches")
         # The child performs its own fresh target-config scan immediately
-        # before constructing a CLI-backed provider. Propagate only the
-        # explicit/project-derived operator override, never a cached verdict.
-        if args.trust_repo:
-            analysis_cmd.append("--trust-repo")
+        # before constructing a CLI-backed provider. Forward the resolved
+        # tri-state canonically: explicit/project decisions become one flag;
+        # None becomes no flag so authenticated session trust is inherited.
+        analysis_cmd.extend(repo_trust_cli_args(repo_trust_override))
         # P9 execution-oracle flags ride the analysis subprocess; the
         # child resolves them against the project 'dynamic' trust
         # marker (explicit flag > marker > off).

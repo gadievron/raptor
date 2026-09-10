@@ -57,6 +57,7 @@ def test_build_command_maps_tools_and_permissions(tmp_path):
             max_ai_credits=12.5,
             effort="high",
             session_id="session-1",
+            persist_session=True,
         ),
         workspace=tmp_path,
         usage_path=tmp_path / "usage.json",
@@ -69,6 +70,11 @@ def test_build_command_maps_tools_and_permissions(tmp_path):
     assert "--resume=session-1" in cmd
     assert cmd[cmd.index("--max-ai-credits") + 1] == "12.5"
     assert cmd[cmd.index("--effort") + 1] == "high"
+
+
+def test_dispatch_config_requires_explicit_persistent_session():
+    with pytest.raises(ValueError, match="persist_session"):
+        _config(session_id="session-1")
 
 
 def test_build_command_rejects_relative_binary(tmp_path):
@@ -170,6 +176,43 @@ def test_parse_nonzero_redacts_and_escapes_error():
     assert result.error
     assert "ghp_" not in result.error
     assert "\x1b" not in result.error
+
+
+def test_parse_nonzero_process_with_content_has_nonempty_error():
+    stdout = json.dumps({
+        "type": "assistant.message",
+        "data": {"content": "partial answer", "model": "gpt-5.6-sol"},
+    })
+    result = ca.parse_copilot_output(
+        stdout,
+        "",
+        returncode=9,
+        usage={},
+        model_hint="gpt-5.6-sol",
+        duration_seconds=0.1,
+    )
+    assert result.content == "partial answer"
+    assert result.error == "Copilot process exited with status 9"
+
+
+def test_parse_nonzero_json_result_with_content_has_nonempty_error():
+    stdout = "\n".join([
+        json.dumps({
+            "type": "assistant.message",
+            "data": {"content": "partial answer", "model": "gpt-5.6-sol"},
+        }),
+        json.dumps({"type": "result", "exitCode": 7}),
+    ])
+    result = ca.parse_copilot_output(
+        stdout,
+        "",
+        returncode=0,
+        usage={},
+        model_hint="gpt-5.6-sol",
+        duration_seconds=0.1,
+    )
+    assert result.content == "partial answer"
+    assert result.error == "Copilot result reported exitCode 7"
 
 
 def test_parse_nonzero_keeps_terminal_model_error_for_fallback():
@@ -280,6 +323,32 @@ def test_process_uses_stdin_and_parses_large_prompt(monkeypatch):
     assert duration >= 0
 
 
+def test_execute_normalizes_nonzero_json_result_exit(monkeypatch):
+    stdout = "\n".join([
+        json.dumps({
+            "type": "assistant.message",
+            "data": {"content": "partial answer", "model": "gpt-5.6-sol"},
+        }),
+        json.dumps({"type": "result", "exitCode": 11}),
+    ])
+    monkeypatch.setattr(
+        ca,
+        "_run_process",
+        lambda *args, **kwargs: (0, stdout, "", 0.25),
+    )
+
+    proc, duration = ca.execute_copilot_command(
+        ["/usr/bin/copilot"],
+        "prompt",
+        env={},
+        timeout_s=30,
+    )
+
+    assert proc.returncode == 11
+    assert proc.stdout == stdout
+    assert duration == pytest.approx(0.25)
+
+
 def test_process_interrupt_kills_detached_child(monkeypatch):
     monkeypatch.setenv("RAPTOR_COPILOT_TRANSPORT_DISABLED", "0")
     spawned: list[subprocess.Popen] = []
@@ -359,6 +428,7 @@ def test_run_prompt_falls_back_only_for_model_availability(
     monkeypatch, tmp_path,
 ):
     monkeypatch.setenv("RAPTOR_COPILOT_TRANSPORT_DISABLED", "0")
+    monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "test-token")
     attempted: list[str] = []
 
     def fake_run(cmd, prompt, *, env, timeout_s):
@@ -402,6 +472,7 @@ def test_run_prompt_falls_back_only_for_model_availability(
 
 def test_run_prompt_does_not_fallback_on_arbitrary_error(monkeypatch):
     monkeypatch.setenv("RAPTOR_COPILOT_TRANSPORT_DISABLED", "0")
+    monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "test-token")
     attempted: list[str] = []
 
     def fake_run(cmd, prompt, *, env, timeout_s):
@@ -461,6 +532,7 @@ def test_token_resolution_uses_launcher_broker(monkeypatch):
 
 
 def test_private_copilot_home_redirects_xdg_state(monkeypatch, tmp_path):
+    monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "test-token")
     private = tmp_path / "copilot-home"
     cache = tmp_path / "runtime-cache"
     env = ca.copilot_subprocess_env(
@@ -470,12 +542,160 @@ def test_private_copilot_home_redirects_xdg_state(monkeypatch, tmp_path):
     assert env["HOME"] == str(private.resolve())
     assert env["COPILOT_HOME"] == str(private.resolve())
     assert env["XDG_CACHE_HOME"] == str(cache.resolve())
-    assert env["XDG_CONFIG_HOME"] == str(private.resolve().parent)
-    assert env["XDG_DATA_HOME"] == str(private.resolve().parent)
+    assert env["XDG_CONFIG_HOME"] == str(private.resolve())
+    assert env["XDG_DATA_HOME"] == str(private.resolve())
     assert env["NODE_COMPILE_CACHE"] == str(
         cache.resolve() / "node-compile-cache"
     )
     assert cache.stat().st_mode & 0o777 == 0o700
+    assert private.stat().st_mode & 0o777 == 0o700
+
+
+def test_private_home_stages_only_validated_auth_state(
+    monkeypatch, tmp_path,
+):
+    operator_home = tmp_path / "operator"
+    source_home = operator_home / ".copilot"
+    source_home.mkdir(parents=True)
+    (source_home / "config.json").write_text(
+        """
+        // Operator UI and plugin state must not cross the boundary.
+        {
+          "copilotTokens": {"account-key": "token-value"},
+          "loggedInUsers": [
+            {"host": "github.com", "login": "octocat"},
+          ],
+          "lastLoggedInUser": {
+            "host": "github.com",
+            "login": "octocat",
+          },
+          "installedPlugins": ["operator-plugin"],
+          "trustedFolders": ["/operator/private"]
+        }
+        """,
+        encoding="utf-8",
+    )
+    (source_home / "settings.json").write_text(
+        '{"model": "operator-setting"}',
+        encoding="utf-8",
+    )
+    (source_home / "session-store.db").write_bytes(b"operator-session")
+    monkeypatch.setenv("HOME", str(operator_home))
+    monkeypatch.delenv("COPILOT_HOME", raising=False)
+    for name in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        ca,
+        "resolve_copilot_github_token",
+        lambda *, mint=False: None,
+    )
+    private = tmp_path / "private"
+
+    env = ca.copilot_subprocess_env(copilot_home=private)
+
+    staged = json.loads(
+        (private / "config.json").read_text(encoding="utf-8")
+    )
+    assert staged == {
+        "copilotTokens": {"account-key": "token-value"},
+        "loggedInUsers": [
+            {"host": "github.com", "login": "octocat"},
+        ],
+        "lastLoggedInUser": {
+            "host": "github.com",
+            "login": "octocat",
+        },
+    }
+    assert env["HOME"] == str(private.resolve())
+    assert env["COPILOT_HOME"] == str(private.resolve())
+    assert (private / "config.json").stat().st_mode & 0o777 == 0o600
+    assert private.stat().st_mode & 0o777 == 0o700
+    assert not (private / "settings.json").exists()
+    assert not (private / "session-store.db").exists()
+    assert not (private / "installed-plugins.lock").exists()
+
+
+def test_private_home_prefers_parent_token_over_operator_config(
+    monkeypatch, tmp_path,
+):
+    private = tmp_path / "private"
+    monkeypatch.setattr(
+        ca,
+        "resolve_copilot_github_token",
+        lambda *, mint=False: "parent-token",
+    )
+    monkeypatch.setattr(
+        ca,
+        "stage_copilot_auth_config",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("auth config should not be staged")
+        ),
+    )
+
+    env = ca.copilot_subprocess_env(copilot_home=private)
+
+    assert env["COPILOT_GITHUB_TOKEN"] == "parent-token"
+    assert not (private / "config.json").exists()
+
+
+def test_private_home_auth_staging_failure_is_fail_closed(
+    monkeypatch, tmp_path,
+):
+    operator_home = tmp_path / "operator"
+    source_home = operator_home / ".copilot"
+    source_home.mkdir(parents=True)
+    (source_home / "config.json").write_text(
+        json.dumps({
+            "copilotTokens": {"account-key": "x" * 20_000},
+            "loggedInUsers": [
+                {"host": "github.com", "login": "octocat"},
+            ],
+            "lastLoggedInUser": {
+                "host": "github.com",
+                "login": "octocat",
+            },
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(operator_home))
+    monkeypatch.delenv("COPILOT_HOME", raising=False)
+    monkeypatch.setattr(
+        ca,
+        "resolve_copilot_github_token",
+        lambda *, mint=False: None,
+    )
+    private = tmp_path / "private"
+
+    with pytest.raises(RuntimeError, match="isolated subprocess"):
+        ca.copilot_subprocess_env(copilot_home=private)
+
+    assert private.is_dir()
+    assert private.stat().st_mode & 0o777 == 0o700
+    assert not (private / "config.json").exists()
+
+
+def test_auth_staging_rejects_invalid_field_types(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "config.json").write_text(
+        json.dumps({
+            "copilotTokens": {"account-key": {"token": "nested"}},
+            "loggedInUsers": [
+                {"host": "github.com", "login": "octocat"},
+            ],
+            "lastLoggedInUser": {
+                "host": "github.com",
+                "login": "octocat",
+            },
+        }),
+        encoding="utf-8",
+    )
+    private = tmp_path / "private"
+
+    with pytest.raises(RuntimeError, match="validated"):
+        ca.stage_copilot_auth_config(private, source_home=source)
+
+    assert not (private / "config.json").exists()
 
 
 def test_configured_fallback_models_override_catalog(monkeypatch):
@@ -532,6 +752,7 @@ def test_copilot_env_prefers_copilot_keyring(monkeypatch):
 
 def test_private_agent_file_contains_system_prompt(monkeypatch):
     monkeypatch.setenv("RAPTOR_COPILOT_TRANSPORT_DISABLED", "0")
+    monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "test-token")
     observed: dict[str, str] = {}
 
     def fake_run(cmd, prompt, *, env, timeout_s):
@@ -558,6 +779,229 @@ def test_private_agent_file_contains_system_prompt(monkeypatch):
     assert "trusted system instruction" in observed["agent"]
     assert "untrusted user content" not in observed["agent"]
     assert observed["prompt"] == "untrusted user content"
+
+
+def test_stateless_prompt_uses_disposable_private_home(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setenv("RAPTOR_COPILOT_TRANSPORT_DISABLED", "0")
+    observed: dict[str, Path] = {}
+
+    def fake_env(**kwargs):
+        home = Path(kwargs["copilot_home"])
+        observed["home"] = home
+        observed["cache"] = Path(kwargs["runtime_cache"])
+        assert home.is_dir()
+        assert home.stat().st_mode & 0o777 == 0o700
+        assert observed["cache"].is_relative_to(home)
+        observed["cache"].mkdir(mode=0o700)
+        (home / "config.json").write_text(
+            '{"copilotTokens":{"test":"secret"}}',
+            encoding="utf-8",
+        )
+        return {}
+
+    def fake_run(cmd, prompt, *, env, timeout_s):
+        stdout = "\n".join([
+            json.dumps({
+                "type": "assistant.message",
+                "data": {"content": "ok", "model": "gpt-5.6-sol"},
+            }),
+            json.dumps({"type": "result", "exitCode": 0}),
+        ])
+        return 0, stdout, "", 0.1
+
+    monkeypatch.setattr(ca, "copilot_subprocess_env", fake_env)
+    monkeypatch.setattr(ca, "_run_process", fake_run)
+    monkeypatch.setattr(ca, "_load_usage", lambda path: {})
+
+    result = ca.run_copilot_prompt(_config(), "prompt")
+
+    assert result.error is None
+    assert not observed["home"].exists()
+    assert not observed["cache"].exists()
+
+
+def test_stateless_prompt_cleans_secret_state_on_auth_error(monkeypatch):
+    observed: dict[str, Path] = {}
+
+    def fake_env(**kwargs):
+        home = Path(kwargs["copilot_home"])
+        observed["home"] = home
+        (home / "config.json").write_text("secret", encoding="utf-8")
+        raise RuntimeError("auth staging failed")
+
+    monkeypatch.setattr(ca, "copilot_subprocess_env", fake_env)
+
+    with pytest.raises(RuntimeError, match="auth staging failed"):
+        ca.run_copilot_prompt(_config(), "prompt")
+
+    assert not observed["home"].exists()
+
+
+def test_stateless_prompt_cleans_secret_state_on_timeout(monkeypatch):
+    observed: dict[str, Path] = {}
+
+    def fake_env(**kwargs):
+        home = Path(kwargs["copilot_home"])
+        observed["home"] = home
+        (home / "config.json").write_text("secret", encoding="utf-8")
+        return {}
+
+    def fake_run(cmd, prompt, *, env, timeout_s):
+        raise subprocess.TimeoutExpired(cmd, timeout_s)
+
+    monkeypatch.setattr(ca, "copilot_subprocess_env", fake_env)
+    monkeypatch.setattr(ca, "_run_process", fake_run)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        ca.run_copilot_prompt(_config(), "prompt")
+
+    assert not observed["home"].exists()
+
+
+def test_disposable_auth_state_is_outside_model_visible_roots(
+    monkeypatch, tmp_path,
+):
+    operator_home = tmp_path / "operator"
+    operator_config = operator_home / ".copilot"
+    operator_config.mkdir(parents=True)
+    (operator_config / "config.json").write_text(
+        json.dumps({
+            "copilotTokens": {"account-key": "token-value"},
+            "loggedInUsers": [
+                {"host": "github.com", "login": "octocat"},
+            ],
+            "lastLoggedInUser": {
+                "host": "github.com",
+                "login": "octocat",
+            },
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(operator_home))
+    monkeypatch.delenv("COPILOT_HOME", raising=False)
+    monkeypatch.setattr(
+        ca,
+        "resolve_copilot_github_token",
+        lambda *, mint=False: None,
+    )
+
+    run_dir = tmp_path / "run"
+    workspace = run_dir / ".copilot-workspace-test"
+    raptor_root = tmp_path / "raptor"
+    target = tmp_path / "target"
+    context = tmp_path / "context"
+    for path in (workspace, raptor_root, target, context):
+        path.mkdir(parents=True)
+    model_roots = (
+        workspace,
+        run_dir,
+        raptor_root,
+        target,
+        context,
+    )
+
+    with ca.disposable_copilot_state(
+        forbidden_roots=model_roots,
+    ) as private_home:
+        env = ca.copilot_subprocess_env(copilot_home=private_home)
+        settings_path = ca.stage_copilot_sandbox_settings(
+            private_home,
+            workspace=run_dir,
+            readonly_paths=(
+                str(raptor_root),
+                str(target),
+                str(context),
+            ),
+        )
+        config_path = private_home / "config.json"
+        assert "token-value" in config_path.read_text(encoding="utf-8")
+        for root in model_roots:
+            assert not config_path.resolve().is_relative_to(root.resolve())
+
+        policy = json.loads(
+            settings_path.read_text(encoding="utf-8")
+        )["sandbox"]["userPolicy"]["filesystem"]
+        granted_roots = (
+            *policy["readwritePaths"],
+            *policy["readonlyPaths"],
+        )
+        assert str(private_home.resolve()) not in granted_roots
+        for raw_root in granted_roots:
+            assert not config_path.resolve().is_relative_to(
+                Path(raw_root).resolve()
+            )
+        for name in (
+            "HOME",
+            "COPILOT_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+        ):
+            assert Path(env[name]).resolve().is_relative_to(
+                private_home.resolve()
+            )
+        captured_home = private_home
+
+    assert not captured_home.exists()
+
+
+def test_disposable_auth_state_fails_closed_on_overlapping_root(
+    monkeypatch, tmp_path,
+):
+    model_root = tmp_path / "model-root"
+    model_root.mkdir()
+    planted = model_root / "raptor-copilot-state-test"
+
+    def fake_mkdtemp(*, prefix):
+        planted.mkdir(mode=0o700)
+        return str(planted)
+
+    monkeypatch.setattr(ca.tempfile, "mkdtemp", fake_mkdtemp)
+
+    with pytest.raises(RuntimeError, match="model-readable root"):
+        with ca.disposable_copilot_state(
+            forbidden_roots=(model_root,),
+        ):
+            pytest.fail("overlapping secret state was yielded")
+
+    assert not planted.exists()
+
+
+def test_persistent_prompt_keeps_operator_home_available(monkeypatch):
+    monkeypatch.setenv("RAPTOR_COPILOT_TRANSPORT_DISABLED", "0")
+    observed: dict[str, object] = {}
+
+    def fake_env(**kwargs):
+        observed.update(kwargs)
+        return {}
+
+    def fake_run(cmd, prompt, *, env, timeout_s):
+        stdout = "\n".join([
+            json.dumps({
+                "type": "assistant.message",
+                "data": {"content": "ok", "model": "gpt-5.6-sol"},
+            }),
+            json.dumps({
+                "type": "result",
+                "sessionId": "session-1",
+                "exitCode": 0,
+            }),
+        ])
+        return 0, stdout, "", 0.1
+
+    monkeypatch.setattr(ca, "copilot_subprocess_env", fake_env)
+    monkeypatch.setattr(ca, "_run_process", fake_run)
+    monkeypatch.setattr(ca, "_load_usage", lambda path: {})
+
+    result = ca.run_copilot_prompt(
+        _config(persist_session=True),
+        "prompt",
+    )
+
+    assert result.session_id == "session-1"
+    assert observed == {"mint_github_token": False}
 
 
 def test_stage_copilot_agent_is_private(tmp_path):

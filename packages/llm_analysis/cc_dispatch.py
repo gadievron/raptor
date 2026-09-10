@@ -23,6 +23,7 @@ from core.llm.cc_adapter import (
     parse_cc_structured,
     system_prompt_file_for,
 )
+from core.llm.schema_normalization import normalize_json_schema
 from core.security.log_sanitisation import escape_nonprintable
 from core.security.redaction import redact_secrets
 from packages.llm_analysis.dispatch import DispatchResult
@@ -93,8 +94,7 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
         # required all unenforced) or rejects outright. Reuse the one
         # canonical converter so both lanes constrain identically; it
         # passes already-normalised schemas through unchanged.
-        from core.llm.providers import _normalize_schema
-        effective_schema = _normalize_schema(effective_schema)
+        effective_schema = normalize_json_schema(effective_schema)
     config = CCDispatchConfig(
         claude_bin=claude_bin,
         tools="Read,Grep,Glob",

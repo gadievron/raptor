@@ -430,6 +430,90 @@ def test_generate_structured_passes_schema_to_subprocess(monkeypatch) -> None:
     assert json.loads(raw)["answer"] == 42
 
 
+def test_generate_structured_normalizes_descriptive_schema_on_wire(
+    monkeypatch,
+) -> None:
+    import core.llm.cc_adapter as _cc_adapter
+    captured: dict[str, Any] = {}
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        captured["cmd"] = list(cmd)
+        return _stream_result({"answer": 42, "explanation": "computed"})
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
+    p = ClaudeCodeLLMProvider(_config())
+    result, _raw = p.generate_structured(
+        "compute",
+        {
+            "answer": "int - computed answer",
+            "explanation": "description",
+        },
+    )
+
+    schema_idx = captured["cmd"].index("--json-schema") + 1
+    sent = json.loads(captured["cmd"][schema_idx])
+    assert sent == {
+        "type": "object",
+        "properties": {
+            "answer": {
+                "type": "integer",
+                "description": "computed answer",
+            },
+            "explanation": {
+                "type": "string",
+                "description": "description",
+            },
+        },
+        "required": ["answer", "explanation"],
+    }
+    assert result == {"answer": 42, "explanation": "computed"}
+
+
+def test_generate_structured_preserves_complex_json_schema_on_wire(
+    monkeypatch,
+) -> None:
+    import core.llm.cc_adapter as _cc_adapter
+    captured: dict[str, Any] = {}
+    schema = {
+        "type": "object",
+        "properties": {
+            "findings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "enum": ["confirmed", "rejected"],
+                        },
+                        "detail": {
+                            "anyOf": [
+                                {"type": "string"},
+                                {"type": "null"},
+                            ],
+                        },
+                    },
+                    "required": ["status"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["findings"],
+        "additionalProperties": False,
+    }
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        captured["cmd"] = list(cmd)
+        return _stream_result({"findings": []})
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
+    p = ClaudeCodeLLMProvider(_config())
+    p.generate_structured("compute", schema)
+
+    schema_idx = captured["cmd"].index("--json-schema") + 1
+    assert json.loads(captured["cmd"][schema_idx]) == schema
+
+
 def test_generate_structured_prefers_structured_output(monkeypatch) -> None:
     """CLI >= 2.1.x delivers --json-schema output via a StructuredOutput
     tool call: assistant text is empty, the object arrives on the result
@@ -639,6 +723,38 @@ def test_turn_invokes_subprocess_with_json_schema(monkeypatch) -> None:
     schema = json.loads(captured["cmd"][schema_idx])
     assert schema["properties"]["type"]["enum"] == ["tool_call", "complete"]
     assert schema["properties"]["tool_name"]["enum"] == ["search"]
+
+
+def test_stateless_turn_normalizes_schema_on_wire(monkeypatch) -> None:
+    import core.llm.cc_adapter as _cc_adapter
+    captured: dict[str, Any] = {}
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        captured["cmd"] = list(cmd)
+        return _stream_result({"type": "complete", "final_text": "ok"})
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
+    p = ClaudeCodeLLMProvider(_config())
+    monkeypatch.setattr(
+        p,
+        "_build_turn_schema",
+        lambda tools: {
+            "type": "string - tool_call or complete",
+            "final_text": "string",
+        },
+    )
+
+    out = p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="hi")])],
+        tools=_TOOL_DEFS,
+    )
+
+    schema_idx = captured["cmd"].index("--json-schema") + 1
+    sent = json.loads(captured["cmd"][schema_idx])
+    assert sent["type"] == "object"
+    assert sent["properties"]["type"]["type"] == "string"
+    assert sent["properties"]["final_text"]["type"] == "string"
+    assert out.stop_reason is StopReason.COMPLETE
 
 
 def test_turn_malformed_tool_call_falls_back_to_text(monkeypatch) -> None:
@@ -958,6 +1074,48 @@ def test_resumable_second_turn_uses_resume(monkeypatch) -> None:
 
     assert "start" not in captured["prompt"]
     assert "tool result" in captured["prompt"]
+
+
+def test_resumable_turn_normalizes_schema_on_every_wire_call(
+    monkeypatch,
+) -> None:
+    import core.llm.cc_adapter as _cc_adapter
+    calls: list[list[str]] = []
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        calls.append(list(cmd))
+        return _stream_result(
+            {"type": "complete", "final_text": "done"},
+            session_id="sess-schema",
+        )
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
+    p = ClaudeCodeLLMProvider(_config(), resumable=True)
+    monkeypatch.setattr(
+        p,
+        "_build_turn_schema",
+        lambda tools: {
+            "type": "string - tool_call or complete",
+            "final_text": "string",
+        },
+    )
+
+    messages = [Message(role="user", content=[TextBlock(text="start")])]
+    p.turn(messages, _TOOL_DEFS)
+    messages.extend([
+        Message(role="assistant", content=[TextBlock(text="done")]),
+        Message(role="user", content=[TextBlock(text="continue")]),
+    ])
+    p.turn(messages, _TOOL_DEFS)
+
+    assert "--resume" not in calls[0]
+    assert "--resume" in calls[1]
+    for cmd in calls:
+        schema_idx = cmd.index("--json-schema") + 1
+        sent = json.loads(cmd[schema_idx])
+        assert sent["type"] == "object"
+        assert sent["properties"]["type"]["type"] == "string"
+        assert sent["properties"]["final_text"]["type"] == "string"
 
 
 def test_resumable_second_turn_omits_system_prompt(monkeypatch) -> None:

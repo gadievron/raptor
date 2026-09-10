@@ -17,6 +17,7 @@ import signal
 import subprocess
 import tempfile
 import time
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,12 @@ _NONINTERACTIVE_ENV = "RAPTOR_NONINTERACTIVE"
 _AGENT_NAME = "raptor-subprocess"
 _STDOUT_CAP_DEFAULT = 64 * 1024 * 1024
 _STDERR_CAP_DEFAULT = 8 * 1024 * 1024
+_COPILOT_CONFIG_MAX_BYTES = 256 * 1024
+_COPILOT_AUTH_CONFIG_MAX_BYTES = 64 * 1024
+_COPILOT_AUTH_MAX_ACCOUNTS = 32
+_COPILOT_AUTH_MAX_KEY_BYTES = 1024
+_COPILOT_AUTH_MAX_TOKEN_BYTES = 16 * 1024
+_COPILOT_AUTH_MAX_IDENTITY_BYTES = 1024
 _SECRET_ENV_VARS = (
     "COPILOT_GITHUB_TOKEN",
     "GH_TOKEN",
@@ -210,6 +217,183 @@ def resolve_copilot_github_token(*, mint: bool = False) -> str | None:
     return token
 
 
+def _operator_copilot_home() -> Path:
+    configured = os.environ.get("COPILOT_HOME", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".copilot"
+
+
+def _prepare_private_copilot_home(path: Path) -> Path:
+    try:
+        if path.is_symlink():
+            raise RuntimeError("private Copilot home is a symlink")
+        path.mkdir(parents=True, mode=0o700, exist_ok=True)
+        if path.is_symlink() or not path.is_dir():
+            raise RuntimeError("private Copilot home is not a directory")
+        path.chmod(0o700)
+    except OSError as exc:
+        raise RuntimeError("unable to create private Copilot home") from exc
+    return path
+
+
+def _bounded_auth_string(
+    value: Any,
+    *,
+    label: str,
+    max_bytes: int,
+) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{label} must be a nonempty string")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{label} is not valid UTF-8") from exc
+    if len(encoded) > max_bytes:
+        raise ValueError(f"{label} exceeds the size limit")
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise ValueError(f"{label} contains control characters")
+    return value
+
+
+def _validated_copilot_auth_config(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        raise ValueError("Copilot config must be an object")
+
+    raw_tokens = data.get("copilotTokens")
+    if (
+        not isinstance(raw_tokens, dict)
+        or not raw_tokens
+        or len(raw_tokens) > _COPILOT_AUTH_MAX_ACCOUNTS
+    ):
+        raise ValueError("copilotTokens must be a bounded nonempty object")
+    tokens: dict[str, str] = {}
+    for raw_key, raw_value in raw_tokens.items():
+        key = _bounded_auth_string(
+            raw_key,
+            label="copilotTokens key",
+            max_bytes=_COPILOT_AUTH_MAX_KEY_BYTES,
+        )
+        value = _bounded_auth_string(
+            raw_value,
+            label="copilotTokens value",
+            max_bytes=_COPILOT_AUTH_MAX_TOKEN_BYTES,
+        )
+        tokens[key] = value
+
+    raw_users = data.get("loggedInUsers")
+    if (
+        not isinstance(raw_users, list)
+        or not raw_users
+        or len(raw_users) > _COPILOT_AUTH_MAX_ACCOUNTS
+    ):
+        raise ValueError("loggedInUsers must be a bounded nonempty list")
+    users: list[dict[str, str]] = []
+    identities: set[tuple[str, str]] = set()
+    for index, raw_user in enumerate(raw_users):
+        if (
+            not isinstance(raw_user, dict)
+            or set(raw_user) != {"host", "login"}
+        ):
+            raise ValueError(
+                f"loggedInUsers[{index}] must contain only host and login"
+            )
+        host = _bounded_auth_string(
+            raw_user.get("host"),
+            label=f"loggedInUsers[{index}].host",
+            max_bytes=_COPILOT_AUTH_MAX_IDENTITY_BYTES,
+        )
+        login = _bounded_auth_string(
+            raw_user.get("login"),
+            label=f"loggedInUsers[{index}].login",
+            max_bytes=_COPILOT_AUTH_MAX_IDENTITY_BYTES,
+        )
+        identity = (host, login)
+        if identity in identities:
+            raise ValueError("loggedInUsers contains duplicate identities")
+        identities.add(identity)
+        users.append({"host": host, "login": login})
+
+    raw_last = data.get("lastLoggedInUser")
+    if (
+        not isinstance(raw_last, dict)
+        or set(raw_last) != {"host", "login"}
+    ):
+        raise ValueError(
+            "lastLoggedInUser must contain only host and login"
+        )
+    last = {
+        "host": _bounded_auth_string(
+            raw_last.get("host"),
+            label="lastLoggedInUser.host",
+            max_bytes=_COPILOT_AUTH_MAX_IDENTITY_BYTES,
+        ),
+        "login": _bounded_auth_string(
+            raw_last.get("login"),
+            label="lastLoggedInUser.login",
+            max_bytes=_COPILOT_AUTH_MAX_IDENTITY_BYTES,
+        ),
+    }
+    if (last["host"], last["login"]) not in identities:
+        raise ValueError("lastLoggedInUser is not present in loggedInUsers")
+
+    staged = {
+        "copilotTokens": tokens,
+        "loggedInUsers": users,
+        "lastLoggedInUser": last,
+    }
+    encoded = json.dumps(
+        staged,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if len(encoded) > _COPILOT_AUTH_CONFIG_MAX_BYTES:
+        raise ValueError("validated Copilot auth config exceeds the size limit")
+    return staged
+
+
+def stage_copilot_auth_config(
+    copilot_home: str | Path,
+    *,
+    source_home: str | Path | None = None,
+) -> Path:
+    """Copy only validated authentication state into a private home."""
+    from core.json import save_json
+    from core.json.jsonc import load_jsonc
+    from core.security.capped_read import read_capped
+
+    private_home = _prepare_private_copilot_home(Path(copilot_home))
+    source_root = (
+        Path(source_home).expanduser()
+        if source_home is not None
+        else _operator_copilot_home()
+    )
+    if source_root.is_symlink():
+        raise RuntimeError(
+            "unable to stage Copilot authentication from a symlinked home"
+        )
+    source = source_root / "config.json"
+    destination = private_home / "config.json"
+    if source.absolute() == destination.absolute():
+        raise RuntimeError(
+            "refusing to overwrite the operator Copilot configuration"
+        )
+    raw = read_capped(source, _COPILOT_CONFIG_MAX_BYTES)
+    if raw is None:
+        raise RuntimeError(
+            "unable to read a bounded regular Copilot authentication config"
+        )
+    try:
+        decoded = raw.decode("utf-8")
+        staged = _validated_copilot_auth_config(load_jsonc(decoded))
+        save_json(destination, staged, mode=0o600, sort_keys=True)
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise RuntimeError(
+            "unable to stage validated Copilot authentication config"
+        ) from exc
+    return destination
+
+
 def copilot_subprocess_env(
     *,
     mint_github_token: bool = False,
@@ -227,19 +411,26 @@ def copilot_subprocess_env(
         value = os.environ.get(key)
         if value:
             env[key] = value
-    selected_home = (
-        str(Path(copilot_home).resolve())
-        if copilot_home is not None
-        else os.environ.get("COPILOT_HOME")
-    )
+    private_home = copilot_home is not None
+    selected_home = None
+    if private_home:
+        selected_home = str(
+            _prepare_private_copilot_home(Path(copilot_home)).resolve()
+        )
+    else:
+        selected_home = os.environ.get("COPILOT_HOME")
     if selected_home:
         env["HOME"] = selected_home
         env["COPILOT_HOME"] = selected_home
         private_root = Path(selected_home)
-        state_root = private_root.parent
+        state_root = private_root if private_home else private_root.parent
         cache_root = Path(
             runtime_cache
-            or Path.home() / ".cache" / "raptor" / "copilot-cli"
+            or (
+                private_root / ".cache" / "raptor" / "copilot-cli"
+                if private_home
+                else Path.home() / ".cache" / "raptor" / "copilot-cli"
+            )
         ).expanduser().resolve()
         cache_root.mkdir(parents=True, mode=0o700, exist_ok=True)
         cache_root.chmod(0o700)
@@ -267,6 +458,13 @@ def copilot_subprocess_env(
     token = resolve_copilot_github_token(mint=mint_github_token)
     if token:
         env["COPILOT_GITHUB_TOKEN"] = token
+    elif private_home:
+        try:
+            stage_copilot_auth_config(Path(selected_home))
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "Copilot authentication unavailable for isolated subprocess"
+            ) from exc
     return env
 
 
@@ -330,9 +528,14 @@ class CopilotDispatchConfig:
     effort: str | None = None
     max_ai_credits: float | None = None
     session_id: str | None = None
+    persist_session: bool = False
     allow_model_fallback: bool = True
     sandbox: bool = False
     mint_github_token: bool = False
+
+    def __post_init__(self) -> None:
+        if self.session_id and not self.persist_session:
+            raise ValueError("session_id requires persist_session=True")
 
 
 @dataclass
@@ -512,6 +715,37 @@ def disposable_copilot_workspace(parent: Path):
             shutil.rmtree(workspace, ignore_errors=True)
 
 
+@contextlib.contextmanager
+def disposable_copilot_state(
+    *,
+    forbidden_roots: Iterable[str | Path],
+) -> Iterator[Path]:
+    """Private Copilot state outside every model-readable filesystem root."""
+    state = Path(tempfile.mkdtemp(prefix="raptor-copilot-state-"))
+    try:
+        state = _prepare_private_copilot_home(state)
+        resolved_state = state.resolve(strict=True)
+        for raw_root in forbidden_roots:
+            try:
+                root = Path(raw_root).expanduser().resolve(strict=True)
+            except OSError as exc:
+                raise RuntimeError(
+                    "unable to validate a model-readable Copilot root"
+                ) from exc
+            if resolved_state == root or root in resolved_state.parents:
+                raise RuntimeError(
+                    "private Copilot state overlaps a model-readable root"
+                )
+        yield state
+    finally:
+        import shutil
+
+        try:
+            shutil.rmtree(state)
+        except FileNotFoundError:
+            pass
+
+
 def build_copilot_command(
     config: CopilotDispatchConfig,
     *,
@@ -574,6 +808,30 @@ def build_copilot_command(
         # Copilot CLI versions. Keep one harmless tool visible but deny it.
         cmd.extend(["--available-tools=view", "--deny-tool=read"])
     return cmd
+
+
+def _iter_copilot_events(stdout: str) -> Iterator[dict[str, Any]]:
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict):
+            yield event
+
+
+def _copilot_result_exit_code(stdout: str) -> int:
+    result_exit = 0
+    for event in _iter_copilot_events(stdout):
+        if event.get("type") != "result":
+            continue
+        exit_code = event.get("exitCode")
+        if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+            result_exit = exit_code
+    return result_exit
 
 
 def _run_process(
@@ -757,8 +1015,17 @@ def execute_copilot_command(
         timeout_s=timeout_s,
         cwd=cwd,
     )
+    result_exit = _copilot_result_exit_code(stdout)
+    effective_returncode = (
+        returncode if returncode != 0 or result_exit == 0 else result_exit
+    )
     return (
-        subprocess.CompletedProcess(cmd, returncode, stdout, stderr),
+        subprocess.CompletedProcess(
+            cmd,
+            effective_returncode,
+            stdout,
+            stderr,
+        ),
         duration,
     )
 
@@ -831,16 +1098,7 @@ def parse_copilot_output(
     session_id: str | None = None
     event_error = ""
     result_exit = 0
-    for line in stdout.splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(event, dict):
-            continue
+    for event in _iter_copilot_events(stdout):
         event_type = event.get("type")
         data = event.get("data")
         if event_type == "assistant.message" and isinstance(data, dict):
@@ -852,7 +1110,7 @@ def parse_copilot_output(
             if isinstance(sid, str) and sid:
                 session_id = sid
             exit_code = event.get("exitCode")
-            if isinstance(exit_code, int):
+            if isinstance(exit_code, int) and not isinstance(exit_code, bool):
                 result_exit = exit_code
         elif isinstance(event_type, str) and "error" in event_type.lower():
             if isinstance(data, dict):
@@ -867,9 +1125,16 @@ def parse_copilot_output(
     if returncode != 0 or result_exit != 0 or not content:
         from core.security.prompt_output_sanitise import escape_nonprintable
 
-        cause = event_error or stderr.strip()
-        if not cause and not content:
-            cause = "Copilot produced no final assistant.message"
+        cause = event_error.strip() or stderr.strip()
+        if not cause:
+            if result_exit != 0:
+                cause = f"Copilot result reported exitCode {result_exit}"
+                if returncode != 0 and returncode != result_exit:
+                    cause += f" after process exit status {returncode}"
+            elif returncode != 0:
+                cause = f"Copilot process exited with status {returncode}"
+            elif not content:
+                cause = "Copilot produced no final assistant.message"
         if len(cause) > 2000:
             cause = f"{cause[:500]}\n...[middle omitted]...\n{cause[-1500:]}"
         error = escape_nonprintable(redact_secrets(cause))
@@ -980,25 +1245,41 @@ def run_copilot_prompt(
                 usage_path=usage_path,
                 model=model,
             )
-            try:
-                returncode, stdout, stderr, duration = _run_process(
-                    cmd,
-                    prompt,
-                    env=copilot_subprocess_env(
-                        mint_github_token=config.mint_github_token,
-                    ),
-                    timeout_s=config.timeout_s,
+            state_context = (
+                contextlib.nullcontext(None)
+                if config.persist_session
+                else disposable_copilot_state(
+                    forbidden_roots=(workspace, *config.add_dirs),
                 )
-            except subprocess.TimeoutExpired:
-                raise
-            current = parse_copilot_output(
-                stdout,
-                stderr,
-                returncode=returncode,
-                usage=_load_usage(usage_path),
-                model_hint=model,
-                duration_seconds=duration,
             )
+            with state_context as copilot_home:
+                env_kwargs: dict[str, Any] = {
+                    "mint_github_token": config.mint_github_token,
+                }
+                if copilot_home is not None:
+                    env_kwargs.update({
+                        "copilot_home": copilot_home,
+                        "runtime_cache": (
+                            copilot_home / ".copilot-runtime-cache"
+                        ),
+                    })
+                try:
+                    returncode, stdout, stderr, duration = _run_process(
+                        cmd,
+                        prompt,
+                        env=copilot_subprocess_env(**env_kwargs),
+                        timeout_s=config.timeout_s,
+                    )
+                except subprocess.TimeoutExpired:
+                    raise
+                current = parse_copilot_output(
+                    stdout,
+                    stderr,
+                    returncode=returncode,
+                    usage=_load_usage(usage_path),
+                    model_hint=model,
+                    duration_seconds=duration,
+                )
         result = merge_copilot_attempts(last, current)
         result.attempted_models = tuple(attempted)
         last = result
@@ -1023,6 +1304,7 @@ __all__ = [
     "copilot_subprocess_env",
     "configured_copilot_fallback_models",
     "copilot_transport_disabled",
+    "disposable_copilot_state",
     "execute_copilot_command",
     "is_model_unavailable_error",
     "merge_copilot_attempts",
@@ -1032,6 +1314,7 @@ __all__ = [
     "run_copilot_prompt",
     "is_session_unavailable_error",
     "stage_copilot_agent",
+    "stage_copilot_auth_config",
     "stage_copilot_sandbox_settings",
     "stage_raptor_workspace_links",
     "disposable_copilot_workspace",

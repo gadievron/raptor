@@ -1632,6 +1632,7 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
                     configured_copilot_fallback_models,
                     copilot_subprocess_env,
                     copilot_transport_disabled,
+                    disposable_copilot_state,
                     execute_copilot_command,
                     is_model_unavailable_error,
                     parse_copilot_output,
@@ -1669,7 +1670,15 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
                         max_credits = parsed_credits
 
                 result = None
-                with scratch_dir("raptor-copilot-build-") as raw_workspace:
+                with (
+                    scratch_dir("raptor-copilot-build-") as raw_workspace,
+                    disposable_copilot_state(
+                        forbidden_roots=(
+                            raw_workspace,
+                            self.repo_path,
+                        ),
+                    ) as copilot_home,
+                ):
                     workspace = Path(raw_workspace)
                     config = CopilotDispatchConfig(
                         copilot_bin=agent_bin,
@@ -1686,12 +1695,6 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
                         workspace,
                         system_prompt=system,
                         tools=config.tools,
-                    )
-                    copilot_home = workspace / ".copilot-home"
-                    copilot_home.mkdir(mode=0o700, exist_ok=True)
-                    (workspace / "node-compile-cache").mkdir(
-                        mode=0o700,
-                        exist_ok=True,
                     )
                     stage_copilot_sandbox_settings(
                         copilot_home,

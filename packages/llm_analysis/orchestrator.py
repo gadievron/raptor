@@ -16,13 +16,14 @@ External-LLM failure falls back to the selected agent CLI when trusted.
 import contextlib
 import copy
 import logging
+import math
 import os
 import sys
 import threading
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from core.reporting.formatting import format_elapsed as _format_elapsed
 from packages.llm_analysis.cc_dispatch import invoke_cc_simple
@@ -51,6 +52,49 @@ class CostTracker:
         self._thinking_tokens = 0
         self._max_cost = max_cost  # 0 = no limit
         self._per_model: dict[str, float] = {}
+        self._authoritative_spend_getter: Callable[[], float] | None = None
+        self._provider_spend_getter: Callable[[], float] | None = None
+
+    def bind_authoritative_spend(
+        self,
+        getter: Callable[[], float],
+        *,
+        provider_spend_getter: Callable[[], float] | None = None,
+    ) -> None:
+        """Bind the shared client's authoritative spend surface.
+
+        Dispatch-result accounting cannot attribute every failed call safely
+        under concurrency, while ``LLMClient`` retains those costs on provider
+        ledgers. Soft gates and final reporting therefore use the maximum of
+        locally-accounted result cost and this authoritative source.
+        """
+        with self._lock:
+            self._authoritative_spend_getter = getter
+            self._provider_spend_getter = provider_spend_getter
+
+    @staticmethod
+    def _read_spend(getter: Callable[[], float] | None) -> float:
+        if getter is None:
+            return 0.0
+        try:
+            value = float(getter())
+        except (TypeError, ValueError, RuntimeError):
+            logger.debug(
+                "authoritative LLM spend read failed", exc_info=True,
+            )
+            return 0.0
+        if not math.isfinite(value):
+            return 0.0
+        return max(0.0, value)
+
+    def _spend_snapshot(self) -> tuple[float, float, float]:
+        with self._lock:
+            accounted = self._total_cost
+            authoritative_getter = self._authoritative_spend_getter
+            provider_getter = self._provider_spend_getter
+        authoritative = self._read_spend(authoritative_getter)
+        provider_spend = self._read_spend(provider_getter)
+        return max(accounted, authoritative), accounted, provider_spend
 
     def add_cost(self, model_name: str, cost: float, tokens: int = 0,
                  thinking_tokens: int = 0) -> None:
@@ -63,8 +107,7 @@ class CostTracker:
 
     @property
     def total_cost(self) -> float:
-        with self._lock:
-            return self._total_cost
+        return self._spend_snapshot()[0]
 
     @property
     def fraction_used(self) -> float:
@@ -84,8 +127,7 @@ class CostTracker:
         """Current spend as fraction of budget. 0 if no budget set."""
         if self._max_cost <= 0:
             return 0.0
-        with self._lock:
-            return self._total_cost / self._max_cost
+        return self.total_cost / self._max_cost
 
     # ---- Deprecated budget-cutoff API ----
     #
@@ -137,6 +179,19 @@ class CostTracker:
     def should_skip_phase(self, n_calls: int, model_name: str,
                           cutoff_ratio: float, phase_name: str,
                           is_cc: bool = False) -> bool:
+        """Compatibility wrapper around :meth:`check_phase_budget`."""
+        return self.check_phase_budget(
+            n_calls, model_name, cutoff_ratio, phase_name, is_cc=is_cc,
+        )[0]
+
+    def check_phase_budget(
+        self,
+        n_calls: int,
+        model_name: str,
+        cutoff_ratio: float,
+        phase_name: str,
+        is_cc: bool = False,
+    ) -> tuple[bool, str]:
         """Pre-check: would running this phase likely exceed the budget?
 
         Prevents starting a parallel dispatch that would be mostly cancelled
@@ -147,17 +202,24 @@ class CostTracker:
         token rate.
         """
         if self._max_cost <= 0:
-            return False
+            return False, ""
         estimate = self.estimate_cost(n_calls, model_name=model_name,
                                       is_cc=is_cc)
-        with self._lock:
-            projected = self._total_cost + estimate
-        if projected > self._max_cost * cutoff_ratio:
+        spent = self.total_cost
+        projected = spent + estimate
+        phase_cap = self._max_cost * cutoff_ratio
+        if projected > phase_cap:
+            reason = (
+                f"{phase_name} skipped: ${spent:.2f} spent + "
+                f"${estimate:.2f} estimated exceeds the "
+                f"{int(cutoff_ratio * 100)}% phase budget "
+                f"(${phase_cap:.2f} of ${self._max_cost:.2f})"
+            )
             logger.info("Skipping %s — estimated $%.2f "
                         "would push total to $%.2f (budget: $%.2f)",
                         phase_name, estimate, projected, self._max_cost)
-            return True
-        return False
+            return True, reason
+        return False, ""
 
     def estimate_cost(self, n_findings: int, n_consensus_models: int = 0,
                       model_name: str = "", is_cc: bool = False) -> float:
@@ -187,17 +249,157 @@ class CostTracker:
         return (analysis_calls + consensus_calls) * avg_cost
 
     def get_summary(self) -> dict[str, Any]:
+        effective, accounted, provider_spend = self._spend_snapshot()
         with self._lock:
             summary = {
-                "total_cost": round(self._total_cost, 4),
+                "total_cost": round(effective, 4),
+                "accounted_result_cost": round(accounted, 4),
                 "total_tokens": self._total_tokens,
                 "max_cost": self._max_cost,
-                "budget_used_percent": round(self._budget_ratio() * 100, 1) if self._max_cost > 0 else 0,
+                "budget_limited": self._max_cost > 0,
+                "budget_remaining": (
+                    round(max(0.0, self._max_cost - effective), 4)
+                    if self._max_cost > 0 else None
+                ),
+                "budget_used_percent": (
+                    round((effective / self._max_cost) * 100, 1)
+                    if self._max_cost > 0 else 0
+                ),
                 "cost_by_model": {k: round(v, 4) for k, v in self._per_model.items()},
             }
+            if self._provider_spend_getter is not None:
+                summary["authoritative_provider_spend"] = round(
+                    provider_spend, 4,
+                )
+            unattributed = max(0.0, effective - accounted)
+            if unattributed > 0:
+                summary["unattributed_provider_spend"] = round(
+                    unattributed, 4,
+                )
             if self._thinking_tokens > 0:
                 summary["thinking_tokens"] = self._thinking_tokens
             return summary
+
+
+def _dispatch_with_client(
+    client: Any,
+    prompt: str,
+    schema: dict[str, Any] | None,
+    system_prompt: str | None,
+    temperature: float,
+    model_config: Any,
+    *,
+    exclude_fallback_to: set[str] | None = None,
+    provider_kwargs: dict[str, Any] | None = None,
+    call_class: str = "agentic-orchestrator",
+) -> Any:
+    """Run one orchestrator call through ``LLMClient`` accounting."""
+    from packages.llm_analysis.dispatch import DispatchResult
+
+    kwargs: dict[str, Any] = {
+        "model_config": model_config,
+        "temperature": temperature,
+        "exclude_fallback_to": exclude_fallback_to,
+        "call_class": call_class,
+    }
+    kwargs.update(provider_kwargs or {})
+    if schema:
+        response = client.generate_structured(
+            prompt=prompt,
+            schema=schema,
+            system_prompt=system_prompt,
+            **kwargs,
+        )
+        result = response.result
+        quality = 1.0
+        if isinstance(result, dict) and "error" not in result:
+            from core.llm.response_validation import (
+                validate_structured_response,
+            )
+            validated = validate_structured_response(result, schema)
+            result = validated.data
+            quality = validated.quality
+        return DispatchResult(
+            result=result,
+            cost=response.cost,
+            tokens=response.tokens_used,
+            model=response.model,
+            duration=response.duration,
+            quality=quality,
+            resolved_model=response.resolved_model,
+            thinking_tokens=getattr(response, "thinking_tokens", 0) or 0,
+            native_usage=getattr(response, "native_usage", {}),
+            attempted_models=getattr(response, "attempted_models", ()),
+        )
+
+    response = client.generate(
+        prompt=prompt,
+        system_prompt=system_prompt,
+        **kwargs,
+    )
+    return DispatchResult(
+        result={"content": response.content},
+        cost=response.cost,
+        tokens=response.tokens_used,
+        model=response.model,
+        duration=response.duration,
+        resolved_model=response.resolved_model,
+        thinking_tokens=getattr(response, "thinking_tokens", 0) or 0,
+        native_usage=getattr(response, "native_usage", {}),
+        attempted_models=getattr(response, "attempted_models", ()),
+    )
+
+
+def _budget_exception_reason(exc: BaseException) -> str:
+    """Return the concrete typed budget message from a wrapped error."""
+    from core.llm.client import LLMBudgetExceededError
+
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, LLMBudgetExceededError):
+            return str(current)
+        if current.__cause__ is not None:
+            current = current.__cause__
+        elif not current.__suppress_context__:
+            current = current.__context__
+        else:
+            current = None
+    return str(exc)
+
+
+def _reported_fired_models(
+    client: Any | None,
+    fallback_entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge client provenance with selected-agent fallback attribution."""
+    client_entries = client.get_fired_models() if client is not None else []
+    live_fallbacks = [
+        dict(entry)
+        for entry in fallback_entries
+        if int(entry.get("calls") or 0) > 0
+    ]
+    if not live_fallbacks:
+        return client_entries
+
+    from core.llm.config import canonical_agent_cli_provider
+
+    fallback_providers = {
+        canonical_agent_cli_provider(str(entry.get("provider") or ""))
+        or str(entry.get("provider") or "").lower()
+        for entry in live_fallbacks
+    }
+    retained = []
+    for entry in client_entries:
+        provider = str(entry.get("provider") or "")
+        canonical = (
+            canonical_agent_cli_provider(provider)
+            or provider.lower()
+        )
+        if canonical not in fallback_providers:
+            retained.append(entry)
+    return [*retained, *live_fallbacks]
 
 
 def _cc_fallback_role_resolution(role_resolution: dict) -> dict:
@@ -227,18 +429,47 @@ def _classify_absent_consensus(
 ) -> tuple[bool, bool]:
     """Classify a consensus stage that produced no verdicts.
 
-    Returns ``(budget_skipped, all_errored)``. The budget gate skips
-    PRE-dispatch and returns ``[]`` with zero spend; any dispatch
-    record at all (success, error, abort backfill) means calls were
-    attempted, so the absence of consensus is all-errored. The spend
-    delta alone under-detects: raised errors (bad key, provider
-    outage) never book cost, so an all-raised stage leaves spend flat
-    and would be mislabelled budget-skipped — telling the operator to
-    raise the budget when the action is "fix the API failure".
+    Returns ``(budget_skipped, all_errored)``. Budget gates and
+    mid-batch typed exhaustion now emit explicit budget records; those
+    take precedence over spend/error heuristics. Otherwise any record
+    or spend proves calls were attempted and all errored.
     """
+    if any(
+        isinstance(record, dict)
+        and (
+            record.get("error_type") == "budget"
+            or record.get("status") == "skipped_over_budget"
+        )
+        for record in dispatch_records
+    ):
+        return True, False
     if dispatch_records or spent_delta > 0:
         return False, True
     return True, False
+
+
+def _select_primary_dispatch_result(
+    model_results: list[dict[str, Any]],
+    adapter: FindingAdapter,
+) -> dict[str, Any]:
+    """Select a primary result, preferring budget skips over failures.
+
+    A mixed all-error model panel can contain genuine provider failures
+    followed by the typed terminal budget record that stopped the batch.
+    With no successful verdict, the terminal outcome is "not dispatched over
+    budget", not whichever provider error happened to complete first.
+    """
+    if model_results and all("error" in result for result in model_results):
+        budget_records = [
+            result for result in model_results
+            if (
+                result.get("error_type") == "budget"
+                or result.get("status") == "skipped_over_budget"
+            )
+        ]
+        if budget_records:
+            return dict(budget_records[0])
+    return adapter.select_primary_with_error_fallback(model_results)
 
 
 def _cap_findings(findings: list, max_findings: int) -> list:
@@ -862,7 +1093,13 @@ def orchestrate(
         )
 
     # Cost tracking
-    max_cost = getattr(llm_config, 'max_cost_per_scan', 0) if llm_config else 0
+    cost_tracking_enabled = bool(
+        getattr(llm_config, "enable_cost_tracking", True)
+    ) if llm_config else False
+    max_cost = (
+        getattr(llm_config, "max_cost_per_scan", 0)
+        if llm_config and cost_tracking_enabled else 0
+    )
     cost_tracker = CostTracker(max_cost=max_cost or 0)
     if rank_cost:
         cost_tracker.add_cost(rank_model or "ranking", rank_cost)
@@ -928,7 +1165,12 @@ def orchestrate(
         get_profile_for,
     )
     from core.security.prompt_telemetry import defense_telemetry
-    from packages.llm_analysis.dispatch import DispatchResult, dispatch_task
+    from packages.llm_analysis.dispatch import (
+        DispatchResult,
+        _is_budget_result,
+        _make_budget_skip_records,
+        dispatch_task,
+    )
     from packages.llm_analysis.tasks import (
         AggregationTask,
         AnalysisTask,
@@ -954,12 +1196,16 @@ def orchestrate(
         # External LLM: dispatch via generate_structured/generate
         from core.llm.client import LLMClient
         client = LLMClient(llm_config)
+        cost_tracker.bind_authoritative_spend(
+            lambda: client.authoritative_spend_usd,
+            provider_spend_getter=lambda: client.provider_spend_usd,
+        )
         if rank_cost:
             # Pre-charge the rank spend against this client's budget:
             # the LLMClient budget gate is instance-local, and without
             # this the operator's --max-cost would bound the ranking
             # client and the analysis client independently.
-            client.total_cost += rank_cost
+            client.record_external_spend(rank_cost)
 
         # Multi-model duplicate guard: when a primary model fails and
         # the client silently falls back, the fallback target may
@@ -977,55 +1223,14 @@ def orchestrate(
 
         def dispatch_fn(prompt, schema, system_prompt, temperature, model):
             other_active = _active_analysis_names - {model.model_name}
-            if schema:
-                response = client.generate_structured(
-                    prompt=prompt, schema=schema, system_prompt=system_prompt,
-                    model_config=model, temperature=temperature,
-                    exclude_fallback_to=other_active,
-                )
-                result = response.result
-                quality = 1.0
-                if isinstance(result, dict) and "error" not in result:
-                    from core.llm.response_validation import (
-                        validate_structured_response,
-                    )
-                    validated = validate_structured_response(result, schema)
-                    result = validated.data
-                    quality = validated.quality
-                return DispatchResult(
-                    result=result, cost=response.cost,
-                    tokens=response.tokens_used, model=response.model,
-                    duration=response.duration, quality=quality,
-                    resolved_model=response.resolved_model,
-                    # getattr: StructuredResponse doesn't carry the
-                    # field yet — wired here so the tracker's
-                    # thinking-token telemetry fires as soon as the
-                    # provider layer surfaces it.
-                    thinking_tokens=getattr(
-                        response, "thinking_tokens", 0,
-                    ) or 0,
-                    native_usage=getattr(response, "native_usage", {}),
-                    attempted_models=getattr(
-                        response, "attempted_models", (),
-                    ),
-                )
-            response = client.generate(
-                prompt=prompt, system_prompt=system_prompt,
-                model_config=model, temperature=temperature,
+            return _dispatch_with_client(
+                client,
+                prompt,
+                schema,
+                system_prompt,
+                temperature,
+                model,
                 exclude_fallback_to=other_active,
-            )
-            return DispatchResult(
-                result={"content": response.content}, cost=response.cost,
-                tokens=response.tokens_used, model=response.model,
-                duration=response.duration,
-                resolved_model=response.resolved_model,
-                thinking_tokens=getattr(
-                    response, "thinking_tokens", 0,
-                ) or 0,
-                native_usage=getattr(response, "native_usage", {}),
-                attempted_models=getattr(
-                    response, "attempted_models", (),
-                ),
             )
 
         dispatch_mode = "external_llm"
@@ -1105,7 +1310,9 @@ def orchestrate(
     }
     disabled_fallback_keys: set[tuple[str, str]] = set()
     _probe_failed = False
+    _probe_budget_error = ""
     if dispatch_fn and _models_to_probe:
+        from core.llm.client import is_budget_exceeded_error
         from core.security.envelope_probe import probe_envelope_compatibility
         # Per-model profile collection. Pre-fix the outer `profile`
         # was set ONCE to the primary's profile and used unchanged
@@ -1185,6 +1392,14 @@ def orchestrate(
                     _probe_model, _pprofile, dispatch_fn, strict=True,
                 )
             except RuntimeError as _probe_err:
+                if is_budget_exceeded_error(_probe_err):
+                    # The strict probe wraps provider exceptions in a
+                    # RuntimeError. Preserve the typed budget cause as a
+                    # terminal budget stop, not an envelope incompatibility.
+                    _probe_budget_error = _budget_exception_reason(
+                        _probe_err,
+                    )
+                    break
                 defense_telemetry.set_probe_result(_pname, False)
                 if _required_probe:
                     _probe_failed = True
@@ -1223,7 +1438,11 @@ def orchestrate(
                 # its own telemetry record.
                 continue
             _probed_profiles.append(_pprofile)
-        if disabled_fallback_keys and llm_config is not None:
+        if (
+            not _probe_budget_error
+            and disabled_fallback_keys
+            and llm_config is not None
+        ):
             llm_config.fallback_models = [
                 model
                 for model in llm_config.fallback_models
@@ -1240,9 +1459,9 @@ def orchestrate(
         # so any model that lacks a defence layer disables it
         # globally, matching the comment's "strictest COMPATIBLE
         # profile" semantics.
-        if not _probe_failed and _probed_profiles:
+        if not _probe_budget_error and not _probe_failed and _probed_profiles:
             profile = _intersect_profiles(_probed_profiles)
-        if _probe_failed:
+        if not _probe_budget_error and _probe_failed:
             # `_failed_probe_models` is guaranteed non-empty here:
             # both code paths that set `_probe_failed=True` (the
             # `except RuntimeError` branch and the
@@ -1304,12 +1523,33 @@ def orchestrate(
             client, pending_claims=pending_fp_claims,
         )
 
-    analysis_results = dispatch_task(
-        AnalysisTask(profile=profile, allow_unreachable=allow_unreachable),
-        findings, dispatch_fn, role_resolution,
-        results_by_id, cost_tracker, max_parallel,
-        prefilter_fn=prefilter_fn,
+    analysis_task = AnalysisTask(
+        profile=profile,
+        allow_unreachable=allow_unreachable,
     )
+    if _probe_budget_error:
+        probe_budget_reason = (
+            "analysis skipped before finding dispatch: "
+            f"{_probe_budget_error}"
+        )
+        print(
+            f"\n  analysis: skipped ({len(findings)} items) — "
+            "budget exhausted during envelope probe",
+            file=sys.stderr,
+        )
+        analysis_results = _make_budget_skip_records(
+            analysis_task,
+            findings,
+            probe_budget_reason,
+            model_name=analysis_model_name,
+        )
+    else:
+        analysis_results = dispatch_task(
+            analysis_task,
+            findings, dispatch_fn, role_resolution,
+            results_by_id, cost_tracker, max_parallel,
+            prefilter_fn=prefilter_fn,
+        )
 
     # Adjudicate the fall-through cheap "clear_fp" claims against the
     # full verdicts so agentic:<rule_id> cells accumulate trust and
@@ -1330,10 +1570,10 @@ def orchestrate(
     # trusted agent CLI. Copilot then owns its catalog model fallback chain.
     if (dispatch_mode == "external_llm"
             and analysis_results
-            and all("error" in r for r in analysis_results)):
+            and all("error" in r for r in analysis_results)
+            and not any(_is_budget_result(r) for r in analysis_results)):
         if selected_agent_cli == "copilot":
             from core.llm.config import _build_copilotcli_config
-            from core.llm.providers import CopilotCLILLMProvider
 
             copilot_config = (
                 None if block_cc_dispatch else _build_copilotcli_config()
@@ -1349,7 +1589,16 @@ def orchestrate(
                     "back to GitHub Copilot CLI",
                     file=sys.stderr,
                 )
-                copilot_provider = CopilotCLILLMProvider(copilot_config)
+                # Reuse the original client so the external attempts,
+                # fallback probe, and fallback analysis share one atomic
+                # reservation/accounting cap. Direct provider calls here
+                # previously bypassed --max-cost entirely.
+                copilot_provider = client._get_provider(copilot_config)
+                fallback_exclusions = {
+                    model.model_name
+                    for model in (client.config.fallback_models or [])
+                    if getattr(model, "model_name", None)
+                }
                 copilot_fired_entry = {
                     "provider": "copilotcli",
                     "alias": copilot_config.model_name,
@@ -1362,75 +1611,37 @@ def orchestrate(
                 def dispatch_fn(
                     prompt, schema, system_prompt, temperature, model,
                 ):
-                    if schema:
-                        response = copilot_provider.generate_structured(
+                    response_result = None
+                    try:
+                        response_result = _dispatch_with_client(
+                            client,
                             prompt,
                             schema,
-                            system_prompt=system_prompt,
-                            temperature=temperature,
-                            sandbox=True,
+                            system_prompt,
+                            temperature,
+                            # Keep the original configured key so the
+                            # Copilot provider instance retains the model
+                            # selected by its internal catalog fallback.
+                            copilot_config,
+                            exclude_fallback_to=fallback_exclusions,
+                            provider_kwargs={"sandbox": True},
+                            call_class="agentic-selected-agent-fallback",
                         )
-                        result = response.result
-                        quality = 1.0
-                        if isinstance(result, dict) and "error" not in result:
-                            from core.llm.response_validation import (
-                                validate_structured_response,
-                            )
-                            validated = validate_structured_response(
-                                result,
-                                schema,
-                            )
-                            result = validated.data
-                            quality = validated.quality
+                        return response_result
+                    finally:
                         selected = (
-                            copilot_provider.selected_model
-                            or response.model
+                            getattr(copilot_provider, "selected_model", None)
+                            or getattr(response_result, "model", "")
                             or copilot_config.model_name
                         )
                         copilot_fired_entry.update(
                             alias=selected,
                             resolved=selected,
-                            calls=copilot_provider.call_count,
+                            calls=int(
+                                getattr(copilot_provider, "call_count", 0)
+                                or 0
+                            ),
                         )
-                        return DispatchResult(
-                            result=result,
-                            cost=response.cost,
-                            tokens=response.tokens_used,
-                            model=response.model,
-                            duration=response.duration,
-                            quality=quality,
-                            resolved_model=response.resolved_model,
-                            thinking_tokens=response.thinking_tokens,
-                            native_usage=response.native_usage,
-                            attempted_models=response.attempted_models,
-                        )
-                    response = copilot_provider.generate(
-                        prompt,
-                        system_prompt=system_prompt,
-                        temperature=temperature,
-                        sandbox=True,
-                    )
-                    selected = (
-                        copilot_provider.selected_model
-                        or response.model
-                        or copilot_config.model_name
-                    )
-                    copilot_fired_entry.update(
-                        alias=selected,
-                        resolved=selected,
-                        calls=copilot_provider.call_count,
-                    )
-                    return DispatchResult(
-                        result={"content": response.content},
-                        cost=response.cost,
-                        tokens=response.tokens_used,
-                        model=response.model,
-                        duration=response.duration,
-                        resolved_model=response.resolved_model,
-                        thinking_tokens=response.thinking_tokens,
-                        native_usage=response.native_usage,
-                        attempted_models=response.attempted_models,
-                    )
 
                 from core.security.envelope_probe import (
                     probe_envelope_compatibility,
@@ -1439,6 +1650,7 @@ def orchestrate(
                 copilot_profile = CONSERVATIVE
                 copilot_probe_failed = False
                 copilot_probe_error = ""
+                copilot_probe_budget_error = ""
                 probe_cost_before = copilot_provider.total_cost
                 probe_tokens_before = copilot_provider.total_tokens
                 probe_thinking_before = (
@@ -1454,40 +1666,90 @@ def orchestrate(
                     copilot_probe_failed = not probe_result.compatible
                     copilot_probe_error = probe_result.error or ""
                 except RuntimeError as exc:
-                    copilot_probe_failed = True
-                    copilot_probe_error = str(exc)
+                    if is_budget_exceeded_error(exc):
+                        copilot_probe_budget_error = (
+                            _budget_exception_reason(exc)
+                        )
+                    else:
+                        copilot_probe_failed = True
+                        copilot_probe_error = str(exc)
                 finally:
                     probe_model = (
-                        copilot_provider.selected_model
+                        getattr(copilot_provider, "selected_model", None)
                         or copilot_config.model_name
                     )
                     copilot_fired_entry.update(
                         alias=probe_model,
                         resolved=probe_model,
-                        calls=copilot_provider.call_count,
-                    )
-                    cost_tracker.add_cost(
-                        probe_model,
-                        copilot_provider.total_cost - probe_cost_before,
-                        copilot_provider.total_tokens - probe_tokens_before,
-                        (
-                            copilot_provider.total_thinking_tokens
-                            - probe_thinking_before
+                        calls=int(
+                            getattr(copilot_provider, "call_count", 0)
+                            or 0
                         ),
                     )
-                defense_telemetry.set_probe_result(
-                    probe_model,
-                    not copilot_probe_failed,
-                )
+                    probe_cost = max(
+                        0.0,
+                        copilot_provider.total_cost - probe_cost_before,
+                    )
+                    probe_tokens = max(
+                        0,
+                        copilot_provider.total_tokens - probe_tokens_before,
+                    )
+                    probe_thinking = max(
+                        0,
+                        copilot_provider.total_thinking_tokens
+                        - probe_thinking_before,
+                    )
+                    if probe_cost or probe_tokens or probe_thinking:
+                        cost_tracker.add_cost(
+                            probe_model,
+                            probe_cost,
+                            probe_tokens,
+                            probe_thinking,
+                        )
 
-                fallback_allowed = not copilot_probe_failed
-                if copilot_probe_failed and not accept_weakened_defenses:
+                fallback_allowed = (
+                    not copilot_probe_failed
+                    and not copilot_probe_budget_error
+                )
+                if copilot_probe_budget_error:
+                    reason = (
+                        "Copilot fallback analysis skipped: "
+                        f"{copilot_probe_budget_error}"
+                    )
+                    print(
+                        "\n  Copilot fallback: skipped — budget exhausted "
+                        "during envelope probe",
+                        file=sys.stderr,
+                    )
+                    analysis_results = _make_budget_skip_records(
+                        AnalysisTask(
+                            profile=copilot_profile,
+                            allow_unreachable=allow_unreachable,
+                        ),
+                        findings,
+                        reason,
+                        model_name=probe_model,
+                    )
+                else:
+                    defense_telemetry.set_probe_result(
+                        probe_model,
+                        not copilot_probe_failed,
+                    )
+
+                if (
+                    not copilot_probe_budget_error
+                    and copilot_probe_failed
+                    and not accept_weakened_defenses
+                ):
                     print(
                         "\n  ✗ Copilot fallback envelope probe failed: "
                         f"{copilot_probe_error}",
                         file=sys.stderr,
                     )
-                elif copilot_probe_failed:
+                elif (
+                    not copilot_probe_budget_error
+                    and copilot_probe_failed
+                ):
                     from core.security.rule_of_two import (
                         NonInteractiveError,
                         require_interactive_for_weakened_defenses,
@@ -1513,7 +1775,7 @@ def orchestrate(
                     )
 
                     selected_model = (
-                        copilot_provider.selected_model
+                        getattr(copilot_provider, "selected_model", None)
                         or copilot_config.model_name
                     )
                     try:
@@ -1579,7 +1841,6 @@ def orchestrate(
             and claude_config is not None
         ):
             print("\n  ⚠️  All external LLM calls failed — falling back to Claude Code", file=sys.stderr)
-            cc_calls = 0
             cc_fired_entry = {
                 "provider": "claudecode",
                 "alias": claude_config.model_name,
@@ -1588,27 +1849,40 @@ def orchestrate(
                 "calls": 0,
             }
             fallback_fired_models.append(cc_fired_entry)
+            claude_provider = client._get_provider(claude_config)
+            fallback_exclusions = {
+                model.model_name
+                for model in (client.config.fallback_models or [])
+                if getattr(model, "model_name", None)
+            }
 
             def dispatch_fn(prompt, schema, system_prompt, temperature, model):
-                nonlocal cc_calls
-                # Same dedicated system-prompt channel as the primary
-                # CC dispatch path above — never fold into user content.
-                response = invoke_cc_simple(
-                    prompt,
-                    schema,
-                    repo_path,
-                    claude_bin,
-                    out_dir,
-                    system_prompt=system_prompt,
-                )
-                cc_calls += 1
-                selected = response.model or claude_config.model_name
-                cc_fired_entry.update(
-                    alias=selected,
-                    resolved=selected,
-                    calls=cc_calls,
-                )
-                return response
+                response_result = None
+                try:
+                    response_result = _dispatch_with_client(
+                        client,
+                        prompt,
+                        schema,
+                        system_prompt,
+                        temperature,
+                        claude_config,
+                        exclude_fallback_to=fallback_exclusions,
+                        call_class="agentic-selected-agent-fallback",
+                    )
+                    return response_result
+                finally:
+                    selected = (
+                        getattr(response_result, "model", "")
+                        or claude_config.model_name
+                    )
+                    cc_fired_entry.update(
+                        alias=selected,
+                        resolved=selected,
+                        calls=int(
+                            getattr(claude_provider, "call_count", 0)
+                            or 0
+                        ),
+                    )
 
             from core.security.envelope_probe import (
                 probe_envelope_compatibility,
@@ -1632,6 +1906,12 @@ def orchestrate(
 
             cc_probe_failed = False
             cc_probe_error = ""
+            cc_probe_budget_error = ""
+            probe_cost_before = claude_provider.total_cost
+            probe_tokens_before = claude_provider.total_tokens
+            probe_thinking_before = (
+                claude_provider.total_thinking_tokens
+            )
             try:
                 probe_result = probe_envelope_compatibility(
                     claude_config,
@@ -1642,33 +1922,77 @@ def orchestrate(
                 cc_probe_failed = not probe_result.compatible
                 cc_probe_error = probe_result.error or ""
             except RuntimeError as exc:
-                cc_probe_failed = True
-                cc_probe_error = str(exc)
-            defense_telemetry.set_probe_result(
-                (
-                    cc_probe_result.model
-                    if cc_probe_result is not None
-                    and cc_probe_result.model
-                    else claude_config.model_name
-                ),
-                not cc_probe_failed,
+                if is_budget_exceeded_error(exc):
+                    cc_probe_budget_error = _budget_exception_reason(exc)
+                else:
+                    cc_probe_failed = True
+                    cc_probe_error = str(exc)
+            probe_model = (
+                cc_probe_result.model
+                if cc_probe_result is not None
+                and cc_probe_result.model
+                else claude_config.model_name
             )
-            if cc_probe_result is not None:
+            probe_cost = max(
+                0.0,
+                claude_provider.total_cost - probe_cost_before,
+            )
+            probe_tokens = max(
+                0,
+                claude_provider.total_tokens - probe_tokens_before,
+            )
+            probe_thinking = max(
+                0,
+                claude_provider.total_thinking_tokens
+                - probe_thinking_before,
+            )
+            if probe_cost or probe_tokens or probe_thinking:
                 cost_tracker.add_cost(
-                    cc_probe_result.model or claude_config.model_name,
-                    cc_probe_result.cost,
-                    cc_probe_result.tokens,
-                    cc_probe_result.thinking_tokens,
+                    probe_model,
+                    probe_cost,
+                    probe_tokens,
+                    probe_thinking,
                 )
 
-            fallback_allowed = not cc_probe_failed
-            if cc_probe_failed and not accept_weakened_defenses:
+            fallback_allowed = (
+                not cc_probe_failed and not cc_probe_budget_error
+            )
+            if cc_probe_budget_error:
+                reason = (
+                    "Claude fallback analysis skipped: "
+                    f"{cc_probe_budget_error}"
+                )
+                print(
+                    "\n  Claude fallback: skipped — budget exhausted "
+                    "during envelope probe",
+                    file=sys.stderr,
+                )
+                analysis_results = _make_budget_skip_records(
+                    AnalysisTask(
+                        profile=cc_profile,
+                        allow_unreachable=allow_unreachable,
+                    ),
+                    findings,
+                    reason,
+                    model_name=probe_model,
+                )
+            else:
+                defense_telemetry.set_probe_result(
+                    probe_model,
+                    not cc_probe_failed,
+                )
+
+            if (
+                not cc_probe_budget_error
+                and cc_probe_failed
+                and not accept_weakened_defenses
+            ):
                 print(
                     "\n  ✗ Claude fallback envelope probe failed: "
                     f"{cc_probe_error}",
                     file=sys.stderr,
                 )
-            elif cc_probe_failed:
+            elif not cc_probe_budget_error and cc_probe_failed:
                 from core.security.rule_of_two import (
                     NonInteractiveError,
                     require_interactive_for_weakened_defenses,
@@ -1688,12 +2012,7 @@ def orchestrate(
             if fallback_allowed:
                 from dataclasses import replace
 
-                selected_model = (
-                    cc_probe_result.model
-                    if cc_probe_result is not None
-                    and cc_probe_result.model
-                    else claude_config.model_name
-                )
+                selected_model = probe_model
                 selected_config = replace(
                     claude_config,
                     model_name=selected_model,
@@ -1767,7 +2086,9 @@ def orchestrate(
         if len(model_results) == 1:
             primary = model_results[0]
         else:
-            primary = _finding_adapter.select_primary_with_error_fallback(model_results)
+            primary = _select_primary_dispatch_result(
+                model_results, _finding_adapter,
+            )
             primary["multi_model_analyses"] = [
                 _finding_adapter.extract_analysis_record(
                     r, r.get("analysed_by", "?"),
@@ -2308,6 +2629,9 @@ def orchestrate(
                                 if r.get("cross_family_disputed"))
     retries = sum(1 for r in per_finding_results if r.get("retried"))
     low_confidence = sum(1 for r in per_finding_results if r.get("low_confidence"))
+    budget_skipped = sum(
+        1 for r in per_finding_results if _is_budget_result(r)
+    )
 
     analysis_models_list = role_resolution.get("analysis_models", [])
     reported_analysis_model = (
@@ -2355,8 +2679,14 @@ def orchestrate(
         "aggregated": aggregation is not None,
         "calibrated_aggregation": calibrated_summary,
         "findings_dispatched": len(findings),
-        "findings_analysed": sum(1 for r in per_finding_results if "error" not in r),
-        "findings_failed": sum(1 for r in per_finding_results if "error" in r),
+        "findings_analysed": sum(
+            1 for r in per_finding_results if "error" not in r
+        ),
+        "findings_failed": sum(
+            1 for r in per_finding_results
+            if "error" in r and not _is_budget_result(r)
+        ),
+        "findings_skipped_over_budget": budget_skipped,
         "failed_by_model": _per_model_failure_summary(analysis_results),
         "structural_groups": len(groups),
         "cross_family_checked": cross_family_checked,
@@ -2379,10 +2709,9 @@ def orchestrate(
         # otherwise). Feeds the run provenance manifest. Empty on CC-prep /
         # subprocess-dispatch paths (no in-process client calls) — alias-level
         # attribution still lives in `analysis_models` above.
-        "fired_models": [
-            *(client.get_fired_models() if client is not None else []),
-            *fallback_fired_models,
-        ],
+        "fired_models": _reported_fired_models(
+            client, fallback_fired_models,
+        ),
         "stability_events": n_stability,
     }
 
@@ -2422,6 +2751,10 @@ def orchestrate(
             parts.append(f"{blocked} blocked")
         else:
             parts.append(f"{orch['findings_failed']} failed")
+    if orch["findings_skipped_over_budget"] > 0:
+        parts.append(
+            f"{orch['findings_skipped_over_budget']} skipped over budget"
+        )
     parts.append(f"{_format_elapsed(orch['elapsed_seconds'])} elapsed")
     if cost_total > 0:
         parts.append(f"${cost_total:.2f}")
@@ -2740,7 +3073,12 @@ def _per_model_failure_summary(
     """
     by_model: dict[str, dict[str, Any]] = {}
     for r in analysis_results:
-        if not isinstance(r, dict) or "error" not in r:
+        if (
+            not isinstance(r, dict)
+            or "error" not in r
+            or r.get("error_type") == "budget"
+            or r.get("status") == "skipped_over_budget"
+        ):
             continue
         model = r.get("analysed_by") or "?"
         entry = by_model.setdefault(model, {"count": 0, "first_error": None})
@@ -2916,7 +3254,11 @@ def _merge_results(
     exploits_generated = 0
     patches_generated = 0
 
-    from core.run.finding_status import SKIPPED, set_status
+    from core.run.finding_status import (
+        SKIPPED,
+        SKIPPED_OVER_BUDGET,
+        set_status,
+    )
     for finding in results:
         fid = finding.get("finding_id")
         cc = cc_by_id.get(fid)
@@ -2934,6 +3276,24 @@ def _merge_results(
                     set_status(
                         finding, SKIPPED, skip_reason="not_dispatched",
                     )
+            elif (
+                cc.get("error_type") == "budget"
+                or cc.get("status") == SKIPPED_OVER_BUDGET
+            ):
+                # Budget exhaustion is an intentional dispatch stop, not
+                # an analysis crash. Preserve the concrete producer reason
+                # without copying the internal ``error`` marker that the
+                # dispatch pipeline uses to keep later LLM stages away.
+                reason = (
+                    cc.get("skip_reason")
+                    or cc.get("error")
+                    or "LLM budget exhausted before finding dispatch"
+                )
+                set_status(
+                    finding,
+                    SKIPPED_OVER_BUDGET,
+                    skip_reason=str(reason),
+                )
             else:
                 # Real per-finding analysis failure. The canonical
                 # field is ``error`` (derive_status keys on it — the

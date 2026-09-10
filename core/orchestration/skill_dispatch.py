@@ -247,6 +247,48 @@ _LIFECYCLE_TIMEOUT_S = 30   # lifecycle helpers are mechanical; should be instan
 _CHECKLIST_TIMEOUT_S = 300  # build_checklist parses every source file
 
 
+@dataclass(frozen=True)
+class SkillTarget:
+    """Dispatch identity plus the filesystem root, when one exists.
+
+    URL targets remain opaque strings for lifecycle and prompt identity.
+    Local targets retain the existing resolved-path contract used by the
+    agent CLI adapters and sandbox.
+    """
+
+    identity: str
+    filesystem_root: Path | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.identity, str) or not self.identity:
+            raise ValueError("skill target identity must be a non-empty string")
+        if self.filesystem_root is not None:
+            object.__setattr__(
+                self,
+                "filesystem_root",
+                Path(self.filesystem_root).resolve(),
+            )
+
+    @classmethod
+    def local(cls, target: str | Path) -> "SkillTarget":
+        root = Path(target).resolve()
+        return cls(identity=str(root), filesystem_root=root)
+
+    @classmethod
+    def opaque(cls, identity: str) -> "SkillTarget":
+        return cls(identity=identity)
+
+    @classmethod
+    def coerce(cls, target: "SkillTarget | str | Path") -> "SkillTarget":
+        if isinstance(target, cls):
+            return target
+        if isinstance(target, str) and target.lower().startswith(
+            ("http://", "https://")
+        ):
+            return cls.opaque(target)
+        return cls.local(target)
+
+
 @dataclass
 class SkillDispatchResult:
     """Outcome of :func:`run_skill_dispatch`.
@@ -295,7 +337,7 @@ def _run_copilot_skill_child(
     copilot_bin: str,
     prompt: str,
     tools: str,
-    target: Path,
+    target: SkillTarget | str | Path,
     run_dir: Path,
     context_dirs: Sequence[Path],
     timeout_s: int,
@@ -308,6 +350,7 @@ def _run_copilot_skill_child(
         build_copilot_command,
         configured_copilot_fallback_models,
         copilot_subprocess_env,
+        disposable_copilot_state,
         disposable_copilot_workspace,
         execute_copilot_command,
         is_model_unavailable_error,
@@ -319,6 +362,12 @@ def _run_copilot_skill_child(
     )
     from core.llm.model_data import COPILOT_DEFAULT_MODEL
 
+    target_spec = SkillTarget.coerce(target)
+    target_dirs = (
+        (str(target_spec.filesystem_root),)
+        if target_spec.filesystem_root is not None
+        else ()
+    )
     model = (
         os.environ.get("RAPTOR_COPILOT_MODEL", "").strip()
         or COPILOT_DEFAULT_MODEL
@@ -333,7 +382,7 @@ def _run_copilot_skill_child(
         tools=tools,
         add_dirs=(
             str(_RAPTOR_DIR),
-            str(target),
+            *target_dirs,
             *(str(path) for path in context_dirs),
             str(run_dir),
         ),
@@ -346,20 +395,29 @@ def _run_copilot_skill_child(
     last_proc: subprocess.CompletedProcess | None = None
     attempted: list[str] = []
     accumulated = None
-    with disposable_copilot_workspace(run_dir) as workspace:
+    with (
+        disposable_copilot_state(
+            forbidden_roots=(
+                _RAPTOR_DIR,
+                *target_dirs,
+                *context_dirs,
+                run_dir,
+            ),
+        ) as copilot_home,
+        disposable_copilot_workspace(run_dir) as workspace,
+    ):
         stage_raptor_workspace_links(workspace, _RAPTOR_DIR)
         stage_copilot_agent(
             workspace,
             system_prompt=None,
             tools=tools,
         )
-        copilot_home = workspace / ".copilot-home"
         stage_copilot_sandbox_settings(
             copilot_home,
             workspace=run_dir,
             readonly_paths=(
                 str(_RAPTOR_DIR),
-                str(target),
+                *target_dirs,
                 *(str(path) for path in context_dirs),
             ),
         )
@@ -444,7 +502,10 @@ def _run_copilot_skill_child(
 # ---------------------------------------------------------------------------
 
 
-def start_lifecycle(command: str, target: Path) -> Path | None:
+def start_lifecycle(
+    command: str,
+    target: SkillTarget | str | Path,
+) -> Path | None:
     """Start a new lifecycle-managed run dir.
 
     Returns the OUTPUT_DIR path on success, or None if the helper failed
@@ -462,7 +523,14 @@ def start_lifecycle(command: str, target: Path) -> Path | None:
     """
     from core.config import RaptorConfig
     safe_env = RaptorConfig.get_safe_env()
-    argv = [str(_LIFECYCLE), "start", command, "--target", str(target)]
+    target_spec = SkillTarget.coerce(target)
+    argv = [
+        str(_LIFECYCLE),
+        "start",
+        command,
+        "--target",
+        target_spec.identity,
+    ]
     # Thread the parent's project explicitly: a sibling lifecycle run
     # (the /understand pre-pass, the /validate post-pass, the gap-audit
     # chain) must land in the SAME project as the run that spawned it —
@@ -634,7 +702,7 @@ def truncate_findings_by_signal(
 def run_skill_dispatch(
     *,
     command: str,
-    target: Path,
+    target: SkillTarget | str | Path,
     tools: str,
     budget_usd: str,
     timeout_s: int,
@@ -669,8 +737,9 @@ def run_skill_dispatch(
 
     ``context_dirs`` are prior-phase artefact dirs the agent child must
     read (e.g. the parent pipeline's out_dir): they are appended to the
-    sandbox ``add_dirs`` and ``readable_paths``. ``target`` and the run
-    dir are always included.
+    sandbox ``add_dirs`` and ``readable_paths``. The run dir is always
+    included. A local target's resolved filesystem root is included too;
+    an opaque URL identity is lifecycle/prompt metadata only.
 
     May raise: unexpected exceptions propagate AFTER the lifecycle is
     marked failed — callers keep their own never-raise wrapper so the
@@ -748,12 +817,14 @@ def run_skill_dispatch(
         if reason is not None:
             return SkillDispatchResult(ran=False, skipped_reason=reason)
 
-    target = Path(target).resolve()
+    target_spec = SkillTarget.coerce(target)
+    target_root = target_spec.filesystem_root
+    target_dirs = (str(target_root),) if target_root is not None else ()
     context_dirs = [Path(d).resolve() for d in context_dirs]
 
     t0 = time.monotonic()
 
-    run_dir = start_lifecycle(command, target)
+    run_dir = start_lifecycle(command, target_spec)
     if run_dir is None:
         return SkillDispatchResult(ran=False,
                                    skipped_reason="lifecycle start failed",
@@ -789,7 +860,7 @@ def run_skill_dispatch(
                     copilot_bin=resolved_agent_bin,
                     prompt=prompt,
                     tools=tools,
-                    target=target,
+                    target=target_spec,
                     run_dir=run_dir,
                     context_dirs=context_dirs,
                     timeout_s=timeout_s,
@@ -851,8 +922,12 @@ def run_skill_dispatch(
             dispatch_config = CCDispatchConfig(
                 claude_bin=claude_bin,
                 tools=tools,
-                add_dirs=(str(_RAPTOR_DIR), str(target),
-                          *(str(d) for d in context_dirs), str(run_dir)),
+                add_dirs=(
+                    str(_RAPTOR_DIR),
+                    *target_dirs,
+                    *(str(d) for d in context_dirs),
+                    str(run_dir),
+                ),
                 budget_usd=budget_usd,
                 timeout_s=timeout_s,
                 capture_json_envelope=False,
@@ -888,6 +963,12 @@ def run_skill_dispatch(
                 stdin_kwargs = {"input": prompt}
             try:
                 with system_prompt_file_for(dispatch_config) as _sys_prompt_path:
+                    sandbox_paths: dict[str, str] = {
+                        "output": str(run_dir),
+                        "cwd": str(run_dir),
+                    }
+                    if target_root is not None:
+                        sandbox_paths["target"] = str(target_root)
                     proc = run_untrusted_networked(
                         build_cc_command(
                             dispatch_config,
@@ -896,9 +977,7 @@ def run_skill_dispatch(
                         text=True,
                         **stdin_kwargs,
                         timeout=timeout_s,
-                        target=str(target),
-                        output=str(run_dir),
-                        cwd=str(run_dir),
+                        **sandbox_paths,
                         env=child_env,
                         keep_trust_markers=True,
                         readable_paths=(
@@ -999,6 +1078,7 @@ def run_skill_dispatch(
 
 __all__ = [
     "MAX_VALIDATE_FINDINGS",
+    "SkillTarget",
     "SkillDispatchResult",
     "StageError",
     "build_checklist",

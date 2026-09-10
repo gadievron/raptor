@@ -51,9 +51,13 @@ These sandbox flags apply to every mode. Pass them **after** the mode name:
                                            inside the sandbox (repeatable; read-only)
 ```
 
-`--trust-repo` (mark the target repo as trusted) is mode-specific: it exists
-on `agentic`, `codeql`, and `sca`, not on every mode. `--version` is top-level only —
-`python3 raptor.py --version`, before any mode name.
+`--trust-repo` / `--no-trust-repo` are mode-specific: they apply to
+`agentic`, `analyze`, `codeql`, `scan --codeql`, and `sca`. Explicit
+`--no-trust-repo` wins over the positive flag and project trust. If neither
+flag nor a project marker decides, Python child processes inherit only the
+authenticated launcher's exact-target session assertion; no environment
+boolean grants trust. `--version` is top-level only — `python3 raptor.py
+--version`, before any mode name.
 
 
 ## Examples

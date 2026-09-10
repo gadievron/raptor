@@ -37,6 +37,7 @@ Static analysis scan using Semgrep (and optionally CodeQL and Coccinelle).
 | `--languages <langs>` | Restrict to specific languages |
 | `--build-command <cmd>` | Build command for compiled languages (CodeQL) |
 | `--traced-build` / `--no-traced-build` | Opt into (or force off) traced-build C/C++ CodeQL extraction |
+| `--trust-repo` / `--no-trust-repo` | Trust target-owned CodeQL configuration, or force strict checks; relevant when `--codeql` is enabled |
 | `--compiler-scan` / `--no-compiler-scan` | Enable/disable the compiler-analyzer channel (gcc `-fanalyzer` / clang `--analyze`) |
 | `--compiler-scan-max-tus <n>` | Cap on translation units for `--compiler-scan` (default 2000) |
 | `--expanded-semgrep` | Re-run rules over preprocessor-expanded views of macro-heavy C/C++ TUs |
@@ -181,7 +182,7 @@ patches.
 | `--skip-sca-triage` | Skip SCA triage |
 | `--accept-weakened-defenses` | Accept findings in weakened-defence categories |
 | `--trust-repo` | Trust the repository (skip untrusted-repo sanitisation) |
-| `--no-trust-repo` | Keep strict trust checks, overriding `--trust-repo` and the project's `config` trust marker |
+| `--no-trust-repo` | Keep strict trust checks, overriding `--trust-repo`, the project's `config` marker, and authenticated-session trust |
 | `--max-cost-usd <usd>` | LLM budget cap for the run (default $10) |
 
 **Sandbox** (see [sandbox](sandbox.md))
@@ -232,6 +233,7 @@ Deep static analysis with CodeQL dataflow validation.
 | `--max-findings <n>` | Maximum findings to process |
 | `--no-visualizations` | Skip diagram generation |
 | `--trust-repo` | Trust the repository |
+| `--no-trust-repo` | Keep strict checks, overriding positive, project, and authenticated-session trust |
 | `--phase-timeout <secs>` | Per-phase timeout in seconds |
 | `--sandbox` / `--no-sandbox` | Enable or disable [sandbox](sandbox.md) |
 | `--audit` | Enable audit layer |
@@ -342,6 +344,7 @@ Web application security scanner (alpha).
 | `--max-pages <n>` | Maximum pages to crawl (default 100) |
 | `--insecure` | Accept invalid TLS certificates |
 | `--reveal-secrets` | Include discovered secrets in output |
+| `--validate` | In interactive mode, replay eligible `needs_review` findings in the trusted scanner and hand the resulting evidence to a network-denied `/validate` child |
 
 **ffuf integration**
 
@@ -391,7 +394,8 @@ Web application security scanner (alpha).
 | `--oob-grace <seconds>` | Wait for out-of-band callbacks after fuzzing (default 10) |
 
 Recursion and clusterbomb apply a default `-rate 50` unless `--ffuf-rate`
-is set. See `.claude/commands/web.md` for recipes.
+is set. See [the web validation bridge](validation.md#web-bridge) for the
+`--validate` handoff, and `.claude/commands/web.md` for recipes.
 
 ---
 
@@ -938,15 +942,17 @@ gate its per-run flag already loosens:
 | `build` | `--traced-build` | Traced-build C/C++ CodeQL extraction (executes the repo's build system) |
 | `dynamic` | `--dynamic` (audit) | Dynamic validation: Frida observation / target execution defaults on |
 
-Markers are consumed where `/agentic` and `/codeql` load the project's
-persisted binaries, and where the audit pipeline builds
+Markers are consumed by `/agentic`, `/codeql`, `scan --codeql`, direct
+`analyze`, and where the audit pipeline builds
 `dynamic_validation` and `repo_trusted` (the `config` marker arms
 audit's trust-gated refutation witnesses; that consumption has no
 per-run flag pair — the marker is the only control, see
 [audit.md](audit.md)). Per-run flags always win, in both directions:
 explicit negative flag (`--no-trust-repo`, `--no-traced-build`,
 `--no-dynamic`) > explicit positive flag > project marker > default
-(off). Whenever a marker affects a run, one banner line prints at
+(off). For repo-trust-capable Python entry points specifically, an
+otherwise-unspecified decision next consults the authenticated launcher's
+exact-target session assertion before falling back to off. Whenever a marker affects a run, one banner line prints at
 start: `[*] project trust: build, dynamic (per-run flags override)`.
 `build` deliberately does NOT imply `config` — a traced run that hits
 unsafe CodeQL pack config still refuses (see

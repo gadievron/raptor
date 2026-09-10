@@ -521,11 +521,11 @@ class TestTracedBuildTrustIndependence:
     def _reset_overrides(self):
         import core.security.cc_trust as cct
         import core.security.codeql_trust as qlt
-        qlt.set_trust_override(False)
-        cct.set_trust_override(False)
+        qlt.set_trust_override(None)
+        cct.set_trust_override(None)
         yield
-        qlt.set_trust_override(False)
-        cct.set_trust_override(False)
+        qlt.set_trust_override(None)
+        cct.set_trust_override(None)
 
     def _run_main(self, tmp_path, extra_args):
         """Drive agent.py main() on an empty repo (no languages ->
@@ -536,22 +536,54 @@ class TestTracedBuildTrustIndependence:
         import core.security.cc_trust as cct
         import core.security.codeql_trust as qlt
         from packages.codeql import agent as agent_mod
+        qlt.set_trust_override(True)
+        cct.set_trust_override(True)
         argv = ["agent.py", "--repo", str(tmp_path),
                 "--out", str(tmp_path / "out"), *extra_args]
         with patch.object(sys, "argv", argv), \
+                patch("core.project.trust.active_project_trust",
+                      return_value=({}, None)), \
                 contextlib.suppress(SystemExit):
             agent_mod.main()
         return (qlt._trust_override_set, cct._trust_override_set)
 
     def test_traced_build_sets_no_trust_override(self, tmp_path):
         ql, cc = self._run_main(tmp_path, ["--traced-build"])
-        assert ql is False
-        assert cc is False
+        assert ql is None
+        assert cc is None
 
     def test_default_sets_neither(self, tmp_path):
         ql, cc = self._run_main(tmp_path, [])
-        assert ql is False
-        assert cc is False
+        assert ql is None
+        assert cc is None
+
+    @pytest.mark.parametrize(
+        ("flags", "expected"),
+        [
+            (["--trust-repo"], True),
+            (["--no-trust-repo"], False),
+            (["--trust-repo", "--no-trust-repo"], False),
+            ([], None),
+        ],
+    )
+    def test_repo_trust_tri_state_matrix(self, tmp_path, flags, expected):
+        ql, cc = self._run_main(tmp_path, flags)
+        assert ql is expected
+        assert cc is expected
+
+    def test_unspecified_inherits_authenticated_session(
+        self, tmp_path, monkeypatch,
+    ):
+        import core.security.cc_trust as cct
+
+        ql, cc = self._run_main(tmp_path, [])
+        assert ql is None
+        assert cc is None
+        monkeypatch.setattr(
+            "core.project.sessions.session_repo_trusted",
+            lambda repo: Path(repo).resolve() == tmp_path.resolve(),
+        )
+        assert cct.is_trust_overridden(tmp_path)
 
 
 # ---------------------------------------------------------------------------

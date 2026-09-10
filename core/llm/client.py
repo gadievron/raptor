@@ -10,6 +10,7 @@ Manages multiple LLM providers with:
 """
 
 import json
+import math
 
 # Import for type-based error detection (optional SDKs)
 # DEBUG log on import failure so operators can diagnose partial-
@@ -1085,6 +1086,11 @@ class LLMClient:
         self._pinned_model = pinned_model
         self.providers: dict[str, LLMProvider] = {}
         self.total_cost = 0.0
+        # Spend incurred outside this client's own provider instances but
+        # charged to the same run budget (for example agentic's ranking
+        # client). Kept separate so provider-ledger failed-call spend remains
+        # additive instead of being lost behind max(total_cost, provider).
+        self._external_spend = 0.0
         self.request_count = 0
         self.cache_hits = 0
         # Entries whose provenance token was PRESENT but invalid — a
@@ -2062,18 +2068,19 @@ class LLMClient:
         )
         self._budget_exceeded_logged = True
         reserve = getattr(self, "_budget_reserve", 0.0) or 0.0
+        spent = self._effective_spent_locked()
         if reserve:
             emit(
                 "Budget exceeded: $%.2f + $%.2f > $%.2f "
                 "($%.2f cap - $%.2f held in reserve)",
-                self.total_cost, estimated_cost,
+                spent, estimated_cost,
                 self._effective_cap_locked(),
                 self.config.max_cost_per_scan, reserve,
             )
         else:
             emit(
                 "Budget exceeded: $%.2f + $%.2f > $%.2f",
-                self.total_cost, estimated_cost,
+                spent, estimated_cost,
                 self.config.max_cost_per_scan,
             )
 
@@ -2118,7 +2125,53 @@ class LLMClient:
         does not book per-call (per-call attribution from shared
         counters is impossible under parallel workers). The max of
         the two never double-counts and misses neither surface."""
-        return max(self.total_cost, self.provider_spend_usd)
+        external = getattr(self, "_external_spend", 0.0) or 0.0
+        return external + max(self.total_cost, self.provider_spend_usd)
+
+    def record_external_spend(self, amount: float) -> float:
+        """Charge externally incurred spend to this client's run cap.
+
+        Returns the new cumulative external-spend total. The amount must be
+        finite and non-negative; invalid accounting input is rejected rather
+        than silently weakening the cap.
+        """
+        value = float(amount)
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(
+                f"external LLM spend must be finite and non-negative: "
+                f"{amount!r}"
+            )
+        with self._stats_lock:
+            current = getattr(self, "_external_spend", 0.0) or 0.0
+            self._external_spend = current + value
+            return self._external_spend
+
+    @property
+    def authoritative_spend_usd(self) -> float:
+        """Spend used for budget enforcement and external reporting.
+
+        Includes attributable client-ledger cost, in-flight reservations,
+        and provider-ledger spend from completed calls whose result later
+        failed validation or parsing.
+        """
+        with self._stats_lock:
+            return self._effective_spent_locked()
+
+    @property
+    def budget_remaining_usd(self) -> float | None:
+        """Remaining enforced budget, or ``None`` when cost caps are off.
+
+        ``None`` deliberately distinguishes an unbounded client from a
+        bounded client with exactly ``$0`` remaining.
+        """
+        if not self.config.enable_cost_tracking:
+            return None
+        with self._stats_lock:
+            return max(
+                0.0,
+                self.config.max_cost_per_scan
+                - self._effective_spent_locked(),
+            )
 
     def hold_budget_reserve(self, amount: float) -> float:
         """Hold back ``amount`` of the per-scan cap from ordinary
@@ -2308,8 +2361,9 @@ class LLMClient:
         """
         # Check budget
         if not self._check_budget():
+            spent = self.authoritative_spend_usd
             msg = (
-                f"LLM budget exceeded: ${self.total_cost:.4f} spent > ${self.config.max_cost_per_scan:.4f} limit. "
+                f"LLM budget exceeded: ${spent:.4f} spent > ${self.config.max_cost_per_scan:.4f} limit. "
                 f"Increase budget with: LLMConfig(max_cost_per_scan={self.config.max_cost_per_scan * 2:.1f})"
             )
             raise LLMBudgetExceededError(msg)
@@ -2500,8 +2554,9 @@ class LLMClient:
                         # released on exception.
                         reservation = self._estimate_call_cost(call_class)
                         if not self._acquire_budget(reservation):
+                            spent = self.authoritative_spend_usd
                             msg = (
-                                f"LLM budget exceeded: ${self.total_cost:.4f} spent "
+                                f"LLM budget exceeded: ${spent:.4f} spent "
                                 f"+ ${reservation:.4f} estimated > "
                                 f"${self.config.max_cost_per_scan:.4f} limit. Increase budget "
                                 f"with: LLMConfig(max_cost_per_scan="
@@ -2826,8 +2881,9 @@ class LLMClient:
         """
         # Check budget
         if not self._check_budget():
+            spent = self.authoritative_spend_usd
             msg = (
-                f"LLM budget exceeded: ${self.total_cost:.4f} spent > ${self.config.max_cost_per_scan:.4f} limit. "
+                f"LLM budget exceeded: ${spent:.4f} spent > ${self.config.max_cost_per_scan:.4f} limit. "
                 f"Increase budget with: LLMConfig(max_cost_per_scan={self.config.max_cost_per_scan * 2:.1f})"
             )
             raise LLMBudgetExceededError(msg)
@@ -3013,8 +3069,9 @@ class LLMClient:
                         # by one call's estimate error.
                         reservation = self._estimate_call_cost(call_class)
                         if not self._acquire_budget(reservation):
+                            spent = self.authoritative_spend_usd
                             msg = (
-                                f"LLM budget exceeded: ${self.total_cost:.4f} spent "
+                                f"LLM budget exceeded: ${spent:.4f} spent "
                                 f"+ ${reservation:.4f} estimated > "
                                 f"${self.config.max_cost_per_scan:.4f} limit. Increase budget "
                                 f"with: LLMConfig(max_cost_per_scan="
@@ -3430,11 +3487,22 @@ class LLMClient:
                 pstat["cache_write_tokens"] = provider.total_cache_write_tokens
             provider_stats[key] = pstat
 
+        authoritative_spend = self.authoritative_spend_usd
+        provider_spend = self.provider_spend_usd
+        budget_remaining = self.budget_remaining_usd
         with self._stats_lock:
+            external_spend = (
+                getattr(self, "_external_spend", 0.0) or 0.0
+            )
+            accounted_cost = self.total_cost + external_spend
             stats = {
                 "total_requests": self.request_count,
-                "total_cost": self.total_cost,
-                "budget_remaining": self.config.max_cost_per_scan - self.total_cost,
+                "total_cost": authoritative_spend,
+                "accounted_total_cost": accounted_cost,
+                "provider_spend_usd": provider_spend,
+                "external_spend_usd": external_spend,
+                "budget_limited": self.config.enable_cost_tracking,
+                "budget_remaining": budget_remaining,
                 "providers": provider_stats,
                 "task_type_costs": dict(self.task_type_costs),
             }

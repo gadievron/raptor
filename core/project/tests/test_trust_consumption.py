@@ -18,6 +18,10 @@ from core.project.project import ProjectManager
 from core.project.trust import (
     active_project_trust,
     apply_project_trust_flags,
+    canonicalize_repo_trust_cli_args,
+    configure_repo_trust_from_args,
+    derive_repo_trust_override,
+    repo_trust_cli_args,
     resolve_dynamic_validation,
     resolve_trust_flag,
 )
@@ -74,6 +78,61 @@ class TestResolveTrustFlag(unittest.TestCase):
 
     def test_negative_beats_positive(self):
         self.assertFalse(resolve_trust_flag(True, True, True))
+
+
+class TestRepoTrustTriState(unittest.TestCase):
+    """Shared parsed-args and child-argv tri-state contract."""
+
+    def test_derive_override_matrix(self):
+        cases = [
+            ("positive", _ns(trust_repo=True), True),
+            ("negative", _ns(no_trust_repo=True), False),
+            (
+                "both-negative-wins",
+                _ns(trust_repo=True, no_trust_repo=True),
+                False,
+            ),
+            ("unspecified", _ns(), None),
+        ]
+        for label, args, expected in cases:
+            with self.subTest(label):
+                self.assertIs(derive_repo_trust_override(args), expected)
+
+    def test_canonical_child_flag_matrix(self):
+        self.assertEqual(repo_trust_cli_args(True), ["--trust-repo"])
+        self.assertEqual(repo_trust_cli_args(False), ["--no-trust-repo"])
+        self.assertEqual(repo_trust_cli_args(None), [])
+
+    def test_canonicalizer_removes_duplicates_and_contradictions(self):
+        argv = [
+            "--trust-repo",
+            "--repo", "/target",
+            "--no-trust-repo",
+            "--trust-repo",
+        ]
+        self.assertEqual(
+            canonicalize_repo_trust_cli_args(argv, False),
+            ["--no-trust-repo", "--repo", "/target"],
+        )
+
+    def test_configure_resets_stale_process_state_to_none(self):
+        import core.security.cc_trust as cct
+        import core.security.codeql_trust as qlt
+
+        cct.set_trust_override(True)
+        qlt.set_trust_override(True)
+        self.addCleanup(cct.set_trust_override, None)
+        self.addCleanup(qlt.set_trust_override, None)
+        with patch(
+            "core.project.trust.active_project_trust",
+            return_value=({}, None),
+        ):
+            override = configure_repo_trust_from_args(
+                _ns(), banner=False, target_path="/target",
+            )
+        self.assertIsNone(override)
+        self.assertIsNone(cct._trust_override_set)
+        self.assertIsNone(qlt._trust_override_set)
 
 
 class TestApplyProjectTrustFlags(TrustProjectFixture):

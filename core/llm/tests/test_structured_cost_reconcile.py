@@ -32,10 +32,13 @@ class _CostlyFailingProvider:
         self.total_output_tokens = 0
         self.total_cache_read_tokens = 0
         self.total_cache_write_tokens = 0
+        self.total_duration = 0.0
+        self.call_count = 0
         self.calls = 0
 
     def generate_structured(self, prompt, schema, system_prompt=None, **kwargs):
         self.calls += 1
+        self.call_count += 1
         self.total_cost += 0.05
         raise ValueError("simulated post-API parse failure")
 
@@ -109,3 +112,50 @@ def test_budget_enforcement_sees_failed_attempt_spend():
     provider.total_cost = 0.9
     assert client.total_cost == pytest.approx(0.0)
     assert client.is_budget_exhausted(estimated_cost=0.5)
+
+
+def test_stats_report_authoritative_failed_spend_and_unbounded_budget():
+    client, provider = _client(cost_tracking=False)
+    provider.total_cost = 0.4
+
+    stats = client.get_stats()
+
+    assert client.authoritative_spend_usd == pytest.approx(0.4)
+    assert client.budget_remaining_usd is None
+    assert stats["total_cost"] == pytest.approx(0.4)
+    assert stats["accounted_total_cost"] == pytest.approx(0.0)
+    assert stats["provider_spend_usd"] == pytest.approx(0.4)
+    assert stats["external_spend_usd"] == pytest.approx(0.0)
+    assert stats["budget_limited"] is False
+    assert stats["budget_remaining"] is None
+
+
+def test_stats_clamp_exhausted_budget_remaining_to_zero():
+    client, provider = _client(cost_tracking=True)
+    client.config.max_cost_per_scan = 0.5
+    provider.total_cost = 0.75
+
+    stats = client.get_stats()
+
+    assert client.authoritative_spend_usd == pytest.approx(0.75)
+    assert client.budget_remaining_usd == pytest.approx(0.0)
+    assert stats["total_cost"] == pytest.approx(0.75)
+    assert stats["budget_limited"] is True
+    assert stats["budget_remaining"] == pytest.approx(0.0)
+
+
+def test_external_spend_is_additive_with_failed_provider_spend():
+    client, provider = _client(cost_tracking=True)
+    client.config.max_cost_per_scan = 1.0
+    client.record_external_spend(0.2)
+    provider.total_cost = 0.7
+
+    stats = client.get_stats()
+
+    assert client.total_cost == pytest.approx(0.0)
+    assert client.provider_spend_usd == pytest.approx(0.7)
+    assert client.authoritative_spend_usd == pytest.approx(0.9)
+    assert client.budget_remaining_usd == pytest.approx(0.1)
+    assert stats["total_cost"] == pytest.approx(0.9)
+    assert stats["accounted_total_cost"] == pytest.approx(0.2)
+    assert stats["external_spend_usd"] == pytest.approx(0.2)

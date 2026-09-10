@@ -787,18 +787,39 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     return rc
 
 
-# Set True by main() when --trust-repo is seen (and stripped from argv).
-# Read by the subprocess mode handlers (codeql/agentic) to re-inject the
-# flag into their child args — see the note in main().
-_TRUST_REPO_SEEN = False
-
-# Set True by main() when --no-trust-repo is seen (and stripped from
-# argv). The explicit negative wins over --trust-repo AND over a
-# persisted project 'config' trust marker; re-injected into the
-# codeql/agentic children so their own resolution sees it.
-_NO_TRUST_REPO_SEEN = False
+# Tri-state top-level decision stripped from argv by main() and forwarded
+# canonically by subprocess mode handlers:
+#   True  -> --trust-repo
+#   False -> --no-trust-repo
+#   None  -> no flag; child trust gates inherit authenticated session state.
+_REPO_TRUST_OVERRIDE: bool | None = None
 
 _active_dispatcher = None
+
+
+def _repo_trust_child_args(args: list[str]) -> list[str]:
+    """Return child argv with exactly one canonical trust flag or none.
+
+    Normal dispatch gets its decision from ``main()`` after the flags
+    were stripped. Direct/internal callers may still supply the flags in
+    *args*, so fold both sources with the same negative-wins precedence.
+    """
+    from core.project.trust import (
+        canonicalize_repo_trust_cli_args,
+        derive_repo_trust_override,
+    )
+
+    inline = derive_repo_trust_override(argparse.Namespace(
+        trust_repo="--trust-repo" in args,
+        no_trust_repo="--no-trust-repo" in args,
+    ))
+    if _REPO_TRUST_OVERRIDE is False or inline is False:
+        override = False
+    elif _REPO_TRUST_OVERRIDE is True or inline is True:
+        override = True
+    else:
+        override = None
+    return canonicalize_repo_trust_cli_args(args, override)
 
 
 def _get_or_start_dispatcher(audit_path=None):
@@ -1050,6 +1071,7 @@ def mode_scan(args: list) -> int:
         print(f"✗ Scanner not found: {scanner_script}", file=sys.stderr)
         return 1
 
+    args = _repo_trust_child_args(args)
     return _run_with_lifecycle("scan", scanner_script, args,
                               "Running static analysis with Semgrep...")
 
@@ -1239,13 +1261,7 @@ def mode_agentic(args: list) -> int:
                 file=sys.stderr,
             )
 
-    # Re-inject --trust-repo / --no-trust-repo stripped by main(): the
-    # agentic child parses them to resolve the cc_trust + codeql_trust
-    # overrides in its own process (negative wins there).
-    if _TRUST_REPO_SEEN and '--trust-repo' not in args:
-        args = ['--trust-repo'] + args
-    if _NO_TRUST_REPO_SEEN and '--no-trust-repo' not in args:
-        args = ['--no-trust-repo'] + args
+    args = _repo_trust_child_args(args)
 
     log_level = _extract_agentic_log_level(args)
     if log_level:
@@ -1273,13 +1289,7 @@ def mode_codeql(args: list) -> int:
     if '--scan-only' not in args and not analyze:
         args = ['--scan-only'] + args
 
-    # Re-inject --trust-repo / --no-trust-repo stripped by main(): the
-    # codeql child parses them to resolve the cc_trust + codeql_trust
-    # overrides in its own process (negative wins there).
-    if _TRUST_REPO_SEEN and '--trust-repo' not in args:
-        args = ['--trust-repo'] + args
-    if _NO_TRUST_REPO_SEEN and '--no-trust-repo' not in args:
-        args = ['--no-trust-repo'] + args
+    args = _repo_trust_child_args(args)
 
     return _run_with_lifecycle("codeql", codeql_script, args,
                               "Running CodeQL analysis...")
@@ -1294,6 +1304,7 @@ def mode_llm_analysis(args: list) -> int:
         print(f"✗ LLM analysis script not found: {llm_script}", file=sys.stderr)
         return 1
 
+    args = _repo_trust_child_args(args)
     print("\n[*] Running LLM-powered vulnerability analysis...\n")
     return _run_script(llm_script, args)
 
@@ -1551,35 +1562,24 @@ For more information, visit: https://github.com/gadievron/raptor
 
 def main():
     """Main entry point for unified RAPTOR launcher."""
-    # Pre-process --trust-repo at the top level so it works in any position
-    # (`raptor --trust-repo scan /x` or `raptor scan /x --trust-repo`).
-    # Sets the cc_trust module flag for in-process / parent-side checks.
-    # SUBPROCESS mode handlers (codeql/agentic) can't rely on that flag —
-    # module-level trust state doesn't cross the subprocess boundary, and
-    # we strip the flag from argv here — so they re-inject --trust-repo into
-    # their child args via _TRUST_REPO_SEEN. Without that, `raptor.py codeql
-    # --trust-repo` silently fails to lift the child's target-repo trust
-    # checks (fail-closed: it over-blocks, but the documented override breaks).
-    # --no-trust-repo (explicit negative) beats --trust-repo and any
-    # persisted project 'config' trust marker. Stripped here like the
-    # positive flag so subcommands without the flag still parse; the
-    # codeql/agentic handlers re-inject it for their children.
-    global _TRUST_REPO_SEEN, _NO_TRUST_REPO_SEEN
-    if "--no-trust-repo" in sys.argv:
-        from core.security.cc_trust import set_trust_override
-        from core.security.codeql_trust import (
-            set_trust_override as _ql_set_trust_override,
-        )
-        _NO_TRUST_REPO_SEEN = True
-        set_trust_override(False)
-        _ql_set_trust_override(False)
-        sys.argv = [a for a in sys.argv if a != "--no-trust-repo"]
-    if "--trust-repo" in sys.argv:
-        from core.security.cc_trust import set_trust_override
-        if not _NO_TRUST_REPO_SEEN:
-            set_trust_override(True)
-        _TRUST_REPO_SEEN = True
-        sys.argv = [a for a in sys.argv if a != "--trust-repo"]
+    # Pre-process repo-trust flags so they work in any position. Resolve
+    # to a tri-state before stripping: explicit negative wins, positive
+    # propagates, and absence stays None so authenticated launcher/session
+    # trust can be inherited by this process and every child. Setting both
+    # module gates on EVERY main() call also clears stale in-process test
+    # state without weakening the exact-target session authentication.
+    global _REPO_TRUST_OVERRIDE
+    from core.project.trust import (
+        canonicalize_repo_trust_cli_args,
+        derive_repo_trust_override,
+        set_repo_trust_override,
+    )
+    _REPO_TRUST_OVERRIDE = derive_repo_trust_override(argparse.Namespace(
+        trust_repo="--trust-repo" in sys.argv,
+        no_trust_repo="--no-trust-repo" in sys.argv,
+    ))
+    set_repo_trust_override(_REPO_TRUST_OVERRIDE)
+    sys.argv = canonicalize_repo_trust_cli_args(sys.argv, None)
 
     # If no arguments provided, show help
     if len(sys.argv) == 1:

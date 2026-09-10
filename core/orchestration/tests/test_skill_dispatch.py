@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 from core.orchestration.skill_dispatch import (
     MAX_VALIDATE_FINDINGS,
+    SkillTarget,
     StageError,
     run_skill_dispatch,
     truncate_findings_by_signal,
@@ -376,6 +377,53 @@ class DispatchFlowTests(unittest.TestCase):
             add_dirs = {cmd[i + 1] for i, a in enumerate(cmd)
                         if a == "--add-dir"}
             self.assertIn(str(ctx.resolve()), add_dirs)
+
+    def test_local_target_remains_resolved_in_filesystem_fields(self):
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            target = tmp / "target"
+            target.mkdir()
+            run_dir = tmp / "run"
+            dispatcher = _lifecycle_dispatcher(run_dir)
+            captured = {}
+
+            def _sandbox(cmd, *args, **kwargs):
+                captured["cmd"] = list(cmd)
+                captured["kwargs"] = kwargs
+                return dispatcher(cmd, *args, **kwargs)
+
+            result = _run(
+                tmp,
+                run_dir,
+                sandbox=_sandbox,
+                target=target / ".",
+            )
+
+        self.assertTrue(result.ran)
+        resolved = str(target.resolve())
+        self.assertEqual(captured["kwargs"]["target"], resolved)
+        add_dirs = {
+            captured["cmd"][i + 1]
+            for i, arg in enumerate(captured["cmd"])
+            if arg == "--add-dir"
+        }
+        self.assertIn(resolved, add_dirs)
+
+
+class SkillTargetTests(unittest.TestCase):
+
+    def test_opaque_target_preserves_exact_identity(self):
+        target = "HTTPS://Example.Test:443/app/"
+        spec = SkillTarget.coerce(target)
+        self.assertEqual(spec.identity, target)
+        self.assertIsNone(spec.filesystem_root)
+
+    def test_local_target_uses_resolved_identity(self):
+        with TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo" / ".."
+            spec = SkillTarget.coerce(target)
+        self.assertEqual(spec.identity, str(Path(tmp).resolve()))
+        self.assertEqual(spec.filesystem_root, Path(tmp).resolve())
 
 
 class TruncationTests(unittest.TestCase):

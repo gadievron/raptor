@@ -45,6 +45,7 @@ from typing import Any
 from core.json import load_json, save_json
 from core.orchestration.skill_dispatch import (
     MAX_VALIDATE_FINDINGS,
+    SkillTarget,
     StageError,
     run_skill_dispatch,
     truncate_findings_by_signal,
@@ -230,7 +231,7 @@ def _run_understand_prepass_unsafe(
 
 
 def run_validate_postpass(
-    target: Path,
+    target: SkillTarget | str | Path,
     agentic_out_dir: Path,
     analysis_report: Path,
     block_cc_dispatch: bool = False,
@@ -271,7 +272,7 @@ def run_validate_postpass(
 
 
 def _run_validate_postpass_unsafe(
-    target: Path,
+    target: SkillTarget | str | Path,
     agentic_out_dir: Path,
     analysis_report: Path,
     block_cc_dispatch: bool,
@@ -280,7 +281,9 @@ def _run_validate_postpass_unsafe(
     allow_unreachable: bool = False,
     audit_dir: Path | None = None,
 ) -> PostpassResult:
-    target = Path(target).resolve()
+    target_spec = SkillTarget.coerce(target)
+    target_identity = target_spec.identity
+    target_root = target_spec.filesystem_root
     agentic_out_dir = Path(agentic_out_dir).resolve()
     analysis_report = Path(analysis_report)
 
@@ -317,7 +320,7 @@ def _run_validate_postpass_unsafe(
         # skill can consume the file directly without prompt-driven
         # field translation (was the stopgap; this is the real fix).
         selection_file = validate_dir / "selected-findings.json"
-        payload = convert_agentic_to_validate(selected, str(target))
+        payload = convert_agentic_to_validate(selected, target_identity)
         if audit_selected:
             # Audit findings lead the container: they carry tool
             # evidence (G2) where agentic findings carry LLM verdicts.
@@ -344,12 +347,12 @@ def _run_validate_postpass_unsafe(
         # TTL on the validate side rejects checklists older than 1h
         # (stale source drift).
         agentic_checklist = agentic_out_dir / "checklist.json"
-        if agentic_checklist.is_file():
+        if target_root is not None and agentic_checklist.is_file():
             save_json(
                 validate_dir / "parent-checklist-pointer.json",
                 {
                     "checklist_path": str(agentic_checklist.resolve()),
-                    "expected_target_path": str(target),
+                    "expected_target_path": str(target_root),
                     "expected_root_dir": str(agentic_out_dir.resolve()),
                 },
             )
@@ -370,7 +373,7 @@ def _run_validate_postpass_unsafe(
 
     def _prompt(validate_dir: Path) -> str:
         return _build_validate_prompt(
-            target, agentic_out_dir, validate_dir,
+            target_spec, agentic_out_dir, validate_dir,
             analysis_report.resolve(),
             validate_dir / "selected-findings.json",
             len(selected) + len(audit_selected),
@@ -383,7 +386,7 @@ def _run_validate_postpass_unsafe(
     # are in readable_paths; $HOME secrets stay denied.
     dispatch = run_skill_dispatch(
         command="validate",
-        target=target,
+        target=target_spec,
         tools=_VALIDATE_TOOLS,
         budget_usd=_POSTPASS_BUDGET_USD,
         timeout_s=_POSTPASS_TIMEOUT_S,
@@ -499,7 +502,8 @@ def convert_agentic_to_validate(agentic_findings: list, target_path: str) -> dic
     Args:
         agentic_findings: list of finding dicts in /agentic shape (per
             FINDING_RESULT_SCHEMA).
-        target_path: the target repo path; written into the container.
+        target_path: resolved local path or exact opaque URL identity;
+            written into the container.
 
     Returns:
         A dict in /validate FindingsContainer shape — ready to drop into a
@@ -1017,18 +1021,24 @@ Keep output concise. Report what you mapped and exit.
 """
 
 
-def _build_validate_prompt(target: Path, agentic_out_dir: Path, validate_dir: Path,
-                            analysis_report: Path, selection_file: Path,
-                            selected_count: int,
-                            *,
-                            allow_unreachable: bool = False) -> str:
-    safe_target = escape_nonprintable(str(target))
+def _build_validate_prompt(
+    target: SkillTarget | str | Path,
+    agentic_out_dir: Path,
+    validate_dir: Path,
+    analysis_report: Path,
+    selection_file: Path,
+    selected_count: int,
+    *,
+    allow_unreachable: bool = False,
+) -> str:
+    target_spec = SkillTarget.coerce(target)
+    safe_target = escape_nonprintable(target_spec.identity)
     safe_agentic = escape_nonprintable(str(agentic_out_dir))
     safe_validate = escape_nonprintable(str(validate_dir))
     safe_report = escape_nonprintable(str(analysis_report))
     safe_selection = escape_nonprintable(str(selection_file))
     safe_raptor = escape_nonprintable(str(_RAPTOR_DIR))
-    threat_model = _threat_model_prompt_block(target)
+    threat_model = _threat_model_prompt_block(target_spec)
     allow_unreachable_note = ""
     if allow_unreachable:
         allow_unreachable_note = """
@@ -1049,7 +1059,7 @@ workflow. The base agentic pipeline has finished and produced an analysis
 report; your job is to run the full validation pipeline against the
 {selected_count} findings the launcher pre-selected.
 
-Target repository:    {safe_target}
+Target identity:      {safe_target}
 Agentic out_dir:      {safe_agentic}
 Analysis report:      {safe_report}
 Selection file:       {safe_selection}
@@ -1083,10 +1093,19 @@ Keep narration brief. Report the per-finding outcomes and exit.
 """
 
 
-def _threat_model_prompt_block(target: Path) -> str:
+def _threat_model_prompt_block(
+    target: SkillTarget | str | Path,
+) -> str:
+    target_spec = SkillTarget.coerce(target)
+    if target_spec.filesystem_root is None:
+        return ""
     try:
         from core.threat_model import threat_model_prompt_block
-        return threat_model_prompt_block(target)
+        return threat_model_prompt_block(target_spec.filesystem_root)
     except Exception:
-        logger.warning("threat model context unavailable for %s", target, exc_info=True)
+        logger.warning(
+            "threat model context unavailable for %s",
+            target_spec.identity,
+            exc_info=True,
+        )
         return ""

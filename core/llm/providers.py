@@ -29,6 +29,7 @@ from core.logging import get_logger
 
 from .cc_adapter import strip_json_fences
 from .config import ModelConfig, canonical_agent_cli_provider
+from .schema_normalization import normalize_json_schema as _normalize_schema
 
 # Wire-shape types for tool-use turn primitive. These live in
 # ``core.llm.tool_use.types`` (zero dependencies on this module);
@@ -1167,69 +1168,6 @@ def _coerce_to_schema(data: dict[str, Any], schema: dict[str, Any]) -> dict[str,
             ]
 
     return coerced
-
-
-def _normalize_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Normalize simple format schema to JSON Schema format.
-
-    Simple format: {"field": "type description"}
-    JSON Schema format: {"properties": {...}, "required": [...]}
-
-    Returns the schema unchanged if already in JSON Schema format.
-    """
-    if "properties" in schema:
-        return schema  # Already JSON Schema
-
-    type_aliases = {
-        "bool": "boolean", "str": "string", "int": "integer",
-        "float": "number", "list": "array", "dict": "object",
-    }
-
-    properties = {}
-    for field_name, field_desc in schema.items():
-        if isinstance(field_desc, dict):
-            properties[field_name] = field_desc
-            continue
-
-        field_desc_str = str(field_desc)
-        parts = field_desc_str.split()
-        field_type = parts[0].strip() if parts else "string"
-        field_type = type_aliases.get(field_type, field_type)
-
-        desc_lower = field_desc_str.lower()
-        # Detect nullable: "string or null", "float or null"
-        if " or null" in desc_lower:
-            prop = {"type": [field_type, "null"]}
-        elif desc_lower.startswith("null or "):
-            # "null or string" — the type is the token after "null or",
-            # i.e. parts[2] (parts[1] is always the literal "or")
-            actual = parts[2].strip() if len(parts) > 2 else "string"
-            actual = type_aliases.get(actual, actual)
-            prop = {"type": [actual, "null"]}
-        else:
-            prop = {"type": field_type}
-
-        # Arrays need an items definition for Gemini
-        if field_type == "array":
-            prop["items"] = {"type": "string"}
-
-        # Extract description
-        if " - " in field_desc_str:
-            prop["description"] = field_desc_str.split(" - ", 1)[1].strip()
-        elif "(" in field_desc_str:
-            prop["description"] = field_desc_str[field_desc_str.find("("):].strip()
-
-        properties[field_name] = prop
-
-    required = []
-    for field_name, field_desc in schema.items():
-        if isinstance(field_desc, dict):
-            required.append(field_name)
-            continue
-        desc_lower = str(field_desc).lower()
-        if "optional" not in desc_lower and "or null" not in desc_lower:
-            required.append(field_name)
-    return {"properties": properties, "required": required}
 
 
 def _schema_to_gemini(schema: dict[str, Any]) -> dict[str, Any]:
@@ -4166,6 +4104,7 @@ class CopilotCLILLMProvider(LLMProvider):
                             max_ai_credits,
                         ),
                         session_id=resume_id,
+                        persist_session=self._resumable,
                         allow_model_fallback=fallback_enabled,
                         sandbox=sandbox,
                         mint_github_token=True,
@@ -4196,10 +4135,14 @@ class CopilotCLILLMProvider(LLMProvider):
                 result = merge_copilot_attempts(result, retry)
                 result.attempted_models = attempted
 
-            if self._resumable and result.session_id and not result.error:
+            if (
+                self._resumable
+                and result.session_id
+                and result.error is None
+            ):
                 self._session_id = result.session_id
                 self._session_model = result.model or model
-            if not result.error and result.model:
+            if result.error is None and result.model:
                 if self._resumable:
                     self._selected_model = result.model
                 else:
@@ -4249,7 +4192,7 @@ class CopilotCLILLMProvider(LLMProvider):
             thinking_tokens=result.reasoning_tokens,
             duration=result.duration_seconds,
         )
-        if result.error:
+        if result.error is not None:
             raise RuntimeError(result.error)
 
         resolved = result.model or None
@@ -4689,13 +4632,14 @@ class ClaudeCodeLLMProvider(LLMProvider):
         # CCDispatchConfig.system_prompt (which build_cc_command
         # converts into a `--system-prompt-file` flag).
         call_timeout = self._effective_timeout_s(kwargs.pop("timeout_s", None))
+        normalized_schema = _normalize_schema(schema)
 
         cc_config = CCDispatchConfig(
             claude_bin=self._claude_bin,
             tools="",                                # see generate() comment
             budget_usd=self._budget_usd,
             timeout_s=call_timeout,
-            json_schema=schema,
+            json_schema=normalized_schema,
             capture_json_envelope=False,
             stream_json=True,
             system_prompt=system_prompt,
@@ -4883,7 +4827,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
         system: str | None = None,
     ) -> TurnResponse:
         """Original per-subprocess turn with no session state."""
-        schema = self._build_turn_schema(tools)
+        schema = _normalize_schema(self._build_turn_schema(tools))
         sys_combined = self._build_turn_system_prompt(tools, extra=system)
         rendered_history = self._render_history_for_cc(messages)
 
@@ -4957,7 +4901,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
             system_prompt_file_for,
         )
 
-        schema = self._build_turn_schema(tools)
+        schema = _normalize_schema(self._build_turn_schema(tools))
         first_turn = self._session_id is None
 
         if first_turn:

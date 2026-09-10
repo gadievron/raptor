@@ -144,6 +144,15 @@ process inside the sandbox cannot replay them to pass this gate.
 | Filesystem writes outside output | Landlock / SBPL file-write deny | seccomp closes AF_NETLINK (and AF_UNIX on lanes where namespaces don't already neutralise it) |
 | Long-game findings poisoning | Per-run output isolation | Output schema validation |
 
+The container wrapper also treats command resolution as a trust boundary. By
+default it puts system directories first, drops empty, relative, and
+world-writable inherited PATH entries, and keeps the selected Docker or Podman
+executable fixed for the operation. `RAPTOR_ALLOW_UNSAFE_PATH` relaxes only
+the PATH filtering and warns for every retained unsafe entry.
+`RAPTOR_NO_LAUNCHER_HARDENING` disables the wrapper's PATH-hardening layer,
+but does not disable engine pinning or the explicit mount, authentication, and
+privilege gates.
+
 ### What Is Not Fully Defended
 
 Operators should know the honest residuals and compensate accordingly:

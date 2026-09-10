@@ -88,7 +88,10 @@ class TestDispatchSitesRecheck:
 
     def test_sequential_child_receives_only_the_operator_override(self):
         src = (_REPO_ROOT / "raptor_agentic.py").read_text(encoding="utf-8")
-        assert 'analysis_cmd.append("--trust-repo")' in src
+        assert (
+            "analysis_cmd.extend("
+            "repo_trust_cli_args(repo_trust_override))"
+        ) in src
 
 
 class TestMidRunConfigWrite:

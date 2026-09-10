@@ -21,12 +21,15 @@ Runs a phased pipeline against a target web application:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self
 from types import TracebackType
-from urllib.parse import parse_qsl, urlparse
+from typing import TYPE_CHECKING, Any, Self
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 if __name__ == "__main__":
     # Direct script invocation only — module imports rely on the
@@ -141,6 +144,46 @@ _FINDING_VULN_MAP = {
 
 _INJECTION_VULN_TYPES = ["sqli", "xss", "ssti", "command_injection", "path_traversal"]
 
+_VALIDATION_REPLAY_ARTIFACT = "web-validation-replay.json"
+_VALIDATION_REPLAY_SCHEMA = "raptor.web.validation-replay.v1"
+_VALIDATION_REPLAY_MAX_ARTIFACT_BYTES = 2 * 1024 * 1024
+_VALIDATION_REPLAY_RESPONSE_BYTES = 1024
+_VALIDATION_REPLAY_TEXT_CHARS = 512
+_VALIDATION_REPLAY_VECTORS = frozenset({
+    "query_param",
+    "request_body",
+    "api_query",
+})
+_VALIDATION_REPLAY_VULN_TYPES = frozenset({
+    "sqli",
+    "xss",
+    "ssti",
+    "command_injection",
+    "path_traversal",
+})
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+def _bounded_redacted(value: object, limit: int = _VALIDATION_REPLAY_TEXT_CHARS) -> str:
+    from core.security.redaction import redact_secrets
+
+    text = redact_secrets(value)
+    if len(text) <= limit:
+        return text
+    suffix = "...[truncated]"
+    return text[: max(0, limit - len(suffix))] + suffix
+
+
+def _text_fingerprint(value: object) -> dict[str, Any]:
+    raw = str(value).encode("utf-8", "replace")
+    return {
+        "bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+
 
 class WebScanner:
     """Fully autonomous web application security scanner."""
@@ -183,6 +226,7 @@ class WebScanner:
     ) -> None:
         import time
 
+        self.target_identity = base_url
         self.base_url = base_url.rstrip("/")
         self.llm = llm
         self.out_dir = out_dir or Path("out") / f"web_scan_{int(time.time())}"
@@ -227,7 +271,7 @@ class WebScanner:
         self._client_rate_limit = rate_limit
 
         self.execution_policy = WebExecutionPolicy.for_target(
-            self.base_url,
+            self.target_identity,
             approval_level=approval_level,
             approved_tools=approved_tools or [],
         )
@@ -256,6 +300,16 @@ class WebScanner:
         self._sage_recall_rows: list[dict] = []
         self._external_validation_results: list[dict] = []
         self._raw_injection_hits: list[dict] = []
+        self._validation_request_evidence: dict[str, dict[str, Any]] = {}
+        self._verification_budget_consumed = 0
+        self._verification_budget_by_phase = {
+            "phase_6v": 0,
+            "phase_7a": 0,
+        }
+        self._phase6v_validation_evidence: dict[
+            tuple[str, str, str, str, str],
+            dict[str, Any],
+        ] = {}
         self._external_sensitive_candidates: list[tuple[str, str]] = []
         # phase -> names of check classes that crashed (surfaced at
         # WARNING and in the scan report; never silently swallowed).
@@ -1014,12 +1068,19 @@ class WebScanner:
         # adapters consume findings without scraping prose.
         grouped: dict[tuple, dict] = {}
 
-        def _record(endpoint: str, param: str, raw: dict, attack_vector: str) -> None:
+        def _record(
+            endpoint: str,
+            param: str,
+            raw: dict,
+            attack_vector: str,
+            request_evidence: dict[str, Any] | None = None,
+        ) -> None:
             self._raw_injection_hits.append({
                 **raw,
                 "endpoint": endpoint,
                 "parameter": param,
                 "attack_vector": attack_vector,
+                "request_evidence": dict(request_evidence or {}),
             })
             vuln_type = raw.get("vulnerability_type", "injection")
             key = (endpoint, vuln_type)
@@ -1037,6 +1098,7 @@ class WebScanner:
                     "status_codes": [],
                     "methods": [],
                     "attack_vectors": [],
+                    "request_evidence": [],
                 }
             grouped[key]["params"].append(param)
             grouped[key]["payloads"].append(raw.get("payload", "")[:200])
@@ -1053,6 +1115,9 @@ class WebScanner:
             if raw.get("status_code") is not None:
                 grouped[key]["status_codes"].append(raw["status_code"])
             grouped[key]["attack_vectors"].append(attack_vector)
+            grouped[key]["request_evidence"].append(
+                dict(request_evidence or {}),
+            )
 
         # Build fuzz cells. Parameters are fuzzed at the URLs where the
         # crawler actually discovered them (`parameter_urls`); the
@@ -1147,7 +1212,19 @@ class WebScanner:
                     vulnerability_types=["sqli", "xss"], method=method,
                     base_data=base_data,
                 ):
-                    _record(endpoint, field_name, raw, attack_vector)
+                    _record(
+                        endpoint,
+                        field_name,
+                        raw,
+                        attack_vector,
+                        request_evidence={
+                            "method": str(method).upper(),
+                            "url": endpoint,
+                            "headers": {},
+                            "body_kind": "form",
+                            "body": dict(base_data),
+                        },
+                    )
 
         # Spec-driven API surface: parameters at their DOCUMENTED
         # locations. OpenAPI GET query params and string-typed JSON body
@@ -1176,7 +1253,22 @@ class WebScanner:
                         for raw in self.fuzzer.fuzz_json_field(
                             op.url, op.body_template, field_path,
                         ):
-                            _record(op.url, ".".join(field_path), raw, "json_body")
+                            _record(
+                                op.url,
+                                ".".join(field_path),
+                                raw,
+                                "json_body",
+                                request_evidence={
+                                    "method": "POST",
+                                    "url": op.url,
+                                    "headers": {
+                                        "Content-Type": "application/json",
+                                    },
+                                    "body_kind": "json",
+                                    "body": op.body_template,
+                                    "field_path": list(field_path),
+                                },
+                            )
         if discovery is not None and discovery.graphql_endpoint:
             self._graphql_subpass(discovery.graphql_endpoint, _record)
 
@@ -1956,7 +2048,7 @@ class WebScanner:
         """
         try:
             from core.sage.hooks import recall_context_for_web_scan
-            rows = recall_context_for_web_scan(self.base_url)
+            rows = recall_context_for_web_scan(self.target_identity)
         except Exception:
             logger.debug("SAGE web recall unavailable", exc_info=True)
             return
@@ -1989,7 +2081,7 @@ class WebScanner:
             # SAGE rows persist across runs — this is a render/persist
             # boundary, so live raw values go through redaction here.
             store_web_scan_observations(
-                self.base_url,
+                self.target_identity,
                 fingerprint=dict(
                     getattr(discovery, "fingerprint", None) or {},
                 ),
@@ -2024,8 +2116,9 @@ class WebScanner:
         evidence_snippet = response_evidence[0] if response_evidence else ""
         diff_summary = diff_summaries[0] if diff_summaries else ""
         oracle_signal = oracle_signals[0] if oracle_signals else "web_oracle"
+        request_evidence = hit.get("request_evidence") or []
         self._finding_counter += 1
-        return WebFinding(
+        finding = WebFinding(
             id=f"WEB-{self._finding_counter:04d}",
             title=(
                 f"{vuln_type.replace('_', ' ').title()} -- "
@@ -2066,6 +2159,12 @@ class WebScanner:
             oracle_signal=oracle_signal,
             reproducible=False,
         )
+        self._validation_request_evidence[finding.id] = (
+            dict(request_evidence[0])
+            if request_evidence and isinstance(request_evidence[0], dict)
+            else {}
+        )
+        return finding
 
     # ------------------------------------------------------------------
     # Phase 6v — mechanical verification (replay + control differential)
@@ -2074,6 +2173,209 @@ class WebScanner:
     _REPLAYABLE_VECTORS = frozenset({
         "query_param", "request_body", "api_query",
     })
+
+    def _verification_budget_snapshot(self) -> dict[str, Any]:
+        limit = max(0, int(self.max_verifications))
+        consumed = max(
+            0,
+            int(getattr(self, "_verification_budget_consumed", 0)),
+        )
+        phases = getattr(self, "_verification_budget_by_phase", {})
+        if not isinstance(phases, dict):
+            phases = {}
+        return {
+            "limit": limit,
+            "consumed": consumed,
+            "remaining": max(0, limit - consumed),
+            "unit": "finding_verification",
+            "control_requests_counted_separately": False,
+            "consumed_by_phase": {
+                "phase_6v": max(0, int(phases.get("phase_6v", 0))),
+                "phase_7a": max(0, int(phases.get("phase_7a", 0))),
+            },
+        }
+
+    def _consume_verification_budget(self, phase: str) -> bool:
+        if phase not in {"phase_6v", "phase_7a"}:
+            raise ValueError(f"unknown verification phase: {phase}")
+        budget = self._verification_budget_snapshot()
+        if budget["remaining"] <= 0:
+            return False
+        self._verification_budget_consumed = budget["consumed"] + 1
+        phases = dict(budget["consumed_by_phase"])
+        phases[phase] += 1
+        self._verification_budget_by_phase = phases
+        return True
+
+    @staticmethod
+    def _verification_request_key(
+        *,
+        url: object,
+        method: object,
+        parameter: object,
+        payload: object,
+        vuln_type: object,
+    ) -> tuple[str, str, str, str, str]:
+        return (
+            str(url),
+            str(method).strip().upper(),
+            str(parameter),
+            str(payload),
+            str(vuln_type),
+        )
+
+    def _phase6v_request_key(
+        self,
+        finding: dict,
+        url: str,
+        parameter: str,
+        method: str,
+    ) -> tuple[str, str, str, str, str]:
+        return self._verification_request_key(
+            url=url,
+            method=method,
+            parameter=parameter,
+            payload=finding.get("payload", ""),
+            vuln_type=finding.get("vulnerability_type", ""),
+        )
+
+    def _validation_candidate_request_key(
+        self,
+        candidate: dict[str, Any],
+    ) -> tuple[str, str, str, str, str] | None:
+        method = candidate["method"].strip().upper()
+        headers = candidate.get("headers") or {}
+        body = candidate.get("body") or {}
+        parameter = candidate["parameter"]
+        if headers:
+            return None
+        if method == "GET" and body:
+            return None
+        if method == "POST" and any(name != parameter for name in body):
+            return None
+        return self._verification_request_key(
+            url=candidate["url"],
+            method=method,
+            parameter=parameter,
+            payload=candidate["payload"],
+            vuln_type=candidate["vuln_type"],
+        )
+
+    def _remember_phase6v_validation_evidence(
+        self,
+        *,
+        finding: dict,
+        url: str,
+        parameter: str,
+        method: str,
+        result: Any,
+        started_at: str,
+        completed_at: str,
+        policy_start: int | None,
+    ) -> None:
+        requests_used = max(0, int(getattr(result, "requests_used", 0)))
+        vuln_type = str(finding.get("vulnerability_type", ""))
+        status = str(getattr(result, "status", "inconclusive"))
+        observations = getattr(result, "observations", {})
+        if not isinstance(observations, dict):
+            observations = {}
+        if vuln_type == "xss":
+            complete = (
+                status == "refuted"
+                and observations.get("payload_in_canary_response") is True
+            ) or all(
+                name in observations
+                for name in (
+                    "canary_reflected",
+                    "payload_in_canary_response",
+                    "payload_reflected_on_replay",
+                    "replay_status_code",
+                )
+            )
+            control_signals = (
+                [observations.get("payload_in_canary_response")]
+                if "payload_in_canary_response" in observations
+                else []
+            )
+            replay_signal = observations.get(
+                "payload_reflected_on_replay",
+            )
+        else:
+            complete = all(
+                name in observations
+                for name in (
+                    "marker_on_replay",
+                    "marker_on_control",
+                    "marker_on_control_replay",
+                    "replay_status_code",
+                )
+            )
+            control_signals = [
+                observations[name]
+                for name in ("marker_on_control", "marker_on_control_replay")
+                if name in observations
+            ]
+            replay_signal = observations.get("marker_on_replay")
+        if not complete or requests_used <= 0:
+            return
+
+        decisions = []
+        policy = getattr(self, "execution_policy", None)
+        if policy is not None and policy_start is not None:
+            decisions = self._validation_replay_policy_decisions(
+                policy,
+                policy_start,
+            )
+
+        cache = getattr(self, "_phase6v_validation_evidence", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._phase6v_validation_evidence = cache
+        key = self._phase6v_request_key(
+            finding,
+            url,
+            parameter,
+            method,
+        )
+        cache.setdefault(key, {
+            "status": status,
+            "evidence_type": _bounded_redacted(
+                getattr(result, "evidence_type", vuln_type),
+                64,
+            ),
+            "reason": _bounded_redacted(
+                getattr(result, "reason", ""),
+                300,
+            ),
+            "requests_used": requests_used,
+            "oracle": {
+                "signal": _bounded_redacted(
+                    getattr(result, "evidence_type", vuln_type),
+                    64,
+                ),
+                "replay_signal_present": replay_signal,
+                "control_signal_present": control_signals,
+                "canary_reflected": observations.get("canary_reflected"),
+                "payload_present_in_control": observations.get(
+                    "payload_in_canary_response",
+                ),
+            },
+            "control_value": (
+                _text_fingerprint(observations["canary"])
+                if isinstance(observations.get("canary"), str)
+                else (
+                    _text_fingerprint(observations["control_value"])
+                    if isinstance(observations.get("control_value"), str)
+                    else None
+                )
+            ),
+            "replay_status_code": observations.get("replay_status_code"),
+            "policy_decisions": decisions,
+            "timestamps": {
+                "started_at": started_at,
+                "completed_at": completed_at,
+            },
+        })
 
     def _partition_replayable_hits(
         self, hits: list[dict],
@@ -2124,25 +2426,46 @@ class WebScanner:
         oracle = VerificationOracle(self.client)
         counts = {"verified": 0, "refuted": 0, "inconclusive": 0, "skipped": 0}
         attempts = []
+        budget_before = self._verification_budget_snapshot()
 
-        for i, (finding, url, param, method) in enumerate(probe_contexts):
-            if i >= self.max_verifications:
+        for finding, url, param, method in probe_contexts:
+            if not self._consume_verification_budget("phase_6v"):
                 finding['verification'] = {
                     'status': 'skipped',
-                    'reason': 'per-run verification cap reached',
+                    'reason': (
+                        'shared per-run verification budget exhausted'
+                    ),
                 }
                 counts["skipped"] += 1
                 continue
+            started_at = _utc_now()
+            policy = getattr(self, "execution_policy", None)
+            policy_start = (
+                policy.decision_cursor()
+                if policy is not None
+                else None
+            )
             result = oracle.verify(
                 url, param, finding.get('payload', ''),
                 finding.get('vulnerability_type', ''), method,
             )
+            completed_at = _utc_now()
             finding['verification'] = {
                 'status': result.status,
                 'evidence_type': result.evidence_type,
                 'reason': result.reason,
                 'requests_used': result.requests_used,
             }
+            self._remember_phase6v_validation_evidence(
+                finding=finding,
+                url=url,
+                parameter=param,
+                method=method,
+                result=result,
+                started_at=started_at,
+                completed_at=completed_at,
+                policy_start=policy_start,
+            )
             counts[result.status] = counts.get(result.status, 0) + 1
             try:
                 attempts.append(build_web_attempt(
@@ -2173,6 +2496,15 @@ class WebScanner:
         summary["requests_used"] = oracle.requests_used
         summary["transport_errors"] = oracle.errors
         summary["records_written"] = len(written)
+        budget_after = self._verification_budget_snapshot()
+        summary["verification_budget"] = {
+            **budget_after,
+            "consumed_before_phase": budget_before["consumed"],
+            "consumed_in_phase": (
+                budget_after["consumed_by_phase"]["phase_6v"]
+                - budget_before["consumed_by_phase"]["phase_6v"]
+            ),
+        }
         if oracle.errors:
             # Loud: an unreachable/flaky target means verification is
             # partial — the operator must not read heuristic findings
@@ -2229,6 +2561,885 @@ class WebScanner:
     # Optional phases
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _validation_replay_error(exc: BaseException) -> dict[str, str]:
+        import requests
+
+        message = str(exc).lower()
+        if isinstance(exc, requests.exceptions.Timeout):
+            code = "timeout"
+        elif isinstance(exc, requests.exceptions.TooManyRedirects):
+            code = "redirect_limit"
+        elif "redirect" in message and (
+            "outside" in message or "scope" in message
+        ):
+            code = "cross_origin_redirect"
+        elif isinstance(exc, WebPolicyError):
+            code = (
+                "policy_denied"
+                if any(token in message for token in (
+                    "outside scope",
+                    "credential",
+                    "only approves",
+                ))
+                else "malformed_evidence"
+            )
+        elif isinstance(exc, NotImplementedError):
+            code = "unsupported"
+        elif isinstance(exc, requests.exceptions.RequestException):
+            code = "transport_error"
+        elif isinstance(exc, (TypeError, ValueError)):
+            code = "malformed_evidence"
+        else:
+            code = "unexpected_error"
+        return {
+            "code": code,
+            "message": _bounded_redacted(exc, 300),
+        }
+
+    @staticmethod
+    def _validation_replay_record(
+        *,
+        finding_id: str,
+        vuln_type: str,
+        attack_vector: str,
+        method: str | None,
+        parameter: str | None,
+        payload: object,
+    ) -> dict[str, Any]:
+        return {
+            "finding_id": _bounded_redacted(finding_id, 128),
+            "evidence_status": "inconclusive",
+            "freshness": "not_obtained",
+            "reason": "",
+            "source_evidence": {
+                "kind": "structured_scanner_finding",
+                "vuln_type": _bounded_redacted(vuln_type, 64),
+                "attack_vector": _bounded_redacted(attack_vector, 64),
+                "method": (
+                    _bounded_redacted(method, 16)
+                    if method is not None
+                    else None
+                ),
+                "parameter": (
+                    _bounded_redacted(parameter, 128)
+                    if parameter is not None
+                    else None
+                ),
+                "payload": _text_fingerprint(payload),
+            },
+            "replay": None,
+            "controls": [],
+            "oracle": {
+                "signal": None,
+                "replay_signal_present": None,
+                "control_signal_present": [],
+                "canary_reflected": None,
+                "payload_present_in_control": None,
+            },
+            "policy": {
+                "decisions": [],
+                "error": None,
+            },
+            "timestamps": {
+                "started_at": None,
+                "completed_at": None,
+            },
+            "provenance": {
+                "producer": "packages.web.scanner.WebScanner",
+                "network_executor": "packages.web.client.WebClient",
+                "policy_enforcer":
+                    "packages.web.execution_policy.WebExecutionPolicy",
+                "model_generated_request": False,
+            },
+            "artifact_details_truncated": False,
+        }
+
+    def _validation_replay_input(
+        self,
+        finding: WebFinding,
+    ) -> dict[str, Any]:
+        if not hasattr(finding, "to_dict"):
+            raise ValueError(
+                "validation replay requires a structured WebFinding"
+            )
+        data = finding.to_dict()
+        if not isinstance(data, dict):
+            raise ValueError("validation replay finding must serialize to an object")
+
+        finding_id = str(data.get("finding_id") or data.get("id") or "")
+        url = data.get("target_url") or data.get("url")
+        method = data.get("method")
+        params = data.get("affected_parameters")
+        parameter = (
+            params[0]
+            if isinstance(params, list) and params
+            else data.get("parameter")
+        )
+        payload = data.get("confirmation_payload")
+        vuln_type = data.get("vuln_type")
+        attack_vector = data.get("attack_vector")
+        request_evidence = self._validation_request_evidence.get(
+            finding_id,
+            {},
+        )
+        if not isinstance(request_evidence, dict):
+            raise ValueError("scanner request evidence must be an object")
+
+        url = request_evidence.get("url") or url
+        method = request_evidence.get("method") or method
+        headers = request_evidence.get("headers", {})
+        body_kind = request_evidence.get("body_kind")
+        body = request_evidence.get("body")
+
+        if not all(isinstance(item, str) and item for item in (
+            finding_id,
+            url,
+            method,
+            parameter,
+            payload,
+            vuln_type,
+            attack_vector,
+        )):
+            raise ValueError(
+                "validation replay evidence is missing a required string field"
+            )
+        if attack_vector not in _VALIDATION_REPLAY_VECTORS:
+            raise NotImplementedError(
+                f"validation replay does not support vector {attack_vector}"
+            )
+        if vuln_type not in _VALIDATION_REPLAY_VULN_TYPES:
+            raise NotImplementedError(
+                f"validation replay does not support class {vuln_type}"
+            )
+        if headers is not None and not isinstance(headers, dict):
+            raise ValueError("validation replay headers must be an object")
+        if body is not None and not isinstance(body, dict):
+            raise ValueError("validation replay body must be an object")
+        if body_kind not in (None, "form"):
+            raise NotImplementedError(
+                f"validation replay does not support body kind {body_kind}"
+            )
+
+        return {
+            "finding_id": finding_id,
+            "url": url,
+            "method": method,
+            "parameter": parameter,
+            "payload": payload,
+            "vuln_type": vuln_type,
+            "attack_vector": attack_vector,
+            "headers": dict(headers or {}),
+            "body": dict(body or {}),
+        }
+
+    @staticmethod
+    def _validation_replay_url(
+        url: str,
+        parameter: str,
+        value: str,
+    ) -> str:
+        parsed = urlparse(url)
+        query = [
+            (name, existing)
+            for name, existing in parse_qsl(
+                parsed.query,
+                keep_blank_values=True,
+            )
+            if name != parameter
+        ]
+        query.append((parameter, value))
+        return urlunparse(parsed._replace(query=urlencode(query)))
+
+    def _prepare_validation_replay_leg(
+        self,
+        candidate: dict[str, Any],
+        value: str,
+        *,
+        action: str,
+    ):
+        method = candidate["method"].strip().upper()
+        if method == "GET":
+            url = self._validation_replay_url(
+                candidate["url"],
+                candidate["parameter"],
+                value,
+            )
+            form_data = None
+            required_body_field = None
+        else:
+            url = candidate["url"]
+            form_data = dict(candidate["body"])
+            form_data[candidate["parameter"]] = value
+            required_body_field = candidate["parameter"]
+
+        return self.execution_policy.prepare_replay_request(
+            method=method,
+            url=url,
+            headers=candidate["headers"],
+            form_data=form_data,
+            required_body_field=required_body_field,
+            action=action,
+        )
+
+    def _send_validation_replay_leg(
+        self,
+        prepared,
+        *,
+        value: str,
+        value_source: str,
+    ) -> tuple[dict[str, Any], Any | None]:
+        started_at = _utc_now()
+        request = prepared.metadata()
+        request["value_source"] = value_source
+        request["value"] = _text_fingerprint(value)
+        leg = {
+            "request": request,
+            "response": None,
+            "timestamps": {
+                "started_at": started_at,
+                "completed_at": None,
+            },
+            "error": None,
+        }
+        try:
+            if prepared.method == "POST":
+                response = self.client.post(
+                    prepared.url,
+                    data=prepared.form_data,
+                    headers=prepared.headers,
+                    allow_redirects=True,
+                )
+            else:
+                response = self.client.get(
+                    prepared.url,
+                    headers=prepared.headers,
+                    allow_redirects=True,
+                )
+            leg["response"] = self.client.response_evidence(
+                response,
+                max_body_bytes=_VALIDATION_REPLAY_RESPONSE_BYTES,
+            )
+            if response.status_code == 429:
+                leg["error"] = {
+                    "code": "rate_limited",
+                    "message": "target returned HTTP 429",
+                }
+            return leg, response
+        except Exception as exc:
+            leg["error"] = self._validation_replay_error(exc)
+            return leg, None
+        finally:
+            leg["timestamps"]["completed_at"] = _utc_now()
+
+    @staticmethod
+    def _validation_replay_policy_decisions(
+        policy: WebExecutionPolicy,
+        start: int,
+    ) -> list[dict[str, Any]]:
+        decisions = policy.decisions_since(start)
+        if not isinstance(decisions, list):
+            return []
+        return [
+            {
+                "sequence": item.get("sequence"),
+                "at": item.get("at"),
+                "tool_id": item.get("tool_id"),
+                "target_origin": item.get("target_origin"),
+                "risk": item.get("risk"),
+                "action": item.get("action"),
+                "decision": item.get("decision"),
+                "reason": _bounded_redacted(item.get("reason"), 300),
+            }
+            for item in decisions
+            if isinstance(item, dict)
+        ]
+
+    def _phase6v_validation_replay_record(
+        self,
+        candidate: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        key = self._validation_candidate_request_key(candidate)
+        cache = getattr(self, "_phase6v_validation_evidence", {})
+        if key is None or not isinstance(cache, dict):
+            return None
+        evidence = cache.get(key)
+        if not isinstance(evidence, dict):
+            return None
+
+        record = self._validation_replay_record(
+            finding_id=candidate["finding_id"],
+            vuln_type=candidate["vuln_type"],
+            attack_vector=candidate["attack_vector"],
+            method=candidate["method"],
+            parameter=candidate["parameter"],
+            payload=candidate["payload"],
+        )
+        status = str(evidence.get("status") or "inconclusive")
+        record["evidence_status"] = {
+            "verified": "confirmed",
+            "refuted": "refuted",
+        }.get(status, "inconclusive")
+        record["freshness"] = "fresh"
+        record["reason"] = _bounded_redacted(
+            evidence.get("reason") or "reused fresh Phase 6v evidence",
+            300,
+        )
+        record["timestamps"] = dict(evidence.get("timestamps") or {})
+        record["oracle"].update(dict(evidence.get("oracle") or {}))
+        record["policy"]["decisions"] = [
+            dict(item)
+            for item in evidence.get("policy_decisions") or []
+            if isinstance(item, dict)
+        ]
+        record["source_evidence"]["phase_6v_verification_status"] = status
+        record["provenance"].update({
+            "evidence_source": "phase_6v",
+            "reused_for_phase_7a": True,
+            "verification_requests_used": max(
+                0,
+                int(evidence.get("requests_used") or 0),
+            ),
+            "verification_budget_phase": "phase_6v",
+        })
+
+        replay_signal = record["oracle"].get("replay_signal_present")
+        replay_status = evidence.get("replay_status_code")
+        if replay_signal is not None or replay_status is not None:
+            response = {"signal_present": replay_signal}
+            if replay_status is not None:
+                response["status_code"] = replay_status
+            record["replay"] = {
+                "request": {
+                    "method": candidate["method"].strip().upper(),
+                    "url": _bounded_redacted(candidate["url"], 2048),
+                    "parameter": _bounded_redacted(
+                        candidate["parameter"],
+                        128,
+                    ),
+                    "value_source": "scanner_confirmation_payload",
+                    "value": _text_fingerprint(candidate["payload"]),
+                    "reused_from": "phase_6v",
+                },
+                "response": response,
+                "timestamps": dict(record["timestamps"]),
+                "error": None,
+            }
+
+        control_value = evidence.get("control_value")
+        for index, signal in enumerate(
+            record["oracle"].get("control_signal_present") or [],
+        ):
+            record["controls"].append({
+                "request": {
+                    "method": candidate["method"].strip().upper(),
+                    "url": _bounded_redacted(candidate["url"], 2048),
+                    "parameter": _bounded_redacted(
+                        candidate["parameter"],
+                        128,
+                    ),
+                    "value_source": (
+                        "fresh_scanner_control"
+                        if index == 0
+                        else "fresh_scanner_control_replay"
+                    ),
+                    "value": control_value,
+                    "reused_from": "phase_6v",
+                },
+                "response": {"signal_present": signal},
+                "timestamps": dict(record["timestamps"]),
+                "error": None,
+            })
+        return record
+
+    def _replay_validation_finding(
+        self,
+        finding: WebFinding,
+    ) -> dict[str, Any]:
+        started_at = _utc_now()
+        policy_start = self.execution_policy.decision_cursor()
+        try:
+            candidate = self._validation_replay_input(finding)
+            record = self._validation_replay_record(
+                finding_id=candidate["finding_id"],
+                vuln_type=candidate["vuln_type"],
+                attack_vector=candidate["attack_vector"],
+                method=candidate["method"],
+                parameter=candidate["parameter"],
+                payload=candidate["payload"],
+            )
+        except NotImplementedError as exc:
+            data = (
+                finding.to_dict()
+                if hasattr(finding, "to_dict")
+                else {}
+            )
+            record = self._validation_replay_record(
+                finding_id=str(data.get("finding_id") or data.get("id") or ""),
+                vuln_type=str(data.get("vuln_type") or ""),
+                attack_vector=str(data.get("attack_vector") or ""),
+                method=data.get("method"),
+                parameter=(
+                    (data.get("affected_parameters") or [None])[0]
+                    if isinstance(data.get("affected_parameters"), list)
+                    else None
+                ),
+                payload=data.get("confirmation_payload") or "",
+            )
+            record["evidence_status"] = "unsupported"
+            record["reason"] = _bounded_redacted(exc, 300)
+            record["policy"]["error"] = self._validation_replay_error(exc)
+            record["timestamps"] = {
+                "started_at": started_at,
+                "completed_at": _utc_now(),
+            }
+            return record
+        except Exception as exc:
+            record = self._validation_replay_record(
+                finding_id=str(getattr(finding, "id", "")),
+                vuln_type=str(getattr(finding, "vuln_type", "")),
+                attack_vector=str(getattr(finding, "attack_vector", "")),
+                method=getattr(finding, "method", None),
+                parameter=None,
+                payload="",
+            )
+            record["evidence_status"] = "malformed"
+            record["reason"] = "structured scanner evidence was malformed"
+            record["policy"]["error"] = self._validation_replay_error(exc)
+            record["timestamps"] = {
+                "started_at": started_at,
+                "completed_at": _utc_now(),
+            }
+            return record
+
+        record["timestamps"]["started_at"] = started_at
+        try:
+            from packages.web.markers import marker_present
+            from packages.web.oracle import mint_canary
+
+            control_value = mint_canary()
+            control_prepared = self._prepare_validation_replay_leg(
+                candidate,
+                control_value,
+                action="validation_control",
+            )
+            control_leg, control_response = self._send_validation_replay_leg(
+                control_prepared,
+                value=control_value,
+                value_source="fresh_scanner_control",
+            )
+            record["controls"].append(control_leg)
+            if control_response is None or control_leg["error"] is not None:
+                if (
+                    (control_leg["error"] or {}).get("code")
+                    in {"cross_origin_redirect", "policy_denied"}
+                ):
+                    record["evidence_status"] = "blocked"
+                record["reason"] = "fresh control request did not complete"
+                record["policy"]["error"] = control_leg["error"]
+                return record
+
+            replay_prepared = self._prepare_validation_replay_leg(
+                candidate,
+                candidate["payload"],
+                action="validation_replay",
+            )
+            replay_leg, replay_response = self._send_validation_replay_leg(
+                replay_prepared,
+                value=candidate["payload"],
+                value_source="scanner_confirmation_payload",
+            )
+            record["replay"] = replay_leg
+            if replay_response is None or replay_leg["error"] is not None:
+                if (
+                    (replay_leg["error"] or {}).get("code")
+                    in {"cross_origin_redirect", "policy_denied"}
+                ):
+                    record["evidence_status"] = "blocked"
+                record["freshness"] = "partial"
+                record["reason"] = "fresh replay request did not complete"
+                record["policy"]["error"] = replay_leg["error"]
+                return record
+
+            control_responses = [control_response]
+            if candidate["vuln_type"] != "xss":
+                control_replay_prepared = self._prepare_validation_replay_leg(
+                    candidate,
+                    control_value,
+                    action="validation_control_replay",
+                )
+                control_replay_leg, control_replay_response = (
+                    self._send_validation_replay_leg(
+                        control_replay_prepared,
+                        value=control_value,
+                        value_source="fresh_scanner_control_replay",
+                    )
+                )
+                record["controls"].append(control_replay_leg)
+                if (
+                    control_replay_response is None
+                    or control_replay_leg["error"] is not None
+                ):
+                    if (
+                        (control_replay_leg["error"] or {}).get("code")
+                        in {"cross_origin_redirect", "policy_denied"}
+                    ):
+                        record["evidence_status"] = "blocked"
+                    record["freshness"] = "partial"
+                    record["reason"] = (
+                        "fresh control replay request did not complete"
+                    )
+                    record["policy"]["error"] = control_replay_leg["error"]
+                    return record
+                control_responses.append(control_replay_response)
+
+            record["freshness"] = "fresh"
+            record["oracle"]["signal"] = _bounded_redacted(
+                candidate["vuln_type"],
+                64,
+            )
+            if candidate["vuln_type"] == "xss":
+                control_text = (
+                    control_response.text
+                    if isinstance(control_response.text, str)
+                    else ""
+                )
+                replay_text = (
+                    replay_response.text
+                    if isinstance(replay_response.text, str)
+                    else ""
+                )
+                canary_reflected = control_value in control_text
+                payload_in_control = candidate["payload"] in control_text
+                replay_signal = candidate["payload"] in replay_text
+                record["oracle"].update({
+                    "signal": "xss_reflection",
+                    "replay_signal_present": replay_signal,
+                    "control_signal_present": [payload_in_control],
+                    "canary_reflected": canary_reflected,
+                    "payload_present_in_control": payload_in_control,
+                })
+                if payload_in_control:
+                    record["evidence_status"] = "refuted"
+                    record["reason"] = (
+                        "confirmation payload was already present in the "
+                        "fresh control response"
+                    )
+                elif canary_reflected and replay_signal:
+                    record["evidence_status"] = "confirmed"
+                    record["reason"] = (
+                        "fresh canary attribution and payload replay both "
+                        "reproduced"
+                    )
+                else:
+                    record["reason"] = (
+                        "fresh reflection evidence did not reproduce cleanly"
+                    )
+            else:
+                replay_signal = marker_present(
+                    candidate["vuln_type"],
+                    replay_response.text,
+                )
+                control_signals = [
+                    marker_present(candidate["vuln_type"], response.text)
+                    for response in control_responses
+                ]
+                record["oracle"].update({
+                    "signal": _bounded_redacted(
+                        candidate["vuln_type"],
+                        64,
+                    ),
+                    "replay_signal_present": replay_signal,
+                    "control_signal_present": control_signals,
+                })
+                if all(control_signals):
+                    record["evidence_status"] = "refuted"
+                    record["reason"] = (
+                        "class signal reproduced on both benign controls"
+                    )
+                elif replay_signal and not any(control_signals):
+                    record["evidence_status"] = "confirmed"
+                    record["reason"] = (
+                        "class signal reproduced on fresh replay with "
+                        "clean controls"
+                    )
+                else:
+                    record["reason"] = (
+                        "fresh replay and control signals were inconclusive"
+                    )
+            return record
+        except WebPolicyError as exc:
+            error = self._validation_replay_error(exc)
+            record["evidence_status"] = (
+                "blocked"
+                if error["code"] == "policy_denied"
+                else "malformed"
+            )
+            record["reason"] = (
+                "validation replay was refused by policy"
+                if record["evidence_status"] == "blocked"
+                else "structured replay evidence failed policy validation"
+            )
+            record["policy"]["error"] = error
+            return record
+        except Exception as exc:
+            record["reason"] = "validation replay failed without aborting the scan"
+            record["policy"]["error"] = self._validation_replay_error(exc)
+            return record
+        finally:
+            record["timestamps"]["completed_at"] = _utc_now()
+            record["policy"]["decisions"] = (
+                self._validation_replay_policy_decisions(
+                    self.execution_policy,
+                    policy_start,
+                )
+            )
+
+    def _skipped_validation_replay_record(
+        self,
+        finding: WebFinding,
+        reason: str,
+        *,
+        evidence_source: str,
+    ) -> dict[str, Any]:
+        try:
+            data = finding.to_dict()
+        except Exception:
+            data = {}
+        params = data.get("affected_parameters")
+        record = self._validation_replay_record(
+            finding_id=str(data.get("finding_id") or data.get("id") or ""),
+            vuln_type=str(data.get("vuln_type") or ""),
+            attack_vector=str(data.get("attack_vector") or ""),
+            method=data.get("method"),
+            parameter=(
+                params[0]
+                if isinstance(params, list) and params
+                else None
+            ),
+            payload=data.get("confirmation_payload") or "",
+        )
+        now = _utc_now()
+        record["evidence_status"] = "skipped"
+        record["reason"] = reason
+        record["timestamps"] = {
+            "started_at": now,
+            "completed_at": now,
+        }
+        record["provenance"].update({
+            "evidence_source": evidence_source,
+            "reused_for_phase_7a": False,
+            "verification_requests_used": 0,
+        })
+        return record
+
+    @staticmethod
+    def _validation_replay_artifact_size(artifact: dict[str, Any]) -> int:
+        return len(json.dumps(
+            artifact,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=True,
+        ).encode("utf-8"))
+
+    def _bound_validation_replay_artifact(
+        self,
+        artifact: dict[str, Any],
+    ) -> dict[str, Any]:
+        truncated = 0
+        records = artifact.get("records")
+        if not isinstance(records, list):
+            return artifact
+        for record in reversed(records):
+            if (
+                self._validation_replay_artifact_size(artifact)
+                <= _VALIDATION_REPLAY_MAX_ARTIFACT_BYTES
+            ):
+                break
+            if not isinstance(record, dict):
+                continue
+            record["replay"] = None
+            record["controls"] = []
+            policy = record.get("policy")
+            if isinstance(policy, dict):
+                policy["decisions"] = []
+            record["artifact_details_truncated"] = True
+            truncated += 1
+        artifact["artifact_truncated_records"] = truncated
+        return artifact
+
+    def _build_validation_replay_artifact(
+        self,
+        findings: list[WebFinding],
+    ) -> dict[str, Any]:
+        started_at = _utc_now()
+        records = []
+        budget_before = self._verification_budget_snapshot()
+        for finding in findings:
+            if not self.verify_findings:
+                records.append(self._skipped_validation_replay_record(
+                    finding,
+                    "live replay disabled by --no-verify",
+                    evidence_source="skipped_no_verify",
+                ))
+                continue
+
+            candidate = None
+            try:
+                candidate = self._validation_replay_input(finding)
+            except (NotImplementedError, TypeError, ValueError):
+                pass
+            if candidate is not None:
+                reused = self._phase6v_validation_replay_record(
+                    candidate,
+                )
+                if reused is not None:
+                    records.append(reused)
+                    continue
+
+            if not self._consume_verification_budget("phase_7a"):
+                records.append(self._skipped_validation_replay_record(
+                    finding,
+                    "shared per-run verification budget exhausted",
+                    evidence_source="skipped_budget_exhausted",
+                ))
+                continue
+            record = self._replay_validation_finding(finding)
+            record["provenance"].update({
+                "evidence_source": "phase_7a",
+                "reused_for_phase_7a": False,
+                "verification_budget_phase": "phase_7a",
+            })
+            records.append(record)
+
+        status_counts = {
+            status: sum(
+                1
+                for record in records
+                if record.get("evidence_status") == status
+            )
+            for status in (
+                "blocked",
+                "confirmed",
+                "inconclusive",
+                "malformed",
+                "refuted",
+                "skipped",
+                "unsupported",
+            )
+        }
+        request_count = 0
+        reused_request_count = 0
+        reused_finding_count = 0
+        live_fresh_finding_count = 0
+        live_partial_finding_count = 0
+        for record in records:
+            provenance = record.get("provenance") or {}
+            if provenance.get("evidence_source") == "phase_6v":
+                reused_finding_count += 1
+                reused_request_count += max(
+                    0,
+                    int(provenance.get("verification_requests_used") or 0),
+                )
+                continue
+            if provenance.get("evidence_source") == "phase_7a":
+                if record.get("freshness") == "fresh":
+                    live_fresh_finding_count += 1
+                elif record.get("freshness") == "partial":
+                    live_partial_finding_count += 1
+                if record.get("replay") is not None:
+                    request_count += 1
+                request_count += len(record.get("controls") or [])
+
+        policy_report = self.execution_policy.report()
+        receipt = policy_report.get("scope_receipt", {})
+        budget_after = self._verification_budget_snapshot()
+        if live_fresh_finding_count and reused_request_count:
+            freshness_source = (
+                "fresh scanner-owned Phase 6v evidence and "
+                "Phase 7a replay/controls"
+            )
+        elif live_fresh_finding_count:
+            freshness_source = "fresh scanner-owned Phase 7a replay/controls"
+        elif reused_request_count:
+            freshness_source = "fresh scanner-owned Phase 6v evidence"
+        elif live_partial_finding_count:
+            freshness_source = "partial scanner-owned Phase 7a replay/controls"
+        else:
+            freshness_source = "not_obtained"
+        artifact = {
+            "schema": _VALIDATION_REPLAY_SCHEMA,
+            "target": _bounded_redacted(self.target_identity, 2048),
+            "summary": {
+                "finding_count": len(records),
+                "request_count": request_count,
+                "reused_request_count": reused_request_count,
+                "reused_finding_count": reused_finding_count,
+                "status_counts": status_counts,
+                "live_replay_enabled": self.verify_findings,
+                "verification_budget": {
+                    **budget_after,
+                    "consumed_before_phase": budget_before["consumed"],
+                    "consumed_in_phase": (
+                        budget_after["consumed_by_phase"]["phase_7a"]
+                        - budget_before["consumed_by_phase"]["phase_7a"]
+                    ),
+                },
+            },
+            "scope": {
+                "receipt_id": receipt.get("id"),
+                "allowed_origins": list(receipt.get("allowed_origins") or []),
+                "approval_level": receipt.get("approval_level"),
+            },
+            "security_boundary": {
+                "network_actor": "trusted_scanner_process",
+                "http_client": "WebClient",
+                "execution_policy": "WebExecutionPolicy",
+                "model_generated_requests": False,
+                "selected_agent_target_network_access": False,
+                "cross_origin_redirects": "refused",
+                "credential_inputs": "excluded",
+            },
+            "limits": {
+                "max_artifact_bytes":
+                    _VALIDATION_REPLAY_MAX_ARTIFACT_BYTES,
+                "max_records_replayed": (
+                    budget_before["remaining"]
+                    if self.verify_findings
+                    else 0
+                ),
+                "max_verifications_per_run": budget_after["limit"],
+                "verification_budget_unit": budget_after["unit"],
+                "control_requests_counted_separately": False,
+                "response_excerpt_bytes":
+                    _VALIDATION_REPLAY_RESPONSE_BYTES,
+                **self.execution_policy.replay_limits(),
+            },
+            "timestamps": {
+                "started_at": started_at,
+                "completed_at": _utc_now(),
+            },
+            "provenance": {
+                "producer": "raptor-web-scanner",
+                "input_contract": "structured WebFinding/request evidence",
+                "freshness_source": freshness_source,
+            },
+            "records": records,
+            "artifact_truncated_records": 0,
+        }
+        return self._bound_validation_replay_artifact(artifact)
+
+    def _save_validation_replay_artifact(
+        self,
+        path: Path,
+        artifact: dict[str, Any],
+    ) -> None:
+        # Unlike ordinary scan artifacts, reveal_secrets never applies:
+        # this file is intentionally readable by the selected-agent sandbox.
+        safe = _redact_json_artifact(artifact)
+        safe = self._bound_validation_replay_artifact(safe)
+        save_json(path, safe, mode=0o600, sort_keys=True)
+
     def _phase_understand(
         self, crawl_data: dict, discovery: DiscoveryResult,
     ) -> dict | None:
@@ -2265,15 +3476,18 @@ class WebScanner:
                 f"oracle={f.oracle_signal or '-'}"
             )[:300],
         )
-        logger.info("Phase 7a: Validating %d needs_review findings", len(needs_review))
+        try:
+            from core.orchestration.skill_dispatch import MAX_VALIDATE_FINDINGS
+            needs_review = needs_review[:MAX_VALIDATE_FINDINGS]
+        except ImportError:
+            needs_review = needs_review[:50]
+
+        logger.info(
+            "Phase 7a: Validating %d needs_review findings",
+            len(needs_review),
+        )
         try:
             import shutil
-
-            findings_for_validate = [
-                self._web_finding_to_agentic_result(f) for f in needs_review
-            ]
-            findings_input = self.out_dir / "web_findings_for_validation.json"
-            self._save_artifact(findings_input, {"results": findings_for_validate})
 
             selected_agent = os.environ.get("RAPTOR_AGENT_CLI", "claude")
             agent_bin = shutil.which(
@@ -2286,16 +3500,58 @@ class WebScanner:
                 )
                 return findings
 
+            replay_artifact = self._build_validation_replay_artifact(
+                needs_review,
+            )
+            replay_path = self.out_dir / _VALIDATION_REPLAY_ARTIFACT
+            try:
+                self._save_validation_replay_artifact(
+                    replay_path,
+                    replay_artifact,
+                )
+            except OSError as exc:
+                logger.warning(
+                    "Phase 7a: could not persist scanner replay evidence: %s",
+                    self._redact(str(exc)),
+                )
+
+            findings_for_validate = [
+                self._web_finding_to_agentic_result(f) for f in needs_review
+            ]
+            findings_input = self.out_dir / "web_findings_for_validation.json"
+            self._save_artifact(findings_input, {
+                "results": findings_for_validate,
+                "web_validation_replay": {
+                    "artifact": str(replay_path),
+                    "schema": _VALIDATION_REPLAY_SCHEMA,
+                    "network_actor": "trusted_scanner_process",
+                    "model_generated_requests": False,
+                },
+            })
+
             from core.orchestration.agentic_passes import run_validate_postpass
             result = run_validate_postpass(
-                target=Path(self.base_url),
+                target=self.target_identity,
                 agentic_out_dir=self.out_dir,
                 analysis_report=findings_input,
                 # Copilot mode resolves its binary through the shared
                 # dispatcher; the legacy argument remains Claude-specific.
                 claude_bin=agent_bin if selected_agent == "claude" else None,
             )
-            if result.ran:
+            validate_dir = getattr(result, "validate_dir", None)
+            if validate_dir is not None:
+                try:
+                    self._save_validation_replay_artifact(
+                        Path(validate_dir) / _VALIDATION_REPLAY_ARTIFACT,
+                        replay_artifact,
+                    )
+                except OSError as exc:
+                    logger.warning(
+                        "Phase 7a: could not mirror replay evidence into "
+                        "validation run: %s",
+                        self._redact(str(exc)),
+                    )
+            if getattr(result, "ran", False):
                 logger.info("Phase 7a: /validate complete")
                 self._phases_completed.append("validate")
         except Exception as e:
@@ -2386,7 +3642,7 @@ class WebScanner:
         ]
 
         return {
-            "target": self.base_url,
+            "target": self.target_identity,
             "kind": "web_application",
             "entry_points": entry_points,
             "sources": [{"type": "http_parameter", "name": p} for p in parameters],
@@ -2645,7 +3901,7 @@ class WebScanner:
         self._save_artifact(self.out_dir / "research_landscape.json", research_landscape)
 
         session_context = build_web_session_context(
-            base_url=self.base_url,
+            base_url=self.target_identity,
             discovery=discovery,
             crawl_data=crawl_data,
             client=self.client,
@@ -2716,7 +3972,7 @@ class WebScanner:
         self._save_artifact(self.out_dir / "web-evidence-ledger.json", evidence_ledger)
 
         context_guard = build_web_context_guard_report(
-            target=self.base_url,
+            target=self.target_identity,
             llm_enabled=self.llm is not None,
             auth_context=(
                 "authenticated"
@@ -2759,7 +4015,7 @@ class WebScanner:
         )
 
         result = {
-            "target": self.base_url,
+            "target": self.target_identity,
             "findings": findings_dicts,
             "total_findings": len(findings),
             "total_vulnerabilities": len(findings),
@@ -2886,7 +4142,7 @@ class WebScanner:
 
     def _empty_result(self, reason: str) -> dict[str, Any]:
         return {
-            "target": self.base_url, "findings": [], "total_findings": 0,
+            "target": self.target_identity, "findings": [], "total_findings": 0,
             "total_vulnerabilities": 0, "auth_context": "unauthenticated",
             "discovery": {}, "crawl": {}, "findings_by_severity": {},
             "phases_completed": self._phases_completed, "error": reason,

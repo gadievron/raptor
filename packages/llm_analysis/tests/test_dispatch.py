@@ -1,6 +1,7 @@
 """Tests for the generic dispatch framework (dispatch.py + tasks.py)."""
 
 import sys
+import threading
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -10,6 +11,7 @@ import pytest
 # packages/llm_analysis/tests/test_dispatch.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
+from core.llm.client import LLMBudgetExceededError
 from packages.llm_analysis.dispatch import (
     DispatchTask, DispatchResult, dispatch_task, _format_elapsed,
     _classify_error,
@@ -602,7 +604,115 @@ class TestDispatchTaskIntegration:
             max_parallel=1,
         )
 
-        assert results == []  # Skipped due to budget
+        assert len(results) == 1
+        assert results[0]["error_type"] == "budget"
+        assert results[0]["status"] == "skipped_over_budget"
+        assert results[0]["skip_reason"].startswith("exploit skipped:")
+
+    def test_typed_budget_exhaustion_stops_queued_provider_calls(self):
+        """One typed refusal stops the batch without tripping breakers.
+
+        Calls already inside the provider boundary may finish, but no
+        queued item may invoke the provider after the stop flag is set.
+        """
+        findings = [
+            _make_finding(f"f-{i:03d}") for i in range(20)
+        ]
+        calls: list[str] = []
+        calls_lock = threading.Lock()
+
+        def budget_then_success(
+            prompt, schema, system_prompt, temperature, model,
+        ):
+            with calls_lock:
+                call_index = len(calls)
+                calls.append(prompt)
+            if call_index == 0:
+                raise LLMBudgetExceededError(
+                    "LLM budget exceeded: $1.00 spent > $1.00 limit"
+                )
+            # Keep the other admitted workers in flight long enough for
+            # the first worker to publish the terminal stop.
+            time.sleep(0.05)
+            return _make_dispatch_result()
+
+        results = dispatch_task(
+            task=AnalysisTask(),
+            items=findings,
+            dispatch_fn=budget_then_success,
+            role_resolution={},
+            prior_results={},
+            cost_tracker=CostTracker(1.0),
+            max_parallel=3,
+        )
+
+        assert len(results) == len(findings)
+        assert 1 <= len(calls) <= 3
+        budget_records = [
+            result for result in results
+            if result.get("error_type") == "budget"
+        ]
+        assert len(budget_records) == (
+            len(findings) - (len(calls) - 1)
+        )
+        assert all(
+            result["status"] == "skipped_over_budget"
+            for result in budget_records
+        )
+        assert all(
+            "LLM budget exceeded" in result["skip_reason"]
+            for result in budget_records
+        )
+        assert not any(
+            result.get("error_type") == "circuit_breaker"
+            for result in results
+        )
+
+    def test_prefilter_budget_exhaustion_stops_full_dispatch(self):
+        """A typed refusal from the cheap-tier prefilter is terminal too."""
+        findings = [
+            _make_finding(f"f-{i:03d}") for i in range(12)
+        ]
+        prefilter_calls = 0
+        full_dispatch_calls = 0
+        calls_lock = threading.Lock()
+
+        def budget_prefilter(item):
+            nonlocal prefilter_calls
+            with calls_lock:
+                call_index = prefilter_calls
+                prefilter_calls += 1
+            if call_index == 0:
+                raise LLMBudgetExceededError(
+                    "LLM budget exceeded in fast-tier prefilter"
+                )
+            time.sleep(0.02)
+            return None
+
+        def full_dispatch(*args):
+            nonlocal full_dispatch_calls
+            with calls_lock:
+                full_dispatch_calls += 1
+            return _make_dispatch_result()
+
+        results = dispatch_task(
+            task=AnalysisTask(),
+            items=findings,
+            dispatch_fn=full_dispatch,
+            role_resolution={},
+            prior_results={},
+            cost_tracker=CostTracker(1.0),
+            max_parallel=3,
+            prefilter_fn=budget_prefilter,
+        )
+
+        assert len(results) == len(findings)
+        assert 1 <= prefilter_calls <= 3
+        assert full_dispatch_calls == 0
+        assert all(
+            result.get("status") == "skipped_over_budget"
+            for result in results
+        )
 
     def test_prefilter_short_circuits_skip_dispatch_fn(self):
         """When ``prefilter_fn`` returns a result for an item the

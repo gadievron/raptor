@@ -199,6 +199,67 @@ def resolve_trust_flag(
     return default
 
 
+_REPO_TRUST_CLI_FLAGS = frozenset({
+    "--trust-repo",
+    "--no-trust-repo",
+})
+
+
+def derive_repo_trust_override(args) -> bool | None:
+    """Derive the process/child repo-trust override from parsed args.
+
+    Call this after :func:`apply_project_trust_flags`, so a governing
+    project's ``config`` marker is represented by ``args.trust_repo``.
+    The return value deliberately preserves all three states:
+
+    - ``False``: explicit ``--no-trust-repo`` (wins over everything)
+    - ``True``: explicit ``--trust-repo`` or the project marker
+    - ``None``: no CLI or project decision; trust gates may consult the
+      authenticated launcher/session registry for this exact target
+    """
+    if bool(getattr(args, "no_trust_repo", False)):
+        return False
+    if bool(getattr(args, "trust_repo", False)):
+        return True
+    return None
+
+
+def set_repo_trust_override(override: bool | None) -> None:
+    """Set both process-wide target-repo trust gates to one tri-state.
+
+    ``None`` is an intentional reset, not a synonym for ``False``. It
+    clears stale in-process state while preserving the authenticated
+    session-registry fallback implemented by both trust modules.
+    """
+    from core.security.cc_trust import set_trust_override as _cc_set
+    from core.security.codeql_trust import set_trust_override as _ql_set
+
+    _cc_set(override)
+    _ql_set(override)
+
+
+def repo_trust_cli_args(override: bool | None) -> list[str]:
+    """Return exactly one canonical child flag, or none for ``None``."""
+    if override is False:
+        return ["--no-trust-repo"]
+    if override is True:
+        return ["--trust-repo"]
+    return []
+
+
+def canonicalize_repo_trust_cli_args(
+    argv: list[str], override: bool | None,
+) -> list[str]:
+    """Remove all repo-trust flags and prepend the canonical decision.
+
+    This makes subprocess propagation idempotent: duplicate positive
+    flags and contradictory positive/negative pairs collapse to the one
+    tri-state decision already resolved by the trusted parent.
+    """
+    cleaned = [arg for arg in argv if arg not in _REPO_TRUST_CLI_FLAGS]
+    return [*repo_trust_cli_args(override), *cleaned]
+
+
 def emit_trust_banner(affecting: list[str]) -> None:
     """One line at run start whenever a project marker changed the
     run's behaviour. Trust state must never be invisible."""
@@ -211,12 +272,11 @@ def apply_project_trust_flags(
     args, *, banner: bool = True, target_path: str | Path | None = None,
 ) -> list[str]:
     """Resolve the ``config`` and ``build`` markers into
-    ``args.trust_repo`` / ``args.traced_build`` for the /agentic and
-    /codeql entry points.
+    ``args.trust_repo`` / ``args.traced_build`` for analysis and
+    CodeQL-capable entry points.
 
     Mutates ``args`` in place to the *effective* values so downstream
-    consumers (the ``set_trust_override`` block, the ``--traced-build``
-    forwarding) stay unchanged. Returns the list of markers that
+    consumers and child forwarding share one decision. Returns the list of markers that
     actually affected this run (marker present AND no explicit per-run
     flag in either direction).
 
@@ -259,6 +319,25 @@ def apply_project_trust_flags(
     if banner:
         emit_trust_banner(affecting)
     return affecting
+
+
+def configure_repo_trust_from_args(
+    args, *, banner: bool = True, target_path: str | Path | None = None,
+) -> bool | None:
+    """Apply project markers, derive tri-state trust, and set both gates.
+
+    Entry points call this once after parsing (and after adopting any run
+    pin). The returned value is the only value that should cross a child
+    process boundary via :func:`repo_trust_cli_args`.
+    """
+    apply_project_trust_flags(
+        args,
+        banner=banner,
+        target_path=target_path,
+    )
+    override = derive_repo_trust_override(args)
+    set_repo_trust_override(override)
+    return override
 
 
 def resolve_dynamic_validation(
@@ -349,10 +428,15 @@ __all__ = [
     "active_project_target",
     "active_project_trust",
     "apply_project_trust_flags",
+    "canonicalize_repo_trust_cli_args",
+    "configure_repo_trust_from_args",
+    "derive_repo_trust_override",
     "emit_trust_banner",
+    "repo_trust_cli_args",
     "resolve_build_execution",
     "resolve_dynamic_validation",
     "resolve_repo_trust",
     "resolve_trust_flag",
     "run_target_matches_project",
+    "set_repo_trust_override",
 ]

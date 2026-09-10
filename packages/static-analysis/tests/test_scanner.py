@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+import pytest
+
 
 # static-analysis has a hyphen — load via importlib
 _SCANNER_PATH = Path(__file__).parent.parent / "scanner.py"
@@ -133,6 +135,33 @@ class TestRunCodeqlDelegation:
         assert "--build-command" in cmd
         idx = cmd.index("--build-command")
         assert cmd[idx + 1] == "make -j4"
+
+    @pytest.mark.parametrize(
+        ("override", "expected"),
+        [
+            (True, ["--trust-repo"]),
+            (False, ["--no-trust-repo"]),
+            (None, []),
+        ],
+    )
+    def test_repo_trust_forwarded_canonically(
+        self, tmp_path, override, expected,
+    ):
+        with patch("shutil.which", return_value="/usr/bin/codeql"), \
+             patch.object(_scanner_mod.subprocess, "Popen") as mock_proc:
+            mock_proc.return_value = _fake_popen()
+            run_codeql(
+                tmp_path,
+                tmp_path / "out",
+                repo_trust_override=override,
+            )
+
+        cmd = mock_proc.call_args.args[0]
+        trust_flags = [
+            arg for arg in cmd
+            if arg in ("--trust-repo", "--no-trust-repo")
+        ]
+        assert trust_flags == expected
 
     def test_returns_globbed_sarif_paths(self, tmp_path):
         """After the agent runs, scanner globs out_dir for

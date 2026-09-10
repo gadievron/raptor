@@ -29,7 +29,11 @@ auto-selected — pick it explicitly in `models.json`):
 workloads; a stale session resets and retries as fresh.
 
 Copilot parity transport names are `copilotcli` and
-`copilotcli-resumable` (same semantics as the claudecode pair).
+`copilotcli-resumable` (same continuity semantics as the claudecode pair).
+`copilotcli` is stateless: every provider call receives disposable private
+Copilot state. `copilotcli-resumable` is an explicit continuity choice and
+uses persistent Copilot state so the CLI session it creates can be resumed on
+later calls.
 
 See [dependencies](dependencies.md) for SDK installation.
 
@@ -186,10 +190,19 @@ is not auto-injected by launcher defaults.
 Two distinct Copilot execution paths are used:
 
 - **Pure provider calls** (analysis dispatch) run as trusted Copilot CLI
-  subprocesses with no usable internal tools. RAPTOR uses this as a pure
-  model substrate, not as an in-process shell runner.
+  subprocesses with no usable internal tools. Stateless `copilotcli` calls
+  use a disposable private HOME, config/data roots, and runtime cache;
+  `copilotcli-resumable` intentionally keeps persistent state available for
+  session continuation. RAPTOR uses both as pure model substrates, not as
+  in-process shell runners.
 - **Unattended skill/build command children** run with Copilot MXC policy
   enabled (`--experimental --sandbox`) and a run-local private HOME.
+
+Private-state calls prefer a parent-resolved Copilot token. If no token is
+available, RAPTOR copies only validated authentication fields from the
+operator's Copilot config (account tokens and logged-in identities). Settings,
+plugins, trusted folders, session databases, and other mutable CLI state do
+not cross into the private HOME; invalid or unavailable auth fails closed.
 
 For MXC command children, RAPTOR stages a private sandbox policy
 (`.copilot-home/settings.json`) with:
@@ -230,11 +243,12 @@ on the same child process in this path (MXC cannot nest there). Copilot model
 traffic remains allowed; model-directed shell/tool commands are confined by
 the MXC policy and have no outbound or local-network access.
 
-The per-call Copilot workspace (private HOME, selected-agent instructions,
-session database, logs, and transcript) is removed on every return/exception
-path. Run output retains only `copilot-usage.json` and the normalized
-`copilot-transport-usage.json`. Copilot's extracted public runtime package is
-cached separately under `~/.cache/raptor/copilot-cli/`.
+Disposable Copilot workspaces (private state, selected-agent instructions,
+logs, and transcript) are removed on every return/exception path. Run output
+retains only `copilot-usage.json` and the normalized
+`copilot-transport-usage.json`. Resumable provider state is deliberately not
+disposable. Copilot's extracted public runtime package is cached separately
+under `~/.cache/raptor/copilot-cli/`.
 
 ## Quick Start
 
@@ -594,6 +608,12 @@ Controlled by `LLMConfig.scorecard_enabled` (default `True`).
 `LLMConfig.max_cost_per_scan` sets a USD budget cap (default $10.00). Enforced via
 atomic pre-debit reservation before each provider call. Concurrent dispatchers cannot
 race past the cap. Override with `--max-cost-usd` on the CLI.
+
+A hard budget refusal is terminal for the current dispatch batch: queued work
+is recorded as `skipped_over_budget`, and budget exhaustion does not trigger a
+selected-agent fallback. When fallback is used for non-budget provider
+failures, its compatibility probe and analysis calls share the same
+scan-wide cap rather than receiving a second budget.
 
 **Note:** there is no `RAPTOR_MAX_COST` environment variable — no code reads it.
 The budget cap is set exclusively via `--max-cost-usd` (CLI) or `max_cost_per_scan`

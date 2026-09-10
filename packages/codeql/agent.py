@@ -1227,6 +1227,16 @@ Examples:
              "--traced-build. Escape hatch for wrappers that forward "
              "--traced-build from persisted project trust.",
     )
+    parser.add_argument(
+        "--trust-repo", action="store_true",
+        help="Trust target-owned agent and CodeQL configuration for this run.",
+    )
+    parser.add_argument(
+        "--no-trust-repo", action="store_true",
+        help="Keep strict target-repo trust checks, overriding "
+             "--trust-repo, project trust, and authenticated "
+             "launcher-session trust.",
+    )
     parser.add_argument("--force", action="store_true", help="Force database recreation (ignore cache)")
     parser.add_argument("--extended", action="store_true", help="Use extended security suites")
     parser.add_argument("--out", help="Output directory (auto-generated if not specified)")
@@ -1282,11 +1292,11 @@ Examples:
         from core.run.pin import bootstrap_process_pin
         bootstrap_process_pin(args.out)
 
-    # Explicit negative beats positive (per-run escape hatch; no
-    # project-marker consumption here — the /agentic and /codeql
-    # entry points resolve markers before forwarding --traced-build).
-    if getattr(args, "no_traced_build", False):
-        args.traced_build = False
+    # Direct invocations and subprocess invocations share the same marker
+    # resolution and tri-state reset. Parent-resolved decisions arrive as
+    # one canonical flag; no flag preserves authenticated session trust.
+    from core.project.trust import configure_repo_trust_from_args
+    configure_repo_trust_from_args(args, target_path=args.repo)
 
     # Flip the IRIS Tier 1 master switch for this invocation. The
     # config is process-scoped so /codeql subprocesses don't bleed

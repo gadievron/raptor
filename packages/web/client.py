@@ -10,6 +10,7 @@ Handles HTTP requests with safety features:
 """
 
 import contextlib
+import hashlib
 import ipaddress
 import socket
 import threading
@@ -52,6 +53,14 @@ _MAX_RESPONSE_BYTES = 128 * 1024 * 1024
 # response captured per call) until process exit.
 _MAX_REQUEST_HISTORY = 1024
 
+# Replay artifacts retain only a redacted response excerpt plus hashes and
+# metadata. The live response remains available to the trusted scanner for
+# oracle checks; the selected agent never receives the full body.
+_DEFAULT_EVIDENCE_BODY_BYTES = 1024
+_MAX_EVIDENCE_BODY_BYTES = 8192
+_MAX_EVIDENCE_HEADER_CHARS = 512
+_MAX_EVIDENCE_URL_CHARS = 2048
+
 logger = get_logger()
 
 # Thread-safe DNS pinning. A per-request save/patch/restore of the
@@ -83,6 +92,16 @@ def _ensure_pin_wrapper_installed() -> None:
         if _original_getaddrinfo is None:
             _original_getaddrinfo = socket.getaddrinfo
             socket.getaddrinfo = _pinning_getaddrinfo
+
+
+def _truncate_utf8(value: str, limit: int) -> tuple[str, bool]:
+    encoded = value.encode("utf-8", "replace")
+    if len(encoded) <= limit:
+        return value, False
+    suffix = b"...[truncated]"
+    keep = max(0, limit - len(suffix))
+    prefix = encoded[:keep].decode("utf-8", "ignore")
+    return prefix + suffix.decode("ascii"), True
 
 
 class WebClient:
@@ -275,16 +294,28 @@ class WebClient:
         if not location:
             return None
         next_url = urljoin(current_url, location)
+        if self.execution_policy is not None:
+            # Let the policy record the denied origin before the local
+            # transport guard raises. Replay artifacts can then show an
+            # explicit policy decision instead of only an exception string.
+            try:
+                self.execution_policy.authorize(
+                    tool_id="raptor-http",
+                    url=next_url,
+                    risk="passive",
+                    action="follow_redirect",
+                )
+            except ValueError as exc:
+                if not self._is_in_scope(next_url):
+                    msg = (
+                        "Blocked redirect outside configured target scope: "
+                        f"{next_url}"
+                    )
+                    raise ValueError(msg) from exc
+                raise
         if not self._is_in_scope(next_url):
             msg = f"Blocked redirect outside configured target scope: {next_url}"
             raise ValueError(msg)
-        if self.execution_policy is not None:
-            self.execution_policy.authorize(
-                tool_id="raptor-http",
-                url=next_url,
-                risk="passive",
-                action="follow_redirect",
-            )
         return next_url
 
     def _rate_limit_wait(self) -> None:
@@ -305,6 +336,88 @@ class WebClient:
     def _redact_for_logging(self, value: object) -> str:
         """Apply this client's secret-redaction policy to log/display text."""
         return redact_secrets(value, reveal_secrets=self.reveal_secrets)
+
+    def response_evidence(
+        self,
+        response: requests.Response,
+        *,
+        max_body_bytes: int = _DEFAULT_EVIDENCE_BODY_BYTES,
+    ) -> dict[str, Any]:
+        """Return a bounded, always-redacted response projection.
+
+        This is intentionally stricter than normal scan artifacts:
+        ``reveal_secrets`` does not apply because validation replay evidence is
+        made readable to a selected-agent sandbox. Cookie/authentication
+        headers are never copied; only content type and redirect location are
+        retained after redaction.
+        """
+        if not 0 <= max_body_bytes <= _MAX_EVIDENCE_BODY_BYTES:
+            raise ValueError(
+                f"max_body_bytes must be between 0 and "
+                f"{_MAX_EVIDENCE_BODY_BYTES}"
+            )
+
+        content = bytes(response.content or b"")
+        # Redact a wider bounded prefix before cutting the persisted excerpt.
+        # This keeps a credential that starts near the excerpt boundary from
+        # being split into an unrecognizable (and therefore unredacted) token.
+        sample_bytes = content[:max(16 * 1024, max_body_bytes + 8192)]
+        encoding = response.encoding or "utf-8"
+        try:
+            excerpt = sample_bytes.decode(encoding, "replace")
+        except LookupError:
+            excerpt = sample_bytes.decode("utf-8", "replace")
+        excerpt = redact_secrets(excerpt)
+        excerpt, redaction_truncated = _truncate_utf8(
+            excerpt,
+            max_body_bytes,
+        )
+
+        def safe_header(name: str) -> str | None:
+            value = response.headers.get(name)
+            if value is None:
+                return None
+            safe = redact_secrets(value)
+            return _truncate_utf8(
+                safe,
+                _MAX_EVIDENCE_HEADER_CHARS,
+            )[0]
+
+        def safe_url(value: object) -> str:
+            return _truncate_utf8(
+                redact_secrets(value),
+                _MAX_EVIDENCE_URL_CHARS,
+            )[0]
+
+        redirect_chain = []
+        for hop in list(getattr(response, "history", []) or [])[:_MAX_REDIRECTS]:
+            redirect_chain.append({
+                "status_code": int(hop.status_code),
+                "url": safe_url(hop.url or ""),
+                "location": (
+                    _truncate_utf8(
+                        redact_secrets(hop.headers.get("Location")),
+                        _MAX_EVIDENCE_HEADER_CHARS,
+                    )[0]
+                    if hop.headers.get("Location") is not None
+                    else None
+                ),
+            })
+
+        return {
+            "status_code": int(response.status_code),
+            "final_url": safe_url(response.url or ""),
+            "content_type": safe_header("Content-Type"),
+            "location": safe_header("Location"),
+            "body_bytes": len(content),
+            "body_sha256": hashlib.sha256(content).hexdigest(),
+            "body_excerpt": excerpt,
+            "body_excerpt_truncated": (
+                len(content) > max_body_bytes or redaction_truncated
+            ),
+            "transport_body_capped": len(content) >= _MAX_RESPONSE_BYTES,
+            "redirect_chain": redirect_chain,
+        }
 
     def _log_request(self, method: str, url: str, response: requests.Response,
                      duration: float) -> None:

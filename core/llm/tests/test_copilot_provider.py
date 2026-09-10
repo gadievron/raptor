@@ -112,6 +112,30 @@ def test_generate_books_failed_call_usage_before_raising(monkeypatch) -> None:
         provider.generate("prompt")
     assert provider.call_count == 1
     assert provider.total_cost == pytest.approx(0.01)
+    assert provider.selected_model is None
+    assert provider._session_id is None
+
+
+def test_empty_error_is_failure_and_never_pins_state(monkeypatch) -> None:
+    import core.llm.copilot_adapter as adapter
+
+    monkeypatch.setattr(
+        adapter,
+        "run_copilot_prompt",
+        lambda config, prompt: _result(error=""),
+    )
+    provider = CopilotCLILLMProvider(
+        _config("copilotcli-resumable"),
+        copilot_bin="/usr/bin/copilot",
+        resumable=True,
+    )
+
+    with pytest.raises(RuntimeError):
+        provider.generate("prompt")
+
+    assert provider.selected_model is None
+    assert provider._session_id is None
+    assert provider._session_model is None
 
 
 def test_structured_response_uses_validated_json_fallback(
@@ -304,6 +328,7 @@ def test_automatic_fallback_and_explicit_model_state(monkeypatch) -> None:
     provider.generate("automatic")
     assert seen[-1].allow_model_fallback is True
     assert "gpt-5.3-codex" in seen[-1].fallback_models
+    assert seen[-1].persist_session is False
 
     monkeypatch.setenv("RAPTOR_COPILOT_MODEL_EXPLICIT", "1")
     provider.generate("explicit")
@@ -385,10 +410,12 @@ def test_resumable_provider_passes_session_to_next_call(monkeypatch) -> None:
 
     seen_sessions: list[str | None] = []
     seen_models: list[str] = []
+    seen_persistence: list[bool] = []
 
     def fake_run(config, prompt):
         seen_sessions.append(config.session_id)
         seen_models.append(config.model)
+        seen_persistence.append(config.persist_session)
         return _result(
             session_id="session-next",
             model="gpt-5.3-codex",
@@ -405,6 +432,7 @@ def test_resumable_provider_passes_session_to_next_call(monkeypatch) -> None:
     provider.generate("second")
     assert seen_sessions == [None, "session-next"]
     assert seen_models == ["gpt-5.6-sol", "gpt-5.3-codex"]
+    assert seen_persistence == [True, True]
 
 
 def test_resumable_provider_retries_rejected_session_fresh(

@@ -73,6 +73,7 @@ class TestSchemaNormalisedForCCTransport:
         # Real JSON Schema shape: properties with typed entries, not
         # bare descriptive strings the CLI validator would ignore.
         assert "properties" in sent
+        assert sent["type"] == "object"
         props = sent["properties"]
         assert props["reasoning"]["type"] == "string"
         assert props["is_exploitable"]["type"] == "boolean"
@@ -83,11 +84,27 @@ class TestSchemaNormalisedForCCTransport:
 
     def test_proper_json_schema_passes_through(self, monkeypatch):
         proper = {
-            "properties": {"verdict": {"type": "string"}},
-            "required": ["verdict"],
+            "type": "array",
+            "items": {
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "verdict": {
+                                "type": "string",
+                                "enum": ["confirmed", "rejected"],
+                            },
+                        },
+                        "required": ["verdict"],
+                        "additionalProperties": False,
+                    },
+                    {"type": "null"},
+                ],
+            },
         }
         sent = self._invoke(monkeypatch, proper)
         assert sent == proper
+        assert sent is proper
 
     def test_none_schema_stays_freeform(self, monkeypatch):
         assert self._invoke(monkeypatch, None) is None
@@ -97,6 +114,7 @@ class TestSchemaNormalisedForCCTransport:
         # out as a closed, typed JSON Schema.
         from packages.llm_analysis.prompts import build_analysis_schema
         sent = self._invoke(monkeypatch, build_analysis_schema())
+        assert sent["type"] == "object"
         assert "properties" in sent
         assert all(isinstance(v, dict) for v in sent["properties"].values())
 

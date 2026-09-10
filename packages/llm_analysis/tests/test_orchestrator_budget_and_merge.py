@@ -24,12 +24,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from core.llm.model_data import MODEL_COSTS  # noqa: E402
 from core.run.finding_status import get_status  # noqa: E402
+from packages.llm_analysis.finding_adapter import FindingAdapter  # noqa: E402
 from packages.llm_analysis.orchestrator import (  # noqa: E402
     CostTracker,
     _cap_findings,
     _cc_fallback_role_resolution,
     _classify_absent_consensus,
     _merge_results,
+    _per_model_failure_summary,
+    _select_primary_dispatch_result,
 )
 from packages.llm_analysis.tasks import AnalysisTask  # noqa: E402
 
@@ -58,6 +61,37 @@ class TestEstimateCost:
         tracker = CostTracker(max_cost=1.0)
         assert tracker.should_skip_phase(10, "", 0.7, "test", is_cc=True)
         assert not tracker.should_skip_phase(10, "", 0.7, "test")
+
+    def test_authoritative_failed_spend_drives_soft_gate_and_report(self):
+        provider_spend = [0.8]
+        tracker = CostTracker(max_cost=1.0)
+        tracker.bind_authoritative_spend(
+            lambda: provider_spend[0],
+            provider_spend_getter=lambda: provider_spend[0],
+        )
+
+        assert tracker.total_cost == 0.8
+        assert tracker.fraction_used == 0.8
+        assert tracker.should_skip_phase(
+            0, "unknown-model", 0.7, "consensus",
+        )
+        summary = tracker.get_summary()
+        assert summary["total_cost"] == 0.8
+        assert summary["accounted_result_cost"] == 0.0
+        assert summary["authoritative_provider_spend"] == 0.8
+        assert summary["unattributed_provider_spend"] == 0.8
+        assert summary["budget_remaining"] == 0.2
+
+    def test_budget_remaining_distinguishes_unbounded_from_empty(self):
+        unbounded = CostTracker(max_cost=0.0).get_summary()
+        assert unbounded["budget_limited"] is False
+        assert unbounded["budget_remaining"] is None
+
+        exhausted = CostTracker(max_cost=1.0)
+        exhausted.add_cost("m", 1.25)
+        summary = exhausted.get_summary()
+        assert summary["budget_limited"] is True
+        assert summary["budget_remaining"] == 0.0
 
 
 class TestCcFallbackRoleResolution:
@@ -100,6 +134,17 @@ class TestClassifyAbsentConsensus:
     def test_spend_without_records_is_all_errored(self):
         assert _classify_absent_consensus([], 0.02) == (False, True)
 
+    def test_budget_record_is_budget_skip_even_with_spend(self):
+        records = [{
+            "finding_id": "f1",
+            "error": "LLM budget exceeded",
+            "error_type": "budget",
+            "status": "skipped_over_budget",
+        }]
+        assert _classify_absent_consensus(
+            records, 0.25,
+        ) == (True, False)
+
 
 def _prep_report(results):
     return {"mode": "prep_only", "results": results}
@@ -138,6 +183,25 @@ class TestMergeResultsStatuses:
         # No generic cc_error noise over the specific producer stamp.
         assert "cc_error" not in f
 
+    def test_budget_dispatch_record_merges_as_skip_not_error(self):
+        prep = _prep_report([{"finding_id": "f1", "rule_id": "r"}])
+        reason = (
+            "analysis dispatch stopped: LLM budget exceeded at $1.00"
+        )
+        cc = [{
+            "finding_id": "f1",
+            "error": reason,
+            "error_type": "budget",
+            "status": "skipped_over_budget",
+            "skip_reason": reason,
+        }]
+        merged = _merge_results(prep, cc)
+        finding = merged["results"][0]
+        assert finding["status"] == "skipped_over_budget"
+        assert finding["skip_reason"] == reason
+        assert "error" not in finding
+        assert "cc_error" not in finding
+
     def test_successful_merge_not_stamped_error(self):
         # Two-direction: a healthy result keeps flowing as analysed.
         prep = _prep_report([{"finding_id": "f1", "rule_id": "r"}])
@@ -163,3 +227,48 @@ class TestCapFindings:
         findings = [{"finding_id": "f0"}]
         assert _cap_findings(findings, 0) is findings
         assert "status" not in findings[0]
+
+
+class TestFailureSummary:
+
+    def test_budget_skips_are_not_provider_failures(self):
+        results = [
+            {
+                "finding_id": "f1",
+                "error": "LLM budget exceeded",
+                "error_type": "budget",
+                "status": "skipped_over_budget",
+                "analysed_by": "model-a",
+            },
+            {
+                "finding_id": "f2",
+                "error": "provider outage",
+                "error_type": "network",
+                "analysed_by": "model-a",
+            },
+        ]
+        assert _per_model_failure_summary(results) == {
+            "model-a": {
+                "count": 1,
+                "first_error": "provider outage",
+            },
+        }
+
+    def test_budget_record_wins_mixed_all_error_panel(self):
+        provider_error = {
+            "finding_id": "f1",
+            "error": "provider outage",
+            "error_type": "network",
+        }
+        budget_skip = {
+            "finding_id": "f1",
+            "error": "LLM budget exceeded",
+            "error_type": "budget",
+            "status": "skipped_over_budget",
+            "skip_reason": "analysis stopped at the run cost cap",
+        }
+        selected = _select_primary_dispatch_result(
+            [provider_error, budget_skip],
+            FindingAdapter(),
+        )
+        assert selected == budget_skip

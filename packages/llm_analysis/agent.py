@@ -3760,6 +3760,13 @@ def main() -> None:
         help="Trust target-owned agent CLI configuration for this process.",
     )
     ap.add_argument(
+        "--no-trust-repo",
+        action="store_true",
+        help="Keep strict target-repo trust checks for this process, "
+             "overriding --trust-repo, project trust, and authenticated "
+             "launcher-session trust.",
+    )
+    ap.add_argument(
         "--max-parallel", type=int, default=0,
         help="Max parallel dispatch threads (0 = auto from model RPM)",
     )
@@ -3817,9 +3824,15 @@ def main() -> None:
     if not args.sarif and not args.findings:
         ap.error("Either --sarif or --findings is required")
 
-    if args.trust_repo:
-        from core.security.cc_trust import set_trust_override
-        set_trust_override(True)
+    repo_path = Path(args.repo).resolve()
+    if args.out:
+        # Child of a run: adopt the owning run's pin before project-trust
+        # resolution so the child cannot drift to another ambient project.
+        from core.run.pin import bootstrap_process_pin
+        bootstrap_process_pin(args.out)
+
+    from core.project.trust import configure_repo_trust_from_args
+    configure_repo_trust_from_args(args, target_path=repo_path)
 
     _has_role_flags = any([
         getattr(args, "model", []),
@@ -3842,14 +3855,7 @@ def main() -> None:
             logger.info("Validation artifacts found at %s", nearby)
             logger.info("Use --findings for enriched analysis with feasibility data")
 
-    repo_path = Path(args.repo).resolve()
     if args.out:
-        # Child of a run: adopt the owning run's pin as the process
-        # override so every ambient consumer (trust resolvers, IRIS
-        # store, exemplar pools, threat model, verified outcomes)
-        # follows it.
-        from core.run.pin import bootstrap_process_pin
-        bootstrap_process_pin(args.out)
         out_dir = Path(args.out).resolve()
     else:
         # Collision-prevention via unique_run_suffix — see core/run/output.py.

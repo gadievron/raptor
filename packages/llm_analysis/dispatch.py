@@ -50,6 +50,16 @@ class _ModelCircuitOpen(Exception):
     """
 
 
+class _BudgetDispatchStopped(Exception):
+    """A queued work item was stopped after batch budget exhaustion.
+
+    The first typed budget refusal sets a dispatch-wide stop flag. Workers
+    that have not yet entered the provider call raise this sentinel instead
+    of invoking the provider. It is a skip, not a provider failure, so the
+    auth and consecutive-failure circuit breakers must never see it.
+    """
+
+
 class _ErrorDictResult(Exception):
     """A dispatch_fn returned a DispatchResult whose payload is an
     error envelope (``{"error": ...}``) instead of raising.
@@ -71,6 +81,42 @@ class _ErrorDictResult(Exception):
     def __init__(self, message: str, model_name: str = "") -> None:
         super().__init__(message)
         self.model_name = model_name
+
+
+def _is_budget_result(result: dict[str, Any]) -> bool:
+    """True when a dispatch record represents a budget skip/refusal."""
+    return (
+        result.get("error_type") == "budget"
+        or result.get("status") == "skipped_over_budget"
+    )
+
+
+def _make_budget_skip_records(
+    task: "DispatchTask",
+    items: list,
+    reason: str,
+    *,
+    model_name: str = "",
+) -> list[dict[str, Any]]:
+    """Build one canonical budget-skip record per selected item."""
+    from core.run.finding_status import SKIPPED_OVER_BUDGET
+
+    concrete_reason = reason.strip() or (
+        f"{task.name} dispatch stopped because the LLM budget was exhausted"
+    )
+    records: list[dict[str, Any]] = []
+    for item in items:
+        record = {
+            "finding_id": task.get_item_id(item),
+            "error": concrete_reason,
+            "error_type": "budget",
+            "status": SKIPPED_OVER_BUDGET,
+            "skip_reason": concrete_reason,
+        }
+        if model_name:
+            record["analysed_by"] = model_name
+        records.append(record)
+    return records
 
 
 class DispatchResult:
@@ -292,7 +338,7 @@ def dispatch_task(
         else:
             model_name = ""
         total_calls = len(selected) * len(models)
-        skip = cost_tracker.should_skip_phase(
+        skip, skip_reason = cost_tracker.check_phase_budget(
             total_calls, model_name, task.budget_cutoff, task.name,
             # No named models ⇒ the CC subprocess path. Estimating CC
             # calls at the external-LLM default (~$0.03) under-gates
@@ -303,7 +349,9 @@ def dispatch_task(
             print(f"\n  {task.name}: skipped ({len(selected)} items) — "
                   f"budget > {int(task.budget_cutoff * 100)}%"
                   f"; raise --max-cost to include")
-            return []
+            return _make_budget_skip_records(
+                task, selected, skip_reason, model_name=model_name,
+            )
 
     # Build work items: (model, item) pairs
     work: list[tuple[Any, Any]] = []
@@ -345,6 +393,7 @@ def _dispatch_inner(
     max_parallel, prefilter_fn, prior_results, _throttle,
     start, system_prompt, profile_name,
 ):
+    from core.llm.client import is_budget_exceeded_error
     from core.security.prompt_input_preflight import preflight
     from core.security.prompt_telemetry import defense_telemetry
 
@@ -362,6 +411,30 @@ def _dispatch_inner(
     # Guards _per_model_dead: the drain loop (main thread) adds dead
     # models while worker threads check membership in _do_one.
     _dead_lock = _th.Lock()
+    # The first typed budget refusal is terminal for this dispatch batch.
+    # Workers already inside a provider call may finish, but every queued
+    # worker checks this flag before provider invocation and becomes a
+    # SKIPPED_OVER_BUDGET record instead.
+    _budget_stop = _th.Event()
+    _budget_lock = _th.Lock()
+    _budget_reason = [""]
+
+    def _set_budget_stop(reason: str) -> None:
+        with _budget_lock:
+            if not _budget_reason[0]:
+                _budget_reason[0] = (
+                    reason.strip()
+                    or f"{task.name} dispatch stopped: LLM budget exhausted"
+                )
+            _budget_stop.set()
+
+    def _get_budget_reason() -> str:
+        with _budget_lock:
+            return (
+                _budget_reason[0]
+                or f"{task.name} dispatch stopped: LLM budget exhausted"
+            )
+
     # Key by (item_id, model_key) tuple — NOT just item_id. With N
     # models analysing the same item (multi-model orchestration),
     # all N writes land on the same `iid` key and last-writer-
@@ -387,6 +460,8 @@ def _dispatch_inner(
         futures = {}
         for model, item in work:
             def _do_one(m=model, it=item):
+                if _budget_stop.is_set():
+                    raise _BudgetDispatchStopped(_get_budget_reason())
                 # Circuit-breaker enforcement. All (model, item)
                 # futures are pre-submitted before the drain loop
                 # starts, so a model declared dead mid-run still has
@@ -402,7 +477,12 @@ def _dispatch_inner(
                 # trusted. Returning a dict here ends this work item
                 # with that result; ``None`` proceeds to full dispatch.
                 if prefilter_fn is not None:
-                    sc_result = prefilter_fn(it)
+                    try:
+                        sc_result = prefilter_fn(it)
+                    except Exception as exc:
+                        if is_budget_exceeded_error(exc):
+                            _set_budget_stop(str(exc))
+                        raise
                     if sc_result is not None:
                         model_name = m.model_name if m is not None else "prefilter"
                         return DispatchResult(
@@ -424,7 +504,20 @@ def _dispatch_inner(
                 defense_telemetry.record_preflight(hit=pf.has_injection_indicators)
                 schema = task.get_schema(it)
                 with _throttle.acquire_sync():
-                    return dispatch_fn(prompt, schema, system_prompt, task.temperature, m)
+                    # A worker may have queued behind the throttle while
+                    # another in-flight call exhausted the budget. Re-check
+                    # at the final boundary so it never reaches the provider.
+                    if _budget_stop.is_set():
+                        raise _BudgetDispatchStopped(_get_budget_reason())
+                    try:
+                        return dispatch_fn(
+                            prompt, schema, system_prompt,
+                            task.temperature, m,
+                        )
+                    except Exception as exc:
+                        if is_budget_exceeded_error(exc):
+                            _set_budget_stop(str(exc))
+                        raise
 
             future = executor.submit(_do_one)
             futures[future] = (model, item)
@@ -569,6 +662,26 @@ def _dispatch_inner(
                 )
                 print(f"{prefix} {display} {status}{cost_str}")
 
+            except _BudgetDispatchStopped as e:
+                # Queued work stopped before provider invocation. This is a
+                # budget skip, not a provider/auth failure: do not touch any
+                # circuit-breaker counters or response-failure telemetry.
+                with _nonces_lock:
+                    _nonces.pop((item_id, model_key), None)
+                model_name = (
+                    model.model_name if model is not None else ""
+                )
+                results.extend(_make_budget_skip_records(
+                    task, [item], str(e), model_name=model_name,
+                ))
+                display = task.get_item_display(item)
+                prefix = (
+                    f"  [{completed}/{total} "
+                    f"{_format_elapsed(elapsed)} "
+                    f"${running_cost:.2f}]"
+                )
+                print(f"{prefix} {display} skipped — budget exhausted")
+
             except _ModelCircuitOpen:
                 # The worker short-circuited a pre-submitted future
                 # for an already-dead model: no API call was made, no
@@ -591,6 +704,31 @@ def _dispatch_inner(
                 print(f"{prefix} {display} skipped — model circuit-broken")
 
             except Exception as e:  # noqa: BLE001 — per-item isolation: one failed dispatch must not sink the batch
+                if is_budget_exceeded_error(e):
+                    # The worker that observed the typed refusal already set
+                    # the batch-wide stop flag. Record this item as skipped
+                    # and keep draining futures so already in-flight calls can
+                    # finish and queued work can emit its own skip record.
+                    _set_budget_stop(str(e))
+                    with _nonces_lock:
+                        _nonces.pop((item_id, model_key), None)
+                    model_name = (
+                        model.model_name if model is not None else ""
+                    )
+                    results.extend(_make_budget_skip_records(
+                        task, [item], _get_budget_reason(),
+                        model_name=model_name,
+                    ))
+                    display = task.get_item_display(item)
+                    prefix = (
+                        f"  [{completed}/{total} "
+                        f"{_format_elapsed(elapsed)} "
+                        f"${running_cost:.2f}]"
+                    )
+                    print(
+                        f"{prefix} {display} skipped — budget exhausted"
+                    )
+                    continue
                 err_str = str(e)
                 error_type = _classify_error(err_str)
                 model_name = model.model_name if model is not None else "?"

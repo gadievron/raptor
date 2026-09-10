@@ -490,9 +490,9 @@ Examples:
                              "qlpack.yml, .github/codeql/codeql-config.yml).")
     parser.add_argument("--no-trust-repo", action="store_true",
                         help="Keep the strict trust checks for this run, "
-                             "overriding both --trust-repo and the active "
-                             "project's 'config' trust marker "
-                             "(raptor project trust config).")
+                             "overriding --trust-repo, the active project's "
+                             "'config' trust marker, and authenticated "
+                             "launcher-session trust.")
     parser.add_argument(
         "--phase-timeout", type=int,
         default=RaptorConfig.CODEQL_TIMEOUT, metavar="SECONDS",
@@ -512,6 +512,11 @@ Examples:
     if args.project is not None:
         from core.run.pin import set_process_project
         set_process_project(args.project)
+    if args.out:
+        # Trust-marker resolution must follow the lifecycle-created run pin,
+        # not a mutable ambient project selection.
+        from core.run.pin import bootstrap_process_pin
+        bootstrap_process_pin(args.out)
     # Apply --phase-timeout to the framework-wide RaptorConfig.CODEQL_TIMEOUT
     # so package-internal subprocess calls in
     # ``packages/codeql/database_manager.py`` pick up the override
@@ -538,13 +543,11 @@ Examples:
     # uses the same call site to keep behaviour aligned.
     from core.analysis.binary_oracle_cli import apply_to_config
     apply_to_config(args, Path(args.repo), parser=parser)
-    # Project trust markers (schema v4): resolve the active project's
-    # 'config' / 'build' markers into args.trust_repo / args.traced_build.
-    # Per-run flags always win (negative > positive > marker > off);
-    # a banner line prints when a marker affects this run. Mirrors the
-    # persisted-binaries loading path above.
-    from core.project.trust import apply_project_trust_flags
-    apply_project_trust_flags(args)
+    # Resolve project markers and CLI flags to one tri-state and write it
+    # to both in-process trust gates. None intentionally preserves the
+    # authenticated session-registry fallback.
+    from core.project.trust import configure_repo_trust_from_args
+    configure_repo_trust_from_args(args)
     # set_trust_override BEFORE apply_cli_args. apply_cli_args
     # may invoke trust-checks downstream (e.g. when validating
     # caller-supplied paths against project trust state). Pre-fix
@@ -553,14 +556,6 @@ Examples:
     # (untrusted) state and could refuse the operation despite
     # the operator having explicitly passed --trust-repo. Move
     # the override setup before apply_cli_args.
-    if getattr(args, "trust_repo", False):
-        # Umbrella flag: every target-repo trust check honours the same
-        # operator-set override. New checks added here must keep this
-        # list in sync.
-        from core.security.cc_trust import set_trust_override as _cc_set
-        from core.security.codeql_trust import set_trust_override as _ql_set
-        _cc_set(True)
-        _ql_set(True)
     apply_cli_args(args, parser=parser)
 
     try:

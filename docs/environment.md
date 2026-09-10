@@ -564,7 +564,12 @@ Members: `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_MANTLE`,
 - `copilot_subprocess_env()` (`core.llm.copilot_adapter`) is the seam
   for Copilot CLI children: safe env + `RAPTOR_COPILOT_*` controls +
   the operator's proxy snapshot; provider API keys are not forwarded to
-  Copilot transport subprocesses.
+  Copilot transport subprocesses. Stateless `copilotcli` provider calls
+  and unattended skill/build children receive private run-local state;
+  the parent supplies a resolved token when available, otherwise only
+  validated authentication records are copied from the operator's
+  Copilot config. `copilotcli-resumable` intentionally retains access
+  to persistent Copilot state so its session can continue across calls.
 - `RaptorConfig.strip_llm_env_vars()` removes keys, the routing
   family, and the dispatcher route pair from RAPTOR's own non-LLM
   helper children that must otherwise mirror the full environment
@@ -623,11 +628,11 @@ the JVM-installer caveat.
 | `GOOGLE_APPLICATION_CREDENTIALS` | Required for `/oss-forensics` BigQuery; also a Vertex credential path in the LLM key table. Its absence is reported in the startup banner. |
 | `GITHUB_TOKEN` | Used by cve-diff/forensics tooling to raise GitHub API limits; forwarded to the relevant children only. |
 | `GH_HOST` | GitHub host selection override (GitHub CLI / Copilot CLI ecosystem contract). Forwarded to trusted Copilot subprocesses when set so enterprise-hosted installs resolve the same backend host. |
-| `COPILOT_GITHUB_TOKEN` | Copilot CLI automation token. For unattended MXC children RAPTOR resolves the existing Copilot keyring token first (then `gh auth token` as fallback), passes it only to the trusted Copilot process, and names it in `--secret-env-vars` so model-directed shell/MCP children cannot read it. An explicitly exported value takes precedence. |
-| `COPILOT_HOME` | Copilot CLI state root. Pure provider calls use the normal user setting; unattended skill/build children override it to a private run-local `.copilot-home` with a generated no-bypass MXC policy. |
+| `COPILOT_GITHUB_TOKEN` | Copilot CLI automation token. For trusted Copilot subprocesses that request parent-side authentication, RAPTOR resolves the existing Copilot keyring token first (then `gh auth token` as fallback) and passes it only to the Copilot process. MXC skill/build children also name it in `--secret-env-vars` so model-directed shell/MCP children cannot read it. An explicitly exported value takes precedence. |
+| `COPILOT_HOME` | Copilot CLI state root. Stateless `copilotcli` provider calls and unattended skill/build children override it with private run-local state; if no parent-resolved token is available, RAPTOR stages only validated auth records from the operator config, not settings, plugins, trusted folders, or session databases. `copilotcli-resumable` and the interactive CLI intentionally use persistent Copilot state. |
 | `DBUS_SESSION_BUS_ADDRESS` | Read only by the trusted parent-side Linux keyring lookup used to recover the existing Copilot CLI OAuth token. It is not forwarded to the Copilot model/tool child. |
 | `GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS`, `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS`, `GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP` | Force-disabled (`false`) in unattended Copilot subprocesses so target/workspace extensions, hooks, and MCP configuration cannot load outside RAPTOR's trust gate. |
-| `NODE_COMPILE_CACHE` | Redirected to the run-local Copilot workspace for unattended children so the embedded Node runtime never writes the operator's real cache. |
+| `NODE_COMPILE_CACHE` | Redirected to private run-local Copilot state for stateless provider calls and unattended children so the embedded Node runtime never writes the operator's real cache. |
 | `NO_COLOR` | Set to `1` in Copilot subprocesses so machine-parsed JSON/error streams do not contain terminal colour sequences. |
 | `CLAUDE_ENV_FILE` | Claude Code harness contract (set in `.claude/settings.json` to `.claude/raptor.env`): the SessionStart hook writes `RAPTOR_DIR` and a `PATH` extension into that file so every session Bash call inherits them. Not operator-set. |
 | `CLAUDE_CODE_SUBAGENT_MODEL` | `bin/raptor` bridges it from `ANTHROPIC_MODEL` when unset (Bedrock roles entitled for only one model would otherwise 403 on subagents). An explicit operator export is never overridden. |

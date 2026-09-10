@@ -1501,6 +1501,7 @@ def run_codeql(
     languages: list[str] | None = None,
     build_command: str | None = None,
     traced_build: bool = False,
+    repo_trust_override: bool | None = None,
 ) -> list[str]:
     """Delegate CodeQL analysis to packages/codeql/agent.py.
 
@@ -1535,6 +1536,9 @@ def run_codeql(
         traced_build: When True, forward ``--traced-build`` to the
             agent (traced-build CodeQL extraction for compiled
             languages). Default False adds no flag.
+        repo_trust_override: Tri-state target-repo trust decision.
+            True/False forwards one canonical flag; None forwards no
+            flag so the child inherits authenticated session state.
 
     Returns:
         List of absolute SARIF paths the agent wrote. Empty on any
@@ -1565,6 +1569,8 @@ def run_codeql(
         cmd.extend(["--build-command", build_command])
     if traced_build:
         cmd.append("--traced-build")
+    from core.project.trust import repo_trust_cli_args
+    cmd.extend(repo_trust_cli_args(repo_trust_override))
 
     logger.info("Delegating CodeQL stage to %s", agent_script.name)
     # subprocess.run + timeout SIGKILLs the immediate child only,
@@ -2844,6 +2850,16 @@ def main() -> None:
         help="Force buildless CodeQL extraction for this run, overriding "
              "--traced-build. Per-run escape hatch.",
     )
+    ap.add_argument(
+        "--trust-repo", action="store_true",
+        help="Trust target-owned agent and CodeQL configuration for this run.",
+    )
+    ap.add_argument(
+        "--no-trust-repo", action="store_true",
+        help="Keep strict target-repo trust checks, overriding "
+             "--trust-repo, project trust, and authenticated "
+             "launcher-session trust.",
+    )
     ap.add_argument("--keep", action="store_true", help="Keep temp working directory")
     ap.add_argument("--sequential", action="store_true", help="Fully serial run: semgrep packs one at a time AND stages in order (no semgrep/codeql overlap). Debugging knob.")
     ap.add_argument("--out", default=None, help="Output directory (from lifecycle). Overrides auto-generated path.")
@@ -2907,18 +2923,18 @@ def main() -> None:
         from core.run.pin import bootstrap_process_pin
         bootstrap_process_pin(args.out)
 
+    from core.project.trust import configure_repo_trust_from_args
+    repo_trust_override = configure_repo_trust_from_args(
+        args,
+        banner=bool(args.codeql and not args.no_codeql),
+    )
+
     # Unknown policy groups are an argparse-level HARD error. Pre-fix
     # they only logged a warning mid-scan — an operator copying a bad
     # example (`--policy-groups injction`) got a scan that silently
     # ran without the intended rules and never found out. Fail fast,
     # before any clone / output-dir work, listing the valid groups.
     _validate_policy_groups(ap, args.policy_groups)
-
-    # Explicit negative beats positive (per-run escape hatch; project
-    # trust-marker consumption lives in the /agentic and /codeql entry
-    # points which resolve markers before forwarding --traced-build).
-    if getattr(args, "no_traced_build", False):
-        args.traced_build = False
 
     # Validate --extra-config paths upfront. Fail-loud on bad input so the
     # operator finds out before a 30-minute scan has burnt its budget. The
@@ -3112,6 +3128,7 @@ def main() -> None:
                 languages=_langs_arg,
                 build_command=args.build_command,
                 traced_build=args.traced_build,
+                repo_trust_override=repo_trust_override,
             )
 
         if args.sequential:
@@ -3194,6 +3211,7 @@ def main() -> None:
                 languages=languages,
                 build_command=args.build_command,
                 traced_build=args.traced_build,
+                repo_trust_override=repo_trust_override,
             )
 
         # Coccinelle stage. Default-on for C/C++ targets; auto-skips

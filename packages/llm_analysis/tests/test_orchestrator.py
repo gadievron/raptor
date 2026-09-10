@@ -322,10 +322,24 @@ class TestOrchestrate:
                     "finding_id": "finding-001",
                     "error": "provider outage",
                 }]
-            return [_make_cc_result("finding-001")]
+            finding = findings[0]
+            dispatched = dispatch_fn(
+                "fallback prompt",
+                task.get_schema(finding),
+                task.get_system_prompt(),
+                task.temperature,
+                role_resolution["analysis_model"],
+            )
+            processed = task.process_result(finding, dispatched)
+            processed["finding_id"] = "finding-001"
+            return [processed]
 
         fake_client = MagicMock()
+        fake_client.config = config
+        fake_client.authoritative_spend_usd = 0.0
+        fake_client.provider_spend_usd = 0.0
         fake_client.short_circuits = 0
+        fake_client.scorecard = None
         fake_client.get_fired_models.return_value = []
         fake_copilot_provider = MagicMock()
         fake_copilot_provider.selected_model = "gpt-5.3-codex"
@@ -333,6 +347,20 @@ class TestOrchestrate:
         fake_copilot_provider.total_tokens = 0
         fake_copilot_provider.total_thinking_tokens = 0
         fake_copilot_provider.call_count = 1
+        fake_client._get_provider.return_value = fake_copilot_provider
+        fallback_payload = _make_cc_result("finding-001")
+        fallback_response = MagicMock(
+            result=fallback_payload,
+            cost=0.2,
+            tokens_used=500,
+            model="gpt-5.3-codex",
+            duration=1.0,
+            resolved_model="gpt-5.3-codex",
+            thinking_tokens=0,
+            native_usage={},
+            attempted_models=("gpt-5.6-sol", "gpt-5.3-codex"),
+        )
+        fake_client.generate_structured.return_value = fallback_response
         compatible = ProbeResult(
             compatible=True,
             valid_json=True,
@@ -358,8 +386,8 @@ class TestOrchestrate:
             return_value=copilot,
         ), patch(
             "core.llm.providers.CopilotCLILLMProvider",
-            return_value=fake_copilot_provider,
-        ) as provider_cls:
+            side_effect=AssertionError("direct provider constructed"),
+        ):
             result = orchestrate(
                 prep_report_path=report_path,
                 repo_path=tmp_path,
@@ -385,7 +413,236 @@ class TestOrchestrate:
             "calls": 1,
         }]
         assert analysis_calls == 2
-        provider_cls.assert_called_once_with(copilot)
+        fake_client._get_provider.assert_called_once_with(copilot)
+        fallback_call = fake_client.generate_structured.call_args
+        assert fallback_call.kwargs["model_config"] is copilot
+        assert fallback_call.kwargs["sandbox"] is True
+        assert (
+            fallback_call.kwargs["call_class"]
+            == "agentic-selected-agent-fallback"
+        )
+
+    def test_budget_exhaustion_does_not_trigger_selected_fallback(
+        self, tmp_path,
+    ):
+        from core.llm.config import LLMConfig, ModelConfig
+        from core.security.envelope_probe import ProbeResult
+        from packages.llm_analysis.tasks import AnalysisTask
+
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(_make_prep_report()))
+        config = LLMConfig(
+            primary_model=ModelConfig(
+                provider="anthropic",
+                model_name="claude-opus-5",
+                api_key="test",
+            ),
+            fallback_models=[],
+            specialized_models={},
+            max_cost_per_scan=1.0,
+        )
+        fake_client = MagicMock()
+        fake_client.config = config
+        fake_client.authoritative_spend_usd = 0.9
+        fake_client.provider_spend_usd = 0.9
+        fake_client.short_circuits = 0
+        fake_client.scorecard = None
+        fake_client.get_fired_models.return_value = []
+        compatible = ProbeResult(
+            compatible=True,
+            valid_json=True,
+            correct_verdict=True,
+            nonce_leaked=False,
+            raw_response="{}",
+        )
+
+        def fake_dispatch(
+            task, findings, dispatch_fn, role_resolution,
+            results_by_id, cost_tracker, max_parallel,
+            prefilter_fn=None,
+        ):
+            if type(task) is AnalysisTask:
+                return [{
+                    "finding_id": "finding-001",
+                    "error": "LLM budget exceeded: $0.90 spent",
+                    "error_type": "budget",
+                    "status": "skipped_over_budget",
+                    "skip_reason": (
+                        "analysis stopped: LLM budget exceeded at $0.90"
+                    ),
+                    "analysed_by": "claude-opus-5",
+                }]
+            return []
+
+        with patch.dict(
+            os.environ,
+            {"RAPTOR_AGENT_CLI": "copilot"},
+        ), patch(
+            "core.llm.client.LLMClient",
+            return_value=fake_client,
+        ), patch(
+            "packages.llm_analysis.dispatch.dispatch_task",
+            side_effect=fake_dispatch,
+        ), patch(
+            "core.security.envelope_probe.probe_envelope_compatibility",
+            return_value=compatible,
+        ), patch(
+            "core.llm.config._build_copilotcli_config",
+        ) as fallback_config:
+            result = orchestrate(
+                prep_report_path=report_path,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "orch",
+                llm_config=config,
+                no_exploits=True,
+                no_patches=True,
+                dataflow_validation_enabled=False,
+            )
+
+        assert result is not None
+        fallback_config.assert_not_called()
+        finding = result["results"][0]
+        assert finding["status"] == "skipped_over_budget"
+        assert finding["skip_reason"].startswith("analysis stopped:")
+        assert "error" not in finding
+        orchestration = result["orchestration"]
+        assert orchestration["findings_failed"] == 0
+        assert orchestration["findings_skipped_over_budget"] == 1
+        assert orchestration["failed_by_model"] == {}
+        assert orchestration["cost"]["total_cost"] == 0.9
+        assert orchestration["cost"]["budget_remaining"] == 0.1
+        assert (
+            orchestration["cost"]["authoritative_provider_spend"]
+            == 0.9
+        )
+
+    def test_external_failure_uses_client_for_claude_fallback(
+        self, tmp_path,
+    ):
+        from core.llm.config import LLMConfig, ModelConfig
+        from core.security.envelope_probe import ProbeResult
+        from packages.llm_analysis.tasks import AnalysisTask
+
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(_make_prep_report()))
+        external = ModelConfig(
+            provider="anthropic",
+            model_name="claude-opus-5",
+            api_key="test",
+        )
+        config = LLMConfig(
+            primary_model=external,
+            fallback_models=[],
+            specialized_models={},
+        )
+        claude = ModelConfig(
+            provider="claudecode",
+            model_name="session-default",
+            max_context=1_000_000,
+            max_tokens=32_000,
+        )
+        analysis_calls = 0
+
+        def fake_dispatch(
+            task, findings, dispatch_fn, role_resolution,
+            results_by_id, cost_tracker, max_parallel,
+            prefilter_fn=None,
+        ):
+            nonlocal analysis_calls
+            if type(task) is not AnalysisTask:
+                return []
+            analysis_calls += 1
+            if analysis_calls == 1:
+                return [{
+                    "finding_id": "finding-001",
+                    "error": "provider outage",
+                }]
+            finding = findings[0]
+            dispatched = dispatch_fn(
+                "fallback prompt",
+                task.get_schema(finding),
+                task.get_system_prompt(),
+                task.temperature,
+                role_resolution["analysis_model"],
+            )
+            processed = task.process_result(finding, dispatched)
+            processed["finding_id"] = "finding-001"
+            return [processed]
+
+        fake_client = MagicMock()
+        fake_client.config = config
+        fake_client.authoritative_spend_usd = 0.0
+        fake_client.provider_spend_usd = 0.0
+        fake_client.short_circuits = 0
+        fake_client.scorecard = None
+        fake_client.get_fired_models.return_value = []
+        fake_provider = MagicMock()
+        fake_provider.total_cost = 0.0
+        fake_provider.total_tokens = 0
+        fake_provider.total_thinking_tokens = 0
+        fake_provider.call_count = 1
+        fake_client._get_provider.return_value = fake_provider
+        fake_client.generate_structured.return_value = MagicMock(
+            result=_make_cc_result("finding-001"),
+            cost=0.2,
+            tokens_used=500,
+            model="claude-sonnet-5",
+            duration=1.0,
+            resolved_model="claude-sonnet-5",
+            thinking_tokens=0,
+            native_usage={},
+            attempted_models=(),
+        )
+        compatible = ProbeResult(
+            compatible=True,
+            valid_json=True,
+            correct_verdict=True,
+            nonce_leaked=False,
+            raw_response="{}",
+        )
+
+        with patch.dict(
+            os.environ,
+            {"RAPTOR_AGENT_CLI": "claude"},
+        ), patch(
+            "core.llm.client.LLMClient",
+            return_value=fake_client,
+        ), patch(
+            "packages.llm_analysis.dispatch.dispatch_task",
+            side_effect=fake_dispatch,
+        ), patch(
+            "core.security.envelope_probe.probe_envelope_compatibility",
+            return_value=compatible,
+        ), patch(
+            "core.llm.cc_adapter.resolve_claude_cli",
+            return_value="/usr/bin/claude",
+        ), patch(
+            "core.llm.config._build_claudecode_config",
+            return_value=claude,
+        ), patch(
+            "packages.llm_analysis.orchestrator.invoke_cc_simple",
+            side_effect=AssertionError("direct Claude fallback invoked"),
+        ):
+            result = orchestrate(
+                prep_report_path=report_path,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "orch",
+                llm_config=config,
+                no_exploits=True,
+                no_patches=True,
+                dataflow_validation_enabled=False,
+            )
+
+        assert result is not None
+        assert result["orchestration"]["mode"] == "cc_fallback"
+        assert analysis_calls == 2
+        fake_client._get_provider.assert_called_once_with(claude)
+        fallback_call = fake_client.generate_structured.call_args
+        assert fallback_call.kwargs["model_config"] is claude
+        assert (
+            fallback_call.kwargs["call_class"]
+            == "agentic-selected-agent-fallback"
+        )
 
     def test_corrupt_report(self, tmp_path):
         """Corrupt JSON in Phase 3 report -> returns None."""

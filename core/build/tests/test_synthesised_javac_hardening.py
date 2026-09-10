@@ -16,6 +16,7 @@ Two properties of the no-build-system Java path:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -145,6 +146,14 @@ def test_copilot_suggest_flags_uses_copilot_sandbox(
 
     captured: dict = {}
 
+    def fake_env(**kwargs):
+        captured["env_kwargs"] = kwargs
+        home = Path(kwargs["copilot_home"])
+        captured["settings"] = json.loads(
+            (home / "settings.json").read_text(encoding="utf-8")
+        )["sandbox"]
+        return {"PATH": "/usr/bin"}
+
     def fake_run(cmd, prompt, **kwargs):
         captured["cmd"] = list(cmd)
         captured["prompt"] = prompt
@@ -180,7 +189,7 @@ def test_copilot_suggest_flags_uses_copilot_sandbox(
     monkeypatch.setattr(
         copilot_adapter,
         "copilot_subprocess_env",
-        lambda **kwargs: {"PATH": "/usr/bin"},
+        fake_env,
     )
     monkeypatch.setattr(
         copilot_adapter,
@@ -197,3 +206,19 @@ def test_copilot_suggest_flags_uses_copilot_sandbox(
     assert "--sandbox" in captured["cmd"]
     assert captured["prompt"]
     assert captured["cwd"] != str(tmp_path)
+    private_home = Path(captured["env_kwargs"]["copilot_home"])
+    workspace = Path(captured["cwd"])
+    policy = captured["settings"]["userPolicy"]["filesystem"]
+    model_roots = (
+        workspace,
+        tmp_path,
+        *(Path(path) for path in policy["readwritePaths"]),
+        *(Path(path) for path in policy["readonlyPaths"]),
+    )
+    for root in model_roots:
+        assert not private_home.resolve().is_relative_to(root.resolve())
+    assert str(private_home.resolve()) not in (
+        *policy["readwritePaths"],
+        *policy["readonlyPaths"],
+    )
+    assert not private_home.exists()
