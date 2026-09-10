@@ -23,7 +23,7 @@
       ]
     },
     "copilot-cli": {
-      "version": "1.0.84-3",
+      "version": "1.0.83",
       "package_version": "1.0.83",
       "package_version_command": [
         "node",
@@ -31,7 +31,7 @@
         "require('/opt/raptor/npm/all-tools/node_modules/@github/copilot/package.json').version"
       ],
       "version_command": [
-        "copilot",
+        "/opt/raptor/npm/all-tools/node_modules/.bin/copilot",
         "--version"
       ]
     },

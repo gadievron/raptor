@@ -31,8 +31,8 @@ all_tools = _load_module("exact_version_verifier_under_test", VERIFIER)
     [
         ("2.1.263", "2.1.263 (Claude Code)\n"),
         (
-            "1.0.84-3",
-            "GitHub Copilot CLI 1.0.84-3.\n"
+            "1.0.83",
+            "GitHub Copilot CLI 1.0.83.\n"
             "Run 'copilot update' to check for updates.\n",
         ),
         ("1.22.22", "1.22.22\n"),
@@ -246,7 +246,7 @@ def test_verify_installed_rejects_prerelease_output(
 
     assert any(
         error.startswith(
-            "example version output does not contain 1.2.3:"
+            "example version output does not contain exact 1.2.3:"
         )
         for error in errors
     )

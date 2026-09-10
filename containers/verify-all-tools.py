@@ -39,8 +39,11 @@ _REQUIRED_CLI_TOOLS = {
     ),
     "copilot-cli": (
         "GitHub Copilot CLI",
-        "1.0.84-3",
-        ["copilot", "--version"],
+        "1.0.83",
+        [
+            "/opt/raptor/npm/all-tools/node_modules/.bin/copilot",
+            "--version",
+        ],
         "1.0.83",
         [
             "node",
@@ -129,30 +132,53 @@ def version_output_matches(expected_version: str, output: str) -> bool:
     return normalized_expected in _normalized_version_tokens(output)
 
 
-def verify_command_version(expected_version: str, command: list[str]) -> str | None:
+def version_probe_env(home: Path) -> dict[str, str]:
+    env = runtime_probe_env()
+    env.update(
+        {
+            "HOME": str(home),
+            "PATH": "/usr/local/bin:/usr/bin:/bin",
+            "XDG_CACHE_HOME": str(home / ".cache"),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "XDG_DATA_HOME": str(home / ".local" / "share"),
+        }
+    )
+    return env
+
+
+def verify_command_version(
+    expected_version: str,
+    command: list[str],
+    *,
+    label: str | None = None,
+) -> str | None:
     if not command:
         return "version command is empty"
-    try:
-        result = subprocess.run(
-            command,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=30,
-            stdin=subprocess.DEVNULL,
-            env=runtime_probe_env(),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return f"{command[0]} version check failed: {exc}"
+    subject = label or command[0]
+    with tempfile.TemporaryDirectory(prefix="raptor-version-probe-") as temp_dir:
+        home = Path(temp_dir) / "home"
+        home.mkdir()
+        try:
+            result = subprocess.run(
+                command,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=30,
+                stdin=subprocess.DEVNULL,
+                env=version_probe_env(home),
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return f"{subject} version check failed: {exc}"
 
     output = f"{result.stdout}\n{result.stderr}".strip()
     if result.returncode != 0:
         return (
-            f"{command[0]} version check exited {result.returncode}: {output}"
+            f"{subject} version check exited {result.returncode}: {output}"
         )
     if not version_output_matches(expected_version, output):
         return (
-            f"{command[0]} version output does not contain exact "
+            f"{subject} version output does not contain exact "
             f"{expected_version}: {output}"
         )
     return None
@@ -222,9 +248,10 @@ def load_manifest(path: Path) -> dict:
                 f"{display_name} npm package must be version-checked with "
                 f"`{command_text}`"
             )
-        if expected_command[0] not in data["required_binaries"]:
+        required_binary = Path(expected_command[0]).name
+        if required_binary not in data["required_binaries"]:
             raise ValueError(
-                f"{display_name} binary `{expected_command[0]}` must be required"
+                f"{display_name} binary `{required_binary}` must be required"
             )
     for tool_name, (
         display_name,
@@ -682,29 +709,13 @@ def verify_installed(manifest: dict) -> list[str]:
         command = tool.get("version_command")
         if not command:
             continue
-        try:
-            result = subprocess.run(
-                command,
-                text=True,
-                capture_output=True,
-                check=False,
-                timeout=30,
-                stdin=subprocess.DEVNULL,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            errors.append(f"{tool_name} version check failed: {exc}")
-            continue
-        output = f"{result.stdout}\n{result.stderr}"
-        if result.returncode != 0:
-            errors.append(
-                f"{tool_name} version check exited {result.returncode}: "
-                f"{output.strip()}"
-            )
-        elif not version_output_matches(tool["version"], output):
-            errors.append(
-                f"{tool_name} version output does not contain {tool['version']}: "
-                f"{output.strip()}"
-            )
+        version_error = verify_command_version(
+            tool["version"],
+            command,
+            label=tool_name,
+        )
+        if version_error is not None:
+            errors.append(version_error)
 
     try:
         r2_plugins = subprocess.run(

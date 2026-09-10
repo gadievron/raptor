@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -98,7 +99,7 @@ def test_manifest_pins_cli_version_commands() -> None:
         "version_command": ["claude", "--version"],
     }
     assert manifest["tools"]["copilot-cli"] == {
-        "version": "1.0.84-3",
+        "version": "1.0.83",
         "package_version": "1.0.83",
         "package_version_command": [
             "node",
@@ -106,7 +107,10 @@ def test_manifest_pins_cli_version_commands() -> None:
             "require('/opt/raptor/npm/all-tools/node_modules/"
             "@github/copilot/package.json').version",
         ],
-        "version_command": ["copilot", "--version"],
+        "version_command": [
+            "/opt/raptor/npm/all-tools/node_modules/.bin/copilot",
+            "--version",
+        ],
     }
     assert manifest["tools"]["yarn"] == {
         "version": "1.22.22",
@@ -223,6 +227,15 @@ def test_dockerfile_installs_locked_npm_closures_without_global_installs() -> No
         "node /opt/raptor/npm/base/node_modules/"
         "@anthropic-ai/claude-code/install.cjs"
     ) in dockerfile
+    assert (
+        "test -x /opt/raptor/npm/all-tools/node_modules/"
+        "@github/copilot-linux-x64/copilot"
+    ) in dockerfile
+    assert (
+        "raptor-verify-all-tools --check-version "
+        '"${copilot_version}" \\\n'
+        "        /opt/raptor/npm/all-tools/node_modules/.bin/copilot --version"
+    ) in dockerfile
 
 
 def test_standard_target_runs_locked_claude_executable_probe() -> None:
@@ -322,10 +335,12 @@ def test_all_tools_verifier_executes_cli_version_commands(
                 stderr="",
             )
         if command == ["copilot", "--version"]:
+            raise AssertionError("host PATH copilot must never be executed")
+        if command == full_manifest["tools"]["copilot-cli"]["version_command"]:
             return subprocess.CompletedProcess(
                 command,
                 0,
-                stdout="GitHub Copilot CLI 1.0.84-3",
+                stdout="GitHub Copilot CLI 1.0.83.",
                 stderr="",
             )
         if command[:3] == ["r2", "-q", "-c"]:
@@ -342,7 +357,8 @@ def test_all_tools_verifier_executes_cli_version_commands(
     errors = all_tools.verify_installed(manifest)
 
     assert ["claude", "--version"] in commands
-    assert ["copilot", "--version"] in commands
+    assert ["copilot", "--version"] not in commands
+    assert full_manifest["tools"]["copilot-cli"]["version_command"] in commands
     assert full_manifest["tools"]["claude-code"][
         "package_version_command"
     ] in commands
@@ -351,6 +367,55 @@ def test_all_tools_verifier_executes_cli_version_commands(
     ] in commands
     assert any("claude-code version check exited 127" in error for error in errors)
     assert not any("copilot-cli" in error for error in errors)
+
+
+def test_locked_copilot_probe_ignores_host_path_and_rejects_near_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = all_tools.load_manifest(ALL_TOOLS_MANIFEST)
+    command = manifest["tools"]["copilot-cli"]["version_command"]
+    host_copilot = "/host/bin/copilot"
+    outputs = iter(
+        (
+            "GitHub Copilot CLI 1.0.83.",
+            "GitHub Copilot CLI 1.0.830.",
+            "GitHub Copilot CLI 1.0.83-rc1.",
+        )
+    )
+    commands: list[list[str]] = []
+
+    monkeypatch.setenv("PATH", f"/host/bin:{os.environ.get('PATH', '')}")
+    monkeypatch.setattr(
+        all_tools.shutil,
+        "which",
+        lambda name: host_copilot if name == "copilot" else None,
+    )
+
+    def run(
+        invoked: list[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append(invoked)
+        assert invoked == command
+        assert invoked[0] != host_copilot
+        probe_env = kwargs["env"]
+        assert isinstance(probe_env, dict)
+        assert probe_env["PATH"] == "/usr/local/bin:/usr/bin:/bin"
+        assert probe_env["HOME"] != os.environ["HOME"]
+        assert not any(name.startswith("COPILOT_") for name in probe_env)
+        return subprocess.CompletedProcess(
+            invoked,
+            0,
+            stdout=next(outputs),
+            stderr="",
+        )
+
+    monkeypatch.setattr(all_tools.subprocess, "run", run)
+
+    assert all_tools.verify_command_version("1.0.83", command) is None
+    assert all_tools.verify_command_version("1.0.83", command) is not None
+    assert all_tools.verify_command_version("1.0.83", command) is not None
+    assert commands == [command, command, command]
 
 
 @pytest.mark.parametrize(

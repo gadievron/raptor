@@ -327,6 +327,10 @@ RUN npm ci --ignore-scripts --include=optional --omit=dev --no-audit --no-fund \
         --prefix /opt/raptor/npm/all-tools \
     && node -e "if (require('/opt/raptor/npm/all-tools/node_modules/@github/copilot/package.json').version !== '1.0.83') process.exit(1)" \
     && node -e "if (require('/opt/raptor/npm/all-tools/node_modules/detect-libc/package.json').version !== '2.1.2') process.exit(1)" \
+    && test -x /opt/raptor/npm/all-tools/node_modules/@github/copilot-linux-x64/copilot \
+    && copilot_version="$(jq -er '.tools."copilot-cli".version' /usr/local/share/raptor/all-tools-manifest.json)" \
+    && raptor-verify-all-tools --check-version "${copilot_version}" \
+        /opt/raptor/npm/all-tools/node_modules/.bin/copilot --version \
     && ln -sf /opt/raptor/npm/all-tools/node_modules/.bin/copilot \
         /usr/local/bin/copilot
 

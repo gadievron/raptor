@@ -250,7 +250,8 @@ def test_runtime_rejects_near_miss_snapshot_versions(
 
     assert any(
         error.startswith(
-            f"{tool_name} version output does not contain {tool['version']}:"
+            f"{tool_name} version output does not contain exact "
+            f"{tool['version']}:"
         )
         for error in errors
     )
