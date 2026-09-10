@@ -256,16 +256,18 @@ def test_same_origin_get_replay_and_controls_are_fresh(tmp_path):
 
 
 def test_target_credentials_are_redacted_but_replay_uses_real_url(tmp_path):
-    password = "operator-password"
-    token = "operator-access-token"
+    username_token = "ghp_" + "a" * 36
+    password_token = "sk-" + "b" * 48
+    query_token = "ghp_" + "c" * 36
     with _server() as (server, handler):
         transport_url = (
-            f"http://alice:{password}@"
+            f"http://{username_token}:{password_token}@"
             f"{server.server_address[0]}:{server.server_address[1]}"
-            f"/search?access_token={token}"
+            f"/search?opaque={query_token}"
         )
         scanner = _scanner(transport_url, tmp_path)
         try:
+            assert scanner.transport_url == transport_url
             artifact = scanner._build_validation_replay_artifact([
                 _finding(transport_url),
             ])
@@ -273,11 +275,11 @@ def test_target_credentials_are_redacted_but_replay_uses_real_url(tmp_path):
             scanner.close()
 
     expected_auth = "Basic " + base64.b64encode(
-        f"alice:{password}".encode(),
+        f"{username_token}:{password_token}".encode(),
     ).decode()
     assert len(handler.hits) == 3
     assert all(
-        hit["params"]["access_token"] == token
+        hit["params"]["opaque"] == query_token
         for hit in handler.hits
     )
     assert all(
@@ -286,8 +288,8 @@ def test_target_credentials_are_redacted_but_replay_uses_real_url(tmp_path):
     )
     assert artifact["target"] == redact_url_secrets_only(transport_url)
     rendered = json.dumps(artifact, sort_keys=True)
-    assert password not in rendered
-    assert token not in rendered
+    for secret in (username_token, password_token, query_token):
+        assert secret not in rendered
     assert "[REDACTED]" in rendered
 
 

@@ -1,6 +1,7 @@
 """Tri-state repo trust must cross every unified-launcher child boundary."""
 from __future__ import annotations
 
+import argparse
 import sys
 import tempfile
 import unittest
@@ -149,6 +150,29 @@ class TestTrustRepoPropagation(unittest.TestCase):
         self.assertEqual(rc, 0)
         return captured["args"]
 
+    def _captured_sca_main(self, argv):
+        captured = {}
+
+        def fake_run(cmd, **_kwargs):
+            captured["args"] = list(cmd[2:])
+            return SimpleNamespace(returncode=0)
+
+        with mock.patch.object(sys, "argv", ["raptor.py", *argv]), \
+                mock.patch.object(raptor.subprocess, "run", fake_run):
+            rc = raptor.main()
+        self.assertEqual(rc, 0)
+        return captured["args"]
+
+    @staticmethod
+    def _resolve_sca_child_args(argv):
+        from packages.sca._scan_args import add_scan_args, options_from_args
+
+        parser = argparse.ArgumentParser(prog="test-sca-child")
+        parser.add_argument("target")
+        add_scan_args(parser)
+        args = parser.parse_args(argv)
+        return options_from_args(args)
+
     def test_top_level_both_flags_forward_only_negative(self):
         args = self._captured_main([
             "analyze",
@@ -213,6 +237,79 @@ class TestTrustRepoPropagation(unittest.TestCase):
                 self._assert_canonical(args, ["--no-trust-repo"])
                 self.assertFalse(cct.is_trust_overridden(target))
                 self.assertTrue(qlt.check_repo_codeql_trust(str(target)))
+
+    def test_unified_sca_inherits_exact_target_session_trust(self):
+        import core.security.cc_trust as cct
+        import core.security.codeql_trust as qlt
+
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch(
+                    "core.project.trust.active_project_trust",
+                    return_value=({}, None),
+                ), mock.patch(
+                    "core.project.sessions.session_repo_trusted",
+                    side_effect=lambda repo: Path(repo).resolve()
+                    == Path(td).resolve(),
+                ):
+            child_args = self._captured_sca_main([
+                "sca",
+                "--repo", td,
+            ])
+            self._assert_canonical(child_args, [])
+            options = self._resolve_sca_child_args(child_args)
+
+        self.assertTrue(options.trust_repo)
+        self.assertIsNone(cct._trust_override_set)
+        self.assertIsNone(qlt._trust_override_set)
+
+    def test_unified_sca_untrusted_session_stays_strict_without_override(
+        self,
+    ):
+        import core.security.cc_trust as cct
+        import core.security.codeql_trust as qlt
+
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch(
+                    "core.project.trust.active_project_trust",
+                    return_value=({}, None),
+                ), mock.patch(
+                    "core.project.sessions.session_repo_trusted",
+                    return_value=False,
+                ):
+            child_args = self._captured_sca_main([
+                "sca",
+                "--repo", td,
+            ])
+            self._assert_canonical(child_args, [])
+            options = self._resolve_sca_child_args(child_args)
+
+        self.assertFalse(options.trust_repo)
+        self.assertIsNone(cct._trust_override_set)
+        self.assertIsNone(qlt._trust_override_set)
+
+    def test_unified_sca_negative_beats_trusted_session(self):
+        import core.security.cc_trust as cct
+        import core.security.codeql_trust as qlt
+
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch(
+                    "core.project.trust.active_project_trust",
+                    return_value=({}, None),
+                ), mock.patch(
+                    "core.project.sessions.session_repo_trusted",
+                    return_value=True,
+                ):
+            child_args = self._captured_sca_main([
+                "sca",
+                "--repo", td,
+                "--no-trust-repo",
+            ])
+            self._assert_canonical(child_args, ["--no-trust-repo"])
+            options = self._resolve_sca_child_args(child_args)
+
+        self.assertFalse(options.trust_repo)
+        self.assertIs(cct._trust_override_set, False)
+        self.assertIs(qlt._trust_override_set, False)
 
 
 class TestNestedAgenticPropagation(unittest.TestCase):

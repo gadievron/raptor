@@ -81,11 +81,14 @@ def test_scanner_redacts_target_credentials_from_artifacts_and_prompt(
     tmp_path,
     monkeypatch,
 ):
-    password = "operator-password"
-    token = "operator-access-token"
+    username_token = "ghp_" + "a" * 36
+    password_token = "sk-" + "b" * 48
+    query_token = "ghp_" + "c" * 36
+    fragment_token = "sk-" + "d" * 48
     target = (
-        f"https://alice:{password}@example.test/app/"
-        f"?access_token={token}&mode=validate"
+        f"https://{username_token}:{password_token}@example.test/app/"
+        f"?opaque={query_token}&mode=validate"
+        f"#continue={fragment_token}"
     )
     safe_target = redact_url_secrets_only(target)
     scanner = WebScanner(
@@ -150,8 +153,13 @@ def test_scanner_redacts_target_credentials_from_artifacts_and_prompt(
     assert scanner.target_identity == safe_target
     assert scanner.execution_policy.receipt.target == safe_target
     assert captured["target"] == safe_target
-    assert password not in captured["prompt"]
-    assert token not in captured["prompt"]
+    for secret in (
+        username_token,
+        password_token,
+        query_token,
+        fragment_token,
+    ):
+        assert secret not in captured["prompt"]
     assert "[REDACTED]" in captured["prompt"]
 
     artifact_text = (
@@ -161,8 +169,13 @@ def test_scanner_redacts_target_credentials_from_artifacts_and_prompt(
         tmp_path / _VALIDATION_REPLAY_ARTIFACT
     ).read_text(encoding="utf-8")
     for rendered in (artifact_text, replay_text):
-        assert password not in rendered
-        assert token not in rendered
+        for secret in (
+            username_token,
+            password_token,
+            query_token,
+            fragment_token,
+        ):
+            assert secret not in rendered
         assert "[REDACTED]" in rendered
 
 

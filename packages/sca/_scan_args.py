@@ -326,43 +326,65 @@ def resolve_repo_trust(args: argparse.Namespace) -> bool:
     """Resolve the repo-trust umbrella ONCE and fan the result out to
     every consumer.
 
-    Precedence (``core.project.trust.resolve_trust_flag``, shared with
-    /agentic and /codeql): ``--no-trust-repo`` > ``--trust-repo`` >
-    active project's ``config`` marker > off. When the marker decides,
-    the standard project-trust banner prints (via
-    ``apply_project_trust_flags``).
+    Precedence (shared with /agentic and /codeql):
+    ``--no-trust-repo`` > ``--trust-repo`` > active project's
+    ``config`` marker > authenticated exact-target session assertion >
+    off. When the marker decides, the standard project-trust banner
+    prints.
 
-    Mutates ``args.trust_repo`` to the effective value AND sets the
-    process-wide ``cc_trust`` / ``codeql_trust`` overrides to the SAME
-    value, so the pipeline plumbing (``RunOptions.trust_repo``) and the
-    process-wide gates cannot disagree. Entry points must NOT call
-    ``set_trust_override`` from the raw flag themselves — that path
-    missed marker-implied trust (override stayed off on marker-only
-    runs) and, when both flags were passed, left the override trusted
-    while the pipeline correctly resolved untrusted.
+    The process-wide gates retain the tri-state override: explicit/project
+    decisions set ``True``/``False``; an unspecified decision sets ``None``
+    so ``cc_trust`` and ``codeql_trust`` can consult the authenticated
+    session for the concrete target. ``RunOptions.trust_repo`` receives the
+    resulting effective boolean for SCA's own repo-shipped config gates.
 
-    Idempotent: a second call re-resolves from the already-mutated
-    ``args`` to the same value, and the marker banner prints at most
-    once per run.
+    Idempotent: a second call reuses the stamped tri-state/effective pair
+    rather than reinterpreting the mutated ``args.trust_repo`` value, and
+    the marker banner prints at most once per run.
     """
-    from core.project.trust import apply_project_trust_flags
-    apply_project_trust_flags(args)
-    resolved = bool(getattr(args, "trust_repo", False))
+    if hasattr(args, "_raptor_repo_trust_override"):
+        return bool(getattr(args, "_raptor_repo_trust_effective", False))
+
+    target = getattr(args, "target", None)
+    from core.project.trust import (
+        apply_project_trust_flags,
+        derive_repo_trust_override,
+        set_repo_trust_override,
+    )
+
+    apply_project_trust_flags(
+        args,
+        target_path=target,
+    )
+    override = derive_repo_trust_override(args)
     try:
-        from core.security.cc_trust import set_trust_override
-        set_trust_override(resolved)
+        set_repo_trust_override(override)
     except ImportError:
-        logger.debug("raptor-sca: cc_trust unavailable; repo-trust "
-                     "override not propagated")
-    try:
-        from core.security.codeql_trust import (
-            set_trust_override as _codeql_set_trust_override,
+        logger.debug(
+            "raptor-sca: process-wide trust gates unavailable; "
+            "tri-state override not propagated",
         )
-        _codeql_set_trust_override(resolved)
-    except ImportError:
-        logger.debug("raptor-sca: codeql_trust unavailable; repo-trust "
-                     "override not propagated")
-    return resolved
+    if override is None and target:
+        try:
+            from core.project.sessions import session_repo_trusted
+            effective = session_repo_trusted(target)
+        except Exception:  # noqa: BLE001 — authenticated lookup fails closed
+            logger.debug(
+                "raptor-sca: authenticated session trust lookup failed",
+                exc_info=True,
+            )
+            effective = False
+    else:
+        effective = bool(override)
+
+    # Preserve the tri-state across the entry point + options_from_args
+    # double-call. Mutating args.trust_repo to the effective session value
+    # without this stamp would make a second call mistake inherited trust
+    # for an explicit positive override.
+    args._raptor_repo_trust_override = override
+    args._raptor_repo_trust_effective = effective
+    args.trust_repo = effective
+    return effective
 
 
 def options_from_args(args: argparse.Namespace) -> RunOptions:
@@ -376,9 +398,9 @@ def options_from_args(args: argparse.Namespace) -> RunOptions:
 
     Repo-trust is resolved here via :func:`resolve_repo_trust`
     (``--no-trust-repo`` > ``--trust-repo`` > project ``config``
-    marker > off) so both entry points share the precedence, the
-    marker banner, AND the propagation of the resolved value to
-    the process-wide ``cc_trust`` / ``codeql_trust`` overrides.
+    marker > authenticated exact-target session > off) so both entry
+    points share one effective decision while the process-wide gates
+    preserve an unspecified ``None`` override for session lookup.
     """
     resolve_repo_trust(args)
     return RunOptions(

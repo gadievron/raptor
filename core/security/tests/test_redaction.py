@@ -146,6 +146,48 @@ class TestRedactUrlSecretsOnly:
         assert "abcdefghijklmnop" not in out
         assert "api_key=[REDACTED]" in out
 
+    def test_generic_query_and_fragment_values_use_vendor_detection(self):
+        github_token = "ghp_" + "a" * 36
+        openai_token = "sk-" + "b" * 48
+        value = (
+            "https://example.test/callback"
+            f"?next={github_token}&mode=scan"
+            f"#continue={openai_token}&section=results"
+        )
+
+        out = redact_url_secrets_only(value)
+
+        assert github_token not in out
+        assert openai_token not in out
+        assert "next=[REDACTED]" in out
+        assert "continue=[REDACTED]" in out
+        assert "mode=scan" in out
+        assert "section=results" in out
+
+    def test_vendor_tokens_redacted_from_both_userinfo_components(self):
+        username_token = "ghp_" + "c" * 36
+        password_token = "sk-" + "d" * 48
+        value = (
+            f"https://{username_token}:{password_token}@"
+            "example.test/private"
+        )
+
+        out = redact_url_secrets_only(value)
+
+        assert username_token not in out
+        assert password_token not in out
+        assert "[REDACTED]:[REDACTED]@example.test" in out
+
+    def test_username_only_vendor_token_does_not_leak(self):
+        username_token = "ghp_" + "e" * 36
+
+        out = redact_url_secrets_only(
+            f"https://{username_token}@example.test/private",
+        )
+
+        assert username_token not in out
+        assert "[REDACTED]@example.test" in out
+
 
 class TestVendorShapeCoverage:
     """Credential shapes from the injection-evasion battery that

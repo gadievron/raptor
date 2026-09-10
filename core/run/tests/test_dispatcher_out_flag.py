@@ -185,11 +185,14 @@ class TestRunWithLifecycleOut:
     ):
         raptor = _import_raptor()
         h = _LifecycleHarness(raptor, monkeypatch)
-        password = "operator-password"
-        token = "operator-access-token"
+        username_token = "ghp_" + "a" * 36
+        password_token = "sk-" + "b" * 48
+        query_token = "ghp_" + "c" * 36
+        fragment_token = "sk-" + "d" * 48
         target = (
-            f"https://alice:{password}@example.test/app"
-            f"?access_token={token}&mode=scan"
+            f"https://{username_token}:{password_token}@example.test/app"
+            f"?opaque={query_token}&mode=scan"
+            f"#continue={fragment_token}"
         )
         out_dir = tmp_path / "web-run"
 
@@ -205,8 +208,13 @@ class TestRunWithLifecycleOut:
         assert target in h.child_args
         assert len(h.started_targets) == 1
         lifecycle_target = h.started_targets[0] or ""
-        assert password not in lifecycle_target
-        assert token not in lifecycle_target
+        for secret in (
+            username_token,
+            password_token,
+            query_token,
+            fragment_token,
+        ):
+            assert secret not in lifecycle_target
         assert "[REDACTED]" in lifecycle_target
 
     def test_help_short_circuits_before_lifecycle(self, tmp_path, monkeypatch):

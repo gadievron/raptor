@@ -419,13 +419,23 @@ class SkillTargetTests(unittest.TestCase):
         self.assertIsNone(spec.filesystem_root)
 
     def test_opaque_url_identity_redacts_embedded_credentials(self):
+        username_token = "ghp_" + "a" * 36
+        password_token = "sk-" + "b" * 48
+        query_token = "ghp_" + "c" * 36
+        fragment_token = "sk-" + "d" * 48
         target = (
-            "https://alice:operator-password@example.test/app"
-            "?access_token=operator-access-token&mode=validate"
+            f"https://{username_token}:{password_token}@example.test/app"
+            f"?opaque={query_token}&mode=validate"
+            f"#continue={fragment_token}"
         )
         spec = SkillTarget.coerce(target)
-        self.assertNotIn("operator-password", spec.identity)
-        self.assertNotIn("operator-access-token", spec.identity)
+        for secret in (
+            username_token,
+            password_token,
+            query_token,
+            fragment_token,
+        ):
+            self.assertNotIn(secret, spec.identity)
         self.assertIn("[REDACTED]", spec.identity)
         self.assertIsNone(spec.filesystem_root)
 

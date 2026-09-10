@@ -14,10 +14,13 @@ run could disagree:
 
 Post-fix every entry point routes through
 ``packages.sca._scan_args.resolve_repo_trust``, which resolves ONCE
-(``--no-trust-repo`` > ``--trust-repo`` > ``config`` marker > off)
-and drives BOTH consumers — ``RunOptions.trust_repo`` and the
-process-wide ``cc_trust`` / ``codeql_trust`` overrides — from the
-same resolved value. These tests pin that invariant per entry point.
+(``--no-trust-repo`` > ``--trust-repo`` > ``config`` marker >
+authenticated exact-target session > off). ``RunOptions.trust_repo``
+receives the effective boolean, while the process-wide
+``cc_trust`` / ``codeql_trust`` override remains ``None`` when no
+explicit/project decision exists so those gates can perform the same
+exact-target session lookup. These tests pin that invariant per entry
+point.
 """
 
 from __future__ import annotations
@@ -45,9 +48,11 @@ _MARKER = {"config": "2026-01-01T00:00:00Z"}
 def _no_project_trust_markers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pin "no active project" so tests don't depend on the developer
     machine's ``~/.raptor`` state. Marker tests override this."""
-    from core.project import trust
+    from core.project import sessions, trust
     monkeypatch.setattr(trust, "active_project_trust",
                         lambda: ({}, None))
+    monkeypatch.setattr(sessions, "session_repo_trusted",
+                        lambda _target: False)
 
 
 @pytest.fixture
@@ -78,13 +83,33 @@ def _set_marker(monkeypatch: pytest.MonkeyPatch) -> None:
                         lambda target: True)
 
 
-def _assert_both_overrides(calls: dict, expected: bool) -> None:
+def _assert_both_overrides(calls: dict, expected: bool | None) -> None:
     """Both process-wide gates must have been driven, last value ==
     the resolved one."""
     assert calls["cc"], "cc_trust.set_trust_override never called"
     assert calls["codeql"], "codeql_trust.set_trust_override never called"
     assert calls["cc"][-1] is expected
     assert calls["codeql"][-1] is expected
+
+
+def _set_session_trust(
+    monkeypatch: pytest.MonkeyPatch,
+    expected_target: str | Path,
+    *,
+    trusted: bool,
+) -> list[Path]:
+    from core.project import sessions
+
+    seen: list[Path] = []
+    expected = Path(expected_target).resolve()
+
+    def _trusted(target) -> bool:
+        resolved = Path(target).resolve()
+        seen.append(resolved)
+        return trusted and resolved == expected
+
+    monkeypatch.setattr(sessions, "session_repo_trusted", _trusted)
+    return seen
 
 
 # ---------------------------------------------------------------------------
@@ -94,8 +119,12 @@ def _assert_both_overrides(calls: dict, expected: bool) -> None:
 class TestResolveRepoTrust:
 
     def _args(self, *, trust: bool = False, no_trust: bool = False,
-              ) -> argparse.Namespace:
-        return argparse.Namespace(trust_repo=trust, no_trust_repo=no_trust)
+              target: str = "./t") -> argparse.Namespace:
+        return argparse.Namespace(
+            trust_repo=trust,
+            no_trust_repo=no_trust,
+            target=target,
+        )
 
     def test_marker_only_resolves_trusted(
         self, monkeypatch: pytest.MonkeyPatch, override_spy: dict,
@@ -126,8 +155,62 @@ class TestResolveRepoTrust:
         assert args.trust_repo is True
         _assert_both_overrides(override_spy, True)
 
-    def test_neither_resolves_untrusted(self, override_spy: dict) -> None:
+    def test_neither_resolves_untrusted_without_forcing_override(
+        self,
+        override_spy: dict,
+    ) -> None:
         args = self._args()
+        assert resolve_repo_trust(args) is False
+        assert args.trust_repo is False
+        _assert_both_overrides(override_spy, None)
+
+    def test_session_trusted_resolves_effective_true_with_none_override(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        override_spy: dict,
+        tmp_path: Path,
+    ) -> None:
+        target = tmp_path / "target"
+        target.mkdir()
+        seen = _set_session_trust(
+            monkeypatch,
+            target,
+            trusted=True,
+        )
+        args = self._args(target=str(target))
+
+        assert resolve_repo_trust(args) is True
+        assert resolve_repo_trust(args) is True
+        assert args.trust_repo is True
+        assert seen == [target.resolve()]
+        _assert_both_overrides(override_spy, None)
+
+    def test_session_untrusted_resolves_false_with_none_override(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        override_spy: dict,
+        tmp_path: Path,
+    ) -> None:
+        target = tmp_path / "target"
+        target.mkdir()
+        _set_session_trust(monkeypatch, target, trusted=False)
+        args = self._args(target=str(target))
+
+        assert resolve_repo_trust(args) is False
+        assert args.trust_repo is False
+        _assert_both_overrides(override_spy, None)
+
+    def test_explicit_negative_beats_trusted_session(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        override_spy: dict,
+        tmp_path: Path,
+    ) -> None:
+        target = tmp_path / "target"
+        target.mkdir()
+        _set_session_trust(monkeypatch, target, trusted=True)
+        args = self._args(no_trust=True, target=str(target))
+
         assert resolve_repo_trust(args) is False
         assert args.trust_repo is False
         _assert_both_overrides(override_spy, False)
@@ -211,8 +294,44 @@ class TestScanOptionsPropagation:
         assert opts.trust_repo is True
         _assert_both_overrides(override_spy, True)
 
-    def test_neither_untrusts_both(self, override_spy: dict) -> None:
+    def test_neither_untrusts_pipeline_without_forcing_override(
+        self,
+        override_spy: dict,
+    ) -> None:
         opts = options_from_args(self._parse(["./t"]))
+        assert opts.trust_repo is False
+        _assert_both_overrides(override_spy, None)
+
+    def test_session_trust_reaches_scan_options(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        override_spy: dict,
+        tmp_path: Path,
+    ) -> None:
+        target = tmp_path / "target"
+        target.mkdir()
+        _set_session_trust(monkeypatch, target, trusted=True)
+
+        opts = options_from_args(self._parse([str(target)]))
+
+        assert opts.trust_repo is True
+        _assert_both_overrides(override_spy, None)
+
+    def test_explicit_negative_beats_session_in_scan_options(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        override_spy: dict,
+        tmp_path: Path,
+    ) -> None:
+        target = tmp_path / "target"
+        target.mkdir()
+        _set_session_trust(monkeypatch, target, trusted=True)
+
+        opts = options_from_args(self._parse([
+            str(target),
+            "--no-trust-repo",
+        ]))
+
         assert opts.trust_repo is False
         _assert_both_overrides(override_spy, False)
 
@@ -279,7 +398,7 @@ class TestScanCliEntrypoint:
         override_spy: dict,
     ) -> None:
         assert self._run(monkeypatch, tmp_path, []) == 0
-        _assert_both_overrides(override_spy, False)
+        _assert_both_overrides(override_spy, None)
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +432,7 @@ class TestBumpEntrypoint:
 
     def test_neither(self, override_spy: dict) -> None:
         assert self._run([]) == 2
-        _assert_both_overrides(override_spy, False)
+        _assert_both_overrides(override_spy, None)
 
     def _run_with_stub(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
@@ -393,7 +512,7 @@ class TestHardenEntrypoint:
 
     def test_neither(self, override_spy: dict) -> None:
         assert self._run([]) == 2
-        _assert_both_overrides(override_spy, False)
+        _assert_both_overrides(override_spy, None)
 
 
 # ---------------------------------------------------------------------------

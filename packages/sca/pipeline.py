@@ -106,8 +106,9 @@ class RunOptions:
                                           # (suppression overlay, license
                                           # policy file). Resolved at the
                                           # CLI layer: --no-trust-repo >
-                                          # --trust-repo > the project
-                                          # ``config`` trust marker > off.
+                                          # --trust-repo > project ``config``
+                                          # marker > authenticated exact-
+                                          # target session > off.
                                           # Off means files shipped in the
                                           # scanned tree are reported but
                                           # not applied — an untrusted

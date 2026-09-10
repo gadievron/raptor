@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, unquote, urlsplit, urlunsplit
 
 # Vendor-published credential shapes. Each entry is a
 # (regex, replacement) tuple; context-anchored patterns keep the field
@@ -182,6 +182,28 @@ def is_secret_field_name(name: object) -> bool:
     )
 
 
+def _redact_value_secrets(value: object) -> str:
+    """Apply the shared value-level secret detectors without URL parsing."""
+    text = str(value)
+    for pattern, replacement in _VENDOR_SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return _SECRET_ASSIGNMENT_RE.sub(_redact_assignment, text)
+
+
+def _value_contains_secret(value: object) -> bool:
+    return _redact_value_secrets(value) != str(value)
+
+
+def _redact_userinfo_component(
+    value: str,
+    *,
+    secret_by_position: bool,
+) -> str:
+    if secret_by_position or _value_contains_secret(unquote(value)):
+        return "[REDACTED]"
+    return value
+
+
 def _redact_url(match: re.Match[str]) -> str:
     raw_url = match.group(0)
     # Prose-paren trim: parens are legitimate URL characters
@@ -225,17 +247,30 @@ def _redact_url_inner(raw_url: str) -> str:
     if netloc and "@" in netloc:
         userinfo, host = netloc.rsplit("@", 1)
         if ":" in userinfo:
-            username, _password = userinfo.split(":", 1)
-            userinfo = f"{username}:[REDACTED]"
+            username, password = userinfo.split(":", 1)
+            userinfo = (
+                f"{_redact_userinfo_component(username, secret_by_position=False)}:"
+                f"{_redact_userinfo_component(password, secret_by_position=True)}"
+            )
         else:
-            userinfo = "[REDACTED]"
+            # Username-only userinfo can itself be a bearer/vendor token.
+            # Preserve the existing fail-closed behavior for all such forms.
+            userinfo = _redact_userinfo_component(
+                userinfo,
+                secret_by_position=True,
+            )
         redacted_netloc = f"{userinfo}@{host}"
         changed = redacted_netloc != netloc
         netloc = redacted_netloc
 
     query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
     redacted_pairs = [
-        (key, "[REDACTED]" if is_secret_field_name(key) else value)
+        (
+            key,
+            "[REDACTED]"
+            if is_secret_field_name(key) or _value_contains_secret(value)
+            else value,
+        )
         for key, value in query_pairs
     ]
     changed = changed or redacted_pairs != query_pairs
@@ -255,7 +290,15 @@ def _redact_url_inner(raw_url: str) -> str:
         fragment_pairs = parse_qsl(fragment, keep_blank_values=True)
         if fragment_pairs:
             redacted_fragment_pairs = [
-                (key, "[REDACTED]" if is_secret_field_name(key) else value)
+                (
+                    key,
+                    "[REDACTED]"
+                    if (
+                        is_secret_field_name(key)
+                        or _value_contains_secret(value)
+                    )
+                    else value,
+                )
                 for key, value in fragment_pairs
             ]
             changed = changed or redacted_fragment_pairs != fragment_pairs

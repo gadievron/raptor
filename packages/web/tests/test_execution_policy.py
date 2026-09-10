@@ -30,11 +30,12 @@ def test_policy_preserves_operator_target_identity_while_normalizing_origin():
 
 
 def test_policy_redacts_receipt_but_reuses_exact_target_credentials():
-    password = "operator-password"
-    token = "operator-access-token"
+    username_token = "ghp_" + "a" * 36
+    password_token = "sk-" + "b" * 48
+    query_token = "ghp_" + "c" * 36
     target = (
-        f"https://alice:{password}@example.test/search"
-        f"?access_token={token}&mode=scan"
+        f"https://{username_token}:{password_token}@example.test/search"
+        f"?opaque={query_token}&mode=scan"
     )
     policy = WebExecutionPolicy.for_target(target)
     replay_url = f"{target}&q=probe"
@@ -47,12 +48,12 @@ def test_policy_redacts_receipt_but_reuses_exact_target_credentials():
 
     receipt = policy.report()["scope_receipt"]
     assert receipt["target"] == redact_url_secrets_only(target)
-    assert password not in receipt["target"]
-    assert token not in receipt["target"]
+    for secret in (username_token, password_token, query_token):
+        assert secret not in receipt["target"]
     assert prepared.url == replay_url
     metadata_url = prepared.metadata()["url"]
-    assert password not in metadata_url
-    assert token not in metadata_url
+    for secret in (username_token, password_token, query_token):
+        assert secret not in metadata_url
     assert "[REDACTED]" in metadata_url
 
 

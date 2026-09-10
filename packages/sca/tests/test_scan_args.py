@@ -30,9 +30,11 @@ def _no_project_trust_markers(monkeypatch: pytest.MonkeyPatch) -> None:
     tests don't depend on the developer machine's ``~/.raptor``
     state. Marker-behaviour tests override this with their own
     patch."""
-    from core.project import trust
+    from core.project import sessions, trust
     monkeypatch.setattr(trust, "active_project_trust",
                         lambda: ({}, None))
+    monkeypatch.setattr(sessions, "session_repo_trusted",
+                        lambda _target: False)
 
 
 @pytest.fixture(autouse=True)
@@ -42,7 +44,7 @@ def _restore_trust_overrides():
     (via ``resolve_repo_trust``); restore both module globals so
     trust state never leaks between tests."""
     from core.security import cc_trust, codeql_trust
-    saved_cc = cc_trust.is_trust_overridden()
+    saved_cc = cc_trust._trust_override_set
     saved_ql = codeql_trust._trust_override_set
     yield
     cc_trust.set_trust_override(saved_cc)
