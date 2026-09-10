@@ -225,6 +225,28 @@ def test_dockerfile_installs_locked_npm_closures_without_global_installs() -> No
     ) in dockerfile
 
 
+def test_standard_target_runs_locked_claude_executable_probe() -> None:
+    dockerfile = (
+        ROOT / ".devcontainer" / "Dockerfile"
+    ).read_text(encoding="utf-8")
+    package_check = dockerfile.index(
+        "require('/opt/raptor/npm/base/node_modules/"
+        "@anthropic-ai/claude-code/package.json').version"
+    )
+    executable_probe = dockerfile.index(
+        'raptor-verify-all-tools \\\n'
+        '    --check-version "${CLAUDE_CODE_VERSION}" claude --version'
+    )
+    standard_target = dockerfile.index(
+        "FROM raptor-base AS raptor-devcontainer"
+    )
+
+    assert "ARG CLAUDE_CODE_VERSION=2.1.263" in dockerfile
+    assert package_check < executable_probe < standard_target
+    assert "claude --version" in dockerfile[executable_probe:standard_target]
+    assert "package.json" not in dockerfile[executable_probe:standard_target]
+
+
 @pytest.mark.parametrize(
     ("tool_name", "expected_message"),
     [

@@ -116,6 +116,64 @@ def test_matcher_does_not_extract_a_shorter_dotted_tail() -> None:
 
 
 @pytest.mark.parametrize(
+    ("output", "accepted"),
+    [
+        ("2.1.263 (Claude Code)\n", True),
+        ("2.1.2630 (Claude Code)\n", False),
+        ("2.1.263-rc1 (Claude Code)\n", False),
+    ],
+)
+def test_executable_probe_requires_exact_version_token(
+    monkeypatch: pytest.MonkeyPatch,
+    output: str,
+    accepted: bool,
+) -> None:
+    command = ["claude", "--version"]
+    monkeypatch.setattr(
+        all_tools.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=output,
+            stderr="",
+        ),
+    )
+
+    error = all_tools.verify_command_version("2.1.263", command)
+
+    assert (error is None) is accepted
+
+
+def test_executable_probe_rejects_missing_or_failed_binary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command = ["claude", "--version"]
+
+    monkeypatch.setattr(
+        all_tools.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            command,
+            127,
+            stdout="",
+            stderr="native package missing",
+        ),
+    )
+    error = all_tools.verify_command_version("2.1.263", command)
+    assert error is not None
+    assert "exited 127" in error
+
+    def missing(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError("claude")
+
+    monkeypatch.setattr(all_tools.subprocess, "run", missing)
+    error = all_tools.verify_command_version("2.1.263", command)
+    assert error is not None
+    assert "version check failed" in error
+
+
+@pytest.mark.parametrize(
     ("expected", "output"),
     [
         ("1.2.3.4", "tool 1.2.3.4"),

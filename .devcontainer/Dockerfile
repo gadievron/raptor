@@ -88,6 +88,9 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 # resolving anything outside the checked-in, hash-verified closure.
 COPY containers/requirements-build.lock /tmp/raptor/requirements-build.lock
 COPY containers/requirements-base.lock /tmp/raptor/requirements-base.lock
+COPY containers/verify-all-tools.py /usr/local/bin/raptor-verify-all-tools
+
+RUN chmod 0755 /usr/local/bin/raptor-verify-all-tools
 
 RUN python3 -m pip install --no-cache-dir --require-hashes --no-deps \
         --only-binary=:all: \
@@ -153,6 +156,7 @@ RUN install -d -m 0755 -o root -g vscode "${PLAYWRIGHT_BROWSERS_PATH}" \
 # Capture-then-execute the nodesource setup script so a curl failure isn't
 # silently swallowed by the pipeline (curl | bash ignores curl's exit status).
 # Node 24 is the current stable release, and is supported by the latest Claude CLI.
+ARG CLAUDE_CODE_VERSION=2.1.263
 RUN curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource_setup.sh \
     && bash /tmp/nodesource_setup.sh \
     && rm /tmp/nodesource_setup.sh \
@@ -174,6 +178,9 @@ RUN npm ci --ignore-scripts --include=optional --omit=dev --no-audit --no-fund \
     && ln -sf /opt/raptor/npm/base/node_modules/.bin/yarnpkg /usr/local/bin/yarnpkg \
     && ln -sf /opt/raptor/npm/base/node_modules/.bin/pnpm /usr/local/bin/pnpm \
     && ln -sf /opt/raptor/npm/base/node_modules/.bin/pnpx /usr/local/bin/pnpx
+
+RUN raptor-verify-all-tools \
+    --check-version "${CLAUDE_CODE_VERSION}" claude --version
 
 # ============================================================================
 # ENVIRONMENT CONFIGURATION
@@ -239,10 +246,7 @@ USER root
 COPY containers/all-tools-manifest.json /usr/local/share/raptor/all-tools-manifest.json
 COPY containers/cargo-fuzz-smoke/Cargo.lock /usr/local/share/raptor/cargo-fuzz-smoke.Cargo.lock
 COPY containers/install-all-tools-native.sh /usr/local/libexec/raptor-install-all-tools-native
-COPY containers/verify-all-tools.py /usr/local/bin/raptor-verify-all-tools
-RUN chmod 0755 \
-    /usr/local/libexec/raptor-install-all-tools-native \
-    /usr/local/bin/raptor-verify-all-tools
+RUN chmod 0755 /usr/local/libexec/raptor-install-all-tools-native
 
 ARG ACCEPT_CODEQL_TERMS=0
 ARG TEMURIN_RELEASE=jdk-21.0.12.1%2B1

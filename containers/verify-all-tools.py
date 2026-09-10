@@ -129,6 +129,35 @@ def version_output_matches(expected_version: str, output: str) -> bool:
     return normalized_expected in _normalized_version_tokens(output)
 
 
+def verify_command_version(expected_version: str, command: list[str]) -> str | None:
+    if not command:
+        return "version command is empty"
+    try:
+        result = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+            env=runtime_probe_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"{command[0]} version check failed: {exc}"
+
+    output = f"{result.stdout}\n{result.stderr}".strip()
+    if result.returncode != 0:
+        return (
+            f"{command[0]} version check exited {result.returncode}: {output}"
+        )
+    if not version_output_matches(expected_version, output):
+        return (
+            f"{command[0]} version output does not contain exact "
+            f"{expected_version}: {output}"
+        )
+    return None
+
+
 def load_manifest(path: Path) -> dict:
     data = json.loads(path.read_text(encoding="utf-8"))
     required_keys = {
@@ -738,7 +767,19 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--manifest-only", action="store_true")
     mode.add_argument("--runtime-probes", action="store_true")
+    parser.add_argument("--check-version", nargs=argparse.REMAINDER)
     args = parser.parse_args()
+
+    if args.check_version is not None:
+        if len(args.check_version) < 2:
+            parser.error("--check-version requires VERSION COMMAND [ARG ...]")
+        expected_version, *command = args.check_version
+        error = verify_command_version(expected_version, command)
+        if error is not None:
+            print(f"executable verification: {error}", file=sys.stderr)
+            return 1
+        print(f"{command[0]} exact version {expected_version} verified")
+        return 0
 
     try:
         manifest = load_manifest(args.manifest)
