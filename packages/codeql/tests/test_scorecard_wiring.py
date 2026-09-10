@@ -25,6 +25,8 @@ from core.llm.task_types import TaskType
 from packages.codeql.autonomous_analyzer import (
     AutonomousCodeQLAnalyzer,
     CodeQLFinding,
+    FP_PREFILTER_SCHEMA,
+    VULNERABILITY_ANALYSIS_SCHEMA,
 )
 
 
@@ -136,10 +138,20 @@ def _finding(rule_id: str = "py/sql-injection") -> CodeQLFinding:
 
 
 # Schema shape detector — used by responders to know whether a call
-# is the cheap prefilter or the full analysis. Cheap schema has
-# ``verdict``; full schema has ``is_true_positive``.
+# is the cheap prefilter or the full analysis. LLMClient normalizes
+# compact schemas before invoking providers, so inspect JSON Schema
+# ``properties`` when present instead of assuming field names remain
+# at the document root.
+def _schema_fields(schema):
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    if isinstance(properties, dict):
+        return set(properties)
+    return set(schema) if isinstance(schema, dict) else set()
+
+
 def _is_cheap_call(schema):
-    return "verdict" in schema and "is_true_positive" not in schema
+    fields = _schema_fields(schema)
+    return "verdict" in fields and "is_true_positive" not in fields
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +164,19 @@ def llm(tmp_path):
     """Yield a fresh (client, provider) pair per test."""
     client, prov = _build_llm(tmp_path)
     yield client, prov
+
+
+def test_stub_distinguishes_normalized_cheap_and_full_schemas():
+    """Pin the provider-facing schema contract used by every responder."""
+    from core.llm.schema_normalization import normalize_json_schema
+
+    cheap = normalize_json_schema(FP_PREFILTER_SCHEMA)
+    full = normalize_json_schema(VULNERABILITY_ANALYSIS_SCHEMA)
+
+    assert _is_cheap_call(cheap)
+    assert not _is_cheap_call(full)
+    assert _schema_fields(cheap) == {"reasoning", "verdict"}
+    assert "is_true_positive" in _schema_fields(full)
 
 
 def _make_analyzer(llm_client):
@@ -354,6 +379,45 @@ def test_cheap_call_failure_falls_through_silently(llm):
     # Should not raise.
     result = analyzer.analyze_vulnerability(_finding(), "code")
     assert result.is_true_positive is True
+
+
+def test_cheap_response_with_full_analysis_fields_is_rejected(llm):
+    """The strict unknown-field floor stays active on the cheap schema."""
+    client, prov = llm
+    analyzer = _make_analyzer(client)
+    cheap_calls, full_calls = [], []
+
+    def responder(prompt, schema, system_prompt):
+        if _is_cheap_call(schema):
+            cheap_calls.append(prompt)
+            return ({
+                "verdict": "clear_fp",
+                "reasoning": "looks constant",
+                "is_true_positive": False,
+            }, "raw")
+        full_calls.append(prompt)
+        return ({
+            "is_true_positive": True, "is_exploitable": True,
+            "exploitability_score": 0.8, "severity_assessment": "high",
+            "reasoning": "full analysis found taint", "attack_scenario": "",
+            "prerequisites": [], "impact": "data exposure",
+            "cvss_estimate": 8.0, "mitigation": "parameterize",
+        }, "raw")
+
+    prov.responder = responder
+    result = analyzer.analyze_vulnerability(_finding(), "code")
+
+    assert len(cheap_calls) == 1
+    assert len(full_calls) == 1
+    assert result.is_true_positive is True
+    stat = ModelScorecard(client.config.scorecard_path).get_stat(
+        "codeql:py/sql-injection",
+        "haiku-stub",
+    )
+    assert stat is None or (
+        stat.events[EventType.CHEAP_SHORT_CIRCUIT].correct == 0
+        and stat.events[EventType.CHEAP_SHORT_CIRCUIT].incorrect == 0
+    )
 
 
 def test_decision_class_is_codeql_prefixed(llm):
