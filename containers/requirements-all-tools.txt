@@ -1,0 +1,18 @@
+# RAPTOR all-tools image dependencies pinned on 2026-09-08.
+
+-r ../requirements-grammars.txt
+
+# GH Archive / BigQuery support. Authentication remains runtime-only.
+google-auth==2.57.1
+google-cloud-bigquery==3.45.0
+
+# Host-side Frida client and CLI only.
+frida-tools==14.10.4
+
+# Exploit development and SCA scoring.
+pwntools==4.15.0
+cvss==3.6
+
+# Optional fast JSON and HTTP/2 transports documented by RAPTOR.
+orjson==3.11.9
+h2==4.4.1

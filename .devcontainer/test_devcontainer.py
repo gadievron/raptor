@@ -24,6 +24,7 @@ import importlib
 import importlib.util
 import platform
 import tempfile
+from importlib.metadata import PackageNotFoundError, version as distribution_version
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict
 from dataclasses import dataclass, field
@@ -96,12 +97,41 @@ def check_binary(name: str, version_flag: str = "--version") -> Tuple[bool, str,
         )
         output = result.stdout or result.stderr
         # Extract first line as version
-        version = output.strip().split('\n')[0][:80] if output else "Unknown"
-        return True, f"Found at {path}", version
+        version = output.strip().split('\n')[0][:80] if output else None
+        if result.returncode != 0:
+            detail = f": {version}" if version else ""
+            return (
+                False,
+                f"Found at {path}, but version check exited "
+                f"{result.returncode}{detail}",
+                version,
+            )
+        return True, f"Found at {path}", version or "Unknown"
     except subprocess.TimeoutExpired:
-        return True, f"Found at {path} (version check timed out)", None
-    except Exception:
-        return True, f"Found at {path}", None
+        return False, f"Found at {path}, but version check timed out", None
+    except OSError as exc:
+        return False, f"Found at {path}, but version check failed: {exc}", None
+
+
+def check_semgrep() -> Tuple[bool, str, Optional[str]]:
+    """Check Semgrep without invoking its network-aware CLI version command."""
+    path = shutil.which("semgrep")
+    if not path:
+        return False, "Not found in PATH", None
+
+    try:
+        installed_version = distribution_version("semgrep")
+    except PackageNotFoundError:
+        return False, f"Found at {path}, but Python package metadata is missing", None
+    return True, f"Found at {path}", installed_version
+
+
+def rr_binary_required() -> bool:
+    """Return whether rr is expected on this platform."""
+    return (
+        platform.system() == "Linux"
+        and platform.machine().lower() in {"x86_64", "amd64"}
+    )
 
 
 def check_python_package(name: str, min_version: Optional[str] = None) -> Tuple[bool, str, Optional[str]]:
@@ -146,6 +176,20 @@ def check_env_var(name: str, required: bool = False) -> Tuple[bool, str]:
 
 def check_library(name: str) -> Tuple[bool, str]:
     """Check if a system library is available."""
+    # Ask the platform linker first. Debian multiarch libraries live under
+    # paths such as /lib/x86_64-linux-gnu, and glibc 2.34 merged libpthread
+    # and libdl into libc while retaining compatibility sonames. A fixed list
+    # of /lib and /usr/lib roots therefore reports false negatives.
+    try:
+        from ctypes.util import find_library
+
+        lookup_name = name.removeprefix("lib")
+        resolved = find_library(lookup_name)
+        if resolved:
+            return True, f"Found via platform linker: {resolved}"
+    except (ImportError, OSError):
+        pass
+
     # Try ldconfig on Linux
     if platform.system() == "Linux":
         try:
@@ -297,22 +341,17 @@ def check_raptor_imports() -> List[TestResult]:
     """Test importing RAPTOR packages."""
     results = []
 
-    # Add packages to path
-    packages_dir = Path("packages")
-    if packages_dir.exists():
-        sys.path.insert(0, str(packages_dir.absolute()))
-
     packages_to_test = [
         ("core.config", "Core configuration"),
         ("core.logging", "Core logging"),
         ("core.sarif.parser", "SARIF parser"),
-        ("binary_analysis", "Binary analysis package"),
-        ("codeql", "CodeQL package"),
-        ("fuzzing", "Fuzzing package"),
-        ("llm_analysis", "LLM analysis package"),
-        ("web", "Web package"),
-        ("recon", "Recon package"),
-        ("sca", "SCA package"),
+        ("packages.binary_analysis", "Binary analysis package"),
+        ("packages.codeql", "CodeQL package"),
+        ("packages.fuzzing", "Fuzzing package"),
+        ("packages.llm_analysis", "LLM analysis package"),
+        ("packages.web", "Web package"),
+        ("packages.recon", "Recon package"),
+        ("packages.sca", "SCA package"),
     ]
 
     for module_name, description in packages_to_test:
@@ -388,6 +427,9 @@ def check_raptor_imports() -> List[TestResult]:
 def run_all_tests(verbose: bool = False, skip_optional: bool = False) -> List[TestResult]:
     """Run all dependency tests."""
     results: List[TestResult] = []
+    all_tools = os.environ.get("RAPTOR_ALL_TOOLS") == "1"
+    privileged = os.environ.get("RAPTOR_CONTAINER_PRIVILEGED") == "1"
+    rr_required = rr_binary_required()
 
     # =========================================================================
     # CORE SYSTEM BINARIES
@@ -451,7 +493,7 @@ def run_all_tests(verbose: bool = False, skip_optional: bool = False) -> List[Te
     debugger_binaries = [
         ("gdb", "--version", True, ["rr-debugger", "crash-analyzer-agent", "binary_analysis"]),
         ("gdb-multiarch", "--version", False, ["Cross-platform debugging"]),
-        ("rr", "--version", True, ["rr-debugger skill", "crash-analysis agents"]),
+        ("rr", "--version", rr_required, ["rr-debugger skill", "crash-analysis agents"]),
     ]
 
     # lldb is optional (mainly for macOS)
@@ -478,7 +520,7 @@ def run_all_tests(verbose: bool = False, skip_optional: bool = False) -> List[Te
         name="rr kernel config",
         category=Category.DEBUGGER,
         passed=passed,
-        required=True,  # Required when using --privileged devcontainer
+        required=privileged and rr_required,
         message=msg,
         used_by=["rr-debugger skill (requires --privileged devcontainer)"]
     ))
@@ -487,12 +529,20 @@ def run_all_tests(verbose: bool = False, skip_optional: bool = False) -> List[Te
     # STATIC ANALYSIS TOOLS
     # =========================================================================
 
-    static_analysis_binaries = [
-        ("semgrep", "--version", True, ["/scan", "static-analysis package"]),
-        ("codeql", "--version", True, ["/codeql", "codeql package"]),
-    ]
+    passed, msg, version = check_semgrep()
+    results.append(TestResult(
+        name="semgrep",
+        category=Category.STATIC_ANALYSIS,
+        passed=passed,
+        required=True,
+        message=msg,
+        version=version,
+        used_by=["/scan", "static-analysis package"],
+    ))
 
-    for binary, flag, required, used_by in static_analysis_binaries:
+    for binary, flag, required, used_by in [
+        ("codeql", "--version", all_tools, ["/codeql", "codeql package"]),
+    ]:
         passed, msg, version = check_binary(binary, flag)
         results.append(TestResult(
             name=binary,

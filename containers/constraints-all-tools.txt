@@ -1,0 +1,38 @@
+# Cross-install constraints for the raptor-all-tools Python environment.
+#
+# The Dockerfile installs Semgrep, RAPTOR's development requirements, Google
+# tooling, and angr in separate pip transactions. Keep their shared transitive
+# dependencies in the single intersection accepted by every transaction.
+
+# Semgrep 1.172.0 requires jsonschema~=4.25.1.
+jsonschema==4.25.1
+
+# Semgrep requires OpenTelemetry 1.37/0.58. google-api-core 2.36.0 raises its
+# minimum to OpenTelemetry 1.44, so BigQuery must remain on the newest
+# non-yanked release before that change.
+google-api-core==2.34.0
+opentelemetry-api==1.37.0
+opentelemetry-sdk==1.37.0
+opentelemetry-exporter-otlp-proto-common==1.37.0
+opentelemetry-exporter-otlp-proto-http==1.37.0
+opentelemetry-proto==1.37.0
+opentelemetry-instrumentation==0.58b0
+opentelemetry-instrumentation-requests==0.58b0
+opentelemetry-instrumentation-threading==0.58b0
+opentelemetry-semantic-conventions==0.58b0
+opentelemetry-util-http==0.58b0
+
+# BigQuery/google-api-core and angr require protobuf >=6.33.5/6.33.0, while
+# OpenTelemetry 1.37 requires protobuf <7.
+protobuf==6.33.6
+googleapis-common-protos==1.75.3
+proto-plus==1.28.4
+grpcio==1.83.1
+grpcio-status==1.83.1
+
+# Instructor requires Rich >=13.7,<15; Semgrep and angr accept this release.
+rich==14.3.4
+
+# Do not constrain z3-solver here. requirements-dev.txt first installs 4.15.4.0,
+# then requirements-angr.txt intentionally replaces it with claripy's exact
+# 4.13.0.0 pin in the final transaction.

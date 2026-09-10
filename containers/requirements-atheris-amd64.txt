@@ -1,0 +1,2 @@
+# Atheris 3.1.0 publishes Linux wheels for x86_64 only.
+atheris==3.1.0

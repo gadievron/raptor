@@ -1,0 +1,30 @@
+# The images install only pinned manifests and requirement files. RAPTOR source
+# is bind-mounted at runtime, so no checkout contents or local state belong in
+# the build context.
+**
+
+!/.devcontainer/
+/.devcontainer/**
+!/.devcontainer/Dockerfile
+!/.devcontainer/requirements-all-optional.txt
+
+!/containers/
+/containers/**
+!/containers/all-tools-manifest.json
+!/containers/constraints-all-tools.txt
+!/containers/install-all-tools-native.sh
+!/containers/raptor-container-entrypoint
+!/containers/requirements-all-tools.txt
+!/containers/requirements-angr.txt
+!/containers/requirements-atheris-amd64.txt
+!/containers/verify-all-tools.py
+
+!/packages/
+/packages/**
+!/packages/web/
+/packages/web/**
+!/packages/web/requirements.txt
+
+!/requirements.txt
+!/requirements-dev.txt
+!/requirements-grammars.txt
