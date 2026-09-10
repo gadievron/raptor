@@ -3,8 +3,12 @@
 import os
 import subprocess
 import unittest
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest import mock
 
 
 # parents[0] = packages/sca/tests/
@@ -54,6 +58,90 @@ class RaptorScaRunWrapperTests(unittest.TestCase):
 
     def tearDown(self):
         self._tmp.cleanup()
+
+    def _load_wrapper_module(self):
+        name = f"_raptor_sca_run_test_{id(self)}"
+        loader = SourceFileLoader(name, str(WRAPPER))
+        spec = spec_from_loader(name, loader)
+        self.assertIsNotNone(spec)
+        module = module_from_spec(spec)
+        with mock.patch.dict(
+            os.environ,
+            {"_RAPTOR_TRUSTED": "1"},
+            clear=False,
+        ):
+            loader.exec_module(module)
+        return module
+
+    def _run_implicit_target(
+        self,
+        *,
+        session_trusted: bool,
+        extra_args: tuple[str, ...] = (),
+    ):
+        module = self._load_wrapper_module()
+        target = self.scratch / "implicit-target"
+        target.mkdir(exist_ok=True)
+        out_dir = self.scratch / "out"
+        captured = {}
+        session_targets = []
+
+        def fake_session_trusted(value):
+            resolved = Path(value).resolve()
+            session_targets.append(resolved)
+            return session_trusted and resolved == target.resolve()
+
+        def fake_run_sca(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace()
+
+        from core.security import cc_trust, codeql_trust
+        saved_cc = cc_trust._trust_override_set
+        saved_ql = codeql_trust._trust_override_set
+        try:
+            with mock.patch.dict(
+                os.environ,
+                {"RAPTOR_CALLER_DIR": str(target)},
+                clear=False,
+            ), mock.patch.object(
+                module,
+                "get_output_dir",
+                return_value=out_dir,
+            ), mock.patch.object(
+                module,
+                "start_run",
+            ), mock.patch.object(
+                module,
+                "complete_run",
+            ), mock.patch.object(
+                module,
+                "fail_run",
+            ), mock.patch.object(
+                module,
+                "_configure_logging",
+            ), mock.patch.object(
+                module,
+                "_print_summary",
+            ), mock.patch(
+                "packages.sca.pipeline.run_sca",
+                side_effect=fake_run_sca,
+            ), mock.patch(
+                "core.project.trust.active_project_trust",
+                return_value=({}, None),
+            ), mock.patch(
+                "core.project.sessions.session_repo_trusted",
+                side_effect=fake_session_trusted,
+            ):
+                rc = module._run_analyse(list(extra_args))
+                override_state = (
+                    cc_trust._trust_override_set,
+                    codeql_trust._trust_override_set,
+                )
+        finally:
+            cc_trust.set_trust_override(saved_cc)
+            codeql_trust.set_trust_override(saved_ql)
+
+        return rc, captured, session_targets, override_state
 
     def test_wrapper_exists_and_is_executable(self):
         self.assertTrue(WRAPPER.exists(), msg=f"missing: {WRAPPER}")
@@ -134,6 +222,43 @@ class RaptorScaRunWrapperTests(unittest.TestCase):
         # The scan parser's --help output mentions specific scan-only flags.
         self.assertIn("--no-kev", result.stdout)
         self.assertIn("--no-epss", result.stdout)
+
+    def test_implicit_caller_target_inherits_trusted_session(self):
+        rc, captured, session_targets, overrides = self._run_implicit_target(
+            session_trusted=True,
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertTrue(captured["options"].trust_repo)
+        self.assertEqual(
+            session_targets,
+            [(self.scratch / "implicit-target").resolve()],
+        )
+        self.assertEqual(overrides, (None, None))
+
+    def test_implicit_caller_target_untrusted_session_stays_strict(self):
+        rc, captured, session_targets, overrides = self._run_implicit_target(
+            session_trusted=False,
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertFalse(captured["options"].trust_repo)
+        self.assertEqual(
+            session_targets,
+            [(self.scratch / "implicit-target").resolve()],
+        )
+        self.assertEqual(overrides, (None, None))
+
+    def test_implicit_caller_target_explicit_negative_wins(self):
+        rc, captured, session_targets, overrides = self._run_implicit_target(
+            session_trusted=True,
+            extra_args=("--no-trust-repo",),
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertFalse(captured["options"].trust_repo)
+        self.assertEqual(session_targets, [])
+        self.assertEqual(overrides, (False, False))
 
     # --- Marker-check tests ---------------------------------------------
 

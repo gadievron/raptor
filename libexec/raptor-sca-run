@@ -184,6 +184,12 @@ def _run_analyse(argv):
         print(f"raptor-sca: target is not a directory: {target}", file=sys.stderr)
         return 2
 
+    # Preserve the concrete target resolved from RAPTOR_CALLER_DIR/project
+    # fallback for downstream trust resolution. Leaving args.target=None
+    # made options_from_args skip the authenticated exact-target session
+    # lookup and silently force implicit-target scans into strict mode.
+    args.target = str(target)
+
     try:
         output_dir = get_output_dir(
             command="sca",
