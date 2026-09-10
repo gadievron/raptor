@@ -16,12 +16,16 @@ WRAPPER = ROOT / "bin" / "raptor-container"
 ENTRYPOINT = ROOT / "containers" / "raptor-container-entrypoint"
 LEGACY_DOCKER_INFO_ENV = "RAPTOR_CONTAINER_DOCKER_INFO"
 PERF_SYSCTL_GUIDANCE = "sudo sysctl kernel.perf_event_paranoid=1"
+PRODUCTION_SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+RAPTOR_DIR_ASSIGNMENT = 'RAPTOR_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"'
+SYSTEM_PATH_ASSIGNMENT = f'RAPTOR_SYSTEM_PATH="{PRODUCTION_SYSTEM_PATH}"'
 
 
 def run_wrapper(
     *args: str,
     home: Path,
     extra_env: dict[str, str] | None = None,
+    wrapper: Path = WRAPPER,
 ) -> subprocess.CompletedProcess[str]:
     env = {
         "HOME": str(home),
@@ -30,13 +34,48 @@ def run_wrapper(
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
-        [str(WRAPPER), *args],
+        [str(wrapper), *args],
         cwd=ROOT,
         env=env,
         text=True,
         capture_output=True,
         check=False,
     )
+
+
+def install_hermetic_wrapper(tmp_path: Path) -> Path:
+    """Copy the wrapper with only its repo root and trusted path redirected."""
+    trusted_bin = tmp_path / "trusted-system-bin"
+    trusted_bin.mkdir()
+    for name in (
+        "basename",
+        "cat",
+        "dirname",
+        "id",
+        "mkdir",
+        "readlink",
+        "realpath",
+        "stat",
+    ):
+        helper = shutil.which(name, path=PRODUCTION_SYSTEM_PATH)
+        assert helper is not None
+        (trusted_bin / name).symlink_to(Path(helper).resolve())
+
+    source = WRAPPER.read_text(encoding="utf-8")
+    assert source.count(RAPTOR_DIR_ASSIGNMENT) == 1
+    assert source.count(SYSTEM_PATH_ASSIGNMENT) == 1
+    source = source.replace(
+        RAPTOR_DIR_ASSIGNMENT,
+        f"RAPTOR_DIR={shlex.quote(str(ROOT))}",
+    ).replace(
+        SYSTEM_PATH_ASSIGNMENT,
+        f"RAPTOR_SYSTEM_PATH={shlex.quote(str(trusted_bin))}",
+    )
+
+    wrapper = tmp_path / "raptor-container"
+    wrapper.write_text(source, encoding="utf-8")
+    wrapper.chmod(0o755)
+    return wrapper
 
 
 def dry_run_args(result: subprocess.CompletedProcess[str]) -> list[str]:
@@ -174,6 +213,7 @@ def run_wrapper_with_perf_setting(
 
     fake_bin, log = install_fake_docker(tmp_path)
     install_fake_id(fake_bin, uid=2345, gid=3456)
+    wrapper = install_hermetic_wrapper(tmp_path)
     perf_setting = tmp_path / "perf_event_paranoid"
     perf_setting.write_text(value, encoding="utf-8")
     env = {
@@ -199,7 +239,7 @@ def run_wrapper_with_perf_setting(
             ),
             "raptor-perf-test",
             str(perf_setting),
-            str(WRAPPER),
+            str(wrapper),
             "shell",
             "--engine",
             "docker",
@@ -271,6 +311,51 @@ exec {real_command} "$@"
     assert not log.exists()
 
 
+def test_production_wrapper_hardcodes_trusted_system_directories() -> None:
+    source = WRAPPER.read_text(encoding="utf-8")
+
+    assert source.count(SYSTEM_PATH_ASSIGNMENT) == 1
+    assert 'RAPTOR_SYSTEM_PATH="${RAPTOR_SYSTEM_PATH' not in source
+
+
+def test_production_wrapper_ignores_inherited_system_path_override(
+    tmp_path: Path,
+) -> None:
+    hostile_bin = tmp_path / "hostile-system-bin"
+    hostile_bin.mkdir()
+    marker = tmp_path / "hostile-system-helper-ran"
+    for name in ("docker", "podman", "id", "realpath", "stat"):
+        helper = hostile_bin / name
+        helper.write_text(
+            f"""#!/bin/sh
+printf '{name}\\n' >> "$RAPTOR_HOSTILE_SYSTEM_PATH_LOG"
+exec /usr/bin/{name} "$@"
+""",
+            encoding="utf-8",
+        )
+        helper.chmod(0o755)
+
+    result = run_wrapper(
+        "shell",
+        "--engine",
+        "docker",
+        "--dry-run",
+        "--no-proxy",
+        home=tmp_path,
+        extra_env={
+            "PATH": PRODUCTION_SYSTEM_PATH,
+            "ENGINE": "podman",
+            "ENGINE_EXECUTABLE": str(hostile_bin / "podman"),
+            "RAPTOR_SYSTEM_PATH": str(hostile_bin),
+            "RAPTOR_HOSTILE_SYSTEM_PATH_LOG": str(marker),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert dry_run_args(result)[:2] == ["docker", "run"]
+    assert not marker.exists()
+
+
 def test_wrapper_scrubs_unsafe_path_before_engine_resolution(
     tmp_path: Path,
 ) -> None:
@@ -293,6 +378,7 @@ exit 98
     inherited_path = (
         f":relative-bin:{unsafe_bin}:{safe_bin}:{os.environ['PATH']}:"
     )
+    wrapper = install_hermetic_wrapper(tmp_path)
     result = run_wrapper(
         "shell",
         "--engine",
@@ -309,6 +395,7 @@ exit 98
             "RAPTOR_HOSTILE_ENGINE_MARKER": str(hostile_marker),
             "RAPTOR_TEST_DOCKER_ENV_LOG": str(env_log),
         },
+        wrapper=wrapper,
     )
 
     assert result.returncode == 0, result.stderr
@@ -316,8 +403,10 @@ exit 98
     engine_path = read_engine_environments(env_log)[0]["PATH"]
     assert engine_path is not None
     path_entries = engine_path.split(":")
-    assert path_entries[:4] == ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
-    assert str(safe_bin) in path_entries
+    assert path_entries[:2] == [
+        str(tmp_path / "trusted-system-bin"),
+        str(safe_bin),
+    ]
     assert str(unsafe_bin) not in path_entries
     assert "relative-bin" not in path_entries
     assert "" not in path_entries
@@ -369,6 +458,7 @@ def test_wrapper_unsafe_path_escape_hatch_keeps_flagged_entries(
 
 def test_fixed_host_helpers_use_the_trusted_resolver(tmp_path: Path) -> None:
     fake_bin, log = install_fake_docker(tmp_path)
+    wrapper = install_hermetic_wrapper(tmp_path)
     marker = tmp_path / "hostile-helper-ran"
     install_failing_path_helpers(
         fake_bin,
@@ -394,6 +484,7 @@ def test_fixed_host_helpers_use_the_trusted_resolver(tmp_path: Path) -> None:
         str(output),
         home=tmp_path,
         extra_env=env,
+        wrapper=wrapper,
     )
     dry_run = run_wrapper(
         "shell",
@@ -405,8 +496,14 @@ def test_fixed_host_helpers_use_the_trusted_resolver(tmp_path: Path) -> None:
         str(dry_output),
         home=tmp_path,
         extra_env=env,
+        wrapper=wrapper,
     )
-    help_result = run_wrapper("help", home=tmp_path, extra_env=env)
+    help_result = run_wrapper(
+        "help",
+        home=tmp_path,
+        extra_env=env,
+        wrapper=wrapper,
+    )
 
     assert actual.returncode == 0, actual.stderr
     assert dry_run.returncode == 0, dry_run.stderr
@@ -640,6 +737,7 @@ def test_actual_run_uses_docker_info_despite_legacy_override(
 ) -> None:
     fake_bin, log = install_fake_docker(tmp_path)
     install_fake_id(fake_bin, uid=None, gid=None)
+    wrapper = install_hermetic_wrapper(tmp_path)
 
     result = run_wrapper(
         "shell",
@@ -655,6 +753,7 @@ def test_actual_run_uses_docker_info_despite_legacy_override(
             ),
             LEGACY_DOCKER_INFO_ENV: '["name=rootless"]',
         },
+        wrapper=wrapper,
     )
 
     assert result.returncode == 0, result.stderr
@@ -740,6 +839,7 @@ def test_rootless_docker_uses_container_root_and_existing_home_on_actual_run(
 ) -> None:
     fake_bin, log = install_fake_docker(tmp_path)
     install_fake_id(fake_bin, uid=None, gid=None)
+    wrapper = install_hermetic_wrapper(tmp_path)
     claude_auth = tmp_path / ".claude"
     claude_auth.mkdir()
 
@@ -756,6 +856,7 @@ def test_rootless_docker_uses_container_root_and_existing_home_on_actual_run(
             log,
             '["name=userns","name=rootless","name=cgroupns"]',
         ),
+        wrapper=wrapper,
     )
 
     assert result.returncode == 0, result.stderr
@@ -780,6 +881,7 @@ def test_rootful_userns_remap_is_rejected_before_docker_run(
 ) -> None:
     fake_bin, log = install_fake_docker(tmp_path)
     install_fake_id(fake_bin, uid=None, gid=None)
+    wrapper = install_hermetic_wrapper(tmp_path)
 
     result = run_wrapper(
         "shell",
@@ -792,6 +894,7 @@ def test_rootful_userns_remap_is_rejected_before_docker_run(
             log,
             '["name=seccomp,profile=builtin","name=userns"]',
         ),
+        wrapper=wrapper,
     )
 
     assert result.returncode == 2
