@@ -1,0 +1,10 @@
+{
+  "name": "raptor-container-base-tools",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.263",
+    "pnpm": "11.8.0",
+    "yarn": "1.22.22"
+  }
+}

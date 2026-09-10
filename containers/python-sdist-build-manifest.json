@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "python_version": "3.14",
+  "platform": "x86_64-manylinux_2_36",
+  "source_distributions": [
+    {
+      "distribution": "arpy",
+      "version": "1.1.1",
+      "archive": "arpy-1.1.1.tar.gz",
+      "archive_sha256": "3ec36309d2234648ef8dcd2118fe7d81c30195087e0353473546583f3434e776",
+      "build_backend": "setuptools.build_meta:__legacy__",
+      "build_requires": [
+        "setuptools>=40.8.0"
+      ]
+    },
+    {
+      "distribution": "frida-tools",
+      "version": "14.10.4",
+      "archive": "frida_tools-14.10.4.tar.gz",
+      "archive_sha256": "7a2c544b545d095040fffbd3768a287a426343dad89095b4a24f4b20382d926a",
+      "build_backend": "setuptools.build_meta:__legacy__",
+      "build_requires": [
+        "setuptools>=40.8.0"
+      ],
+      "note": "pyproject.toml is present without a build-system table, so the PEP 517 default applies."
+    },
+    {
+      "distribution": "jpype1",
+      "version": "1.5.2",
+      "archive": "jpype1-1.5.2.tar.gz",
+      "archive_sha256": "74a42eccf21d30394c1832aec3985a14965fa5320da087b65029d172c0cec43b",
+      "build_backend": "setuptools.build_meta",
+      "build_requires": [
+        "setuptools"
+      ]
+    },
+    {
+      "distribution": "mulpyplexer",
+      "version": "0.9",
+      "archive": "mulpyplexer-0.09.tar.gz",
+      "archive_sha256": "144e9e9bf66d3988f60542c9d3d4c94857438f7908f60e53f4c1cb1622fbbd30",
+      "build_backend": "setuptools.build_meta:__legacy__",
+      "build_requires": [
+        "setuptools>=40.8.0"
+      ]
+    },
+    {
+      "distribution": "r2pipe",
+      "version": "1.9.8",
+      "archive": "r2pipe-1.9.8.tar.gz",
+      "archive_sha256": "87ac3a69cd6466e330364bb47995bf49c2a87aadaf6497b9cd7fdd9dcf24c1df",
+      "build_backend": "setuptools.build_meta",
+      "build_requires": [
+        "setuptools>=61.0",
+        "wheel"
+      ]
+    },
+    {
+      "distribution": "unicorn",
+      "version": "2.1.2",
+      "archive": "unicorn-2.1.2.tar.gz",
+      "archive_sha256": "e4a9d671bdea71806f29a396734cfb83317f82943b52d0001d3bca1dcbaee893",
+      "build_backend": "setuptools.build_meta",
+      "build_requires": [
+        "setuptools",
+        "build",
+        "wheel",
+        "versioningit"
+      ]
+    }
+  ]
+}

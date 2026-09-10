@@ -25,8 +25,54 @@ _HEX_DIGEST_LENGTHS = {
     "sha512": 128,
 }
 _REQUIRED_CLI_TOOLS = {
-    "claude-code": ("Claude Code", "2.1.263", ["claude", "--version"]),
-    "copilot-cli": ("GitHub Copilot CLI", "1.0.83", ["copilot", "--version"]),
+    "claude-code": (
+        "Claude Code",
+        "2.1.263",
+        ["claude", "--version"],
+        "2.1.263",
+        [
+            "node",
+            "-p",
+            "require('/opt/raptor/npm/base/node_modules/"
+            "@anthropic-ai/claude-code/package.json').version",
+        ],
+    ),
+    "copilot-cli": (
+        "GitHub Copilot CLI",
+        "1.0.84-3",
+        ["copilot", "--version"],
+        "1.0.83",
+        [
+            "node",
+            "-p",
+            "require('/opt/raptor/npm/all-tools/node_modules/"
+            "@github/copilot/package.json').version",
+        ],
+    ),
+    "yarn": (
+        "Yarn",
+        "1.22.22",
+        ["yarn", "--version"],
+        "1.22.22",
+        [
+            "node",
+            "-p",
+            "require('/opt/raptor/npm/base/node_modules/"
+            "yarn/package.json').version",
+        ],
+    ),
+    "pnpm": (
+        "pnpm",
+        "11.8.0",
+        ["pnpm", "--version"],
+        "11.8.0",
+        [
+            "node",
+            "-p",
+            "require('/opt/raptor/npm/base/node_modules/"
+            "pnpm/package.json').version",
+        ],
+    ),
 }
 _REQUIRED_SNAPSHOT_TOOLS = {
     "semgrep": ("Semgrep", "1.172.0", ("semgrep",)),
@@ -39,6 +85,13 @@ _REQUIRED_SNAPSHOT_TOOLS = {
     "ollama": ("Ollama", "0.33.3", ("ollama",)),
 }
 _JOERN_JAR_PREFIX = "io.joern.joern-cli-"
+_CARGO_FUZZ_FIXTURE_LOCK_SHA256 = (
+    "4baf46b199ba9c236d2ee3618e65ed30949ac240b112376a07543434c97e7b81"
+)
+_LIBFUZZER_SYS_VERSION = "0.4.13"
+_LIBFUZZER_SYS_CHECKSUM = (
+    "a9fd2f41a1cba099f79a0b6b6c35656cf7c03351a7bae8ff0f28f25270f929d2"
+)
 _VERSION_TOKEN_RE = re.compile(
     r"""
     (?<![A-Za-z0-9.])
@@ -112,9 +165,13 @@ def load_manifest(path: Path) -> dict:
             raise ValueError(
                 f"{tool_name} must define a non-empty version_command"
             )
-    for tool_name, (display_name, expected_version, expected_command) in (
-        _REQUIRED_CLI_TOOLS.items()
-    ):
+    for tool_name, (
+        display_name,
+        expected_version,
+        expected_command,
+        expected_package_version,
+        expected_package_command,
+    ) in _REQUIRED_CLI_TOOLS.items():
         tool = data["tools"].get(tool_name)
         if tool is None:
             raise ValueError(f"manifest must define {display_name}")
@@ -124,6 +181,17 @@ def load_manifest(path: Path) -> dict:
             command_text = " ".join(expected_command)
             raise ValueError(
                 f"{display_name} must be version-checked with `{command_text}`"
+            )
+        if tool.get("package_version") != expected_package_version:
+            raise ValueError(
+                f"{display_name} npm package version must be "
+                f"{expected_package_version}"
+            )
+        if tool.get("package_version_command") != expected_package_command:
+            command_text = " ".join(expected_package_command)
+            raise ValueError(
+                f"{display_name} npm package must be version-checked with "
+                f"`{command_text}`"
             )
         if expected_command[0] not in data["required_binaries"]:
             raise ValueError(
@@ -208,6 +276,30 @@ def load_manifest(path: Path) -> dict:
     ):
         if str(required_path) not in data["required_paths"]:
             raise ValueError(f"manifest must require runtime path {required_path}")
+
+    cargo_fuzz = data["tools"].get("cargo-fuzz")
+    if cargo_fuzz is None:
+        raise ValueError("manifest must define cargo-fuzz")
+    for field in ("fixture_lock_sha256", "libfuzzer_sys_checksum"):
+        digest = cargo_fuzz.get(field)
+        if (
+            not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        ):
+            raise ValueError(
+                f"cargo-fuzz {field} must be exactly 64 lowercase "
+                "hexadecimal characters"
+            )
+    if cargo_fuzz.get("fixture_lock_sha256") != _CARGO_FUZZ_FIXTURE_LOCK_SHA256:
+        raise ValueError("cargo-fuzz fixture lock SHA-256 is not the pinned digest")
+    if cargo_fuzz.get("libfuzzer_sys_version") != _LIBFUZZER_SYS_VERSION:
+        raise ValueError(
+            f"cargo-fuzz fixture must pin libfuzzer-sys {_LIBFUZZER_SYS_VERSION}"
+        )
+    if cargo_fuzz.get("libfuzzer_sys_checksum") != _LIBFUZZER_SYS_CHECKSUM:
+        raise ValueError(
+            "cargo-fuzz fixture libfuzzer-sys checksum is not the pinned digest"
+        )
 
     for tool_name, tool in data["tools"].items():
         for field, expected_length in _HEX_DIGEST_LENGTHS.items():
@@ -526,10 +618,17 @@ def verify_installed(manifest: dict) -> list[str]:
     for tool_name, tool in manifest["tools"].items():
         package_version = tool.get("package_version")
         if package_version:
+            package_version_command = tool.get("package_version_command")
             package_name = tool.get("package", tool_name)
+            command = package_version_command or [
+                "dpkg-query",
+                "-W",
+                "-f=${Version}",
+                package_name,
+            ]
             try:
                 package_result = subprocess.run(
-                    ["dpkg-query", "-W", "-f=${Version}", package_name],
+                    command,
                     text=True,
                     capture_output=True,
                     check=False,

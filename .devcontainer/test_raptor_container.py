@@ -435,8 +435,9 @@ def test_all_tools_manifest_and_install_commands_cover_major_gaps() -> None:
     for expected in (
         "AS raptor-all-tools",
         "ACCEPT_CODEQL_TERMS",
-        "COPILOT_CLI_VERSION=1.0.83",
-        "CLAUDE_CODE_VERSION=2.1.263",
+        "containers/npm/base/package-lock.json",
+        "containers/npm/all-tools/package-lock.json",
+        "npm ci --ignore-scripts",
         "JOERN_VERSION=4.0.622",
         "GHIDRA_VERSION=12.1.3",
         "GRADLE_VERSION=9.7.1",
@@ -503,6 +504,7 @@ def test_native_build_blockers_are_pinned_and_rootless_safe(tmp_path: Path) -> N
 def test_every_dockerfile_pip_install_uses_all_tools_constraints() -> None:
     dockerfile = (ROOT / ".devcontainer" / "Dockerfile").read_text(encoding="utf-8")
     expected_locks = {
+        "/tmp/raptor/requirements-build.lock",
         "/tmp/raptor/requirements-base.lock",
         "/tmp/raptor/requirements-all-tools.lock",
     }
@@ -516,7 +518,7 @@ def test_every_dockerfile_pip_install_uses_all_tools_constraints() -> None:
         if re.search(r"\bpip install\b", command)
     ]
 
-    assert len(install_commands) == 2
+    assert len(install_commands) == 3
     assert len(install_commands) == len(
         re.findall(r"\bpip install\b", dockerfile)
     )
@@ -531,6 +533,14 @@ def test_every_dockerfile_pip_install_uses_all_tools_constraints() -> None:
         used_locks.add(lock_paths[0])
 
     assert used_locks == expected_locks
+    for command in install_commands:
+        install = command.split("&&", 1)[0]
+        if "requirements-build.lock" in install:
+            assert "--only-binary=:all:" in install
+            assert "--no-build-isolation" not in install
+        else:
+            assert "--no-build-isolation" in install
+            assert "--only-binary" not in install
     for lock_path in expected_locks:
         source = f"containers/{Path(lock_path).name}"
         assert (ROOT / source).is_file()
@@ -583,11 +593,18 @@ def test_angr_uses_main_interpreter_with_compatible_z3() -> None:
         "COPY containers/requirements-all-tools.lock "
         "/tmp/raptor/requirements-all-tools.lock"
     ) in dockerfile
-    assert (
-        "python3 -m pip install --no-cache-dir --require-hashes --no-deps"
-        in dockerfile
+    final_install = next(
+        command
+        for command in re.findall(
+            r"^RUN (?P<command>.*?)(?=\n\n)",
+            dockerfile,
+            re.MULTILINE | re.DOTALL,
+        )
+        if "requirements-all-tools.lock" in command
     )
-    assert "-r /tmp/raptor/requirements-all-tools.lock" in dockerfile
+    assert "--no-build-isolation" in final_install
+    assert "--require-hashes" in final_install
+    assert "--no-deps" in final_install
     assert "import angr, z3" in dockerfile
     assert "python3 -m pip check" in dockerfile
     assert "/opt/angr" not in dockerfile
@@ -642,11 +659,17 @@ def test_builder_ignore_files_are_identical_restrictive_allowlists() -> None:
     assert {
         "!/.devcontainer/Dockerfile",
         "!/containers/all-tools-manifest.json",
+        "!/containers/cargo-fuzz-smoke/Cargo.lock",
         "!/containers/constraints-all-tools.txt",
         "!/containers/install-all-tools-native.sh",
+        "!/containers/npm/all-tools/package-lock.json",
+        "!/containers/npm/all-tools/package.json",
+        "!/containers/npm/base/package-lock.json",
+        "!/containers/npm/base/package.json",
         "!/containers/raptor-container-entrypoint",
         "!/containers/requirements-all-tools.lock",
         "!/containers/requirements-base.lock",
+        "!/containers/requirements-build.lock",
         "!/containers/verify-all-tools.py",
         "!/packages/web/requirements.txt",
         "!/requirements.txt",
@@ -658,11 +681,14 @@ def test_builder_ignore_files_are_identical_restrictive_allowlists() -> None:
         for line in active_lines
         if line.startswith("!") and line.endswith(".lock")
     } == {
+        "!/containers/cargo-fuzz-smoke/Cargo.lock",
         "!/containers/requirements-all-tools.lock",
         "!/containers/requirements-base.lock",
+        "!/containers/requirements-build.lock",
     }
     assert "!/containers/requirements-all-tools.in" not in active_lines
     assert "!/containers/requirements-base.in" not in active_lines
+    assert "!/containers/requirements-build.in" not in active_lines
     assert (
         active_lines.index("!/.devcontainer/")
         < active_lines.index("/.devcontainer/**")
@@ -751,14 +777,20 @@ def test_podman_build_context_contains_only_allowlisted_files(tmp_path: Path) ->
             ".devcontainer/Dockerfile",
             ".devcontainer/requirements-all-optional.txt",
             "containers/all-tools-manifest.json",
+            "containers/cargo-fuzz-smoke/Cargo.lock",
             "containers/constraints-all-tools.txt",
             "containers/install-all-tools-native.sh",
+            "containers/npm/all-tools/package-lock.json",
+            "containers/npm/all-tools/package.json",
+            "containers/npm/base/package-lock.json",
+            "containers/npm/base/package.json",
             "containers/raptor-container-entrypoint",
             "containers/requirements-all-tools.lock",
             "containers/requirements-all-tools.txt",
             "containers/requirements-angr.txt",
             "containers/requirements-atheris-amd64.txt",
             "containers/requirements-base.lock",
+            "containers/requirements-build.lock",
             "containers/verify-all-tools.py",
             "packages/web/requirements.txt",
             "requirements-dev.txt",

@@ -18,7 +18,7 @@ RUN find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
 # The base image's `node` devcontainer-feature install path added a stale
 # yarn apt source (NO_PUBKEY 62D54FD4003F6525, breaks apt-get update) AND
 # the yarn 1.x package itself (/usr/bin/yarn). Remove both so the later
-# `npm install -g yarn@1.22.22` step doesn't collide on aarch64 builds.
+# locked npm closure doesn't collide on aarch64 builds.
 RUN rm -f /etc/apt/sources.list.d/yarn.list \
     && (apt-get -y remove yarn || echo "yarn not installed - skipping removal")
 
@@ -86,9 +86,15 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 # standard devcontainer closure: RAPTOR runtime/dev packages, web support,
 # optional Python integrations, and Semgrep. --no-deps prevents pip from
 # resolving anything outside the checked-in, hash-verified closure.
+COPY containers/requirements-build.lock /tmp/raptor/requirements-build.lock
 COPY containers/requirements-base.lock /tmp/raptor/requirements-base.lock
 
 RUN python3 -m pip install --no-cache-dir --require-hashes --no-deps \
+        --only-binary=:all: \
+        -r /tmp/raptor/requirements-build.lock
+
+RUN python3 -m pip install --no-cache-dir --no-build-isolation \
+        --require-hashes --no-deps \
         -r /tmp/raptor/requirements-base.lock \
     && python3 -m pip check
 
@@ -137,26 +143,37 @@ RUN install -d -m 0755 -o root -g vscode "${PLAYWRIGHT_BROWSERS_PATH}" \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ============================================================================
-# CLAUDE CLI (claude-code npm package)
-# Required to run RAPTOR via bin/raptor
+# LOCKED NODE TOOLCHAIN
+# Claude Code is required to run RAPTOR via bin/raptor. Yarn and pnpm are
+# available for target builds. npm ci verifies the checked-in registry
+# integrities, and package scripts are disabled except for Claude's explicit
+# local postinstall, which selects the already-locked platform package.
 # ============================================================================
 
 # Capture-then-execute the nodesource setup script so a curl failure isn't
 # silently swallowed by the pipeline (curl | bash ignores curl's exit status).
 # Node 24 is the current stable release, and is supported by the latest Claude CLI.
-ARG CLAUDE_CODE_VERSION=2.1.263
 RUN curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource_setup.sh \
     && bash /tmp/nodesource_setup.sh \
     && rm /tmp/nodesource_setup.sh \
     && apt-get install -y --no-install-recommends nodejs=24.20.0-1nodesource1 \
-    && apt-get clean && rm -rf /var/lib/apt/lists/* \
-    && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# ============================================================================
-# JS PACKAGE MANAGERS (npm-managed yarn — apt source + package removed above)
-# ============================================================================
+ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 
-RUN npm install -g yarn@1.22.22 pnpm@11.8.0
+COPY containers/npm/base/package.json containers/npm/base/package-lock.json \
+    /opt/raptor/npm/base/
+RUN npm ci --ignore-scripts --include=optional --omit=dev --no-audit --no-fund \
+        --prefix /opt/raptor/npm/base \
+    && node /opt/raptor/npm/base/node_modules/@anthropic-ai/claude-code/install.cjs \
+    && node -e "if (require('/opt/raptor/npm/base/node_modules/@anthropic-ai/claude-code/package.json').version !== '2.1.263') process.exit(1)" \
+    && node -e "if (require('/opt/raptor/npm/base/node_modules/yarn/package.json').version !== '1.22.22') process.exit(1)" \
+    && node -e "if (require('/opt/raptor/npm/base/node_modules/pnpm/package.json').version !== '11.8.0') process.exit(1)" \
+    && ln -sf /opt/raptor/npm/base/node_modules/.bin/claude /usr/local/bin/claude \
+    && ln -sf /opt/raptor/npm/base/node_modules/.bin/yarn /usr/local/bin/yarn \
+    && ln -sf /opt/raptor/npm/base/node_modules/.bin/yarnpkg /usr/local/bin/yarnpkg \
+    && ln -sf /opt/raptor/npm/base/node_modules/.bin/pnpm /usr/local/bin/pnpm \
+    && ln -sf /opt/raptor/npm/base/node_modules/.bin/pnpx /usr/local/bin/pnpx
 
 # ============================================================================
 # ENVIRONMENT CONFIGURATION
@@ -220,6 +237,7 @@ FROM raptor-base AS raptor-all-tools-build
 USER root
 
 COPY containers/all-tools-manifest.json /usr/local/share/raptor/all-tools-manifest.json
+COPY containers/cargo-fuzz-smoke/Cargo.lock /usr/local/share/raptor/cargo-fuzz-smoke.Cargo.lock
 COPY containers/install-all-tools-native.sh /usr/local/libexec/raptor-install-all-tools-native
 COPY containers/verify-all-tools.py /usr/local/bin/raptor-verify-all-tools
 RUN chmod 0755 \
@@ -227,7 +245,6 @@ RUN chmod 0755 \
     /usr/local/bin/raptor-verify-all-tools
 
 ARG ACCEPT_CODEQL_TERMS=0
-ARG COPILOT_CLI_VERSION=1.0.83
 ARG TEMURIN_RELEASE=jdk-21.0.12.1%2B1
 ARG TEMURIN_VERSION=21.0.12.1_1
 ARG TEMURIN_AMD64_SHA256=ce79869e1307ed8ee1e2baa86a412b1eb5b75d10a01006d788a6f968bcfaee94
@@ -299,7 +316,15 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     && rm -rf /var/lib/apt/lists/*
 
 # GitHub Copilot CLI. Claude Code is inherited from the canonical base stage.
-RUN npm install -g "@github/copilot@${COPILOT_CLI_VERSION}"
+COPY containers/npm/all-tools/package.json \
+    containers/npm/all-tools/package-lock.json \
+    /opt/raptor/npm/all-tools/
+RUN npm ci --ignore-scripts --include=optional --omit=dev --no-audit --no-fund \
+        --prefix /opt/raptor/npm/all-tools \
+    && node -e "if (require('/opt/raptor/npm/all-tools/node_modules/@github/copilot/package.json').version !== '1.0.83') process.exit(1)" \
+    && node -e "if (require('/opt/raptor/npm/all-tools/node_modules/detect-libc/package.json').version !== '2.1.2') process.exit(1)" \
+    && ln -sf /opt/raptor/npm/all-tools/node_modules/.bin/copilot \
+        /usr/local/bin/copilot
 
 # Use the official CodeQL Action bundle, not the standalone CLI archive. The
 # bundle carries the matching language query packs and is checksum-pinned.
@@ -416,7 +441,8 @@ COPY containers/requirements-all-tools.lock /tmp/raptor/requirements-all-tools.l
 # replaces it with claripy's 4.13 pin so `import angr` works in RAPTOR's
 # main interpreter and symbolic analysis is actually reachable. The final lock
 # contains the complete post-override environment, including amd64-only Atheris.
-RUN python3 -m pip install --no-cache-dir --require-hashes --no-deps \
+RUN python3 -m pip install --no-cache-dir --no-build-isolation \
+        --require-hashes --no-deps \
         -r /tmp/raptor/requirements-all-tools.lock \
     && python3 -c "import angr, z3; from importlib.metadata import version; assert version('z3-solver') == '4.13.0.0'; assert z3.get_version_string() == '4.13.0'" \
     && python3 -m pip check \

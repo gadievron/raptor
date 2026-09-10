@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from types import ModuleType
 
@@ -17,6 +19,7 @@ DOCKERFILE = ROOT / ".devcontainer" / "Dockerfile"
 INSTALLER = ROOT / "containers" / "install-all-tools-native.sh"
 MANIFEST = ROOT / "containers" / "all-tools-manifest.json"
 VERIFIER = ROOT / "containers" / "verify-all-tools.py"
+CARGO_LOCK = ROOT / "containers" / "cargo-fuzz-smoke" / "Cargo.lock"
 
 
 def _load_module(name: str, path: Path) -> ModuleType:
@@ -49,7 +52,7 @@ def test_playwright_uses_shared_path_and_launches_as_runtime_user() -> None:
     install_start = dockerfile.index(
         'RUN install -d -m 0755 -o root -g vscode "${PLAYWRIGHT_BROWSERS_PATH}"'
     )
-    install_end = dockerfile.index("# CLAUDE CLI", install_start)
+    install_end = dockerfile.index("# LOCKED NODE TOOLCHAIN", install_start)
     install_block = dockerfile[install_start:install_end]
     assert 'chown -R root:vscode "${PLAYWRIGHT_BROWSERS_PATH}"' in install_block
     assert 'chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"' in install_block
@@ -102,11 +105,35 @@ def test_cargo_fuzz_uses_snapshot_nightly_and_vendored_offline_fixture() -> None
 
     assert "/usr/local/share/raptor/cargo-fuzz-smoke" in installer
     assert "/usr/local/share/raptor/cargo-fuzz-vendor" in installer
+    assert "cargo generate-lockfile" not in installer
+    assert 'install -m 0644 "$cargo_fuzz_lock"' in installer
     assert "/opt/cargo/bin/cargo vendor --locked" in installer
+    assert (
+        "COPY containers/cargo-fuzz-smoke/Cargo.lock "
+        "/usr/local/share/raptor/cargo-fuzz-smoke.Cargo.lock"
+        in DOCKERFILE.read_text(encoding="utf-8")
+    )
+
+    cargo_lock_bytes = CARGO_LOCK.read_bytes()
+    cargo_lock = tomllib.loads(cargo_lock_bytes.decode())
+    fixture = manifest["tools"]["cargo-fuzz"]
+    assert hashlib.sha256(cargo_lock_bytes).hexdigest() == (
+        fixture["fixture_lock_sha256"]
+    )
+    libfuzzer_sys = next(
+        package
+        for package in cargo_lock["package"]
+        if package["name"] == "libfuzzer-sys"
+    )
+    assert libfuzzer_sys["version"] == fixture["libfuzzer_sys_version"]
+    assert libfuzzer_sys["checksum"] == fixture["libfuzzer_sys_checksum"]
     assert '"CARGO_NET_OFFLINE": "true"' in verifier
     assert "sanitizer=address" in verifier
     assert "/opt/ms-playwright" in manifest["required_paths"]
     assert "/usr/local/share/raptor/cargo-fuzz-smoke" in (
+        manifest["required_paths"]
+    )
+    assert "/usr/local/share/raptor/cargo-fuzz-smoke.Cargo.lock" in (
         manifest["required_paths"]
     )
     assert "/usr/local/share/raptor/cargo-fuzz-vendor" in (
@@ -142,6 +169,39 @@ def test_manifest_rejects_unpinned_nightly(
 ) -> None:
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     manifest["tools"]["rust"][field] = value
+
+    with pytest.raises(ValueError, match=message):
+        all_tools.load_manifest(_write_manifest(tmp_path, manifest))
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        (
+            "fixture_lock_sha256",
+            "0" * 64,
+            "cargo-fuzz fixture lock SHA-256 is not the pinned digest",
+        ),
+        (
+            "libfuzzer_sys_version",
+            "0.4.12",
+            "cargo-fuzz fixture must pin libfuzzer-sys 0.4.13",
+        ),
+        (
+            "libfuzzer_sys_checksum",
+            "0" * 64,
+            "cargo-fuzz fixture libfuzzer-sys checksum is not the pinned digest",
+        ),
+    ],
+)
+def test_manifest_rejects_unpinned_cargo_fixture(
+    tmp_path: Path,
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    manifest["tools"]["cargo-fuzz"][field] = value
 
     with pytest.raises(ValueError, match=message):
         all_tools.load_manifest(_write_manifest(tmp_path, manifest))

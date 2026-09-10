@@ -11,15 +11,53 @@
   "tools": {
     "claude-code": {
       "version": "2.1.263",
+      "package_version": "2.1.263",
+      "package_version_command": [
+        "node",
+        "-p",
+        "require('/opt/raptor/npm/base/node_modules/@anthropic-ai/claude-code/package.json').version"
+      ],
       "version_command": [
         "claude",
         "--version"
       ]
     },
     "copilot-cli": {
-      "version": "1.0.83",
+      "version": "1.0.84-3",
+      "package_version": "1.0.83",
+      "package_version_command": [
+        "node",
+        "-p",
+        "require('/opt/raptor/npm/all-tools/node_modules/@github/copilot/package.json').version"
+      ],
       "version_command": [
         "copilot",
+        "--version"
+      ]
+    },
+    "yarn": {
+      "version": "1.22.22",
+      "package_version": "1.22.22",
+      "package_version_command": [
+        "node",
+        "-p",
+        "require('/opt/raptor/npm/base/node_modules/yarn/package.json').version"
+      ],
+      "version_command": [
+        "yarn",
+        "--version"
+      ]
+    },
+    "pnpm": {
+      "version": "11.8.0",
+      "package_version": "11.8.0",
+      "package_version_command": [
+        "node",
+        "-p",
+        "require('/opt/raptor/npm/base/node_modules/pnpm/package.json').version"
+      ],
+      "version_command": [
+        "pnpm",
         "--version"
       ]
     },
@@ -173,6 +211,9 @@
     },
     "cargo-fuzz": {
       "version": "0.13.2",
+      "fixture_lock_sha256": "4baf46b199ba9c236d2ee3618e65ed30949ac240b112376a07543434c97e7b81",
+      "libfuzzer_sys_version": "0.4.13",
+      "libfuzzer_sys_checksum": "a9fd2f41a1cba099f79a0b6b6c35656cf7c03351a7bae8ff0f28f25270f929d2",
       "version_command": [
         "cargo-fuzz",
         "--version"
@@ -335,6 +376,7 @@
     "mvn",
     "nuclei",
     "ollama",
+    "pnpm",
     "r2",
     "radare2",
     "rr",
@@ -342,7 +384,8 @@
     "semgrep",
     "spatch",
     "strace",
-    "valgrind"
+    "valgrind",
+    "yarn"
   ],
   "required_paths": [
     "/opt/ms-playwright",
@@ -351,7 +394,10 @@
     "/opt/google-cloud-sdk",
     "/opt/joern/joern-cli",
     "/opt/maven",
+    "/opt/raptor/npm/all-tools",
+    "/opt/raptor/npm/base",
     "/opt/rustup",
+    "/usr/local/share/raptor/cargo-fuzz-smoke.Cargo.lock",
     "/usr/local/share/raptor/cargo-fuzz-smoke",
     "/usr/local/share/raptor/cargo-fuzz-vendor",
     "/usr/local/go"

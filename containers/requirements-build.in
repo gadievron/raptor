@@ -1,0 +1,11 @@
+# Build requirements reported by the source distributions recorded in
+# python-sdist-build-manifest.json. Regenerate with uv 0.12.12 using the
+# command embedded in requirements-build.lock.
+
+setuptools>=61.0
+wheel
+build
+versioningit
+
+# Keep the build frontend aligned with RAPTOR's runtime dependency pin.
+packaging==25.0

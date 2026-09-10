@@ -212,6 +212,12 @@ chmod 0755 /usr/local/bin/cargo-fuzz
 
 cargo_fuzz_smoke=/usr/local/share/raptor/cargo-fuzz-smoke
 cargo_fuzz_vendor=/usr/local/share/raptor/cargo-fuzz-vendor
+cargo_fuzz_lock=/usr/local/share/raptor/cargo-fuzz-smoke.Cargo.lock
+cargo_fuzz_lock_sha256="$(tool_value cargo-fuzz fixture_lock_sha256)"
+test -f "$cargo_fuzz_lock"
+printf '%s  %s\n' "$cargo_fuzz_lock_sha256" "$cargo_fuzz_lock" \
+    > "$WORK_DIR/cargo-fuzz-lock.sha256"
+sha256sum -c "$WORK_DIR/cargo-fuzz-lock.sha256"
 rm -rf "$cargo_fuzz_smoke" "$cargo_fuzz_vendor"
 install -d -m 0755 \
     "$cargo_fuzz_smoke/.cargo" \
@@ -262,6 +268,8 @@ bench = false
 members = ["."]
 EOF
 
+install -m 0644 "$cargo_fuzz_lock" "$cargo_fuzz_smoke/fuzz/Cargo.lock"
+
 cat > "$cargo_fuzz_smoke/fuzz/fuzz_targets/smoke.rs" <<'EOF'
 #![no_main]
 
@@ -272,10 +280,6 @@ fuzz_target!(|data: &[u8]| {
 });
 EOF
 
-RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo \
-    RUSTUP_TOOLCHAIN="$rust_nightly" \
-    /opt/cargo/bin/cargo generate-lockfile \
-    --manifest-path "$cargo_fuzz_smoke/fuzz/Cargo.toml"
 RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo \
     RUSTUP_TOOLCHAIN="$rust_nightly" \
     /opt/cargo/bin/cargo vendor --locked \

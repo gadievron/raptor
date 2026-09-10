@@ -11,11 +11,25 @@
 !/containers/
 /containers/**
 !/containers/all-tools-manifest.json
+!/containers/cargo-fuzz-smoke/
+/containers/cargo-fuzz-smoke/**
+!/containers/cargo-fuzz-smoke/Cargo.lock
 !/containers/constraints-all-tools.txt
 !/containers/install-all-tools-native.sh
+!/containers/npm/
+/containers/npm/**
+!/containers/npm/all-tools/
+/containers/npm/all-tools/**
+!/containers/npm/all-tools/package-lock.json
+!/containers/npm/all-tools/package.json
+!/containers/npm/base/
+/containers/npm/base/**
+!/containers/npm/base/package-lock.json
+!/containers/npm/base/package.json
 !/containers/raptor-container-entrypoint
 # Only Docker-consumed generated locks are admitted; lock inputs and all other
 # *.lock files remain excluded by /containers/**.
+!/containers/requirements-build.lock
 !/containers/requirements-base.lock
 !/containers/requirements-all-tools.lock
 !/containers/requirements-all-tools.txt

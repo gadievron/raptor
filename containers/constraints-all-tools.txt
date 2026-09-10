@@ -1,7 +1,7 @@
 # Cross-install constraints for the raptor-all-tools Python environment.
 #
-# These constraints are applied while compiling both complete hash locks. Keep
-# the standard and final all-tools environments in the shared intersection
+# These constraints are applied while compiling the checked-in Python locks.
+# Keep the standard and final all-tools environments in the shared intersection
 # accepted by Semgrep, RAPTOR's development dependencies, Google tooling, and
 # angr.
 

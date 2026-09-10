@@ -31,10 +31,12 @@ all_tools = _load_module("exact_version_verifier_under_test", VERIFIER)
     [
         ("2.1.263", "2.1.263 (Claude Code)\n"),
         (
-            "1.0.83",
-            "GitHub Copilot CLI 1.0.83.\n"
+            "1.0.84-3",
+            "GitHub Copilot CLI 1.0.84-3.\n"
             "Run 'copilot update' to check for updates.\n",
         ),
+        ("1.22.22", "1.22.22\n"),
+        ("11.8.0", "11.8.0\n"),
         ("1.172.0", "1.172.0\n"),
         (
             "21.0.12.1",

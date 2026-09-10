@@ -14,6 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DEVCONTAINER_VERIFIER = ROOT / ".devcontainer" / "test_devcontainer.py"
 ALL_TOOLS_MANIFEST = ROOT / "containers" / "all-tools-manifest.json"
 ALL_TOOLS_VERIFIER = ROOT / "containers" / "verify-all-tools.py"
+BASE_NPM_LOCK = ROOT / "containers" / "npm" / "base" / "package-lock.json"
+ALL_TOOLS_NPM_LOCK = (
+    ROOT / "containers" / "npm" / "all-tools" / "package-lock.json"
+)
 
 
 def _load_module(name: str, path: Path) -> ModuleType:
@@ -84,12 +88,141 @@ def test_manifest_pins_cli_version_commands() -> None:
 
     assert manifest["tools"]["claude-code"] == {
         "version": "2.1.263",
+        "package_version": "2.1.263",
+        "package_version_command": [
+            "node",
+            "-p",
+            "require('/opt/raptor/npm/base/node_modules/"
+            "@anthropic-ai/claude-code/package.json').version",
+        ],
         "version_command": ["claude", "--version"],
     }
     assert manifest["tools"]["copilot-cli"] == {
-        "version": "1.0.83",
+        "version": "1.0.84-3",
+        "package_version": "1.0.83",
+        "package_version_command": [
+            "node",
+            "-p",
+            "require('/opt/raptor/npm/all-tools/node_modules/"
+            "@github/copilot/package.json').version",
+        ],
         "version_command": ["copilot", "--version"],
     }
+    assert manifest["tools"]["yarn"] == {
+        "version": "1.22.22",
+        "package_version": "1.22.22",
+        "package_version_command": [
+            "node",
+            "-p",
+            "require('/opt/raptor/npm/base/node_modules/"
+            "yarn/package.json').version",
+        ],
+        "version_command": ["yarn", "--version"],
+    }
+    assert manifest["tools"]["pnpm"] == {
+        "version": "11.8.0",
+        "package_version": "11.8.0",
+        "package_version_command": [
+            "node",
+            "-p",
+            "require('/opt/raptor/npm/base/node_modules/"
+            "pnpm/package.json').version",
+        ],
+        "version_command": ["pnpm", "--version"],
+    }
+
+
+def test_npm_locks_pin_complete_cli_closures_and_integrities() -> None:
+    manifest = all_tools.load_manifest(ALL_TOOLS_MANIFEST)
+    base_lock = json.loads(BASE_NPM_LOCK.read_text(encoding="utf-8"))
+    all_tools_lock = json.loads(ALL_TOOLS_NPM_LOCK.read_text(encoding="utf-8"))
+    base_packages = base_lock["packages"]
+    all_tools_packages = all_tools_lock["packages"]
+
+    assert base_lock["lockfileVersion"] == 3
+    assert all_tools_lock["lockfileVersion"] == 3
+    assert base_packages[""]["dependencies"] == {
+        "@anthropic-ai/claude-code": "2.1.263",
+        "pnpm": "11.8.0",
+        "yarn": "1.22.22",
+    }
+    assert all_tools_packages[""]["dependencies"] == {
+        "@github/copilot": "1.0.83"
+    }
+    assert len(base_packages) - 1 == 11
+    assert len(all_tools_packages) - 1 == 10
+
+    for packages in (base_packages, all_tools_packages):
+        for path, package in packages.items():
+            if not path:
+                continue
+            assert package["version"]
+            assert package["integrity"].startswith("sha512-")
+
+    expected_base = {
+        "node_modules/@anthropic-ai/claude-code": (
+            "2.1.263",
+            "sha512-kvvBK6/69iTRYnq0TKVyxVZs1CxYCJGojshQSP+2qaDb66A2xtI4"
+            "zbCuqkZUWLkFGmHSRqhFf/ATpzH2UNKcwg==",
+        ),
+        "node_modules/pnpm": (
+            "11.8.0",
+            "sha512-wfXnxMskHI8XS3Q4UdgvQrgCMkr8iw8Ra5atsVqgZmSUjd42lgo7o"
+            "QebpbSyndAUATW5S1tfUmNZIknWjlVfJg==",
+        ),
+        "node_modules/yarn": (
+            "1.22.22",
+            "sha512-prL3kGtyG7o9Z9Sv8IPfBNrWTDmXB4Qbes8A9rEzt6wkJV8mUvoir"
+            "jU0Mp3GGAU06Y0XQyA3/2/RQFVuK7MTfg==",
+        ),
+    }
+    for path, (version, integrity) in expected_base.items():
+        assert base_packages[path]["version"] == version
+        assert base_packages[path]["integrity"] == integrity
+
+    copilot = all_tools_packages["node_modules/@github/copilot"]
+    detect_libc = all_tools_packages["node_modules/detect-libc"]
+    assert copilot["version"] == "1.0.83"
+    assert copilot["integrity"] == (
+        "sha512-M8uZI0V0dahYV1KZij3nGDxaXEGG7I7YUZzQPI7NEZkL/"
+        "83Nl/tNTbPdxKtdWZbOmWoXsPKXty/eEYoj6RHDhA=="
+    )
+    assert copilot["dependencies"]["detect-libc"] == "^2.1.2"
+    assert detect_libc == {
+        "version": "2.1.2",
+        "resolved": (
+            "https://registry.npmjs.org/detect-libc/-/detect-libc-2.1.2.tgz"
+        ),
+        "integrity": (
+            "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsi"
+            "ByU11nZlqWYZm05i/of7io4mzihBtQ=="
+        ),
+        "license": "Apache-2.0",
+        "engines": {"node": ">=8"},
+    }
+    assert {
+        "/opt/raptor/npm/base",
+        "/opt/raptor/npm/all-tools",
+    } <= set(manifest["required_paths"])
+
+
+def test_dockerfile_installs_locked_npm_closures_without_global_installs() -> None:
+    dockerfile = (
+        ROOT / ".devcontainer" / "Dockerfile"
+    ).read_text(encoding="utf-8")
+
+    assert "npm install -g" not in dockerfile
+    assert dockerfile.count("npm ci --ignore-scripts") == 2
+    assert dockerfile.count("--include=optional") == 2
+    assert dockerfile.count("--omit=dev") == 2
+    for prefix in ("/opt/raptor/npm/base", "/opt/raptor/npm/all-tools"):
+        assert f"--prefix {prefix}" in dockerfile
+    for binary in ("claude", "yarn", "yarnpkg", "pnpm", "pnpx", "copilot"):
+        assert f"/usr/local/bin/{binary}" in dockerfile
+    assert (
+        "node /opt/raptor/npm/base/node_modules/"
+        "@anthropic-ai/claude-code/install.cjs"
+    ) in dockerfile
 
 
 @pytest.mark.parametrize(
@@ -97,6 +230,8 @@ def test_manifest_pins_cli_version_commands() -> None:
     [
         ("claude-code", "Claude Code must be version-checked"),
         ("copilot-cli", "GitHub Copilot CLI must be version-checked"),
+        ("yarn", "Yarn must be version-checked"),
+        ("pnpm", "pnpm must be version-checked"),
     ],
 )
 def test_manifest_requires_cli_version_commands(
@@ -139,6 +274,15 @@ def test_all_tools_verifier_executes_cli_version_commands(
 
     def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         commands.append(command)
+        if command == full_manifest["tools"]["claude-code"][
+            "package_version_command"
+        ]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="2.1.263",
+                stderr="",
+            )
         if command == ["claude", "--version"]:
             return subprocess.CompletedProcess(
                 command,
@@ -146,11 +290,20 @@ def test_all_tools_verifier_executes_cli_version_commands(
                 stdout="",
                 stderr="loader failure",
             )
-        if command == ["copilot", "--version"]:
+        if command == full_manifest["tools"]["copilot-cli"][
+            "package_version_command"
+        ]:
             return subprocess.CompletedProcess(
                 command,
                 0,
                 stdout="1.0.83",
+                stderr="",
+            )
+        if command == ["copilot", "--version"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="GitHub Copilot CLI 1.0.84-3",
                 stderr="",
             )
         if command[:3] == ["r2", "-q", "-c"]:
@@ -168,6 +321,12 @@ def test_all_tools_verifier_executes_cli_version_commands(
 
     assert ["claude", "--version"] in commands
     assert ["copilot", "--version"] in commands
+    assert full_manifest["tools"]["claude-code"][
+        "package_version_command"
+    ] in commands
+    assert full_manifest["tools"]["copilot-cli"][
+        "package_version_command"
+    ] in commands
     assert any("claude-code version check exited 127" in error for error in errors)
     assert not any("copilot-cli" in error for error in errors)
 

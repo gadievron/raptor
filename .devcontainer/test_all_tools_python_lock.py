@@ -8,6 +8,9 @@ from packaging.version import Version
 
 
 ROOT = Path(__file__).resolve().parents[1]
+BUILD_INPUT = ROOT / "containers" / "requirements-build.in"
+BUILD_LOCK = ROOT / "containers" / "requirements-build.lock"
+SDIST_BUILD_MANIFEST = ROOT / "containers" / "python-sdist-build-manifest.json"
 BASE_INPUT = ROOT / "containers" / "requirements-base.in"
 BASE_LOCK = ROOT / "containers" / "requirements-base.lock"
 ALL_TOOLS_INPUT = ROOT / "containers" / "requirements-all-tools.in"
@@ -264,6 +267,68 @@ def test_generated_hash_locks_cover_the_complete_environments() -> None:
         assert all_tools[name][0] == Version(package["version"])
 
 
+def test_build_lock_covers_actual_sdist_build_requirements() -> None:
+    build = load_hash_lock(BUILD_LOCK)
+    base = load_hash_lock(BASE_LOCK)
+    all_tools = load_hash_lock(ALL_TOOLS_LOCK)
+    manifest = json.loads(SDIST_BUILD_MANIFEST.read_text(encoding="utf-8"))
+
+    assert manifest["python_version"] == "3.14"
+    assert manifest["platform"] == "x86_64-manylinux_2_36"
+    assert len(build) == 6
+    assert set(build) == {
+        "build",
+        "packaging",
+        "pyproject-hooks",
+        "setuptools",
+        "versioningit",
+        "wheel",
+    }
+    assert build["packaging"][0] == Version("25.0")
+
+    source_distributions = manifest["source_distributions"]
+    assert {item["distribution"] for item in source_distributions} == {
+        "arpy",
+        "frida-tools",
+        "jpype1",
+        "mulpyplexer",
+        "r2pipe",
+        "unicorn",
+    }
+    for item in source_distributions:
+        name = canonicalize_name(item["distribution"])
+        version = Version(item["version"])
+        archive_hash = item["archive_sha256"]
+        assert re.fullmatch(r"[0-9a-f]{64}", archive_hash)
+        assert all_tools[name][0] == version
+        assert archive_hash in all_tools[name][1]
+        for raw_requirement in item["build_requires"]:
+            requirement = Requirement(raw_requirement)
+            build_name = canonicalize_name(requirement.name)
+            locked_version = build[build_name][0]
+            assert not requirement.specifier or requirement.specifier.contains(
+                locked_version
+            )
+
+    for name in ("jpype1", "r2pipe"):
+        assert base[name][0] == all_tools[name][0]
+        source = next(
+            item for item in source_distributions
+            if canonicalize_name(item["distribution"]) == name
+        )
+        assert source["archive_sha256"] in base[name][1]
+
+    build_inputs, includes = load_requirements(BUILD_INPUT)
+    assert not includes
+    assert set(build_inputs) == {
+        "build",
+        "packaging",
+        "setuptools",
+        "versioningit",
+        "wheel",
+    }
+
+
 def test_lock_generation_is_pinned_to_python_314_amd64_snapshot() -> None:
     expected_options = (
         "--python-version 3.14",
@@ -272,7 +337,7 @@ def test_lock_generation_is_pinned_to_python_314_amd64_snapshot() -> None:
         "--exclude-newer 2026-09-09T00:00:00Z",
     )
 
-    for path in (BASE_LOCK, ALL_TOOLS_LOCK):
+    for path in (BUILD_LOCK, BASE_LOCK, ALL_TOOLS_LOCK):
         header = "\n".join(
             path.read_text(encoding="utf-8").splitlines()[:2]
         )
@@ -293,18 +358,35 @@ def test_dockerfile_uses_only_complete_hash_locked_python_transactions() -> None
         re.MULTILINE | re.DOTALL,
     )
 
-    assert len(commands) == 2
+    assert len(commands) == 3
     assert {
         path
         for command in commands
         for path in re.findall(r"-r (/tmp/raptor/requirements-[^ \\\n]+)", command)
     } == {
+        "/tmp/raptor/requirements-build.lock",
         "/tmp/raptor/requirements-base.lock",
         "/tmp/raptor/requirements-all-tools.lock",
     }
     for command in commands:
         assert "--require-hashes" in command
         assert "--no-deps" in command
+
+    build_command = next(
+        command for command in commands
+        if "requirements-build.lock" in command
+    )
+    assert "--only-binary=:all:" in build_command
+    assert "--no-build-isolation" not in build_command
+    for command in commands:
+        if "requirements-build.lock" in command:
+            continue
+        assert "--no-build-isolation" in command
+        assert "--only-binary" not in command
+
+    assert dockerfile.index("requirements-build.lock") < dockerfile.index(
+        "requirements-base.lock"
+    )
 
     devcontainer = (
         ROOT / ".devcontainer" / "devcontainer.json"
@@ -314,8 +396,10 @@ def test_dockerfile_uses_only_complete_hash_locked_python_transactions() -> None
 
     for ignore_file in (ROOT / ".dockerignore", ROOT / ".containerignore"):
         ignored = ignore_file.read_text(encoding="utf-8")
+        assert "!/containers/requirements-build.lock" in ignored
         assert "!/containers/requirements-base.lock" in ignored
         assert "!/containers/requirements-all-tools.lock" in ignored
+        assert "!/containers/requirements-build.in" not in ignored
 
 
 def test_opentelemetry_families_stay_synchronized() -> None:
