@@ -1,7 +1,11 @@
 # Dependencies
 
 The source checkout does not redistribute external tool archives. Users install
-host tools separately according to each tool's licence and terms.
+host tools separately according to each tool's licence and terms, or build the
+container targets, which download and verify their pinned dependencies. CI
+publishes only the standard `raptor-devcontainer` target; the amd64-only
+`raptor-all-tools` target remains an explicit local build pending separate
+CodeQL terms and distribution approval.
 
 See also: [README](README.md), [Fedora 44 + Copilot](fedora-copilot.md),
 [architecture](architecture.md).
@@ -16,6 +20,9 @@ The standard development/Fedora environment pins `z3-solver==4.15.4.0`.
 angr 9.3.4 requires `z3-solver==4.13.0.0`, so host installations must keep
 angr in a separate venv; see
 [angr isolation](fedora-copilot.md#angr-isolation).
+The `raptor-devcontainer` target keeps the standard pin. The all-tools image
+deliberately substitutes `z3-solver==4.13.0.0` so angr can run in RAPTOR's main
+interpreter.
 
 
 ## Agent CLIs
@@ -27,7 +34,9 @@ refuses to mutate an old/incomplete active Node installation automatically.
 
 The Fedora host guide pins Claude Code 2.1.263 and GitHub Copilot CLI 1.0.83.
 Installing either CLI does not authenticate it; account eligibility,
-authentication state, and credentials remain operator-managed. See
+authentication state, and credentials remain operator-managed. The validated
+all-tools snapshot includes the same versions but contains no authentication
+state; container credentials and auth mounts remain operator-managed. See
 [Fedora 44 + Copilot](fedora-copilot.md).
 
 
@@ -38,7 +47,7 @@ authentication state, and credentials remain operator-managed. See
 | Semgrep | Yes | Static analysis scanning | `pip install semgrep` |
 | Coccinelle (spatch) | No | Semantic patch analysis | `apt install coccinelle` (>=1.3) |
 | CodeQL | No | Deep dataflow analysis | [codeql-cli-binaries](https://github.com/github/codeql-cli-binaries) |
-| Joern | No | CPG dataflow queries (`/audit`, tiered taint sweeps) | [joern.io](https://joern.io) — Fedora host recipe pins **4.0.622** (needs a JVM) |
+| Joern | No | CPG dataflow queries (`/audit`, tiered taint sweeps) | [joern.io](https://joern.io) — Fedora host recipe and all-tools snapshot pin **4.0.622** (needs a JVM) |
 | AFL++ | No | Coverage-guided binary fuzzing | `apt install afl++` or `brew install afl++` |
 | GDB | No | Crash analysis (Linux) | `apt install gdb` (pre-installed on most distros) |
 | LLDB | No | Crash analysis (macOS) | Pre-installed with Xcode CLT |
@@ -139,4 +148,5 @@ joern) ignore proxy env vars and need
 `JAVA_TOOL_OPTIONS="-Dhttps.proxyHost=<host> -Dhttps.proxyPort=<port>"`.
 
 For checksum-pinned Fedora host recipes, see
-[Fedora 44 + Copilot](fedora-copilot.md).
+[Fedora 44 + Copilot](fedora-copilot.md). The same guide documents the
+verified all-tools container inventory.

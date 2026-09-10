@@ -115,7 +115,82 @@ cd "$HOME/src/copilot/raptor"
 Atheris is expected to be skipped outside x86_64. Upstream-only tools such as
 CodeQL, Joern, Ghidra, gcloud, and Ollama are intentionally not installed by
 the Fedora script; use the
-[manual host recipes](fedora-copilot.md#optional-upstream-tools-on-the-fedora-host).
+[manual host recipes](fedora-copilot.md#optional-upstream-tools-on-the-fedora-host)
+or build the all-tools container locally.
+
+
+## Container wrapper
+
+### Docker daemon userns-remap rejected
+
+`bin/raptor-container` rejects Docker daemon `userns-remap` because requested
+host bind mounts cannot be mapped safely and predictably. Use rootless Docker
+or Podman:
+
+```bash
+bin/raptor-container shell --engine podman
+```
+
+Rootful Docker without daemon remapping is supported through the wrapper's
+temporary UID/GID-mapping entrypoint.
+
+### Permission denied on Fedora bind mounts
+
+Do not replace the wrapper with an unlabeled raw bind mount. Podman receives a
+shared SELinux relabel; Docker uses `:z` or `:ro,z` as appropriate. Confirm the
+paths exist, make the output directory writable by your user, and enter
+through the wrapper:
+
+```bash
+mkdir -p "$PWD/out/container"
+bin/raptor-container shell \
+  --target "/absolute/path/to/target" \
+  --output "$PWD/out/container"
+```
+
+Podman's rootless keep-id mapping preserves the invoking UID/GID. Rootless
+Docker maps container root to the invoking host user; supported rootful Docker
+uses the entrypoint to adopt the host UID/GID.
+
+### All-tools build refuses to start
+
+The all-tools target is amd64-only because it contains the official Linux
+CodeQL bundle. It is intentionally a local build and requires explicit
+acceptance of the separate
+[GitHub CodeQL Terms and Conditions](https://github.com/github/codeql-cli-binaries/blob/main/LICENSE.md):
+
+```bash
+bin/raptor-container build \
+  --all-tools \
+  --accept-codeql-terms
+```
+
+CI publishes only the standard `raptor-devcontainer` target. There is no
+published `raptor-all-tools` image to pull while terms and distribution review
+remain separate.
+
+### rr or namespace operation fails in the container
+
+The normal shell is intentionally unprivileged. If the run genuinely requires
+rr or full namespace behavior, opt in:
+
+```bash
+bin/raptor-container shell \
+  --all-tools \
+  --privileged \
+  --target "/absolute/path/to/target"
+```
+
+Before a real privileged launch, the wrapper requires the host
+`kernel.perf_event_paranoid` value to be readable and no greater than `1`. It
+never changes the sysctl itself:
+
+```bash
+sudo sysctl kernel.perf_event_paranoid=1
+```
+
+`--privileged` weakens container isolation. Use it only for that run and do not
+add it to the VS Code devcontainer defaults.
 
 
 ## Sandbox

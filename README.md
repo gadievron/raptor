@@ -32,7 +32,9 @@
 **Authors:** Gadi Evron, Daniel Cuthbert, Thomas Dullien (Halvar Flake), Michael Bargury, John Cartwright
 ([@gadievron](https://github.com/gadievron), [@danielcuthbert](https://github.com/danielcuthbert), [@thomasdullien](https://github.com/thomasdullien), [@mbrg](https://github.com/mbrg), [@grokjc](https://github.com/grokjc))
 
-**Licence:** MIT, see LICENSE. Note that CodeQL has its own licence and does not permit commercial use.
+**Licence:** MIT, see LICENSE. CodeQL is governed separately by the
+[GitHub CodeQL Terms and Conditions](https://github.com/github/codeql-cli-binaries/blob/main/LICENSE.md);
+review their use restrictions before installing it.
 
 **Repository:** https://github.com/gadievron/raptor
 
@@ -66,10 +68,10 @@ the code.
 
 Claude remains the default launch path (`raptor` with no `--copilot`). For the analysis dispatch layer (the LLM that analyses individual findings), the selected agent CLI transport can handle everything by default with no extra provider API keys. If you want multi-model analysis (e.g. Claude + GPT + Gemini), you will need API keys for each provider. See [Using a different LLM](#using-a-different-llm) below.
 
-Fedora 44 users should follow the
-[Fedora 44 + GitHub Copilot CLI host guide](docs/fedora-copilot.md), which
-covers native bootstrap, authentication, platform caveats, and optional
-upstream tools.
+Fedora 44 users should follow the complete
+[Fedora 44 + GitHub Copilot CLI guide](docs/fedora-copilot.md), which covers
+the native installer, the recommended container workflow, authentication,
+upstream-only tools, and Fedora-specific caveats.
 
 ## Quick Start
 
@@ -120,52 +122,59 @@ Running plain `claude` from inside the repo directory also works -- Claude Code 
 
 ### Option 2: Run in a container (recommended)
 
-Using containers is a common security practice to restrict agents from accessing areas of your filesystem you don't want them to, as well as limiting the blast radius of any malicious code that may execute (e.g via supply-chain attack). The image is large (around 6 GB). It starts from the Microsoft Python 3.12 devcontainer and adds static analysis, fuzzing, and browser automation tooling.
+Containers provide reproducible tool coverage and reduce the host filesystem
+exposed to agents and untrusted target code. Use the checked-in wrapper rather
+than assembling raw Docker or Podman mounts:
 
-You can pull down a pre-built image:
 ```bash
-docker pull danielcuthbert/raptor:latest
+# Auto-detection prefers Podman, then Docker.
+bin/raptor-container build
+bin/raptor-container shell
 ```
 
-or build it locally using the included `Dockerfile`:
+There are two explicit build targets:
+
+- `raptor-devcontainer` produces the standard local tag
+  `raptor:devcontainer`. CI publishes only this target to Docker Hub as
+  `danielcuthbert/raptor:latest` on `main` and as a versioned tag for releases.
+- `raptor-all-tools` produces the local tag `raptor:all-tools`. It is
+  amd64-only because the official CodeQL bundle is amd64-only, requires
+  explicit acceptance of the separate CodeQL terms, and is not published
+  pending separate terms and distribution approval.
+
+Build the maximal image locally only after reviewing those terms:
+
 ```bash
-docker build -f .devcontainer/Dockerfile -t raptor:latest .
+bin/raptor-container build \
+  --all-tools \
+  --accept-codeql-terms
+
+mkdir -p "$PWD/out/container"
+bin/raptor-container shell \
+  --all-tools \
+  --target "/absolute/path/to/target" \
+  --output "$PWD/out/container"
 ```
 
-The image expects the RAPTOR framework (this repo) to be mounted into `/workspaces/raptor` on startup. You can optionally mount a target folder for local analysis.
+The safe shell default mounts only the checkout: no target, output directory,
+auth state, token environment variable, cloud credential, host home, device,
+Docker socket, or privilege is added implicitly. Every expansion is an
+explicit option. `--privileged` is reserved for rr or full namespace behavior
+and weakens isolation.
 
-To start the container:
-```bash
-docker run -it \
-  -v "$(pwd):/workspaces/raptor" \
-  raptor:latest
-```
+VS Code devcontainers are also supported. The checked-in configuration builds
+target `raptor-devcontainer` without implicit auth mounts or privilege:
 
-To mount a target folder as well:
-```bash
-docker run -it \
-  -v "$(pwd):/workspaces/raptor" \
-  -v "/path/to/target-folder:/workspaces/target" \
-  raptor:latest
-```
-
-Add `--privileged` if you need the `rr` deterministic debugger.
-
-VS Code devcontainers are also supported. To mount a target folder, add it to the `mounts` section of `.devcontainer/devcontainer.json`:
-```jsonc
-"mounts": [
-  // ...existing entries...
-  "source=/path/to/target-folder,target=/workspaces/target,type=bind,consistency=cached"
-]
-```
-
-Then open the repo in VS Code — it will prompt you to reopen in the container:
 ```bash
 cd /path/to/raptor
 code .
 ```
 
-Either way, once you're inside the container, run `raptor` to get started.
+Choose **Dev Containers: Reopen in Container**. See the
+[Fedora/Copilot guide](docs/fedora-copilot.md#container-workflow-recommended)
+for Podman and Docker build, shell, and command examples; SELinux and UID
+behavior; the explicit mount/auth/privilege contract; and the verified
+all-tools inventory.
 
 ---
 
@@ -584,7 +593,7 @@ See `docs/README.md` for the full index. Key guides:
 | `docs/concepts.md` | Core concepts: two-layer model, finding lifecycle, choosing a command |
 | `docs/agentic.md` | Autonomous workflow: `/agentic` pipeline, enrichment flags, multi-model |
 | `docs/sage.md` | SAGE persistent memory: setup, HMAC key, CPU/GPU, use cases |
-| `docs/fedora-copilot.md` | Fedora 44 host setup with GitHub Copilot CLI |
+| `docs/fedora-copilot.md` | Fedora 44 host/container setup with GitHub Copilot CLI |
 | `docs/dependencies.md` | External tools, versions, and licences |
 | `tiers/personas/README.md` | Expert persona reference |
 
@@ -612,6 +621,8 @@ https://join.slack.com/t/promptgtfo/shared_invite/zt-3v2b4sll3-SfyzFRw2lykx_XQX7
 
 MIT -- Copyright (c) 2025-2026 Gadi Evron, Daniel Cuthbert, Thomas Dullien (Halvar Flake), Michael Bargury, John Cartwright.
 
-See LICENSE for the full text. Review the licences for all dependencies before commercial use -- CodeQL in particular does not permit it.
+See LICENSE for the full text. Review the licences and terms for all
+dependencies before use. CodeQL in particular is governed by separate GitHub
+terms and restrictions.
 
 **Issues:** https://github.com/gadievron/raptor/issues

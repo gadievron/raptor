@@ -53,8 +53,28 @@ Conventions used below:
 | `RAPTOR_REGISTRY_ALLOW` | unset | Comma-separated registry authorities (URL-ish forms accepted; Docker Hub aliases collapse to `docker.io`) added to the manifest-probe allowlist in `core.container.registry`. By default `docker manifest inspect` probes only the candidate cascade's six public registries; refs carrying any other authority (including agent-influenced `product` strings that smuggle one) classify `denied` without network contact. Explicit ports are part of the authority: `localhost:5000` allowlists exactly that endpoint, and a port-bearing ref (`quay.io:8080/...`) never inherits the bare host's allowlisting. The `CVE_ENV_DENY_REGISTRY` denylist still applies on the cve-env cascade. |
 | `RAPTOR_NONINTERACTIVE` | unset | Explicit non-interactive override for the AskUserQuestion interactivity gate (`core.ux.interactivity`, consulted via `libexec/raptor-may-ask`). Any truthy value forces the `non-interactive` verdict, so sessions apply the documented default behaviour instead of presenting structured operator prompts. Stamped `=1` into every selected-agent-CLI child RAPTOR spawns (`core.llm.cc_adapter.cc_subprocess_env`, `core.llm.copilot_adapter.copilot_subprocess_env`) — dispatched sub-agents are unattended by definition. Falsy spellings (`0`, `false`, `no`, `off`) are ignored; without the override the gate falls through to `rule_of_two.is_ci()`, the std-fd TTY predicate, and the rule-of-two human-attendance probe, failing closed. |
 | `RAPTOR_CI` | auto-detected | CI-posture marker for the rule-of-two interactivity gate (`core.security.rule_of_two`). Normally parent-stamped: `get_safe_env()` writes `RAPTOR_CI=1` into every sanitised child env whenever the parent judged itself in CI, so the gate keeps working in children whose scrubbed env lost the vendor markers (`CI`, `GITHUB_ACTIONS`, ...). It is also the first — authoritative — entry in the recognised-marker list, so an operator may set `RAPTOR_CI=1` to force CI posture on any host. The whole marker set is unioned into `SAFE_ENV_ALLOWLIST`, so the verdict survives further spawns. |
-| `RAPTOR_NO_LAUNCHER_HARDENING` | unset | Any non-empty value skips the `bin/raptor` exec-boundary hardening block entirely: the soft core-dump cap, the umask floor (current \| `022`), the PATH scrub (empty / relative / world-writable entries), the world-writable-ancestor warning on the resolved selected agent CLI binary (`claude` or `copilot`), and the per-session TMPDIR (creation and stale-sibling sweep). Single opt-out for environments that legitimately violate one of the checks. Fail-closed: unset means hardening runs. |
-| `RAPTOR_ALLOW_UNSAFE_PATH` | unset | Any non-empty value makes the launcher PATH scrub KEEP entries it would otherwise drop (empty, relative, world-writable dirs), each with a stderr warning naming the entry and reason. Escape hatch for hosts where a required tool lives under a loose directory. Only consulted while the hardening block runs (no effect under `RAPTOR_NO_LAUNCHER_HARDENING`). |
+| `RAPTOR_NO_LAUNCHER_HARDENING` | unset | Any non-empty value skips the `bin/raptor` exec-boundary hardening block entirely: the soft core-dump cap, the umask floor (current \| `022`), the PATH scrub (empty / relative / world-writable entries), the world-writable-ancestor warning on the resolved selected agent CLI binary (`claude` or `copilot`), and the per-session TMPDIR (creation and stale-sibling sweep). Single opt-out for environments that legitimately violate one of the checks. `bin/raptor-container` consults the same escape hatch only for its wrapper PATH-hardening layer; fixed engine selection and explicit mount/auth/privilege controls still apply. Fail-closed: unset means hardening runs. |
+| `RAPTOR_ALLOW_UNSAFE_PATH` | unset | Any non-empty value makes the launcher PATH scrub KEEP entries it would otherwise drop (empty, relative, world-writable dirs), each with a stderr warning naming the entry and reason. Escape hatch for hosts where a required tool lives under a loose directory. The container wrapper consults the same variable for its own PATH scrub. Only consulted while hardening runs (no effect under `RAPTOR_NO_LAUNCHER_HARDENING`). |
+
+### Container wrapper environment boundary
+
+`bin/raptor-container` deliberately has no environment override for Docker
+security options. Every non-dry Docker shell run inspects the selected daemon
+with `docker info`; hermetic tests replace the Docker executable instead. The
+wrapper itself starts with privileged Bash and resolves its pre-strip
+`dirname`/`readlink` calls through the system default PATH, so `BASH_ENV`,
+imported functions, and an ambient hostile PATH cannot run before
+`_dangerous_env_strip.sh`. After that scrub it places system directories first,
+drops unsafe inherited PATH entries by default, and fixes the selected
+Docker/Podman executable for the operation. The two PATH escape hatches are
+scoped as documented in the Core runtime table above; neither bypasses the
+wrapper's explicit host-access or privilege checks.
+
+Supplying `--target` makes `/target` both `RAPTOR_CALLER_DIR` and the initial
+container working directory. Before an actual `--privileged` engine run, the
+wrapper requires a readable host `kernel.perf_event_paranoid` value no greater
+than `1`; it never changes that sysctl and directs the operator to
+`sudo sysctl kernel.perf_event_paranoid=1` when remediation is required.
 
 ### `RAPTOR_ALLOW_UNSANDBOXED_TOOLS`
 
@@ -612,6 +632,11 @@ RAPTOR-specific behavior:
   169.254.169.254` so loopback sidecars (Ollama, SAGE, Joern) and
   EC2 IMDS credential fetches never loop through the proxy, even on
   mandatory-proxy hosts whose `NO_PROXY` lacks those entries.
+- **Container wrapper forwarding**: unless `--no-proxy` is used,
+  `bin/raptor-container` merges the inherited `no_proxy` and
+  `NO_PROXY` lists, adds `localhost,127.0.0.1,::1`, and forwards the
+  same reconciled value under both names for image builds and container
+  runs.
 - **`core.http` client**: lowercase proxy vars win over uppercase
   (curl/requests precedence), `all_proxy` is the per-scheme fallback,
   `no_proxy` is suffix-matched with port stripping — and `no_proxy`

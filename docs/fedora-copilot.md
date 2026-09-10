@@ -1,9 +1,10 @@
 # Fedora 44 and GitHub Copilot CLI
 
 This guide sets up RAPTOR on a stock Fedora 44 workstation and launches it
-through GitHub Copilot CLI. It covers native host bootstrap, authentication,
-Fedora-specific caveats, and checksum-pinned recipes for optional upstream
-tools.
+through GitHub Copilot CLI. It covers native host bootstrap, the recommended
+container workflow, authentication, Fedora-specific caveats, and
+checksum-pinned recipes for optional upstream tools. The container versions
+match the repository's validated all-tools snapshot dated 2026-09-08.
 
 See also:
 
@@ -11,6 +12,22 @@ See also:
 - [Troubleshooting](troubleshooting.md) for subsystem-specific failures.
 - [Security](security.md) and [Sandbox](sandbox.md) for RAPTOR's containment
   model.
+
+
+## Choose host or container
+
+| Workflow | Best for | Important trade-off |
+|----------|----------|---------------------|
+| Fedora host installer | Native Fedora development, direct debugger/device access, smaller incremental installs | Tools and target code share the host; several large upstream-only tools remain manual |
+| `raptor-devcontainer` / `raptor:devcontainer` | Routine development and VS Code use | Good standard baseline, but not every optional analysis tool is present |
+| `raptor-all-tools` / `raptor:all-tools` | Maximal, reproducible analysis coverage | amd64-only because the official CodeQL bundle is amd64-only; large and explicitly local-build-only |
+
+The container wrapper is safer than assembling a raw `docker run` or
+`podman run` command. Its default shell mounts only the RAPTOR checkout,
+forwards no credentials, and does not request privilege. Target directories,
+output directories, authentication state, cloud credentials, environment
+variables, and `--privileged` are all explicit opt-ins.
+
 
 ## Trust and authorization
 
@@ -26,8 +43,14 @@ target binaries. Use it only on systems and code you are authorized to test.
 - Never put API keys, OAuth tokens, service-account JSON, or auth directories
   in the RAPTOR checkout. Keep credentials in their standard user-scoped
   stores or explicitly configured paths.
+- Container images contain no baked credentials. Container sessions receive
+  only the auth directory, credential file, or named environment variable you
+  explicitly select.
 - rr requires the host `kernel.perf_event_paranoid` setting to be `1` or
   lower. Change kernel settings only when the analysis needs rr.
+- Prefer the unprivileged container shell. `--privileged` is for rr and
+  features that require full namespace/kernel access; it weakens the container
+  boundary and should not be a routine default.
 
 
 ## Host workflow
@@ -252,12 +275,272 @@ RAPTOR framework version on both agent CLI paths.
   install angr into that environment; see [angr isolation](#angr-isolation).
 
 
+## Container workflow (recommended)
+
+The wrapper interface is:
+
+```text
+bin/raptor-container build [options]
+bin/raptor-container shell [options] [-- command...]
+bin/raptor-container help
+```
+
+It auto-detects Podman first, then Docker. The repository defines two image
+targets:
+
+| Dockerfile target | Wrapper tag | Publication policy |
+|-------------------|-------------|--------------------|
+| `raptor-devcontainer` | `raptor:devcontainer` | Standard image; CI explicitly builds only this target and publishes `danielcuthbert/raptor:latest` on `main` or a versioned tag on releases |
+| `raptor-all-tools` | `raptor:all-tools` | amd64-only local build; not published pending separate CodeQL terms and distribution approval |
+
+The wrapper's built-in tags are local-only for shell sessions and are never
+pulled automatically. Build the selected image before opening a shell. Before
+invoking the engine, the wrapper hardens its inherited PATH and fixes the
+selected Docker or Podman executable for the operation.
+`RAPTOR_ALLOW_UNSAFE_PATH` retains otherwise-rejected PATH entries with
+warnings; `RAPTOR_NO_LAUNCHER_HARDENING` disables only this wrapper
+PATH-hardening layer. Neither escape hatch grants mounts, credentials, or
+privilege.
+
+Unless `--no-proxy` is passed, the wrapper reconciles `NO_PROXY` and
+`no_proxy`, adds loopback addresses, and forwards the same merged value under
+both names. Proxy values are not printed by `--dry-run`.
+
+### Podman on Fedora
+
+```bash
+sudo dnf install -y podman
+podman info
+
+cd "$HOME/src/copilot/raptor"
+bin/raptor-container help
+bin/raptor-container build --engine podman
+bin/raptor-container shell --engine podman
+```
+
+Build the all-tools image only after reading and accepting the
+[GitHub CodeQL Terms and Conditions](https://github.com/github/codeql-cli-binaries/blob/main/LICENSE.md):
+
+```bash
+cd "$HOME/src/copilot/raptor"
+bin/raptor-container build \
+  --engine podman \
+  --all-tools \
+  --accept-codeql-terms
+```
+
+`--accept-codeql-terms` records an explicit build-time acknowledgement. It
+does not expand the uses permitted by GitHub's terms. The standard-image
+publication workflow never passes that acknowledgement and never builds or
+publishes the all-tools target.
+
+### Docker alternative
+
+```bash
+cd "$HOME/src/copilot/raptor"
+bin/raptor-container build --engine docker
+bin/raptor-container shell --engine docker
+
+bin/raptor-container build \
+  --engine docker \
+  --all-tools \
+  --accept-codeql-terms
+```
+
+### Shell and one-command workflows
+
+The default shell mounts the RAPTOR checkout read-write at
+`/workspaces/raptor` and adds no other host path, secret, device, socket, or
+privilege:
+
+```bash
+cd "$HOME/src/copilot/raptor"
+bin/raptor-container shell --engine podman
+```
+
+For a target and persistent output:
+
+```bash
+cd "$HOME/src/copilot/raptor"
+mkdir -p "$PWD/out/container"
+bin/raptor-container shell \
+  --engine podman \
+  --all-tools \
+  --target "/absolute/path/to/target" \
+  --output "$PWD/out/container"
+```
+
+Inside the container:
+
+```bash
+python -m core.startup.doctor
+raptor --copilot
+```
+
+To execute one command instead of entering an interactive shell:
+
+```bash
+cd "$HOME/src/copilot/raptor"
+mkdir -p "$PWD/out/container"
+bin/raptor-container shell \
+  --engine podman \
+  --target "/absolute/path/to/target" \
+  --output "$PWD/out/container" \
+  -- python -m core.startup.doctor
+```
+
+The Docker equivalent changes only the engine selection:
+
+```bash
+bin/raptor-container shell \
+  --engine docker \
+  --target "/absolute/path/to/target" \
+  -- python -m core.startup.doctor
+```
+
+With `--target`, both interactive shells and explicit commands start in
+`/target`, and the wrapper sets `RAPTOR_CALLER_DIR=/target`. Launching `raptor`
+without a path therefore preserves RAPTOR's caller-directory target default.
+An explicit `/target` argument remains valid when desired.
+
+### Explicit host-access contract
+
+The options that expand host access are deliberately explicit:
+
+| Option | Host access granted |
+|--------|---------------------|
+| `--target DIR` | Read-write target mounted at `/target`, which becomes the initial shell/command directory |
+| `--output DIR` | Read-write output mounted at `/workspaces/raptor/out` |
+| `--claude-auth DIR` | Read-write Claude state mounted below the runtime user's home |
+| `--copilot-auth DIR` | Read-write Copilot state mounted below the runtime user's home |
+| `--gcp-credentials FILE` | One JSON credential file mounted read-only; sets `GOOGLE_APPLICATION_CREDENTIALS` |
+| `--env NAME` | One named host environment variable forwarded without printing its value |
+| `--privileged` | Full container privilege for rr/full namespace behavior; actual runs require host `kernel.perf_event_paranoid <= 1` |
+
+No token, auth directory, host home, model, device, Docker socket, or cloud
+credential is forwarded by default. Proxy forwarding is limited to the
+conventional HTTP proxy variable family.
+
+To make persistent Copilot state available for interactive login or an
+explicitly configured resumable provider:
+
+```bash
+mkdir -p "$HOME/.copilot"
+cd "$HOME/src/copilot/raptor"
+mkdir -p "$PWD/out/container"
+bin/raptor-container shell \
+  --engine podman \
+  --all-tools \
+  --target "/absolute/path/to/target" \
+  --output "$PWD/out/container" \
+  --copilot-auth "$HOME/.copilot"
+```
+
+Then, inside that container:
+
+```bash
+copilot login --device-code
+raptor --copilot
+```
+
+Mount only the auth directory you need. Treat it as a credential store, keep
+its permissions restrictive, and never add it to the checkout. Stateless
+`copilotcli` provider calls still use disposable child state and borrow only
+authentication from this mount; they do not write settings or session
+transcripts back into it.
+
+Use privilege only for a run that needs it:
+
+```bash
+sudo sysctl kernel.perf_event_paranoid=1
+
+cd "$HOME/src/copilot/raptor"
+bin/raptor-container shell \
+  --engine podman \
+  --all-tools \
+  --privileged \
+  --target "/absolute/path/to/target"
+```
+
+The wrapper reads `/proc/sys/kernel/perf_event_paranoid` before every actual
+`--privileged` launch. If it is greater than `1` or cannot be read, the wrapper
+stops before the engine run and prints the required `sysctl` command. It never
+changes the host setting itself. `--dry-run` prints the prospective container
+command without probing the sysctl.
+
+### SELinux and UID behavior
+
+Podman sessions use rootless keep-id UID/GID mapping and shared SELinux
+relabeling for explicit bind mounts. Docker sessions inspect the selected
+daemon before every non-dry shell run:
+
+- Rootless Docker runs container root mapped to the invoking host user.
+- Rootful Docker uses a short-lived entrypoint to map the host UID/GID.
+- Docker daemon `userns-remap` is rejected because it cannot safely write the
+  requested host bind mounts.
+- Docker bind mounts use `:z` or `:ro,z`; Podman applies the equivalent shared
+  relabel and read-only setting where requested.
+
+### VS Code: Reopen in Container
+
+The checked-in `.devcontainer/devcontainer.json` builds target
+`raptor-devcontainer`. It has no implicit host auth mounts and does not request
+privilege.
+
+```bash
+cd "$HOME/src/copilot/raptor"
+code .
+```
+
+In VS Code, run **Dev Containers: Reopen in Container**. This opens the
+standard development image, not `raptor:all-tools`. Use
+`bin/raptor-container` when you need the maximal image or explicit
+target/auth mounts.
+
+
+## Validated all-tools snapshot
+
+`raptor:all-tools` builds and runs `raptor-verify-all-tools`; a successful
+build verifies the following snapshot rather than merely placing files in the
+image:
+
+- Agent CLIs: Claude Code 2.1.263 and GitHub Copilot CLI 1.0.83.
+- Static/code analysis: official CodeQL bundle 2.26.4 with matching query
+  packs, Joern 4.0.622, Coccinelle 1.3.3 with working Python SmPL, Semgrep, and
+  grammar wheels.
+- Reverse engineering: Ghidra 12.1.3 with JDK 21 and PyGhidra 3.1.0,
+  radare2 6.2.2 with r2ghidra 6.2.2, and llvm-cov.
+- Fuzzing/debugging: AFL++, rr 5.6.0, Atheris 3.1.0, Frida 17.17.0 with
+  frida-tools 14.10.4, and cargo-fuzz 0.13.2. frida-server is not included.
+- Language/build tooling: Go 1.27.1, Rust 1.98.1, Gradle 9.7.1, Maven 3.9.16,
+  clang/LLVM, and the normal native build stack.
+- Web/exploit tooling: Playwright Chromium, ffuf 2.2.1, nuclei 3.11.1,
+  pwntools 4.15.0, and CVSS 3.6.
+- Optional transports/serialization: h2 4.4.1 and orjson 3.11.9.
+- Cloud/local-model tooling: Google Cloud CLI 583.0.0 with `bq`,
+  `google-auth` 2.57.1, and `google-cloud-bigquery` 3.45.0; Ollama 0.33.3 as
+  a binary only, with no models or GPU drivers.
+- Symbolic execution: angr 9.3.4 in RAPTOR's main interpreter with
+  `z3-solver==4.13.0.0`. The standard image and host environment instead use
+  `z3-solver==4.15.4.0`.
+
+This target is amd64-only because the accepted official CodeQL bundle is
+amd64-only. It must be built locally with `--accept-codeql-terms`; it is not a
+published image. The complete machine-readable snapshot is
+`containers/all-tools-manifest.json`. General dependency purposes and licence
+notes remain in [Dependencies](dependencies.md).
+
+
 ## Optional upstream tools on the Fedora host
 
 These recipes cover large or upstream-only tools that Fedora 44 does not
 provide through the host installer. Review each project's licence and release
 notes before downloading, and revalidate checksums when changing a pinned
 version.
+
+Their versions mirror the validated all-tools snapshot where applicable, but
+the host-specific constraints and architecture checks below remain
+authoritative.
 
 Before using the user-local installs:
 

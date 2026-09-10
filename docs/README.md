@@ -13,8 +13,8 @@ Install the required tools and Python packages ([dependencies](dependencies.md))
 then launch RAPTOR via Claude Code with `bin/raptor`, opt into GitHub Copilot
 CLI with `bin/raptor --copilot`, or invoke the Python CLI directly with
 `python3 raptor.py <mode>` for CI pipelines and scripting
-([Python CLI reference](python-cli.md)). Fedora users can follow the
-[Fedora 44 + GitHub Copilot CLI host guide](fedora-copilot.md).
+([Python CLI reference](python-cli.md)). Fedora users can follow the complete
+[Fedora 44 + GitHub Copilot CLI guide](fedora-copilot.md).
 
 
 ## Command Reference
@@ -81,7 +81,7 @@ overview:
 | [Threat Model](threat-model.md) | Per-project threat model feature |
 | [Configuration](configuration.md) | tuning.json, sandbox calibration |
 | [Environment Variables](environment.md) | Operator knobs, credentials, routing family, proxy behavior, internal plumbing |
-| [Fedora 44 + Copilot](fedora-copilot.md) | Native Fedora installer, Copilot authentication, platform caveats, and upstream tools |
+| [Fedora 44 + Copilot](fedora-copilot.md) | Native Fedora installer, recommended containers, Copilot authentication, and upstream tools |
 | [Dependencies](dependencies.md) | Tool requirements and licensing |
 | [Troubleshooting](troubleshooting.md) | Common failures and fixes by subsystem |
 | [Python CLI](python-cli.md) | Direct `raptor.py` usage for CI and scripting |

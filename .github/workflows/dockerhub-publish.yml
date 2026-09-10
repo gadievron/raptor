@@ -1,12 +1,12 @@
-name: Publish devcontainer image to Docker Hub
+name: Publish standard devcontainer image to Docker Hub
 
-# Builds + pushes the operator-facing devcontainer image
-# (.devcontainer/Dockerfile) to Docker Hub so users can `docker pull`
-# instead of building ~6GB locally. See gadievron/raptor#191.
+# Builds and pushes only the standard operator-facing devcontainer image.
+# The maximal all-tools target remains a local build because it has separate
+# distribution and licence-review requirements. See gadievron/raptor#191.
 #
 # Tags pushed:
 #   :latest      — moving tag, updated on every push to main that touches
-#                  the Dockerfile (mirrors ci-deps-image.yml's pattern).
+#                  the image build inputs (mirrors ci-deps-image.yml's pattern).
 #   :<version>   — pushed only on tagged releases (vX.Y.Z -> X.Y.Z).
 #
 # Uses the plain `docker` CLI rather than docker/* marketplace actions,
@@ -17,11 +17,18 @@ on:
   push:
     branches: [ main ]
     paths:
-      - '.devcontainer/Dockerfile'
+      - '.devcontainer/**'
+      - 'containers/**'
+      - 'requirements.txt'
+      - 'requirements-dev.txt'
+      - 'requirements-grammars.txt'
+      - 'packages/web/requirements.txt'
+      - '.dockerignore'
+      - '.containerignore'
+      - 'bin/raptor-container'
       - '.github/workflows/dockerhub-publish.yml'
     tags:
       - 'v*.*.*'
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}
@@ -69,8 +76,11 @@ jobs:
           for tag in ${TAGS//,/ }; do
             build_args+=(-t "${tag}")
           done
-          docker build -f .devcontainer/Dockerfile "${build_args[@]}" .
+          docker build \
+            --target raptor-devcontainer \
+            -f .devcontainer/Dockerfile \
+            "${build_args[@]}" \
+            .
           for tag in ${TAGS//,/ }; do
             docker push "${tag}"
           done
-
