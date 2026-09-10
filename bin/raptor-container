@@ -23,6 +23,8 @@ unset _symhops
 SCRIPT_DIR="$(cd -- "$(command -p dirname "$SCRIPT")" && pwd -P)"
 RAPTOR_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../core/security/_dangerous_env_strip.sh
 . "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"
 
 RAPTOR_SYSTEM_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
@@ -721,7 +723,7 @@ shell_image() {
         RUN_CMD+=(--tty)
     fi
     if [ "$engine" = "podman" ]; then
-        RUN_CMD+=(--userns=keep-id:uid=1000,gid=1000)
+        RUN_CMD+=("--userns=keep-id:uid=1000,gid=1000")
     elif [ "$DOCKER_SECURITY_MODE" = "rootless" ]; then
         runtime_home="/root"
         RUN_CMD+=(
