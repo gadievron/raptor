@@ -16,7 +16,11 @@ from typing import Any, Iterable, Mapping
 from urllib.parse import parse_qsl, urlencode, urlparse
 from uuid import uuid4
 
-from core.security.redaction import is_secret_field_name, redact_secrets
+from core.security.redaction import (
+    is_secret_field_name,
+    redact_secrets,
+    redact_url_secrets_only,
+)
 
 
 _RISK_ORDER = {"passive": 0, "active": 1, "intrusive": 2}
@@ -183,6 +187,28 @@ def _origin_text(origin: tuple[str, str, int]) -> str:
     return f"{scheme}://{host}{suffix}"
 
 
+def _url_userinfo(url: str) -> str | None:
+    parsed = urlparse(url)
+    if "@" not in parsed.netloc:
+        return None
+    return parsed.netloc.rsplit("@", 1)[0]
+
+
+def _url_query_credentials(url: str) -> Counter[tuple[str, str]]:
+    parsed = urlparse(url)
+    return Counter(
+        (name, value)
+        for name, value in parse_qsl(
+            parsed.query,
+            keep_blank_values=True,
+        )
+        if (
+            _is_replay_secret_field_name(name)
+            or redact_secrets(value) != value
+        )
+    )
+
+
 @dataclass(frozen=True)
 class ScopeReceipt:
     """The operator-supplied live target scope for one web run."""
@@ -212,7 +238,13 @@ class ScopeReceipt:
 class WebExecutionPolicy:
     """Enforce scope and approval before a live web action runs."""
 
-    def __init__(self, receipt: ScopeReceipt, *, audit_limit: int = 1024):
+    def __init__(
+        self,
+        receipt: ScopeReceipt,
+        *,
+        audit_limit: int = 1024,
+        transport_target: str | None = None,
+    ):
         if receipt.approval_level not in _RISK_ORDER:
             raise WebPolicyError(
                 "approval level must be one of passive, active, intrusive"
@@ -222,6 +254,14 @@ class WebExecutionPolicy:
             _origin(origin) for origin in receipt.allowed_origins
         }
         self._approved_tools = set(receipt.approved_tools)
+        if transport_target is None:
+            self._approved_replay_userinfo = None
+            self._approved_replay_query_credentials = Counter()
+        else:
+            self._approved_replay_userinfo = _url_userinfo(transport_target)
+            self._approved_replay_query_credentials = (
+                _url_query_credentials(transport_target)
+            )
         self._audit: deque[dict[str, Any]] = deque(maxlen=audit_limit)
         self._counts: Counter[str] = Counter()
         self._decision_seq = 0
@@ -237,12 +277,12 @@ class WebExecutionPolicy:
         normalized_origin = _origin_text(_origin(target))
         receipt = ScopeReceipt(
             id=f"web-scope-{uuid4().hex[:12]}",
-            target=target,
+            target=redact_url_secrets_only(target),
             allowed_origins=(normalized_origin,),
             approval_level=approval_level,
             approved_tools=tuple(dict.fromkeys(approved_tools)),
         )
-        return cls(receipt)
+        return cls(receipt, transport_target=target)
 
     def authorize(
         self,
@@ -252,18 +292,31 @@ class WebExecutionPolicy:
         risk: str,
         action: str,
     ) -> None:
-        if risk not in _RISK_ORDER:
-            raise WebPolicyError(f"Unknown web action risk: {risk}")
-
         try:
-            action_origin = _origin(url)
+            self._check_authorized(
+                tool_id=tool_id,
+                url=url,
+                risk=risk,
+            )
         except WebPolicyError as exc:
             self._record(tool_id, url, risk, action, "denied", str(exc))
             raise
+        self._record(tool_id, url, risk, action, "allowed", "in scope")
 
+    def _check_authorized(
+        self,
+        *,
+        tool_id: str,
+        url: str,
+        risk: str,
+    ) -> None:
+        """Validate one action without mutating the policy audit."""
+        if risk not in _RISK_ORDER:
+            raise WebPolicyError(f"Unknown web action risk: {risk}")
+
+        action_origin = _origin(url)
         if action_origin not in self._allowed_origins:
             reason = f"target origin {_origin_text(action_origin)} is outside scope receipt"
-            self._record(tool_id, url, risk, action, "denied", reason)
             raise WebPolicyError(reason)
 
         allowed_risk = _RISK_ORDER[self.receipt.approval_level]
@@ -272,10 +325,71 @@ class WebExecutionPolicy:
                 f"{tool_id} is {risk} but receipt only approves "
                 f"{self.receipt.approval_level} actions"
             )
-            self._record(tool_id, url, risk, action, "denied", reason)
             raise WebPolicyError(reason)
 
-        self._record(tool_id, url, risk, action, "allowed", "in scope")
+    def _normalize_replay_request(
+        self,
+        *,
+        method: object,
+        url: object,
+        headers: Mapping[object, object] | None,
+        form_data: Mapping[object, object] | None,
+        required_body_field: str | None,
+    ) -> PreparedReplayRequest:
+        normalized_method = self._validate_replay_method(method)
+        normalized_url = self._validate_replay_url(url)
+        safe_headers, omitted_headers = self._sanitize_replay_headers(
+            headers,
+        )
+        safe_form, omitted_body_fields = self._sanitize_replay_form(
+            form_data,
+        )
+        if normalized_method == "GET" and form_data is not None:
+            raise WebPolicyError("GET validation replay cannot carry a body")
+        if normalized_method == "POST" and safe_form is None:
+            safe_form = {}
+        if required_body_field is not None:
+            if (
+                normalized_method != "POST"
+                or safe_form is None
+                or required_body_field not in safe_form
+            ):
+                raise WebPolicyError(
+                    "required replay body field was absent or removed "
+                    "by credential sanitization"
+                )
+        return PreparedReplayRequest(
+            method=normalized_method,
+            url=normalized_url,
+            headers=safe_headers,
+            form_data=safe_form,
+            omitted_headers=tuple(omitted_headers),
+            omitted_body_fields=tuple(omitted_body_fields),
+        )
+
+    def validate_replay_request(
+        self,
+        *,
+        method: object,
+        url: object,
+        headers: Mapping[object, object] | None = None,
+        form_data: Mapping[object, object] | None = None,
+        required_body_field: str | None = None,
+    ) -> PreparedReplayRequest:
+        """Validate replay inputs and approval without recording an action."""
+        prepared = self._normalize_replay_request(
+            method=method,
+            url=url,
+            headers=headers,
+            form_data=form_data,
+            required_body_field=required_body_field,
+        )
+        self._check_authorized(
+            tool_id="raptor-validation-replay",
+            url=prepared.url,
+            risk="active",
+        )
+        return prepared
 
     def prepare_replay_request(
         self,
@@ -291,33 +405,19 @@ class WebExecutionPolicy:
 
         Only GET and form-encoded POST are supported. Credential-bearing,
         hop-by-hop, transport-managed, and authority-changing headers never
-        reach the transport. URL/body credentials are refused rather than
-        rewritten into a request with different semantics.
+        reach the transport. URL credentials are accepted only when they
+        exactly match credentials in the operator-supplied target; artifacts
+        expose only their redacted form.
         """
         raw_url = url if isinstance(url, str) else "<invalid-url>"
         try:
-            normalized_method = self._validate_replay_method(method)
-            normalized_url = self._validate_replay_url(url)
-            safe_headers, omitted_headers = self._sanitize_replay_headers(
-                headers,
+            prepared = self._normalize_replay_request(
+                method=method,
+                url=url,
+                headers=headers,
+                form_data=form_data,
+                required_body_field=required_body_field,
             )
-            safe_form, omitted_body_fields = self._sanitize_replay_form(
-                form_data,
-            )
-            if normalized_method == "GET" and form_data is not None:
-                raise WebPolicyError("GET validation replay cannot carry a body")
-            if normalized_method == "POST" and safe_form is None:
-                safe_form = {}
-            if required_body_field is not None:
-                if (
-                    normalized_method != "POST"
-                    or safe_form is None
-                    or required_body_field not in safe_form
-                ):
-                    raise WebPolicyError(
-                        "required replay body field was absent or removed "
-                        "by credential sanitization"
-                    )
         except WebPolicyError as exc:
             self._record(
                 "raptor-validation-replay",
@@ -331,18 +431,11 @@ class WebExecutionPolicy:
 
         self.authorize(
             tool_id="raptor-validation-replay",
-            url=normalized_url,
+            url=prepared.url,
             risk="active",
             action=action,
         )
-        return PreparedReplayRequest(
-            method=normalized_method,
-            url=normalized_url,
-            headers=safe_headers,
-            form_data=safe_form,
-            omitted_headers=tuple(omitted_headers),
-            omitted_body_fields=tuple(omitted_body_fields),
-        )
+        return prepared
 
     @staticmethod
     def replay_limits() -> dict[str, int]:
@@ -378,8 +471,7 @@ class WebExecutionPolicy:
             )
         return normalized
 
-    @staticmethod
-    def _validate_replay_url(url: object) -> str:
+    def _validate_replay_url(self, url: object) -> str:
         if not isinstance(url, str):
             raise WebPolicyError("validation replay URL must be a string")
         if not url or len(url) > _MAX_REPLAY_URL_CHARS:
@@ -389,7 +481,11 @@ class WebExecutionPolicy:
             parsed = urlparse(url)
         except ValueError as exc:
             raise WebPolicyError("validation replay URL is malformed") from exc
-        if parsed.username is not None or parsed.password is not None:
+        userinfo = _url_userinfo(url)
+        if (
+            userinfo is not None
+            and userinfo != self._approved_replay_userinfo
+        ):
             raise WebPolicyError(
                 "validation replay URL must not contain credentials"
             )
@@ -397,11 +493,9 @@ class WebExecutionPolicy:
             raise WebPolicyError(
                 "validation replay does not support URL fragments"
             )
-        for name, value in parse_qsl(parsed.query, keep_blank_values=True):
-            if (
-                _is_replay_secret_field_name(name)
-                or redact_secrets(value) != value
-            ):
+        credentials = _url_query_credentials(url)
+        for credential, count in credentials.items():
+            if count > self._approved_replay_query_credentials[credential]:
                 raise WebPolicyError(
                     "validation replay URL contains credential-bearing "
                     "query evidence"

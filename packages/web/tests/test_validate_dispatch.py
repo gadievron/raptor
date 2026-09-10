@@ -13,8 +13,13 @@ from urllib.parse import urlparse
 
 import pytest
 
-from core.orchestration.agentic_passes import run_validate_postpass
-from packages.web.scanner import WebScanner
+from core.orchestration.agentic_passes import (
+    _build_validate_prompt,
+    run_validate_postpass,
+)
+from core.security.redaction import redact_url_secrets_only
+from packages.web.models import WebFinding
+from packages.web.scanner import _VALIDATION_REPLAY_ARTIFACT, WebScanner
 
 
 pytestmark = pytest.mark.usefixtures("cc_spawn_machinery_enabled")
@@ -70,6 +75,95 @@ def test_scanner_passes_exact_url_string_to_validate(tmp_path, monkeypatch):
     assert isinstance(captured["target"], str)
     assert scanner.execution_policy.receipt.target == target
     assert scanner._empty_result("test")["target"] == target
+
+
+def test_scanner_redacts_target_credentials_from_artifacts_and_prompt(
+    tmp_path,
+    monkeypatch,
+):
+    password = "operator-password"
+    token = "operator-access-token"
+    target = (
+        f"https://alice:{password}@example.test/app/"
+        f"?access_token={token}&mode=validate"
+    )
+    safe_target = redact_url_secrets_only(target)
+    scanner = WebScanner(
+        target,
+        out_dir=tmp_path,
+        block_private_ips=False,
+        verify_findings=False,
+    )
+    scanner._maybe_rank = lambda findings, *_args, **_kwargs: findings
+    captured = {}
+
+    monkeypatch.setenv("RAPTOR_AGENT_CLI", "claude")
+    monkeypatch.setattr(
+        "core.security.rule_of_two.is_interactive",
+        lambda: True,
+    )
+    monkeypatch.setattr(shutil, "which", lambda name: f"/fake/{name}")
+
+    def fake_validate(**kwargs):
+        captured.update(kwargs)
+        captured["prompt"] = _build_validate_prompt(
+            kwargs["target"],
+            tmp_path,
+            tmp_path / "validate",
+            Path(kwargs["analysis_report"]),
+            tmp_path / "validate" / "selected-findings.json",
+            1,
+        )
+        return SimpleNamespace(ran=True)
+
+    monkeypatch.setattr(
+        "core.orchestration.agentic_passes.run_validate_postpass",
+        fake_validate,
+    )
+    finding = WebFinding(
+        id="WEB-0001",
+        title="Candidate",
+        severity="high",
+        confidence="medium",
+        status="needs_review",
+        url=target,
+        evidence="scanner evidence",
+        description="candidate",
+        recommendation="review",
+        vuln_type="sqli",
+        asvs_category="V5",
+        check_id="V5.2.1",
+        confirmed=True,
+        target_url=target,
+        confirmation_payload="' OR 1=1--",
+        attack_vector="query_param",
+        method="GET",
+        affected_parameters=["q"],
+    )
+    try:
+        scanner._phase_validate([finding])
+    finally:
+        scanner.close()
+
+    assert scanner.transport_url == target
+    assert scanner.client.base_url == target.rstrip("/")
+    assert scanner.target_identity == safe_target
+    assert scanner.execution_policy.receipt.target == safe_target
+    assert captured["target"] == safe_target
+    assert password not in captured["prompt"]
+    assert token not in captured["prompt"]
+    assert "[REDACTED]" in captured["prompt"]
+
+    artifact_text = (
+        tmp_path / "web_findings_for_validation.json"
+    ).read_text(encoding="utf-8")
+    replay_text = (
+        tmp_path / _VALIDATION_REPLAY_ARTIFACT
+    ).read_text(encoding="utf-8")
+    for rendered in (artifact_text, replay_text):
+        assert password not in rendered
+        assert token not in rendered
+        assert "[REDACTED]" in rendered
 
 
 @pytest.mark.parametrize(

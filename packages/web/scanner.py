@@ -44,6 +44,7 @@ from core.json import append_jsonl, save_json
 from core.logging import get_logger
 from core.run.safe_io import safe_run_mkdir
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
+from core.security.redaction import redact_url_secrets_only
 from packages.web.auth import AuthenticationError, make_auth_manager
 from packages.web.checks import registry
 from packages.web.client import WebClient
@@ -226,8 +227,12 @@ class WebScanner:
     ) -> None:
         import time
 
-        self.target_identity = base_url
-        self.base_url = base_url.rstrip("/")
+        # Keep the operator's exact URL only on the trusted transport data
+        # plane. Lifecycle records, artifacts, SAGE keys, and selected-agent
+        # prompts use a stable secret-safe identity instead.
+        self.transport_url = base_url
+        self.target_identity = redact_url_secrets_only(base_url)
+        self.base_url = self.transport_url.rstrip("/")
         self.llm = llm
         self.out_dir = out_dir or Path("out") / f"web_scan_{int(time.time())}"
         self.out_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -271,13 +276,15 @@ class WebScanner:
         self._client_rate_limit = rate_limit
 
         self.execution_policy = WebExecutionPolicy.for_target(
-            self.target_identity,
+            self.transport_url,
             approval_level=approval_level,
             approved_tools=approved_tools or [],
         )
 
         self.client = WebClient(
-            base_url, verify_ssl=verify_ssl, reveal_secrets=reveal_secrets,
+            self.transport_url,
+            verify_ssl=verify_ssl,
+            reveal_secrets=reveal_secrets,
             block_private_ips=block_private_ips,
         )
         # Set after construction so test doubles that pin the WebClient
@@ -321,7 +328,7 @@ class WebScanner:
 
         logger.info(
             "Web scanner initialized for %s (verify_ssl=%s, max_depth=%s, max_pages=%s)",
-            base_url, verify_ssl, max_depth, max_pages,
+            self.target_identity, verify_ssl, max_depth, max_pages,
         )
 
     # ------------------------------------------------------------------
@@ -2757,6 +2764,7 @@ class WebScanner:
         value: str,
         *,
         action: str,
+        validate_only: bool = False,
     ):
         method = candidate["method"].strip().upper()
         if method == "GET":
@@ -2773,13 +2781,40 @@ class WebScanner:
             form_data[candidate["parameter"]] = value
             required_body_field = candidate["parameter"]
 
-        return self.execution_policy.prepare_replay_request(
-            method=method,
-            url=url,
-            headers=candidate["headers"],
-            form_data=form_data,
-            required_body_field=required_body_field,
-            action=action,
+        prepare = (
+            self.execution_policy.validate_replay_request
+            if validate_only
+            else self.execution_policy.prepare_replay_request
+        )
+        kwargs = {
+            "method": method,
+            "url": url,
+            "headers": candidate["headers"],
+            "form_data": form_data,
+            "required_body_field": required_body_field,
+        }
+        if not validate_only:
+            kwargs["action"] = action
+        return prepare(
+            **kwargs,
+        )
+
+    def _validate_validation_replay_candidate(
+        self,
+        candidate: dict[str, Any],
+    ) -> None:
+        """Reject structurally/policy-ineligible candidates before budget."""
+        self._prepare_validation_replay_leg(
+            candidate,
+            "raptor-validation-preflight",
+            action="validation_control",
+            validate_only=True,
+        )
+        self._prepare_validation_replay_leg(
+            candidate,
+            candidate["payload"],
+            action="validation_replay",
+            validate_only=True,
         )
 
     def _send_validation_replay_leg(
@@ -2955,11 +2990,14 @@ class WebScanner:
     def _replay_validation_finding(
         self,
         finding: WebFinding,
+        *,
+        candidate: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         started_at = _utc_now()
         policy_start = self.execution_policy.decision_cursor()
         try:
-            candidate = self._validation_replay_input(finding)
+            if candidate is None:
+                candidate = self._validation_replay_input(finding)
             record = self._validation_replay_record(
                 finding_id=candidate["finding_id"],
                 vuln_type=candidate["vuln_type"],
@@ -3288,13 +3326,36 @@ class WebScanner:
             try:
                 candidate = self._validation_replay_input(finding)
             except (NotImplementedError, TypeError, ValueError):
-                pass
+                # Unsupported/malformed records require no network replay and
+                # therefore consume none of the shared verification cap.
+                record = self._replay_validation_finding(finding)
+                record["provenance"].update({
+                    "evidence_source": "phase_7a_preflight",
+                    "reused_for_phase_7a": False,
+                    "verification_requests_used": 0,
+                })
+                records.append(record)
+                continue
             if candidate is not None:
                 reused = self._phase6v_validation_replay_record(
                     candidate,
                 )
                 if reused is not None:
                     records.append(reused)
+                    continue
+                try:
+                    self._validate_validation_replay_candidate(candidate)
+                except (WebPolicyError, TypeError, ValueError):
+                    record = self._replay_validation_finding(
+                        finding,
+                        candidate=candidate,
+                    )
+                    record["provenance"].update({
+                        "evidence_source": "phase_7a_preflight",
+                        "reused_for_phase_7a": False,
+                        "verification_requests_used": 0,
+                    })
+                    records.append(record)
                     continue
 
             if not self._consume_verification_budget("phase_7a"):
@@ -3304,7 +3365,10 @@ class WebScanner:
                     evidence_source="skipped_budget_exhausted",
                 ))
                 continue
-            record = self._replay_validation_finding(finding)
+            record = self._replay_validation_finding(
+                finding,
+                candidate=candidate,
+            )
             record["provenance"].update({
                 "evidence_source": "phase_7a",
                 "reused_for_phase_7a": False,
@@ -3398,7 +3462,8 @@ class WebScanner:
                 "model_generated_requests": False,
                 "selected_agent_target_network_access": False,
                 "cross_origin_redirects": "refused",
-                "credential_inputs": "excluded",
+                "credential_inputs":
+                    "operator_target_credentials_transport_only",
             },
             "limits": {
                 "max_artifact_bytes":
@@ -4772,7 +4837,8 @@ def main():
     print("\n" + "=" * 70)
     print("RAPTOR WEB APPLICATION SECURITY SCANNER")
     print("=" * 70)
-    print(f"Target: {args.url}")
+    safe_target_identity = redact_url_secrets_only(args.url)
+    print(f"Target: {safe_target_identity}")
     print(f"Output: {out_dir}")
     print(f"Max depth: {args.max_depth}")
     print(f"Max pages: {args.max_pages}")
@@ -4781,7 +4847,7 @@ def main():
     logger.info("=" * 70)
     logger.info("RAPTOR WEB SCAN STARTED")
     logger.info("=" * 70)
-    logger.info("Target: %s", args.url)
+    logger.info("Target: %s", safe_target_identity)
     logger.info("Output: %s", out_dir)
 
     # Initialize LLM client with multi-model support, fallback, and retry

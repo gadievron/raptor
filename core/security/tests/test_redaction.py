@@ -130,6 +130,10 @@ class TestRedactUrlSecretsOnly:
         path = "/usr/lib/python3/site-packages/__init__.py"
         assert redact_url_secrets_only(path) == path
 
+    def test_clean_url_preserves_exact_spelling(self):
+        value = "HTTPS://Example.Test:443/App/?mode=Validate"
+        assert redact_url_secrets_only(value) == value
+
     def test_reveal_flag_honoured(self):
         value = "https://user:secret@example.com/x"
         assert redact_url_secrets_only(value, reveal_secrets=True) == value

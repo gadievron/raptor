@@ -220,6 +220,7 @@ def _redact_url_inner(raw_url: str) -> str:
     ):
         return raw_url
 
+    changed = False
     netloc = parsed.netloc
     if netloc and "@" in netloc:
         userinfo, host = netloc.rsplit("@", 1)
@@ -228,13 +229,16 @@ def _redact_url_inner(raw_url: str) -> str:
             userinfo = f"{username}:[REDACTED]"
         else:
             userinfo = "[REDACTED]"
-        netloc = f"{userinfo}@{host}"
+        redacted_netloc = f"{userinfo}@{host}"
+        changed = redacted_netloc != netloc
+        netloc = redacted_netloc
 
     query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
     redacted_pairs = [
         (key, "[REDACTED]" if is_secret_field_name(key) else value)
         for key, value in query_pairs
     ]
+    changed = changed or redacted_pairs != query_pairs
     query = "&".join(
         f"{quote(key, safe='[]')}={quote(value, safe='[]/')}"
         for key, value in redacted_pairs
@@ -250,16 +254,20 @@ def _redact_url_inner(raw_url: str) -> str:
     if fragment and "=" in fragment:
         fragment_pairs = parse_qsl(fragment, keep_blank_values=True)
         if fragment_pairs:
-            fragment_pairs = [
+            redacted_fragment_pairs = [
                 (key, "[REDACTED]" if is_secret_field_name(key) else value)
                 for key, value in fragment_pairs
             ]
+            changed = changed or redacted_fragment_pairs != fragment_pairs
             fragment = "&".join(
                 f"{quote(key, safe='[]')}={quote(value, safe='[]/')}"
-                for key, value in fragment_pairs
+                for key, value in redacted_fragment_pairs
             )
 
-    return urlunsplit((parsed.scheme, netloc, parsed.path, query, fragment))
+    if not changed:
+        return raw_url
+    raw_scheme = raw_url.split(":", 1)[0] if parsed.scheme else parsed.scheme
+    return urlunsplit((raw_scheme, netloc, parsed.path, query, fragment))
 
 
 def redact_secrets(value: object, *, reveal_secrets: bool = False) -> str:

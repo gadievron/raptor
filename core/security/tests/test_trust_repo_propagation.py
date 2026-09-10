@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import raptor
@@ -14,6 +15,7 @@ _MODES = (
     raptor.mode_agentic,
     raptor.mode_codeql,
     raptor.mode_scan,
+    raptor.mode_sca,
     raptor.mode_llm_analysis,
 )
 
@@ -37,13 +39,18 @@ class TestTrustRepoPropagation(unittest.TestCase):
             captured["args"] = args
             return 0
 
-        runner = (
-            mock.patch.object(raptor, "_run_script", fake_script)
-            if mode_fn is raptor.mode_llm_analysis
-            else mock.patch.object(
+        if mode_fn is raptor.mode_llm_analysis:
+            runner = mock.patch.object(raptor, "_run_script", fake_script)
+        elif mode_fn is raptor.mode_sca:
+            def fake_run(cmd, **_kwargs):
+                captured["args"] = list(cmd[2:])
+                return SimpleNamespace(returncode=0)
+
+            runner = mock.patch.object(raptor.subprocess, "run", fake_run)
+        else:
+            runner = mock.patch.object(
                 raptor, "_run_with_lifecycle", fake_lifecycle,
             )
-        )
         with runner:
             rc = mode_fn(list(argv))
         self.assertEqual(rc, 0)
@@ -89,6 +96,25 @@ class TestTrustRepoPropagation(unittest.TestCase):
             with self.subTest(mode=mode_fn.__name__):
                 args = self._captured_args(mode_fn, polluted)
                 self._assert_canonical(args, ["--no-trust-repo"])
+
+    def test_inline_negative_overrides_parent_positive(self):
+        raptor._REPO_TRUST_OVERRIDE = True
+        for mode_fn in _MODES:
+            with self.subTest(mode=mode_fn.__name__):
+                args = self._captured_args(
+                    mode_fn,
+                    ["--no-trust-repo", "--repo", "/tgt"],
+                )
+                self._assert_canonical(args, ["--no-trust-repo"])
+
+    def test_sca_trust_flag_does_not_hide_subcommand(self):
+        raptor._REPO_TRUST_OVERRIDE = False
+        args = self._captured_args(
+            raptor.mode_sca,
+            ["--repo", "/tgt", "fix", "--harden"],
+        )
+        self.assertEqual(args[0:2], ["fix", "/tgt"])
+        self._assert_canonical(args, ["--no-trust-repo"])
 
     def test_direct_mode_flags_are_preserved_and_canonicalized(self):
         raptor._REPO_TRUST_OVERRIDE = None

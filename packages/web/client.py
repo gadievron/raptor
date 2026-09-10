@@ -171,7 +171,11 @@ class WebClient:
             maxlen=_MAX_REQUEST_HISTORY,
         )
 
-        logger.info("Web client initialized for %s (verify_ssl=%s)", base_url, verify_ssl)
+        logger.info(
+            "Web client initialized for %s (verify_ssl=%s)",
+            self._redact_for_logging(base_url),
+            verify_ssl,
+        )
 
     def _origin(self, url: str) -> tuple:
         """Return normalized (scheme, host, port) tuple for URL scope checks."""

@@ -609,6 +609,55 @@ class TestDispatchTaskIntegration:
         assert results[0]["status"] == "skipped_over_budget"
         assert results[0]["skip_reason"].startswith("exploit skipped:")
 
+    def test_mixed_model_budget_precheck_sums_panel_costs(
+        self,
+        monkeypatch,
+    ):
+        class BudgetedAnalysisTask(AnalysisTask):
+            name = "mixed-analysis"
+            budget_cutoff = 0.70
+
+        rates = {
+            "cheap": {"input": 0.001, "output": 0.002},
+            "expensive": {"input": 0.01, "output": 0.02},
+        }
+        monkeypatch.setattr(
+            "core.llm.model_data.resolve_model_costs",
+            lambda name: rates.get(name),
+        )
+        cheap = MagicMock(model_name="cheap")
+        expensive = MagicMock(model_name="expensive")
+        calls = []
+
+        def mock_fn(prompt, schema, system_prompt, temperature, model):
+            calls.append(model.model_name)
+            return DispatchResult(
+                result={
+                    "is_true_positive": True,
+                    "is_exploitable": False,
+                    "exploitability_score": 0.1,
+                    "reasoning": "test",
+                },
+                model=model.model_name,
+            )
+
+        findings = [_make_finding(f"f-{i:03d}") for i in range(10)]
+        results = dispatch_task(
+            task=BudgetedAnalysisTask(),
+            items=findings,
+            dispatch_fn=mock_fn,
+            role_resolution={
+                "analysis_models": [cheap, expensive],
+            },
+            prior_results={},
+            cost_tracker=CostTracker(max_cost=0.8),
+            max_parallel=2,
+        )
+
+        assert len(results) == 20
+        assert calls.count("cheap") == 10
+        assert calls.count("expensive") == 10
+
     def test_typed_budget_exhaustion_stops_queued_provider_calls(self):
         """One typed refusal stops the batch without tripping breakers.
 

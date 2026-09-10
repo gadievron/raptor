@@ -30,6 +30,7 @@ from core.logging import get_logger
 from .config import LLMConfig, ModelConfig
 from .providers import LLMProvider, LLMResponse, StructuredResponse, create_provider
 from .response_validation import SchemaUnknownFieldError, unknown_response_fields
+from .schema_normalization import normalize_json_schema
 
 _client_log = _logging.getLogger(__name__)
 
@@ -2879,6 +2880,14 @@ class LLMClient:
 
         Thread-safe: stats tracking uses _stats_lock for concurrent access.
         """
+        # Canonicalize the schema exactly once at the client boundary.
+        # Provider adapters, cache identity, stale-cache checks, and fresh
+        # response validation must all agree on the same shape. In
+        # particular, compact schemas whose field names are themselves JSON
+        # Schema keywords (for example {"type": "string - category"}) are
+        # otherwise mistaken for an open schema by the unknown-field floor.
+        effective_schema = normalize_json_schema(schema)
+
         # Check budget
         if not self._check_budget():
             spent = self.authoritative_spend_usd
@@ -2945,7 +2954,8 @@ class LLMClient:
         # back as if the configured model was queried, matching how
         # generate() does it.
         cache_key = self._get_structured_cache_key(
-            prompt, system_prompt, model_config.model_name, schema, kwargs,
+            prompt, system_prompt, model_config.model_name,
+            effective_schema, kwargs,
         )
         # Per-key lock dedupes concurrent identical calls (see generate()
         # for full rationale).
@@ -2961,7 +2971,10 @@ class LLMClient:
                 # entries written before the floor existed (or by an
                 # older RAPTOR) may carry smuggled fields. Treat a
                 # violating entry as a cache miss and regenerate.
-                stale_unknown = unknown_response_fields(cached_result, schema)
+                stale_unknown = unknown_response_fields(
+                    cached_result,
+                    effective_schema,
+                )
                 if stale_unknown:
                     logger.debug(
                         "Cached structured response rejected (unknown "
@@ -3102,7 +3115,10 @@ class LLMClient:
                         t_start = time.monotonic()
                         try:
                             result_tuple = provider.generate_structured(
-                                prompt, schema, system_prompt, **kwargs,
+                                prompt,
+                                effective_schema,
+                                system_prompt,
+                                **kwargs,
                             )
                         except Exception:
                             # Release the reservation and book NOTHING.
@@ -3212,7 +3228,10 @@ class LLMClient:
                         # (``additionalProperties: true`` or
                         # ``_OPEN_SCHEMA_SIGNATURES`` in
                         # core.llm.response_validation).
-                        unknown = unknown_response_fields(result_dict, schema)
+                        unknown = unknown_response_fields(
+                            result_dict,
+                            effective_schema,
+                        )
                         if unknown:
                             msg = (
                                 f"structured response carried fields "

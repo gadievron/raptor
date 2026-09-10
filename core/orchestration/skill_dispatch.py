@@ -251,9 +251,9 @@ _CHECKLIST_TIMEOUT_S = 300  # build_checklist parses every source file
 class SkillTarget:
     """Dispatch identity plus the filesystem root, when one exists.
 
-    URL targets remain opaque strings for lifecycle and prompt identity.
-    Local targets retain the existing resolved-path contract used by the
-    agent CLI adapters and sandbox.
+    URL targets remain opaque, secret-redacted strings for lifecycle and
+    prompt identity. Local targets retain the existing resolved-path contract
+    used by the agent CLI adapters and sandbox.
     """
 
     identity: str
@@ -276,7 +276,9 @@ class SkillTarget:
 
     @classmethod
     def opaque(cls, identity: str) -> "SkillTarget":
-        return cls(identity=identity)
+        from core.security.redaction import redact_url_secrets_only
+
+        return cls(identity=redact_url_secrets_only(identity))
 
     @classmethod
     def coerce(cls, target: "SkillTarget | str | Path") -> "SkillTarget":

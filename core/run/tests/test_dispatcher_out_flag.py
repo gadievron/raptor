@@ -57,6 +57,7 @@ class _LifecycleHarness:
     def __init__(self, raptor, monkeypatch):
         self.child_args: list | None = None
         self.started_dirs: list[Path] = []
+        self.started_targets: list[str | None] = []
 
         def _spy_run_script(script_path, args, **kwargs):
             # **kwargs: tolerate keyword extensions to the real
@@ -67,6 +68,7 @@ class _LifecycleHarness:
 
         def _spy_start_run(out_dir, command, **kw):
             self.started_dirs.append(Path(out_dir))
+            self.started_targets.append(kw.get("target"))
 
         monkeypatch.setattr(raptor, "_run_script", _spy_run_script)
         monkeypatch.setattr(raptor, "start_run", _spy_start_run)
@@ -174,6 +176,38 @@ class TestRunWithLifecycleOut:
         assert rc == 0
         assert seen["explicit_out"] is None
         assert h.child_out_values() == [str(tmp_path / "lifecycle_run")]
+
+    def test_web_lifecycle_redacts_target_but_child_keeps_transport_url(
+        self,
+        tmp_path,
+        monkeypatch,
+        capsys,
+    ):
+        raptor = _import_raptor()
+        h = _LifecycleHarness(raptor, monkeypatch)
+        password = "operator-password"
+        token = "operator-access-token"
+        target = (
+            f"https://alice:{password}@example.test/app"
+            f"?access_token={token}&mode=scan"
+        )
+        out_dir = tmp_path / "web-run"
+
+        rc = raptor._run_with_lifecycle(
+            "web",
+            Path("/nonexistent/scanner.py"),
+            ["--url", target, "--out", str(out_dir)],
+            "label",
+        )
+
+        assert rc == 0
+        assert h.child_args is not None
+        assert target in h.child_args
+        assert len(h.started_targets) == 1
+        lifecycle_target = h.started_targets[0] or ""
+        assert password not in lifecycle_target
+        assert token not in lifecycle_target
+        assert "[REDACTED]" in lifecycle_target
 
     def test_help_short_circuits_before_lifecycle(self, tmp_path, monkeypatch):
         raptor = _import_raptor()

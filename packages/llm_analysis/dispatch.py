@@ -305,45 +305,26 @@ def dispatch_task(
 
     # Budget pre-check.
     #
-    # Pre-fix this used `models[0].model_name` for the per-call
-    # rate estimate. With multi-model dispatch (`--model
-    # claude-opus --model gpt-4o`), the cost tracker estimated
-    # the WHOLE phase as if every call used models[0]'s rate —
-    # so a phase routing 50% of calls to a 10x-cheaper secondary
-    # model still got estimated at the full primary rate.
-    # Operators saw "skipped — budget" warnings on phases that
-    # would actually have fit within budget.
-    #
-    # Use the MAXIMUM per-call rate across the model list. The
-    # estimate is then conservative (over-, never under-), so
-    # the budget gate fires at most where it should and never
-    # silently skips a phase that would have fit.
+    # Multi-model phases estimate each model's own calls and sum them.
+    # Multiplying the whole panel by its most expensive member
+    # overstates heterogeneous panels and can skip work that fits.
     if task.budget_cutoff < 1.0:
-        # Pick the most expensive model name as the pessimistic
-        # estimator. cost_tracker.should_skip_phase indexes by
-        # name to look up the rate; passing the priciest gives
-        # the conservative ceiling. Fallback to "" if all None
-        # (CC path) — should_skip_phase handles unknown.
         named_models = [m for m in models if m is not None]
-        if named_models:
-            try:
-                model_name = max(
-                    named_models,
-                    key=lambda m: cost_tracker.estimate_cost(
-                        1, model_name=m.model_name,
-                    ),
-                ).model_name
-            except (AttributeError, TypeError):
-                model_name = named_models[0].model_name
-        else:
-            model_name = ""
-        total_calls = len(selected) * len(models)
+        model_names = [
+            str(getattr(model, "model_name", "") or "")
+            for model in named_models
+        ]
+        model_name = model_names[0] if len(model_names) == 1 else ""
         skip, skip_reason = cost_tracker.check_phase_budget(
-            total_calls, model_name, task.budget_cutoff, task.name,
+            len(selected),
+            model_name,
+            task.budget_cutoff,
+            task.name,
             # No named models ⇒ the CC subprocess path. Estimating CC
             # calls at the external-LLM default (~$0.03) under-gates
             # ~7x against the documented ~$0.20/finding observed rate.
             is_cc=not named_models,
+            model_names=model_names or None,
         )
         if skip:
             print(f"\n  {task.name}: skipped ({len(selected)} items) — "

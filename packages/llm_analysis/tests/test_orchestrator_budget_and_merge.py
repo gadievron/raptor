@@ -20,6 +20,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from core.llm.model_data import MODEL_COSTS  # noqa: E402
@@ -61,6 +63,41 @@ class TestEstimateCost:
         tracker = CostTracker(max_cost=1.0)
         assert tracker.should_skip_phase(10, "", 0.7, "test", is_cc=True)
         assert not tracker.should_skip_phase(10, "", 0.7, "test")
+
+    def test_heterogeneous_panel_sums_each_models_estimate(
+        self,
+        monkeypatch,
+    ):
+        rates = {
+            "cheap": {"input": 0.001, "output": 0.002},
+            "expensive": {"input": 0.01, "output": 0.02},
+        }
+        monkeypatch.setattr(
+            "core.llm.model_data.resolve_model_costs",
+            lambda name: rates.get(name),
+        )
+        tracker = CostTracker(max_cost=0.8)
+
+        estimate = tracker.estimate_model_panel_cost(
+            10,
+            ["cheap", "expensive"],
+        )
+        assert estimate == pytest.approx(0.33)
+        skip, _reason = tracker.check_phase_budget(
+            10,
+            "",
+            0.70,
+            "mixed-panel",
+            model_names=["cheap", "expensive"],
+        )
+
+        assert skip is False
+        # The old max-rate multiplication estimated 20 expensive calls
+        # ($0.60) and incorrectly crossed the $0.56 phase cap.
+        assert tracker.estimate_cost(
+            20,
+            model_name="expensive",
+        ) > 0.8 * 0.70
 
     def test_authoritative_failed_spend_drives_soft_gate_and_report(self):
         provider_spend = [0.8]
@@ -201,6 +238,20 @@ class TestMergeResultsStatuses:
         assert finding["skip_reason"] == reason
         assert "error" not in finding
         assert "cc_error" not in finding
+
+    def test_status_only_budget_skip_is_not_counted_as_analyzed(self):
+        prep = _prep_report([{"finding_id": "f1", "rule_id": "r"}])
+        cc = [{
+            "finding_id": "f1",
+            "status": "skipped_over_budget",
+            "skip_reason": "phase budget pre-check",
+        }]
+
+        merged = _merge_results(prep, cc)
+
+        assert merged["analyzed"] == 0
+        assert merged["results"][0]["status"] == "skipped_over_budget"
+        assert "verification_tier" not in merged["results"][0]
 
     def test_successful_merge_not_stamped_error(self):
         # Two-direction: a healthy result keeps flowing as analysed.

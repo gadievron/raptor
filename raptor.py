@@ -620,8 +620,13 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     # leaves nothing behind.
     from core.project.oplock import OpLockContention
     from core.run.pin import ProjectArgvError
+    lifecycle_target = target
+    if command == "web" and target:
+        from core.security.redaction import redact_url_secrets_only
+        lifecycle_target = redact_url_secrets_only(target)
+
     try:
-        start_run(out_dir, command, target=target,
+        start_run(out_dir, command, target=lifecycle_target,
                   target_identity=target_identity)
     except (OpLockContention, ProjectArgvError) as e:
         # Only remove what THIS invocation created: a refused start
@@ -1089,6 +1094,20 @@ def mode_sca(args: list) -> int:
         print(f"✗ SCA module not found: {sca_shim}", file=sys.stderr)
         return 1
 
+    # main() strips the top-level tri-state trust decision before mode
+    # dispatch. Reconstitute one canonical child flag here, just like the
+    # other repo-aware modes. Keep it separate while translating --repo so
+    # an SCA subcommand remains argv[0] for libexec/raptor-sca-run.
+    canonical_args = _repo_trust_child_args(args)
+    trust_args = [
+        arg for arg in canonical_args
+        if arg in ("--trust-repo", "--no-trust-repo")
+    ]
+    args = [
+        arg for arg in canonical_args
+        if arg not in ("--trust-repo", "--no-trust-repo")
+    ]
+
     # Translate ``--repo <p>`` into the positional target the shim
     # expects, so ``raptor.py sca --repo /path`` matches the convention
     # of the other modes. When a subcommand follows --repo (e.g.,
@@ -1136,6 +1155,27 @@ def mode_sca(args: list) -> int:
             forwarded.insert(0, target_from_repo)
         else:
             forwarded.insert(sub_idx + 1, target_from_repo)
+
+    if trust_args:
+        subcommand = (
+            forwarded[0]
+            if forwarded and forwarded[0] in _SCA_SUBCOMMANDS
+            else None
+        )
+        trust_aware_subcommand = (
+            subcommand == "bump"
+            or (
+                subcommand == "fix"
+                and "--harden" in forwarded
+            )
+        )
+        if trust_aware_subcommand:
+            # Preserve subcommand dispatch: SCA only recognizes a
+            # subcommand in argv[0], while its argparse children accept
+            # options after positional arguments.
+            forwarded.extend(trust_args)
+        elif subcommand is None:
+            forwarded[:0] = trust_args
 
     cmd = [sys.executable, str(sca_shim)] + forwarded
     try:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import http.server
 import json
 import stat
@@ -13,6 +14,7 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
+from core.security.redaction import redact_url_secrets_only
 from packages.web.models import WebFinding
 from packages.web.scanner import (
     _VALIDATION_REPLAY_ARTIFACT,
@@ -251,6 +253,42 @@ def test_same_origin_get_replay_and_controls_are_fresh(tmp_path):
         "validation_replay",
         "validation_control_replay",
     }
+
+
+def test_target_credentials_are_redacted_but_replay_uses_real_url(tmp_path):
+    password = "operator-password"
+    token = "operator-access-token"
+    with _server() as (server, handler):
+        transport_url = (
+            f"http://alice:{password}@"
+            f"{server.server_address[0]}:{server.server_address[1]}"
+            f"/search?access_token={token}"
+        )
+        scanner = _scanner(transport_url, tmp_path)
+        try:
+            artifact = scanner._build_validation_replay_artifact([
+                _finding(transport_url),
+            ])
+        finally:
+            scanner.close()
+
+    expected_auth = "Basic " + base64.b64encode(
+        f"alice:{password}".encode(),
+    ).decode()
+    assert len(handler.hits) == 3
+    assert all(
+        hit["params"]["access_token"] == token
+        for hit in handler.hits
+    )
+    assert all(
+        hit["headers"].get("Authorization") == expected_auth
+        for hit in handler.hits
+    )
+    assert artifact["target"] == redact_url_secrets_only(transport_url)
+    rendered = json.dumps(artifact, sort_keys=True)
+    assert password not in rendered
+    assert token not in rendered
+    assert "[REDACTED]" in rendered
 
 
 def test_phase7a_reuses_fresh_compatible_phase6v_evidence(tmp_path):
@@ -603,8 +641,63 @@ def test_malformed_and_unsupported_evidence_have_deterministic_shape(tmp_path):
         "model_generated_requests": False,
         "selected_agent_target_network_access": False,
         "cross_origin_redirects": "refused",
-        "credential_inputs": "excluded",
+        "credential_inputs": "operator_target_credentials_transport_only",
     }
+
+
+def test_unreplayable_findings_do_not_consume_budget_ahead_of_candidates(
+    tmp_path,
+):
+    with _server() as (server, handler):
+        scanner = _scanner(
+            _base_url(server),
+            tmp_path,
+            max_verifications=1,
+        )
+        malformed = _finding(
+            f"{_base_url(server)}/malformed",
+            finding_id="WEB-MALFORMED",
+            method="TRACE",
+        )
+        unsupported = _finding(
+            f"{_base_url(server)}/unsupported",
+            finding_id="WEB-UNSUPPORTED",
+            method="POST",
+            attack_vector="json_body",
+        )
+        scanner._validation_request_evidence[unsupported.id] = {
+            "method": "POST",
+            "url": unsupported.url,
+            "headers": {"Content-Type": "application/json"},
+            "body_kind": "json",
+            "body": {"q": unsupported.confirmation_payload},
+        }
+        first = _finding(
+            f"{_base_url(server)}/first",
+            finding_id="WEB-FIRST",
+        )
+        second = _finding(
+            f"{_base_url(server)}/second",
+            finding_id="WEB-SECOND",
+        )
+        try:
+            artifact = scanner._build_validation_replay_artifact([
+                malformed,
+                unsupported,
+                first,
+                second,
+            ])
+        finally:
+            scanner.close()
+
+    assert [
+        record["evidence_status"] for record in artifact["records"]
+    ] == ["malformed", "unsupported", "confirmed", "skipped"]
+    assert len(handler.hits) == 3
+    budget = artifact["summary"]["verification_budget"]
+    assert budget["consumed"] == 1
+    assert budget["consumed_by_phase"]["phase_7a"] == 1
+    assert budget["remaining"] == 0
 
 
 def test_phase_validate_replays_before_dispatch_and_mirrors_artifact(

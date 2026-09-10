@@ -1,5 +1,6 @@
 import pytest
 
+from core.security.redaction import redact_url_secrets_only
 from packages.web.execution_policy import WebExecutionPolicy, WebPolicyError
 
 
@@ -26,6 +27,33 @@ def test_policy_preserves_operator_target_identity_while_normalizing_origin():
     receipt = policy.report()["scope_receipt"]
     assert receipt["target"] == target
     assert receipt["allowed_origins"] == ["https://example.test"]
+
+
+def test_policy_redacts_receipt_but_reuses_exact_target_credentials():
+    password = "operator-password"
+    token = "operator-access-token"
+    target = (
+        f"https://alice:{password}@example.test/search"
+        f"?access_token={token}&mode=scan"
+    )
+    policy = WebExecutionPolicy.for_target(target)
+    replay_url = f"{target}&q=probe"
+
+    prepared = policy.prepare_replay_request(
+        method="GET",
+        url=replay_url,
+        action="validation_replay",
+    )
+
+    receipt = policy.report()["scope_receipt"]
+    assert receipt["target"] == redact_url_secrets_only(target)
+    assert password not in receipt["target"]
+    assert token not in receipt["target"]
+    assert prepared.url == replay_url
+    metadata_url = prepared.metadata()["url"]
+    assert password not in metadata_url
+    assert token not in metadata_url
+    assert "[REDACTED]" in metadata_url
 
 
 @pytest.mark.parametrize(

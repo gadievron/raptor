@@ -464,7 +464,6 @@ class TestOrchestrate:
             if type(task) is AnalysisTask:
                 return [{
                     "finding_id": "finding-001",
-                    "error": "LLM budget exceeded: $0.90 spent",
                     "error_type": "budget",
                     "status": "skipped_over_budget",
                     "skip_reason": (
@@ -506,6 +505,7 @@ class TestOrchestrate:
         assert finding["skip_reason"].startswith("analysis stopped:")
         assert "error" not in finding
         orchestration = result["orchestration"]
+        assert orchestration["findings_analysed"] == 0
         assert orchestration["findings_failed"] == 0
         assert orchestration["findings_skipped_over_budget"] == 1
         assert orchestration["failed_by_model"] == {}

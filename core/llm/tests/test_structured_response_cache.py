@@ -20,6 +20,7 @@ from core.testing import (
     install_provider,
     make_test_client,
 )
+from core.llm.schema_normalization import normalize_json_schema
 
 # Shared scaffolding (core/testing) under this suite's historical
 # local names — the definitions used to live here and had already
@@ -50,6 +51,32 @@ def test_repeat_call_is_served_from_cache(tmp_path: Path) -> None:
     assert r2.tokens_used == 0
     assert r1.result == r2.result == {"verdict": "safe"}
     assert r1.raw == r2.raw == '{"verdict":"safe"}'
+
+
+def test_compact_keyword_schema_uses_normalized_provider_and_cache_shape(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    fake = _FakeProvider({"type": "safe"})
+    seen_schemas = []
+    original = fake.generate_structured
+
+    def capture_schema(prompt, schema, system_prompt=None, **kwargs):
+        seen_schemas.append(schema)
+        return original(prompt, schema, system_prompt, **kwargs)
+
+    fake.generate_structured = capture_schema
+    _install_provider(client, fake)
+
+    compact = {"type": "string - output category"}
+    normalized = normalize_json_schema(compact)
+    first = client.generate_structured("classify", compact)
+    second = client.generate_structured("classify", normalized)
+
+    assert seen_schemas == [normalized]
+    assert fake.calls == 1
+    assert first.cached is False
+    assert second.cached is True
 
 
 def test_cache_key_no_delimiter_injection(tmp_path: Path) -> None:

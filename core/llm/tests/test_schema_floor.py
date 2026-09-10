@@ -140,6 +140,24 @@ def test_client_accepts_schema_conformant_response(tmp_path: Path) -> None:
     assert fake.calls == 1
 
 
+def test_client_rejects_unknown_field_for_compact_keyword_named_field(
+    tmp_path: Path,
+) -> None:
+    """Compact fields named like JSON Schema keywords still form a closed
+    object after client-side normalization."""
+    client = _client(tmp_path)
+    fake = _FakeProvider({"type": "safe", "exfil": "http://evil"})
+    _install(client, fake)
+
+    with pytest.raises(RuntimeError):
+        client.generate_structured(
+            "check",
+            {"type": "string - output category"},
+        )
+
+    assert fake.calls == client.config.max_retries
+
+
 def test_client_recovers_when_retry_is_clean(tmp_path: Path) -> None:
     """First attempt smuggles a field, second is clean — the retry loop
     recovers exactly as it does for malformed JSON."""

@@ -178,10 +178,16 @@ class CostTracker:
 
     def should_skip_phase(self, n_calls: int, model_name: str,
                           cutoff_ratio: float, phase_name: str,
-                          is_cc: bool = False) -> bool:
+                          is_cc: bool = False,
+                          model_names: list[str] | None = None) -> bool:
         """Compatibility wrapper around :meth:`check_phase_budget`."""
         return self.check_phase_budget(
-            n_calls, model_name, cutoff_ratio, phase_name, is_cc=is_cc,
+            n_calls,
+            model_name,
+            cutoff_ratio,
+            phase_name,
+            is_cc=is_cc,
+            model_names=model_names,
         )[0]
 
     def check_phase_budget(
@@ -191,6 +197,7 @@ class CostTracker:
         cutoff_ratio: float,
         phase_name: str,
         is_cc: bool = False,
+        model_names: list[str] | None = None,
     ) -> tuple[bool, str]:
         """Pre-check: would running this phase likely exceed the budget?
 
@@ -200,11 +207,24 @@ class CostTracker:
         ``is_cc``: the phase dispatches via CC subprocess — estimate at
         the observed CC per-finding rate instead of an external-LLM
         token rate.
+
+        When ``model_names`` is supplied, ``n_calls`` is the number of
+        selected items per model and the estimate is summed across the
+        heterogeneous panel.
         """
         if self._max_cost <= 0:
             return False, ""
-        estimate = self.estimate_cost(n_calls, model_name=model_name,
-                                      is_cc=is_cc)
+        if model_names:
+            estimate = self.estimate_model_panel_cost(
+                n_calls,
+                model_names,
+            )
+        else:
+            estimate = self.estimate_cost(
+                n_calls,
+                model_name=model_name,
+                is_cc=is_cc,
+            )
         spent = self.total_cost
         projected = spent + estimate
         phase_cap = self._max_cost * cutoff_ratio
@@ -247,6 +267,17 @@ class CostTracker:
         analysis_calls = n_findings
         consensus_calls = n_findings * n_consensus_models
         return (analysis_calls + consensus_calls) * avg_cost
+
+    def estimate_model_panel_cost(
+        self,
+        n_findings: int,
+        model_names: list[str],
+    ) -> float:
+        """Estimate one call per finding for each model in a panel."""
+        return sum(
+            self.estimate_cost(n_findings, model_name=model_name)
+            for model_name in model_names
+        )
 
     def get_summary(self) -> dict[str, Any]:
         effective, accounted, provider_spend = self._spend_snapshot()
@@ -2057,7 +2088,11 @@ def orchestrate(
     actual_analysis_models = list(dict.fromkeys(
         result.get("analysed_by")
         for result in analysis_results
-        if "error" not in result and result.get("analysed_by")
+        if (
+            "error" not in result
+            and not _is_budget_result(result)
+            and result.get("analysed_by")
+        )
     ))
     if len(actual_analysis_models) == 1:
         actual_name = actual_analysis_models[0]
@@ -2680,7 +2715,8 @@ def orchestrate(
         "calibrated_aggregation": calibrated_summary,
         "findings_dispatched": len(findings),
         "findings_analysed": sum(
-            1 for r in per_finding_results if "error" not in r
+            1 for r in per_finding_results
+            if "error" not in r and not _is_budget_result(r)
         ),
         "findings_failed": sum(
             1 for r in per_finding_results
@@ -3259,10 +3295,11 @@ def _merge_results(
         SKIPPED_OVER_BUDGET,
         set_status,
     )
+    from packages.llm_analysis.dispatch import _is_budget_result
     for finding in results:
         fid = finding.get("finding_id")
         cc = cc_by_id.get(fid)
-        if cc is None or "error" in cc:
+        if cc is None or "error" in cc or _is_budget_result(cc):
             if cc is None:
                 # Never dispatched (cap / dedup / chokepoint
                 # suppression / dispatch loss) — an explicit skip,
@@ -3276,10 +3313,7 @@ def _merge_results(
                     set_status(
                         finding, SKIPPED, skip_reason="not_dispatched",
                     )
-            elif (
-                cc.get("error_type") == "budget"
-                or cc.get("status") == SKIPPED_OVER_BUDGET
-            ):
+            elif _is_budget_result(cc):
                 # Budget exhaustion is an intentional dispatch stop, not
                 # an analysis crash. Preserve the concrete producer reason
                 # without copying the internal ``error`` marker that the
@@ -3387,7 +3421,8 @@ def _merge_results(
     )
     for finding in results:
         fid = finding.get("finding_id")
-        if fid in cc_by_id and "error" not in (cc_by_id.get(fid) or {}):
+        cc = cc_by_id.get(fid) or {}
+        if fid in cc_by_id and "error" not in cc and not _is_budget_result(cc):
             finding["verification_tier"] = derive_verification_tier(finding)
     results = sort_results_by_tier(results)
 

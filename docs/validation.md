@@ -428,11 +428,11 @@ automatically.
 
 ### Web bridge
 
-`/web --validate` preserves the target URL as an opaque identity for lifecycle
-records, finding conversion, and the validation prompt. The URL is not
-resolved as a local path, mounted as a target directory, or converted into a
-network/proxy allowance; only real artifact directories are exposed as
-filesystem roots.
+`/web --validate` keeps the exact target URL only in the trusted scanner
+transport. Lifecycle records, finding conversion, and the validation prompt
+use a secret-redacted opaque identity. The URL is not resolved as a local
+path, mounted as a target directory, or converted into a network/proxy
+allowance; only real artifact directories are exposed as filesystem roots.
 
 Before selected-agent dispatch, the trusted web scanner performs supported
 replays and control requests through `WebClient` and `WebExecutionPolicy`.
@@ -440,7 +440,9 @@ It writes a bounded, redacted `web-validation-replay.json` in the web run and
 mirrors it into the sibling validation run. The selected-agent sandbox remains
 denied target-network access and consumes this scanner-produced artifact as
 fresh evidence rather than issuing requests itself. Cross-origin redirects
-and credential-bearing inputs are excluded at the scanner boundary.
+are excluded at the scanner boundary. Credentials explicitly present in the
+operator's target URL may be reused unchanged by scanner-owned replay, but
+are redacted from the receipt, artifacts, lifecycle metadata, and prompt.
 
 ### Frida bridge
 

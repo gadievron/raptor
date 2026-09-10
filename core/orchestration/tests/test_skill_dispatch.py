@@ -418,6 +418,17 @@ class SkillTargetTests(unittest.TestCase):
         self.assertEqual(spec.identity, target)
         self.assertIsNone(spec.filesystem_root)
 
+    def test_opaque_url_identity_redacts_embedded_credentials(self):
+        target = (
+            "https://alice:operator-password@example.test/app"
+            "?access_token=operator-access-token&mode=validate"
+        )
+        spec = SkillTarget.coerce(target)
+        self.assertNotIn("operator-password", spec.identity)
+        self.assertNotIn("operator-access-token", spec.identity)
+        self.assertIn("[REDACTED]", spec.identity)
+        self.assertIsNone(spec.filesystem_root)
+
     def test_local_target_uses_resolved_identity(self):
         with TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo" / ".."
