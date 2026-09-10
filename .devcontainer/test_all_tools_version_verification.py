@@ -75,12 +75,92 @@ def test_manifest_uses_noninteractive_local_version_probes() -> None:
     assert "application.properties" in tools["ghidra"]["version_command"][2]
     assert "ghidraRun" not in tools["ghidra"]["version_command"]
     assert tools["joern"]["version_command"][:2] == ["python3", "-c"]
+    assert "shutil.which('joern')" in tools["joern"]["version_command"][2]
     assert "io.joern.joern-cli-" in tools["joern"]["version_command"][2]
+    assert {"joern", "joern-parse"} <= set(manifest["required_binaries"])
     assert tools["gcloud"]["version_command"] == [
         "gcloud",
         "version",
         "--format=json",
     ]
+
+
+def test_joern_runtime_probe_uses_local_distribution_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    install = tmp_path / "joern-cli"
+    lib = install / "lib"
+    lib.mkdir(parents=True)
+    joern = install / "joern"
+    joern_parse = install / "joern-parse"
+    for launcher in (joern, joern_parse):
+        launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        launcher.chmod(0o755)
+    (lib / "io.joern.joern-cli-4.0.622.jar").write_bytes(b"")
+
+    monkeypatch.setattr(
+        all_tools.shutil,
+        "which",
+        lambda name: {
+            "joern": str(joern),
+            "joern-parse": str(joern_parse),
+        }.get(name),
+    )
+
+    def unexpected_subprocess(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Joern runtime validation must not launch the CLI")
+
+    monkeypatch.setattr(all_tools.subprocess, "run", unexpected_subprocess)
+
+    manifest = all_tools.load_manifest(MANIFEST)
+    assert all_tools.verify_joern_runtime(manifest) == []
+
+
+def test_joern_runtime_probe_requires_parser_and_exact_distribution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    install = tmp_path / "joern-cli"
+    lib = install / "lib"
+    lib.mkdir(parents=True)
+    joern = install / "joern"
+    joern.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    joern.chmod(0o755)
+    (lib / "io.joern.joern-cli-4.0.621.jar").write_bytes(b"")
+
+    monkeypatch.setattr(
+        all_tools.shutil,
+        "which",
+        lambda name: str(joern) if name == "joern" else None,
+    )
+    manifest = all_tools.load_manifest(MANIFEST)
+    assert all_tools.verify_joern_runtime(manifest) == [
+        "joern-parse not found on PATH"
+    ]
+
+    joern_parse = install / "joern-parse"
+    joern_parse.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    joern_parse.chmod(0o755)
+    monkeypatch.setattr(
+        all_tools.shutil,
+        "which",
+        lambda name: {
+            "joern": str(joern),
+            "joern-parse": str(joern_parse),
+        }.get(name),
+    )
+    assert all_tools.verify_joern_runtime(manifest) == [
+        "Joern distribution version 4.0.621 != 4.0.622"
+    ]
+
+
+def test_manifest_requires_joern_parse(tmp_path: Path) -> None:
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    manifest["required_binaries"].remove("joern-parse")
+
+    with pytest.raises(ValueError, match="Joern binary `joern-parse`"):
+        all_tools.load_manifest(_write_manifest(tmp_path, manifest))
 
 
 @pytest.mark.parametrize("tool_name", EXPECTED_SNAPSHOT_VERSIONS)

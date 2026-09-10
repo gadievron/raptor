@@ -42,6 +42,7 @@ def test_playwright_uses_shared_path_and_launches_as_runtime_user() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
     browser_env = "ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright"
     browser_install = "python -m playwright install --with-deps chromium"
+    standard_stage = "FROM raptor-base AS raptor-devcontainer"
     all_tools_stage = "FROM raptor-base AS raptor-all-tools-build"
 
     assert dockerfile.index(browser_env) < dockerfile.index(browser_install)
@@ -64,7 +65,7 @@ def test_playwright_uses_shared_path_and_launches_as_runtime_user() -> None:
         all_tools_user,
     )
     assert all_tools_user < runtime_probe
-    assert "FROM raptor-base AS raptor-devcontainer" in dockerfile
+    assert dockerfile.index(standard_stage) < dockerfile.index(all_tools_stage)
     assert "FROM raptor-all-tools-build AS raptor-all-tools" in dockerfile
 
 

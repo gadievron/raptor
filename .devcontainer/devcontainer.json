@@ -43,8 +43,8 @@
     "GIT_TERMINAL_PROMPT": "0",
     "PYTHONUNBUFFERED": "1",
     "PYTHONDONTWRITEBYTECODE": "1",
-    // Runtime proxy passthrough (postCreateCommand pip installs,
-    // in-container scans). Loopback appended to NO_PROXY so
+    // Runtime proxy passthrough for in-container scans. Loopback appended to
+    // NO_PROXY so
     // in-container sidecars (SAGE, Ollama) are never proxied.
     "http_proxy": "${localEnv:http_proxy}",
     "https_proxy": "${localEnv:https_proxy}",
@@ -55,6 +55,5 @@
   },
   // Secrets and host auth state are intentionally not mounted. The explicit
   // bin/raptor-container auth options mount beneath the selected runtime HOME.
-  "postCreateCommand": "pip install -r .devcontainer/requirements-all-optional.txt && pip install -r requirements-dev.txt",
   "remoteUser": "vscode"
 }

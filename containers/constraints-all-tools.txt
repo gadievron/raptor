@@ -1,8 +1,9 @@
 # Cross-install constraints for the raptor-all-tools Python environment.
 #
-# The Dockerfile installs Semgrep, RAPTOR's development requirements, Google
-# tooling, and angr in separate pip transactions. Keep their shared transitive
-# dependencies in the single intersection accepted by every transaction.
+# These constraints are applied while compiling both complete hash locks. Keep
+# the standard and final all-tools environments in the shared intersection
+# accepted by Semgrep, RAPTOR's development dependencies, Google tooling, and
+# angr.
 
 # Semgrep 1.172.0 requires jsonschema~=4.25.1.
 jsonschema==4.25.1
@@ -33,6 +34,6 @@ grpcio-status==1.83.1
 # Instructor requires Rich >=13.7,<15; Semgrep and angr accept this release.
 rich==14.3.4
 
-# Do not constrain z3-solver here. requirements-dev.txt first installs 4.15.4.0,
-# then requirements-angr.txt intentionally replaces it with claripy's exact
-# 4.13.0.0 pin in the final transaction.
+# Do not constrain z3-solver here. requirements-base.in resolves the standard
+# 4.15.4.0 pin, while the final lock compilation supplies
+# requirements-angr.txt as an override to select claripy's exact 4.13.0.0 pin.

@@ -65,7 +65,7 @@
       "version_command": [
         "python3",
         "-c",
-        "from pathlib import Path; prefix = 'io.joern.joern-cli-'; jar, = sorted(Path('/opt/joern/joern-cli/lib').glob(f'{prefix}*.jar')); print(jar.name[len(prefix):-4])"
+        "from pathlib import Path; import shutil; launcher = shutil.which('joern') or shutil.which('joern-cli'); assert launcher; prefix = 'io.joern.joern-cli-'; jar, = sorted((Path(launcher).resolve().parent / 'lib').glob(f'{prefix}*.jar')); print(jar.name[len(prefix):-4])"
       ]
     },
     "gcloud": {
@@ -327,6 +327,7 @@
     "java",
     "javac",
     "joern",
+    "joern-parse",
     "lcov",
     "lldb",
     "ltrace",

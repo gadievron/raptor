@@ -1,0 +1,8 @@
+# Direct inputs for the standard Python 3.14 container environment.
+# Regenerate the lock with uv 0.12.12 using the command embedded in it.
+
+-r ../requirements-dev.txt
+-r ../packages/web/requirements.txt
+-r ../.devcontainer/requirements-all-optional.txt
+
+semgrep==1.172.0

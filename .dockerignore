@@ -14,6 +14,8 @@
 !/containers/constraints-all-tools.txt
 !/containers/install-all-tools-native.sh
 !/containers/raptor-container-entrypoint
+!/containers/requirements-base.lock
+!/containers/requirements-all-tools.lock
 !/containers/requirements-all-tools.txt
 !/containers/requirements-angr.txt
 !/containers/requirements-atheris-amd64.txt

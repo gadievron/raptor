@@ -1,4 +1,5 @@
-# The all-tools image deliberately replaces the standard 4.15 solver with
-# claripy's compatible pin so RAPTOR can import angr in its main interpreter.
+# The all-tools lock compiler uses this file as an override, replacing the
+# standard 4.15 solver with claripy's compatible pin so RAPTOR can import angr
+# in its main interpreter.
 angr==9.3.4
 z3-solver==4.13.0.0

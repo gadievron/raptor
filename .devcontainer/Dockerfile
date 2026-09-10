@@ -79,14 +79,18 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     && rm -rf /var/lib/apt/lists/*
 
 # ============================================================================
-# SEMGREP (static-analysis, scan, raptor-scan, agentic commands)
+# HASH-LOCKED PYTHON ENVIRONMENT
 # ============================================================================
 
-COPY containers/constraints-all-tools.txt /tmp/raptor/containers/constraints-all-tools.txt
+# Generated for CPython 3.14 on Linux amd64. The lock contains the complete
+# standard devcontainer closure: RAPTOR runtime/dev packages, web support,
+# optional Python integrations, and Semgrep. --no-deps prevents pip from
+# resolving anything outside the checked-in, hash-verified closure.
+COPY containers/requirements-base.lock /tmp/raptor/requirements-base.lock
 
-RUN pip install --no-cache-dir \
-    -c /tmp/raptor/containers/constraints-all-tools.txt \
-    semgrep==1.172.0
+RUN python3 -m pip install --no-cache-dir --require-hashes --no-deps \
+        -r /tmp/raptor/requirements-base.lock \
+    && python3 -m pip check
 
 # ============================================================================
 # RR DEBUGGER (rr-debugger skill, crash-analysis agents)
@@ -120,23 +124,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     afl++-clang \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
     || echo "AFL++ not available - skipping"
-
-# ============================================================================
-# PYTHON DEPENDENCIES
-# ============================================================================
-
-COPY requirements.txt requirements-dev.txt /tmp/
-# Also copy package-specific requirements so they can be installed explicitly if desired
-COPY packages/web/requirements.txt /tmp/packages-web-requirements.txt
-
-RUN pip install --no-cache-dir \
-    -c /tmp/raptor/containers/constraints-all-tools.txt \
-    -r /tmp/requirements-dev.txt
-
-# Install web package dependencies (includes playwright)
-RUN pip install --no-cache-dir \
-    -c /tmp/raptor/containers/constraints-all-tools.txt \
-    -r /tmp/packages-web-requirements.txt
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 
@@ -207,7 +194,25 @@ RUN python -c "from playwright.sync_api import sync_playwright; playwright = syn
 CMD ["bash"]
 
 # ============================================================================
-# ALL TOOLS (explicit opt-in target)
+# STANDARD DEVCONTAINER (explicit target)
+# ============================================================================
+
+# Keep this target before every all-tools stage. The legacy Docker builder
+# evaluates earlier stages even when --target is used, so placing the standard
+# target here guarantees `--target raptor-devcontainer` cannot encounter the
+# later CodeQL acceptance gate. Supported wrappers, devcontainers, and CI jobs
+# always select one of the two named targets explicitly.
+# A build without --target intentionally continues to raptor-all-tools and is
+# therefore still subject to the acceptance and amd64-only gates below.
+FROM raptor-base AS raptor-devcontainer
+
+ENV RAPTOR_DIR=/workspaces/raptor
+ENV PYTHONPATH=/workspaces/raptor
+
+CMD ["bash"]
+
+# ============================================================================
+# ALL TOOLS (explicit opt-in target; requires CodeQL acceptance)
 # ============================================================================
 
 FROM raptor-base AS raptor-all-tools-build
@@ -237,7 +242,7 @@ ARG JOERN_AMD64_SHA256=d559b569b6180726c2b5b7a5b9b25753c1cbf42c8143ba11311df0d47
 ARG JOERN_ARM64_SHA256=fceac538dfbc11b7833878532428bdd255ba2fc89762c98d99577edc4c780a1a
 ARG GCLOUD_VERSION=583.0.0
 ARG GCLOUD_AMD64_SHA256=84c5e4798836bda13aa82c3e84fa1acd0c4e4ca5318f7141052e3a5a26a7cc97
-ARG GCLOUD_ARM64_SHA256=8bdb58368fffe2faf2119ffbb66070b5da6fa98a4af55eb5baab33f93cdea880
+ARG GCLOUD_ARM64_SHA256=8ce6287e01e54b53d2e9618d124b62ac85efe5a093904ae027b17f2057030662
 ARG OLLAMA_VERSION=0.33.3
 ARG OLLAMA_AMD64_SHA256=c13cea8f3389db4145f8a6cb88d1747242a48639d7c13e3bda7c1ebdc6eebb2f
 ARG OLLAMA_ARM64_SHA256=4425a112af999ae6572c1ce211fbabeaca7bab23ed5860972acdfc0cc2358420
@@ -405,34 +410,16 @@ RUN arch="$(dpkg --print-architecture)" \
 
 RUN /usr/local/libexec/raptor-install-all-tools-native
 
-COPY requirements.txt /tmp/raptor/requirements.txt
-COPY requirements-grammars.txt /tmp/raptor/requirements-grammars.txt
-COPY .devcontainer/requirements-all-optional.txt /tmp/raptor/.devcontainer/requirements-all-optional.txt
-COPY containers/requirements-all-tools.txt /tmp/raptor/containers/requirements-all-tools.txt
-COPY containers/requirements-angr.txt /tmp/raptor/containers/requirements-angr.txt
-COPY containers/requirements-atheris-amd64.txt /tmp/raptor/containers/requirements-atheris-amd64.txt
+COPY containers/requirements-all-tools.lock /tmp/raptor/requirements-all-tools.lock
 
 # The standard image uses z3 4.15. The all-tools variant deliberately
 # replaces it with claripy's 4.13 pin so `import angr` works in RAPTOR's
-# main interpreter and symbolic analysis is actually reachable.
-RUN pip install --no-cache-dir \
-        -c /tmp/raptor/containers/constraints-all-tools.txt \
-        -r /tmp/raptor/.devcontainer/requirements-all-optional.txt \
-        -r /tmp/raptor/containers/requirements-all-tools.txt \
-    && arch="$(dpkg --print-architecture)" \
-    && case "${arch}" in \
-        amd64) \
-            pip install --no-cache-dir \
-                -c /tmp/raptor/containers/constraints-all-tools.txt \
-                -r /tmp/raptor/containers/requirements-atheris-amd64.txt \
-            ;; \
-        *) echo "Atheris skipped: no supported wheel for ${arch}" >&2 ;; \
-    esac \
-    && pip install --no-cache-dir --force-reinstall \
-        -c /tmp/raptor/containers/constraints-all-tools.txt \
-        -r /tmp/raptor/containers/requirements-angr.txt \
+# main interpreter and symbolic analysis is actually reachable. The final lock
+# contains the complete post-override environment, including amd64-only Atheris.
+RUN python3 -m pip install --no-cache-dir --require-hashes --no-deps \
+        -r /tmp/raptor/requirements-all-tools.lock \
     && python3 -c "import angr, z3; from importlib.metadata import version; assert version('z3-solver') == '4.13.0.0'; assert z3.get_version_string() == '4.13.0'" \
-    && pip check \
+    && python3 -m pip check \
     && rm -rf /tmp/raptor
 
 # Install the checksum-verified release archive directly. Unlike Ollama's convenience
@@ -479,15 +466,6 @@ CMD ["bash"]
 # Runtime-only import path: packages/semgrep must not shadow the installed
 # Semgrep distribution when the checkout is mounted.
 FROM raptor-all-tools-build AS raptor-all-tools
-
-ENV RAPTOR_DIR=/workspaces/raptor
-ENV PYTHONPATH=/workspaces/raptor
-
-CMD ["bash"]
-
-# Keep the no-target devcontainer build on the canonical base. The maximal
-# image is reachable only through --target raptor-all-tools.
-FROM raptor-base AS raptor-devcontainer
 
 ENV RAPTOR_DIR=/workspaces/raptor
 ENV PYTHONPATH=/workspaces/raptor

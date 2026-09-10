@@ -1,0 +1,8 @@
+# Direct inputs for the final amd64 all-tools Python 3.14 environment.
+# requirements-angr.txt is also supplied as uv's override file so its
+# z3-solver 4.13 pin replaces the standard environment's 4.15 pin.
+
+-r requirements-base.in
+-r requirements-all-tools.txt
+-r requirements-angr.txt
+-r requirements-atheris-amd64.txt

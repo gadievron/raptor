@@ -34,10 +34,11 @@ _REQUIRED_SNAPSHOT_TOOLS = {
     "javac": ("Java compiler", "21.0.12.1", ("javac",)),
     "ghidra": ("Ghidra", "12.1.3", ("ghidra", "analyzeHeadless")),
     "gradle": ("Gradle", "9.7.1", ("gradle",)),
-    "joern": ("Joern", "4.0.622", ("joern",)),
+    "joern": ("Joern", "4.0.622", ("joern", "joern-parse")),
     "gcloud": ("Google Cloud CLI", "583.0.0", ("gcloud",)),
     "ollama": ("Ollama", "0.33.3", ("ollama",)),
 }
+_JOERN_JAR_PREFIX = "io.joern.joern-cli-"
 _VERSION_TOKEN_RE = re.compile(
     r"""
     (?<![A-Za-z0-9.])
@@ -240,6 +241,50 @@ def runtime_probe_env() -> dict[str, str]:
         for name in allowed
         if name in os.environ
     }
+
+
+def verify_joern_runtime(manifest: dict) -> list[str]:
+    joern = shutil.which("joern") or shutil.which("joern-cli")
+    joern_parse = shutil.which("joern-parse")
+    errors: list[str] = []
+
+    if joern is None:
+        errors.append("joern-cli not found on PATH")
+    if joern_parse is None:
+        errors.append("joern-parse not found on PATH")
+    if errors:
+        return errors
+
+    joern_path = Path(joern).resolve()
+    joern_parse_path = Path(joern_parse).resolve()
+    for name, path in (("joern", joern_path), ("joern-parse", joern_parse_path)):
+        if not path.is_file() or not os.access(path, os.X_OK):
+            errors.append(f"{name} launcher is not executable: {path}")
+    if errors:
+        return errors
+
+    if joern_path.parent != joern_parse_path.parent:
+        return [
+            "joern and joern-parse do not resolve to the same installation: "
+            f"{joern_path.parent} != {joern_parse_path.parent}"
+        ]
+
+    jars = sorted(
+        (joern_path.parent / "lib").glob(f"{_JOERN_JAR_PREFIX}*.jar")
+    )
+    if len(jars) != 1:
+        return [
+            "Joern installation must contain exactly one "
+            f"{_JOERN_JAR_PREFIX}*.jar, found {len(jars)}"
+        ]
+
+    actual_version = jars[0].name[len(_JOERN_JAR_PREFIX) : -4]
+    expected_version = manifest["tools"]["joern"]["version"]
+    if actual_version != expected_version:
+        return [
+            f"Joern distribution version {actual_version} != {expected_version}"
+        ]
+    return []
 
 
 def verify_playwright_runtime() -> list[str]:
@@ -457,6 +502,7 @@ exec "$@"
 
 def verify_runtime_probes(manifest: dict) -> list[str]:
     errors: list[str] = []
+    errors.extend(verify_joern_runtime(manifest))
     errors.extend(verify_playwright_runtime())
     errors.extend(verify_rust_runtime(manifest))
     errors.extend(verify_cargo_fuzz_runtime(manifest))
