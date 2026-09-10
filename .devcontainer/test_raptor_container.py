@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -486,14 +487,39 @@ def test_native_build_blockers_are_pinned_and_rootless_safe(tmp_path: Path) -> N
 
 def test_every_dockerfile_pip_install_uses_all_tools_constraints() -> None:
     dockerfile = (ROOT / ".devcontainer" / "Dockerfile").read_text(encoding="utf-8")
-    constraint = "-c /tmp/raptor/containers/constraints-all-tools.txt"
+    expected_locks = {
+        "/tmp/raptor/requirements-base.lock",
+        "/tmp/raptor/requirements-all-tools.lock",
+    }
+    install_commands = [
+        command
+        for command in re.findall(
+            r"^RUN (?P<command>.*?)(?=\n\n)",
+            dockerfile,
+            re.MULTILINE | re.DOTALL,
+        )
+        if re.search(r"\bpip install\b", command)
+    ]
 
-    assert (ROOT / "containers" / "constraints-all-tools.txt").is_file()
-    assert (
-        "COPY containers/constraints-all-tools.txt "
-        "/tmp/raptor/containers/constraints-all-tools.txt"
-    ) in dockerfile
-    assert dockerfile.count("pip install") == dockerfile.count(constraint)
+    assert len(install_commands) == 2
+    assert len(install_commands) == len(
+        re.findall(r"\bpip install\b", dockerfile)
+    )
+    used_locks: set[str] = set()
+    for command in install_commands:
+        install = command.split("&&", 1)[0]
+        assert "--require-hashes" in install
+        assert "--no-deps" in install
+        assert " -c " not in install
+        lock_paths = re.findall(r"-r (/tmp/raptor/requirements-[^ \\\n]+)", install)
+        assert len(lock_paths) == 1
+        used_locks.add(lock_paths[0])
+
+    assert used_locks == expected_locks
+    for lock_path in expected_locks:
+        source = f"containers/{Path(lock_path).name}"
+        assert (ROOT / source).is_file()
+        assert f"COPY {source} {lock_path}" in dockerfile
 
 
 def test_angr_uses_main_interpreter_with_compatible_z3() -> None:
@@ -508,14 +534,47 @@ def test_angr_uses_main_interpreter_with_compatible_z3() -> None:
         package["distribution"]: package["version"]
         for package in manifest["python_packages"]
     }
+    base_lock = (ROOT / "containers" / "requirements-base.lock").read_text(
+        encoding="utf-8"
+    )
+    all_tools_lock_path = ROOT / "containers" / "requirements-all-tools.lock"
+    all_tools_lock = all_tools_lock_path.read_text(encoding="utf-8")
+    all_tools_input = (
+        ROOT / "containers" / "requirements-all-tools.in"
+    ).read_text(encoding="utf-8")
+
+    def locked_version(lock: str, distribution: str) -> str:
+        match = re.search(
+            rf"^{re.escape(distribution)}==(?P<version>[^ \\\n]+)",
+            lock,
+            re.MULTILINE,
+        )
+        assert match is not None
+        return match["version"]
 
     assert "angr==9.3.4" in angr_requirements
     assert "z3-solver==4.13.0.0" in angr_requirements
     assert package_versions["angr"] == "9.3.4"
     assert package_versions["z3-solver"] == "4.13.0.0"
-    assert "pip install --no-cache-dir --force-reinstall" in dockerfile
+    assert locked_version(base_lock, "z3-solver") == "4.15.4.0"
+    assert locked_version(all_tools_lock, "angr") == "9.3.4"
+    assert locked_version(all_tools_lock, "z3-solver") == "4.13.0.0"
+    assert "-r requirements-angr.txt" in all_tools_input
+    assert (
+        "--overrides containers/requirements-angr.txt"
+        in "\n".join(all_tools_lock.splitlines()[:2])
+    )
+    assert (
+        "COPY containers/requirements-all-tools.lock "
+        "/tmp/raptor/requirements-all-tools.lock"
+    ) in dockerfile
+    assert (
+        "python3 -m pip install --no-cache-dir --require-hashes --no-deps"
+        in dockerfile
+    )
+    assert "-r /tmp/raptor/requirements-all-tools.lock" in dockerfile
     assert "import angr, z3" in dockerfile
-    assert "pip check" in dockerfile
+    assert "python3 -m pip check" in dockerfile
     assert "/opt/angr" not in dockerfile
     assert "ANGR_VENV" not in dockerfile
 
@@ -571,12 +630,24 @@ def test_builder_ignore_files_are_identical_restrictive_allowlists() -> None:
         "!/containers/constraints-all-tools.txt",
         "!/containers/install-all-tools-native.sh",
         "!/containers/raptor-container-entrypoint",
+        "!/containers/requirements-all-tools.lock",
+        "!/containers/requirements-base.lock",
         "!/containers/verify-all-tools.py",
         "!/packages/web/requirements.txt",
         "!/requirements.txt",
         "!/requirements-dev.txt",
         "!/requirements-grammars.txt",
     } <= set(active_lines)
+    assert {
+        line
+        for line in active_lines
+        if line.startswith("!") and line.endswith(".lock")
+    } == {
+        "!/containers/requirements-all-tools.lock",
+        "!/containers/requirements-base.lock",
+    }
+    assert "!/containers/requirements-all-tools.in" not in active_lines
+    assert "!/containers/requirements-base.in" not in active_lines
     assert (
         active_lines.index("!/.devcontainer/")
         < active_lines.index("/.devcontainer/**")
@@ -668,9 +739,11 @@ def test_podman_build_context_contains_only_allowlisted_files(tmp_path: Path) ->
             "containers/constraints-all-tools.txt",
             "containers/install-all-tools-native.sh",
             "containers/raptor-container-entrypoint",
+            "containers/requirements-all-tools.lock",
             "containers/requirements-all-tools.txt",
             "containers/requirements-angr.txt",
             "containers/requirements-atheris-amd64.txt",
+            "containers/requirements-base.lock",
             "containers/verify-all-tools.py",
             "packages/web/requirements.txt",
             "requirements-dev.txt",

@@ -14,6 +14,8 @@
 !/containers/constraints-all-tools.txt
 !/containers/install-all-tools-native.sh
 !/containers/raptor-container-entrypoint
+# Only Docker-consumed generated locks are admitted; lock inputs and all other
+# *.lock files remain excluded by /containers/**.
 !/containers/requirements-base.lock
 !/containers/requirements-all-tools.lock
 !/containers/requirements-all-tools.txt
