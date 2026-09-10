@@ -128,8 +128,10 @@ Shell options:
 
 Auto-detection prefers Podman, then Docker. Proxy forwarding is limited to
 HTTP_PROXY, HTTPS_PROXY, NO_PROXY, and lowercase equivalents; values are never
-printed in dry-run output. No token, credential file, auth directory, model,
-device, Docker socket, or host home directory is forwarded by default.
+printed in dry-run output. Podman's automatic host-proxy injection is disabled;
+the allowlist is forwarded explicitly unless --no-proxy is used.
+No token, credential file, auth directory, model, device, Docker socket, or
+host home directory is forwarded by default.
 Docker sessions inspect the daemon's user-namespace mode. Rootless Docker runs
 as container root, which maps to the invoking host user, with HOME=/root.
 Rootful Docker maps the host UID/GID through a short-lived entrypoint; daemon
@@ -226,6 +228,107 @@ resolve_engine() {
 
 require_value() {
     [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 requires a value"
+}
+
+is_valid_repository_component() {
+    local component="$1"
+    [[ "$component" =~ ^[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*$ ]]
+}
+
+is_valid_registry_component() {
+    local component="$1"
+    local host port rest label
+
+    if [[ "$component" =~ ^\[[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*\](:[0-9]+)?$ ]]; then
+        return 0
+    fi
+
+    host="$component"
+    if [[ "$host" == *:* ]]; then
+        port="${host##*:}"
+        host="${host%:*}"
+        [[ "$port" =~ ^[0-9]+$ ]] || return 1
+    fi
+    case "$host" in
+        ""|.*|*.|*..*) return 1 ;;
+    esac
+
+    rest="$host"
+    while :; do
+        case "$rest" in
+            *.*) label="${rest%%.*}"; rest="${rest#*.}" ;;
+            *)   label="$rest"; rest="" ;;
+        esac
+        [[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] \
+            || return 1
+        [ -n "$rest" ] || break
+    done
+}
+
+validate_image_reference() {
+    local reference="$1"
+    local name digest tag last_component rest component
+    local component_index=0
+    local registry_component
+
+    case "$reference" in
+        ""|-*|*[[:space:][:cntrl:]]*)
+            die "invalid --image reference"
+            ;;
+        *@*@*)
+            die "invalid --image reference"
+            ;;
+    esac
+
+    name="$reference"
+    digest=""
+    if [[ "$name" == *@* ]]; then
+        digest="${name#*@}"
+        name="${name%%@*}"
+        [[ "$digest" =~ ^[A-Za-z][A-Za-z0-9]*([+._-][A-Za-z0-9]+)*:[A-Fa-f0-9]{32,}$ ]] \
+            || die "invalid --image reference"
+    fi
+
+    last_component="${name##*/}"
+    tag=""
+    if [[ "$last_component" == *:* ]]; then
+        tag="${last_component##*:}"
+        [[ "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] \
+            || die "invalid --image reference"
+        name="${name%:*}"
+    fi
+
+    case "$name" in
+        ""|/*|*/|*//*)
+            die "invalid --image reference"
+            ;;
+    esac
+
+    rest="$name"
+    while :; do
+        case "$rest" in
+            */*) component="${rest%%/*}"; rest="${rest#*/}" ;;
+            *)   component="$rest"; rest="" ;;
+        esac
+
+        registry_component=0
+        if [ "$component_index" -eq 0 ]; then
+            case "$component" in
+                *.*|*:*|localhost|\[*)
+                    registry_component=1
+                    is_valid_registry_component "$component" \
+                        || die "invalid --image reference"
+                    ;;
+            esac
+        fi
+        if [ "$registry_component" -eq 0 ]; then
+            is_valid_repository_component "$component" \
+                || die "invalid --image reference"
+        fi
+
+        component_index=$((component_index + 1))
+        [ -n "$rest" ] || break
+    done
 }
 
 canonical_dir() {
@@ -445,8 +548,11 @@ build_image() {
         image="${image:-$BASE_IMAGE}"
     fi
 
-    BUILD_CMD=(
-        "$engine_argv0" build
+    BUILD_CMD=("$engine_argv0" build)
+    if [ "$engine" = "podman" ]; then
+        BUILD_CMD+=(--http-proxy=false)
+    fi
+    BUILD_CMD+=(
         --file "$RAPTOR_DIR/.devcontainer/Dockerfile"
         --target "$target"
         --tag "$image"
@@ -545,6 +651,7 @@ shell_image() {
         shift
     done
 
+    [ -z "$image" ] || validate_image_reference "$image"
     checkout="$(canonical_dir "checkout" "$checkout")"
     [ -f "$checkout/bin/raptor" ] || die "checkout does not contain bin/raptor: $checkout"
     [ -z "$target" ] || target="$(canonical_dir "target" "$target")"
@@ -593,6 +700,9 @@ shell_image() {
     fi
 
     RUN_CMD=("$engine_argv0" run)
+    if [ "$engine" = "podman" ]; then
+        RUN_CMD+=(--http-proxy=false)
+    fi
     case "$image" in
         "$BASE_IMAGE"|"$ALL_TOOLS_IMAGE")
             RUN_CMD+=(--pull=never)

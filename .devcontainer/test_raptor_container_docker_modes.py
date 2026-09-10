@@ -19,6 +19,15 @@ PERF_SYSCTL_GUIDANCE = "sudo sysctl kernel.perf_event_paranoid=1"
 PRODUCTION_SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 RAPTOR_DIR_ASSIGNMENT = 'RAPTOR_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"'
 SYSTEM_PATH_ASSIGNMENT = f'RAPTOR_SYSTEM_PATH="{PRODUCTION_SYSTEM_PATH}"'
+PROXY_VARS = (
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+)
+UNLISTED_PROXY_VARS = ("ftp_proxy", "FTP_PROXY", "all_proxy", "ALL_PROXY")
 
 
 def run_wrapper(
@@ -640,6 +649,113 @@ def test_proxy_exclusions_merge_lowercase_then_uppercase_for_build_and_run(
     assert all(environment["NO_PROXY"] == expected for environment in environments)
 
 
+@pytest.mark.parametrize(
+    ("command", "proxy_option"),
+    (("build", "--build-arg"), ("shell", "--env")),
+)
+def test_podman_disables_automatic_proxy_and_forwards_only_allowlist(
+    tmp_path: Path,
+    command: str,
+    proxy_option: str,
+) -> None:
+    proxy_env = {
+        "http_proxy": "http://lower-user:lower-pass@proxy.example:8080",
+        "https_proxy": "http://lower-secure:lower-pass@proxy.example:8443",
+        "no_proxy": "lower.example",
+        "HTTP_PROXY": "http://upper-user:upper-pass@proxy.example:8080",
+        "HTTPS_PROXY": "http://upper-secure:upper-pass@proxy.example:8443",
+        "NO_PROXY": "upper.example",
+        "ftp_proxy": "ftp://ftp-user:ftp-lower-secret@proxy.example:2121",
+        "FTP_PROXY": "ftp://ftp-user:ftp-upper-secret@proxy.example:2121",
+        "all_proxy": "socks5://all-user:all-lower-secret@proxy.example:1080",
+        "ALL_PROXY": "socks5://all-user:all-upper-secret@proxy.example:1080",
+    }
+    result = run_wrapper(
+        command,
+        "--engine",
+        "podman",
+        "--dry-run",
+        home=tmp_path,
+        extra_env=proxy_env,
+    )
+    args = dry_run_args(result)
+    forwarded = option_values(args, proxy_option)
+
+    assert args.count("--http-proxy=false") == 1
+    assert [value for value in forwarded if value in PROXY_VARS] == list(PROXY_VARS)
+    assert not any(value in UNLISTED_PROXY_VARS for value in forwarded)
+    for secret in (
+        "lower-pass",
+        "upper-pass",
+        "ftp-lower-secret",
+        "ftp-upper-secret",
+        "all-lower-secret",
+        "all-upper-secret",
+    ):
+        assert secret not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("command", "proxy_option"),
+    (("build", "--build-arg"), ("shell", "--env")),
+)
+def test_podman_no_proxy_disables_all_proxy_forwarding(
+    tmp_path: Path,
+    command: str,
+    proxy_option: str,
+) -> None:
+    result = run_wrapper(
+        command,
+        "--engine",
+        "podman",
+        "--dry-run",
+        "--no-proxy",
+        home=tmp_path,
+        extra_env={
+            "http_proxy": "http://http-user:http-secret@proxy.example:8080",
+            "HTTPS_PROXY": "http://https-user:https-secret@proxy.example:8443",
+            "ftp_proxy": "ftp://ftp-user:ftp-lower-secret@proxy.example:2121",
+            "FTP_PROXY": "ftp://ftp-user:ftp-upper-secret@proxy.example:2121",
+            "all_proxy": "socks5://all-user:all-lower-secret@proxy.example:1080",
+            "ALL_PROXY": "socks5://all-user:all-upper-secret@proxy.example:1080",
+        },
+    )
+    args = dry_run_args(result)
+    forwarded = option_values(args, proxy_option)
+
+    assert args.count("--http-proxy=false") == 1
+    assert not any(value in PROXY_VARS for value in forwarded)
+    assert not any(value in UNLISTED_PROXY_VARS for value in forwarded)
+    for secret in (
+        "http-secret",
+        "https-secret",
+        "ftp-lower-secret",
+        "ftp-upper-secret",
+        "all-lower-secret",
+        "all-upper-secret",
+    ):
+        assert secret not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("command", ("build", "shell"))
+def test_docker_does_not_receive_podman_http_proxy_option(
+    tmp_path: Path,
+    command: str,
+) -> None:
+    args = dry_run_args(
+        run_wrapper(
+            command,
+            "--engine",
+            "docker",
+            "--dry-run",
+            "--no-proxy",
+            home=tmp_path,
+        )
+    )
+
+    assert "--http-proxy=false" not in args
+
+
 def test_entrypoint_does_not_resolve_root_shell_from_checkout_path(
     tmp_path: Path,
 ) -> None:
@@ -1179,8 +1295,19 @@ def test_explicit_builtin_image_remains_local_only(tmp_path: Path) -> None:
     assert args[-2:] == ["raptor:all-tools", "bash"]
 
 
-def test_explicit_custom_image_retains_engine_pull_behavior(
+@pytest.mark.parametrize(
+    "image",
+    (
+        "--entrypoint=/bin/sh",
+        "--privileged",
+        "--pull=always",
+        "--mount=type=bind,src=/,dst=/host",
+        "--volume=/tmp:/host",
+    ),
+)
+def test_image_rejects_container_engine_option_injection(
     tmp_path: Path,
+    image: str,
 ) -> None:
     result = run_wrapper(
         "shell",
@@ -1189,10 +1316,81 @@ def test_explicit_custom_image_retains_engine_pull_behavior(
         "--dry-run",
         "--no-proxy",
         "--image",
+        image,
+        home=tmp_path,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr.strip() == "raptor-container: invalid --image reference"
+
+
+@pytest.mark.parametrize(
+    "image",
+    (
+        "registry.example/team image:tag",
+        "registry.example/team/image:\ttag",
+        "registry.example/team/image\n--privileged",
+        "registry.example/team/image:\x7ftag",
+        "registry.example/Team/image:tag",
+        "repo@sha256:abc",
+        "https://registry.example/image:tag",
+        "repo::tag",
+    ),
+)
+def test_image_rejects_malformed_oci_reference(
+    tmp_path: Path,
+    image: str,
+) -> None:
+    result = run_wrapper(
+        "shell",
+        "--engine",
+        "docker",
+        "--dry-run",
+        "--no-proxy",
+        "--image",
+        image,
+        home=tmp_path,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr.strip() == "raptor-container: invalid --image reference"
+
+
+@pytest.mark.parametrize(
+    "image",
+    (
         "registry.example/raptor:custom",
+        "registry.example:5000/team/raptor:Release_1",
+        (
+            "registry.example/team/raptor@sha256:"
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ),
+        (
+            "localhost:5000/team/raptor:debug@sha256:"
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ),
+        "[2001:db8::1]:5000/team/raptor:debug",
+    ),
+)
+def test_explicit_custom_image_retains_engine_pull_behavior(
+    tmp_path: Path,
+    image: str,
+) -> None:
+    result = run_wrapper(
+        "shell",
+        "--engine",
+        "docker",
+        "--dry-run",
+        "--no-proxy",
+        "--image",
+        image,
         home=tmp_path,
     )
     args = dry_run_args(result)
 
     assert "--pull=never" not in args
-    assert args[-2:] == ["registry.example/raptor:custom", "bash"]
+    assert args[-2:] == [image, "bash"]
