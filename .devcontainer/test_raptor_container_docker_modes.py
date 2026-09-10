@@ -27,6 +27,18 @@ PROXY_VARS = (
     "HTTPS_PROXY",
     "NO_PROXY",
 )
+DOCKER_PROXY_VARS = (
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "ftp_proxy",
+    "all_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "FTP_PROXY",
+    "ALL_PROXY",
+)
 UNLISTED_PROXY_VARS = ("ftp_proxy", "FTP_PROXY", "all_proxy", "ALL_PROXY")
 
 
@@ -754,6 +766,106 @@ def test_docker_does_not_receive_podman_http_proxy_option(
     )
 
     assert "--http-proxy=false" not in args
+
+
+@pytest.mark.parametrize(
+    ("command", "proxy_option"),
+    (("build", "--build-arg"), ("shell", "--env")),
+)
+@pytest.mark.parametrize("forward_proxy", (True, False), ids=("forward", "no-proxy"))
+def test_docker_client_config_proxies_are_explicitly_neutralized(
+    tmp_path: Path,
+    command: str,
+    proxy_option: str,
+    forward_proxy: bool,
+) -> None:
+    docker_config = tmp_path / "docker-config"
+    docker_config.mkdir()
+    config = {
+        "auths": {"registry.example": {"auth": "preserved-auth-sentinel"}},
+        "currentContext": "preserved-context",
+        "proxies": {
+            "default": {
+                "httpProxy": "http://config-user:config-http-secret@proxy:8080",
+                "httpsProxy": "http://config-user:config-https-secret@proxy:8443",
+                "noProxy": "config.internal",
+                "ftpProxy": "ftp://config-user:config-ftp-secret@proxy:2121",
+                "allProxy": "socks5://config-user:config-all-secret@proxy:1080",
+            }
+        },
+    }
+    config_path = docker_config / "config.json"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    host_env = {
+        "DOCKER_CONFIG": str(docker_config),
+        "http_proxy": "http://host-user:host-http-lower@proxy:8080",
+        "https_proxy": "http://host-user:host-https-lower@proxy:8443",
+        "no_proxy": "host-lower.internal",
+        "HTTP_PROXY": "http://host-user:host-http-upper@proxy:8080",
+        "HTTPS_PROXY": "http://host-user:host-https-upper@proxy:8443",
+        "NO_PROXY": "host-upper.internal",
+        "ftp_proxy": "ftp://host-user:host-ftp-lower@proxy:2121",
+        "FTP_PROXY": "ftp://host-user:host-ftp-upper@proxy:2121",
+        "all_proxy": "socks5://host-user:host-all-lower@proxy:1080",
+        "ALL_PROXY": "socks5://host-user:host-all-upper@proxy:1080",
+    }
+    wrapper_args = [command, "--engine", "docker", "--dry-run"]
+    if not forward_proxy:
+        wrapper_args.append("--no-proxy")
+
+    result = run_wrapper(*wrapper_args, home=tmp_path, extra_env=host_env)
+    args = dry_run_args(result)
+    proxy_values = [
+        value
+        for value in option_values(args, proxy_option)
+        if value.partition("=")[0] in DOCKER_PROXY_VARS
+    ]
+
+    expected = [f"{name}=" for name in DOCKER_PROXY_VARS]
+    if forward_proxy:
+        expected.extend(PROXY_VARS)
+    assert proxy_values == expected
+    assert "--http-proxy=false" not in args
+
+    config_values = {
+        "http_proxy": config["proxies"]["default"]["httpProxy"],
+        "HTTP_PROXY": config["proxies"]["default"]["httpProxy"],
+        "https_proxy": config["proxies"]["default"]["httpsProxy"],
+        "HTTPS_PROXY": config["proxies"]["default"]["httpsProxy"],
+        "no_proxy": config["proxies"]["default"]["noProxy"],
+        "NO_PROXY": config["proxies"]["default"]["noProxy"],
+        "ftp_proxy": config["proxies"]["default"]["ftpProxy"],
+        "FTP_PROXY": config["proxies"]["default"]["ftpProxy"],
+        "all_proxy": config["proxies"]["default"]["allProxy"],
+        "ALL_PROXY": config["proxies"]["default"]["allProxy"],
+    }
+    effective = dict(config_values)
+    for value in proxy_values:
+        name, separator, explicit_value = value.partition("=")
+        effective[name] = explicit_value if separator else host_env[name]
+
+    for name in DOCKER_PROXY_VARS:
+        if forward_proxy and name in PROXY_VARS:
+            assert effective[name] == host_env[name]
+        else:
+            assert effective[name] == ""
+    assert json.loads(config_path.read_text(encoding="utf-8")) == config
+    for secret in (
+        "preserved-auth-sentinel",
+        "config-http-secret",
+        "config-https-secret",
+        "config-ftp-secret",
+        "config-all-secret",
+        "host-http-lower",
+        "host-https-lower",
+        "host-http-upper",
+        "host-https-upper",
+        "host-ftp-lower",
+        "host-ftp-upper",
+        "host-all-lower",
+        "host-all-upper",
+    ):
+        assert secret not in result.stdout + result.stderr
 
 
 def test_entrypoint_does_not_resolve_root_shell_from_checkout_path(

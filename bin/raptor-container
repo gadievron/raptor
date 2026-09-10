@@ -83,6 +83,10 @@ fi
 BASE_IMAGE="raptor:devcontainer"
 ALL_TOOLS_IMAGE="raptor:all-tools"
 PROXY_VARS=(http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY)
+DOCKER_PROXY_VARS=(
+    http_proxy https_proxy no_proxy ftp_proxy all_proxy
+    HTTP_PROXY HTTPS_PROXY NO_PROXY FTP_PROXY ALL_PROXY
+)
 
 die() {
     printf 'raptor-container: %s\n' "$*" >&2
@@ -130,8 +134,9 @@ Shell options:
 
 Auto-detection prefers Podman, then Docker. Proxy forwarding is limited to
 HTTP_PROXY, HTTPS_PROXY, NO_PROXY, and lowercase equivalents; values are never
-printed in dry-run output. Podman's automatic host-proxy injection is disabled;
-the allowlist is forwarded explicitly unless --no-proxy is used.
+printed in dry-run output. Podman's automatic host-proxy injection is disabled,
+and Docker client-config proxy defaults are explicitly cleared. The allowlist
+is forwarded explicitly unless --no-proxy is used.
 No token, credential file, auth directory, model, device, Docker socket, or
 host home directory is forwarded by default.
 Docker sessions inspect the daemon's user-namespace mode. Rootless Docker runs
@@ -429,6 +434,20 @@ add_proxy_run_args() {
     done
 }
 
+add_docker_proxy_build_resets() {
+    local name
+    for name in "${DOCKER_PROXY_VARS[@]}"; do
+        BUILD_CMD+=(--build-arg "$name=")
+    done
+}
+
+add_docker_proxy_run_resets() {
+    local name
+    for name in "${DOCKER_PROXY_VARS[@]}"; do
+        RUN_CMD+=(--env "$name=")
+    done
+}
+
 detect_docker_security_mode() {
     local engine_executable="$1"
     local security_options
@@ -553,6 +572,8 @@ build_image() {
     BUILD_CMD=("$engine_argv0" build)
     if [ "$engine" = "podman" ]; then
         BUILD_CMD+=(--http-proxy=false)
+    else
+        add_docker_proxy_build_resets
     fi
     BUILD_CMD+=(
         --file "$RAPTOR_DIR/.devcontainer/Dockerfile"
@@ -766,12 +787,15 @@ shell_image() {
             ro
         RUN_CMD+=(--env GOOGLE_APPLICATION_CREDENTIALS=/run/raptor-secrets/google-application-credentials.json)
     fi
-    if [ "$forward_proxy" -eq 1 ]; then
-        add_proxy_run_args
-    fi
     for name in "${forward_env[@]}"; do
         RUN_CMD+=(--env "$name")
     done
+    if [ "$engine" = "docker" ]; then
+        add_docker_proxy_run_resets
+    fi
+    if [ "$forward_proxy" -eq 1 ]; then
+        add_proxy_run_args
+    fi
     if [ "$rootful_docker" -eq 1 ]; then
         RUN_CMD+=(
             --env "RAPTOR_RUNTIME_UID=$host_uid"

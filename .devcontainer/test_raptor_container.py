@@ -16,6 +16,18 @@ from core.json.jsonc import load_jsonc
 
 ROOT = Path(__file__).resolve().parents[1]
 WRAPPER = ROOT / "bin" / "raptor-container"
+DOCKER_PROXY_VARS = (
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "ftp_proxy",
+    "all_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "FTP_PROXY",
+    "ALL_PROXY",
+)
 
 
 def run_wrapper(
@@ -96,6 +108,7 @@ def test_default_build_uses_canonical_target_and_hides_proxy_value(
     assert args[args.index("--target") + 1] == "raptor-devcontainer"
     assert args[args.index("--tag") + 1] == "raptor:devcontainer"
     assert option_values(args, "--build-arg") == [
+        *(f"{name}=" for name in DOCKER_PROXY_VARS),
         "no_proxy",
         "HTTPS_PROXY",
         "NO_PROXY",
@@ -116,7 +129,9 @@ def test_build_proxy_forwarding_can_be_disabled(tmp_path: Path) -> None:
     )
     args = dry_run_args(result)
 
-    assert "--build-arg" not in args
+    assert option_values(args, "--build-arg") == [
+        f"{name}=" for name in DOCKER_PROXY_VARS
+    ]
 
 
 def test_all_tools_build_requires_codeql_acceptance(tmp_path: Path) -> None:
