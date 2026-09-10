@@ -281,6 +281,23 @@ unset _symhops''',
         # (possibly operator-kept) PATH and could disagree with
         # this pinned one.
     ],
+    "bin/raptor-container": [
+        # Like the main launcher, the wrapper resolves its own pre-strip
+        # helpers through the system default PATH.
+        r'''SCRIPT="$0"
+_symhops=0
+while [ -L "$SCRIPT" ]; do
+    _symhops=$((_symhops + 1))
+    if [ "$_symhops" -gt 32 ]; then
+        echo "raptor-container: symlink hop limit exceeded resolving $0" >&2
+        exit 2
+    fi
+    DIR="$(cd "$(command -p dirname "$SCRIPT")" && pwd)"
+    SCRIPT="$(command -p readlink "$SCRIPT")"
+    [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
+done
+unset _symhops''',
+    ],
     "bin/raptor-sca": [("raptor-sca", 1, ())],
     "libexec/raptor-agentic": [("raptor-agentic", 1, ())],
     "libexec/raptor-cc-trust-check": [
@@ -306,6 +323,7 @@ ENV_STRIP_LINES = {
     "bin/cve-diff": '. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"',
     "bin/cve-env": '. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"',
     "bin/raptor": '. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"',
+    "bin/raptor-container": '. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"',
     "bin/raptor-sca": '. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"',
     "libexec/raptor-agentic": '. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"',
     "libexec/raptor-frida": '. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"',

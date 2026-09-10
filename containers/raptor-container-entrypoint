@@ -1,0 +1,84 @@
+#!/bin/bash -p
+
+set -euo pipefail
+
+SYSTEM_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+application_path="${PATH:-$SYSTEM_PATH}"
+# The image PATH includes the mounted checkout; keep it unreachable as root.
+export PATH="$SYSTEM_PATH"
+readonly SYSTEM_PATH application_path
+
+uid="${RAPTOR_RUNTIME_UID:?RAPTOR_RUNTIME_UID is required}"
+gid="${RAPTOR_RUNTIME_GID:?RAPTOR_RUNTIME_GID is required}"
+home="${RAPTOR_RUNTIME_HOME:-/home/raptor}"
+privileged="${RAPTOR_RUNTIME_PRIVILEGED:?RAPTOR_RUNTIME_PRIVILEGED is required}"
+
+[[ "$uid" =~ ^[0-9]+$ ]] || {
+    printf 'raptor-container-entrypoint: invalid UID: %s\n' "$uid" >&2
+    exit 64
+}
+[[ "$gid" =~ ^[0-9]+$ ]] || {
+    printf 'raptor-container-entrypoint: invalid GID: %s\n' "$gid" >&2
+    exit 64
+}
+case "$privileged" in
+    0|1) ;;
+    *)
+        printf 'raptor-container-entrypoint: invalid privileged flag: %s\n' \
+            "$privileged" >&2
+        exit 64
+        ;;
+esac
+
+group_name="$(getent group "$gid" | cut -d: -f1 || true)"
+if [ -z "$group_name" ]; then
+    group_name="raptor-host-$gid"
+    groupadd --gid "$gid" "$group_name"
+fi
+
+user_name="$(getent passwd "$uid" | cut -d: -f1 || true)"
+if [ -z "$user_name" ]; then
+    user_name="raptor-host-$uid"
+    useradd \
+        --uid "$uid" \
+        --gid "$group_name" \
+        --home-dir "$home" \
+        --no-create-home \
+        --shell /bin/bash \
+        "$user_name"
+else
+    usermod --gid "$group_name" --home "$home" --shell /bin/bash "$user_name"
+fi
+
+install -d -m 0700 -o "$uid" -g "$gid" "$home"
+
+sudoers_file="/etc/sudoers.d/zz-raptor-runtime"
+rm -f -- /etc/sudoers.d/raptor-runtime "$sudoers_file"
+if [ "$privileged" -eq 1 ]; then
+    printf '\\#%s ALL=(ALL) NOPASSWD:ALL\n' "$uid" > "$sudoers_file"
+    setpriv_group_args=(--init-groups)
+    setpriv_security_args=()
+else
+    rm -f -- "/etc/sudoers.d/$user_name"
+    printf '\\#%s ALL=(ALL) !ALL\n' "$uid" > "$sudoers_file"
+    setpriv_group_args=(--clear-groups)
+    setpriv_security_args=(--no-new-privs)
+fi
+chmod 0440 "$sudoers_file"
+/usr/sbin/visudo -cf "$sudoers_file" >/dev/null
+
+export HOME="$home"
+export USER="$user_name"
+export LOGNAME="$user_name"
+unset \
+    RAPTOR_RUNTIME_UID \
+    RAPTOR_RUNTIME_GID \
+    RAPTOR_RUNTIME_HOME \
+    RAPTOR_RUNTIME_PRIVILEGED
+
+exec /usr/bin/setpriv \
+    --reuid="$uid" \
+    --regid="$gid" \
+    "${setpriv_group_args[@]}" \
+    "${setpriv_security_args[@]}" \
+    -- /usr/bin/env -- "PATH=$application_path" "$@"

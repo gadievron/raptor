@@ -1,0 +1,698 @@
+#!/bin/bash -p
+#
+# Build and enter RAPTOR's Docker/Podman images with explicit host access.
+
+set -euo pipefail
+
+# Resolve the wrapper before sourcing the shared environment scrub. Privileged
+# Bash ignores startup hooks and imported functions; command -p keeps the only
+# pre-scrub external helpers on the system default PATH.
+SCRIPT="$0"
+_symhops=0
+while [ -L "$SCRIPT" ]; do
+    _symhops=$((_symhops + 1))
+    if [ "$_symhops" -gt 32 ]; then
+        echo "raptor-container: symlink hop limit exceeded resolving $0" >&2
+        exit 2
+    fi
+    DIR="$(cd "$(command -p dirname "$SCRIPT")" && pwd)"
+    SCRIPT="$(command -p readlink "$SCRIPT")"
+    [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
+done
+unset _symhops
+SCRIPT_DIR="$(cd -- "$(command -p dirname "$SCRIPT")" && pwd -P)"
+RAPTOR_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+
+. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"
+
+RAPTOR_SYSTEM_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+
+# Match bin/raptor's launcher policy after the bootstrap path is known safe.
+# Fixed host helpers resolve through system directories first, while inherited
+# PATH entries are retained only when they are absolute and not world-writable.
+if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
+    _rp() {
+        PATH="$RAPTOR_SYSTEM_PATH${PATH:+:$PATH}" command "$@"
+    }
+
+    _scrubbed="$RAPTOR_SYSTEM_PATH:"
+    _rest="${PATH:-}"
+    _last=""
+    while [ -z "$_last" ]; do
+        case "$_rest" in
+            *:*) _entry="${_rest%%:*}"; _rest="${_rest#*:}" ;;
+            *)   _entry="$_rest"; _last=1 ;;
+        esac
+        _drop_reason=""
+        _shown="$_entry"
+        if [ -z "$_entry" ]; then
+            _drop_reason="empty entry (resolves as cwd)"
+            _shown="(empty)"
+        elif [ "${_entry#/}" = "$_entry" ]; then
+            _drop_reason="relative entry"
+        elif [ -d "$_entry" ]; then
+            _perm="$(_rp stat -Lc '%a' "$_entry" 2>/dev/null \
+                     || _rp stat -Lf '%Lp' "$_entry" 2>/dev/null \
+                     || echo '')"
+            if [ -n "$_perm" ] && [ "$(( 0$_perm & 2 ))" -ne 0 ]; then
+                _drop_reason="world-writable dir"
+            fi
+        fi
+        if [ -n "$_drop_reason" ]; then
+            if [ -n "${RAPTOR_ALLOW_UNSAFE_PATH:-}" ]; then
+                echo "raptor-container: WARNING: keeping unsafe PATH entry ($_drop_reason; RAPTOR_ALLOW_UNSAFE_PATH set): $_shown" >&2
+                _scrubbed="$_scrubbed$_entry:"
+            else
+                echo "raptor-container: dropped unsafe PATH entry ($_drop_reason): $_shown" >&2
+            fi
+        else
+            _scrubbed="$_scrubbed$_entry:"
+        fi
+    done
+    PATH="${_scrubbed%:}"
+    export PATH
+    unset _scrubbed _rest _last _entry _drop_reason _shown _perm
+else
+    _rp() {
+        command "$@"
+    }
+fi
+
+BASE_IMAGE="raptor:devcontainer"
+ALL_TOOLS_IMAGE="raptor:all-tools"
+PROXY_VARS=(http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY)
+
+die() {
+    printf 'raptor-container: %s\n' "$*" >&2
+    exit 2
+}
+
+usage() {
+    _rp cat <<'EOF'
+Usage:
+  raptor-container build [options]
+  raptor-container shell [options] [-- command...]
+  raptor-container help
+
+Build options:
+  --all-tools                 Build the maximal tool image.
+  --accept-codeql-terms       Required with --all-tools; explicitly accepts
+                              the GitHub CodeQL Terms and Conditions.
+  --tag IMAGE                 Override the default image tag.
+  --pull                      Refresh the canonical base image.
+  --no-proxy                  Do not forward the proxy allowlist.
+  --engine docker|podman      Select an engine instead of auto-detection.
+  --dry-run                   Print the command without executing it.
+
+Shell options:
+  --all-tools                 Use raptor:all-tools instead of the base image.
+  --image IMAGE               Use an explicit image.
+  --checkout DIR              RAPTOR checkout mounted at /workspaces/raptor
+                              (default: the checkout containing this script).
+  --target DIR                Target mounted read-write at /target; also makes
+                              /target the initial shell/command directory.
+  --output DIR                Output mounted read-write at
+                              /workspaces/raptor/out; created when needed.
+  --privileged                Enable full kernel/namespace access needed by rr.
+                              Actual runs require host
+                              kernel.perf_event_paranoid <= 1.
+  --claude-auth DIR           Explicitly mount Claude state at
+                              the runtime user's ~/.claude.
+  --copilot-auth DIR          Explicitly mount Copilot state at
+                              the runtime user's ~/.copilot.
+  --gcp-credentials FILE      Mount one service-account/ADC JSON file read-only.
+  --env NAME                  Explicitly forward one host variable by name.
+  --no-proxy                  Do not forward the proxy allowlist.
+  --engine docker|podman      Select an engine instead of auto-detection.
+  --dry-run                   Print the command without executing it.
+
+Auto-detection prefers Podman, then Docker. Proxy forwarding is limited to
+HTTP_PROXY, HTTPS_PROXY, NO_PROXY, and lowercase equivalents; values are never
+printed in dry-run output. No token, credential file, auth directory, model,
+device, Docker socket, or host home directory is forwarded by default.
+Docker sessions inspect the daemon's user-namespace mode. Rootless Docker runs
+as container root, which maps to the invoking host user, with HOME=/root.
+Rootful Docker maps the host UID/GID through a short-lived entrypoint; daemon
+userns-remap is rejected. Docker and Podman apply shared SELinux relabeling to
+explicit bind mounts. The built-in raptor:devcontainer and raptor:all-tools
+tags are local-only for shell sessions and are never pulled automatically.
+Other explicit --image values retain the selected engine's pull behavior.
+Actual --privileged runs inspect /proc/sys/kernel/perf_event_paranoid and fail
+before starting the container unless it is <= 1. The wrapper never changes the
+host setting; use: sudo sysctl kernel.perf_event_paranoid=1. Dry-run does not
+probe the host sysctl.
+
+Examples:
+  bin/raptor-container build
+  bin/raptor-container build --all-tools --accept-codeql-terms
+  bin/raptor-container shell --target ../target --output ./out/container
+  bin/raptor-container shell --claude-auth "$HOME/.claude"
+  bin/raptor-container shell --all-tools --privileged --target ../target
+EOF
+}
+
+print_command() {
+    printf '+'
+    printf ' %q' "$@"
+    printf '\n'
+}
+
+run_command() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        print_command "$@"
+    else
+        "$@"
+    fi
+}
+
+require_privileged_perf_access() {
+    local perf_event_paranoid
+
+    [ "$DRY_RUN" -eq 0 ] || return 0
+    if ! IFS= read -r perf_event_paranoid \
+        < /proc/sys/kernel/perf_event_paranoid; then
+        die "--privileged requires readable host kernel.perf_event_paranoid <= 1 for rr; run: sudo sysctl kernel.perf_event_paranoid=1"
+    fi
+    if ! [[ "$perf_event_paranoid" =~ ^-?[0-9]+$ ]]; then
+        die "--privileged requires readable host kernel.perf_event_paranoid <= 1 for rr; run: sudo sysctl kernel.perf_event_paranoid=1"
+    fi
+    if [ "$perf_event_paranoid" -gt 1 ]; then
+        die "--privileged requires host kernel.perf_event_paranoid <= 1 for rr (found $perf_event_paranoid); run: sudo sysctl kernel.perf_event_paranoid=1"
+    fi
+}
+
+resolve_engine_executable() {
+    local name="$1"
+    local candidate
+
+    candidate="$(command -v "$name" 2>/dev/null || true)"
+    [ -n "$candidate" ] || return 1
+    candidate="$(_rp realpath -e -- "$candidate" 2>/dev/null)" || return 1
+    [ -f "$candidate" ] && [ -x "$candidate" ] || return 1
+    printf '%s\n' "$candidate"
+}
+
+resolve_engine() {
+    local candidate
+
+    ENGINE_NAME=""
+    ENGINE_EXECUTABLE=""
+    if [ -n "$ENGINE" ]; then
+        case "$ENGINE" in
+            docker|podman) ;;
+            *) die "--engine must be docker or podman" ;;
+        esac
+        ENGINE_NAME="$ENGINE"
+        if candidate="$(resolve_engine_executable "$ENGINE_NAME")"; then
+            ENGINE_EXECUTABLE="$candidate"
+        elif [ "$DRY_RUN" -eq 0 ]; then
+            die "$ENGINE is not installed or not in PATH"
+        fi
+        return
+    fi
+
+    if candidate="$(resolve_engine_executable podman)"; then
+        ENGINE_NAME="podman"
+        ENGINE_EXECUTABLE="$candidate"
+    elif candidate="$(resolve_engine_executable docker)"; then
+        ENGINE_NAME="docker"
+        ENGINE_EXECUTABLE="$candidate"
+    elif [ "$DRY_RUN" -eq 1 ]; then
+        ENGINE_NAME="podman"
+    else
+        die "neither podman nor docker is installed"
+    fi
+}
+
+require_value() {
+    [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 requires a value"
+}
+
+canonical_dir() {
+    local label="$1"
+    local path="$2"
+    [ -d "$path" ] || die "$label is not a directory: $path"
+    path="$(_rp realpath -e -- "$path")"
+    case "$path" in
+        *,*) die "$label cannot contain a comma: $path" ;;
+    esac
+    printf '%s\n' "$path"
+}
+
+canonical_file() {
+    local label="$1"
+    local path="$2"
+    [ -f "$path" ] || die "$label is not a file: $path"
+    path="$(_rp realpath -e -- "$path")"
+    case "$path" in
+        *,*) die "$label cannot contain a comma: $path" ;;
+    esac
+    printf '%s\n' "$path"
+}
+
+canonical_output_dir() {
+    local path="$1"
+    if [ -e "$path" ] && [ ! -d "$path" ]; then
+        die "output is not a directory: $path"
+    fi
+    if [ ! -e "$path" ]; then
+        if [ "$DRY_RUN" -eq 1 ]; then
+            local parent
+            parent="$(_rp dirname -- "$path")"
+            [ -d "$parent" ] || die "output parent is not a directory: $parent"
+            path="$(_rp realpath -e -- "$parent")/$(_rp basename -- "$path")"
+        else
+            _rp mkdir -p -- "$path"
+            path="$(_rp realpath -e -- "$path")"
+        fi
+    else
+        path="$(_rp realpath -e -- "$path")"
+    fi
+    case "$path" in
+        *,*) die "output cannot contain a comma: $path" ;;
+    esac
+    printf '%s\n' "$path"
+}
+
+canonicalize_no_proxy() {
+    local name value rest last entry
+    local merged=""
+
+    for name in no_proxy NO_PROXY; do
+        value="${!name:-}"
+        rest="$value"
+        last=""
+        while [ -z "$last" ]; do
+            case "$rest" in
+                *,*) entry="${rest%%,*}"; rest="${rest#*,}" ;;
+                *)   entry="$rest"; last=1 ;;
+            esac
+            [ -n "$entry" ] || continue
+            case ",$merged," in
+                *,"$entry",*) ;;
+                *) merged="${merged:+${merged},}${entry}" ;;
+            esac
+        done
+    done
+    for entry in localhost 127.0.0.1 ::1; do
+        case ",$merged," in
+            *,"$entry",*) ;;
+            *) merged="${merged:+${merged},}${entry}" ;;
+        esac
+    done
+    no_proxy="$merged"
+    NO_PROXY="$merged"
+    export no_proxy NO_PROXY
+}
+
+add_proxy_build_args() {
+    local name
+    canonicalize_no_proxy
+    for name in "${PROXY_VARS[@]}"; do
+        if [ -n "${!name:-}" ]; then
+            BUILD_CMD+=(--build-arg "$name")
+        fi
+    done
+}
+
+add_proxy_run_args() {
+    local name
+    for name in "${PROXY_VARS[@]}"; do
+        if [ -n "${!name:-}" ]; then
+            RUN_CMD+=(--env "$name")
+        fi
+    done
+}
+
+detect_docker_security_mode() {
+    local engine_executable="$1"
+    local security_options
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        DOCKER_SECURITY_MODE="rootful"
+        return
+    elif ! security_options="$(
+        "$engine_executable" info --format '{{json .SecurityOptions}}'
+    )"; then
+        die "cannot inspect Docker daemon security options; ensure 'docker info' works for the selected context"
+    fi
+
+    case "$security_options" in
+        *'"name=rootless"'*)
+            DOCKER_SECURITY_MODE="rootless"
+            ;;
+        *'"name=userns"'*)
+            DOCKER_SECURITY_MODE="remapped"
+            ;;
+        \[*\]|null)
+            DOCKER_SECURITY_MODE="rootful"
+            ;;
+        *)
+            die "unexpected Docker security-options response; expected JSON from 'docker info --format {{json .SecurityOptions}}'"
+            ;;
+    esac
+}
+
+add_bind_mount() {
+    local engine="$1"
+    local source="$2"
+    local destination="$3"
+    local access="${4:-rw}"
+
+    case "$access" in
+        rw|ro) ;;
+        *) die "unsupported bind mount access mode: $access" ;;
+    esac
+
+    if [ "$engine" = "docker" ]; then
+        case "$source" in
+            *:*)
+                die "Docker bind mount source cannot contain ':' when SELinux relabeling requires --volume syntax: $source"
+                ;;
+        esac
+        case "$destination" in
+            *:*)
+                die "Docker bind mount destination cannot contain ':' when SELinux relabeling requires --volume syntax: $destination"
+                ;;
+        esac
+
+        local options="z"
+        [ "$access" = "rw" ] || options="ro,z"
+        RUN_CMD+=(--volume "$source:$destination:$options")
+    else
+        local spec="type=bind,src=$source,dst=$destination"
+        spec+=",relabel=shared"
+        if [ "$access" = "ro" ]; then
+            spec+=",readonly"
+        fi
+        RUN_CMD+=(--mount "$spec")
+    fi
+}
+
+build_image() {
+    local all_tools=0
+    local accept_codeql_terms=0
+    local image=""
+    local pull=0
+    local forward_proxy=1
+
+    ENGINE=""
+    DRY_RUN=0
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --all-tools) all_tools=1 ;;
+            --accept-codeql-terms) accept_codeql_terms=1 ;;
+            --tag)
+                require_value "$@"
+                image="$2"
+                shift
+                ;;
+            --pull) pull=1 ;;
+            --no-proxy) forward_proxy=0 ;;
+            --engine)
+                require_value "$@"
+                ENGINE="$2"
+                shift
+                ;;
+            --dry-run) DRY_RUN=1 ;;
+            -h|--help)
+                usage
+                return
+                ;;
+            *) die "unknown build option: $1" ;;
+        esac
+        shift
+    done
+
+    if [ "$all_tools" -eq 1 ] && [ "$accept_codeql_terms" -ne 1 ]; then
+        die "--all-tools requires --accept-codeql-terms"
+    fi
+    if [ "$all_tools" -ne 1 ] && [ "$accept_codeql_terms" -eq 1 ]; then
+        die "--accept-codeql-terms is only valid with --all-tools"
+    fi
+
+    local engine engine_argv0 target
+    resolve_engine
+    engine="$ENGINE_NAME"
+    engine_argv0="$ENGINE_EXECUTABLE"
+    [ "$DRY_RUN" -eq 0 ] || engine_argv0="$engine"
+    if [ "$all_tools" -eq 1 ]; then
+        target="raptor-all-tools"
+        image="${image:-$ALL_TOOLS_IMAGE}"
+    else
+        target="raptor-devcontainer"
+        image="${image:-$BASE_IMAGE}"
+    fi
+
+    BUILD_CMD=(
+        "$engine_argv0" build
+        --file "$RAPTOR_DIR/.devcontainer/Dockerfile"
+        --target "$target"
+        --tag "$image"
+    )
+    [ "$pull" -eq 0 ] || BUILD_CMD+=(--pull)
+    if [ "$all_tools" -eq 1 ]; then
+        BUILD_CMD+=(--build-arg ACCEPT_CODEQL_TERMS=1)
+    fi
+    if [ "$forward_proxy" -eq 1 ]; then
+        add_proxy_build_args
+    fi
+    BUILD_CMD+=("$RAPTOR_DIR")
+
+    run_command "${BUILD_CMD[@]}"
+}
+
+shell_image() {
+    local all_tools=0
+    local image=""
+    local checkout="$RAPTOR_DIR"
+    local target=""
+    local output=""
+    local privileged=0
+    local claude_auth=""
+    local copilot_auth=""
+    local gcp_credentials=""
+    local forward_proxy=1
+    local -a forward_env=()
+    local -a shell_command=()
+
+    ENGINE=""
+    DRY_RUN=0
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --all-tools) all_tools=1 ;;
+            --image)
+                require_value "$@"
+                image="$2"
+                shift
+                ;;
+            --checkout)
+                require_value "$@"
+                checkout="$2"
+                shift
+                ;;
+            --target)
+                require_value "$@"
+                target="$2"
+                shift
+                ;;
+            --output)
+                require_value "$@"
+                output="$2"
+                shift
+                ;;
+            --privileged) privileged=1 ;;
+            --claude-auth)
+                require_value "$@"
+                claude_auth="$2"
+                shift
+                ;;
+            --copilot-auth)
+                require_value "$@"
+                copilot_auth="$2"
+                shift
+                ;;
+            --gcp-credentials)
+                require_value "$@"
+                gcp_credentials="$2"
+                shift
+                ;;
+            --env)
+                require_value "$@"
+                forward_env+=("$2")
+                shift
+                ;;
+            --no-proxy) forward_proxy=0 ;;
+            --engine)
+                require_value "$@"
+                ENGINE="$2"
+                shift
+                ;;
+            --dry-run) DRY_RUN=1 ;;
+            -h|--help)
+                usage
+                return
+                ;;
+            --)
+                shift
+                shell_command=("$@")
+                break
+                ;;
+            *) die "unknown shell option: $1" ;;
+        esac
+        shift
+    done
+
+    checkout="$(canonical_dir "checkout" "$checkout")"
+    [ -f "$checkout/bin/raptor" ] || die "checkout does not contain bin/raptor: $checkout"
+    [ -z "$target" ] || target="$(canonical_dir "target" "$target")"
+    [ -z "$output" ] || output="$(canonical_output_dir "$output")"
+    [ -z "$claude_auth" ] || claude_auth="$(canonical_dir "Claude auth directory" "$claude_auth")"
+    [ -z "$copilot_auth" ] || copilot_auth="$(canonical_dir "Copilot auth directory" "$copilot_auth")"
+    [ -z "$gcp_credentials" ] || gcp_credentials="$(canonical_file "GCP credentials" "$gcp_credentials")"
+
+    local name
+    for name in "${forward_env[@]}"; do
+        [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "invalid environment variable name: $name"
+        [ "${!name+x}" = x ] || die "host environment variable is not set: $name"
+    done
+
+    if [ "$privileged" -eq 1 ]; then
+        require_privileged_perf_access
+    fi
+    if [ "$forward_proxy" -eq 1 ]; then
+        canonicalize_no_proxy
+    fi
+
+    local engine engine_argv0 runtime_home workdir
+    local rootful_docker=0
+    local host_uid=""
+    local host_gid=""
+    resolve_engine
+    engine="$ENGINE_NAME"
+    engine_argv0="$ENGINE_EXECUTABLE"
+    [ "$DRY_RUN" -eq 0 ] || engine_argv0="$engine"
+    runtime_home="/home/vscode"
+    workdir="/workspaces/raptor"
+    [ -z "$target" ] || workdir="/target"
+    DOCKER_SECURITY_MODE=""
+    if [ "$engine" = "docker" ]; then
+        detect_docker_security_mode "$engine_argv0"
+        if [ "$DOCKER_SECURITY_MODE" = "remapped" ]; then
+            die "Docker daemon userns-remap cannot safely write these host bind mounts; use rootless Docker, select Podman with '--engine podman', or disable daemon userns-remap"
+        fi
+    fi
+    if [ -z "$image" ]; then
+        if [ "$all_tools" -eq 1 ]; then
+            image="$ALL_TOOLS_IMAGE"
+        else
+            image="$BASE_IMAGE"
+        fi
+    fi
+
+    RUN_CMD=("$engine_argv0" run)
+    case "$image" in
+        "$BASE_IMAGE"|"$ALL_TOOLS_IMAGE")
+            RUN_CMD+=(--pull=never)
+            ;;
+    esac
+    RUN_CMD+=(
+        --rm
+        --interactive
+        --workdir "$workdir"
+        --hostname raptor
+        --env RAPTOR_CONTAINER=1
+        --env RAPTOR_DIR=/workspaces/raptor
+        --env "RAPTOR_CONTAINER_PRIVILEGED=$privileged"
+    )
+    if [ -t 0 ] && [ -t 1 ]; then
+        RUN_CMD+=(--tty)
+    fi
+    if [ "$engine" = "podman" ]; then
+        RUN_CMD+=(--userns=keep-id:uid=1000,gid=1000)
+    elif [ "$DOCKER_SECURITY_MODE" = "rootless" ]; then
+        runtime_home="/root"
+        RUN_CMD+=(
+            --user 0:0
+            --env "HOME=$runtime_home"
+        )
+    else
+        host_uid="$(_rp id -u)"
+        host_gid="$(_rp id -g)"
+        [[ "$host_uid" =~ ^[0-9]+$ ]] || die "host UID is not numeric: $host_uid"
+        [[ "$host_gid" =~ ^[0-9]+$ ]] || die "host GID is not numeric: $host_gid"
+        runtime_home="/home/raptor"
+        rootful_docker=1
+        RUN_CMD+=(
+            --user 0:0
+            --entrypoint /usr/local/bin/raptor-container-entrypoint
+        )
+    fi
+    [ "$privileged" -eq 0 ] || RUN_CMD+=(--privileged)
+
+    add_bind_mount "$engine" "$checkout" /workspaces/raptor
+    if [ -n "$target" ]; then
+        add_bind_mount "$engine" "$target" /target
+        RUN_CMD+=(--env RAPTOR_CALLER_DIR=/target)
+    fi
+    if [ -n "$output" ]; then
+        add_bind_mount "$engine" "$output" /workspaces/raptor/out
+    fi
+    if [ -n "$claude_auth" ]; then
+        add_bind_mount "$engine" "$claude_auth" "$runtime_home/.claude"
+    fi
+    if [ -n "$copilot_auth" ]; then
+        add_bind_mount "$engine" "$copilot_auth" "$runtime_home/.copilot"
+    fi
+    if [ -n "$gcp_credentials" ]; then
+        add_bind_mount \
+            "$engine" \
+            "$gcp_credentials" \
+            /run/raptor-secrets/google-application-credentials.json \
+            ro
+        RUN_CMD+=(--env GOOGLE_APPLICATION_CREDENTIALS=/run/raptor-secrets/google-application-credentials.json)
+    fi
+    if [ "$forward_proxy" -eq 1 ]; then
+        add_proxy_run_args
+    fi
+    for name in "${forward_env[@]}"; do
+        RUN_CMD+=(--env "$name")
+    done
+    if [ "$rootful_docker" -eq 1 ]; then
+        RUN_CMD+=(
+            --env "RAPTOR_RUNTIME_UID=$host_uid"
+            --env "RAPTOR_RUNTIME_GID=$host_gid"
+            --env "RAPTOR_RUNTIME_HOME=$runtime_home"
+            --env "RAPTOR_RUNTIME_PRIVILEGED=$privileged"
+            --env "HOME=$runtime_home"
+        )
+    fi
+
+    RUN_CMD+=("$image")
+    if [ "${#shell_command[@]}" -eq 0 ]; then
+        RUN_CMD+=(bash)
+    else
+        RUN_CMD+=("${shell_command[@]}")
+    fi
+
+    run_command "${RUN_CMD[@]}"
+}
+
+case "${1:-help}" in
+    build)
+        shift
+        build_image "$@"
+        ;;
+    shell)
+        shift
+        shell_image "$@"
+        ;;
+    help|-h|--help)
+        usage
+        ;;
+    *)
+        die "unknown command: $1 (expected build, shell, or help)"
+        ;;
+esac
