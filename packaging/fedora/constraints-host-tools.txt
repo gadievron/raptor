@@ -1,0 +1,30 @@
+# Cross-install constraints for optional Python tools added to RAPTOR's Fedora
+# project environment. Keep shared transitive dependencies in the intersection
+# accepted by Semgrep and the documented Google Cloud/BigQuery clients.
+
+# Semgrep 1.172.0 requires jsonschema~=4.25.1.
+jsonschema==4.25.1
+
+# Semgrep requires OpenTelemetry 1.37/0.58. google-api-core 2.36.0 raises its
+# minimum to OpenTelemetry 1.44, so BigQuery must remain on the newest
+# non-yanked release before that change.
+google-api-core==2.34.0
+opentelemetry-api==1.37.0
+opentelemetry-sdk==1.37.0
+opentelemetry-exporter-otlp-proto-common==1.37.0
+opentelemetry-exporter-otlp-proto-http==1.37.0
+opentelemetry-proto==1.37.0
+opentelemetry-instrumentation==0.58b0
+opentelemetry-instrumentation-requests==0.58b0
+opentelemetry-instrumentation-threading==0.58b0
+opentelemetry-semantic-conventions==0.58b0
+opentelemetry-util-http==0.58b0
+
+# BigQuery/google-api-core requires protobuf >=6.33.5, while OpenTelemetry
+# 1.37 requires protobuf <7.
+protobuf==6.33.6
+googleapis-common-protos==1.75.3
+proto-plus==1.28.4
+grpcio==1.83.1
+grpcio-status==1.83.1
+

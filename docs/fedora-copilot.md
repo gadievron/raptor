@@ -268,6 +268,10 @@ cd "$HOME/src/copilot/raptor"
 source .venv/bin/activate
 ```
 
+Python packages added by the recipes below use
+`packaging/fedora/constraints-host-tools.txt` so their shared dependencies
+remain compatible with the Semgrep installation in RAPTOR's main environment.
+
 ### CodeQL 2.26.4 official bundle
 
 Read GitHub's
@@ -358,7 +362,16 @@ for tool in \
   pysrc2cpg rubysrc2cpg; do
   ln -sfn "$JOERN_ROOT/joern-cli/$tool" "$HOME/.local/bin/$tool"
 done
-joern --version
+python - "$JOERN_ROOT/joern-cli/lib" "$JOERN_VERSION" <<'PY'
+from pathlib import Path
+import sys
+
+prefix = "io.joern.joern-cli-"
+jar, = sorted(Path(sys.argv[1]).glob(f"{prefix}*.jar"))
+version = jar.name[len(prefix):-4]
+assert version == sys.argv[2], f"unexpected Joern version: {version}"
+print(f"Joern {version}")
+PY
 )
 ```
 
@@ -398,6 +411,7 @@ export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
 export GHIDRA_INSTALL_DIR="$GHIDRA_ROOT"
 test -x "$JAVA_HOME/bin/java"
 python -m pip install \
+  -c packaging/fedora/constraints-host-tools.txt \
   "pyghidra==3.1.0"
 python -c \
   'from importlib.metadata import version; import pyghidra; print(version("pyghidra"))'
@@ -433,7 +447,7 @@ case "$(uname -m)" in
     ;;
   aarch64|arm64)
     GCLOUD_ARCH=arm
-    GCLOUD_SHA256=8bdb58368fffe2faf2119ffbb66070b5da6fa98a4af55eb5baab33f93cdea880
+    GCLOUD_SHA256=8ce6287e01e54b53d2e9618d124b62ac85efe5a093904ae027b17f2057030662
     ;;
   *)
     printf 'Unsupported Google Cloud CLI architecture: %s\n' "$(uname -m)" >&2
@@ -467,6 +481,7 @@ bq version
 cd "$HOME/src/copilot/raptor"
 source .venv/bin/activate
 python -m pip install \
+  -c packaging/fedora/constraints-host-tools.txt \
   "google-auth==2.57.1" \
   "google-cloud-bigquery==3.45.0"
 python -m pip check
@@ -630,6 +645,7 @@ Install the validated client and CLI versions in RAPTOR's venv:
 cd "$HOME/src/copilot/raptor"
 source .venv/bin/activate
 python -m pip install \
+  -c packaging/fedora/constraints-host-tools.txt \
   "frida==17.17.0" \
   "frida-tools==14.10.4"
 frida --version
