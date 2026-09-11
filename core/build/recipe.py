@@ -152,8 +152,13 @@ def _cmake_recipe(target: Path) -> BuildRecipe:
         "cmake-build-debug", "cmake-build-release",
     ):
         if (target / existing).is_dir():
+            # Point cmake back at the SOURCE ROOT from wherever the
+            # build dir sits. A hardcoded ".." breaks for nested
+            # conventions: from <target>/out/build it would aim at
+            # <target>/out, which has no CMakeLists.txt.
+            rel_root = "/".join(".." for _ in Path(existing).parts)
             steps.append(RecipeStep(
-                command=f"cd <target>/{existing} && cmake .. && make",
+                command=f"cd <target>/{existing} && cmake {rel_root} && make",
             ))
             return BuildRecipe(build_system="cmake", steps=steps)
     # No existing build dir — create the canonical one.

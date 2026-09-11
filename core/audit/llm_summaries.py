@@ -59,10 +59,20 @@ def build_summary_prompt(
     source: str,
     *,
     model_id: str = "",
+    hardened: bool = False,
 ) -> tuple[str, str]:
     """Envelope the summary-extraction prompt: source code in an
     ``UntrustedBlock``, identifiers in slots, instructions in system.
-    Returns ``(user, system)``."""
+    Returns ``(user, system)``.
+
+    ``hardened=True`` renders the source datamarked instead of
+    plaintext — the escape hatch for sources the injection preflight
+    flags (security tooling reviewing itself trips the corpus
+    constantly): sentinel-interleaving breaks up the very phrasing the
+    preflight objected to, so the function gets an LLM summary instead
+    of none. Base64 stays off in both modes (the extraction ask over
+    an encoded payload is the measured hard-refusal conjunction).
+    """
     from core.security.prompt_envelope import TaintedString, UntrustedBlock
 
     from ._util import envelope_prompt
@@ -83,6 +93,15 @@ def build_summary_prompt(
     # rendering: pre-call preflight over the source, post-parse
     # source-grounding of every extracted claim, envelope-echo
     # discard — see _ground_summary / summarize_functions.
+    if hardened:
+        # datamark_payload (not no_base64_payload): the ladder's whole
+        # admission argument is the sentinel interleaving, so it must
+        # hold on profiles whose default datamarking is off
+        # (CONSERVATIVE/unknown models) too.
+        return envelope_prompt(
+            _SUMMARY_SYSTEM_PROMPT, (block,), slots, model_id=model_id,
+            datamark_payload=True,
+        )
     return envelope_prompt(
         _SUMMARY_SYSTEM_PROMPT, (block,), slots, model_id=model_id,
         transparent_payload=True,
@@ -226,26 +245,35 @@ def run_llm_summary_pass(
 
     def _do_one(item: tuple) -> tuple | None:
         file_path, function_name, source = item
-        # Injection preflight over the source BEFORE spending the
-        # call: the summary class renders its payload plaintext (see
-        # build_summary_prompt), so a source file carrying known
-        # injection phrasing gets no LLM pass at all — the mechanical
-        # (Joern/AST) summary path covers it instead. Real code
-        # essentially never trips the corpus; a hit is a loud signal.
+        # Injection preflight over the source BEFORE choosing the
+        # rendering: the summary class defaults to a plaintext payload
+        # (see build_summary_prompt), so a source carrying known
+        # injection phrasing is escalated to the hardened datamarked
+        # rendering below — one LLM attempt whose failure degrades to
+        # the mechanical (Joern/AST) summary path.
         from core.security.prompt_input_preflight import preflight
 
         pf = preflight(source)
-        if pf.has_injection_indicators:
+        hardened = bool(pf.has_injection_indicators)
+        if hardened:
+            # Escape ladder instead of a flat skip: flagged sources
+            # (security tooling reviewing itself trips the corpus
+            # constantly) get the DATAMARKED rendering — the sentinel
+            # interleaving structurally breaks the phrasing the
+            # preflight flagged, so the plaintext-only risk this
+            # guard existed for does not apply. A refusal or failure
+            # on the hardened call degrades to mechanical summaries,
+            # exactly like the old skip.
             logger.warning(
                 "llm_summary: injection indicators (%s) in %s:%s "
-                "source — skipping LLM summary for this function "
-                "(mechanical summaries only)",
+                "source — using hardened (datamarked) rendering for "
+                "this function's summary",
                 ",".join(pf.indicators), file_path, function_name,
             )
-            return None
         prompt, system_prompt = build_summary_prompt(
             file_path, function_name, source,
             model_id=getattr(client, "model_name", "") or "",
+            hardened=hardened,
         )
         # Short call class: minimal prompt, small response. The
         # per-call ceiling (honoured by the claudecode transport;
@@ -306,8 +334,23 @@ def _read_source(
     line_start: int | None = None,
     line_end: int | None = None,
 ) -> str | None:
-    """Read function source from the target directory."""
-    full_path = target_path / file_path
+    """Read function source from the target directory.
+
+    ``file_path`` comes from checklist-gap dicts (LLM-writable), so
+    the join is containment-checked (``core.paths.confine``): an
+    absolute value discards ``target_path`` under ``/`` semantics and
+    ``../`` values escape the root (CWE-22) — the whole file would
+    then flow into LLM summary prompts.
+    """
+    from core.paths import confine
+
+    full_path = confine(target_path, file_path)
+    if full_path is None:
+        logger.warning(
+            "_read_source: refusing path outside target root: %r",
+            file_path,
+        )
+        return None
     if not full_path.is_file():
         return None
 

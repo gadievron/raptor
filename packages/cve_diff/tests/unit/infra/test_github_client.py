@@ -206,35 +206,35 @@ class TestCommitExists:
     def test_422_returns_false(self, fake: _FakeClient) -> None:
         """422 = GH can't parse the SHA as a valid commit ref."""
         fake.queue(
-            "https://api.github.com/repos/x/y/commits/bogus",
+            "https://api.github.com/repos/x/y/commits/b0b0b0b",
             HttpError("Invalid", status=422),
         )
-        assert github_client.commit_exists("x/y", "bogus") is False
+        assert github_client.commit_exists("x/y", "b0b0b0b") is False
 
     def test_403_rate_limited_returns_none(
         self, fake: _FakeClient,
     ) -> None:
         fake.queue(
-            "https://api.github.com/repos/x/y/commits/abc",
+            "https://api.github.com/repos/x/y/commits/abcd",
             HttpError("rate limited", status=403),
         )
-        assert github_client.commit_exists("x/y", "abc") is None
+        assert github_client.commit_exists("x/y", "abcd") is None
 
     def test_memoizes_per_slug_sha_pair(
         self, fake: _FakeClient,
     ) -> None:
         fake.queue(
-            "https://api.github.com/repos/x/y/commits/abc",
-            {"sha": "abc"},
+            "https://api.github.com/repos/x/y/commits/abcd",
+            {"sha": "abcd"},
         )
-        github_client.commit_exists("x/y", "abc")
-        github_client.commit_exists("x/y", "abc")
+        github_client.commit_exists("x/y", "abcd")
+        github_client.commit_exists("x/y", "abcd")
         assert len(fake.calls) == 1
 
     def test_empty_slug_or_sha_returns_none(
         self, fake: _FakeClient,
     ) -> None:
-        assert github_client.commit_exists("", "abc") is None
+        assert github_client.commit_exists("", "abcd") is None
         assert github_client.commit_exists("x/y", "") is None
         assert fake.calls == []
 
@@ -266,22 +266,22 @@ class TestGetCommitFiles:
     ) -> None:
         """A commit with no file changes (rare but valid) returns []."""
         fake.queue(
-            "https://api.github.com/repos/x/y/commits/abc",
-            {"sha": "abc"},
+            "https://api.github.com/repos/x/y/commits/abcd",
+            {"sha": "abcd"},
         )
-        assert github_client.get_commit_files("x/y", "abc") == []
+        assert github_client.get_commit_files("x/y", "abcd") == []
 
     def test_403_returns_none(self, fake: _FakeClient) -> None:
         fake.queue(
-            "https://api.github.com/repos/x/y/commits/abc",
+            "https://api.github.com/repos/x/y/commits/abcd",
             HttpError("rate limited", status=403),
         )
-        assert github_client.get_commit_files("x/y", "abc") is None
+        assert github_client.get_commit_files("x/y", "abcd") is None
 
     def test_empty_slug_or_sha_returns_none(
         self, fake: _FakeClient,
     ) -> None:
-        assert github_client.get_commit_files("", "abc") is None
+        assert github_client.get_commit_files("", "abcd") is None
         assert github_client.get_commit_files("x/y", "") is None
         assert fake.calls == []
 
@@ -300,3 +300,39 @@ class TestWarnIfTokenMissing:
         calls: list[str] = []
         github_client.warn_if_token_missing(echo=calls.append)
         assert calls == []
+
+
+class TestUrlShapeGate:
+    """slug/sha shape validation at the chokepoint: these values arrive
+    from advisory data and free-form LLM tool arguments, and every URL
+    here carries the operator's GITHUB_TOKEN — path traversal and
+    query injection must never reach the network."""
+
+    def test_traversal_slug_rejected_without_network(self, fake: _FakeClient) -> None:
+        assert github_client.get_repo("x/y/../../../user") is None
+        assert github_client.get_languages("x/../user") is None
+        assert github_client.commit_exists("x/y/../../../user", "abcd1234") is None
+        assert github_client.get_commit("x/y/../z", "abcd1234") is None
+        assert fake.calls == []
+
+    def test_query_injection_sha_rejected_without_network(self, fake: _FakeClient) -> None:
+        assert github_client.commit_exists("x/y", "abc1234?per_page=1&foo=") is None
+        assert github_client.get_commit("x/y", "abc1234#frag") is None
+        assert fake.calls == []
+
+    def test_dot_segment_repo_rejected_without_network(self, fake: _FakeClient) -> None:
+        assert github_client.get_repo("owner/..") is None
+        assert github_client.get_repo("owner/.") is None
+        assert fake.calls == []
+
+    def test_dotted_repo_name_accepted(self, fake: _FakeClient) -> None:
+        fake.queue(
+            "https://api.github.com/repos/socketio/socket.io",
+            {"full_name": "socketio/socket.io"},
+        )
+        assert github_client.get_repo("socketio/socket.io") is not None
+
+    def test_non_hex_sha_rejected_without_network(self, fake: _FakeClient) -> None:
+        assert github_client.commit_exists("x/y", "main") is None
+        assert github_client.commit_exists("x/y", "v1.2.3") is None
+        assert fake.calls == []

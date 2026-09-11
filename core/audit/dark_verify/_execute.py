@@ -313,25 +313,40 @@ _RUST_MACRO_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*!")
 # constructor initializer; `process` covers std::process spellings.
 _RUST_FORBIDDEN_TOKENS = ("unsafe", "process")
 
+# The one call shape a Rust setup initializer may keep: zero-argument
+# method segments on a (byte-)string literal — the same concession the
+# shared arg_expression grammar makes ('"x".to_string()').  After
+# masking, a string literal reads `_S_` and a byte-string `b_S_`.  A
+# literal receiver is capability-free: no path to fs / io / env, so it
+# cannot reach the harness source or the process image.
+_RUST_LITERAL_METHOD_RE = re.compile(
+    r"^&?\s*b?_S_(?:\.[A-Za-z_][A-Za-z0-9_]*\(\))+$"
+)
+
 
 def _rust_expr_error(expr: str) -> str | None:
     """Allowlist for one Rust initializer EXPRESSION.
 
-    Wider than the shared arg_expression grammar: plain function /
-    constructor / method calls over identifier paths and literals are
-    allowed (`bytes::Bytes::from_static(&[0x40u8])` is the bread and
-    butter of real Rust witnesses). This stays sound because setup
-    lines execute BEFORE the harness's pre-call sentinel: a setup
-    expression that crashes does so pre-sentinel (classified as a
-    setup-phase failure, never a confirmation), and the verdict
-    channel itself is authenticated (JSON token + post-sentinel
-    sanitizer ordering). Statements, blocks, closures, non-vec!
-    macros, comparisons and arithmetic-deref shapes stay rejected —
-    the field remains a single expression, not code.
+    NO general function / constructor / method calls — the same
+    doctrine as the C declaration-only grammar.  An earlier revision
+    allowed plain calls on the argument that setup lines run BEFORE
+    the pre-call sentinel, so a crash there could never confirm.  That
+    argument was unsound: the run sandbox grants the witness read on
+    its own work directory (it must, to exec the binary), where
+    harness.rs — and the binary image itself — carry the run's secret
+    sentinel token.  A call-capable setup expression can read the
+    token, replay the sentinel line plus a forged sanitizer report to
+    stderr, then panic — minting verdict="confirmed" against a benign
+    target.  No out-of-band token delivery survives arbitrary
+    pre-sentinel call power (the token must eventually reach the
+    process image), so the call surface itself is what gets removed.
+    Illegitimate-but-real constructor initializers now fail validation
+    → the witness is dropped (verdict="error"), never run: the failure
+    direction is inconclusive, not forged confirmation.
 
-    NOTE the asymmetry with arg_expressions: call arguments evaluate
-    AFTER the sentinel (a panicking argument would read as the target
-    crashing), so args keep the strict literal grammar.
+    Still allowed: literals, identifier paths, references, arrays,
+    ``vec![…]``, and zero-argument methods on string/byte literals
+    (capability-free receivers, mirroring arg_expressions).
     """
     masked = _C_STRING_LIT_RE.sub("_S_", expr.strip())
     masked = _C_CHAR_LIT_RE.sub("_S_", masked)
@@ -349,6 +364,9 @@ def _rust_expr_error(expr: str) -> str | None:
     for m in _RUST_MACRO_RE.finditer(masked):
         if m.group(1) != "vec":
             return f"macro not allowed: {m.group(1)}!"
+    if ("(" in masked or ")" in masked) and not \
+            _RUST_LITERAL_METHOD_RE.match(masked):
+        return "function call not allowed"
     # Bracket balance + `;` and `,` only inside brackets (array
     # `[elem; count]`, argument lists). A top-level `;` is a second
     # statement.
@@ -471,6 +489,25 @@ def validate_spec(
         return f"invalid class_name: {cn!r}"
 
     if lang == "java":
+        # javac translates backslash-uXXXX escapes EVERYWHERE in
+        # phase 1 (JLS 3.3), before tokenization — a string Constant
+        # carrying the escape for a double quote passes the
+        # Python-literal allowlist yet becomes a closing quote in the
+        # pasted harness (and the linefeed escape smuggles a newline
+        # past the newline check), letting an LLM-authored arg inject
+        # statements that print the verdict JSON and mint "confirmed"
+        # against a benign target. Any backslash-u shape is rejected
+        # for the Java harness (JLS allows repeated u markers, so the
+        # two-character prefix is the decisive shape); the lost exotic
+        # legit arg degrades to no-witness, never to a wrong verdict.
+        for expr in (
+            lc.get("arg_expressions") or [str(a) for a in spec.args]
+        ):
+            if "\\u" in str(expr):
+                return (
+                    "code injection risk in arg_expression (java "
+                    f"unicode escape): {str(expr)[:60]!r}"
+                )
         # imports are pasted into `import <x>;` lines — allowlist to a
         # dotted identifier path (an embedded newline used to survive
         # the generator's ';' strip and inject top-level Java code).
@@ -634,6 +671,7 @@ def _classify_json_output(
     language: str,
     *,
     expected_token: str = "",
+    sanitizers_active: bool = True,
 ) -> DarkVerifyResult:
     """Classify JSON-formatted output from any language harness.
 
@@ -729,6 +767,21 @@ def _classify_json_output(
         # predicted a crash/sanitizer signal and returned normally is
         # refuted regardless of what the value happens to be.
         if spec.expected_crash or spec.expected_sanitizer:
+            if not sanitizers_active:
+                # The binary ran WITHOUT its sanitizers (the Rust
+                # executor's non-instrumented fallback build): a
+                # memory-safety bug can complete "normally" there, so
+                # the clean run is not a refutation.
+                return DarkVerifyResult(
+                    finding_key=spec.finding_key, verdict="inconclusive",
+                    language=language, actual_return=actual_repr,
+                    match_detail=(
+                        "expected crash/sanitizer signal and the run "
+                        "completed normally — but the fallback build "
+                        "carries no sanitizers, so the crash could not "
+                        "have been observed; not a refutation"
+                    ),
+                )
             return DarkVerifyResult(
                 finding_key=spec.finding_key, verdict="refuted",
                 language=language, actual_return=actual_repr,
@@ -1396,8 +1449,14 @@ def _run_native_binary(
     lang: str,
     *,
     expected_token: str = "",
+    sanitizers_active: bool = True,
 ) -> DarkVerifyResult:
-    """Run a compiled binary and classify the result."""
+    """Run a compiled binary and classify the result.
+
+    ``sanitizers_active=False`` marks a binary built WITHOUT its
+    sanitizers (the Rust executor's fallback build) — clean runs then
+    lose refutation authority in the classifier.
+    """
     from core.config import RaptorConfig
     env = RaptorConfig.get_safe_env()
     env["ASAN_OPTIONS"] = "detect_leaks=0"
@@ -1440,7 +1499,8 @@ def _run_native_binary(
 
     sandbox_info = getattr(proc, "sandbox_info", None)
     return _classify_native_output(
-        spec, proc, sandbox_info, lang, expected_token=expected_token)
+        spec, proc, sandbox_info, lang, expected_token=expected_token,
+        sanitizers_active=sanitizers_active)
 
 
 # One sanitizer report line: the bug-type-and-context tail of an
@@ -1515,6 +1575,7 @@ def _classify_native_output(
     lang: str,
     *,
     expected_token: str = "",
+    sanitizers_active: bool = True,
 ) -> DarkVerifyResult:
     """Classify output from a native binary execution.
 
@@ -1699,6 +1760,23 @@ def _classify_native_output(
 
     stdout = (proc.stdout or "")[:_MAX_OUTPUT_BYTES]
     if spec.expected_crash:
+        if not sanitizers_active:
+            # Non-instrumented fallback build (rustc without -Z
+            # sanitizer support): a memory-safety crash the witness
+            # predicted may simply not manifest without ASan.  A
+            # clean exit there proves nothing — silent sanitizer loss
+            # must not keep refutation authority.
+            return DarkVerifyResult(
+                finding_key=spec.finding_key, verdict="inconclusive",
+                language=lang,
+                actual_return=stdout[:200],
+                match_detail=(
+                    "expected crash and the process exited normally — "
+                    "but the fallback build carries no sanitizers, so "
+                    "the predicted crash could not have been observed; "
+                    "not a refutation"
+                ),
+            )
         return DarkVerifyResult(
             finding_key=spec.finding_key, verdict="refuted",
             language=lang,
@@ -1706,7 +1784,8 @@ def _classify_native_output(
             match_detail="expected crash but process exited normally",
         )
     return _classify_json_output(
-        spec, stdout, lang, expected_token=expected_token)
+        spec, stdout, lang, expected_token=expected_token,
+        sanitizers_active=sanitizers_active)
 
 
 # ---------------------------------------------------------------------------
@@ -2123,6 +2202,7 @@ def _execute_rust(
                 caller_label="audit-dark-verify-rust-compile",
             )
 
+            asan_active = True
             if comp.returncode != 0:
                 compile_cmd_simple = [
                     rustc, "--edition", "2021",
@@ -2143,10 +2223,16 @@ def _execute_rust(
                             f"compilation failed: {(comp.stderr or '')[:300]}"
                         ),
                     )
+                # Fallback build succeeded WITHOUT -Z sanitizer=address
+                # (stable rustc): the run can still confirm (a real
+                # panic/segfault stands on its own), but a clean run
+                # must not refute — silent sanitizer loss must never
+                # keep refutation authority.
+                asan_active = False
 
             return _run_native_binary(
                 spec, binary, target_root, timeout_s, "rust",
-                expected_token=token)
+                expected_token=token, sanitizers_active=asan_active)
 
     except subprocess.TimeoutExpired:
         return DarkVerifyResult(

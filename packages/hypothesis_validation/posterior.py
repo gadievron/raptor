@@ -27,6 +27,7 @@ evidence. Use it directly from a `ValidationResult.evidence` list
 when you need a probability instead of a discrete verdict.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Any
 from collections.abc import Iterable
@@ -94,7 +95,15 @@ def update(p: Posterior, *, confirms: bool, weight: float = 1.0) -> Posterior:
     so every evidence item contributes equally; tune per-adapter when
     you have calibrated likelihoods (CodeQL dataflow ≫ Semgrep
     pattern, for example).
+
+    `weight` must be a positive finite number — this is the only
+    mutation point, so validating here is what keeps the documented
+    alpha/beta > 0 invariant true (a negative weight would let `mean`
+    escape [0, 1] and silently flip `verdict_from_posterior`).
     """
+    if not math.isfinite(weight) or weight <= 0:
+        msg = f"weight must be a positive finite number, got {weight!r}"
+        raise ValueError(msg)
     if confirms:
         return Posterior(alpha=p.alpha + weight, beta=p.beta)
     return Posterior(alpha=p.alpha, beta=p.beta + weight)

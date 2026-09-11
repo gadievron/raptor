@@ -1660,10 +1660,13 @@ def format_context_for_prompt(
         sections.append(PromptSection("type_definitions", "\n".join(tp), 2))
 
     if ctx.get("ghidra_context"):
+        # _fenced, never a fixed ``` fence: symbol/type text from a
+        # hostile binary can itself contain a ``` line, close a fixed
+        # fence, and forge trusted headings in the prompt.
         gp = [
             "\n### Binary database context "
             "(untrusted — derived from the analysed binary)",
-            f"```\n{ctx['ghidra_context']}\n```",
+            _fenced(str(ctx["ghidra_context"])),
         ]
         sections.append(PromptSection("ghidra_context", "\n".join(gp), 2))
 
@@ -1798,6 +1801,13 @@ def format_context_for_prompt(
         sections.append(PromptSection("disagreement_override", "\n".join(dp), 1))
 
     if ctx.get("callee_findings"):
+        # Hypothesis/body are PRIOR-LLM output over attacker-visible
+        # source — same trust class as the prior-hypotheses and
+        # prior-finding-analyses siblings, so they get the same
+        # defences (neutralize_tag_forgery for one-liners,
+        # wrap_untrusted for multi-line bodies). Rendering them raw
+        # let one injected finding propagate instructions into every
+        # neighbour's review prompt.
         cp = [
             "\n### Known-vulnerable callees (from prior iteration)",
             ("The following functions called by this code were found "
@@ -1806,19 +1816,65 @@ def format_context_for_prompt(
             "pass unvalidated input to them?"),
         ]
         for cf in ctx["callee_findings"]:
-            cp.append(f"\n**`{cf['file']}:{cf['function']}`**")
+            loc = _defend_identifier(
+                f"{cf['file']}:{cf['function']}", max_length=512,
+            )
+            cp.append(f"\n**`{loc}`**")
             if cf.get("hypothesis"):
-                cp.append(f"- Hypothesis: {cf['hypothesis']}")
+                cp.append(
+                    "- Hypothesis: "
+                    + neutralize_tag_forgery(
+                        str(cf["hypothesis"]).strip()[:300],
+                    )
+                )
             if cf.get("body"):
-                cp.append(f"- Finding: {cf['body']}")
+                cp.append(wrap_untrusted(
+                    str(cf["body"]),
+                    kind="callee-finding",
+                    origin=f"{cf['file']}:{cf['function']}",
+                ))
             if cf.get("mechanical_evidence"):
-                cp.append(f"- Mechanical evidence: {cf['mechanical_evidence']}")
+                cp.append(
+                    "- Mechanical evidence: "
+                    + neutralize_tag_forgery(
+                        str(cf["mechanical_evidence"]).strip()[:300],
+                    )
+                )
         sections.append(PromptSection("callee_findings", "\n".join(cp), 1))
 
     if ctx.get("chain_findings"):
         callers = [cf for cf in ctx["chain_findings"] if cf.get("direction") == "caller"]
         callees = [cf for cf in ctx["chain_findings"] if cf.get("direction") != "caller"]
         cp = ["\n### Connected findings (from this review pass)"]
+        # Same defence rationale as callee_findings above: prior-LLM
+        # hypothesis/body text is untrusted and self-propagating when
+        # rendered raw into a neighbour's prompt.
+        def _chain_entry(cf: dict[str, Any], direction: str) -> list[str]:
+            label = f"{direction}, "
+            label += _defend_identifier(cf.get("status", "?"), max_length=32)
+            if cf.get("evidence_tool"):
+                label += ", confirmed by " + _defend_identifier(
+                    cf["evidence_tool"], max_length=128,
+                )
+            parts = [
+                f"\n**`{_defend_identifier(cf['function'], max_length=256)}`**"
+                f" ({label})",
+            ]
+            if cf.get("hypothesis"):
+                parts.append(
+                    "- Hypothesis: "
+                    + neutralize_tag_forgery(
+                        str(cf["hypothesis"]).strip()[:300],
+                    )
+                )
+            if cf.get("body"):
+                parts.append(wrap_untrusted(
+                    str(cf["body"]),
+                    kind="chain-finding",
+                    origin=f"{direction}:{cf.get('function', '?')}",
+                ))
+            return parts
+
         if callees:
             cp.append(
                 "The following functions CALLED BY this code were found "
@@ -1826,14 +1882,7 @@ def format_context_for_prompt(
                 "unsanitised or attacker-controlled input to them?",
             )
             for cf in callees:
-                label = f"callee, {cf.get('status', '?')}"
-                if cf.get("evidence_tool"):
-                    label += f", confirmed by {cf['evidence_tool']}"
-                cp.append(f"\n**`{cf['function']}`** ({label})")
-                if cf.get("hypothesis"):
-                    cp.append(f"- Hypothesis: {cf['hypothesis']}")
-                if cf.get("body"):
-                    cp.append(f"- Finding: {cf['body']}")
+                cp.extend(_chain_entry(cf, "callee"))
         if callers:
             cp.append(
                 "\nThe following CALLERS of this function were found "
@@ -1843,14 +1892,7 @@ def format_context_for_prompt(
                 "function's return value or side effects?",
             )
             for cf in callers:
-                label = f"caller, {cf.get('status', '?')}"
-                if cf.get("evidence_tool"):
-                    label += f", confirmed by {cf['evidence_tool']}"
-                cp.append(f"\n**`{cf['function']}`** ({label})")
-                if cf.get("hypothesis"):
-                    cp.append(f"- Hypothesis: {cf['hypothesis']}")
-                if cf.get("body"):
-                    cp.append(f"- Finding: {cf['body']}")
+                cp.extend(_chain_entry(cf, "caller"))
         sections.append(PromptSection("chain_findings", "\n".join(cp), 1))
 
     if ctx.get("batch_context"):
@@ -1919,11 +1961,10 @@ def _format_study_answers(study_answers: list[dict]) -> str:
     sourced answer with its receipt and provenance tier — and the
     model is told to re-derive, never substitute.  Answer/assumption
     text is prior-LLM output over attacker-visible source (untrusted)
-    — defanged with ``neutralize_tag_forgery`` before interpolation;
-    receipt quotes are verbatim repo source, framed as quoted data.
+    — defanged with ``_defend_identifier`` (newline flatten +
+    tag/heading neutralise) before interpolation; receipt quotes are
+    verbatim repo source, framed as quoted data.
     """
-    from core.security.prompt_envelope import neutralize_tag_forgery
-
     lines = [
         "\n### Study answers for your prior assumptions",
         ("The study loop investigated assumptions your prior review "
@@ -1937,13 +1978,16 @@ def _format_study_answers(study_answers: list[dict]) -> str:
     for a in study_answers[:8]:
         if not isinstance(a, dict):
             continue
-        question = neutralize_tag_forgery(
-            str(a.get("question", ""))[:200],
-        )
-        assumption = neutralize_tag_forgery(
-            str(a.get("assumption", ""))[:200],
-        )
-        answer = neutralize_tag_forgery(str(a.get("answer", ""))[:300])
+        # _defend_identifier, not bare neutralize_tag_forgery: the
+        # trust structure of this block is LINE-shaped ("  Receipt
+        # (file:line): `quote`" is emitted only when receipt.verified)
+        # and the tag/heading neutralizer preserves newlines — a
+        # crafted study answer embedding a newline + forged receipt
+        # line rendered indistinguishable from a real one. Flattening
+        # newlines keeps each field on its own labelled line.
+        question = _defend_identifier(a.get("question", ""))
+        assumption = _defend_identifier(a.get("assumption", ""))
+        answer = _defend_identifier(a.get("answer", ""), max_length=300)
         # Charset-restricted: tier/status are channel vocabulary, not
         # prose — raw interpolation let a crafted tier smuggle heading
         # text into this trusted block.
@@ -1970,7 +2014,7 @@ def _format_study_answers(study_answers: list[dict]) -> str:
             )
             lines.append(
                 f"  Receipt ({where}): "
-                f"`{neutralize_tag_forgery(quote[:200])}`"
+                f"`{_defend_identifier(quote)}`"
             )
     return "\n".join(lines)
 
@@ -2471,22 +2515,56 @@ def _resolve_types(
 _header_cache: dict[str, list[Path]] = {}
 
 
+def _admissible_header(target_path: Path, header: Path) -> bool:
+    """Containment + file-type gate for a header candidate.
+
+    ``confine`` resolves symlinks, so a planted link under the target
+    pointing at a host file (out-of-tree content into prompts and the
+    journal) is rejected. The regular-file check on the RESOLVED path
+    additionally refuses FIFOs and devices — opening a FIFO named
+    ``*.h`` blocks the read forever.
+    """
+    from core.paths import confine
+
+    resolved = confine(target_path, header)
+    if resolved is None:
+        return False
+    try:
+        return resolved.is_file()
+    except OSError:
+        return False
+
+
 def _find_headers(target_path: Path, source_file: str) -> list[Path]:
     """Find header files to search for type definitions.
 
     Checks the source file's directory first, then the target root.
     The rglob result for the target root is cached per target_path
-    to avoid re-walking the entire tree on every call.
+    to avoid re-walking the entire tree on every call. Every candidate
+    passes :func:`_admissible_header`; the source file's directory is
+    itself containment-checked (``source_file`` derives from checklist
+    data over the scanned tree — a traversal spelling must not walk a
+    directory outside the target).
     """
+    from core.paths import confine
+
     headers: list[Path] = []
-    source_dir = (target_path / source_file).parent
-    if source_dir.is_dir():
-        headers.extend(sorted(source_dir.glob("*.h"))[:20])
+    source_resolved = confine(target_path, source_file)
+    if source_resolved is not None:
+        source_dir = source_resolved.parent
+        if source_dir.is_dir():
+            headers.extend(
+                h for h in sorted(source_dir.glob("*.h"))[:20]
+                if _admissible_header(target_path, h)
+            )
 
     cache_key = str(target_path)
     all_headers = _header_cache.get(cache_key)
     if all_headers is None:
-        all_headers = sorted(islice(target_path.rglob("*.h"), 1000))
+        all_headers = [
+            h for h in sorted(islice(target_path.rglob("*.h"), 1000))
+            if _admissible_header(target_path, h)
+        ]
         _header_cache[cache_key] = all_headers
 
     for h in all_headers:

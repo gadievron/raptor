@@ -9,8 +9,10 @@ explicitly:
     (undefined), unioned across translation units. A symbol that is BOTH
     defined and undefined across entries is config-dependent project-wide,
     so it is dropped (left unknown).
-  * ``.config`` (kernel Kconfig) — ``CONFIG_X=y|m`` (defined to "1") /
-    ``# CONFIG_X is not set`` (undefined). Applies to ``CONFIG_*`` only.
+  * ``.config`` (kernel Kconfig) — ``CONFIG_X=y`` (defined to "1") /
+    ``CONFIG_X=m`` (defines ``CONFIG_X_MODULE``; ``CONFIG_X`` itself is
+    undefined, matching autoconf.h) / ``# CONFIG_X is not set``
+    (undefined). Applies to ``CONFIG_*`` only.
 
 Everything not explicitly named stays UNKNOWN. This is the load-bearing
 soundness property: a symbol absent from the config might still be
@@ -212,13 +214,25 @@ def _from_kconfig(path: Path) -> MacroConfig:
     defined: dict[str, str] = {}
     undefined: set = set()
     for m in re.finditer(r"^(CONFIG_[A-Z0-9_]+)=([ym])\s*$", text, re.MULTILINE):
-        defined[m.group(1)] = "1" if m.group(2) == "y" else "m"
+        name = m.group(1)
+        if m.group(2) == "y":
+            defined[name] = "1"
+        else:
+            # Tristate =m: the kernel's autoconf.h defines only
+            # CONFIG_X_MODULE; CONFIG_X itself is undefined in every
+            # TU (IS_ENABLED() checks both spellings). Marking
+            # CONFIG_X defined here would blank #else / #ifndef arms
+            # that the real build compiles — the exact false negative
+            # this module's allowlist design exists to prevent.
+            defined[name + "_MODULE"] = "1"
+            undefined.add(name)
     for m in re.finditer(r"^#\s*(CONFIG_[A-Z0-9_]+)\s+is\s+not\s+set\s*$",
                          text, re.MULTILINE):
-        # A CONFIG_X set to =y elsewhere wins (shouldn't happen in a real
-        # .config, but be deterministic): only mark undefined if not defined.
-        if m.group(1) not in defined:
-            undefined.add(m.group(1))
+        undefined.add(m.group(1))
+    # A CONFIG_X seen both defined (=y) and undefined (=m duplicate or
+    # "is not set" line) shouldn't happen in a real .config, but be
+    # deterministic: defined wins.
+    undefined -= set(defined)
     if not defined and not undefined:
         return MacroConfig(source="kconfig")
     return MacroConfig(defined=defined, undefined=frozenset(undefined),

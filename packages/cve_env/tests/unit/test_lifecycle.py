@@ -338,3 +338,48 @@ def test_cleanup_result_images_no_match_noop(monkeypatch: pytest.MonkeyPatch) ->
     assert lf.cleanup_result_images("CVE-9999-0000") == 0
     # two list queries now (label + cve-id tag sweep), no rmi.
     assert len(captured) == 2 and all(c[:2] == ["docker", "images"] for c in captured)
+
+
+def test_acquire_lock_stale_path_never_writes_through_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pre-existing lock name that is a symlink (planted, or left over)
+    must not be written through — the stale path is unlinked and re-created
+    with an exclusive no-follow open, so the symlink's target is untouched."""
+    monkeypatch.setattr(lf, "LOCK_DIR", tmp_path)
+    victim = tmp_path / "victim"
+    victim.write_text("precious")
+    lock_name = tmp_path / f"{lf.LOCK_PREFIX}{os.getpid()}{lf.LOCK_SUFFIX}"
+    lock_name.symlink_to(victim)
+
+    path = lf.acquire_lock()
+
+    assert victim.read_text() == "precious"  # target never overwritten
+    assert not path.is_symlink()
+    assert path.read_text() == str(os.getpid())
+    lf.release_lock(path)
+
+
+def test_acquire_lock_normal_roundtrip_in_private_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Companion direction: the ordinary create/release path still works."""
+    monkeypatch.setattr(lf, "LOCK_DIR", tmp_path / "locks")
+    path = lf.acquire_lock()
+    assert path.parent == tmp_path / "locks"
+    assert path.read_text() == str(os.getpid())
+    lf.release_lock(path)
+    assert not path.exists()
+
+
+def test_ensure_lock_dir_rejects_symlinked_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A planted symlink where the private lock dir should be is refused."""
+    real = tmp_path / "elsewhere"
+    real.mkdir()
+    link = tmp_path / "locks"
+    link.symlink_to(real)
+    monkeypatch.setattr(lf, "LOCK_DIR", link)
+    with pytest.raises(RuntimeError, match="owned by this user"):
+        lf.acquire_lock()

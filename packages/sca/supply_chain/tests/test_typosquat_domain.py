@@ -155,3 +155,53 @@ def test_in_family_skip_unit() -> None:
     assert not _same_registrable_domain(
         "deep.sub.docker.io", "registry-1.docker.io",
     )
+
+
+# ---------------------------------------------------------------------------
+# Userinfo decoys — the host is what the runtime connects to
+# ---------------------------------------------------------------------------
+
+def test_userinfo_decoy_flags_the_real_host(tmp_path: Path) -> None:
+    """``https://github.com@glthlb.com/x`` connects to ``glthlb.com``
+    — everything before ``@`` is userinfo the server never sees.  The
+    URL parser must evaluate the REAL host, not the popular decoy in
+    the userinfo position (which would read as an exact popular match
+    and skip)."""
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "src.js").write_text(
+        "fetch('https://github.com@glthlb.com/api')\n", encoding="utf-8")
+    out = scan_target(tmp_path, _manifests(tmp_path))
+    assert len(out) == 1
+    assert out[0].suspect_host == "glthlb.com"
+    assert out[0].nearest_popular == "github.com"
+
+
+def test_userinfo_on_popular_host_not_flagged(tmp_path: Path) -> None:
+    """Credentials on the genuinely-popular host stay quiet — the
+    userinfo skip must not distort which host gets evaluated."""
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "src.js").write_text(
+        "fetch('https://user:tok@github.com/api')\n", encoding="utf-8")
+    out = scan_target(tmp_path, _manifests(tmp_path))
+    assert out == []
+
+
+# ---------------------------------------------------------------------------
+# Distance-convention boundary — this module returns cap+1 on overflow
+# ---------------------------------------------------------------------------
+
+def test_distance_convention_exact_at_cap_and_cap_plus_one_beyond() -> None:
+    from packages.sca.supply_chain.typosquat_domain import (
+        _damerau_levenshtein,
+    )
+    # Exact distances up to and INCLUDING the cap.
+    assert _damerau_levenshtein("abcd", "abXY", 2) == 2
+    assert _damerau_levenshtein("abc", "abd", 2) == 1
+    assert _damerau_levenshtein("ab", "ba", 2) == 1     # transposition
+    assert _damerau_levenshtein("same", "same", 2) == 0
+    # Beyond the cap: cap + 1, regardless of how far beyond.
+    assert _damerau_levenshtein("abcd", "wxyz", 2) == 3
+    assert _damerau_levenshtein("a" * 20, "b" * 20, 2) == 3
+    # The shared implementation's base-row initialisation carries
+    # over (a zeroed base row made DL("a", "cma") come out 0).
+    assert _damerau_levenshtein("a", "cma", 98) == 2

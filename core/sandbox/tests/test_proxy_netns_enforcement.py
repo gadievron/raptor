@@ -732,6 +732,59 @@ class TestProxyNetnsContextWiring:
         ]
         assert len(tier2_warnings) == 1
 
+    def _tier2_warning_text(self, caplog, *, seccomp_ok: bool) -> str:
+        import logging
+
+        from core.sandbox import sandbox
+        with mock.patch(
+            "core.sandbox.context._get_landlock_abi", return_value=4,
+        ), mock.patch(
+            "core.sandbox.context.check_landlock_available",
+            return_value=True,
+        ), mock.patch(
+            "core.sandbox.context.check_net_available",
+            return_value=False,
+        ), mock.patch(
+            "core.sandbox.context._seccomp.check_seccomp_available",
+            return_value=seccomp_ok,
+        ), caplog.at_level(logging.WARNING, logger="core.sandbox.context"):
+            with sandbox(
+                target=self.out,
+                output=self.out,
+                use_egress_proxy=True,
+                proxy_hosts=["example.com"],
+            ):
+                pass
+        msgs = [r.getMessage() for r in caplog.records
+                if "Landlock TCP port pin" in r.getMessage()]
+        assert msgs, "tier-2 warning did not fire"
+        return msgs[0]
+
+    @pytest.mark.usefixtures("_fresh_tier2_latch")
+    def test_tier2_warning_names_open_udp_when_seccomp_absent(
+            self, caplog):
+        """The UDP-exfil closure on tier 2 IS the seccomp block. On a
+        libseccomp-less host the old message claimed the channel was
+        closed by a filter that never engaged — an actively misleading
+        reassurance over an open DNS-exfil path."""
+        msg = self._tier2_warning_text(caplog, seccomp_ok=False)
+        assert "DNS/UDP exfil is OPEN" in msg
+        assert "stays closed" not in msg
+
+    @pytest.mark.usefixtures("_fresh_tier2_latch")
+    def test_tier2_warning_names_closed_udp_when_seccomp_present(
+            self, caplog):
+        # Prime the real cache first: seccomp_ok=True only pins the
+        # probe's ANSWER; the run's filter builder still dereferences
+        # state._libseccomp_cache, which stays None unless the real
+        # probe ran and succeeded.
+        from core.sandbox import seccomp as seccomp_mod
+        if not seccomp_mod.check_seccomp_available():
+            pytest.skip("libseccomp not functional on this host")
+        msg = self._tier2_warning_text(caplog, seccomp_ok=True)
+        assert "DNS/UDP exfil stays closed by the seccomp UDP block" in msg
+        assert "is OPEN" not in msg
+
     @requires_landlock
     def test_fallback_on_unix_bind_failure(self):
         """If bind_unix fails, falls back to TCP-only without crash."""

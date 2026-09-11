@@ -3,7 +3,7 @@ message.
 
 When the operator-supplied hunt pattern carries a CWE id or recognisable
 bug-class vocabulary, the matching cwe_strategies bug-class lenses get
-appended to the user message after the ``</pattern>`` close, giving the
+appended to the user message after the pattern envelope close, giving the
 hunt model decision support for variant enumeration.
 """
 
@@ -111,8 +111,8 @@ class TestRobustness:
         with patch.object(builtins, "__import__", fake_import):
             out = _format_user_message("CWE-22")
             # Base message intact, no strategy block.
-            assert "<pattern>" in out
-            assert "</pattern>" in out
+            assert 'kind="hunt-pattern"' in out
+            assert "</untrusted-" in out
             assert "Bug-class lenses" not in out
 
     def test_picker_exception_returns_base_message(self):
@@ -121,7 +121,7 @@ class TestRobustness:
 
         with patch("core.llm.cwe_strategies.pick_strategies", boom):
             out = _format_user_message("CWE-22")
-            assert "<pattern>" in out
+            assert 'kind="hunt-pattern"' in out
             assert "Bug-class lenses" not in out
 
     def test_render_exception_returns_base_message(self):
@@ -130,18 +130,16 @@ class TestRobustness:
 
         with patch("core.llm.cwe_strategies.render_strategies", boom):
             out = _format_user_message("CWE-22")
-            assert "<pattern>" in out
+            assert 'kind="hunt-pattern"' in out
             assert "Bug-class lenses" not in out
 
     def test_hostile_cwe_with_fake_heading_no_injection(self):
         """A pattern injecting a fake heading via newline must not echo
         a bare ``## INJECTED`` heading inside the strategy block. The
-        pattern itself sits inside ``<pattern>`` delimiters (data zone);
+        pattern itself sits inside the nonce envelope (data zone);
         the strategy block above is separate operator-trusted content."""
         out = _format_user_message("CWE-22\n## INJECTED")
-        # Pattern goes inside <pattern>...</pattern> as data; the
-        # `<pattern>` block contains the user text verbatim — that's
-        # the existing data-zone contract, not introduced here. Verify
+        # Pattern goes inside the nonce envelope as data. Verify
         # the strategy block (which is OUTSIDE the pattern delimiters)
         # contains no fake heading copied from the pattern.
         bug_pos = out.index("Bug-class lenses for this hunt")
@@ -161,17 +159,17 @@ class TestRobustness:
 
 
 # ---------------------------------------------------------------------------
-# Strategy block placement (after </pattern>, not inside)
+# Strategy block placement (after the envelope close, not inside)
 # ---------------------------------------------------------------------------
 
 
 class TestStrategyBlockPlacement:
     def test_strategy_block_after_pattern_close(self):
-        """The strategy block must sit AFTER ``</pattern>`` so the model
+        """The strategy block must sit AFTER the envelope close so the model
         treats the bug-class lenses as trusted operator instructions
         rather than continuation of the pattern data zone."""
         out = _format_user_message("CWE-22 in upload")
-        pat_close = out.index("</pattern>")
+        pat_close = out.index("</untrusted-")
         bug_pos = out.index("Bug-class lenses for this hunt")
         assert bug_pos > pat_close
 
@@ -340,5 +338,5 @@ class TestExemplarSlotWiring:
             "core.labeled_attempts.view.exemplar_slot_for_finding", boom,
         )
         out = _format_user_message("CWE-22 in upload handler")
-        assert "<pattern>" in out
+        assert 'kind="hunt-pattern"' in out
         assert "<untrusted_verified_outcomes>" not in out

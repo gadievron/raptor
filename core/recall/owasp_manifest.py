@@ -18,13 +18,13 @@ and refuses to run against any other sha (labels are sha-bound).
 from __future__ import annotations
 
 import argparse
-import subprocess
 import sys
 from pathlib import Path
 
 from core.dataflow.owasp_corpus_generator import parse_expected_results
 from core.json import save_json
 from core.recall.manifest import SCHEMA_VERSION
+from core.recall.pinned_clone import verify_pinned_clone
 
 #: Must match core/dataflow/corpus/SOURCES.md.
 OWASP_REPO_URL = "https://github.com/OWASP-Benchmark/BenchmarkJava"
@@ -60,25 +60,9 @@ def _verify_clone(clone_dir: Path) -> None:
             f"{_ACQUIRE_HINT}"
         )
         raise OwaspManifestError(msg)
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(clone_dir), "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=60, check=False,
-        )
-        head = proc.stdout.strip().lower()
-    except (OSError, subprocess.SubprocessError) as exc:
-        msg = f"cannot sha-verify {clone_dir}: {exc}"
-        raise OwaspManifestError(msg) from exc
-    if proc.returncode != 0 or not head:
-        msg = f"cannot sha-verify {clone_dir}: {proc.stderr.strip()}"
-        raise OwaspManifestError(msg)
-    if head != OWASP_PINNED_SHA:
-        msg = (
-            f"{clone_dir} is at {head[:12]}, labels are pinned to "
-            f"{OWASP_PINNED_SHA[:12]} — re-checkout the pin "
-            f"({_ACQUIRE_HINT})"
-        )
-        raise OwaspManifestError(msg)
+    verify_pinned_clone(clone_dir, OWASP_PINNED_SHA,
+                        error_cls=OwaspManifestError,
+                        hint=_ACQUIRE_HINT)
 
 
 def _entry(test_name: str, cwe: int) -> dict:

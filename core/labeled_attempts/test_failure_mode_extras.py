@@ -217,6 +217,26 @@ def test_set_failure_mode_rejects_on_success_record(project_dir):
     assert path.read_text() == original
 
 
+def test_set_failure_mode_preserves_unknown_keys(project_dir):
+    """A pool can be shared across RAPTOR versions: a record written by
+    a newer schema may carry fields this code doesn't know. Annotating
+    failure_mode must mutate ONLY that field and write the raw dict
+    back — a from_dict/to_dict round-trip would silently destroy the
+    newer fields."""
+    a = _attempt(failure_mode=FailureMode.UNKNOWN)
+    [path] = write(a, project_dir=project_dir)
+    blob = json.loads(path.read_text())
+    blob["future_field"] = {"added_by": "a newer schema"}
+    path.write_text(json.dumps(blob))
+
+    updated = set_failure_mode(path, FailureMode.MISSING_INIT)
+    assert updated.failure_mode == FailureMode.MISSING_INIT
+
+    after = json.loads(path.read_text())
+    assert after["failure_mode"] == "missing_init"
+    assert after["future_field"] == {"added_by": "a newer schema"}
+
+
 def test_set_failure_mode_nonexistent_path_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         set_failure_mode(tmp_path / "no-such-file.json", FailureMode.UNKNOWN)

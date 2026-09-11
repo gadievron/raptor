@@ -36,8 +36,10 @@ from core.http.urllib_backend import UrllibClient
 from core.llm.tool_use.types import ToolDef
 from core.url_patterns import (
     GITHUB_COMMIT_URL_RE as _GITHUB_COMMIT_URL_RE,
+    GITHUB_REPO_URL_RE as _GITHUB_REPO_URL_RE,
     KERNEL_SHA_URL_RE as _KERNEL_SHA_URL_RE,
     LINUX_UPSTREAM_SLUG as _LINUX_UPSTREAM_SLUG,
+    normalize_slug as _normalize_slug,
 )
 
 if TYPE_CHECKING:
@@ -207,6 +209,44 @@ def _err(msg: str) -> str:
     return dumps_display({"error": msg[:300]}, indent=None)
 
 
+# slug/base/head/sha/host are free-form tool arguments the model picks
+# after reading untrusted advisory text (a known prompt-injection
+# channel) and several tools interpolate them into URL PATHS — some
+# carrying the operator's GITHUB_TOKEN. Shape-validate before any
+# interpolation so query-string injection ("x/y?per_page=1&..."),
+# dot-segment traversal ("../../user"), and CRLF can never restructure
+# the request. ``github_client`` enforces the same slug/sha shapes at
+# its own chokepoint; these helpers cover the direct ``_gh_get`` and
+# forge-URL builders in this module.
+
+# Git refs (branch / tag / sha) may contain "/" and "." but git itself
+# forbids "..", and URL metacharacters have no place in a ref name.
+_REF_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._/-]{0,254}\Z")
+
+
+def _valid_ref(ref: str) -> bool:
+    return bool(ref) and _REF_RE.match(ref) is not None and ".." not in ref
+
+
+_HEX_SHA_RE = re.compile(r"\A[0-9a-fA-F]{4,64}\Z")
+
+
+def _valid_hex_sha(sha: str) -> bool:
+    return bool(sha) and _HEX_SHA_RE.match(sha) is not None
+
+
+# Forge host argument: scheme + hostname only. A "host" carrying a
+# path prefix, userinfo, port games, or query characters could steer
+# the eventual URL inside an allowlisted forge.
+_FORGE_HOST_RE = re.compile(r"\Ahttps://[A-Za-z0-9][A-Za-z0-9.-]{0,253}\Z")
+
+# cgit repo paths legitimately contain "/" segments
+# ("pub/scm/linux/kernel/git/stable/linux.git"); same character policy
+# as refs.
+def _valid_repo_path(slug: str) -> bool:
+    return bool(slug) and _REF_RE.match(slug) is not None and ".." not in slug
+
+
 def _safe_json(data: Any, max_bytes: int = _MAX_BYTES) -> str:
     """Serialize to valid JSON within ``max_bytes``."""
     raw = dumps_display(data, indent=None)
@@ -308,9 +348,13 @@ def _deterministic_hints_impl(cve_id: str) -> str:
                     continue
                 repo = rng.get("repo") or ""
                 repo_slug = ""
-                m = re.match(r"https?://github\.com/([^/]+/[^/.\s]+)", repo)
+                # Shared repo-URL pattern: the repo segment must keep
+                # dots ("socketio/socket.io") — a dot-excluding class
+                # here truncated dotted repo names into hints for a
+                # different, wrong repository.
+                m = _GITHUB_REPO_URL_RE.match(repo)
                 if m:
-                    repo_slug = m.group(1)
+                    repo_slug = _normalize_slug(m.group(1))
                 for ev in rng.get("events") or []:
                     if not isinstance(ev, dict):
                         continue
@@ -397,9 +441,17 @@ def _gh_commit_detail_impl(slug: str, sha: str) -> str:
         return _err("not found / rate limited")
     commit = data.get("commit") or {}
     files = github_client.get_commit_files(slug, sha) or []
+    # Report GitHub's canonical 40-char sha, not the caller's input:
+    # the response feeds the loop's verified-pair evidence, and echoing
+    # a short input back would let a later full-length submission that
+    # merely EXTENDS the verified prefix (hallucinated middle) pass the
+    # verified-SHA gate.
+    canonical = data.get("sha")
+    if not (isinstance(canonical, str) and _valid_hex_sha(canonical)):
+        canonical = sha
     return dumps_display({
         "slug": slug,
-        "sha": sha,
+        "sha": canonical,
         "message": (commit.get("message") or "")[:1000],
         "files": files[:20],
         "files_total": len(files),
@@ -410,6 +462,8 @@ def _gh_commit_detail_impl(slug: str, sha: str) -> str:
 def _gh_list_commits_by_path_impl(slug: str, path: str, since: str = "", until: str = "") -> str:
     if not slug or not path:
         return _err("slug and path required")
+    if not github_client.valid_slug(slug):
+        return _err("invalid slug shape (expected owner/repo)")
     params: dict[str, Any] = {"path": path, "per_page": 20}
     if since:
         params["since"] = since
@@ -432,6 +486,10 @@ def _gh_list_commits_by_path_impl(slug: str, path: str, since: str = "", until: 
 def _gh_compare_impl(slug: str, base: str, head: str) -> str:
     if not slug or not base or not head:
         return _err("slug, base, head required")
+    if not github_client.valid_slug(slug):
+        return _err("invalid slug shape (expected owner/repo)")
+    if not _valid_ref(base) or not _valid_ref(head):
+        return _err("invalid base/head ref shape")
     data = _gh_get(f"/repos/{slug}/compare/{base}...{head}")
     if data is None or not isinstance(data, dict):
         return _err("rate_limited or http error")
@@ -483,6 +541,10 @@ def _gitlab_commit_impl(host: str, slug: str, sha: str) -> str:
     if not host or not slug or not sha:
         return _err("host, slug, sha required")
     host = host.rstrip("/")
+    if not _FORGE_HOST_RE.match(host):
+        return _err("invalid host (expected https://<hostname>)")
+    if not _valid_hex_sha(sha):
+        return _err("invalid sha (expected hex commit id)")
     project = quote(slug, safe="")
     url = f"{host}/api/v4/projects/{project}/repository/commits/{sha}"
     try:
@@ -516,6 +578,12 @@ def _cgit_fetch_impl(host: str, slug: str, sha: str) -> str:
     if not host or not slug or not sha:
         return _err("host, slug, sha required")
     host = host.rstrip("/")
+    if not _FORGE_HOST_RE.match(host):
+        return _err("invalid host (expected https://<hostname>)")
+    if not _valid_repo_path(slug):
+        return _err("invalid slug (repo path)")
+    if not _valid_hex_sha(sha):
+        return _err("invalid sha (expected hex commit id)")
     url = f"{host}/{slug}/commit/?id={sha}"
     try:
         body_bytes = _forge_client().get_bytes(

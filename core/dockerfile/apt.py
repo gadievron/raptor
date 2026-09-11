@@ -41,6 +41,7 @@ Dockerfile uses this.
 
 from __future__ import annotations
 
+import re
 import shlex
 from dataclasses import dataclass
 
@@ -214,11 +215,16 @@ def _packages_from_command(
     tokens = [_strip_subshell_paren(t) for t in tokens if t]
     tokens = [t for t in tokens if t]
     i = 0
-    # Skip ``KEY=VALUE`` env-var prefixes (e.g. DEBIAN_FRONTEND) and
+    # Skip ``KEY=VALUE`` env-var prefixes (e.g. DEBIAN_FRONTEND),
     # ``sudo`` prefixes (rare in Dockerfiles but real, e.g. on
-    # bases that demote root before subsequent layers).
+    # bases that demote root before subsequent layers), and BuildKit
+    # RUN flags (``--mount=type=cache``, ``--network``, ``--security``)
+    # — those belong to the RUN directive, land in the first command's
+    # token list, and previously hid its installs entirely.
     while i < len(tokens) and (
-        _is_env_prefix(tokens[i]) or tokens[i] == "sudo"
+        _is_env_prefix(tokens[i])
+        or tokens[i] == "sudo"
+        or tokens[i].startswith(("--mount", "--network", "--security"))
     ):
         i += 1
     if i >= len(tokens):
@@ -252,6 +258,15 @@ def _packages_from_command(
             if tok in _ARG_BEARING_FLAGS and i < len(tokens):
                 i += 1
             continue
+        redir = _REDIRECTION_RE.match(tok)
+        if redir:
+            # Shell redirections are not packages. A BARE operator
+            # token ("2>", ">>") redirects into the NEXT token — skip
+            # that file target too; fused targets ("2>/dev/null") and
+            # fd-dups ("2>&1") complete within the token.
+            if redir.end() == len(tok) and i < len(tokens):
+                i += 1
+            continue
         parsed = _parse_pkg(tok)
         if parsed is None:
             continue
@@ -262,6 +277,10 @@ def _packages_from_command(
         ))
     return out
 
+
+# Shell redirection operator at token start: ``>``, ``>>``, ``<``,
+# ``<<``, with an optional leading fd number, plus ``&>`` / ``&>>``.
+_REDIRECTION_RE = re.compile(r"^(?:\d*(?:>>|>|<<|<)|&>>|&>)")
 
 _SHELL_PROGS = frozenset({"bash", "sh", "dash", "ash", "zsh"})
 # Flag values that mean "next token is the shell-command body".

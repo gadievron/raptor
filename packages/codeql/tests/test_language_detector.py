@@ -576,3 +576,53 @@ class TestRustDetection:
         det = LanguageDetector(tmp_path)
         det.filter_codeql_supported(det.detect_languages())
         assert called == []
+
+
+class TestExtractorProbeCliResolution:
+    """The probe must consult the SAME binary the run will spawn:
+    CODEQL_CLI first (documented operator override), then PATH — a
+    bare PATH lookup dropped rust on multi-install hosts where only
+    the CODEQL_CLI bundle ships the extractor."""
+
+    def _reset_probe_cache(self):
+        LanguageDetector._extractor_langs = None
+
+    def _stub_cli(self, tmp_path: Path) -> Path:
+        stub = tmp_path / "codeql-stub"
+        stub.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = "resolve" ] && [ "$2" = "languages" ]; then\n'
+            '  echo "rust (/opt/bundle/rust)"\n'
+            '  echo "cpp (/opt/bundle/cpp)"\n'
+            "fi\n"
+        )
+        stub.chmod(0o755)
+        return stub
+
+    def test_codeql_cli_env_binary_consulted(self, tmp_path: Path, monkeypatch):
+        self._reset_probe_cache()
+        try:
+            import shutil as _shutil
+            # No codeql on PATH — only the operator override exists.
+            monkeypatch.setattr(_shutil, "which", lambda _name: None)
+            monkeypatch.setenv("CODEQL_CLI", str(self._stub_cli(tmp_path)))
+            det = LanguageDetector(tmp_path)
+            assert det._extractor_available("rust") is True
+            assert det._extractor_available("go") is False
+        finally:
+            self._reset_probe_cache()
+
+    def test_without_override_path_miss_reads_unavailable(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        # Two-direction: no CODEQL_CLI and no PATH binary -> probe
+        # degrades to unavailable, never crashes.
+        self._reset_probe_cache()
+        try:
+            import shutil as _shutil
+            monkeypatch.setattr(_shutil, "which", lambda _name: None)
+            monkeypatch.delenv("CODEQL_CLI", raising=False)
+            det = LanguageDetector(tmp_path)
+            assert det._extractor_available("rust") is False
+        finally:
+            self._reset_probe_cache()

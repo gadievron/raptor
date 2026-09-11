@@ -66,3 +66,122 @@ def test_every_manager_yields_defensively_unpackable_rows() -> None:
             assert ceiling is None or isinstance(ceiling, str)
             seen.add(mgr.ecosystem)
     assert seen == set(samples), "every manager sample should parse"
+
+
+# ---------------------------------------------------------------------------
+# pip token classification
+# ---------------------------------------------------------------------------
+
+def test_pip_extras_token_records_base_package() -> None:
+    # ``pkg[extra]==1.0`` selects optional features of the SAME PyPI
+    # package; the token used to be dropped entirely because the
+    # extras bracket failed the operator check.
+    from packages.sca.parsers.inline_installs._managers import (
+        _classify_pip_token,
+    )
+    row = _classify_pip_token("requests[security]==2.31.0")
+    assert row is not None
+    name, version, pin, _floor, _ceiling = row
+    assert (name, version, pin) == ("requests", "2.31.0", PinStyle.EXACT)
+    # Unpinned extras form too.
+    row = _classify_pip_token("uvicorn[standard]")
+    assert row is not None
+    assert (row[0], row[1], row[2]) == ("uvicorn", None, PinStyle.WILDCARD)
+
+
+def test_pip_exclusion_spec_records_no_version() -> None:
+    # ``foo!=1.5`` EXCLUDES 1.5 — recording it as the installed
+    # version flagged advisories for the one version guaranteed
+    # absent. Classification is shared with the requirements.txt
+    # parser so the two pip surfaces agree.
+    from packages.sca.parsers.inline_installs._managers import (
+        _classify_pip_token,
+    )
+    row = _classify_pip_token("foo!=1.5")
+    assert row is not None
+    assert row[1] is None
+    assert row[2] is PinStyle.RANGE
+
+
+def test_pip_exact_spec_still_records_version() -> None:
+    from packages.sca.parsers.inline_installs._managers import (
+        _classify_pip_token,
+    )
+    row = _classify_pip_token("foo==1.5")
+    assert row is not None
+    assert row[1] == "1.5"
+    assert row[2] is PinStyle.EXACT
+
+
+def test_pip_classifier_shared_with_requirements_parser() -> None:
+    # Structural guard: the token classifier must delegate to the
+    # requirements parser's specifier classifier rather than keep a
+    # drift-prone local copy.
+    import inspect
+    from packages.sca.parsers.inline_installs import _managers
+    from packages.sca.parsers.requirements import _classify_specifier
+    assert _managers._classify_specifier is _classify_specifier
+    assert "_classify_specifier(" in inspect.getsource(
+        _managers._classify_pip_token,
+    )
+
+
+def test_pip_legacy_fallback_exclusion_records_no_version() -> None:
+    from packages.sca.parsers.inline_installs._managers import (
+        _legacy_single_spec,
+    )
+    row = _legacy_single_spec("foo", "!=1.5")
+    assert row is not None
+    assert row[1] is None and row[2] is PinStyle.RANGE
+    row = _legacy_single_spec("foo", ">=1.5")
+    assert row is not None
+    assert row[1] == "1.5" and row[3] == "1.5"    # inclusive floor kept
+
+
+def test_pip_value_taking_flag_value_not_a_package() -> None:
+    # ``--progress-bar off`` — "off" is the flag's VALUE, not a
+    # package; it used to be emitted as a phantom dep.
+    rows = list(_parse_pip_args("--progress-bar off foo==1.0"))
+    assert [r[0] for r in rows] == ["foo"]
+
+
+def test_pip_boolean_flag_next_token_still_a_package() -> None:
+    # Other direction: after a boolean flag the next token really is
+    # a package.
+    rows = list(_parse_pip_args("--upgrade foo==1.0"))
+    assert [r[0] for r in rows] == ["foo"]
+
+
+# ---------------------------------------------------------------------------
+# yum/dnf name-version split
+# ---------------------------------------------------------------------------
+
+def test_yum_digit_bearing_name_not_split() -> None:
+    # ``java-1.8.0-openjdk`` is a package NAME (the ``openjdk``
+    # segment can't start a version-release); the first-dash-digit
+    # split mangled it into name ``java`` + bogus version.
+    from packages.sca.parsers.inline_installs._managers import (
+        _parse_yum_args,
+    )
+    [(name, version, pin)] = list(_parse_yum_args("java-1.8.0-openjdk"))
+    assert name == "java-1.8.0-openjdk"
+    assert version is None
+    assert pin is PinStyle.WILDCARD
+
+
+def test_yum_real_version_release_still_split() -> None:
+    from packages.sca.parsers.inline_installs._managers import (
+        _parse_yum_args,
+    )
+    [(name, version, pin)] = list(_parse_yum_args("nginx-1.18.0-2.el8"))
+    assert (name, version, pin) == ("nginx", "1.18.0-2.el8", PinStyle.EXACT)
+
+
+def test_yum_digit_name_with_full_nevra_splits_at_version() -> None:
+    from packages.sca.parsers.inline_installs._managers import (
+        _parse_yum_args,
+    )
+    [(name, version, _pin)] = list(
+        _parse_yum_args("java-1.8.0-openjdk-1.8.0.412-1.el8"))
+    assert name == "java-1.8.0-openjdk"
+    assert version == "1.8.0.412-1.el8"

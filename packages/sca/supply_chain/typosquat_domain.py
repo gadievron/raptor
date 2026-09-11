@@ -36,6 +36,7 @@ from core.json import load_json_bounded
 from .._test_paths import TEST_DIR_NAMES as _SHARED_TEST_DIR_NAMES
 from ..discovery import EXCLUDED_DIR_NAMES
 from ..models import Confidence, Dependency, Manifest
+from ._edit_distance import damerau_levenshtein
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -56,9 +57,16 @@ _SKIP_HOSTS = {
 }
 
 # URL pattern — same shape as exfil_destinations to keep behaviour
-# consistent.
+# consistent. The optional userinfo section (``user:pass@``) is
+# consumed BEFORE the host capture: URL semantics resolve
+# ``https://api.github.com@evil.example/x`` to host ``evil.example``
+# (everything before ``@`` is userinfo the server never sees), so a
+# regex that captured the userinfo as the host would evaluate the
+# decoy name while the runtime connects to the real one. The group
+# requires a literal ``@`` to consume anything, so plain URLs are
+# unaffected.
 _URL_RE = re.compile(
-    r"https?://(?P<host>[A-Za-z0-9._\-]+)",
+    r"https?://(?:[A-Za-z0-9._%+:\-]*@)?(?P<host>[A-Za-z0-9._\-]+)",
 )
 
 # Test-path detection is delegated to the shared ``_test_paths``
@@ -262,38 +270,17 @@ def _same_registrable_domain(a: str, b: str) -> bool:
 
 
 def _damerau_levenshtein(a: str, b: str, cap: int) -> int:
-    """Damerau-Levenshtein with full DP matrix (small strings only).
+    """Damerau-Levenshtein with this module's historical overflow
+    convention: returns the EXACT distance when it is ``<= cap`` and
+    ``cap + 1`` when the distance exceeds ``cap`` (the ``cap + 1``
+    value gives callers an early-exit signal).
 
-    Hostnames are short (≤ ~40 chars typically), so the O(la·lb)
-    matrix is fine. Returns ``cap + 1`` when the distance exceeds
-    ``cap`` to give callers an early-exit signal.
+    Delegates to the shared rolling-row implementation, whose
+    convention clamps AT its ``cutoff`` argument — calling it with
+    ``cutoff = cap + 1`` returns exact distances up to ``cap`` and
+    ``cap + 1`` beyond, which is this convention precisely.
     """
-    if a == b:
-        return 0
-    la, lb = len(a), len(b)
-    if abs(la - lb) > cap:
-        return cap + 1
-    # dp[i][j] = distance between a[:i] and b[:j].
-    dp = [[0] * (lb + 1) for _ in range(la + 1)]
-    for i in range(la + 1):
-        dp[i][0] = i
-    for j in range(lb + 1):
-        dp[0][j] = j
-    for i in range(1, la + 1):
-        for j in range(1, lb + 1):
-            cost = 0 if a[i - 1] == b[j - 1] else 1
-            dp[i][j] = min(
-                dp[i - 1][j] + 1,           # delete
-                dp[i][j - 1] + 1,           # insert
-                dp[i - 1][j - 1] + cost,    # substitute
-            )
-            if (i > 1 and j > 1
-                    and a[i - 1] == b[j - 2]
-                    and a[i - 2] == b[j - 1]):
-                dp[i][j] = min(dp[i][j], dp[i - 2][j - 2] + 1)
-        if min(dp[i]) > cap:
-            return cap + 1
-    return dp[la][lb]
+    return damerau_levenshtein(a, b, cap + 1)
 
 
 def _walk_sources(target: Path, *, max_depth: int) -> Iterable[Path]:

@@ -95,6 +95,33 @@ def _quotes_agree(first: dict, second_quote: str, second_line) -> bool:
     return False
 
 
+#: Negation markers for the stance check.  Presence in exactly one of
+#: two answers to the same question signals a contradiction.
+_NEGATION_RE = re.compile(
+    r"\b(?:not|no|never|none|neither|nor|cannot|can't|won't|wouldn't|"
+    r"doesn't|don't|didn't|isn't|aren't|wasn't|weren't|hasn't|haven't|"
+    r"without|false|incorrect)\b",
+    re.IGNORECASE,
+)
+
+
+def _stances_conflict(first_answer: str, second_answer: str) -> bool:
+    """Whether two answer texts take opposite stances.
+
+    Quote agreement alone lets a REFUTING second answer pass the gate:
+    'the lock is NOT held' cites the same lines as 'the lock is held'.
+    Cheap negation-marker asymmetry catches that class — a marker
+    present in one answer and absent from the other means the shared
+    evidence is being read in opposite directions.  Symmetric marker
+    presence (both negative, or both positive) is not a conflict.
+    """
+    a = _normalise(first_answer or "")
+    b = _normalise(second_answer or "")
+    if not a or not b:
+        return False
+    return bool(_NEGATION_RE.search(a)) != bool(_NEGATION_RE.search(b))
+
+
 def _rephrase(question: str) -> str:
     """Mechanical rephrase so the second resolution is not a verbatim
     replay of the first prompt."""
@@ -114,12 +141,17 @@ def verify_flip_answer(
     *,
     tier: str = "",
     contradicts_llm: bool = False,
+    first_answer: str = "",
 ) -> dict:
     """Second independent resolution for a flip-causing answer.
 
     *snippets* are study-list item dicts (name/file/line/definition)
     relevant to the question.  Returns ``{"agreed": bool, "reason":
-    str}``.  Mechanical-tier answers pass without a call — a second
+    str}``.  When *first_answer* (the first resolution's answer text)
+    is provided, quote agreement alone is not enough: the two answer
+    texts must not take opposite stances — a second resolution that
+    refutes the first while citing the same code is a disagreement,
+    not a confirmation.  Mechanical-tier answers pass without a call — a second
     run of a deterministic extractor is the same run — UNLESS the
     mechanical answer CONTRADICTS an LLM answer
     (``contradicts_llm=True``): determinism only guarantees the
@@ -207,6 +239,15 @@ def verify_flip_answer(
     if same_file and _quotes_agree(
         first_receipt, result.get("quote") or "", result.get("line"),
     ):
+        # Quote overlap proves both resolutions read the same source
+        # neighbourhood — not that they reached the same conclusion.
+        second_answer = str(result.get("answer") or "")
+        if _stances_conflict(first_answer, second_answer):
+            return {
+                "agreed": False,
+                "reason": "independent resolution cited the same "
+                          "source but took the opposite stance",
+            }
         return {"agreed": True, "reason": "independent resolution agreed"}
     return {
         "agreed": False,

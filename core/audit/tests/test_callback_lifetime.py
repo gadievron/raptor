@@ -535,3 +535,36 @@ class TestSafeTeardownOrdering:
         r = check_safe_teardown("void t(void){ flush_workqueue(wq); }")
         assert r.safe is True
         assert r.no_dealloc is True
+
+
+class TestSafeTeardownSameLineAsync:
+    def test_same_line_async_cancel_then_free_is_not_safe(self):
+        # The async arm was line-only (`f > a` over line numbers), so
+        # a same-line ``del_timer(&d->timer); kfree(d);`` never
+        # matched — with an earlier waiting barrier also present the
+        # function was certified safe despite the live async race.
+        from core.audit.callback_lifetime import check_safe_teardown
+        r = check_safe_teardown(
+            "void t(struct dev *d)\n{\n"
+            "  cancel_work_sync(&d->work);\n"
+            "  del_timer(&d->timer); kfree(d);\n"
+            "}\n",
+        )
+        assert r.safe is False
+        assert "async" in r.reason
+
+    def test_same_line_free_then_async_cancel_not_flagged_by_async_arm(
+        self,
+    ):
+        # Two-direction guard: column order matters — a free BEFORE
+        # the async cancel on one line is not the async-cancel-then-
+        # free shape (the free-then-barrier order check still governs
+        # it independently).
+        from core.audit.callback_lifetime import check_safe_teardown
+        r = check_safe_teardown(
+            "void t(struct dev *d)\n{\n"
+            "  cancel_work_sync(&d->work);\n"
+            "  kfree(d); del_timer(&d->timer);\n"
+            "}\n",
+        )
+        assert "async cancel" not in (r.reason or "")

@@ -136,9 +136,11 @@ def enrich_trace_with_joern(
         return trace
 
     start = time.monotonic()
+    query_errors: list = []
     try:
         flows = server.run_taint_query(
             source_method, sink_call, timeout=timeout,
+            errors_out=query_errors,
         ) or []
     except Exception:
         logger.debug(
@@ -151,6 +153,26 @@ def enrich_trace_with_joern(
         }
         return trace
     elapsed_ms = int((time.monotonic() - start) * 1000)
+
+    # An empty flow list is AMBIGUOUS when the query itself errored
+    # (server restarting, timeout): "no taint path" and "the query
+    # never ran" both return [] — see run_taint_query's errors_out
+    # contract. A degraded query is booked as unavailable, never as a
+    # mechanical refutation. Non-empty flows stand: positive evidence
+    # survives partial errors.
+    if not flows and query_errors:
+        logger.warning(
+            "joern trace verification degraded for %s -> %s: %s",
+            source_method, sink_call, query_errors,
+        )
+        trace["joern_verification"] = {
+            "verified": None,
+            "skipped": (
+                f"joern query degraded for {source_method} -> "
+                f"{sink_call} (server errors; no verdict)"
+            ),
+        }
+        return trace
 
     verified = len(flows) > 0
     verification: dict[str, Any] = {

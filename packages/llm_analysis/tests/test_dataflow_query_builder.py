@@ -874,3 +874,67 @@ class TestCweInference:
         # "subprocess-shell-true" should hit the command-injection
         # pattern, not be vaguely classified as something generic.
         assert infer_cwe_from_rule_id("subprocess-shell-true") == "CWE-78"
+
+
+class TestNoSqlInferencePrecedence:
+    """"nosql-injection" contains "sql-injection" as a substring — the
+    NoSQL pattern must win in the first-match loop or NoSQL findings
+    get validated through the SQL-injection prebuilt query (wrong
+    lens)."""
+
+    def test_nosql_rule_ids_map_to_cwe_943(self):
+        for rule in (
+            "nosql-injection",
+            "nosql_injection",
+            "python.mongo.nosql_injection",
+            "mongo-query-injection",
+            "nosqli",
+        ):
+            assert infer_cwe_from_rule_id(rule) == "CWE-943", rule
+
+    def test_sql_rule_ids_still_map_to_cwe_89(self):
+        # Two-direction: plain SQL naming keeps its mapping.
+        for rule in ("sql-injection", "sqli", "python.django.sql-injection"):
+            assert infer_cwe_from_rule_id(rule) == "CWE-89", rule
+
+
+class TestMemoryCorruptionInference:
+    """Native-code rule names resolve to the same CWEs the import-time
+    normalizer assigns, so Tier 1 query routing works whichever
+    pipeline leg infers the CWE."""
+
+    def test_memory_corruption_patterns(self):
+        cases = {
+            "heap-buffer-overflow": "CWE-122",
+            "stack-buffer-overflow": "CWE-120",
+            "buffer_overflow": "CWE-120",
+            "format-string": "CWE-134",
+            "integer-overflow": "CWE-190",
+            "double-free": "CWE-415",
+            "use-after-free": "CWE-416",
+            "cpp/uaf": "CWE-416",
+            "null-pointer-dereference": "CWE-476",
+            "null_deref": "CWE-476",
+            "out-of-bounds-write": "CWE-787",
+            "out-of-bounds-read": "CWE-125",
+        }
+        for rule, cwe in cases.items():
+            assert infer_cwe_from_rule_id(rule) == cwe, rule
+
+
+class TestResolvedPackPointersImportGuard:
+    """`_resolved_pack_pointers` must degrade to {} when core.config is
+    not importable (test/script contexts) — the same guard `_pack_roots`
+    already carries. An ImportError escaping crashes Tier 1 discovery
+    despite the docstring's silent-failure promise."""
+
+    def test_core_config_import_failure_returns_empty(self, monkeypatch):
+        import sys
+        import packages.llm_analysis.dataflow_query_builder as dqb
+        # codeql "on PATH" so the import site is actually reached.
+        monkeypatch.setattr(dqb.shutil, "which",
+                            lambda name: "/usr/bin/codeql")
+        # A None sys.modules entry makes `from core.config import ...`
+        # raise ImportError without touching the real module state.
+        monkeypatch.setitem(sys.modules, "core.config", None)
+        assert dqb._resolved_pack_pointers() == {}

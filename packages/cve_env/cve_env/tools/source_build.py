@@ -690,7 +690,17 @@ class SourceBuilder:
         return _CloneOutcome(tag=sha, warnings=warnings, needs_checkout=False)
 
     def _checkout(self, repo_dir: Path, tag: str) -> bool:
-        outcome = self._run_git(["git", "checkout", tag], cwd=repo_dir, timeout=30)
+        # The tag comes from the untrusted clone's own ref list (git refs
+        # may legally begin with '-'); refuse dash-leading names and
+        # terminate option parsing so the ref can never be read as a git
+        # option.
+        if not tag or tag.startswith("-"):
+            return False
+        outcome = self._run_git(
+            ["git", "checkout", "--end-of-options", tag],
+            cwd=repo_dir,
+            timeout=30,
+        )
         if outcome.timed_out:
             return False
         return outcome.returncode == 0
@@ -741,7 +751,11 @@ class SourceBuilder:
             # string-aware so a "https://..." image value survives.
             try:
                 data = load_jsonc(raw)
-            except json.JSONDecodeError:
+            except ValueError:
+                # json.JSONDecodeError plus load_jsonc's non-finite
+                # rejection (NaN/Infinity raise plain ValueError) —
+                # a scanned repo's devcontainer.json must degrade,
+                # never crash the source-build path.
                 continue
             image = data.get("image") if isinstance(data, dict) else None
             if isinstance(image, str) and image.strip():

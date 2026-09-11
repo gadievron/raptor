@@ -140,17 +140,80 @@ def test_bomb_shaped_reason_absolute_cd_cap():
 
 
 def test_extract_rejects_forged_count_zip():
+    import pytest
+
     from core.zip import ZipEntryCountExceeded, extract_files_from_zip
 
     data = _forge_entry_count(_build_zip(1_000), 3)
-    # Graceful mode: empty result.
-    assert extract_files_from_zip(data, selector=lambda n: n) == {}
-    # Raising mode: surfaced to the caller.
-    try:
-        extract_files_from_zip(
-            data, selector=lambda n: n, raise_on_entry_count=True,
-        )
-    except ZipEntryCountExceeded as e:
-        assert "zip-bomb shape" in str(e)
-    else:
-        raise AssertionError("expected ZipEntryCountExceeded")
+    # Fail closed: the bomb-shape refusal is always a typed raise, so
+    # a caller can never mistake it for a successfully-empty archive.
+    with pytest.raises(ZipEntryCountExceeded, match="zip-bomb shape"):
+        extract_files_from_zip(data, selector=lambda n: n)
+
+
+# ---------------------------------------------------------------------------
+# ZIP64 parity with zipfile._EndRecData64 (unconditional locator follow)
+# ---------------------------------------------------------------------------
+
+def _append_zip64_records(data: bytes, entries: int, cd_size: int) -> bytes:
+    """Rebuild ``data``'s tail with a ZIP64 EOCD record + locator
+    inserted BEFORE the classic EOCD (whose fields stay small and
+    non-sentinel) — the shape where zipfile uses the ZIP64 numbers
+    while a sentinel-gated peek would use the classic ones."""
+    import struct
+
+    eocd_off = data.rfind(b"\x50\x4b\x05\x06")
+    assert eocd_off >= 0, "test fixture: EOCD signature not found"
+    zip64_eocd = (
+        b"\x50\x4b\x06\x06"
+        + struct.pack("<Q", 44)          # size of remaining record
+        + struct.pack("<HH", 45, 45)     # version made by / needed
+        + struct.pack("<II", 0, 0)       # disk numbers
+        + struct.pack("<QQ", entries, entries)  # entries disk / total
+        + struct.pack("<QQ", cd_size, 0)        # cd size / cd offset
+    )
+    zip64_off = eocd_off  # record lands where the classic EOCD was
+    locator = (
+        b"\x50\x4b\x06\x07"
+        + struct.pack("<I", 0)
+        + struct.pack("<Q", zip64_off)
+        + struct.pack("<I", 1)
+    )
+    return data[:eocd_off] + zip64_eocd + locator + data[eocd_off:]
+
+
+def test_zip64_locator_overrides_non_sentinel_eocd():
+    """A ZIP64 record declaring 30k entries behind a classic EOCD
+    declaring 5 must be what the gate sees — zipfile follows the
+    locator unconditionally, so the pre-flight must too."""
+    data = _append_zip64_records(
+        _build_zip(5), entries=30_000, cd_size=30_000 * 46)
+    summary = peek_eocd(data)
+    assert summary is not None
+    assert summary.entries_total == 30_000
+    assert bomb_shaped_reason(summary) is not None
+
+
+def test_zip64_locator_absent_uses_classic_fields():
+    """No locator: classic EOCD fields are authoritative (unchanged
+    behaviour for the entire non-ZIP64 population)."""
+    data = _build_zip(5)
+    summary = peek_eocd(data)
+    assert summary is not None
+    assert summary.entries_total == 5
+
+
+def test_zip64_extract_gate_fires_on_non_sentinel_eocd(tmp_path: Path):
+    import pytest
+
+    from core.zip import ZipEntryCountExceeded, extract_files_from_zip
+
+    data = _append_zip64_records(
+        _build_zip(5), entries=30_000, cd_size=30_000 * 46)
+    with pytest.raises(ZipEntryCountExceeded):
+        extract_files_from_zip(data, selector=lambda n: n)
+    # Path-backed source takes the fh arm of the ZIP64 follow-up.
+    p = tmp_path / "zip64.zip"
+    p.write_bytes(data)
+    with pytest.raises(ZipEntryCountExceeded):
+        extract_files_from_zip(str(p), selector=lambda n: n)

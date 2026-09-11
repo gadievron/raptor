@@ -187,8 +187,64 @@ class TestGraduated:
             engine_rules_dir=engine_rules, record=False,
         )
         assert report.rules_graduated == 1
+        # A rule that is both a replayable library entry and a
+        # graduated file runs ONCE (in the library loop) — sweeping
+        # the graduated copy too duplicated every match and, with
+        # record=True, double-counted total_matches.
         provs = sorted(m.provenance for m in report.matches)
-        assert provs == ["graduated", "rule-library"]
+        assert provs == ["rule-library"]
+
+    def test_graduated_only_rule_still_swept(self, tmp_path, monkeypatch):
+        # A graduated file with no replayable library twin must still
+        # join the sweep (dedup must not drop it).
+        lib_dir = _write_library(tmp_path, [])
+        engine_rules = tmp_path / "engine-rules"
+        (engine_rules / "semgrep" / "rules").mkdir(parents=True)
+        (engine_rules / "semgrep" / "rules" / "solo.yaml").write_text(
+            "rules: []\n",
+        )
+        target = tmp_path / "t"
+        target.mkdir()
+        monkeypatch.setattr(
+            rs.semgrep_runner, "run_rule",
+            lambda *a, **k: _semgrep_result(1, rule_id="solo"),
+        )
+        report = rs.run_sweep(
+            [target], library_dir=lib_dir,
+            engine_rules_dir=engine_rules, record=False,
+        )
+        assert [m.provenance for m in report.matches] == ["graduated"]
+
+    def test_graduated_cocci_rules_join_sweep(self, tmp_path, monkeypatch):
+        # graduate() writes coccinelle rules to coccinelle/*.cocci —
+        # the sweep must pick those up, not just semgrep/rules.
+        lib_dir = _write_library(tmp_path, [])
+        engine_rules = tmp_path / "engine-rules"
+        (engine_rules / "coccinelle").mkdir(parents=True)
+        (engine_rules / "coccinelle" / "gradc.cocci").write_text(
+            "@@\n@@\n- x\n",
+        )
+        target = tmp_path / "t"
+        target.mkdir()
+        (target / "a.c").write_text("int main(void){return 0;}\n")
+
+        class _CocciResult:
+            errors: list = []
+            matches = [
+                type("M", (), {"file": "a.c", "line": 1, "message": "hit"})(),
+            ]
+
+        monkeypatch.setattr(
+            rs.cocci_runner, "run_rule", lambda *a, **k: _CocciResult(),
+        )
+        report = rs.run_sweep(
+            [target], library_dir=lib_dir,
+            engine_rules_dir=engine_rules, record=False,
+        )
+        assert report.rules_graduated == 1
+        assert [
+            (m.rule_id, m.engine, m.provenance) for m in report.matches
+        ] == [("gradc", "coccinelle", "graduated")]
 
 
 class TestRecording:
@@ -224,17 +280,50 @@ class TestRecording:
         assert report.recorded_updates == 0
         assert (lib_dir / "manifest.json").read_text() == before
 
-    def test_zero_matches_not_recorded(self, tmp_path, monkeypatch):
+    def test_zero_matches_recorded_as_coverage(self, tmp_path, monkeypatch):
+        # A target where the rule fired nowhere is negative evidence:
+        # the TargetRecord must accrue (matches=0, no verdict) so
+        # stale rules can eventually be auto-archived and per-target
+        # confidence counts misses, not just hits.
         lib_dir = _write_library(tmp_path, [_manifest_entry("sg")])
-        before = (lib_dir / "manifest.json").read_text()
         target = tmp_path / "t"
         target.mkdir()
         monkeypatch.setattr(
             rs.semgrep_runner, "run_rule",
             lambda *a, **k: _semgrep_result(0, rule_id="sg"),
         )
-        rs.run_sweep([target], library_dir=lib_dir, record=True)
-        assert (lib_dir / "manifest.json").read_text() == before
+        report = rs.run_sweep([target], library_dir=lib_dir, record=True)
+        assert report.recorded_updates == 1
+        entry = RuleLibrary(lib_dir).all_entries()[0]
+        assert len(entry.targets) == 2  # original + zero-match sweep target
+        sweep_rec = entry.targets[-1]
+        assert sweep_rec.matches == 0
+        assert sweep_rec.tp_rate is None  # no triage → no verdict
+        assert entry.tp_rate == pytest.approx(0.9)  # precision untouched
+
+    def test_zero_match_sweeps_can_auto_archive(self, tmp_path, monkeypatch):
+        # Enough zero-match targets push a never-firing rule over the
+        # prune threshold — sweep evidence alone can retire it.
+        lib_dir = _write_library(
+            tmp_path, [_manifest_entry("dud", n_targets=1)],
+        )
+        # Strip prior variant evidence so the rule counts as never
+        # having fired.
+        manifest = json.loads((lib_dir / "manifest.json").read_text())
+        manifest["rules"][0]["total_variants"] = 0
+        (lib_dir / "manifest.json").write_text(json.dumps(manifest))
+        targets = []
+        for i in range(3):
+            t = tmp_path / f"t{i}"
+            t.mkdir()
+            targets.append(t)
+        monkeypatch.setattr(
+            rs.semgrep_runner, "run_rule",
+            lambda *a, **k: _semgrep_result(0, rule_id="dud"),
+        )
+        rs.run_sweep(targets, library_dir=lib_dir, record=True)
+        entry = RuleLibrary(lib_dir).all_entries()[0]
+        assert entry.archived is True
 
 
 class TestCap:

@@ -68,10 +68,15 @@ def main() -> int:
         return 0
 
     project_dir = understand_dir.parent
-    if project_dir == understand_dir:
+    # The CPG cache is one slot per cache dir. Only managed project
+    # dirs may host it — for a standalone run the parent is the shared
+    # out/ dir, where runs against different targets would evict each
+    # other's cache, so skip instead.
+    from core.project.project import is_project_output_dir
+    if not is_project_output_dir(project_dir):
         print(
-            "raptor-build-cpg-cache: no project active (no parent dir); "
-            "skipping"
+            "raptor-build-cpg-cache: no project active "
+            "(standalone run dir); skipping"
         )
         return 0
 

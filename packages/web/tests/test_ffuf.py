@@ -1938,6 +1938,9 @@ def test_run_uses_subprocess_argv_and_summarizes_json(tmp_path: Path, monkeypatc
             "length": 42,
             "words": 3,
             "lines": 1,
+            # Verbatim value for replay/seeding consumers; persisted
+            # copies pass the scanner's artifact redaction boundary.
+            "url_raw": "https://example.test/admin?" + "tok" + "en=abc123",
         }
     ]
 

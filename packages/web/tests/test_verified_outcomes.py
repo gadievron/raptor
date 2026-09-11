@@ -138,3 +138,33 @@ def test_attempt_builder_redacts_secret_urls():
 
     assert attempt is not None
     assert "sk-super-secret-123" not in attempt.web_evidence.target_url
+
+
+def test_replay_refuted_finding_is_projected_refuted_not_verified():
+    # The same run's labeled-attempt record projects a control-refuted
+    # hit as refuted; the sidecar record must agree, never over-claim.
+    outcome = from_web_finding(
+        _oracle_proven_finding(verification_status="refuted"),
+    )
+    assert outcome is not None
+    assert outcome.to_dict()["status"] == "refuted"
+    assert outcome.to_dict()["evidence"]["replay_verification_status"] == "refuted"
+
+
+def test_replay_inconclusive_finding_is_not_minted_verified():
+    outcome = from_web_finding(
+        _oracle_proven_finding(verification_status="inconclusive"),
+    )
+    assert outcome is not None
+    assert outcome.to_dict()["status"] == "inconclusive"
+
+
+def test_replay_verified_and_unreplayed_shapes_stay_verified():
+    # Detection-time three-gate confirmation stands when the replay
+    # pass verified it or had no request shape for the vector.
+    assert from_web_finding(
+        _oracle_proven_finding(verification_status="verified"),
+    ).to_dict()["status"] == "verified"
+    assert from_web_finding(
+        _oracle_proven_finding(),  # never replayed
+    ).to_dict()["status"] == "verified"

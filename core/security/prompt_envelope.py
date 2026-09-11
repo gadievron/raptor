@@ -442,11 +442,18 @@ _MARKDOWN_HEADING_RE = re.compile(r'(?m)^( {0,3})(#+)')
 # Setext headings: a text line "underlined" by a run of `=` or `-`
 # (0-3 leading spaces, trailing blanks only) renders the PRECEDING
 # line as a heading — a forgery channel the ATX escape never sees.
-# Only fires when the underline directly follows a non-blank line
-# (after a blank line, `---` is a thematic break / `===` plain text,
-# so ordinary horizontal rules in prose are left alone).
+# Only fires when the underline follows a non-blank line (after a
+# blank line, `---` is a thematic break / `===` plain text, so
+# ordinary horizontal rules in prose are left alone). The preceding
+# line may carry trailing spaces/tabs — CommonMark strips trailing
+# whitespace from the heading content line, so `TEXT \n===` still
+# renders a heading; the old fixed lookbehind `(?<=\S\n)` demanded a
+# non-space directly before the newline and one trailing blank
+# bypassed the whole neutralisation. Group 1 therefore captures the
+# trailing blanks + newline + underline indent so the replacement
+# preserves them byte-for-byte.
 _SETEXT_UNDERLINE_RE = re.compile(
-    r'(?m)(?<=\S\n)^( {0,3})(=+|-+)([ \t]*)$'
+    r'(?m)(?<=\S)([ \t]*\n {0,3})(=+|-+)([ \t]*)$'
 )
 
 
@@ -498,7 +505,17 @@ def neutralize_tag_forgery(content: str) -> str:
 
     The replacement is narrow enough to leave normal source-code
     comparisons (``a < b``) and inline ``#`` characters untouched.
+
+    CR line endings are normalised to ``\n`` first: the heading and
+    setext patterns are ``(?m)^``-anchored and ``(?m)^`` matches after
+    ``\n`` only, so ``text\r# H`` / ``Fake\r\n===`` bypassed both for
+    callers invoking this helper directly. The envelope pipeline is
+    unaffected (no double-processing): its upstream control-char
+    escape (``_escape_for_envelope``) already turns raw ``\r`` into
+    the literal ``\x0d`` before this runs.
     """
+    content = content.replace('\r\n', '\n').replace('\r', '\n')
+
     def _escape_match(m: re.Match) -> str:
         s = m.group(0)
         # XML-style: insert ZWSP after `<` so the model no longer

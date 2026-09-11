@@ -25,12 +25,14 @@ Supported target kinds:
 from __future__ import annotations
 
 import logging
+import os
 import platform
 import shutil
 import struct
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -231,16 +233,28 @@ def _detect_zip_artifact(path: Path) -> TargetInfo | None:
     return None
 
 
+def _tree_has_extension(root: Path, extensions: set[str]) -> bool:
+    """Single recursive walk with early exit on the first match.
+
+    One ``glob('**/pat')`` per extension meant up to five COMPLETE
+    recursive walks (node_modules-scale included) when a large non-C
+    tree matched nothing; one walk checking every extension per file
+    bounds the no-match case at a single traversal.
+    """
+    for _dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
+        for name in filenames:
+            if os.path.splitext(name)[1].lower() in extensions:
+                return True
+    return False
+
+
 def _detect_directory(path: Path) -> TargetInfo:
     """Inspect a directory for project markers."""
     if (path / "Cargo.toml").exists():
         return _detect_rust_crate(path)
     if (path / "pyproject.toml").exists() or (path / "setup.py").exists():
         return _detect_python_pkg(path)
-    if any(
-        any(path.glob(pat)) or any(path.glob(f"**/{pat}"))
-        for pat in ("*.h", "*.c", "*.cc", "*.cpp", "*.hpp")
-    ):
+    if _tree_has_extension(path, {".h", ".c", ".cc", ".cpp", ".hpp"}):
         return TargetInfo(
             path=path, kind="source-c",
             description="Directory containing C/C++ sources",
@@ -261,7 +275,15 @@ def _detect_elf(path: Path, magic: bytes, sys_platform: str) -> TargetInfo:
     arch = "unknown"
     if len(magic) >= 20:
         ei_class = magic[4]   # 1=32-bit, 2=64-bit
-        machine = int.from_bytes(magic[18:20], "little")
+        # e_machine uses the file's own byte order (EI_DATA: 1=LSB,
+        # 2=MSB) — reading it little-endian unconditionally byte-swaps
+        # the arch label for every big-endian ELF (s390x, MIPS BE,
+        # ppc32).
+        ei_data = magic[5]
+        byteorder: Literal["little", "big"] = (
+            "big" if ei_data == 2 else "little"
+        )
+        machine = int.from_bytes(magic[18:20], byteorder)
         machine_map = {
             0x03: "i386", 0x3E: "x86_64",
             0x28: "arm", 0xB7: "aarch64",

@@ -17,11 +17,15 @@ the newest stable, which is the only one Homebrew exposes.
 from __future__ import annotations
 
 import logging
-import urllib.parse
 
 from core.json import MISSING, JsonCache
 
-from ._negative_cache import log_fetch_failure
+from ._negative_cache import log_fetch_failure, should_negative_cache
+from ._url import (
+    UnsafeUrlComponentError,
+    quote_segment,
+    registry_cache_key,
+)
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -32,15 +36,6 @@ logger = logging.getLogger(__name__)
 
 _CACHE_KEY_PREFIX = "brew-versions"
 _DEFAULT_TTL = 24 * 3600
-
-
-def _key_component(value: str) -> str:
-    """Percent-encode one cache-key component so the key identity is
-    injective — tap-qualified formula names contain ``/``, and a raw
-    name with ``..`` segments could otherwise alias another formula's
-    cache file after JsonCache path sanitisation. Old raw-name entries
-    re-fetch once."""
-    return urllib.parse.quote(value, safe="")
 
 
 class HomebrewClient:
@@ -62,7 +57,16 @@ class HomebrewClient:
         self._offline = offline
 
     def list_versions(self, name: str) -> list[str]:
-        cache_key = f"{_CACHE_KEY_PREFIX}:{_key_component(name)}"
+        try:
+            # formulae.brew.sh serves core formulae only, as one path
+            # segment (``python@3.11``); a name carrying ``/`` (tap-
+            # qualified — not hosted here) or ``..`` can't exist on
+            # the API, so it takes the not-found path without any
+            # request or cache write.
+            encoded = quote_segment(name, safe="@")
+        except UnsafeUrlComponentError:
+            return []
+        cache_key = registry_cache_key(_CACHE_KEY_PREFIX, name)
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -73,10 +77,10 @@ class HomebrewClient:
 
         try:
             data = self._http.get_json(
-                f"https://formulae.brew.sh/api/formula/{name}.json")
+                f"https://formulae.brew.sh/api/formula/{encoded}.json")
         except Exception as e:                # noqa: BLE001
             log_fetch_failure(logger, "sca.registries.homebrew", name, e)
-            if self._cache is not None:
+            if self._cache is not None and should_negative_cache(e):
                 self._cache.put(cache_key, [], ttl_seconds=self._ttl)
             return []
 

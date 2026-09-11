@@ -491,8 +491,10 @@ class LoopTerminated:
         "max_total_tokens",          # cumulative input+output tokens crossed cap
         "max_tokens",                # provider truncated response (no tool calls)
         "refused",                   # provider safety / content filter
-        "tool_error",                # handler exception or timeout under terminate_on_handler_error
-        "tool_timeout",              # handler timeout, not configured to terminate
+        "tool_error",                # handler exception under terminate_on_handler_error
+        "tool_timeout",              # handler timeout under terminate_on_handler_error
+                                     # (without that flag, both convert to an
+                                     # is_error ToolResult and the loop continues)
         "context_overflow",          # request would exceed context window
         "provider_error",            # transport / API failure after retries
         "credit_exhausted",          # account out of credit / billing failure

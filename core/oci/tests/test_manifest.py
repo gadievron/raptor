@@ -79,23 +79,46 @@ def test_parse_image_manifest_docker_v2_shape():
     )]
 
 
-def test_parse_image_manifest_skips_malformed_layers():
-    """A layer entry missing ``digest`` or with a non-int size is
-    skipped silently — broken layers shouldn't crash the parser
-    but the consumer should still see the well-formed ones."""
+def test_parse_image_manifest_malformed_size_coerced_not_dropped():
+    """Malformed / absent sizes are coerced to 0 (unknown; budget
+    logic applies the floor) — the layer itself is KEPT. Silently
+    dropping a layer for a bad size field made the package inventory
+    partial while looking complete: an SBOM-evasion primitive."""
     parsed = parse_image_manifest({
         "mediaType": "application/vnd.oci.image.manifest.v1+json",
         "config": {"digest": "sha256:" + "c" * 64},
         "layers": [
             {"digest": "sha256:" + "a" * 64, "size": 100},
-            "this-is-not-a-dict",
-            {"digest": "sha256:" + "b" * 64},   # missing size
-            {"size": 500},                       # missing digest
-            {"digest": "sha256:" + "d" * 64, "size": 999},
+            {"digest": "sha256:" + "b" * 64},              # missing size
+            {"digest": "sha256:" + "d" * 64, "size": "999"},  # str size
+            {"digest": "sha256:" + "e" * 64, "size": None},   # null size
         ],
     })
-    digests = [line.digest for line in parsed.layers]
-    assert digests == ["sha256:" + "a" * 64, "sha256:" + "d" * 64]
+    assert [(line.digest, line.size) for line in parsed.layers] == [
+        ("sha256:" + "a" * 64, 100),
+        ("sha256:" + "b" * 64, 0),
+        ("sha256:" + "d" * 64, 999),
+        ("sha256:" + "e" * 64, 0),
+    ]
+
+
+def test_parse_image_manifest_unfetchable_layer_is_loud():
+    """A layer with no digest (or a non-object entry) cannot be
+    fetched at all — refusing loudly beats a silently partial
+    inventory, matching the config.digest posture."""
+    import pytest
+    with pytest.raises(ValueError, match="digest"):
+        parse_image_manifest({
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {"digest": "sha256:" + "c" * 64},
+            "layers": [{"size": 500}],
+        })
+    with pytest.raises(ValueError, match="not an object"):
+        parse_image_manifest({
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {"digest": "sha256:" + "c" * 64},
+            "layers": ["this-is-not-a-dict"],
+        })
 
 
 def test_parse_image_manifest_missing_config_digest_raises():

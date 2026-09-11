@@ -163,3 +163,46 @@ def test_short_sha_no_mirror_match(fake) -> None:
     ))
     v = verify(_CVE, "curl/curl", "abcdef", fake)  # type: ignore[arg-type]
     assert v.verdict != Verdict.MIRROR_DIFFERENT_SLUG
+
+
+def test_two_short_shas_do_not_match_exact(fake) -> None:
+    """Two coincident 7-char short SHAs are within git's own ambiguity
+    range — the oracle must not mint MATCH_EXACT below the 12-char
+    floor (same floor as the NVD oracle)."""
+    fake.add(_CVE, _payload(references=[
+        {"type": "FIX", "url": "https://github.com/curl/curl/commit/fb4415d"},
+    ]))
+    v = verify(_CVE, "curl/curl", "fb4415d", fake)  # type: ignore[arg-type]
+    assert v.verdict == Verdict.DISPUTE
+    assert "12-char minimum" in (v.notes or "")
+
+
+def test_twelve_char_pick_still_matches_full_sha(fake) -> None:
+    """At/above the floor, mutual-prefix matching keeps working."""
+    fake.add(_CVE, _payload(references=[
+        {"type": "FIX", "url": f"https://github.com/curl/curl/commit/{_SHA}"},
+    ]))
+    v = verify(_CVE, "curl/curl", _SHA[:12], fake)  # type: ignore[arg-type]
+    assert v.verdict == Verdict.MATCH_EXACT
+
+
+def test_short_record_sha_does_not_match_full_pick(fake) -> None:
+    """A sub-12-char SHA on the RECORD side is equally ambiguous; the
+    correct-slug pick degrades to DISPUTE, never a false match."""
+    fake.add(_CVE, _payload(affected=[
+        {"ranges": [{"type": "GIT", "repo": "https://github.com/curl/curl",
+                     "events": [{"fixed": _SHA[:8]}]}]},
+    ]))
+    v = verify(_CVE, "curl/curl", _SHA, fake)  # type: ignore[arg-type]
+    assert v.verdict == Verdict.DISPUTE
+
+
+def test_lowercase_git_range_still_verifies(fake) -> None:
+    """Mirrors/converters ship type "git"; the range must still feed the
+    oracle's GIT extraction rather than being reclassified away."""
+    fake.add(_CVE, _payload(affected=[
+        {"ranges": [{"type": "git", "repo": "https://github.com/curl/curl",
+                     "events": [{"fixed": _SHA}]}]},
+    ]))
+    v = verify(_CVE, "curl/curl", _SHA, fake)  # type: ignore[arg-type]
+    assert v.verdict == Verdict.MATCH_RANGE

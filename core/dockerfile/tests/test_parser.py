@@ -250,3 +250,129 @@ CMD ["python", "src/server.py"]
     apt_run = [r for r in runs if "apt-get update" in r.args]
     assert len(apt_run) == 1
     assert "rm -rf" in apt_run[0].args
+
+
+# ── heredoc bodies are consumed, never parsed as instructions ──────────
+
+
+def test_heredoc_body_never_yields_phantom_instructions():
+    text = (
+        "FROM debian:11 AS build\n"
+        "RUN <<SCRIPT\n"
+        "FROM evil/image\n"
+        "RUN echo phantom\n"
+        "SCRIPT\n"
+        "RUN echo real\n"
+    )
+    insts = parse_dockerfile(text)
+    directives = [i.directive for i in insts]
+    assert directives == ["FROM", "RUN", "RUN"]
+    # Stage tracking survives — the heredoc'd FROM must not reset it.
+    assert all(i.stage_name == "build" for i in insts)
+    # The body is preserved in raw for round-trip consumers.
+    heredoc_run = insts[1]
+    assert "FROM evil/image" in heredoc_run.raw
+    assert heredoc_run.args.startswith("<<SCRIPT")
+
+
+def test_heredoc_dash_form_indented_terminator():
+    text = (
+        "FROM alpine\n"
+        "RUN <<-EOT\n"
+        "  echo body\n"
+        "\tEOT\n"
+        "RUN echo after\n"
+    )
+    insts = parse_dockerfile(text)
+    assert [i.directive for i in insts] == ["FROM", "RUN", "RUN"]
+    assert insts[2].args == "echo after"
+
+
+def test_unterminated_heredoc_consumes_to_eof_without_phantoms():
+    text = "FROM alpine\nRUN <<EOT\nFROM evil/image\n"
+    insts = parse_dockerfile(text)
+    assert [i.directive for i in insts] == ["FROM", "RUN"]
+
+
+def test_shell_shapes_do_not_false_trigger_heredoc():
+    # ``<<<`` here-strings and arithmetic ``1<<2`` are not heredocs.
+    text = (
+        "FROM alpine\n"
+        "RUN cat <<< hello\n"
+        "RUN echo $((1<<2))\n"
+        "RUN echo done\n"
+    )
+    insts = parse_dockerfile(text)
+    assert [i.directive for i in insts] == ["FROM", "RUN", "RUN", "RUN"]
+
+
+# ── comment-only continuation chunks are transparent in args ───────────
+
+
+def test_comment_continuation_lines_excluded_from_args():
+    text = (
+        "RUN apt-get install -y \\\n"
+        "    # explainer comment\n"
+        "    zlib1g-dev\n"
+    )
+    insts = parse_dockerfile(text)
+    assert len(insts) == 1
+    assert "#" not in insts[0].args
+    assert "explainer" not in insts[0].args
+    assert "zlib1g-dev" in insts[0].args
+    # raw keeps the comment for round-trip.
+    assert "# explainer comment" in insts[0].raw
+
+
+# ── heredoc markers are TOKENS: quoted / mid-word << never triggers ────
+
+
+def test_quoted_heredoc_lookalike_does_not_swallow_instructions():
+    # BuildKit builds all of these normally; a phantom heredoc here
+    # both regresses legitimate files and hands an attacker a
+    # one-token way to hide later RUN/FROM lines from extraction.
+    text = (
+        "FROM debian:11\n"
+        'RUN echo "placeholder <<VERSION"\n'
+        "RUN apt-get install -y curl\n"
+        "RUN pip install requests\n"
+    )
+    insts = parse_dockerfile(text)
+    assert [i.directive for i in insts] == ["FROM", "RUN", "RUN", "RUN"]
+
+
+def test_single_quoted_sed_template_not_a_heredoc():
+    text = (
+        "FROM debian:11\n"
+        "RUN sed -i 's/<<PLACEHOLDER>>/prod/' /etc/app.conf\n"
+        "RUN apt-get install -y curl\n"
+    )
+    insts = parse_dockerfile(text)
+    assert [i.directive for i in insts] == ["FROM", "RUN", "RUN"]
+
+
+def test_mid_token_shift_with_identifier_not_a_heredoc():
+    text = (
+        "FROM debian:11\n"
+        "RUN echo $((1<<bits))\n"
+        "FROM alpine AS second\n"
+    )
+    insts = parse_dockerfile(text)
+    assert [i.directive for i in insts] == ["FROM", "RUN", "FROM"]
+    assert insts[2].stage_name == "second"
+
+
+def test_true_heredoc_mid_line_still_consumes_body():
+    # Control: a genuine token-initial marker after a connector still
+    # opens the heredoc and its body never becomes instructions.
+    text = (
+        "FROM debian:11\n"
+        "RUN apt-get update && tee /etc/motd <<BANNER\n"
+        "FROM inside/body\n"
+        "BANNER\n"
+        "RUN echo after\n"
+    )
+    insts = parse_dockerfile(text)
+    assert [i.directive for i in insts] == ["FROM", "RUN", "RUN"]
+    assert "FROM inside/body" in insts[1].raw
+    assert insts[2].args == "echo after"

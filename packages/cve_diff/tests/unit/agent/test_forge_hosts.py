@@ -108,12 +108,12 @@ def test_override_dedupes_and_strips_garbage(override_config):
     })
 
 
-def test_empty_override_falls_back_to_default(override_config):
-    """``{"hosts": []}`` (or any all-garbage list) falls through to
-    default rather than producing a deny-all allowlist."""
+def test_empty_override_is_deny_all(override_config):
+    """``{"hosts": []}`` is an explicit operator statement — the
+    override REPLACES the default so operators can ban public
+    forges; falling back would silently defeat that."""
     override_config({"hosts": []})
-    hosts = tools.forge_hosts()
-    assert _has_host(hosts, "github.com")
+    assert tools.forge_hosts() == frozenset()
 
 
 def test_override_missing_hosts_key_falls_back(override_config):

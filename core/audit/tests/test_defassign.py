@@ -447,6 +447,44 @@ class TestMacroExpansion:
         )
         assert not r.proven
 
+    def test_expression_macro_guard_branch_stays_unknown(self, tmp_path):
+        # An expression-shaped macro guard reduces to a placeholder;
+        # the placeholder must be OPAQUE, not a constant.  A constant
+        # (0) lets the walker const-fold the guarded branch away and
+        # erase the uninitialized use inside it — a false proof.
+        root = tmp_path / "target"
+        root.mkdir()
+        (root / "m.c").write_text(
+            "#define GUARD(c) (!!(c))\n"
+            "int f(int a){int v; if (GUARD(a)) { return v; }"
+            " v = 1; return v;}\n",
+        )
+        r = check_definite_assignment(
+            "int f(int a){int v; if (GUARD(a)) { return v; }"
+            " v = 1; return v;}", "v",
+            target_path=root, rel_file="m.c",
+        )
+        assert not r.proven
+
+    def test_expression_macro_guard_both_arms_assigning_proves(
+        self, tmp_path,
+    ):
+        # Control: the reduction itself stays usable — when both arms
+        # of the macro-guarded branch assign, the proof still lands.
+        root = tmp_path / "target"
+        root.mkdir()
+        (root / "m.c").write_text(
+            "#define GUARD(c) (!!(c))\n"
+            "int f(int a){int v; if (GUARD(a)) { v = 2; }"
+            " else { v = 1; } return v;}\n",
+        )
+        r = check_definite_assignment(
+            "int f(int a){int v; if (GUARD(a)) { v = 2; }"
+            " else { v = 1; } return v;}", "v",
+            target_path=root, rel_file="m.c",
+        )
+        assert r.proven, r.reason
+
 
 # ---------------------------------------------------------------------------
 # Z3 arm
@@ -591,3 +629,27 @@ class TestHelpers:
             "int f(int a, char *b){int v; return v;}",
         )
         assert names == frozenset({"a", "b"})
+
+
+class TestInitDeclaratorSizeReads:
+    def test_vla_size_read_in_initialized_declarator_not_proven(self):
+        # ``int (*rows)[x] = get_rows();`` evaluates x at the
+        # declaration; the init branch only scanned the initializer,
+        # so the prover certified "assigned before every use" over an
+        # uninitialized size read.
+        r = _check(
+            "int f(int a){int x; int (*rows)[x] = get_rows();"
+            " x = a; return x;}",
+            "x",
+        )
+        assert not r.proven
+
+    def test_assigned_size_read_still_proven(self):
+        # Two-direction guard: the same shape with x assigned FIRST
+        # stays provable.
+        r = _check(
+            "int f(int a){int x; x = a;"
+            " int (*rows)[x] = get_rows(); return x;}",
+            "x",
+        )
+        assert r.proven

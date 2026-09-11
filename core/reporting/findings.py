@@ -109,6 +109,8 @@ def build_findings_summary(findings: list[dict[str, Any]]) -> dict[str, int]:
               "confirmed_unrestricted": 0,
               "confirmed_constrained": 0,
               "confirmed_blocked": 0,
+              "confirmed_unverified": 0,
+              "not_disproven": 0,
               "false_positive": 0,
               "ruled_out": 0, "error": 0, "other": 0}
     for f in findings:
@@ -121,9 +123,19 @@ def build_findings_summary(findings: list[dict[str, Any]]) -> dict[str, int]:
         elif status == "Confirmed (Blocked)":
             counts["confirmed_blocked"] += 1
             counts["confirmed"] += 1
+        elif status == "Confirmed (Unverified)":
+            # NOT summed into the confirmed umbrella: unverified means
+            # exactly that — counting it as a verified confirmation is
+            # the inversion this bucket exists to prevent.
+            counts["confirmed_unverified"] += 1
         elif status.startswith("Confirmed"):
             counts["confirmed_unrestricted"] += 1
             counts["confirmed"] += 1
+        elif status == "Unconfirmed":
+            # not_disproven is a legitimate TERMINAL status, not an
+            # uncategorised leftover — the "other" bucket feeds a
+            # possible-pipeline-bug warning it must not trip.
+            counts["not_disproven"] += 1
         elif status == "False Positive":
             counts["false_positive"] += 1
         elif status == "Ruled Out":
@@ -157,6 +169,10 @@ def findings_summary_line(counts: dict[str, int], vuln_count: int | None = None)
         parts.append(f"{counts['confirmed_constrained']} Confirmed (Constrained)")
     if counts.get("confirmed_blocked"):
         parts.append(f"{counts['confirmed_blocked']} Confirmed (Blocked)")
+    if counts.get("confirmed_unverified"):
+        parts.append(f"{counts['confirmed_unverified']} Confirmed (Unverified)")
+    if counts.get("not_disproven"):
+        parts.append(f"{counts['not_disproven']} Not Disproven")
     if counts["false_positive"]:
         parts.append(f"{counts['false_positive']} False Positive")
     if counts["ruled_out"]:
@@ -220,7 +236,12 @@ def _md_table_cell(s: str) -> str:
     s = _strip_autofetch_markup(s)
     s = s.replace("\\", "\\\\")
     s = s.replace("|", "\\|")
-    s = s.replace("`", "\\`")
+    # Backticks are REPLACED (U+02BC, same policy as the threat-model
+    # renderer), never backslash-escaped: many callers wrap cells in
+    # code spans, where backslash escapes are inert (CommonMark) — an
+    # escaped backtick still terminated the span and spilled the rest
+    # of a target-controlled cell into live markdown.
+    s = s.replace("`", "\u02bc")
     return s.replace("\r\n", "<br>").replace("\n", "<br>").replace("\r", "<br>")
 
 

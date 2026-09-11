@@ -61,7 +61,7 @@ def _adapter_with_fake_result() -> SourceIntelAdapter:
         aborts=[],
         allocations=[],
     )
-    a = SourceIntelAdapter(cache=None, sandbox=False)
+    a = SourceIntelAdapter(cache=None)
     a.is_available = lambda: True
     a._load_result = lambda target: fake
     return a
@@ -412,3 +412,213 @@ class TestSkipReason:
         assert not ev.success
         assert "source_intel skipped" in ev.error
         assert "spatch_not_available" in ev.error
+
+
+# ---- exact function matching ------------------------------------------
+
+
+class TestExactFunctionMatching:
+    """Observations whose enclosing function the cocci rules could not
+    resolve (None) must match NO query — otherwise unrelated file-scope
+    evidence props up a verdict for an arbitrary function, since the
+    verdict ladder counts any non-empty match list as
+    confirming-compatible."""
+
+    def _run(self, result, query, tmp_path):
+        adapter = SourceIntelAdapter()
+        with (
+            patch.object(adapter, "is_available", return_value=True),
+            patch(
+                "packages.source_intel.analyze.analyze",
+                return_value=result,
+            ),
+        ):
+            return adapter.run(query, tmp_path)
+
+    def test_unresolved_abort_does_not_match_arbitrary_function(self, tmp_path):
+        result = _abort_result(
+            AbortEvidence(
+                macro="panic", location=("src/f.c", 50),
+                enclosing_function=None, grade=GRADE_DOMINATES,
+            ),
+        )
+        ev = self._run(
+            result, _q(function="unrelated_fn", axes=["aborts"]), tmp_path,
+        )
+        assert ev.success
+        assert ev.matches == []
+
+    def test_named_abort_still_matches_its_function(self, tmp_path):
+        # Direction guard: exact-name observations keep matching.
+        result = _abort_result(
+            AbortEvidence(
+                macro="panic", location=("src/f.c", 50),
+                enclosing_function="do_thing", grade=GRADE_DOMINATES,
+            ),
+        )
+        ev = self._run(
+            result, _q(function="do_thing", axes=["aborts"]), tmp_path,
+        )
+        assert ev.success
+        assert len(ev.matches) == 1
+
+    def test_unresolved_allocation_does_not_match(self, tmp_path):
+        result = _alloc_result(
+            AllocationEvidence(
+                allocator="kmalloc", location=("src/f.c", 200),
+                shape="field", enclosing_function=None, target_field="data",
+            ),
+        )
+        ev = self._run(
+            result, _q(function="unrelated_fn", axes=["allocations"]),
+            tmp_path,
+        )
+        assert ev.success
+        assert ev.matches == []
+
+    def test_unresolved_hazard_and_capability_do_not_match(self, tmp_path):
+        from packages.source_intel.analyze import (
+            CapabilityEvidence,
+            HazardEvidence,
+        )
+        result = SourceIntelResult(
+            target="src",
+            hazards=(
+                HazardEvidence(
+                    kind="deprecated_func", detail="strcpy",
+                    location=("src/f.c", 10), enclosing_function=None,
+                ),
+            ),
+            capabilities=(
+                CapabilityEvidence(
+                    cap_function="capable", location=("src/f.c", 20),
+                    grade=GRADE_DOMINATES, enclosing_function=None,
+                ),
+            ),
+        )
+        ev = self._run(
+            result,
+            _q(function="unrelated_fn", axes=["hazards", "privilege"]),
+            tmp_path,
+        )
+        assert ev.success
+        assert ev.matches == []
+
+
+# ---- privilege axis fields --------------------------------------------
+
+
+class TestPrivilegeAxisFields:
+    def _run(self, result, query, tmp_path):
+        adapter = SourceIntelAdapter()
+        with (
+            patch.object(adapter, "is_available", return_value=True),
+            patch(
+                "packages.source_intel.analyze.analyze",
+                return_value=result,
+            ),
+        ):
+            return adapter.run(query, tmp_path)
+
+    def test_capability_match_names_the_check_function(self, tmp_path):
+        # CapabilityEvidence carries the check in `cap_function`; the
+        # match must surface it (not a permanently-None wrong-field
+        # read rendering "cap:?") so the LLM can tell capable() from
+        # ns_capable() sites.
+        from packages.source_intel.analyze import CapabilityEvidence
+        result = SourceIntelResult(
+            target="src",
+            capabilities=(
+                CapabilityEvidence(
+                    cap_function="ns_capable", location=("src/f.c", 20),
+                    grade=GRADE_DOMINATES, enclosing_function="do_thing",
+                ),
+            ),
+        )
+        ev = self._run(
+            result, _q(function="do_thing", axes=["privilege"]), tmp_path,
+        )
+        assert ev.success
+        assert len(ev.matches) == 1
+        assert ev.matches[0]["capability"] == "ns_capable"
+        assert "cap:ns_capable" in ev.matches[0]["message"]
+        assert "cap:?" not in ev.matches[0]["message"]
+
+    def test_lsm_hooks_surface_on_privilege_axis(self, tmp_path):
+        # The axis is documented as covering LSM enforcement points too.
+        from packages.source_intel.analyze import LsmEvidence
+        result = SourceIntelResult(
+            target="src",
+            lsm_hooks=(
+                LsmEvidence(
+                    hook_name="security_file_open",
+                    location=("src/f.c", 30),
+                    enclosing_function="do_thing",
+                ),
+            ),
+        )
+        ev = self._run(
+            result, _q(function="do_thing", axes=["privilege"]), tmp_path,
+        )
+        assert ev.success
+        assert len(ev.matches) == 1
+        assert ev.matches[0]["kind"] == "lsm_hook"
+        assert ev.matches[0]["hook"] == "security_file_open"
+
+
+# ---- variants axis -----------------------------------------------------
+
+
+class TestVariantsAxis:
+    """Axis-5 variant data lives on `checked_allocations`; the axis
+    must surface it (a query against a result with checked-alloc
+    observations previously always returned zero matches, mechanically
+    downgrading a confirmed variants hypothesis to refuted)."""
+
+    def _run(self, result, query, tmp_path):
+        adapter = SourceIntelAdapter()
+        with (
+            patch.object(adapter, "is_available", return_value=True),
+            patch(
+                "packages.source_intel.analyze.analyze",
+                return_value=result,
+            ),
+        ):
+            return adapter.run(query, tmp_path)
+
+    def test_checked_alloc_surfaces_as_variant_match(self, tmp_path):
+        from packages.source_intel.analyze import CheckedAllocationEvidence
+        result = SourceIntelResult(
+            target="src",
+            checked_allocations=(
+                CheckedAllocationEvidence(
+                    allocator="kmalloc", location=("src/f.c", 77),
+                    enclosing_function="do_thing",
+                ),
+            ),
+        )
+        ev = self._run(
+            result, _q(function="do_thing", axes=["variants"]), tmp_path,
+        )
+        assert ev.success
+        assert len(ev.matches) == 1
+        assert ev.matches[0]["variant_kind"] == "checked_alloc"
+        assert ev.matches[0]["allocator"] == "kmalloc"
+
+    def test_other_functions_checked_allocs_do_not_match(self, tmp_path):
+        # Direction guard: exact function matching applies here too.
+        from packages.source_intel.analyze import CheckedAllocationEvidence
+        result = SourceIntelResult(
+            target="src",
+            checked_allocations=(
+                CheckedAllocationEvidence(
+                    allocator="kmalloc", location=("src/f.c", 77),
+                    enclosing_function="other_fn",
+                ),
+            ),
+        )
+        ev = self._run(
+            result, _q(function="do_thing", axes=["variants"]), tmp_path,
+        )
+        assert ev.success
+        assert ev.matches == []

@@ -88,12 +88,24 @@ def containing_item(
 
 def normalise_trace_path(raw: str, inv_paths: set[str]) -> str | None:
     """Map a trace path (possibly absolute / ``./``-prefixed) onto its
-    inventory key. Exact match first; else a unique suffix match."""
+    inventory key. Exact match first; else a unique suffix match.
+
+    ``removeprefix`` (not ``lstrip``): ``lstrip("./")`` strips ANY
+    leading ``.``/``/`` characters (set semantics) — the exact pitfall
+    the shared matcher fixed — so ``../shared/util.c`` (out of tree)
+    became ``shared/util.c`` (an inventory key) and ``.hidden.c`` /
+    dot-dir prefixes got mangled.
+    """
     if raw in inv_paths:
         return raw
-    cleaned = raw.lstrip("./")
+    cleaned = raw.removeprefix("./")
     if cleaned in inv_paths:
         return cleaned
+    # ``..`` segments mean the path points OUTSIDE the tree the
+    # inventory keys are relative to — a suffix hit would map an
+    # out-of-tree file onto an unrelated inventory key.
+    if ".." in raw.split("/"):
+        return None
     hits = [p for p in inv_paths if raw.endswith("/" + p)]
     if len(hits) == 1:
         return hits[0]

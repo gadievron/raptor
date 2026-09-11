@@ -229,7 +229,21 @@ def _safe_eval(expr: str, bindings: dict) -> Any:
     def _p(n: int, sz: int) -> bytes:
         return int(n).to_bytes(sz, "little", signed=False)
 
-    def _u(b: bytes, sz: int) -> int:
+    def _u(b: Any, sz: int) -> int:
+        # Bytes-like only: ``bytes(<int>)`` allocates VALUE-many zero
+        # bytes before the [:sz] cap ever runs, so a binding parsed
+        # from hostile target output (e.g. a RAM-scale hex leak) fed
+        # to u64() would attempt a giant allocation host-side. The
+        # magnitude budgets all measure bit LENGTH, not allocation
+        # size, so they never catch it. An int argument was never
+        # meaningful anyway — bytes(n) is n zeros, so u64(<int>)
+        # always decoded to 0.
+        if not isinstance(b, (bytes, bytearray, memoryview)):
+            msg = (
+                f"u64/u32/u16 take raw recv bytes, not "
+                f"{type(b).__name__}"
+            )
+            raise ValueError(msg)
         return int.from_bytes(bytes(b)[:sz], "little", signed=False)
 
     ns = {

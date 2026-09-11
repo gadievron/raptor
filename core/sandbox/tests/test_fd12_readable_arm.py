@@ -109,6 +109,29 @@ class TestFd12ReadableArm(unittest.TestCase):
 
         self.assertEqual(captured.get("stdout"), subprocess.DEVNULL)
 
+    def test_reopen_oserror_fails_closed_to_devnull(self):
+        """An OSError during the write-only reopen must plug with
+        DEVNULL like the sibling branches — falling through left the
+        child the readable descriptor (an O_RDWR pty slave taps the
+        operator's keystrokes), which is exactly what this arm exists
+        to revoke."""
+        import core.sandbox.context as ctx
+
+        with tempfile.NamedTemporaryFile(delete=False) as tf:
+            path = tf.name
+        self.addCleanup(os.unlink, path)
+        fd = os.open(path, os.O_RDWR)
+        self.addCleanup(os.close, fd)
+
+        def boom(*_a, **_k):
+            msg = "simulated reopen failure"
+            raise OSError(msg)
+
+        with _Fd1Swap(fd), patch.object(ctx, "_reopen_write_only", boom):
+            captured = self._run_untrusted_capturing()
+
+        self.assertEqual(captured.get("stdout"), subprocess.DEVNULL)
+
     def test_wronly_file_untouched(self):
         import tempfile
 

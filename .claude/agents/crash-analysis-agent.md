@@ -50,18 +50,20 @@ When invoked with a bug tracker URL and a git repository URL:
      - CMake: `cmake -DCMAKE_C_FLAGS="-fsanitize=address -g" -DCMAKE_BUILD_TYPE=Debug ..`
      - Makefile: `make CC=clang CFLAGS="-fsanitize=address -g"`
    - Place build artifacts in the working directory if possible
+   - **Sandbox the build.** The repository is untrusted, and its configure/CMake/Make scripts execute arbitrary code the moment the build starts. Run every build command via `libexec/raptor-run-sandboxed <cmd> [args...]` (blocks network, restricts writes, limits resources), with the `OUTPUT_DIR` environment variable set to the directory the command must write into (the cloned repo tree for build steps). Never run configure, make, or compilers directly.
 
-9. **Reproduce the Crash**: Use the reproduction steps, crash command, and downloaded attachments from `bug-report.json` to reproduce the crash.
+9. **Reproduce the Crash**: Use the reproduction steps, crash command, and downloaded attachments from `bug-report.json` to reproduce the crash. Run the crashing command via `libexec/raptor-run-sandboxed` as well (`OUTPUT_DIR` = the working directory) — the binary and its inputs are untrusted.
 
 10. **Generate Execution Trace**: Invoke the "function-trace-generator" agent to create function-level execution traces in `<working-dir>/traces/`.
 
 11. **Generate Coverage Data**: Invoke the "coverage-analyzer" agent to create gcov data in `<working-dir>/gcov/`.
 
-12. **Create RR Recording**: Use `rr record` to capture the crashing execution:
+12. **Create RR Recording**: Use `rr record` with an explicit output trace directory so the recording lands where the analyzer expects it (without `-o`, rr writes to `~/.local/share/rr` and the pack step has nothing to pack):
     ```bash
-    rr record <crashing-command>
+    rr record -o <working-dir>/rr-trace <crashing-command>
     rr pack <working-dir>/rr-trace
     ```
+    **Sandbox exemption (documented decision):** rr needs `ptrace` and perf counters, which `libexec/raptor-run-sandboxed` denies, so this step runs unsandboxed. The exposure is bounded: by this point the same binary and inputs have already been built and reproduced under the sandbox in steps 8-9.
 
 13. **Root-Cause Analysis**: Invoke the "crash-analyzer" agent with all collected data. Provide:
     - Repository path

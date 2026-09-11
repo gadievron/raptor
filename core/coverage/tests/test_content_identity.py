@@ -52,3 +52,16 @@ def test_store_records_and_persists_content_id(tmp_path):
     assert cid and cid.startswith("content:")
     s.save()
     assert CoverageStore(tmp_path / "coverage.json").content_id == cid
+
+
+def test_content_identity_tolerates_lone_surrogate_paths():
+    """JSON round-trips lone surrogates from non-UTF-8 filenames; the
+    identity hash must use surrogateescape (core.hash) instead of
+    crashing the whole computation on the first such path."""
+    checklist = {"files": [
+        {"path": "src/ok.c", "sha256": "a" * 64},
+        {"path": "src/b\udce9d.c", "sha256": "b" * 64},
+    ]}
+    cid = content_identity(checklist)
+    assert cid is not None
+    assert cid.startswith("content:")

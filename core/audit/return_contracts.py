@@ -117,10 +117,29 @@ def harvest_wur_declarations(
             if not wur_alias_in(line):
                 continue
             # The attribute binds to the declaration it annotates: the
-            # alias line itself, or — for an attribute on its own line
-            # — the first following line that carries a name. Never
-            # more than one declaration per alias occurrence.
-            for candidate in lines[idx:idx + 3]:
+            # alias line itself, else the ±2-line window the docstring
+            # promises (the forward-only window never harvested the
+            # name-before-trailing-attribute style). Direction is
+            # disambiguated by the alias line's own shape: a ``)``
+            # OUTSIDE the attribute text means the declarator's
+            # parameter list closes here (trailing style — the name
+            # sits on this or a preceding line); a bare attribute line
+            # is the attribute-first style (name follows). Never more
+            # than one declaration per alias occurrence.
+            declarator_tail = re.sub(
+                r"__attribute__\s*\(\(.*?\)\)", "", line,
+            )
+            if ")" in declarator_tail:
+                nearby = (
+                    lines[max(0, idx - 2):idx][::-1]
+                    + lines[idx + 1:idx + 3]
+                )
+            else:
+                nearby = (
+                    lines[idx + 1:idx + 3]
+                    + lines[max(0, idx - 2):idx][::-1]
+                )
+            for candidate in lines[idx:idx + 1] + nearby:
                 found = [
                     m.group(1) for m in decl_re.finditer(candidate)
                     if m.group(1) not in (

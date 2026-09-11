@@ -222,6 +222,35 @@ description: y
         with pytest.raises(StrategyLoadError):
             load_strategy(tmp_path / "nope.yml")
 
+    def test_non_string_prompt_addendum_rejected(self, tmp_path):
+        # A mis-indented addendum parses as a YAML list; silently
+        # stringifying it would ship a Python repr into the prompt.
+        p = _write(tmp_path, """
+name: x
+description: y
+prompt_addendum:
+  - looks like
+  - a list
+""")
+        with pytest.raises(StrategyLoadError,
+                           match="prompt_addendum.*expected string"):
+            load_strategy(p)
+
+    def test_string_prompt_addendum_still_accepted(self, tmp_path):
+        p = _write(tmp_path, """
+name: x
+description: y
+prompt_addendum: check the bounds
+""")
+        assert load_strategy(p).prompt_addendum == "check the bounds"
+
+    def test_absent_prompt_addendum_defaults_empty(self, tmp_path):
+        p = _write(tmp_path, """
+name: x
+description: y
+""")
+        assert load_strategy(p).prompt_addendum == ""
+
 
 # ---------------------------------------------------------------------------
 # load_all behaviour

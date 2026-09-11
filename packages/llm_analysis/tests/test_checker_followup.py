@@ -568,3 +568,99 @@ class TestAdversarial:
         assert len(lines) == 1
         record = json.loads(lines[0])
         assert record["rule_id"] == "hostile\nrule\x00id"
+
+
+class TestSwallowAllContract:
+    """The module contract is best-effort throughout: exceptions from
+    result consumption and match RECORDING (not just synthesis) must
+    be logged and swallowed, never escape to the analysis loop."""
+
+    @staticmethod
+    def _wire_success(monkeypatch, tmp_path):
+        import packages.llm_analysis.checker_followup as cf
+
+        class _Match:
+            file = "src/v.py"
+            line = 3
+            snippet = "x"
+
+        class _Rule:
+            rule_id = "r1"
+            engine = "semgrep"
+            rationale = ""
+
+        class _Result:
+            rule = _Rule()
+            matches = [_Match()]
+            triage = []
+            errors = []
+            positive_control = True
+            dual_control = True
+
+        seed = type("Seed", (), {
+            "file": "src/auth.py", "function": "login",
+            "line_start": 10, "line_end": 20, "cwe": "CWE-89",
+            "reasoning": "",
+        })()
+        monkeypatch.setattr(cf, "_seed_from_vuln", lambda v, repo_root: seed)
+        monkeypatch.setattr(
+            cf, "_llm_callable_from_client",
+            lambda c, cost_tracker=None: (lambda *a, **kw: {}),
+        )
+        monkeypatch.setattr(
+            cf, "_try_replay_from_library",
+            lambda *a, **kw: _Result(),
+        )
+        monkeypatch.setattr(cf, "_try_promote_to_library", lambda r, rr: None)
+        return cf
+
+    def test_record_matches_failure_swallowed(self, monkeypatch, tmp_path):
+        cf = self._wire_success(monkeypatch, tmp_path)
+
+        def boom(**_kw):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(cf, "_record_matches", boom)
+        n = cf.emit_variant_matches_for_finding(
+            StubVuln(), out_dir=tmp_path, checklist=None,
+            repo_root=tmp_path, llm_client=StubLLMClient(),
+        )
+        assert n == 0
+
+    def test_synthesiser_returning_none_swallowed(
+        self, monkeypatch, tmp_path,
+    ):
+        import packages.llm_analysis.checker_followup as cf
+        seed = type("Seed", (), {
+            "file": "src/auth.py", "function": "login",
+            "line_start": 10, "line_end": 20, "cwe": "CWE-89",
+        })()
+        monkeypatch.setattr(cf, "_seed_from_vuln", lambda v, repo_root: seed)
+        monkeypatch.setattr(
+            cf, "_llm_callable_from_client",
+            lambda c, cost_tracker=None: (lambda *a, **kw: {}),
+        )
+        # Library replay declines AND synthesis yields None (result
+        # consumption would AttributeError on result.rule).
+        monkeypatch.setattr(
+            cf, "_try_replay_from_library", lambda *a, **kw: None,
+        )
+        import packages.checker_synthesis as cs
+        monkeypatch.setattr(
+            cs, "synthesise_with_refinement", lambda *a, **kw: None,
+        )
+        n = cf.emit_variant_matches_for_finding(
+            StubVuln(), out_dir=tmp_path, checklist=None,
+            repo_root=tmp_path, llm_client=StubLLMClient(),
+        )
+        assert n == 0
+
+    def test_successful_recording_still_writes(self, monkeypatch, tmp_path):
+        # Two-direction: the happy path still records matches.
+        cf = self._wire_success(monkeypatch, tmp_path)
+        n = cf.emit_variant_matches_for_finding(
+            StubVuln(), out_dir=tmp_path, checklist=None,
+            repo_root=tmp_path, llm_client=StubLLMClient(),
+        )
+        assert n == 1
+        assert _load_matches(tmp_path)

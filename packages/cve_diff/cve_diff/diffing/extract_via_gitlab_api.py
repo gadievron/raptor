@@ -192,11 +192,16 @@ def extract_via_gitlab_api(cve_id: str, ref: RepoRef) -> DiffBundle:
     for entry in diff_entries:
         if not isinstance(entry, dict):
             continue
-        path = entry.get("new_path") or entry.get("old_path") or ""
-        if not path:
+        # Same per-field type guards as the GitHub API extractor: a
+        # non-str path/diff in one entry must skip that entry rather
+        # than raise past the AnalysisError-only agreement handlers.
+        path = entry.get("new_path") or entry.get("old_path")
+        if not isinstance(path, str) or not path:
             continue
         file_names.append(path)
-        body = entry.get("diff") or ""
+        body = entry.get("diff")
+        if not isinstance(body, str):
+            body = ""
         if body:
             diff_chunks.append(
                 f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n{body}"

@@ -11,11 +11,15 @@ Protocol. Caching: ``crates-versions:<name>`` with a 24h TTL by default.
 from __future__ import annotations
 
 import logging
-import urllib.parse
 
 from core.json import MISSING, JsonCache
 
-from ._negative_cache import log_fetch_failure
+from ._negative_cache import log_fetch_failure, should_negative_cache
+from ._url import (
+    UnsafeUrlComponentError,
+    quote_segment,
+    registry_cache_key,
+)
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -26,14 +30,6 @@ logger = logging.getLogger(__name__)
 
 _CACHE_KEY_PREFIX = "crates-versions"
 _DEFAULT_TTL = 24 * 3600
-
-
-def _key_component(value: str) -> str:
-    """Percent-encode one cache-key component so the key identity is
-    injective — a raw name containing ``/`` or ``..`` could otherwise
-    alias another package's cache file after JsonCache path
-    sanitisation. Old raw-name entries re-fetch once."""
-    return urllib.parse.quote(value, safe="")
 
 
 class CratesClient:
@@ -57,7 +53,7 @@ class CratesClient:
         self._offline = offline
 
     def list_versions(self, name: str) -> list[str]:
-        cache_key = f"{_CACHE_KEY_PREFIX}:{_key_component(name)}"
+        cache_key = registry_cache_key(_CACHE_KEY_PREFIX, name)
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -74,7 +70,15 @@ class CratesClient:
 
     def get_metadata(self, name: str) -> dict | None:
         """Return the raw crates.io aggregate response."""
-        cache_key = f"crates-meta:{_key_component(name)}"
+        try:
+            # Single-segment encode: a hostile name must not splice
+            # extra path segments into the registry request.
+            encoded = quote_segment(name)
+        except UnsafeUrlComponentError:
+            # Not a name crates.io could ever serve — not-found path
+            # without touching the cache.
+            return None
+        cache_key = registry_cache_key("crates-meta", name)
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -83,11 +87,11 @@ class CratesClient:
             return None
         try:
             data = self._http.get_json(
-                f"https://crates.io/api/v1/crates/{name}",
+                f"https://crates.io/api/v1/crates/{encoded}",
             )
         except Exception as e:                # noqa: BLE001
             log_fetch_failure(logger, "sca.registries.crates", name, e)
-            if self._cache is not None:
+            if self._cache is not None and should_negative_cache(e):
                 self._cache.put(cache_key, None, ttl_seconds=self._ttl)
             return None
         if self._cache is not None:
@@ -104,8 +108,12 @@ class CratesClient:
         ``kind``, ``optional``, ``features``, ``default_features``,
         etc.); None on miss / offline. Used by the
         transitive-drop detector."""
-        cache_key = (f"crates-deps:{_key_component(name)}:"
-                     f"{_key_component(version)}")
+        try:
+            encoded = quote_segment(name)
+            enc_version = quote_segment(version)
+        except UnsafeUrlComponentError:
+            return None
+        cache_key = registry_cache_key("crates-deps", name, version)
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -116,13 +124,13 @@ class CratesClient:
             return None
         try:
             data = self._http.get_json(
-                f"https://crates.io/api/v1/crates/{name}/"
-                f"{version}/dependencies",
+                f"https://crates.io/api/v1/crates/{encoded}/"
+                f"{enc_version}/dependencies",
             )
         except Exception as e:                # noqa: BLE001
             log_fetch_failure(
                 logger, "sca.registries.crates", f"{name}@{version}", e)
-            if self._cache is not None:
+            if self._cache is not None and should_negative_cache(e):
                 self._cache.put(cache_key, None, ttl_seconds=self._ttl)
             return None
         deps = data.get("dependencies") if isinstance(data, dict) else None

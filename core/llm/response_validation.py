@@ -299,9 +299,15 @@ def _get_field_type(field_spec: Any) -> str:
     return "string"
 
 
+# Token-level match: a substring check on "null" also matched words
+# that merely contain it ("nullify", "annulled"), silently marking a
+# field nullable from unrelated description prose.
+_NULLABLE_TOKEN_RE = re.compile(r"\bnull(?:able)?\b", re.IGNORECASE)
+
+
 def _is_nullable(field_spec: Any) -> bool:
     if isinstance(field_spec, str):
-        return "or null" in field_spec.lower() or "null" in field_spec.lower()
+        return bool(_NULLABLE_TOKEN_RE.search(field_spec))
     if isinstance(field_spec, dict):
         t = field_spec.get("type")
         if isinstance(t, list) and "null" in t:
@@ -426,10 +432,21 @@ def _coerce_value(value: Any, field_type: str) -> tuple[Any, bool]:
         if isinstance(value, bool):
             return value, False
         if isinstance(value, str):
-            return value.lower() in ("true", "yes", "1"), True
+            # Strip before matching (mirrors the severity/confidence
+            # normalisers) — 'true ' must not silently flip to False.
+            # An unrecognised string is a FAILED coercion (None →
+            # invalid + incomplete downstream, feeding the corrective
+            # retry), never a silent False: fields like
+            # ``is_exploitable`` must not be decided by garbage text.
+            lowered = value.strip().lower()
+            if lowered in ("true", "yes", "1"):
+                return True, True
+            if lowered in ("false", "no", "0"):
+                return False, True
+            return None, True
         if isinstance(value, (int, float)):
             return bool(value), True
-        return False, True
+        return None, True
 
     if field_type == "number":
         if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -459,12 +476,17 @@ def _coerce_value(value: Any, field_type: str) -> tuple[Any, bool]:
             return value, False
         if isinstance(value, str):
             return [value], True
-        return [], True
+        # No faithful array reading — substituting ``[]`` silently
+        # discarded the whole value at near-full ("coerced") credit.
+        # FAILED coercion instead: None → invalid + incomplete
+        # downstream, so the data loss is visible and retryable.
+        return None, True
 
     if field_type == "object":
         if isinstance(value, dict):
             return value, False
-        return {}, True
+        # Same wholesale-discard hazard as the array branch above.
+        return None, True
 
     return value, False
 
@@ -553,17 +575,22 @@ def validate_structured_response(
             value, norm_coerced = normaliser(value)
             was_coerced = was_coerced or norm_coerced
 
-        # Domain validation
+        # Domain validation. Rejected values are NULLED, honouring the
+        # module contract ("nulls bad ones") — keeping them let e.g. a
+        # score of 8 on a 0-1 scale flow into triage. Both branches
+        # flag the field incomplete so the loss is visible and the
+        # corrective retry can target it; the partial quality credit
+        # (coerced 0.5 / invalid 0.25) is unchanged.
         validator = _DOMAIN_VALIDATORS.get(field_name)
         if validator is not None and value is not None and not validator(value):
-            data[field_name] = value
+            data[field_name] = None
             status = "coerced" if was_coerced else "invalid"
             fields[field_name] = FieldResult(status=status, original=original)
+            incomplete.append(field_name)
             if was_coerced:
                 coerced_fields.append(field_name)
                 weighted_score += weight * 0.5
             else:
-                incomplete.append(field_name)
                 weighted_score += weight * 0.25
             continue
 

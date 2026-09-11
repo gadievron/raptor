@@ -924,21 +924,30 @@ class TestSignalReadyHandshake:
         # closed via the finally clause. Without it, a transient
         # broken-pipe / disk-full would leak the fd in the tracer
         # process for the rest of its lifetime.
+        #
+        # Closure is verified by RECORDING the close call, not by
+        # re-closing the fd and expecting EBADF: in a process with
+        # live background threads (proxy singletons from earlier
+        # tests in the same worker) the freed fd number can be reused
+        # between _signal_ready's close and the re-close — the EBADF
+        # probe then closes an UNRELATED live descriptor and the test
+        # flakes.
         rd, wr = os.pipe()
+        real_close = os.close
+        closed: list[int] = []
         try:
             def boom(*a, **k):
                 raise OSError("simulated write failure")
             monkeypatch.setattr(os, "write", boom)
+            monkeypatch.setattr(os, "close", closed.append)
 
             # Must not raise; must close wr.
             tracer._signal_ready(wr)
-
-            # Verify wr is closed: re-closing it should raise
-            # OSError(EBADF). Don't catch — let pytest report.
-            with pytest.raises(OSError):
-                os.close(wr)
+            assert closed == [wr]
         finally:
-            try:
-                os.close(rd)
-            except OSError:
-                pass
+            monkeypatch.undo()
+            for fd in (wr, rd):
+                try:
+                    real_close(fd)
+                except OSError:
+                    pass

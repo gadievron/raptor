@@ -39,7 +39,7 @@ from core.llm.scorecard.scorecard import (
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
 
 
 DEFAULT_PATH = Path("out/llm_scorecard.json")
@@ -100,6 +100,43 @@ def _empty_event_summary(event_type: str) -> EventTypeSummary:
         event_type=event_type,
         cells_at_thresholds=dict.fromkeys(THRESHOLDS, 0),
     )
+
+
+def _iter_raw_event_counts(raw: dict) -> Iterator[tuple[str, int]]:
+    """Yield ``(event_type, cell_observation_count)`` straight from the
+    sidecar JSON, one pair per (cell, event type) that appears there.
+
+    ``ModelScorecard.get_stats()`` materialises only the known
+    ``ALL_EVENT_TYPES``, so event types written by a newer schema never
+    reach the stats view — the audit walks the raw sidecar as well so
+    those aren't silently dropped. Tolerates both the flat v1 bucket
+    shape (``{"correct": n, "incorrect": n}``) and the v2 age-bucket
+    shape (``{"YYYY-MM": {"correct": n, "incorrect": n}}``).
+    """
+    for by_dc in (raw.get("models") or {}).values():
+        if not isinstance(by_dc, dict):
+            continue
+        for cell in by_dc.values():
+            events = cell.get("events") if isinstance(cell, dict) else None
+            if not isinstance(events, dict):
+                continue
+            for event_type, buckets in events.items():
+                if not isinstance(buckets, dict):
+                    continue
+                if set(buckets) <= {"correct", "incorrect"}:
+                    n = (_safe_count(buckets.get("correct"))
+                         + _safe_count(buckets.get("incorrect")))
+                else:
+                    n = sum(
+                        _safe_count(b.get("correct"))
+                        + _safe_count(b.get("incorrect"))
+                        for b in buckets.values() if isinstance(b, dict)
+                    )
+                yield event_type, n
+
+
+def _safe_count(value: object) -> int:
+    return int(value) if isinstance(value, (int, float)) else 0
 
 
 def _load_raw(path: Path) -> dict | None:
@@ -168,11 +205,12 @@ def audit(path: Path = DEFAULT_PATH) -> AuditReport:
         dc_models[stats.decision_class].add(stats.model)
 
         for event_type, counts in stats.events.items():
+            # ``get_stats()`` only materialises ALL_EVENT_TYPES today;
+            # the fallback keeps the walk robust if that ever widens
+            # (unknown types from the sidecar itself are picked up by
+            # the raw walk below).
             summary = event_summaries.get(event_type)
             if summary is None:
-                # Unknown event type — likely a forward-compat field added
-                # since this audit was written. Surface it under its own
-                # bucket so it isn't silently dropped.
                 summary = _empty_event_summary(event_type)
                 event_summaries[event_type] = summary
             summary.total_cells += 1
@@ -188,6 +226,28 @@ def audit(path: Path = DEFAULT_PATH) -> AuditReport:
 
             if event_type == PRIMARY_EVENT_TYPE:
                 dc_obs_primary[stats.decision_class].append(n)
+
+    # Event types the stats view cannot carry (written by a newer
+    # schema) — surface them under their own buckets so they aren't
+    # silently dropped. Types already summarised above are skipped so
+    # nothing double-counts.
+    raw_only: set[str] = set()
+    for event_type, n in _iter_raw_event_counts(raw):
+        if event_type in event_summaries and event_type not in raw_only:
+            continue  # already summarised via the stats view
+        raw_only.add(event_type)
+        summary = event_summaries.setdefault(
+            event_type, _empty_event_summary(event_type),
+        )
+        summary.total_cells += 1
+        summary.total_observations += n
+        if n > 0:
+            summary.cells_with_any_data += 1
+        for threshold in THRESHOLDS:
+            if n >= threshold:
+                summary.cells_at_thresholds[threshold] = (
+                    summary.cells_at_thresholds.get(threshold, 0) + 1
+                )
 
     dc_summaries: list[DecisionClassSummary] = []
     for dc, obs_list in sorted(dc_obs_primary.items()):

@@ -104,6 +104,14 @@ def derive_status(finding: dict) -> str:
       3. ``is_exploitable=True`` AND ``self_contradictory=True``
          (and not resolved by judge) → ``analysis_inconsistent``
       4. Otherwise → ``analysed``
+
+    Known tension (deliberately unchanged): a PRESENT-but-null
+    ``is_true_positive`` derives ``analysed`` here, while the funnel
+    counts it ``unverdicted`` (gh #549) — reclassifying it as skipped
+    in this fallback would make ``is_skipped`` swallow unverdicted
+    findings out of the funnel and hide dispatch failures. Fixing the
+    ``analysed`` overstatement needs a dedicated enum value threaded
+    through the status consumers, not a fallback tweak.
     """
     if "error" in finding:
         return ERROR

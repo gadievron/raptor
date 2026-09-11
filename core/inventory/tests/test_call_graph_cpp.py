@@ -832,3 +832,30 @@ class TestCallersCalleesIndexParity:
         assert not any(
             c.file_path == "src/main.cpp" for c in r.definitive
         )
+
+
+# ---------------------------------------------------------------------------
+# Function-pointer pre-pass runs for C++ too
+# ---------------------------------------------------------------------------
+
+
+class TestCppFnPointerPrePass:
+    """The C++ walk() override previously skipped the fn-ptr
+    declaration pre-pass entirely, so C++ files never flagged bare
+    calls through declared pointers."""
+
+    def test_namespace_scope_fn_ptr_flagged(self):
+        g = extract_call_graph_cpp(
+            "namespace n {\n"
+            "void (*handler)(int) = handler_impl;\n"
+            "void use() { handler(1); }\n"
+            "}\n"
+        )
+        assert INDIRECTION_FN_POINTER in g.indirection
+
+    def test_method_calls_not_flagged(self):
+        g = extract_call_graph_cpp(
+            "class C { public: void m(); };\n"
+            "void f() { C c; c.m(); }\n"
+        )
+        assert INDIRECTION_FN_POINTER not in g.indirection

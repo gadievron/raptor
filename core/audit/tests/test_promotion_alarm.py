@@ -478,3 +478,72 @@ class TestReportSurface:
         report = generate_report(tmp_path)
         assert "promotion_alarms" not in report
         assert "Promotion alarms" not in report["summary"]
+
+
+# ---------------------------------------------------------------------------
+# Reuse exemption — the export mirror must carry the journal-side
+# exemption (a cross-run reused finding with journal:recall provenance
+# is legitimate; unexempted, the export sweep decayed it one way and
+# fired the CRITICAL alarm on every reuse).
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _ReusedOutcome(_FakeOutcome):
+    reused: bool = True
+    reused_from_run: str = "run-origin"
+
+
+class TestReuseExemption:
+    def test_is_reuse_exempt_requires_both_fields(self):
+        from core.audit.promotion_alarm import is_reuse_exempt
+
+        assert is_reuse_exempt(_ReusedOutcome())
+        assert not is_reuse_exempt(_FakeOutcome())
+        assert not is_reuse_exempt(
+            _ReusedOutcome(reused_from_run=""),
+        )
+
+    def test_export_sweep_exempts_reused_finding(self, tmp_path):
+        from core.audit.findings_export import export_findings
+
+        outcomes = [
+            _ReusedOutcome(
+                function="reused", status="finding",
+                evidence_tool="journal:recall:run-origin",
+            ),
+        ]
+        export = export_findings(outcomes, out_dir=tmp_path, run_id="run-z")
+        by_fn = {f["function"]: f["status"] for f in export["findings"]}
+        assert by_fn["reused"] == "finding"
+        assert _alarm_lines(tmp_path) == []
+
+    def test_export_sweep_still_demotes_unreused_forgery(self, tmp_path):
+        # Two-direction guard: the exemption is keyed on the
+        # pipeline-set reuse fields, not on the evidence string — a
+        # non-reused evidence-less finding still demotes and alarms.
+        from core.audit.findings_export import export_findings
+
+        outcomes = [
+            _FakeOutcome(function="forged", status="finding",
+                         evidence_tool=""),
+        ]
+        export = export_findings(outcomes, out_dir=tmp_path, run_id="run-z")
+        by_fn = {f["function"]: f["status"] for f in export["findings"]}
+        assert by_fn["forged"] == "suspicious"
+        lines = _alarm_lines(tmp_path)
+        assert len(lines) == 1 and lines[0]["blocked"] is True
+
+    def test_recall_evidence_alone_is_not_exempt(self, tmp_path):
+        # A raw model response can emit "journal:recall:x" as
+        # evidence_tool text; without the pipeline-set reuse fields it
+        # must still be treated as an evidence-less promotion.
+        from core.audit.findings_export import export_findings
+
+        outcomes = [
+            _FakeOutcome(function="forged", status="finding",
+                         evidence_tool="journal:recall:run-origin"),
+        ]
+        export = export_findings(outcomes, out_dir=tmp_path)
+        by_fn = {f["function"]: f["status"] for f in export["findings"]}
+        assert by_fn["forged"] == "suspicious"

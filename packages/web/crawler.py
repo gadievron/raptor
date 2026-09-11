@@ -10,7 +10,7 @@ LLM-powered web crawler that:
 """
 
 import re
-from urllib.parse import urlparse, urljoin, parse_qs
+from urllib.parse import urlparse, urljoin, urldefrag, parse_qs
 
 # No sys.path mutation here: this module is only ever imported (no
 # __main__ entry point), and the path-safety rule (CLAUDE.md) forbids
@@ -146,9 +146,15 @@ class WebCrawler:
             redacted["url"] = self._redact_url_for_artifact(redacted["url"])
         return redacted
 
-    def crawl(self, start_url: str) -> dict:
+    def crawl(self, start_url: str, seeds: list[str] | None = None) -> dict:
         """
         Crawl website starting from URL.
+
+        ``seeds`` are additional URLs (external discovery, sitemap,
+        robots surface) enqueued as real crawl work at depth 1 — merely
+        adding them to ``discovered_urls`` would record them without
+        ever fetching them, so their forms, links, and parameters would
+        never be extracted. Out-of-scope seeds are dropped.
 
         Returns:
             Dict with discovered resources
@@ -180,6 +186,17 @@ class WebCrawler:
         # below drives multiple passes.
         from collections import deque
         queue: deque[tuple[str, int]] = deque([(start_url, 0)])
+        for seed in seeds or []:
+            seed_url = urldefrag(str(seed))[0]
+            if not seed_url or seed_url == start_url:
+                continue
+            try:
+                in_scope = self.client._is_in_scope(seed_url)
+            except Exception:
+                in_scope = False
+            if in_scope:
+                self.discovered_urls.add(seed_url)
+                queue.append((seed_url, 1))
         while queue:
             if len(self.visited_urls) >= self.max_pages:
                 logger.info("Max pages limit reached (%d)", self.max_pages)
@@ -303,7 +320,14 @@ class WebCrawler:
                 href = link["href"]
                 if not isinstance(href, str):
                     continue
-                absolute_url = urljoin(url, href)
+                # Strip the fragment: it never reaches the wire, so
+                # every #anchor of a page is the same resource. Exact-
+                # string visited/enqueue checks would otherwise re-fetch
+                # an anchor-heavy page once per anchor, burning the
+                # max_pages budget on duplicates.
+                absolute_url = urldefrag(urljoin(url, href))[0]
+                if not absolute_url:
+                    continue
 
                 # Scope-check against `base_url`, not the
                 # currently-being-crawled URL. Pre-fix
@@ -454,7 +478,10 @@ class WebCrawler:
             matches = re.findall(pattern, js_code, re.IGNORECASE)
             for match in matches:
                 if match.startswith(("/", "http")):
-                    absolute_url = urljoin(self.client.base_url, match)
+                    # Same fragment-stripping rule as anchor discovery.
+                    absolute_url = urldefrag(
+                        urljoin(self.client.base_url, match),
+                    )[0]
                     # Scheme-aware scope check via client._is_in_scope
                     # — bare netloc equality silently accepted a JS-
                     # discovered ``http://base.com/x`` against a
@@ -484,19 +511,25 @@ class WebCrawler:
                         )
 
     def get_results(self) -> dict:
-        """Get crawl results."""
+        """Live crawl results — RAW values, for the scan data plane.
+
+        Downstream phases (param mining, fuzz-cell construction,
+        verification replays) must probe the URLs the crawler actually
+        fetched: redacting here would corrupt the very values the
+        probes send (a ``?token=...`` endpoint becomes unfuzzable and
+        every derived verification targets a URL that never existed).
+        Redaction is a display/persist concern — persisted artifacts go
+        through :meth:`artifact_results` (or the scanner's artifact
+        redaction boundary) instead.
+        """
         return {
-            "visited_urls": self._redacted_url_list(self.visited_urls),
-            "discovered_urls": self._redacted_url_list(self.discovered_urls),
-            "discovered_forms": [
-                self._redacted_form(form) for form in self.discovered_forms
-            ],
-            "discovered_apis": [
-                self._redacted_api(api) for api in self.discovered_apis
-            ],
+            "visited_urls": sorted(self.visited_urls),
+            "discovered_urls": sorted(self.discovered_urls),
+            "discovered_forms": list(self.discovered_forms),
+            "discovered_apis": list(self.discovered_apis),
             "discovered_parameters": sorted(self.discovered_parameters),
             "parameter_urls": {
-                param: self._redacted_url_list(urls)
+                param: sorted(urls)
                 for param, urls in sorted(self.parameter_urls.items())
             },
             "stats": {
@@ -505,5 +538,27 @@ class WebCrawler:
                 "total_forms": len(self.discovered_forms),
                 "total_apis": len(self.discovered_apis),
                 "total_parameters": len(self.discovered_parameters),
+            },
+        }
+
+    def artifact_results(self) -> dict:
+        """Redacted projection of :meth:`get_results` for persisted
+        crawl artifacts (secret-named query values and sensitive form
+        input values hidden unless the operator opted into reveal
+        mode)."""
+        raw = self.get_results()
+        return {
+            **raw,
+            "visited_urls": self._redacted_url_list(self.visited_urls),
+            "discovered_urls": self._redacted_url_list(self.discovered_urls),
+            "discovered_forms": [
+                self._redacted_form(form) for form in self.discovered_forms
+            ],
+            "discovered_apis": [
+                self._redacted_api(api) for api in self.discovered_apis
+            ],
+            "parameter_urls": {
+                param: self._redacted_url_list(urls)
+                for param, urls in sorted(self.parameter_urls.items())
             },
         }

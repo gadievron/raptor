@@ -59,8 +59,11 @@ _REQUIRE_RE = re.compile(
 # ``discovery.EXCLUDED_DIR_NAMES`` so a new entry there still
 # propagates through the shared walk.
 
-_TEST_DIR_NAMES: set[str] = {"tests", "test", "__tests__", "spec", "e2e"}
-_TEST_FILE_RE = re.compile(r".*\.(test|spec)\.[mc]?[jt]sx?$")
+# Test-path detection is shared with the other reachability
+# scanners and the supply-chain detectors via
+# ``packages.sca._test_paths`` (which covers the ``.mts``/``.cts``
+# TS variants this module previously matched with a private regex).
+from .._test_paths import is_test_path as _is_test_file  # noqa: E402
 
 _JS_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
 
@@ -181,16 +184,6 @@ def _walk_js_sources(target: Path, *, max_depth: int) -> Iterable[Path]:
     # instead of seven redundant traversals.
     from ._walker import iter_source_files
     return iter_source_files(target, _JS_SUFFIXES, max_depth=max_depth)
-
-
-def _is_test_file(path: Path, target: Path) -> bool:
-    if _TEST_FILE_RE.match(path.name):
-        return True
-    try:
-        rel = path.relative_to(target)
-    except ValueError:
-        rel = path
-    return any(part in _TEST_DIR_NAMES for part in rel.parts)
 
 
 def _format_evidence(

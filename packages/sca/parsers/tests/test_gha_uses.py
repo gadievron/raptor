@@ -247,3 +247,87 @@ def test_discovery_recognises_composite_action(tmp_path):
     manifests = find_manifests(tmp_path)
     found = [m for m in manifests if m.path.name == "action.yml"]
     assert len(found) == 1
+
+
+# ---------------------------------------------------------------------------
+# Quoted uses: + adversarial whitespace
+# ---------------------------------------------------------------------------
+
+def test_quoted_uses_lines_extracted(tmp_path: Path) -> None:
+    # YAML permits (and formatters emit) quoted action refs; the
+    # unquoted-only pattern silently skipped them.
+    wf = tmp_path / "wf.yml"
+    wf.write_text(
+        "jobs:\n"
+        "  build:\n"
+        "    steps:\n"
+        '      - uses: "actions/checkout@v4"\n'
+        "      - uses: 'actions/setup-node@v3'\n"
+        "      - uses: actions/cache@v3\n",
+        encoding="utf-8",
+    )
+    deps = parse_gha_workflow(wf)
+    got = {(d.name, d.version) for d in deps}
+    assert got == {
+        ("actions/checkout", "v4"),
+        ("actions/setup-node", "v3"),
+        ("actions/cache", "v3"),
+    }
+
+
+def test_mismatched_quote_uses_line_not_extracted(tmp_path: Path) -> None:
+    # Other direction: a mismatched quote is malformed YAML for this
+    # shape — no phantom row.
+    wf = tmp_path / "wf.yml"
+    wf.write_text('steps:\n  - uses: "actions/checkout@v4\n', encoding="utf-8")
+    assert parse_gha_workflow(wf) == []
+
+
+def test_adversarial_whitespace_lines_parse_fast(tmp_path: Path) -> None:
+    # A long all-space line used to make the uses: pattern explore
+    # O(n^2) whitespace splits; ~200k chars must parse in linear-ish
+    # time (generous bound for slow CI runners).
+    import time
+    wf = tmp_path / "wf.yml"
+    wf.write_text(
+        " " * 200_000 + "x\n"
+        "steps:\n"
+        "  - uses: actions/checkout@v4\n"
+        "  - run: echo hi" + " " * 100_000 + "x\n",
+        encoding="utf-8",
+    )
+    t0 = time.monotonic()
+    deps = parse_gha_workflow(wf)
+    assert time.monotonic() - t0 < 2.0
+    assert ("actions/checkout", "v4") in {(d.name, d.version) for d in deps}
+
+
+def test_adversarial_unclosed_template_expressions_fast(tmp_path: Path) -> None:
+    # Repeated unclosed ``${{`` openers used to rescan to end-of-line
+    # from every opener (quadratic) during expression stripping.
+    import time
+    wf = tmp_path / "wf.yml"
+    wf.write_text(
+        "steps:\n"
+        "  - run: pip install foo==1.0 " + "${{" * 40_000 + "\n",
+        encoding="utf-8",
+    )
+    t0 = time.monotonic()
+    deps = parse_gha_workflow(wf)
+    assert time.monotonic() - t0 < 2.0
+    assert ("foo", "1.0") in {(d.name, d.version) for d in deps}
+
+
+def test_template_expression_still_stripped(tmp_path: Path) -> None:
+    # Matching semantics preserved: a closed expression never becomes
+    # a phantom package.
+    wf = tmp_path / "wf.yml"
+    wf.write_text(
+        "steps:\n"
+        "  - run: npm i ${{ matrix.pkg }} lodash@4.17.21\n",
+        encoding="utf-8",
+    )
+    deps = parse_gha_workflow(wf)
+    names = {d.name for d in deps}
+    assert "lodash" in names
+    assert "matrix.pkg" not in names

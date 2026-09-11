@@ -116,44 +116,65 @@ def _apply_one_uses(
         rf"(\s|$|#)",                    # boundary
         re.MULTILINE,
     )
-    match = pattern.search(text)
-    if match is None:
+    # A workflow can reference the same action several times with
+    # DIFFERENT refs (``@main`` in one job, ``@v4`` in another).
+    # Verdicts must be computed across ALL matching lines — deciding
+    # from the first match alone would let an unrelated ``@main``
+    # occurrence shadow a legitimate ``@v4`` bump into value_mismatch.
+    refs = [m.group(2) for m in pattern.finditer(text)]
+    if not refs:
         return text, RewriteResult(
             edit=edit, applied=False, reason="not_found",
         )
-    current_ref = match.group(2)
-    # SHA-pinned refs (40-char hex) are Phase 3.b.2 territory.
-    # The walker doesn't emit candidates for them today, so
-    # encountering one here is a signal that something's off —
-    # refuse politely.
-    if _looks_like_sha(current_ref):
+    # Occurrences that actually need the bump: at the old ref and not
+    # already at the new one (a degenerate plan with old == new is
+    # idempotent, not applied).
+    old_refs = [r for r in refs
+                if r == edit.old_value and r != edit.new_value]
+    if old_refs:
+        # SHA-pinned refs (40-char hex) are Phase 3.b.2 territory.
+        # The walker doesn't emit candidates for them today, so a plan
+        # whose old value matches only SHA-pinned occurrences is a
+        # signal that something's off — refuse politely.
+        if all(_looks_like_sha(r) for r in old_refs):
+            return text, RewriteResult(
+                edit=edit, applied=False,
+                reason=(
+                    "value_mismatch: file uses SHA-pinned ref "
+                    f"{old_refs[0][:12]}..., bumper only handles "
+                    "tag-pinned refs in Phase 3.b"
+                ),
+            )
+
+        def _repl(m: re.Match) -> str:
+            if m.group(2) == edit.old_value:
+                return f"{m.group(1)}{edit.new_value}{m.group(3)}"
+            return m.group(0)
+        new_text = pattern.sub(_repl, text)
+        return new_text, RewriteResult(
+            edit=edit, applied=True, reason="applied",
+        )
+    # No occurrence carries the plan's old value.
+    if all(r == edit.new_value for r in refs):
+        return text, RewriteResult(
+            edit=edit, applied=False, reason="no_change",
+        )
+    if all(_looks_like_sha(r) for r in refs):
         return text, RewriteResult(
             edit=edit, applied=False,
             reason=(
                 "value_mismatch: file uses SHA-pinned ref "
-                f"{current_ref[:12]}..., bumper only handles "
+                f"{refs[0][:12]}..., bumper only handles "
                 "tag-pinned refs in Phase 3.b"
             ),
         )
-    if current_ref == edit.new_value:
-        return text, RewriteResult(
-            edit=edit, applied=False, reason="no_change",
-        )
-    if current_ref != edit.old_value:
-        return text, RewriteResult(
-            edit=edit, applied=False,
-            reason=(
-                f"value_mismatch: file has {current_ref!r}, "
-                f"plan expected {edit.old_value!r}"
-            ),
-        )
-    def _repl(m):
-        if m.group(2) == edit.old_value:
-            return f"{m.group(1)}{edit.new_value}{m.group(3)}"
-        return m.group(0)
-    new_text = pattern.sub(_repl, text)
-    return new_text, RewriteResult(
-        edit=edit, applied=True, reason="applied",
+    stray = next(r for r in refs if r != edit.new_value)
+    return text, RewriteResult(
+        edit=edit, applied=False,
+        reason=(
+            f"value_mismatch: file has {stray!r}, "
+            f"plan expected {edit.old_value!r}"
+        ),
     )
 
 

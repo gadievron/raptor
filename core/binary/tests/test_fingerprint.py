@@ -653,3 +653,73 @@ class TestSharedTaxonomyParity:
             bucket_imports as fp_bucket_imports,
         )
         assert cdmod.bucket_imports is fp_bucket_imports
+
+
+# ---------------------------------------------------------------------------
+# Tier dispatch — section-header-stripped dynamic binaries
+# ---------------------------------------------------------------------------
+
+
+class TestSectionlessTierDispatch:
+    """A dynamic ELF whose section headers were stripped (sstrip)
+    still imports symbols via PT_DYNAMIC. Tier 0 can't enumerate
+    them, so the fingerprint must come from the radare2 tier —
+    never a success-shaped empty-bucket fingerprint that makes the
+    binary look capability-free."""
+
+    def test_sectionless_dynamic_elf_engages_radare2_tier(
+        self, patched_analyser, tmp_path,
+    ):
+        from core.binary.tests.test_elf import _build_elf64_with_dynsym
+        bin_path = _real_bytes_tempfile(
+            tmp_path, "sstripped.elf",
+            _build_elf64_with_dynsym(sections=False),
+        )
+        patched_analyser["ctx"] = BinaryContextMap(
+            binary_path=bin_path,
+            arch="x86", bits=64, binary_format="elf",
+            imports=["execve", "recv"],
+        )
+        fp = capability_fingerprint(bin_path)
+        assert fp is not None
+        assert "exec" in fp.capability_buckets
+        assert "network" in fp.capability_buckets
+
+    def test_full_elf_stays_on_tier0(self, patched_analyser, tmp_path):
+        """Section headers intact → tier 0 answers by itself; the
+        radare2 tier must not even be consulted."""
+        from core.binary.tests.test_elf import _build_elf64_with_dynsym
+        bin_path = _real_bytes_tempfile(
+            tmp_path, "full.elf", _build_elf64_with_dynsym(sections=True),
+        )
+        patched_analyser["raise"] = AssertionError(
+            "tier 1 must not be consulted for a parseable ELF",
+        )
+        fp = capability_fingerprint(bin_path)
+        assert fp is not None
+        assert fp.capability_buckets.get("exec") == ["execve"]
+        assert fp.capability_buckets.get("network") == ["recv"]
+
+
+# ---------------------------------------------------------------------------
+# Content hash — routed through the repo hash chokepoint
+# ---------------------------------------------------------------------------
+
+
+def test_sha256_of_file_uses_hash_chokepoint(tmp_path, monkeypatch):
+    """``_sha256_of_file`` must route through ``core.hash.sha256_file``
+    (the single streamed-hash chokepoint) so hash-policy changes —
+    chunk sizing, algorithm agility — apply here too."""
+    import core.binary.fingerprint as fp_mod
+
+    calls: list[Path] = []
+
+    def spy(path: Path, chunk_size: int | None = None) -> str:
+        calls.append(Path(path))
+        return "d" * 64
+
+    monkeypatch.setattr(fp_mod, "sha256_file", spy)
+    f = tmp_path / "x.bin"
+    f.write_bytes(b"abc")
+    assert fp_mod._sha256_of_file(f) == "d" * 64
+    assert calls == [f]

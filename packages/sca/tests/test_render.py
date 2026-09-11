@@ -261,3 +261,82 @@ def test_non_list_top_level_returns_2(tmp_path: Path) -> None:
     f = tmp_path / "findings.json"
     f.write_text(json.dumps({"results": []}), encoding="utf-8")
     assert render.main([str(f)]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Untrusted row values are sanitised at re-render time
+# ---------------------------------------------------------------------------
+
+def test_render_defangs_hostile_advisory_fields(tmp_path: Path) -> None:
+    """Advisory-derived text (description, dep name/version, advisory
+    ids/aliases) is untrusted — ANSI/OSC escapes and markdown-image
+    autofetch payloads must not survive into report.md."""
+    row = _vuln_row(name="evil-pkg")
+    row["description"] = (
+        "boom \x1b]0;pwned\x07\x1b[31m ![](https://evil.example/x)"
+    )
+    row["sca"]["name"] = "evil\x1b[31mpkg"
+    row["sca"]["version"] = "1.0.0![](https://evil.example/v)"
+    row["sca"]["advisory"]["id"] = "GHSA-\x1b[32mzzzz"
+    row["sca"]["advisory"]["aliases"] = ["CVE-2099-1![](//evil.example)"]
+    row["sca"]["fixed_version"] = "2.0.0\x07"
+    findings = _findings_file(tmp_path, [row, _hygiene_row()])
+
+    rc = render.main([str(findings), "--no-sarif"])
+    assert rc == 0
+    md = (tmp_path / "report.md").read_text(encoding="utf-8")
+    assert "\x1b" not in md
+    assert "\x07" not in md
+    assert "![](" not in md
+
+
+def test_render_hostile_description_cannot_break_table_row(
+    tmp_path: Path,
+) -> None:
+    """A pipe-carrying description must stay inside its cell in the
+    kind tables (escaped pipes only)."""
+    row = _hygiene_row()
+    row["description"] = "detail | with | pipes"
+    findings = _findings_file(tmp_path, [row])
+    rc = render.main([str(findings), "--no-sarif"])
+    assert rc == 0
+    md = (tmp_path / "report.md").read_text(encoding="utf-8")
+    assert "detail \\| with \\| pipes" in md
+
+
+def test_render_normal_fields_unchanged(tmp_path: Path) -> None:
+    """Benign values render exactly as before the sanitisation."""
+    findings = _findings_file(tmp_path, [_vuln_row(), _hygiene_row()])
+    rc = render.main([str(findings), "--no-sarif"])
+    assert rc == 0
+    md = (tmp_path / "report.md").read_text(encoding="utf-8")
+    assert ("Maven:org.apache.logging.log4j:log4j-core@2.14.1"
+            in md)
+    assert "GHSA-jfh8-c2jp-5v3q (CVE-2021-44228)" in md
+    assert "2.15.0" in md
+    assert "npm:lodash" in md
+    assert "loose pin shape" in md
+
+
+# ---------------------------------------------------------------------------
+# Stray non-dict elements in a hand-edited findings.json
+# ---------------------------------------------------------------------------
+
+def test_render_with_stray_non_dict_row_emits_md_and_sarif(
+    tmp_path: Path,
+) -> None:
+    """A stray string element must not crash either output — the
+    markdown renderer, the reachability filter, and the SARIF
+    emitter's rule-collection loop all skip it."""
+    findings = _findings_file(
+        tmp_path, [_vuln_row(), "stray-string", _hygiene_row()],
+    )
+    rc = render.main([str(findings), "--only-reachable"])
+    assert rc == 0
+    md = (tmp_path / "report.md").read_text(encoding="utf-8")
+    assert "Hygiene findings" in md
+    sarif = json.loads(
+        (tmp_path / "findings.sarif").read_text(encoding="utf-8"),
+    )
+    rule_ids = {r["id"] for r in sarif["runs"][0]["tool"]["driver"]["rules"]}
+    assert "sca:hygiene:loose_pin" in rule_ids

@@ -34,8 +34,10 @@ import argparse
 import ast
 import hashlib
 import json as json_mod
+import os
 import subprocess
 import sys
+import tempfile
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -273,9 +275,27 @@ def detect_slow_files(test_files: list[Path], repo: Path) -> set[Path]:
 
 # -- Graph caching ---------------------------------------------------------
 
-def _cache_path(repo: Path) -> Path:
+def _cache_path(repo: Path) -> Path | None:
+    """Per-user cache file, or None when caching must be disabled.
+
+    The cache used to live at a predictable world-shared /tmp path —
+    on a multi-user host another local user could squat the filename
+    (blocking writes) or plant a cache whose reverse_graph hides
+    dependents, silently under-selecting tests for a developer's
+    --diff run (the fingerprint is computable from a world-readable
+    checkout). A 0700 per-uid directory closes both; if the directory
+    is squatted by another uid, run uncached rather than trust it.
+    """
+    base = Path(tempfile.gettempdir()) / f"raptor-test-impact-{os.getuid()}"
+    try:
+        base.mkdir(mode=0o700, exist_ok=True)
+        st = base.stat()
+        if st.st_uid != os.getuid() or base.is_symlink():
+            return None
+    except OSError:
+        return None
     repo_hash = hashlib.md5(str(repo).encode()).hexdigest()[:12]
-    return Path(f"/tmp/raptor-test-impact-{repo_hash}.json")
+    return base / f"graph-{repo_hash}.json"
 
 
 def _files_fingerprint(py_files: list[Path], repo: Path) -> str:
@@ -441,14 +461,20 @@ def main() -> int:
 
     cache_file = _cache_path(repo)
     fingerprint = _files_fingerprint(all_py, repo)
-    cached = None if args.no_cache else _load_cached_graph(cache_file, fingerprint)
+    cached = (
+        None if (args.no_cache or cache_file is None)
+        else _load_cached_graph(cache_file, fingerprint)
+    )
 
     if cached is not None:
         reverse_graph, parse_failures = cached
         cache_status = "hit"
     else:
         reverse_graph, parse_failures = build_graph(all_py, repo)
-        _save_graph_cache(cache_file, fingerprint, reverse_graph, parse_failures)
+        if cache_file is not None:
+            _save_graph_cache(
+                cache_file, fingerprint, reverse_graph, parse_failures,
+            )
         cache_status = "miss"
     graph_time = time.monotonic() - t0
 

@@ -104,9 +104,12 @@ _SECOND_RECV_RE = re.compile(
     r'\b(recv|recvfrom|read|fread)\s*\(([^,]+),\s*([^,]+),\s*([^,)]+)',
 )
 
+# Operator captured: acceptance must be direction-aware — a
+# comparison only bounds the variable it caps ABOVE (see
+# _var_has_upper_bound).
 _MAX_CHECK_RE = re.compile(
     r'(?:if|while)\s*\([^)]*?'
-    r'(\w+)\s*(?:>|>=|<|<=)\s*(\w+|\d+(?:x[\da-fA-F]+)?)'
+    r'(\w+)\s*(>=|<=|>|<)\s*(\w+|\d+(?:x[\da-fA-F]+)?)'
     r'[^)]*\)',
 )
 
@@ -125,17 +128,25 @@ def _var_has_upper_bound(
     var_name: str,
     before_pos: int,
 ) -> Optional[str]:
-    """Check if var_name has an upper-bound check before before_pos."""
+    """Check if var_name has an upper-bound check before before_pos.
+
+    Direction-aware: a comparison bounds var_name only when it caps
+    it ABOVE — ``len < MAX`` / ``MAX >= len``.  Symmetric acceptance
+    read ``while (i < len)`` (a bound on ``i``) as an upper bound on
+    ``len`` and hid the classic recv → malloc(len) → copy bug behind
+    its own copy loop.
+    """
     prefix = source[:before_pos]
     for m in _RETURN_CHECK_RE.finditer(prefix):
         if m.group(1) == var_name:
             return m.group(2)
     for m in _MAX_CHECK_RE.finditer(prefix):
         lhs = m.group(1).strip()
-        rhs = m.group(2).strip()
-        if var_name == lhs:
+        op = m.group(2)
+        rhs = m.group(3).strip()
+        if var_name == lhs and op in ("<", "<="):
             return rhs
-        if var_name == rhs:
+        if var_name == rhs and op in (">", ">="):
             return lhs
     return None
 

@@ -107,3 +107,51 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+    def test_synchronize_net_grace_period_does_not_fire(self, tmp_path):
+        # synchronize_net is a documented RCU grace-period equivalent;
+        # the unpublish + synchronize_net + kfree teardown is correct.
+        results = _run_rule(tmp_path, """\
+            void ok(struct cfg **head, struct cfg *newc)
+            {
+                rcu_assign_pointer(*head, newc);
+                synchronize_net();
+                kfree(newc);
+            }
+        """)
+        assert results == []
+
+    def test_synchronize_srcu_grace_period_does_not_fire(self, tmp_path):
+        results = _run_rule(tmp_path, """\
+            void ok(struct srcu_struct *ss, struct cfg **head, struct cfg *newc)
+            {
+                rcu_assign_pointer(*head, newc);
+                synchronize_srcu(ss);
+                kfree(newc);
+            }
+        """)
+        assert results == []
+
+    def test_rcu_barrier_does_not_fire(self, tmp_path):
+        results = _run_rule(tmp_path, """\
+            void ok(struct cfg **head, struct cfg *newc)
+            {
+                rcu_assign_pointer(*head, newc);
+                rcu_barrier();
+                kfree(newc);
+            }
+        """)
+        assert results == []
+
+    def test_call_rcu_handoff_does_not_fire(self, tmp_path):
+        # Handing the published pointer to call_rcu transfers the free
+        # to a post-grace-period callback.
+        results = _run_rule(tmp_path, """\
+            void ok(struct cfg **head, struct cfg *newc)
+            {
+                rcu_assign_pointer(*head, newc);
+                call_rcu(&newc->rcu, cfg_free_cb);
+                kfree(newc);
+            }
+        """)
+        assert results == []

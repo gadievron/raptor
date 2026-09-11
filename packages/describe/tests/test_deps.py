@@ -92,3 +92,32 @@ class TestDetectDependencyCounts:
         # by_ecosystem stays empty because is_lockfile=True
         # manifests are skipped.
         assert "npm" not in result.by_ecosystem
+
+
+class TestBestEffortAndLoggerRestore:
+    def test_manifest_contract_drift_degrades_and_restores_loggers(
+        self, tmp_path, monkeypatch,
+    ):
+        """A ManifestInfo shape the filter can't read (contract drift)
+        must degrade to an empty result — never crash /describe — and
+        must never leave the sca loggers clamped at WARNING."""
+        import logging
+
+        class _DriftedManifest:
+            # No is_lockfile attribute at all.
+            path = tmp_path / "package.json"
+            ecosystem = "npm"
+
+        monkeypatch.setattr(
+            "packages.sca.discovery.find_manifests",
+            lambda _p: [_DriftedManifest()],
+        )
+        disc = logging.getLogger("packages.sca.discovery")
+        pars = logging.getLogger("packages.sca.parsers")
+        prev_disc, prev_pars = disc.level, pars.level
+        try:
+            result = detect_dependency_counts(tmp_path)
+        finally:
+            restored = (disc.level, pars.level)
+        assert result.by_ecosystem == {}
+        assert restored == (prev_disc, prev_pars)

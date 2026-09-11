@@ -149,6 +149,30 @@ class TestConnectExisting(unittest.TestCase):
         self.assertIsNone(lifecycle._connect_existing(state))
 
     @patch.object(lifecycle, "_pid_alive", return_value=True)
+    @patch.object(lifecycle, "_health_check", return_value=True)
+    def test_reuse_handle_carries_every_init_field(self, _hc, _pa):
+        """The reuse handle is built through __init__ (connect_existing),
+        never __new__ + field copy: every field __init__ sets — present
+        AND future — must exist on it. The field-copy approach drifted
+        twice (_restarting, then _flow_semantics/_last_import_timeout),
+        each omission an AttributeError on some method of a reused
+        server (e.g. run_tiered_sweep reading _flow_semantics)."""
+        from packages.joern.server import JoernServer
+        state = {"pid": 12345, "port": 8888, "heap_mb": 4096,
+                 "query_timeout_s": 300, **_AUTH_STATE}
+        srv = lifecycle._connect_existing(state)
+        self.assertIsNotNone(srv)
+        reference = JoernServer()
+        missing = set(vars(reference)) - set(vars(srv))
+        self.assertEqual(missing, set())
+        # The two historically-omitted fields, pinned explicitly.
+        self.assertEqual(srv._flow_semantics, [])
+        self.assertIsNone(srv._last_import_timeout)
+        # Reuse handles never own the process or the socket dir.
+        self.assertIsNone(srv._proc)
+        self.assertIsNone(srv._uds_dir)
+
+    @patch.object(lifecycle, "_pid_alive", return_value=True)
     def test_reconnect_carries_credential_into_health_check(self, _pa):
         state = {"pid": 12345, "port": 8888, **_AUTH_STATE}
         with patch.object(lifecycle, "_health_check",

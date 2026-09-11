@@ -406,3 +406,68 @@ class TestGateHelper:
             evidence_tool="smt:check-lock-domain",
         )
         assert _is_verification_evidence_for_gate(outcome) is False
+
+
+class _RecordingJoernServer(MockJoernServer):
+    """MockJoernServer that also records every query it is sent."""
+
+    def __init__(self):
+        super().__init__()
+        self.queries = []
+
+    def query(self, cpgql, **kwargs):
+        self.queries.append(cpgql)
+        return super().query(cpgql, **kwargs)
+
+
+class TestCallerConstraintQueryShape:
+    """The guard query was a bare substring (".*lock_page.*" counted
+    unlock_page callers as guarded); it is now token-anchored, and
+    the all-guarded evidence states presence, not dominance."""
+
+    def _query_for(self, hypothesis):
+        server = _RecordingJoernServer()
+        server.add_response(
+            ".caller",
+            'List((caller_a, file.c, 10))',
+        )
+        server.add_response("nonEmpty", "List(true)")
+        _verify_caller_constraint("esp_input", hypothesis, server)
+        return "\n".join(server.queries)
+
+    def test_guard_query_is_token_anchored(self):
+        queries = self._query_for(
+            "callers must call `lock_page` before this function",
+        )
+        assert '(.*_)?lock_page(_.*)?' in queries
+        assert ".*lock_page.*" not in queries
+
+    def test_anchored_pattern_excludes_run_in_spellings(self):
+        import re as _re
+
+        pat = _re.compile(r"(.*_)?lock_page(_.*)?\Z")
+        assert pat.fullmatch("lock_page")
+        assert pat.fullmatch("do_lock_page")
+        assert not pat.fullmatch("unlock_page")
+        # Default alternation: *_unlock stays out, real acquires stay
+        # in (spin_lock_irqsave via the lock branch).
+        dflt = _re.compile(r"(.*_)?(lock|mutex|spin|rw_?sem)(_.*)?\Z")
+        assert dflt.fullmatch("spin_lock_irqsave")
+        assert dflt.fullmatch("mutex_lock")
+        assert not dflt.fullmatch("foo_unlock")
+
+    def test_all_guarded_evidence_states_presence_only(self):
+        server = MockJoernServer()
+        server.add_response(
+            ".caller",
+            'List((caller_a, file.c, 10))',
+        )
+        server.add_response("skb_cow_data", "List(true)")
+        result = _verify_caller_constraint(
+            "esp_input",
+            "callers must call `skb_cow_data` before this function",
+            server,
+        )
+        assert result is not None and result.verified is False
+        assert "presence" in result.evidence
+        assert "hold" not in result.evidence

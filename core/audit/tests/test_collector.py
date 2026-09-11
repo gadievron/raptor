@@ -488,3 +488,147 @@ class TestCorrectiveStrategyInheritance:
         entry = load_entries(tmp_path)[-1]
         assert entry.strategies == []
         assert not is_mechanical_echo(entry)
+
+
+class TestFlushDurability:
+    """flush() is re-usable (post-loop passes submit AFTER the first
+    flush), retains entries on write failure, and appends through the
+    hardened JSONL writer (no symlink-follow)."""
+
+    def test_flush_reusable_across_post_loop_submits(
+        self, tmp_path: Path,
+    ) -> None:
+        c = Collector(out_dir=tmp_path, target_path=tmp_path)
+        c.submit(_FakeOutcome(function="main_loop"), _make_gap(name="main_loop"))
+        c.flush()
+        # Post-loop pass (dark verify / IRIS telemetry) submits more —
+        # a one-shot latch used to silently discard this.
+        c.submit(_FakeOutcome(function="post_loop"), _make_gap(name="post_loop"))
+        c.flush()
+        lines = (tmp_path / ".audit-log.jsonl").read_text(
+            encoding="utf-8",
+        ).strip().split("\n")
+        keys = [json.loads(ln)["key"] for ln in lines]
+        assert keys == [
+            "src/auth.py:main_loop:10", "src/auth.py:post_loop:10",
+        ]
+
+    def test_failed_write_retains_entries(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        import core.json as core_json
+
+        c = Collector(out_dir=tmp_path, target_path=tmp_path)
+        c.submit(_FakeOutcome(function="kept"), _make_gap(name="kept"))
+
+        real = core_json.append_jsonl
+        state = {"fail": True}
+
+        def flaky(*args, **kwargs):
+            if state["fail"]:
+                raise OSError("disk full")
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(core_json, "append_jsonl", flaky)
+        c.flush()  # must not raise, must not mark flushed
+        assert not (tmp_path / ".audit-log.jsonl").exists()
+
+        state["fail"] = False
+        c.flush()
+        lines = (tmp_path / ".audit-log.jsonl").read_text(
+            encoding="utf-8",
+        ).strip().split("\n")
+        assert len(lines) == 1
+        assert json.loads(lines[0])["key"] == "src/auth.py:kept:10"
+
+    def test_symlinked_audit_log_refused(self, tmp_path: Path) -> None:
+        # A symlink planted at the trail path in the target-writable
+        # run dir must be refused (O_NOFOLLOW), never followed.
+        out = tmp_path / "out"
+        out.mkdir()
+        victim = tmp_path / "victim.txt"
+        victim.write_text("host file\n")
+        (out / ".audit-log.jsonl").symlink_to(victim)
+
+        c = Collector(out_dir=out, target_path=tmp_path)
+        c.submit(_FakeOutcome(function="x"), _make_gap(name="x"))
+        c.flush()  # swallows the OSError, retains the entry
+        assert victim.read_text() == "host file\n"
+        assert c._log_entries  # retained for a later flush
+
+
+class TestSubmitVerificationTier:
+    def test_submit_computes_verification_tier(self, tmp_path: Path) -> None:
+        # Collector.submit must derive the tier like _commit_outcome
+        # does — otherwise propagate_confidence's trusted_clean set is
+        # empty on every standard (collector) run.
+        from core.audit.orchestrator import ReviewOutcome
+
+        c = Collector(out_dir=tmp_path, target_path=tmp_path)
+        clean = ReviewOutcome(
+            file="src/a.c", function="ok", status="clean",
+            body="fine", tools_dispatched={"semgrep"},
+        )
+        c.submit(clean, _make_gap(name="ok"))
+        assert clean.verification_tier == "tool_backed"
+
+        spec = ReviewOutcome(
+            file="src/a.c", function="guess", status="clean", body="fine",
+        )
+        c.submit(spec, _make_gap(name="guess"))
+        assert spec.verification_tier == "speculative"
+
+        c.flush()
+        lines = (tmp_path / ".audit-log.jsonl").read_text(
+            encoding="utf-8",
+        ).strip().split("\n")
+        tiers = {
+            json.loads(ln)["key"]: json.loads(ln)["verification_tier"]
+            for ln in lines
+        }
+        assert tiers["src/a.c:ok:10"] == "tool_backed"
+        assert tiers["src/a.c:guess:10"] == "speculative"
+
+
+class TestReusedVerdictChokepoint:
+    """The journal-write promotion gate must not decay reused
+    findings: a cross-run import re-asserts the origin run's already-
+    gated verdict at the LLM_ONLY tier cap (verdict_reuse doctrine),
+    it is not a fresh promotion."""
+
+    def test_reused_finding_not_demoted_no_alarm(
+        self, tmp_path: Path,
+    ) -> None:
+        from core.audit.orchestrator import ReviewOutcome
+        from core.audit.promotion_alarm import load_alarms
+
+        o = ReviewOutcome(
+            file="src/a.c", function="fn", status="finding",
+            body="[reused]", evidence_tool="journal:recall:run-1",
+        )
+        o.reused = True
+        o.reused_from_run = "run-1"
+
+        c = Collector(out_dir=tmp_path, target_path=tmp_path, run_id="run-2")
+        c.submit(o, _make_gap(name="fn"))
+        assert o.status == "finding"
+        assert load_alarms(tmp_path) == []
+        # ...and the tier cap still applies: no live receipt, LLM_ONLY.
+        assert o.verification_tier == "llm_only"
+
+    def test_fresh_evidence_less_finding_still_demoted(
+        self, tmp_path: Path,
+    ) -> None:
+        from core.audit.orchestrator import ReviewOutcome
+        from core.audit.promotion_alarm import load_alarms
+
+        o = ReviewOutcome(
+            file="src/a.c", function="fn", status="finding",
+            body="claim", evidence_tool="",
+        )
+        c = Collector(out_dir=tmp_path, target_path=tmp_path, run_id="run-2")
+        c.submit(o, _make_gap(name="fn"))
+        assert o.status == "suspicious"
+        alarms = load_alarms(tmp_path)
+        assert len(alarms) == 1
+        assert alarms[0]["blocked"] is True

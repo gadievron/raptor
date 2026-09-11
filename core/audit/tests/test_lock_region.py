@@ -514,3 +514,40 @@ void run(struct obj *obj) {
         assert res.outcome == "confirmed"
         assert not res.callback.get("registered_by")
         assert not res.callback.get("setter_exported")
+
+
+class TestRegisteredNamesBalancedExtraction:
+    """The greedy up-to-the-last-``)`` capture dropped legitimately
+    registered handlers (``register_cb((handler));`` yielded arg
+    ``(handler)``; ``register_cb(h) && log(x);`` yielded
+    ``h) && log(x``), leaving the registered set empty — the consumer
+    then emitted an affirmative "no invocation inside the region"
+    refutation over a region that calls the handler directly."""
+
+    class _Vocab:
+        callback_registers = ("register_cb",)
+
+    def test_paren_wrapped_handler_extracted(self):
+        src = "void f(void) { register_cb((handler)); }\n"
+        assert lr._registered_callback_names(src, self._Vocab()) == {
+            "handler",
+        }
+
+    def test_trailing_expression_does_not_eat_args(self):
+        src = "int f(void) { return register_cb(handler) && log(x); }\n"
+        assert lr._registered_callback_names(src, self._Vocab()) == {
+            "handler",
+        }
+
+    def test_plain_registration_unchanged(self):
+        src = "void f(void) { register_cb(handler, ctx); }\n"
+        assert lr._registered_callback_names(src, self._Vocab()) == {
+            "handler", "ctx",
+        }
+
+    def test_non_identifier_args_still_dropped(self):
+        # Two-direction guard: balanced extraction must not ADD
+        # spurious names (the false 'confirmed' direction) — nested
+        # calls and member expressions stay out of the set.
+        src = "void f(void) { register_cb(make_cb(a, b), o->fn); }\n"
+        assert lr._registered_callback_names(src, self._Vocab()) == set()

@@ -37,6 +37,9 @@ from core.audit.pipeline import (
     STATUS_RANK as _STATUS_RANK,
 )
 from core.audit.pipeline import (
+    _SUSPICIOUS_RANK,
+)
+from core.audit.pipeline import (
     _has_any_mechanical_evidence,
     _is_verification_evidence,
 )
@@ -2904,9 +2907,17 @@ def _run_ensemble_audit(
                 )
 
                 use_max = True
+                # Named rank floor, not a literal: the pipeline's
+                # STATUS_RANK renumbering (dark inserted below
+                # suspicious) left a hardcoded 3 here meaning "dark",
+                # so this replica skipped the evidence gate for
+                # (dark, suspicious) pairs the pipeline gates.
                 if (
                     higher_status in ("suspicious", "finding")
-                    and not (sec_rank >= 3 and bf_rank >= 3)
+                    and not (
+                        sec_rank >= _SUSPICIOUS_RANK
+                        and bf_rank >= _SUSPICIOUS_RANK
+                    )
                 ):
                     sec_ev = sec_r.get("evidence_tool", "")
                     bf_ev = bf_r.get("evidence_tool", "")

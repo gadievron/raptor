@@ -162,7 +162,7 @@ def test_npm_negative_caches_404_failures(tmp_path) -> None:
     from core.http import HttpError
     from core.json import JsonCache
     cache = JsonCache(root=tmp_path)
-    http = _FakeHttp(raise_exc=HttpError("404"))
+    http = _FakeHttp(raise_exc=HttpError("404", status=404))
     client = NpmClient(http, cache=cache)
     # First call: hits the registry, fails, caches None.
     assert client.get_metadata("@grafana/unpublished") is None
@@ -172,17 +172,52 @@ def test_npm_negative_caches_404_failures(tmp_path) -> None:
     assert len(http.calls) == 1, "second call must be cache-served"
 
 
+def test_npm_transient_failure_not_negative_cached(tmp_path) -> None:
+    """A 5xx / timeout is not an authoritative not-found — caching it
+    would let one registry outage answer 'package doesn't exist' for
+    every dep for a whole TTL window. The sentinel is returned but
+    NOT cached, so the next call retries (and can succeed)."""
+    from core.http import HttpError
+    from core.json import JsonCache
+    cache = JsonCache(root=tmp_path)
+    http = _FakeHttp(raise_exc=HttpError("503 upstream", status=503))
+    client = NpmClient(http, cache=cache)
+    assert client.get_metadata("lodash") is None
+    assert len(http.calls) == 1
+    # Outage over: the registry answers again.
+    http.raise_exc = None
+    http.json_payload = {"name": "lodash", "versions": {"1.0.0": {}}}
+    meta = client.get_metadata("lodash")
+    assert meta is not None and meta["name"] == "lodash"
+    assert len(http.calls) == 2, "transient failure must not be cached"
+
+
 def test_pypi_negative_caches_404_failures(tmp_path) -> None:
     """Same negative-caching contract for PyPI."""
     from core.http import HttpError
     from core.json import JsonCache
     cache = JsonCache(root=tmp_path)
-    http = _FakeHttp(raise_exc=HttpError("404"))
+    http = _FakeHttp(raise_exc=HttpError("404", status=404))
     client = PyPIClient(http, cache=cache)
     assert client.get_metadata("nonexistent-private-pkg") is None
     assert len(http.calls) == 1
     assert client.get_metadata("nonexistent-private-pkg") is None
     assert len(http.calls) == 1, "second call must be cache-served"
+
+
+def test_pypi_transient_failure_not_negative_cached(tmp_path) -> None:
+    """PyPI mirror of the outage-poisoning guard: 5xx / timeout is
+    returned as a miss but never cached as not-found."""
+    from core.http import HttpError
+    from core.json import JsonCache
+    cache = JsonCache(root=tmp_path)
+    http = _FakeHttp(raise_exc=HttpError("timeout", status=None))
+    client = PyPIClient(http, cache=cache)
+    assert client.get_metadata("requests") is None
+    http.raise_exc = None
+    http.json_payload = {"info": {"name": "requests"}, "releases": {}}
+    assert client.get_metadata("requests") is not None
+    assert len(http.calls) == 2, "transient failure must not be cached"
 
 
 # ---------------------------------------------------------------------------
@@ -646,12 +681,39 @@ def test_npm_grammar_rejects_registry_impossible_names() -> None:
     assert _valid_npm_name("lodash")
     assert _valid_npm_name("@babel/traverse")
     assert _valid_npm_name("some-pkg_1.2~x")
+    # Legacy mixed-case names published before npm's lowercase rule
+    # exist and resolve (JSONStream — event-stream incident class);
+    # rejecting them silently hid exactly those aged packages from
+    # the supply-chain detectors.
+    assert _valid_npm_name("JSONStream")
+    assert _valid_npm_name("UpperCase")
+    # Dangerous shapes stay blocked.
     assert not _valid_npm_name("lodash/..")
     assert not _valid_npm_name("../etc")
-    assert not _valid_npm_name("UpperCase")
+    assert not _valid_npm_name("JSON Stream")     # whitespace
+    assert not _valid_npm_name(".hidden")          # leading dot
     assert not _valid_npm_name("@scope/a/b")
     assert not _valid_npm_name("")
     assert not _valid_npm_name("a" * 215)
+
+
+def test_npm_legacy_uppercase_name_fetches_and_caches(tmp_path) -> None:
+    """``JSONStream`` resolves end-to-end: URL preserves case (npm
+    names are case-sensitive once published) and the cache key is
+    distinct from the lowercase package's."""
+    from core.json import JsonCache
+    cache = JsonCache(root=tmp_path)
+    http = _FakeHttp(json_payload={
+        "name": "JSONStream", "versions": {"1.3.5": {}},
+    })
+    client = NpmClient(http, cache=cache)
+    assert client.get_metadata("JSONStream") is not None
+    assert "JSONStream" in http.calls[0]
+    n = len(http.calls)
+    # Different package, different entry: the lowercase name must
+    # not be served from the uppercase name's cache.
+    client.get_metadata("jsonstream")
+    assert len(http.calls) == n + 1
 
 
 def test_pypi_slash_name_key_distinct_from_flattened(tmp_path) -> None:
@@ -683,9 +745,10 @@ def test_packagist_vendor_name_key_injective(tmp_path) -> None:
 
     assert client.list_versions("vendor/pkg") == ["1.2.3"]
     n = len(http.calls)
-    # Different (degenerate) name → different cache entry → refetch.
-    client.list_versions("vendor/../pkg")
-    assert len(http.calls) == n + 1
+    # Degenerate name: rejected before any fetch or cache write —
+    # ``..`` is a traversal segment no Composer name can carry.
+    assert client.list_versions("vendor/../pkg") == []
+    assert len(http.calls) == n
     # Original entry unaffected.
     assert client.list_versions("vendor/pkg") == ["1.2.3"]
-    assert len(http.calls) == n + 1
+    assert len(http.calls) == n

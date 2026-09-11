@@ -26,12 +26,16 @@ from core.llm.scorecard import audit as audit_mod
 def _populate(sc: ModelScorecard, *, model: str, decision_class: str,
               event_type: str, n: int, correct_fraction: float = 1.0) -> None:
     """Record ``n`` events on one cell; ``correct_fraction`` chooses the
-    correct / incorrect split."""
+    correct / incorrect split. Batched into ONE write: per-event
+    record_event is a full lock+fsync cycle each, and the ~300 events
+    these fixtures seed measured 12s of setup on slow-fsync CI disks."""
     n_correct = int(round(n * correct_fraction))
-    for _ in range(n_correct):
-        sc.record_event(decision_class, model, event_type, "correct")
-    for _ in range(n - n_correct):
-        sc.record_event(decision_class, model, event_type, "incorrect")
+    sc.record_events([
+        {"decision_class": decision_class, "model": model,
+         "event_type": event_type, "outcome": outcome}
+        for outcome in (["correct"] * n_correct
+                        + ["incorrect"] * (n - n_correct))
+    ])
 
 
 @pytest.fixture

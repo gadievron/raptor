@@ -90,12 +90,16 @@ def normalize_findings(data: dict) -> None:
         if finding.get("final_status"):
             finding["final_status"] = normalize_status(finding["final_status"])
 
+        # isinstance guards (mirrors core/reporting/formatting.py):
+        # producers legitimately emit these fields as bare strings
+        # ("ruling": "false_positive" from the prefilter, free-form LLM
+        # verdict strings) — .get() on a str crashed the whole load.
         ruling = finding.get("ruling")
-        if ruling and ruling.get("status"):
+        if isinstance(ruling, dict) and ruling.get("status"):
             ruling["status"] = normalize_status(ruling["status"])
 
         feasibility = finding.get("feasibility")
-        if feasibility:
+        if isinstance(feasibility, dict):
             if feasibility.get("verdict"):
                 feasibility["verdict"] = normalize_status(feasibility["verdict"])
             if feasibility.get("status"):

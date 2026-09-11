@@ -51,9 +51,19 @@ class TestVolatileTargetReason:
         f.write_bytes(b"\x7fELF")
         assert volatile_target_reason(str(f)) is None
 
-    def test_none_and_empty_pass(self):
+    def test_none_passes_empty_flags(self):
+        # None = nothing to vet. An empty/whitespace STRING flags:
+        # Path("").resolve() is the CWD (the RAPTOR repo dir for these
+        # callers) — exactly the forbidden default-target fallback.
         assert volatile_target_reason(None) is None
-        assert volatile_target_reason("") is None
+        assert volatile_target_reason("") == "is empty"
+        assert volatile_target_reason("   ") == "is empty"
+
+    def test_temp_root_alias_flags(self, tmp_path):
+        # Trailing-slash / dot aliases of the temp root must not slip
+        # past the equality check.
+        assert volatile_target_reason("/tmp/") is not None
+        assert volatile_target_reason("/tmp/.") is not None
 
 
 class TestResolveDefaultTargetGate:

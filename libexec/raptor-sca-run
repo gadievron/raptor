@@ -51,7 +51,12 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import core.startup.process_init  # noqa: E402,F401
 from core.json import load_json  # noqa: E402
-from core.run.metadata import complete_run, fail_run, start_run  # noqa: E402
+from core.run.metadata import (  # noqa: E402
+    complete_run,
+    fail_run,
+    interrupt_run,
+    start_run,
+)
 from core.run.output import get_output_dir  # noqa: E402
 from packages.sca import cli as sca_cli  # noqa: E402
 from packages.sca.cli import SUBCOMMANDS as _SUBCOMMANDS  # noqa: E402
@@ -199,16 +204,23 @@ def _run_analyse(argv):
             sys.exit(1)
         raise
 
-    # ``options_from_args`` resolves the repo-trust umbrella
-    # (``--no-trust-repo`` > ``--trust-repo`` > project ``config``
-    # marker > off) and propagates the resolved value to the
-    # process-wide ``cc_trust`` / ``codeql_trust`` overrides. Do NOT
-    # set the overrides from the raw flag here.
-    from packages.sca._scan_args import options_from_args
-    options = options_from_args(args)
-
     try:
+        # ``options_from_args`` resolves the repo-trust umbrella
+        # (``--no-trust-repo`` > ``--trust-repo`` > project ``config``
+        # marker > off) and propagates the resolved value to the
+        # process-wide ``cc_trust`` / ``codeql_trust`` overrides. Do NOT
+        # set the overrides from the raw flag here. It reads project
+        # registry/settings state, so it runs INSIDE this guard: any
+        # failure after start_run must mark the run failed rather than
+        # strand the record in 'running'.
+        from packages.sca._scan_args import options_from_args
+        options = options_from_args(args)
         result = run_sca(target=target, output_dir=output_dir, options=options)
+    except KeyboardInterrupt:
+        # Ctrl-C is a BaseException the handler below never sees;
+        # without this the run record stays 'running' forever.
+        interrupt_run(output_dir, reason="operator interrupt (SIGINT)")
+        raise
     except Exception as e:                  # noqa: BLE001
         fail_run(output_dir, str(e))
         print(f"raptor-sca: run failed: {e}", file=sys.stderr)
@@ -227,10 +239,12 @@ def _run_analyse(argv):
             print(f"raptor-sca: baseline delta failed: {e}",
                    file=sys.stderr)
 
-    complete_run(output_dir)
-    _print_summary(result)
-
     # CI-gate threshold evaluation — only fires when --fail-on-* set.
+    # Read the findings BEFORE sealing the run: an unreadable
+    # findings.json is a run-artifact failure, and the exit code 3
+    # ('run failed') must agree with the recorded run status. A gate
+    # BREACH (exit 1) is not a run failure — the scan itself finished
+    # — so the run still completes in that case.
     from packages.sca.thresholds import (
         cfg_from_args,
         print_result,
@@ -239,23 +253,29 @@ def _run_analyse(argv):
         evaluate as eval_thresholds,
     )
     cfg = cfg_from_args(args)
+    rows = None
     if cfg.is_active:
+        error = None
         try:
             rows = load_json(
                 output_dir / "findings.json", strict=True,
                 max_bytes=_MAX_FINDINGS_BYTES,
             )
         except (OSError, ValueError) as e:
-            print(f"raptor-sca: cannot read findings for threshold check: {e}",
-                  file=sys.stderr)
+            error = f"cannot read findings for threshold check: {e}"
+        if error is None and rows is None:
+            error = "findings.json not found for threshold check"
+        if error is None and not isinstance(rows, list):
+            error = "findings.json is not a list"
+        if error is not None:
+            fail_run(output_dir, error)
+            print(f"raptor-sca: {error}", file=sys.stderr)
             return 3
-        if rows is None:
-            print("raptor-sca: findings.json not found for threshold check",
-                  file=sys.stderr)
-            return 3
-        if not isinstance(rows, list):
-            print("raptor-sca: findings.json is not a list", file=sys.stderr)
-            return 3
+
+    complete_run(output_dir)
+    _print_summary(result)
+
+    if cfg.is_active:
         passed, fails = eval_thresholds(rows, cfg)
         print_result(passed, fails)
         return 0 if passed else 1

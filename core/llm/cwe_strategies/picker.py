@@ -155,8 +155,9 @@ def _keyword_score(function_name: str, keywords: Iterable[str]) -> int:
     NOT ``is_sparse_array`` (no standalone "parse" component). This
     is the bulk of the false-positive reduction over substring
     matching. Trailing ``_``/``-`` on operator-written keywords is
-    stripped because it's a convention for "matches as a prefix" —
-    that semantic is built into tokenisation already.
+    the convention for "matches as a prefix": ``authoriz_`` matches
+    the tokens ``authorize`` and ``authorization``. Plain keywords
+    stay exact-token matches.
     """
     tokens = _tokenise(function_name)
     if not tokens:
@@ -165,12 +166,19 @@ def _keyword_score(function_name: str, keywords: Iterable[str]) -> int:
     for k in keywords:
         if not k:
             continue
-        # Strip trailing separator chars; tokens never carry them.
-        kl = k.lower().rstrip("_-")
-        if not kl:
+        kl = k.lower()
+        stem = kl.rstrip("_-")
+        if not stem:
             continue
-        if kl in tokens:
-            score += len(kl)
+        if kl != stem:
+            # Trailing separator = prefix-match convention. Stem
+            # keywords ("authoriz_") fire on any token they prefix;
+            # score by stem length to keep specificity weighting
+            # consistent with the exact-match branch.
+            if any(t.startswith(stem) for t in tokens):
+                score += len(stem)
+        elif stem in tokens:
+            score += len(stem)
     return score
 
 

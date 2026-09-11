@@ -19,7 +19,8 @@ import urllib.parse
 
 from core.json import MISSING, JsonCache
 
-from ._negative_cache import log_fetch_failure
+from ._negative_cache import log_fetch_failure, should_negative_cache
+from ._url import UnsafeUrlComponentError, registry_cache_key
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -30,15 +31,6 @@ logger = logging.getLogger(__name__)
 
 _CACHE_KEY_PREFIX = "go-versions"
 _DEFAULT_TTL = 24 * 3600
-
-
-def _key_component(value: str) -> str:
-    """Percent-encode one cache-key component so the key identity is
-    injective — Go module paths legitimately contain ``/``, and a raw
-    path with ``..`` segments could otherwise alias another module's
-    cache file after JsonCache path sanitisation. Old raw-name entries
-    re-fetch once."""
-    return urllib.parse.quote(value, safe="")
 
 
 class GoClient:
@@ -62,9 +54,13 @@ class GoClient:
     def list_versions(self, name: str) -> list[str]:
         # Module path encoding: capital letters are encoded as ``!<lower>``
         # (Go's case-insensitive mapping). Slashes and dots are passed
-        # through.
-        encoded = _encode_module_path(name)
-        cache_key = f"{_CACHE_KEY_PREFIX}:{_key_component(name)}"
+        # through; dot SEGMENTS (``..`` traversal) and control chars
+        # are rejected — not a path the proxy could ever serve.
+        try:
+            encoded = _encode_module_path(name)
+        except UnsafeUrlComponentError:
+            return []
+        cache_key = registry_cache_key(_CACHE_KEY_PREFIX, name)
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -79,7 +75,7 @@ class GoClient:
             text = raw.decode("utf-8", errors="replace")
         except Exception as e:                # noqa: BLE001
             log_fetch_failure(logger, "sca.registries.golang", name, e)
-            if self._cache is not None:
+            if self._cache is not None and should_negative_cache(e):
                 self._cache.put(cache_key, [], ttl_seconds=self._ttl)
             return []
 
@@ -94,8 +90,22 @@ def _encode_module_path(name: str) -> str:
 
     See https://pkg.go.dev/golang.org/x/mod/module#EscapePath — capital
     letters become ``!<lower>``. The path is otherwise passed through
-    URL-encoded (slashes preserved).
+    URL-encoded (slashes preserved as segment separators).
+
+    Raises :class:`UnsafeUrlComponentError` for shapes no legitimate
+    module path has and that would steer the proxy request elsewhere:
+    empty segments, dot segments (``..`` traversal), whitespace, and
+    control characters.
     """
+    for seg in name.split("/"):
+        if not seg or seg in (".", ".."):
+            raise UnsafeUrlComponentError(
+                f"degenerate module path segment in {name!r}"
+            )
+        if any(ord(ch) < 0x21 or ord(ch) == 0x7F for ch in seg):
+            raise UnsafeUrlComponentError(
+                f"control/whitespace character in module path {name!r}"
+            )
     out = []
     for ch in name:
         if ch.isupper():

@@ -61,10 +61,13 @@ def extract_js_routes(client: "WebClient", base_url: str) -> List[str]:
         logger.debug(f"JS route extraction: root fetch failed: {e}")
         return []
 
-    # Inline scripts
-    inline_re = re.compile(r"<script(?![^>]*\bsrc\b)[^>]*>(.*?)</script(?:\s[^>]*)?>", re.I | re.DOTALL)
-    for m in inline_re.finditer(html):
-        for route in _extract_routes(m.group(1)):
+    # Inline scripts — linear string scan, not a lazy-DOTALL regex: the
+    # regex form re-scanned to end-of-document for every unclosed
+    # '<script' occurrence, going quadratic in (tag count x page size);
+    # a hostile page with thousands of unclosed tags stalled the whole
+    # discovery phase for minutes to hours.
+    for script_body in _inline_scripts(html):
+        for route in _extract_routes(script_body):
             _add(route)
 
     # External scripts on same origin
@@ -85,6 +88,29 @@ def extract_js_routes(client: "WebClient", base_url: str) -> List[str]:
 
     logger.info("JS route extraction: %d routes found", len(found_urls))
     return found_urls
+
+
+def _inline_scripts(html: str, max_scripts: int = 200) -> List[str]:
+    """Bodies of inline (non-src) <script> elements, via one linear pass."""
+    scripts: List[str] = []
+    lower = html.lower()
+    pos = 0
+    while len(scripts) < max_scripts:
+        start = lower.find("<script", pos)
+        if start < 0:
+            break
+        tag_end = lower.find(">", start)
+        if tag_end < 0:
+            break
+        close = lower.find("</script", tag_end + 1)
+        if close < 0:
+            break
+        tag = lower[start:tag_end]
+        if "src=" not in tag and "src =" not in tag:
+            scripts.append(html[tag_end + 1:close])
+        close_end = lower.find(">", close)
+        pos = close + 9 if close_end < 0 else close_end + 1
+    return scripts
 
 
 def _extract_routes(js_text: str) -> List[str]:

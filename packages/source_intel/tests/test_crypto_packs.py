@@ -289,6 +289,27 @@ def test_axis_dirs_ignore_data_subdirs():
     assert analyze_mod._axis_dirs(_CRYPTO_DIR) == []
 
 
+def test_materialize_routes_two_space_marker(tmp_path: Path):
+    # The caller gates on the renderer's authoritative marker predicate
+    # — a two-space '//  @api-packs:' marker (regex-valid) previously
+    # failed the local substring gate and was silently never rendered.
+    axis = tmp_path / "crypto"
+    packs = axis / "packs"
+    packs.mkdir(parents=True)
+    (packs / "p.json").write_text(json.dumps({
+        "api": "openssl",
+        "kinds": {"call": {"prefixes": ["EVP_Digest"], "names": []}},
+    }))
+    (axis / "r.cocci").write_text("//  @api-packs: packs crypto\n")
+    eff, handle = analyze_mod._materialize_rules_dir(axis)
+    try:
+        assert handle is not None
+        assert "crypto:call:openssl:" in (eff / "r.cocci").read_text()
+    finally:
+        if handle is not None:
+            handle.cleanup()
+
+
 def test_parser_accepts_pack_declared_api_tags():
     apis = analyze_mod._crypto_call_apis()
     assert {"libc", "openssl", "kernel", "libsodium"} <= apis

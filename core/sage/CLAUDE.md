@@ -58,29 +58,37 @@ because they arrived through that verified channel. Concretely:
       recorded as denied; the guard keeps them out of sessions (with
       a calm note instead of the warning) and review/status stop
       flagging them as pending. Recommended because it is the
-      conservative default and fully reversible: a later
+      conservative default and fully reversible: a later operator-run
       `review --approve` un-rejects.
-    - "Approve": run `libexec/raptor-sage-setup review --approve` —
-      the payload change is authorized; future sessions receive it.
+    - "Approve": tell the operator to run
+      `bin/raptor sage-setup review --approve` AT THEIR OWN TERMINAL
+      — the CLI hard-refuses `--approve` on a non-TTY stdin, so you
+      cannot run it for them (that gate is what stops a mid-session
+      injected instruction from laundering a hostile variant into the
+      authorized record). Once they run it, future sessions receive
+      the approved payload.
     - "Decide later": no action; it will be flagged again next
       session.
   Non-interactive fallback (may-ask says no, or the tool is absent):
-  do not ask — report the drift and the review/--approve/--reject
-  commands in your output and leave the stamp unchanged (the review
-  CLI's own non-interactive behavior).
-  A selection IS the operator's explicit instruction to run the
-  corresponding command. The decision is the operator's alone — never
-  run `--approve` or `--reject` without it in the current session.
-  Always use the `libexec/` route when running these yourself (the
+  do not ask — report the drift, the `review --reject` command, and
+  the operator-terminal `review --approve` instruction in your output
+  and leave the stamp unchanged (the review CLI's own non-interactive
+  behavior).
+  A "Reject" selection IS the operator's explicit instruction to run
+  `review --reject`; approval always happens at the operator's own
+  terminal. The decision is the operator's alone — never run
+  `--reject` without it in the current session.
+  Use the `libexec/` route when running review/--reject yourself (the
   session's CLAUDECODE marker satisfies its trust check);
   `bin/raptor sage-setup` is the wrapper for humans at a bare shell.
-- A payload change is never self-authorizing: both `review`
-  (`--approve` / interactive `y`) and `install` (`--reauthorize` /
-  interactive `y`) require explicit operator confirmation before the
-  stamp changes. `review` MERGES newly approved variants into the
-  existing record, so state-dependent payloads (Auto-Inception vs
-  Auto-Connect) stop flapping; `install` REPLACES the record with a
-  fresh capture.
+- A payload change is never self-authorizing: `review` approval
+  (`--approve` / interactive `y`) requires the operator at an
+  interactive terminal (non-TTY `--approve` is refused), and `install`
+  (`--reauthorize` / interactive `y`) requires explicit operator
+  confirmation before the stamp changes. `review` MERGES newly
+  approved variants into the existing record, so state-dependent
+  payloads (Auto-Inception vs Auto-Connect) stop flapping; `install`
+  REPLACES the record with a fresh capture.
 
 Two qualifications:
 

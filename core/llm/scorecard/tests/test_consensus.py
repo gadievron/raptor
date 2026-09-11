@@ -424,9 +424,11 @@ class TestProducerErrorVisibility:
     def test_per_event_failure_logs_at_warning(
         self, scorecard, caplog, monkeypatch,
     ):
-        # Force record_event to raise so we exercise the except path.
+        # Force both write paths to raise: the batched fast path AND
+        # the per-event fallback it degrades to.
         def _boom(*args, **kwargs):
-            raise RuntimeError("simulated record_event failure")
+            raise RuntimeError("simulated scorecard write failure")
+        monkeypatch.setattr(scorecard, "record_events", _boom)
         monkeypatch.setattr(scorecard, "record_event", _boom)
 
         matrix = {"f1": {

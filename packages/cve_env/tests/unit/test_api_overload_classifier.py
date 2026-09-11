@@ -71,3 +71,33 @@ def test_classify_api_overload_negative_cases() -> None:
     assert (
         classifier("API Error: Claude Code is unable to respond...") != "api_overload"
     )
+
+
+def test_classify_api_overload_matches_provider_native_shapes() -> None:
+    """The legacy CLI-wrapper prefix is not the only overload shape: raised
+    provider exceptions / provider_error text carry the typed
+    'overloaded_error' token and/or '529' next to the word. Both must map
+    to the re-runnable rate_limited path."""
+    classifier = _try_import_classifier()
+    assert classifier is not None
+    samples = (
+        "APIStatusError: Error code: 529 - {'type': 'error', 'error': "
+        "{'type': 'overloaded_error', 'message': 'Overloaded'}}",
+        "provider error: HTTP 529 (Overloaded), please retry",
+        "anthropic.InternalServerError: overloaded_error",
+    )
+    for sample in samples:
+        assert classifier(sample) == "api_overload", sample
+
+
+def test_classify_api_overload_provider_native_negatives() -> None:
+    """Companion direction: '529' alone, or overload-free errors, still do
+    NOT classify as api_overload."""
+    classifier = _try_import_classifier()
+    assert classifier is not None
+    for sample in (
+        "downloaded 529 bytes from the registry",
+        "API Error: rate_limit_exceeded",
+        "HTTP 529",
+    ):
+        assert classifier(sample) != "api_overload", sample

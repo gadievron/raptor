@@ -35,6 +35,22 @@ def _text(value: Any) -> str:
     return _sanitize(raw).replace("-&gt;", "->")
 
 
+def _id_list(value: Any) -> list[str]:
+    """Coerce an id-list field (``covers`` / ``reaches_from``) to a list.
+
+    LLM-emitted maps sometimes carry a scalar ("EP-001") where the
+    schema says array — bare iteration over a string yields one
+    garbage single-char node per character, so scalars are treated as
+    a one-element (comma-separable) list instead. Non-list/str shapes
+    contribute nothing.
+    """
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    if isinstance(value, list):
+        return [str(v) for v in value if v]
+    return []
+
+
 def _first_text(item: dict[str, Any], *keys: str) -> str:
     for key in keys:
         value = item.get(key)
@@ -239,18 +255,18 @@ def generate(data: dict[str, Any]) -> str:
 
     for tb in boundary_details:
         tb_id = _sid(tb.get("id", "TB-?"))
-        for ep_id in [_sid(e) for e in tb.get("covers", [])]:
+        for ep_id in [_sid(e) for e in _id_list(tb.get("covers"))]:
             add_edge(f"    {ep_id} --> {tb_id}")
             covered_eps.add(ep_id)
 
     # -- Edges: TB → SINK (reaches_from) --
     for sink in sink_details:
         sink_id = _sid(sink.get("id", "SINK-?"))
-        for ep_id in [_sid(e) for e in sink.get("reaches_from", [])]:
+        for ep_id in [_sid(e) for e in _id_list(sink.get("reaches_from"))]:
             # Find which TB covers this EP
             tb_for_ep = [
                 _sid(tb.get("id")) for tb in boundary_details
-                if ep_id in [_sid(e) for e in tb.get("covers", [])]
+                if ep_id in [_sid(e) for e in _id_list(tb.get("covers"))]
             ]
             if tb_for_ep:
                 for tb_id in tb_for_ep:
@@ -277,10 +293,25 @@ def generate(data: dict[str, Any]) -> str:
         fn = functions_by_id.get(source_id)
         if not fn:
             continue
-        src_id = entry_by_address.get(_addr(fn.get("address")), _sid(source_id))
+        # Only draw edges from DECLARED nodes: candidate function
+        # nodes are declared only in blackbox mode, so a flow whose
+        # source resolves neither to an entry point nor to a declared
+        # candidate would otherwise materialise as an unstyled bare-id
+        # node Mermaid auto-creates outside any section.
+        addr_id = entry_by_address.get(_addr(fn.get("address")))
+        if addr_id is not None:
+            src_id = addr_id
+        elif source_id in candidate_function_nodes:
+            src_id = _sid(source_id)
+        else:
+            continue
         sink_id = _sid(flow.get("sink", "?"))
-        relationship = _text(flow.get("relationship") or "candidate")
-        add_edge(f'    {src_id} -. "{relationship} candidate" .-> {sink_id}')
+        relationship = _text(flow.get("relationship") or "")
+        # Suffix "candidate" only when a distinct relationship exists —
+        # the default otherwise rendered the doubled label
+        # "candidate candidate".
+        label = f"{relationship} candidate" if relationship else "candidate"
+        add_edge(f'    {src_id} -. "{label}" .-> {sink_id}')
 
     # -- Style classes --
     lines.append("")

@@ -28,7 +28,11 @@ def _make_old_dir(root, name, contents=()):
     d = root / name
     d.mkdir()
     for fname in contents:
-        (d / fname).write_text("x")
+        f = d / fname
+        f.write_text("x")
+        # Age the contents too: the internal-activity probe keeps any
+        # dir with a fresh entry inside (a live campaign's writes).
+        os.utime(f, (_OLD, _OLD))
     os.utime(d, (_OLD, _OLD))
     return d
 
@@ -163,6 +167,11 @@ class TestDirReaping:
             try:
                 srv.bind(str(d / "llm.sock"))
                 srv.listen(1)
+                # Age the socket file too — the internal-activity probe
+                # would otherwise keep the dir on the socket's fresh
+                # mtime and never exercise the answering-socket probe.
+                os.utime(d / "llm.sock", (_OLD, _OLD),
+                         follow_symlinks=False)
                 os.utime(d, (_OLD, _OLD))
                 assert reap_stale_tmp() == []
                 assert d.is_dir()
@@ -173,6 +182,19 @@ class TestDirReaping:
             assert not d.exists()
         finally:
             shutil.rmtree(short_root, ignore_errors=True)
+
+    def test_old_dir_with_fresh_internal_write_kept(self, tmp_root):
+        # A live >floor campaign whose scratch top-level mtime froze at
+        # creation but whose tools still write inside must survive the
+        # sweep; once the internal activity ages out too, it's reaped.
+        d = _make_old_dir(tmp_root, "raptor_git_live1")
+        (d / "clone.log").write_text("x")  # fresh internal write
+        os.utime(d, (_OLD, _OLD))          # top level frozen at creation
+        assert reap_stale_tmp() == []
+        assert d.is_dir()
+        os.utime(d / "clone.log", (_OLD, _OLD))
+        assert reap_stale_tmp() == [d]
+        assert not d.exists()
 
     def test_dir_serving_as_live_cwd_kept(self, tmp_root):
         d = _make_old_dir(tmp_root, "raptor-cc-cwd-livecwd")
@@ -352,6 +374,11 @@ class TestRunReaping:
                 "version": 2, "command": "scan", "status": status,
                 "timestamp": ts.isoformat(), "extra": {},
             }))
+        # Back-date the dir mtime to match: the reaper clamps timestamp
+        # age by mtime evidence, and a genuinely old run's dir mtime IS
+        # old — only a fresh sweep rewrite refreshes it.
+        old = time.time() - age_d * 86400
+        os.utime(d, (old, old))
         return d
 
     def test_old_failed_and_cancelled_reaped(self, out_root):
@@ -383,6 +410,78 @@ class TestRunReaping:
         monkeypatch.setenv("RAPTOR_RUN_REAP_MAX_AGE_D", "0")
         assert reap_stale_runs(out_root) == []
         assert failed.is_dir()
+
+    def test_failed_run_aged_from_end_timestamp(self, out_root):
+        # Started 45 days ago, FAILED yesterday: kept — aging from the
+        # start stamp deleted a long run right after it failed (journal
+        # and partial results lost).
+        import json
+        from datetime import datetime, timedelta, timezone
+        d = self._run_dir(out_root, "scan-001", "failed", age_d=45.0)
+        meta = json.loads((d / ".raptor-run.json").read_text())
+        meta["end_timestamp"] = (
+            datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        (d / ".raptor-run.json").write_text(json.dumps(meta))
+        assert reap_stale_runs(out_root) == []
+        assert d.is_dir()
+
+    def test_failed_run_with_old_end_timestamp_reaped(self, out_root):
+        # Two-direction guard: an END past the floor still ages out.
+        import json
+        from datetime import datetime, timedelta, timezone
+        d = self._run_dir(out_root, "scan-001", "failed", age_d=60.0)
+        meta = json.loads((d / ".raptor-run.json").read_text())
+        meta["end_timestamp"] = (
+            datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
+        (d / ".raptor-run.json").write_text(json.dumps(meta))
+        assert reap_stale_runs(out_root) == [d]
+        assert not d.exists()
+
+    def test_freshly_swept_old_run_kept(self, out_root):
+        # The sweep-failed path: abandon sweeps record NO end_timestamp
+        # (record_timing=False), but their metadata rewrite refreshes
+        # the dir mtime. A 45-day-old run swept-failed TODAY must get a
+        # full reap window, not instant deletion of its journal and
+        # partial results.
+        import json
+        d = self._run_dir(out_root, "scan-001", "failed", age_d=45.0)
+        meta = json.loads((d / ".raptor-run.json").read_text())
+        meta["extra"] = {"abandon_sweep": True,
+                         "error": "abandoned — owning session terminated"}
+        (d / ".raptor-run.json").write_text(json.dumps(meta))
+        os.utime(d, None)  # the sweep's atomic rewrite refreshed mtime
+        assert reap_stale_runs(out_root) == []
+        assert d.is_dir()
+
+    def test_swept_long_ago_still_reaped(self, out_root):
+        # Two-direction guard: once the SWEEP itself is past the floor
+        # (dir mtime old too), the run ages out normally.
+        import json
+        d = self._run_dir(out_root, "scan-001", "failed", age_d=60.0)
+        meta = json.loads((d / ".raptor-run.json").read_text())
+        meta["extra"] = {"abandon_sweep": True,
+                         "error": "abandoned — owning session terminated"}
+        (d / ".raptor-run.json").write_text(json.dumps(meta))
+        old = time.time() - 40 * 86400
+        os.utime(d, (old, old))
+        assert reap_stale_runs(out_root) == [d]
+        assert not d.exists()
+
+    def test_failed_run_in_use_as_cwd_kept(self, out_root):
+        # A live process cwd'd inside an aged-out failed run (an
+        # operator inspecting the journal) keeps it this sweep.
+        import subprocess
+        d = self._run_dir(out_root, "scan-001", "failed", age_d=45.0)
+        proc = subprocess.Popen(
+            ["sleep", "30"], cwd=str(d),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            assert reap_stale_runs(out_root) == []
+            assert d.is_dir()
+        finally:
+            proc.terminate()
+            proc.wait()
 
     def test_mtime_fallback_when_timestamp_malformed(self, out_root):
         import json

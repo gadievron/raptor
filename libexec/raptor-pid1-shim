@@ -236,7 +236,10 @@ def main() -> int:
                 "raptor-pid1-shim: missing target argv after "
                 "--strip-raptor-dir\n"
             )
-            sys.exit(125)
+            # Usage error, same as the --netns-lo / --keep-trust-markers
+            # branches. 125 is reserved for exec-errno failures — a
+            # wrapper usage bug must not masquerade as one.
+            return 2
     if target_argv and target_argv[0] == "--keep-trust-markers":
         target_argv = target_argv[1:]
         keep_trust_markers = True

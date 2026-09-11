@@ -56,6 +56,31 @@ class TestAppendJsonl:
         with pytest.raises(TypeError):
             append_jsonl(tmp_path / "trail.jsonl", {"x": object()})
 
+    def test_short_writes_complete_the_record(self, tmp_path: Path, monkeypatch):
+        """``os.write`` returning short counts (RLIMIT_FSIZE, signal
+        after partial progress) must not report a truncated record as
+        success — the loop retries until every byte lands."""
+        trail = tmp_path / "trail.jsonl"
+        real_write = os.write
+
+        def one_byte_writes(fd, data):
+            return real_write(fd, bytes(data[:1]))
+
+        monkeypatch.setattr(os, "write", one_byte_writes)
+        append_jsonl(trail, {"k": "value-long-enough-to-span-writes"})
+        monkeypatch.undo()
+        assert load_jsonl(trail) == [
+            {"k": "value-long-enough-to-span-writes"}]
+
+    def test_zero_progress_write_raises(self, tmp_path: Path, monkeypatch):
+        """A write that makes no progress raises instead of spinning
+        (and instead of silently succeeding)."""
+        trail = tmp_path / "trail.jsonl"
+
+        monkeypatch.setattr(os, "write", lambda fd, data: 0)
+        with pytest.raises(OSError, match="short write"):
+            append_jsonl(trail, {"k": 1})
+
     def test_creates_with_requested_mode(self, tmp_path: Path):
         p = tmp_path / "trail.jsonl"
         append_jsonl(p, {"a": 1}, mode=0o600)
@@ -83,6 +108,29 @@ class TestLoadJsonl:
         link = tmp_path / "link.jsonl"
         link.symlink_to(real)
         assert load_jsonl(link) == []
+
+    def test_recursion_bomb_line_skipped_not_raised(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        """On Python <= 3.13 the stdlib parser raises RecursionError
+        for deeply-nested lines; a foreign writer's bomb line must be
+        skipped like any malformed line, keeping the rest of the
+        trail. (Simulated: newer stdlib parsers are iterative.)"""
+        trail = tmp_path / "trail.jsonl"
+        trail.write_text('{"bomb": 1}\n{"ok": 2}\n')
+        # Patch through the function's OWN globals so the patch holds
+        # even after suites that purge core.json.* from sys.modules
+        # (lazy-reexport tests) leave the imported function bound to a
+        # detached module object.
+        real_loads = load_jsonl.__globals__["_loads"]
+
+        def bombing_loads(text, **kwargs):
+            if "bomb" in text:
+                raise RecursionError("maximum recursion depth exceeded")
+            return real_loads(text, **kwargs)
+
+        monkeypatch.setitem(load_jsonl.__globals__, "_loads", bombing_loads)
+        assert load_jsonl(trail) == [{"ok": 2}]
 
 
 class TestLoadJsonlBackends:

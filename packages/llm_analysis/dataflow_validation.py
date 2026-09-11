@@ -595,17 +595,6 @@ def validate_dataflow_claims(
             continue
 
         hypothesis = _build_hypothesis(finding, analysis, repo_path)
-        cache_key = _hypothesis_cache_key(hypothesis)
-
-        if cache_key in cache:
-            metrics["n_cache_hits"] += 1
-            _attach_result(analysis, cache[cache_key])
-            if cache[cache_key].refuted and analysis.get("dataflow_validation", {}).get("recommends_downgrade"):
-                metrics["n_recommended_downgrades"] += 1
-            continue
-
-        if progress_callback:
-            progress_callback(f"Validating dataflow for {fid}")
 
         # Usage-driven deep_validate gate. The operator's choice
         # forms a tri-state:
@@ -624,6 +613,11 @@ def validate_dataflow_claims(
         #                            silently make the entire Tier
         #                            4 + path_conditions investment
         #                            unreachable.
+        # Computed BEFORE the cache lookup: the gate joins the cache
+        # key, so a duplicate-claim finding whose analysis would run
+        # deeper tiers never silently reuses a shallower finding's
+        # result (verdicts must not depend on iteration order).
+        auto_enabled = False
         if deep_validate_disabled:
             effective_deep_validate = False
         elif deep_validate:
@@ -634,72 +628,96 @@ def validate_dataflow_claims(
                 nested_dv.get("path_conditions")
                 or (analysis or {}).get("path_conditions")
             )
-            if effective_deep_validate:
+            auto_enabled = effective_deep_validate
+
+        cache_key = _hypothesis_cache_key(
+            hypothesis,
+            deep_validate=effective_deep_validate,
+            tier4_inputs=_tier4_input_key(analysis),
+        )
+
+        cached = cache.get(cache_key)
+        if cached is not None:
+            # Cache stores the PRE-Tier-4 result: the SMT refinement
+            # below is local (no LLM cost) and writes the structured
+            # `smt_witness` side-band into the specific finding's
+            # analysis dict, so it must run per finding — a cache hit
+            # that skipped it would leave the duplicate finding
+            # without its witness.
+            metrics["n_cache_hits"] += 1
+            result = cached
+        else:
+            if progress_callback:
+                progress_callback(f"Validating dataflow for {fid}")
+            if auto_enabled:
                 metrics["n_deep_validate_auto_enabled"] += 1
 
-        try:
-            result, tier_used = _validate_one_hypothesis(
-                hypothesis, finding, adapter, llm_client,
-                deep_validate=effective_deep_validate,
-                tier1_batch=tier1_batch,
-            )
-        except Exception as e:  # noqa: BLE001 — never let a single validation crash the loop
-            logger.warning(
-                "dataflow validation errored on %s (lang adapter %s): %s",
-                fid, adapter.name, e,
-            )
-            metrics["n_errors"] += 1
-            continue
+            try:
+                result, tier_used = _validate_one_hypothesis(
+                    hypothesis, finding, adapter, llm_client,
+                    deep_validate=effective_deep_validate,
+                    tier1_batch=tier1_batch,
+                )
+            except Exception as e:  # noqa: BLE001 — never let a single validation crash the loop
+                logger.warning(
+                    "dataflow validation errored on %s (lang adapter %s): %s",
+                    fid, adapter.name, e,
+                )
+                metrics["n_errors"] += 1
+                continue
 
-        # Track which tier produced the verdict.
-        metrics.setdefault("n_tier1_prebuilt", 0)
-        metrics.setdefault("n_tier2_template", 0)
-        metrics.setdefault("n_tier3_retry", 0)
-        if tier_used == "prebuilt":
-            metrics["n_tier1_prebuilt"] += 1
-        elif tier_used == "template":
-            metrics["n_tier2_template"] += 1
-        elif tier_used == "retry":
-            metrics["n_tier3_retry"] += 1
+            # Track which tier produced the verdict.
+            metrics.setdefault("n_tier1_prebuilt", 0)
+            metrics.setdefault("n_tier2_template", 0)
+            metrics.setdefault("n_tier3_retry", 0)
+            if tier_used == "prebuilt":
+                metrics["n_tier1_prebuilt"] += 1
+            elif tier_used == "template":
+                metrics["n_tier2_template"] += 1
+            elif tier_used == "retry":
+                metrics["n_tier3_retry"] += 1
 
-        # ----- Telemetry: did the LLM populate path_conditions? -----
-        # The Tier 4 design (PR #442) depends on the LLM emitting
-        # `path_conditions` when the CWE warrants. Track presence per
-        # finding (and break down by CWE) so the operator can see if
-        # the schema-extension is paying off — without this, a Tier 4
-        # of all-zeros could be either "LLM never populates" or "LLM
-        # populates but SMT always returns no_check"; very different
-        # remediations.
-        # The setdefault calls live OUTSIDE the cond_present gate
-        # so the counters are always present in the metrics dict
-        # (with value 0 when nothing populated). Without that, an
-        # absent counter is ambiguous between "code path never ran"
-        # and "code path ran, found nothing" — different
-        # remediations. Tier 1/2/3 counters above use the same
-        # always-init-then-conditional-increment pattern.
-        metrics.setdefault("n_path_conditions_populated", 0)
-        metrics.setdefault("path_conditions_by_cwe", {})
-        nested_dv = (analysis or {}).get("dataflow_validation") or {}
-        cond_present = bool(
-            nested_dv.get("path_conditions")
-            or (analysis or {}).get("path_conditions")
-        )
-        if cond_present:
-            metrics["n_path_conditions_populated"] += 1
-            # Prefer the LLM analysis result's cwe_id over the
-            # SARIF-derived finding's. The finding object often
-            # lacks cwe_id at the top level — Semgrep findings in
-            # particular only carry rule_id; the analysis call is
-            # what classifies the CWE. Without this fallback the
-            # by-cwe breakdown buckets everything under "UNKNOWN"
-            # which defeats the breakdown's purpose.
-            cwe = (
-                (finding.get("cwe_id") or "").strip()
-                or ((analysis or {}).get("cwe_id") or "").strip()
-            ).upper() or "UNKNOWN"
-            metrics["path_conditions_by_cwe"][cwe] = (
-                metrics["path_conditions_by_cwe"].get(cwe, 0) + 1
+            # ----- Telemetry: did the LLM populate path_conditions? -----
+            # The Tier 4 design (PR #442) depends on the LLM emitting
+            # `path_conditions` when the CWE warrants. Track presence per
+            # finding (and break down by CWE) so the operator can see if
+            # the schema-extension is paying off — without this, a Tier 4
+            # of all-zeros could be either "LLM never populates" or "LLM
+            # populates but SMT always returns no_check"; very different
+            # remediations.
+            # The setdefault calls live OUTSIDE the cond_present gate
+            # so the counters are always present in the metrics dict
+            # (with value 0 when nothing populated). Without that, an
+            # absent counter is ambiguous between "code path never ran"
+            # and "code path ran, found nothing" — different
+            # remediations. Tier 1/2/3 counters above use the same
+            # always-init-then-conditional-increment pattern.
+            metrics.setdefault("n_path_conditions_populated", 0)
+            metrics.setdefault("path_conditions_by_cwe", {})
+            nested_dv = (analysis or {}).get("dataflow_validation") or {}
+            cond_present = bool(
+                nested_dv.get("path_conditions")
+                or (analysis or {}).get("path_conditions")
             )
+            if cond_present:
+                metrics["n_path_conditions_populated"] += 1
+                # Prefer the LLM analysis result's cwe_id over the
+                # SARIF-derived finding's. The finding object often
+                # lacks cwe_id at the top level — Semgrep findings in
+                # particular only carry rule_id; the analysis call is
+                # what classifies the CWE. Without this fallback the
+                # by-cwe breakdown buckets everything under "UNKNOWN"
+                # which defeats the breakdown's purpose.
+                cwe = (
+                    (finding.get("cwe_id") or "").strip()
+                    or ((analysis or {}).get("cwe_id") or "").strip()
+                ).upper() or "UNKNOWN"
+                metrics["path_conditions_by_cwe"][cwe] = (
+                    metrics["path_conditions_by_cwe"].get(cwe, 0) + 1
+                )
+
+            cache[cache_key] = result
+            metrics["n_validated"] += 1
 
         # ----- Tier 4: SMT path-feasibility refinement -----
         # Reads `path_conditions` + `path_profile` from the LLM analysis
@@ -712,7 +730,7 @@ def validate_dataflow_claims(
         # (logged as a disagreement metric for offline review).
         # Same always-init pattern as the path_conditions counters
         # above: present-with-zero is meaningfully distinct from
-        # absent.
+        # absent. Runs for cache hits too — see the cache-hit comment.
         metrics.setdefault("n_tier4_smt_refuted", 0)
         metrics.setdefault("n_tier4_smt_witness", 0)
         metrics.setdefault("n_tier4_smt_disagree", 0)
@@ -728,8 +746,6 @@ def validate_dataflow_claims(
             elif smt_outcome == "smt_disagree":
                 metrics["n_tier4_smt_disagree"] += 1
 
-        cache[cache_key] = result
-        metrics["n_validated"] += 1
         _attach_result(analysis, result)
         if analysis.get("dataflow_validation", {}).get("recommends_downgrade"):
             metrics["n_recommended_downgrades"] += 1
@@ -920,7 +936,35 @@ def _build_hypothesis(finding: dict, analysis: dict, repo_path: Path):
     )
 
 
-def _hypothesis_cache_key(h) -> str:
+def _tier4_input_key(analysis: dict | None) -> "tuple[str, ...]":
+    """Stable encoding of the analysis fields Tier 4 SMT consumes.
+
+    Joins the within-run cache key: two findings with identical
+    hypotheses but different `path_conditions` / `path_profile` reach
+    different Tier 4 outcomes, so they must not share a cached result.
+    Tolerates schema-violating shapes (non-list conditions, non-string
+    profile) the same way Tier 4 itself does.
+    """
+    dv = (analysis or {}).get("dataflow_validation")
+    if not isinstance(dv, dict):
+        dv = {}
+    conditions = (
+        dv.get("path_conditions")
+        or (analysis or {}).get("path_conditions")
+        or []
+    )
+    if not isinstance(conditions, (list, tuple)):
+        conditions = [conditions]
+    profile = dv.get("path_profile") or (analysis or {}).get("path_profile") or ""
+    return (*(str(c) for c in conditions), str(profile))
+
+
+def _hypothesis_cache_key(
+    h,
+    *,
+    deep_validate: bool = False,
+    tier4_inputs: "tuple[str, ...]" = (),
+) -> str:
     """Cheap content-addressed key for within-run caching.
 
     Uses hashlib.sha256 over a stable JSON encoding of the
@@ -929,6 +973,12 @@ def _hypothesis_cache_key(h) -> str:
     single run, "foo bar" and "foo  bar" are unlikely to come from the
     same finding twice and getting both validated separately is harmless;
     we'd rather avoid false cache hits.
+
+    `deep_validate` and `tier4_inputs` join the payload because they
+    change which tiers run and what Tier 4 evaluates: without them, a
+    duplicate-hypothesis finding that would have run Tier 2/3/4 reused
+    an earlier finding's shallow Tier 1 result, making verdicts
+    iteration-order dependent.
     """
     import hashlib
     import json
@@ -937,6 +987,8 @@ def _hypothesis_cache_key(h) -> str:
         "target": str(h.target),
         "target_function": h.target_function,
         "cwe": h.cwe,
+        "deep_validate": bool(deep_validate),
+        "tier4_inputs": list(tier4_inputs),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -1299,10 +1351,14 @@ def _try_template_with_retry(
 
         if ev.success:
             # Tool ran cleanly — verdict is determined by matches.
-            # Use the Tier 2 verdict semantic: no matches DOES refute,
-            # because the LLM customised the predicates to match the
-            # specific claim.
-            verdict = _verdict_from_template(ev, finding)
+            # Use the Tier 2 verdict semantic: no matches DOES refute
+            # (the LLM customised the predicates to the specific
+            # claim), but only after the DB-coverage gate confirms the
+            # finding's file/function was actually extracted.
+            verdict = _verdict_from_template(
+                ev, finding,
+                codeql_db=getattr(adapter, "_database_path", None),
+            )
             return (
                 _wrap_result(ev, verdict, tier="template"),
                 True,
@@ -1367,9 +1423,30 @@ def _tier4_smt_refine(
 
     Never raises — failure modes (Z3 missing, conditions unparseable,
     parser exception) all fall through to "no_check" / "smt_unavailable"
-    / "smt_error" so production callers stay unaffected.
+    / "smt_error" so production callers stay unaffected. The call site
+    sits outside the per-finding try, and validate_dataflow_claims
+    promises the same contract, so this wrapper is the enforcement
+    point: any unexpected exception (schema-violating LLM output
+    shapes included) degrades to "smt_error" instead of killing the
+    whole validation pass.
     """
-    dataflow_validation = (analysis or {}).get("dataflow_validation") or {}
+    try:
+        return _tier4_smt_refine_inner(result, finding, analysis, metrics=metrics)
+    except Exception as e:  # noqa: BLE001 — never-raises contract (see docstring)
+        logger.warning("Tier 4 SMT refinement errored: %s", e)
+        return result, "smt_error"
+
+
+def _tier4_smt_refine_inner(
+    result: "ValidationResult",
+    finding: dict,
+    analysis: dict,
+    metrics: dict[str, Any] | None = None,
+) -> "tuple[ValidationResult, str]":
+    """Implementation of `_tier4_smt_refine` — see the wrapper's docstring."""
+    dataflow_validation = (analysis or {}).get("dataflow_validation")
+    if not isinstance(dataflow_validation, dict):
+        dataflow_validation = {}
     conditions = (
         dataflow_validation.get("path_conditions")
         or (analysis or {}).get("path_conditions")
@@ -1377,11 +1454,17 @@ def _tier4_smt_refine(
     )
     if not conditions:
         return result, "no_check"
-    profile_name = (
+    # LLMs routinely violate structured-output schemas: `path_profile`
+    # can arrive as an int/list/dict. Coerce non-strings to the default
+    # profile instead of crashing on `.strip()`.
+    raw_profile = (
         dataflow_validation.get("path_profile")
         or (analysis or {}).get("path_profile")
         or "uint64"
-    ).strip().lower()
+    )
+    profile_name = (
+        raw_profile.strip().lower() if isinstance(raw_profile, str) else ""
+    ) or "uint64"
 
     try:
         from packages.exploit_feasibility.smt_path import validate_path
@@ -1398,7 +1481,7 @@ def _tier4_smt_refine(
     # a SOFT bias, not a deadline contract. CWE-680 (integer
     # overflow → buffer overflow) inherits CWE-787's longer
     # ceiling because the chained-condition encoding is larger.
-    cwe = (finding.get("cwe_id") or "").upper().strip()
+    cwe = str(finding.get("cwe_id") or "").upper().strip()
     if cwe in ("CWE-125", "CWE-787", "CWE-680"):
         smt_timeout_ms = 10_000
     elif cwe in ("CWE-190", "CWE-191", "CWE-476"):
@@ -1440,10 +1523,14 @@ def _tier4_smt_refine(
     # Goes onto the existing ValidationResult.evidence list so the
     # report renderer + /exploit downstream can see why the verdict
     # was refined.
-    def _smt_evidence(_label: str, summary: str) -> Evidence:
+    def _smt_evidence(label: str, summary: str) -> Evidence:
+        # The outcome label rides in the structured `rule` field
+        # ("path-feasibility:refuted" / ":witness" / ":disagreement")
+        # so evidence consumers can distinguish the record kinds
+        # without parsing the free-text summary.
         return Evidence(
             tool="smt",
-            rule="path-feasibility",
+            rule=f"path-feasibility:{label}",
             summary=summary,
             matches=[],
             success=True,
@@ -1638,34 +1725,53 @@ def _verdict_from_prebuilt(
     # never indexed the finding's file.
     if query_path is None or not _query_is_in_extras_pack(query_path):
         return "inconclusive"
+    if not _refutation_coverage_ok(finding, codeql_db):
+        return "inconclusive"
+    return "refuted"
+
+
+def _refutation_coverage_ok(finding: dict, codeql_db: Path | None) -> bool:
+    """Shared DB-coverage gate for every refuted-on-zero-matches verdict.
+
+    A clean zero-match run against a DB that never extracted the
+    finding's file/function is indistinguishable from "the flow truly
+    doesn't exist" — refuting in that state silently downgrades real
+    findings. Both the Tier 1 prebuilt verdict and the Tier 2/3
+    template verdict must pass this gate before returning "refuted";
+    real-world CodeQL DBs miss files for ordinary reasons (build
+    failures skipping a class, paths-ignore in the operator's
+    codeql-config.yml, DB built from a different commit).
+
+    Returns True only when coverage is POSITIVELY verified. `None`
+    for `codeql_db` means coverage cannot be verified at all — refuse
+    to refute (hard guarantee against the silent-FN path where a
+    caller accidentally drops the DB arg).
+    """
     if codeql_db is None:
-        # No DB to verify coverage against — refuse to refute. This is
-        # a hard guarantee against the silent-FN path where a caller
-        # accidentally drops the DB arg (or `_database_path` was None).
         # Always log at WARNING so the gap is visible in operator logs.
         logger.warning(
-            "Tier 1 declines to refute %s: no codeql_db supplied for "
+            "declining to refute %s: no codeql_db supplied for "
             "coverage check (caller bug or test misconfiguration)",
             finding.get("file_path") or finding.get("file"),
         )
-        return "inconclusive"
+        return False
     if not _finding_file_in_db(finding, codeql_db):
         logger.info(
-            "Tier 1 declines to refute %s: file not in DB index at %s",
+            "declining to refute %s: file not in DB index at %s",
             finding.get("file_path") or finding.get("file"), codeql_db,
         )
-        return "inconclusive"
+        return False
     # Layer 2 coverage check: file is indexed but the named function
     # may have changed since DB build, or extraction silently dropped
     # it. Cheap second-line check before allowing refutation.
     if not _finding_function_in_db(finding, codeql_db):
         logger.info(
-            "Tier 1 declines to refute %s: function %r not in DB source text",
+            "declining to refute %s: function %r not in DB source text",
             finding.get("file_path") or finding.get("file"),
             finding.get("function_name") or finding.get("function")
             or finding.get("entry_function"),
         )
-        return "inconclusive"
+        return False
     # Layer 3 (Java only): authoritative check via CodeQL callable
     # inventory. Catches the bytecode-extraction failure case where
     # the .java file IS in src.zip and the function name appears in
@@ -1678,14 +1784,14 @@ def _verdict_from_prebuilt(
         layer3 = _function_in_codeql_inventory(finding, codeql_db, language)
         if layer3 is False:
             logger.info(
-                "Tier 1 declines to refute %s: function %r not in CodeQL "
+                "declining to refute %s: function %r not in CodeQL "
                 "callable inventory (extraction missed it)",
                 finding.get("file_path") or finding.get("file"),
                 finding.get("function_name") or finding.get("function")
                 or finding.get("entry_function"),
             )
-            return "inconclusive"
-    return "refuted"
+            return False
+    return True
 
 
 @functools.lru_cache(maxsize=64)
@@ -1734,11 +1840,12 @@ def _resolve_finding_in_db(finding: dict, db_path: Path) -> str | None:
     """Return the indexed-source entry that matches the finding's file,
     or None if no match.
 
-    Match strategy: (1) full file_path suffix match; (2) basename
-    fallback. The two-step approach trades a tiny FP risk (two files
-    with the same basename in different dirs) for catching real-world
-    cases where the finding's path is project-relative but the DB's
-    index is repo-root-relative — they don't anchor to the same root.
+    Match strategy: (1) full file_path suffix match on a path-component
+    boundary; (2) basename fallback. The two-step approach trades a
+    tiny FP risk (two files with the same basename in different dirs)
+    for catching real-world cases where the finding's path is
+    project-relative but the DB's index is repo-root-relative — they
+    don't anchor to the same root.
 
     Used by both `_finding_file_in_db` (returns bool) and
     `_finding_function_in_db` (needs the entry path to read its
@@ -1753,16 +1860,41 @@ def _resolve_finding_in_db(finding: dict, db_path: Path) -> str | None:
     if not indexed:
         return None
     needle = file_path.lstrip("/")
-    # Step 1: full-path suffix match (preferred — unambiguous)
-    for entry in indexed:
-        if entry.endswith((needle, "/" + needle)):
+    if not needle:
+        return None
+    return _match_needle_in_index(indexed, needle)
+
+
+@functools.lru_cache(maxsize=4096)
+def _match_needle_in_index(indexed: "frozenset[str]", needle: str) -> str | None:
+    """Match a repo-relative path against the DB's indexed entries.
+
+    Keyed on the index frozenset itself so the memo can never go stale:
+    a re-read of src.zip produces a new frozenset and therefore a new
+    cache key. This resolution runs several times per finding (file
+    gate, function gate, per verdict) — without the memo a monorepo DB
+    with ~100k entries pays a full linear scan on every call.
+
+    Suffix matches anchor to a path-component boundary (`==` or a
+    preceding "/"): a bare `endswith(needle)` also matched mid-component
+    (needle "app/main.py" matched entry "webapp/main.py"), letting a
+    DIFFERENT file satisfy the coverage gate and steer a refuted
+    verdict from the wrong file's contents. Sorted iteration keeps the
+    chosen entry deterministic when several match.
+    """
+    entries = sorted(indexed)
+    slash_needle = "/" + needle
+    # Step 1: full-path suffix match on a component boundary (preferred)
+    for entry in entries:
+        if entry == needle or entry.endswith(slash_needle):
             return entry
-    # Step 2: basename fallback
-    basename = Path(needle).name
+    # Step 2: basename fallback (deliberate trade-off — see caller)
+    basename = needle.rsplit("/", 1)[-1]
     if not basename:
         return None
-    for entry in indexed:
-        if Path(entry).name == basename:
+    slash_basename = "/" + basename
+    for entry in entries:
+        if entry == basename or entry.endswith(slash_basename):
             return entry
     return None
 
@@ -1978,10 +2110,13 @@ def _function_in_codeql_inventory(
     file_path = strip_file_uri(file_path)
     needle = file_path.lstrip("/")
     # Suffix match — finding's path may not anchor to DB's source root.
+    # Component-boundary anchored: a bare endswith also matched
+    # mid-component (needle "app/main.py" vs entry "webapp/main.py"),
+    # accepting the wrong file as extraction-coverage proof.
     for entry_file, entry_fn in inventory:
         if entry_fn != fn:
             continue
-        if entry_file.endswith((needle, "/" + needle)):
+        if entry_file == needle or entry_file.endswith("/" + needle):
             return True
     # Basename fallback — same trade-off as Layer 1
     basename = Path(needle).name
@@ -2021,23 +2156,32 @@ def _query_is_in_extras_pack(query_path: Path) -> bool:
 def _verdict_from_template(
     evidence: ToolEvidence,
     finding: dict,
+    codeql_db: Path | None = None,
 ) -> str:
     """Derive verdict from a Tier 2 LLM-customised query result.
 
     Unlike Tier 1, the LLM tailored the source/sink predicates to the
     specific claim, so absence of matches IS evidence of refutation —
     the LLM's own claim is being tested against the exact dataflow it
-    described.
+    described. That reasoning only holds when the DB demonstrably
+    covers the finding's file and function: a tailored query still
+    returns a clean zero against a DB that never extracted the file,
+    so refutation additionally requires the same coverage gate Tier 1
+    applies (`_refutation_coverage_ok`).
 
     Verdict logic:
       - tool failed → inconclusive
       - matches at location → confirmed
       - matches elsewhere → inconclusive
-      - no matches at all → refuted (LLM's specific claim, no path found)
+      - no matches, DB coverage of the finding verified → refuted
+      - no matches, coverage unverifiable → inconclusive (absence of
+        coverage is not refutation)
     """
     if not evidence.success:
         return "inconclusive"
     if not evidence.matches:
+        if not _refutation_coverage_ok(finding, codeql_db):
+            return "inconclusive"
         return "refuted"
     if _any_match_at_finding_location(evidence.matches, finding):
         return "confirmed"
@@ -2085,28 +2229,37 @@ def _any_match_at_finding_location(
     return False
 
 
+# Extension → CodeQL language map. ONE table shared by
+# `_finding_language` (tier selection) and `_pick_adapter_for_finding`
+# (adapter selection): the two previously carried separate literal
+# copies that drifted (.hh/.c++/.h++/.tcc present in one, absent in the
+# other), so a finding could get a language for tier selection while
+# the adapter picker returned None and the finding was skipped as
+# "no DB for language" despite a matching adapter existing.
+_EXT_TO_LANG: dict[str, str] = {
+    ".py":  "python", ".pyi": "python",
+    ".java": "java", ".kt": "java",
+    ".c":  "cpp", ".h": "cpp", ".cc": "cpp", ".cpp": "cpp",
+    ".cxx": "cpp", ".hpp": "cpp", ".hxx": "cpp",
+    ".hh": "cpp", ".c++": "cpp", ".h++": "cpp", ".tcc": "cpp",
+    ".js": "javascript", ".jsx": "javascript",
+    ".ts": "javascript", ".tsx": "javascript",
+    ".go": "go",
+    ".rb": "ruby",
+    ".cs": "csharp",
+    ".swift": "swift",
+    ".rs": "rust",
+}
+
+
 def _finding_language(finding: dict) -> str | None:
     """Infer the finding's language from file extension or language field.
 
     Same precedence as _pick_adapter_for_finding so the tier-selection
-    and adapter-selection agree.
+    and adapter-selection agree (both read `_EXT_TO_LANG`).
     """
     file_path = (finding.get("file_path") or finding.get("file") or "").lower()
-    ext_to_lang = {
-        ".py":  "python", ".pyi": "python",
-        ".java": "java", ".kt": "java",
-        ".c":  "cpp", ".h": "cpp", ".cc": "cpp", ".cpp": "cpp",
-        ".cxx": "cpp", ".hpp": "cpp", ".hxx": "cpp",
-        ".hh": "cpp", ".c++": "cpp", ".h++": "cpp", ".tcc": "cpp",
-        ".js": "javascript", ".jsx": "javascript",
-        ".ts": "javascript", ".tsx": "javascript",
-        ".go": "go",
-        ".rb": "ruby",
-        ".cs": "csharp",
-        ".swift": "swift",
-        ".rs": "rust",
-    }
-    for ext, lang in ext_to_lang.items():
+    for ext, lang in _EXT_TO_LANG.items():
         if file_path.endswith(ext):
             return lang
     fl = finding.get("language") or finding.get("languages")
@@ -2181,6 +2334,25 @@ def _iris_spec_note(target: Any) -> str:
     return note
 
 
+def _context_sanitised_at_assembly(context: str) -> str:
+    """Pass through a Hypothesis.context whose sanitisation happened at
+    assembly time — the named contract point for the envelope audit.
+
+    ``_build_hypothesis`` defangs every untrusted inner piece
+    (scanner message, LLM reasoning, exemplar blocks) via
+    ``_sanitize_for_prompt`` and then wraps them in the deliberate
+    ``<untrusted_finding_context>`` envelope, with trusted guidance /
+    strategy blocks outside it. Re-running the sanitiser over the
+    ASSEMBLED string at interpolation time neutralised the legitimate
+    envelope open/close tags (leaving reflected target text unmarked
+    as data — by design indistinguishable from forged, neutralised
+    tags) and backslash-escaped trusted headings, destroying the very
+    injection defence the envelope provides. So: sanitise the pieces
+    once, at assembly; interpolate the assembled whole verbatim.
+    """
+    return context
+
+
 def _ask_llm_for_predicates(
     hypothesis: "Hypothesis",
     llm_client: Any,
@@ -2198,21 +2370,28 @@ def _ask_llm_for_predicates(
     appended to the prompt so the LLM can correct AST class names or
     other resolution errors.
     """
-    # ``hypothesis.claim`` and ``hypothesis.context`` originate from
-    # callers that may have pulled text from external advisory data
-    # or prior LLM output — defang forged envelope-close tags before
-    # interpolating into the prompt. Audit surface enforced by
-    # core/security/prompt_envelope_audit.
+    # ``hypothesis.claim`` originates from callers that may have pulled
+    # text from external advisory data or prior LLM output — defang
+    # forged envelope-close tags before interpolating into the prompt.
+    # Audit surface enforced by core/security/prompt_envelope_audit.
     prompt_parts = [
         f"Language: {language}",
         f"Hypothesis: {_sanitize_for_prompt(hypothesis.claim)}",
     ]
     if hypothesis.target_function:
-        prompt_parts.append(f"Target function: {hypothesis.target_function}")
+        # Target-derived identifier (the finding's function name) —
+        # same defang the IRIS spec note applies to the identical data
+        # class; the generated predicates are compiled and run, so a
+        # tag-forgery carrier here could steer which flows the
+        # mechanical validator reports.
+        prompt_parts.append(
+            "Target function: "
+            + _sanitize_for_prompt(str(hypothesis.target_function))
+        )
     if hypothesis.cwe:
-        prompt_parts.append(f"CWE: {hypothesis.cwe}")
+        prompt_parts.append(f"CWE: {_sanitize_for_prompt(str(hypothesis.cwe))}")
     if hypothesis.context:
-        prompt_parts.append(_sanitize_for_prompt(hypothesis.context))
+        prompt_parts.append(_context_sanitised_at_assembly(hypothesis.context))
     iris_note = _iris_spec_note(getattr(hypothesis, "target", None))
     if iris_note:
         prompt_parts.append(iris_note)
@@ -2277,32 +2456,23 @@ def _pick_adapter_for_finding(
     """Return the adapter whose DB matches the finding's language.
 
     Priority order:
-      1. Single "_default" key (legacy callers passing one DB) → always wins
-      2. Exact language match by file extension
-      3. Exact language match by Semgrep `language` field on the finding
+      1. Exact language match by file extension
+      2. Exact language match by Semgrep `language` field on the finding
+      3. "_default" wildcard — the FALLBACK, per the
+         validate_dataflow_claims contract ("each finding is validated
+         against the DB matching its language, falling back to
+         `_default`"). Checking it first instead would disable language
+         routing entirely whenever `codeql_db` and `codeql_dbs` are
+         both supplied, validating e.g. C++ findings against a Python
+         DB. Single-DB legacy callers still land here because no
+         language key exists to match.
       4. None — caller should skip the finding
     """
-    if "_default" in adapters:
-        return adapters["_default"]
-
     # File extension is more reliable than Semgrep language tags
     file_path = (
         finding.get("file_path") or finding.get("file") or ""
     ).lower()
-    ext_map = {
-        ".c": "cpp", ".h": "cpp", ".cc": "cpp", ".cpp": "cpp",
-        ".cxx": "cpp", ".hpp": "cpp", ".hxx": "cpp",
-        ".java": "java", ".kt": "java",
-        ".py": "python", ".pyi": "python",
-        ".js": "javascript", ".jsx": "javascript",
-        ".ts": "javascript", ".tsx": "javascript",
-        ".go": "go",
-        ".rb": "ruby",
-        ".cs": "csharp",
-        ".swift": "swift",
-        ".rs": "rust",
-    }
-    for ext, lang in ext_map.items():
+    for ext, lang in _EXT_TO_LANG.items():
         if file_path.endswith(ext):
             if lang in adapters:
                 return adapters[lang]
@@ -2316,7 +2486,7 @@ def _pick_adapter_for_finding(
         if norm and norm in adapters:
             return adapters[norm]
 
-    return None
+    return adapters.get("_default")
 
 
 # How old a DB can be before we warn. CodeQL builds tend to take minutes-

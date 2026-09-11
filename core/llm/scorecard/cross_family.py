@@ -1,11 +1,19 @@
-"""Producer for ``EventType.CROSS_FAMILY_CHECK``.
+"""Producer for ``EventType.CROSS_FAMILY_CONSISTENCY``.
 
 When a finding triggers a cross-family re-analysis (different model
 family from the primary), the checker either agrees or disputes.
-Records one scorecard event per cross-family-checked finding:
+Records one consistency event per cross-family-checked finding:
 
-  * Checker agreed with primary → ``correct``
-  * Checker disputed primary → ``incorrect``
+  * Checker agreed with primary → ``correct`` (consistent pair)
+  * Checker disputed primary → ``incorrect`` (unresolved dispute)
+
+This is an observability axis, NOT a correctness verdict: the pair is
+1-vs-1 with no ground truth, so a dispute never establishes which side
+was wrong (same reasoning as the consensus producer's even-split
+skip). The event type is therefore kept out of the correctness-graded
+reliability pools — recording it under a reliability-pooled type would
+let mere disagreement penalise dissent and reward agreeing with the
+primary.
 
 Skips findings where the checker fell back to the same family
 (no independent signal).
@@ -52,6 +60,10 @@ def record_cross_family_outcomes(
         # Derive agreed/disputed from the verdict string rather than
         # relying on the separate top-level boolean flags — those are
         # set by a different code path and could fall out of sync.
+        # Either way the event is a consistency observation: with one
+        # primary and one checker a dispute is an even split with no
+        # ground truth, so neither side earns a correctness
+        # attribution from it.
         if "disputed" in verdict:
             outcome = "incorrect"
         elif result.get("cross_family_agreed") or "agreed" in verdict:
@@ -76,7 +88,7 @@ def record_cross_family_outcomes(
             scorecard.record_event(
                 decision_class,
                 str(checker_model),
-                EventType.CROSS_FAMILY_CHECK,
+                EventType.CROSS_FAMILY_CONSISTENCY,
                 outcome,
                 model_version=model_version,
                 sample=sample,

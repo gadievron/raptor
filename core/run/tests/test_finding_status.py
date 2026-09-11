@@ -40,6 +40,18 @@ class TestDeriveStatus:
         # point is to start recording one explicitly).
         assert derive_status({"file_path": "x.c"}) == SKIPPED
 
+    def test_null_verdict_stays_analysed_for_funnel_visibility(self):
+        # Present-but-null derives ``analysed`` BY DESIGN: the funnel
+        # counts it ``unverdicted`` (gh #549), and a skipped
+        # classification here would make is_skipped swallow it out of
+        # the funnel — see the derive_status docstring.
+        assert derive_status(
+            {"file_path": "x.c", "is_true_positive": None}) == ANALYSED
+
+    def test_false_verdict_analysed(self):
+        assert derive_status(
+            {"file_path": "x.c", "is_true_positive": False}) == ANALYSED
+
     def test_self_contradictory_exploitable_gives_inconsistent(self):
         finding = {
             "is_true_positive": True,

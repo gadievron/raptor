@@ -18,7 +18,23 @@ from .receipts import Receipt, mechanical_receipt
 # Value extraction from definitions
 # ------------------------------------------------------------------
 
-_VALUE = r"([-+]?0[xX][0-9a-fA-F]+|[-+]?\d+(?:\.\d+)?|\"[^\"]*\"|'[^']*')"
+# Literal grammar covers the forms real definitions use: hex / binary
+# / octal base prefixes, digit-group underscores (1_000_000), and
+# scientific notation (1e6, 1.5e-3).  A grammar that stopped at the
+# first non-digit character extracted '1' from '1_000_000' and '1e6'
+# — and that wrong value was trusted unconditionally as a mechanical
+# answer.
+_VALUE = (
+    r"([-+]?0[xX][0-9a-fA-F][0-9a-fA-F_]*"
+    r"|[-+]?0[bB][01][01_]*"
+    r"|[-+]?0[oO][0-7][0-7_]*"
+    r"|[-+]?\d[\d_]*(?:\.[\d_]+)?(?:[eE][-+]?\d+)?"
+    r"|\"[^\"]*\"|'[^']*')"
+)
+
+# C-style octal: leading zero, octal digits only (0755). Distinct
+# from Python's 0o755 form, which int(text, 0) already handles.
+_C_OCTAL_RE = re.compile(r"^[-+]?0[0-7]+$")
 
 
 def _value_patterns(name: str) -> list[re.Pattern]:
@@ -59,14 +75,46 @@ def _normalise_literal(text: str) -> str | None:
         return None
     if text[0] in "\"'" and text[-1] == text[0] and len(text) >= 2:
         return text[1:-1]
+    # C-style leading-zero octal BEFORE int(text, 0): Python rejects
+    # '0755' outright, and the float fallback would have asserted it
+    # as decimal 755 instead of 493.
+    if _C_OCTAL_RE.match(text):
+        return str(int(text, 8))
     try:
         return str(int(text, 0))
     except ValueError:
         pass
     try:
-        return repr(float(text))
+        f = float(text)
     except ValueError:
         return text
+    # Integral floats canonicalise to the int form so '1e6' and
+    # '1000000' compare equal across notation styles.
+    if f.is_integer():
+        return str(int(f))
+    return repr(f)
+
+
+# Prose words that also commonly name corpus symbols.  The fallback
+# candidate scan treats every question token as a potential
+# identifier; without this filter a question like "what version
+# constraint governs replay?" resolved against an unrelated
+# `version = "1.2"` global and injected the wrong constant as a
+# trusted mechanical answer.  Blocklist; applied to plain lowercase
+# tokens only, so identifier-cased tokens always pass through.
+_FALLBACK_STOPWORDS = frozenset({
+    "a", "an", "and", "any", "are", "as", "at", "be", "buffer", "by",
+    "can", "code", "constraint", "count", "data", "default", "define",
+    "defined", "do", "does", "each", "equal", "equals", "error",
+    "field", "file", "flag", "for", "from", "function", "get",
+    "governs", "has", "have", "how", "if", "in", "index", "is", "it",
+    "item", "key", "length", "level", "limit", "line", "list", "max",
+    "min", "mode", "name", "no", "not", "of", "offset", "on", "or",
+    "result", "return", "returns", "set", "size", "state", "status",
+    "string", "that", "the", "this", "time", "to", "type", "used",
+    "value", "version", "what", "when", "where", "which", "why",
+    "with",
+})
 
 
 # ------------------------------------------------------------------
@@ -120,8 +168,17 @@ def spot_check_question(
     if m:
         candidates.append(m.group(1))
         expected = m.group(2)
-    # Fall back to any identifier-shaped token that names a corpus item
+    # Fall back to identifier-shaped tokens that name a corpus item —
+    # excluding common English / generic-programming words, which
+    # would otherwise match same-named corpus globals and answer the
+    # wrong question (the corpus lookup below still gates every
+    # candidate to exact symbol names).  Only plain lowercase words
+    # can be prose: tokens carrying identifier conventions (an
+    # underscore, a dot/colon qualifier, or any uppercase — MAX_FRAME,
+    # json.loads, Version) are never filtered.
     for tok in re.findall(r"[`'\"]?([A-Za-z_][\w.:]*)[`'\"]?", question):
+        if tok.isalpha() and tok.islower() and tok in _FALLBACK_STOPWORDS:
+            continue
         if tok not in candidates:
             candidates.append(tok)
 

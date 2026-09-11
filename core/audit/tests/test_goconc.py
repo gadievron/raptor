@@ -615,6 +615,55 @@ func carry(v any) {
         assert "function value" in r.reasoning
 
     @needs_ts_go
+    def test_method_value_to_import_refuses(self):
+        # A METHOD VALUE (p.opener) is a function value: it slipped
+        # past the identifier/literal checks and left isolated=True
+        # standing while the import could run the method on a
+        # goroutine no go statement shows.
+        files = _pkg({
+            "cb.go": (
+                'package store\n\nimport "workers"\n\n'
+                "func start(p *Pool) {\n"
+                "\tworkers.OnEvent(p.opener)\n}\n"
+            ),
+        })
+        r = check_goroutine_isolation(_RECORD_SCAN, files)
+        assert r.isolated is False
+        assert "function value" in r.reasoning
+
+    @needs_ts_go
+    def test_method_value_to_package_callee_keeps_witness(self):
+        # Control: a method value handed to a package-local callee
+        # stays inside the analysis.
+        files = _pkg({
+            "cb.go": (
+                "package store\n\n"
+                "func withHold(fn func()) {\n\tfn()\n}\n\n"
+                "func hook(p *Pool) {\n"
+                "\twithHold(p.opener)\n}\n"
+            ),
+        })
+        r = check_goroutine_isolation(_RECORD_SCAN, files)
+        assert r.isolated is True
+
+    @needs_ts_go
+    def test_nested_closure_in_composite_refuses(self):
+        # A closure buried in a composite-literal argument
+        # (cfg{Handler: func(){…}}) is the same escape the top-level
+        # literal check caught — nesting must not hide it.
+        files = _pkg({
+            "cb.go": (
+                'package store\n\nimport "workers"\n\n'
+                "type cfg struct {\n\tHandler func()\n}\n\n"
+                "func start() {\n"
+                "\tworkers.Run(cfg{Handler: func() {\n\t}})\n}\n"
+            ),
+        })
+        r = check_goroutine_isolation(_RECORD_SCAN, files)
+        assert r.isolated is False
+        assert "function value" in r.reasoning
+
+    @needs_ts_go
     def test_callback_to_package_rooted_chain_allowed(self):
         # withLock-style helpers and sync primitives reached through
         # package-owned state keep the witness (their spawning

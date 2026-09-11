@@ -63,6 +63,12 @@ from typing import Any
 
 from core.json import load_json, save_json
 
+# Ground-truth loading + CVE-alias extraction are shared with the
+# validator so refit optimises exactly the metric validate verdicts
+# on (same signal-file list, same ``informational`` skip, same
+# primary-id key).
+from .validate import _extract_cve_ids, _load_ground_truth
+
 logger = logging.getLogger(__name__)
 
 
@@ -613,22 +619,23 @@ def joint_grid_search_refit(
     # Always run the single-pass per-constant search first so we
     # can compare joint to single. Cheap (~50 evals); gives a
     # fallback when joint doesn't improve.
-    single_pass = grid_search_refit(
-        corpus_dir, max_delta=max_delta,
-        improvement_threshold=improvement_threshold,
-        min_samples=min_samples,
-        # Suppress the disk write — we'll emit our own joint
-        # report. ``out_path=`` to /dev/null isn't supported on
-        # Windows but tests pass an explicit tmp path; for the
-        # in-line call we write to a throwaway path and clean it
-        # up on success.
-        out_path=corpus_dir / "refit" / f".{snapshot}.single.tmp",
-        ecosystem_filter=ecosystem_filter,
-    )
+    single_tmp = corpus_dir / "refit" / f".{snapshot}.single.tmp"
     try:
-        (corpus_dir / "refit" / f".{snapshot}.single.tmp").unlink()
-    except FileNotFoundError:
-        pass
+        single_pass = grid_search_refit(
+            corpus_dir, max_delta=max_delta,
+            improvement_threshold=improvement_threshold,
+            min_samples=min_samples,
+            # Suppress the default disk write — we'll emit our own
+            # joint report. ``out_path=`` to /dev/null isn't
+            # supported on Windows, so the in-line call writes to a
+            # throwaway path that the ``finally`` removes on every
+            # exit — including a raise inside the search, which
+            # previously leaked the tmp file.
+            out_path=single_tmp,
+            ecosystem_filter=ecosystem_filter,
+        )
+    finally:
+        single_tmp.unlink(missing_ok=True)
     single_pass_overrides = {
         c.name: c.proposed for c in single_pass.per_constant if c.changed
     }
@@ -767,12 +774,13 @@ def joint_grid_search_refit(
     p20_improvement = joint_metric[0] - reference_p20
     rho_improvement = joint_metric[2] - reference_rho
 
+    report_proposed_p20 = joint_metric[0]
+    report_improvement = p20_improvement
     if (p20_improvement < improvement_threshold
             and rho_improvement < improvement_threshold):
-        status = "rejected"
         # Surface whichever metric came closest to the gate so
         # operators reading the report know what's driving the
-        # rejection.
+        # verdict.
         if p20_improvement >= rho_improvement:
             notes.append(
                 f"joint P20 improvement vs single-pass "
@@ -789,9 +797,23 @@ def joint_grid_search_refit(
                 f"joint search confirms per-constant is at the "
                 f"basin floor on this corpus"
             )
-        # Reset per_constant to the single-pass winners (or none)
-        # so the report doesn't propose values we just rejected.
+        # The single-pass result is always preserved as a fallback:
+        # when it passed its OWN gate, the joint search merely
+        # re-finding (or failing to beat) that optimum must not
+        # discard it — requesting the more thorough search would
+        # otherwise yield strictly less than the cheap one.
         per_constant = list(single_pass.per_constant)
+        if single_pass.status == "proposed":
+            status = "proposed"
+            report_proposed_p20 = single_pass_metric[0]
+            report_improvement = single_pass_metric[0] - baseline_tuple[0]
+            notes.append(
+                "single-pass refit passed its own gate; propagating "
+                "its proposed values (joint search added nothing on "
+                "top of them)"
+            )
+        else:
+            status = "rejected"
     else:
         status = "proposed"
         notes.append(
@@ -805,8 +827,8 @@ def joint_grid_search_refit(
             snapshot_date=snapshot, status=status,
             sample_count=len(samples),
             overall_baseline_precision=baseline_tuple[0],
-            overall_proposed_precision=joint_metric[0],
-            improvement=p20_improvement,
+            overall_proposed_precision=report_proposed_p20,
+            improvement=report_improvement,
             improvement_threshold=improvement_threshold,
             max_delta=max_delta,
             per_constant=per_constant,
@@ -911,60 +933,6 @@ def _load_findings_with_labels(
             cve_ids = _extract_cve_ids(f.get("advisory") or {})
             label = 1 if any(c in signals for c in cve_ids) else 0
             out.append((f, label))
-    return out
-
-
-def _load_ground_truth(corpus_dir: Path) -> set:
-    """Union of CVE IDs marked as exploited across all ground-truth
-    signal files. Mirrors ``validate.py::_load_ground_truth``.
-
-    Signal files (built by ``calibration/build.py``) carry a top-
-    level ``signals`` dict mapping CVE-id → metadata. The dict's
-    keys ARE the CVE IDs we want. Earlier this function looked for
-    a top-level ``items`` list shape that no signal file actually
-    has — refit silently saw zero exploited CVEs and rejected every
-    proposed weight as "no improvement vs baseline 0.000". Test
-    fixtures were written to that wrong shape too, so the unit
-    tests passed against a format the production builder never
-    emitted. Fixed by matching the real format.
-    """
-    signals: set = set()
-    for fname in (
-        "kev_signals.json", "exploitdb_signals.json",
-        "metasploit_signals.json", "github_poc_signals.json",
-        "osv_evidence_signals.json",
-        "vulnrichment_signals.json",
-    ):
-        path = corpus_dir / fname
-        if not path.is_file():
-            continue
-        # Ground-truth signal snapshot; missing / corrupt / oversize
-        # come back as None and fall into the isinstance guard.
-        data = load_json(path, max_bytes=64 * 1024 * 1024)
-        if not isinstance(data, dict):
-            continue
-        sig_dict = data.get("signals")
-        if isinstance(sig_dict, dict):
-            for cve in sig_dict:
-                if isinstance(cve, str) and cve:
-                    signals.add(cve)
-    return signals
-
-
-def _extract_cve_ids(advisory: dict[str, Any]) -> list[str]:
-    """Pull CVE IDs from an advisory record. Mirrors
-    ``validate.py::_extract_cve_ids`` — including the
-    ``informational`` skip so refit's ground-truth labelling
-    stays aligned with the metric validate optimises."""
-    out: list[str] = []
-    if not isinstance(advisory, dict):
-        return out
-    if advisory.get("informational"):
-        return out
-    osv_id = advisory.get("osv_id")
-    if isinstance(osv_id, str) and osv_id.startswith("CVE-"):
-        out.append(osv_id)
-    out.extend(alias for alias in advisory.get("aliases", []) or [] if isinstance(alias, str) and alias.startswith("CVE-"))
     return out
 
 
@@ -1089,16 +1057,39 @@ def _ndcg_at_n(
     return dcg / idcg if idcg > 0 else 0.0
 
 
+# Fields a project-sample row must carry (non-null) before the
+# refitter trusts a rebuild of the risk inputs. Rows archived
+# before the schema carried them are scored from their archived
+# ``raptor_risk_estimate`` instead: rebuilding those rows from
+# invented defaults (direct=True, depth 0, full confidence, zero
+# exposure) made the depth / exposure constants untunable — every
+# candidate tied baseline — and tuned the remaining constants
+# against a ranking that didn't match what production scans saw.
+_RESCORE_REQUIRED_FIELDS = (
+    "direct",
+    "parser_confidence",
+    "version_match_confidence",
+    "exposure_factor",
+    "transitive_depth",
+)
+
+
+def _archived_score(finding: dict[str, Any]) -> float | None:
+    raw = finding.get("raptor_risk_estimate")
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    return None
+
+
 def _rescore_finding(
     finding: dict[str, Any],
     overrides: dict[str, float] | None,
 ) -> float | None:
-    """Recompute the risk score for a finding dict using the
-    multiplier overrides.
+    """Recompute the risk score for an archived finding dict using
+    the multiplier overrides.
 
-    ``finding`` is the dict shape ``project_samples`` archives
-    (the JSON shape of :class:`packages.sca.models.VulnFinding`
-    plus a ``risk_components`` block). The archived
+    ``finding`` is the flat dict shape
+    ``project_samples._sanitise_findings`` archives. The archived
     ``raptor_risk_estimate`` reflects whatever constants were
     active when ``collect-samples`` ran — which drifts from the
     current ``risk.py`` constants every time refit-apply edits
@@ -1108,64 +1099,73 @@ def _rescore_finding(
     metric, and a freshly-applied refit looked already-applied
     on the next refit run.
 
-    Always re-score from the underlying inputs — using the current
+    So: re-score from the underlying inputs — using the current
     module constants when ``overrides`` is None, the proposed
     set otherwise. Both paths produce a metric coherent with the
-    constants in code RIGHT NOW. Falls back to the archived
-    score only when the rebuild is impossible (test fixtures
-    that don't carry the full inputs).
+    constants in code RIGHT NOW.
 
-    Returns the recomputed score, or ``None`` when the finding
-    has no usable score at all.
+    Rows that don't carry the full input set (archives written
+    before the schema carried the risk-model inputs, minimal test
+    fixtures) fall back to the archived score EXPLICITLY — the
+    overrides then can't influence such rows, which is honest;
+    rebuilding them from silent defaults would mis-score them for
+    every candidate, not merely leave them untuned.
+
+    Returns the recomputed (or archived) score, or ``None`` when
+    the finding has no usable score at all.
     """
+    if any(finding.get(k) is None for k in _RESCORE_REQUIRED_FIELDS):
+        return _archived_score(finding)
     try:
         score, _components = _compute_with_overrides(
             finding, overrides or {},
         )
         return score
     except Exception:                                   # noqa: BLE001
-        # Fallback for archives missing reconstruction inputs
-        # (older fixtures, tests that skip the full block).
-        raw = finding.get("raptor_risk_estimate")
-        if isinstance(raw, (int, float)):
-            return float(raw)
-        return None
+        # Defensive fallback for rows whose fields are present but
+        # unusably shaped (corrupt archives).
+        return _archived_score(finding)
 
 
 def _compute_with_overrides(
     finding: dict[str, Any], overrides: dict[str, float],
 ) -> tuple[float, dict[str, Any]]:
     """Rebuild a :class:`VulnFinding` from the archived dict and
-    call ``compute_risk_estimate(overrides=...)``."""
+    call ``compute_risk_estimate(overrides=...)``.
+
+    ``finding`` is the flat schema the corpus writer
+    (``project_samples._sanitise_findings``) actually emits:
+    ``dep_name`` / ``dep_version`` / ``purl`` / ``direct`` /
+    ``parser_confidence`` / ``version_match_confidence`` /
+    ``exposure_factor`` / ``transitive_depth`` / ``reachability``
+    / ``exploit_evidence`` / ``ssvc_*`` alongside the score
+    fields. The caller (``_rescore_finding``) has already verified
+    the risk-model input fields are present — rows without them
+    never reach this rebuild.
+
+    Fields the archive deliberately strips (the ``declared_in``
+    path, scope, pin style, lockfile flag) get fixed placeholders:
+    ``compute_risk_estimate`` never reads them — on the Dependency
+    side only ``direct`` and ``parser_confidence`` feed the score.
+    """
     from packages.sca.models import (
         Dependency, PinStyle, Reachability, VulnFinding,
     )
     from packages.sca.risk import compute_risk_estimate
 
-    # Dependency reconstruction — the project-sample archive
-    # writes a ``dependency`` sub-dict mirroring the dataclass
-    # fields. Use frugal defaults for any field the archive
-    # omitted (Path / Confidence are required positional args).
-    dep_dict = finding.get("dependency") or {}
-    pc_raw = dep_dict.get("parser_confidence") or {"level": "high",
-                                                     "reason": ""}
-    parser_conf = _confidence_from_dict(pc_raw)
-    pin_raw = dep_dict.get("pin_style", "exact")
-    try:
-        pin_style = PinStyle(pin_raw)
-    except ValueError:
-        pin_style = PinStyle.EXACT
     dep = Dependency(
-        ecosystem=dep_dict.get("ecosystem", "PyPI"),
-        name=dep_dict.get("name", "unknown"),
-        version=dep_dict.get("version"),
-        declared_in=Path(dep_dict.get("declared_in") or "/unknown"),
-        scope=dep_dict.get("scope", "main"),
-        is_lockfile=bool(dep_dict.get("is_lockfile", False)),
-        pin_style=pin_style,
-        direct=bool(dep_dict.get("direct", True)),
-        purl=dep_dict.get("purl", ""),
-        parser_confidence=parser_conf,
+        ecosystem=finding.get("ecosystem") or "?",
+        name=finding.get("dep_name") or "?",
+        version=finding.get("dep_version"),
+        declared_in=Path("archived"),        # stripped by the writer
+        scope="main",                        # not archived; unused by risk
+        is_lockfile=False,                   # not archived; unused by risk
+        pin_style=PinStyle.UNKNOWN,          # not archived; unused by risk
+        direct=bool(finding["direct"]),
+        purl=finding.get("purl") or "",
+        parser_confidence=_confidence_from_dict(
+            finding["parser_confidence"],
+        ),
     )
 
     reach_dict = finding.get("reachability") or {}
@@ -1178,10 +1178,7 @@ def _compute_with_overrides(
         evidence=list(reach_dict.get("evidence") or []),
     )
 
-    vmc = _confidence_from_dict(
-        finding.get("version_match_confidence")
-        or {"level": "high", "reason": ""},
-    )
+    vmc = _confidence_from_dict(finding["version_match_confidence"])
 
     # ExploitEvidence reconstruction. Without this, refit can't
     # exercise the EDB / MSF / GitHub-PoC weight branch — every
@@ -1232,8 +1229,8 @@ def _compute_with_overrides(
         cvss_score=finding.get("cvss_score"),
         cvss_vector=finding.get("cvss_vector"),
         severity=finding.get("severity", "low"),
-        exposure_factor=float(finding.get("exposure_factor") or 0.0),
-        transitive_depth=int(finding.get("transitive_depth") or 0),
+        exposure_factor=float(finding["exposure_factor"]),
+        transitive_depth=int(finding["transitive_depth"]),
         exploit_evidence=ee,
         ssvc_exploitation=ssvc,
         ssvc_automatable=ssvc_auto,

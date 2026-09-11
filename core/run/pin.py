@@ -479,13 +479,42 @@ def bootstrap_process_pin(out_dir: str | os.PathLike[str] | None) -> None:
         return
     if not pin.authoritative:
         return
+    # The marker the pin came from is CHILD-WRITABLE (the run dir root
+    # is the sandbox write grant): consult the session ledger's
+    # out-of-grant pin witness before adopting it as this process's
+    # project override. A witness that DISAGREES wins outright — the
+    # marker was rewritten under us; a witness that agrees makes the
+    # adoption sealable. No witness (pre-witness runs, sessionless
+    # contexts) keeps the adoption for compatibility but never SEALS
+    # it into the freeze cache — an unwitnessed marker must stay
+    # re-verifiable, not laundered into trusted frozen state.
+    witnessed_ok = False
+    try:
+        from core.project.sessions import ledger_pin_witness
+        found, witnessed, wit_source = ledger_pin_witness(
+            pin.run_dir if pin.run_dir is not None else out_dir)
+        if found:
+            if witnessed != pin.project:
+                logger.warning(
+                    "pin: bootstrap for %s — run marker resolves %r but "
+                    "the session ledger witnessed %r at start; using the "
+                    "witness (the marker may have been tampered with)",
+                    out_dir, pin.project, witnessed)
+                pin = RunPin(witnessed, wit_source or "session",
+                             pin.run_dir, True, True)
+            witnessed_ok = True
+    except Exception:  # noqa: BLE001 — witness is best-effort
+        logger.debug("pin: bootstrap witness check failed", exc_info=True)
     set_process_project(pin.project if pin.project is not None
                         else ARGV_NONE)
     # Seal the resolved pin in the process freeze cache: consumers in
     # THIS process resolving the same run dir later must see the value
     # read at bootstrap, not whatever a sandboxed child rewrote the
-    # on-disk marker to in between.
-    if pin.run_dir is not None:
+    # on-disk marker to in between. Witnessed adoptions only — sealing
+    # an unwitnessed marker would promote a possibly-forged
+    # .raptor-run.json to unrevisable trusted state for the whole
+    # process lifetime.
+    if witnessed_ok and pin.run_dir is not None:
         _frozen_pins.setdefault(str(pin.run_dir), pin)
 
 

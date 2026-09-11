@@ -892,3 +892,73 @@ class TestModelIdentityNormalisation:
         )
         assert sink == {}
         assert "auth.c:check_pw" in _gap_keys(gaps)
+
+
+class TestResweepReceiptCounting:
+    """'Mechanically re-validated: N confirmed' may only count findings
+    a tool actually re-confirmed (live receipt) — a sweep that raised
+    or found nothing leaves the finding reused-but-unconfirmed at the
+    LLM_ONLY tier cap, and reporting that as confirmed forged the run
+    summary's receipt claim."""
+
+    def _run(self, tmp_path, monkeypatch, caplog, fake_sweep):
+        import core.audit.orchestrator as orch
+
+        monkeypatch.setattr(orch, "_sweep_validate", fake_sweep)
+        monkeypatch.setattr(
+            orch, "_proactive_validate",
+            lambda outcome, *a, **k: outcome,
+        )
+        target = _write_target(tmp_path)
+        finding = _entry(
+            target, verdict="finding",
+            hypotheses=[{"mechanism": "m", "confidence": "high"}],
+        )
+        result = OrchestratorResult()
+        with caplog.at_level("INFO", logger="core.audit.verdict_reuse"):
+            import_reused_verdicts(
+                {"auth.c:check_pw": finding},
+                _config(tmp_path, sweep_validate_findings=True),
+                result,
+                collector=_Collector(),
+            )
+        return result, caplog.text
+
+    def test_unconfirmed_survivor_not_counted_confirmed(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        def _no_receipt_sweep(outcome, config, sarif_cache=None, **kw):
+            return outcome  # status stays finding, no live stamp
+
+        result, log = self._run(
+            tmp_path, monkeypatch, caplog, _no_receipt_sweep,
+        )
+        assert result.findings == 1
+        assert "0 confirmed" in log
+        assert "1 reused without live re-confirmation" in log
+
+    def test_live_receipt_counts_confirmed(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        def _receipt_sweep(outcome, config, sarif_cache=None, **kw):
+            outcome.evidence_tool = "semgrep:rule-1"
+            return outcome
+
+        result, log = self._run(
+            tmp_path, monkeypatch, caplog, _receipt_sweep,
+        )
+        assert result.findings == 1
+        assert "1 confirmed" in log
+        assert "reused without live re-confirmation" not in log
+
+    def test_sweep_exception_not_counted_confirmed(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        def _raising_sweep(outcome, config, sarif_cache=None, **kw):
+            raise RuntimeError("tool chain crashed")
+
+        result, log = self._run(
+            tmp_path, monkeypatch, caplog, _raising_sweep,
+        )
+        assert "0 confirmed" in log
+        assert "1 reused without live re-confirmation" in log

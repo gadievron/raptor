@@ -110,6 +110,19 @@ class TestBuildCensus:
         assert census["rules_firing_per_cwe"]["CWE-79"] == [
             "xss-a", "xss-b"]
 
+    def test_rules_per_cwe_reads_normalized_findings(self, tmp_path):
+        # parse_sarif_findings emits the CWE under 'cwe_id' — the
+        # census must read that shape (not only report-shaped 'cwe'
+        # dicts), otherwise the rules column is always '(none)'.
+        missed = [_missed_entry(tmp_path, "A", "CWE-79", _HELPER)]
+        produced = [
+            {"rule_id": "xss-a", "cwe_id": "CWE-79"},
+            {"rule_id": "sqli", "cwe_id": "CWE-89"},  # unrelated
+        ]
+        census = build_fn_census(missed, source_root=tmp_path,
+                                 produced=produced)
+        assert census["rules_firing_per_cwe"]["CWE-79"] == ["xss-a"]
+
     def test_label_class_and_render(self, tmp_path):
         missed = [_missed_entry(tmp_path, "A", "CWE-89", _COLLECTION)]
         census = build_fn_census(missed, source_root=tmp_path,

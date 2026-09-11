@@ -25,7 +25,6 @@ and per-call max_bytes; the user-agent is fixed at client construction
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any, Protocol, TYPE_CHECKING
 
@@ -58,6 +57,7 @@ class HttpError(Exception):
         retry_after: int | None = None,
         *,
         circuit_break: bool = False,
+        response: Response | None = None,
     ) -> None:
         super().__init__(message)
         self.status = status
@@ -66,6 +66,12 @@ class HttpError(Exception):
         # means "no Retry-After advertised, use our backoff schedule".
         self.retry_after = retry_after
         self.circuit_break = circuit_break
+        # Backend-internal: with ``raise_on_status=False`` the retry
+        # loop still uses HttpError to drive backoff on transient
+        # statuses; the response rides along here so the FINAL attempt
+        # can hand it back per the documented contract instead of
+        # raising.
+        self.response = response
 
 
 class SizeLimitExceeded(HttpError):
@@ -105,10 +111,23 @@ class Response:
     url: str
 
     def json(self) -> Any:
-        """Parse body as JSON. Raises HttpError on parse failure."""
+        """Parse body as JSON. Raises HttpError on parse failure.
+
+        Parses through :func:`core.json.loads` — HTTP bodies are one
+        of that chokepoint's named sources: BOM-prefixed bodies parse
+        (the raw ``json.loads`` here used to reject them), non-finite
+        constants (``NaN`` / ``Infinity``) are rejected instead of
+        flowing unguarded into consumers, and both failure shapes —
+        plus a RecursionError from a nesting bomb on recursive-parser
+        Pythons — translate to :class:`HttpError`.
+        """
+        from core.json import loads as _core_loads
+
         try:
-            return json.loads(self.body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            return _core_loads(self.body)
+        except (UnicodeDecodeError, ValueError, RecursionError) as e:
+            # json.JSONDecodeError and the non-finite rejection are
+            # ValueError subclasses.
             msg = f"Response is not valid JSON: {e}"
             raise HttpError(msg) from e
 

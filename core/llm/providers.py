@@ -113,8 +113,43 @@ def _instructor_truncation_stop(exc: Exception) -> str | None:
     return None
 
 
+# Package roots whose exception classes come from an HTTP / SDK
+# transport layer. Used to decide whether an exception MESSAGE is
+# trustworthy evidence about the API's behaviour (status codes,
+# rate-limit vocabulary) — see ``_is_api_transport_exception``.
+_TRANSPORT_EXC_MODULE_ROOTS: frozenset[str] = frozenset({
+    "openai", "anthropic", "google", "httpx", "httpcore",
+    "requests", "urllib3", "aiohttp", "ssl", "socket",
+})
+
+
+def _is_api_transport_exception(exc: Exception) -> bool:
+    """Whether *exc* originates from an HTTP/SDK transport layer.
+
+    Message sniffing for quota / rate-limit / auth vocabulary is only
+    meaningful on transport errors. A validation/shape exception (e.g.
+    pydantic ``ValidationError``) embeds the model's raw output in its
+    message — a ``429`` or ``rate limit`` inside it describes the
+    CONTENT of a completed, recoverable generation, not the API's
+    status, and must not be routed as a quota boundary.
+    """
+    if getattr(exc, "status_code", None) is not None:
+        return True
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+        return True
+    module_root = (type(exc).__module__ or "").split(".")[0]
+    return module_root in _TRANSPORT_EXC_MODULE_ROOTS
+
+
 _TEMPERATURE_DEPRECATED_FROM = (4, 7)
-_CLAUDE_VERSION_RE = re.compile(r"claude-[a-z]+-(\d+)(?:-(\d+))?")
+# The optional minor group is capped at 7 digits with a trailing
+# digit-boundary so a dated snapshot suffix can never be read as a
+# minor version: ``claude-opus-4-20250514`` is major-only (the 8-digit
+# date is NOT the minor — an unbounded ``(\d+)`` parsed it as
+# (4, 20250514) >= (4, 7) and silently dropped ``temperature`` for a
+# 4.0 model that accepts it), while ``claude-sonnet-4-7-20260115``
+# still parses as (4, 7).
+_CLAUDE_VERSION_RE = re.compile(r"claude-[a-z]+-(\d+)(?:-(\d{1,7})(?!\d))?")
 
 
 def supports_temperature(model_name: str) -> bool:
@@ -556,6 +591,27 @@ class LLMProvider(ABC):
         )
         yield StreamChunk(type="done", stop_reason=response.stop_reason)
 
+    def _convert_stream_failure(self, exc: Exception) -> RuntimeError:
+        """Convert a raw SDK/socket exception from a streaming turn
+        into the ``RuntimeError`` shape the non-streaming paths raise.
+
+        A mid-stream disconnect otherwise escapes the generator as a
+        raw transport exception. The message is sanitised the same way
+        the non-streaming error handlers sanitise theirs (SDK bodies
+        can echo auth headers, the prompt, and the request URL, plus
+        control bytes that forge log/terminal output) and keeps the
+        original text so message-based classifiers (credit exhaustion,
+        rate-limit vocabulary) still see it.
+        """
+        from core.security.log_sanitisation import escape_nonprintable
+        from core.security.redaction import redact_secrets
+        detail = escape_nonprintable(redact_secrets(_redact_endpoint(
+            str(exc), getattr(self.config, "api_base", None),
+        )))[:512]
+        return RuntimeError(
+            f"stream failed mid-turn ({type(exc).__name__}): {detail}"
+        )
+
     def track_usage(self, tokens: int, cost: float,
                     input_tokens: int = 0, output_tokens: int = 0,
                     duration: float = 0.0,
@@ -604,7 +660,7 @@ class LLMProvider(ABC):
         # Same four-step normalisation chain as ``context_window_for``:
         # exact -> dated alias -> bedrock strip -> both. Pre-fix the
         # bedrock steps were missing here, so a Bedrock-form id
-        # (``anthropic.claude-mythos-5``) resolved limits but NOT
+        # (``anthropic.claude-fable-5``) resolved limits but NOT
         # rates and fell into the $0 unknown-model path — budget caps
         # silently unenforced for every Bedrock-routed model.
         rates = resolve_model_costs(self.config.model_name)
@@ -739,18 +795,31 @@ class LLMProvider(ABC):
             return "blocked"
         type_name = type(exc).__name__
         lowered = text.lower()
+        # Message sniffing is restricted to transport-layer exception
+        # types. A pydantic ValidationError's message embeds the raw
+        # model output — a "429" or "rate limit" in there is model
+        # CONTENT from a completed generation (a recoverable shape
+        # failure the JSON fallback can fix), not an API status;
+        # routing it as a boundary skipped the fallback entirely.
+        # Type-name and status-code checks stay unconditional — those
+        # attributes only exist on real SDK exceptions.
+        transport = _is_api_transport_exception(exc)
         # Quota before auth: AUTH_KEYWORDS_RE deliberately covers
         # billing vocabulary ("quota", "rate limit"), so the
         # rate-limit check must win for the label to be honest.
         if (
             getattr(exc, "status_code", None) == 429
             or "RateLimitError" in type_name
-            or "429" in text
-            or "rate limit" in lowered
-            or ("quota" in lowered and "exceeded" in lowered)
+            or (transport and (
+                "429" in text
+                or "rate limit" in lowered
+                or ("quota" in lowered and "exceeded" in lowered)
+            ))
         ):
             return "quota"
-        if "AuthenticationError" in type_name or is_auth_error_text(text):
+        if "AuthenticationError" in type_name or (
+            transport and is_auth_error_text(text)
+        ):
             return "auth"
         return "fallback"
 
@@ -795,6 +864,8 @@ class LLMProvider(ABC):
     def _structured_fallback(self, prompt: str, schema: dict[str, Any],
                              pydantic_model, system_prompt: str | None = None,
                              timeout_s: float | None = None,
+                             max_tokens: int | None = None,
+                             temperature: float | None = None,
                              ) -> StructuredResponse:
         """
         Universal fallback: ask for JSON in the prompt, validate
@@ -802,7 +873,13 @@ class LLMProvider(ABC):
         Usage is tracked by self.generate() — no double counting.
         ``timeout_s`` is the caller's per-call ceiling, forwarded to
         ``generate`` (providers without per-request timeout support
-        ignore it there).
+        ignore it there). ``max_tokens`` / ``temperature`` are the
+        caller's sizing parameters — forwarded so the fallback re-send
+        runs at the caller's sizing, not the config defaults (a caller
+        that raised ``max_tokens`` for a long structured response
+        otherwise gets a fallback that truncates at the default).
+        ``None`` means "not overridden" and leaves ``generate``'s own
+        config-default resolution in effect.
         """
         schema_json = dumps_display(schema)
         schema_block = (
@@ -814,7 +891,12 @@ class LLMProvider(ABC):
         augmented_system = (
             (system_prompt or "") + schema_block
         )
-        response = self.generate(prompt, augmented_system, timeout_s=timeout_s)
+        gen_kwargs: dict[str, Any] = {"timeout_s": timeout_s}
+        if max_tokens is not None:
+            gen_kwargs["max_tokens"] = max_tokens
+        if temperature is not None:
+            gen_kwargs["temperature"] = temperature
+        response = self.generate(prompt, augmented_system, **gen_kwargs)
         if response.finish_reason in ("max_tokens", "length"):
             # RuntimeError, not json.JSONDecodeError: the client's
             # retry loop treats JSON decode failures as retryable, but
@@ -1570,8 +1652,11 @@ class OpenAICompatibleProvider(LLMProvider):
                 if details:
                     thinking_tokens = getattr(details, 'reasoning_tokens', 0) or 0
                     # Reasoning tokens are included in completion_tokens — subtract
-                    # to get actual output tokens for display, but bill both as output
-                    output_tokens = output_tokens - thinking_tokens
+                    # to get actual output tokens for display, but bill both as output.
+                    # Clamped at 0: some gateway shims report reasoning_tokens
+                    # WITHOUT including them in completion_tokens, which would
+                    # push this negative.
+                    output_tokens = max(0, output_tokens - thinking_tokens)
                 prompt_details = getattr(response.usage, 'prompt_tokens_details', None)
                 if prompt_details:
                     cache_read_tokens = getattr(prompt_details, 'cached_tokens', 0) or 0
@@ -1673,7 +1758,8 @@ class OpenAICompatibleProvider(LLMProvider):
                     details = getattr(completion.usage, 'completion_tokens_details', None)
                     if details:
                         thinking_tokens = getattr(details, 'reasoning_tokens', 0) or 0
-                        output_tokens = output_tokens - thinking_tokens
+                        # Clamped at 0 — same gateway-shim caveat as generate().
+                        output_tokens = max(0, output_tokens - thinking_tokens)
                     prompt_details = getattr(completion.usage, 'prompt_tokens_details', None)
                     if prompt_details:
                         cache_read_tokens = getattr(prompt_details, 'cached_tokens', 0) or 0
@@ -1722,7 +1808,12 @@ class OpenAICompatibleProvider(LLMProvider):
                 self._note_instructor_failure(e)
 
         # Fallback: JSON-in-prompt
-        return self._structured_fallback(prompt, schema, pydantic_model, system_prompt, timeout_s=kwargs.get("timeout_s"))
+        return self._structured_fallback(
+            prompt, schema, pydantic_model, system_prompt,
+            timeout_s=kwargs.get("timeout_s"),
+            max_tokens=kwargs.get("max_tokens"),
+            temperature=kwargs.get("temperature"),
+        )
 
     # ------------------------------------------------------------------
     # Tool-use turn primitive — OpenAI function-calling shape.
@@ -1942,6 +2033,16 @@ class OpenAICompatibleProvider(LLMProvider):
             # payloads.
             try:
                 args = json.loads(tc.function.arguments)
+                if not isinstance(args, dict):
+                    # 'null', '[1,2]', '"str"' all parse cleanly but
+                    # ToolCall.input is a dict — a non-dict would crash
+                    # handler dispatch. Same treatment as a parse
+                    # failure.
+                    msg = (
+                        f"tool arguments JSON is "
+                        f"{type(args).__name__}, expected object"
+                    )
+                    raise ValueError(msg)
             except (TypeError, ValueError) as _arg_exc:
                 _raw = str(getattr(tc.function, "arguments", ""))[:400]
                 _name = getattr(tc.function, "name", "?")
@@ -2126,6 +2227,10 @@ class OpenAICompatibleProvider(LLMProvider):
         # ---- consume stream ----------------------------------------------
         tool_calls_seen: dict[int, str] = {}
         input_tokens = output_tokens = 0
+        # Characters of output received so far — the mid-stream
+        # failure path books an output estimate from this when the
+        # final usage payload never arrived.
+        approx_output_chars = 0
         stop = StopReason.ERROR
 
         try:
@@ -2148,6 +2253,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 delta = choice.delta
 
                 if delta and getattr(delta, "content", None):
+                    approx_output_chars += len(delta.content)
                     yield StreamChunk(
                         type="text_delta", text=delta.content,
                     )
@@ -2168,6 +2274,9 @@ class OpenAICompatibleProvider(LLMProvider):
                             tc.function
                             and getattr(tc.function, "arguments", None)
                         ):
+                            approx_output_chars += len(
+                                tc.function.arguments,
+                            )
                             yield StreamChunk(
                                 type="tool_call_delta",
                                 tool_call_id=tool_calls_seen.get(idx, ""),
@@ -2183,6 +2292,33 @@ class OpenAICompatibleProvider(LLMProvider):
                             type="tool_call_end",
                             tool_call_id=tool_calls_seen[idx],
                         )
+        except Exception as exc:
+            # Mid-stream disconnect: the usage chunk + track_usage
+            # below never run, so tokens the API already billed would
+            # go unbooked. Book what the received chunks reported —
+            # the final usage payload usually never arrived, so fall
+            # back to a 4-chars/token estimate over the delta text
+            # received (same heuristic as ``estimate_tokens``, without
+            # buffering the stream) — then raise the sanitised typed
+            # error the non-streaming paths use.
+            booked_out = output_tokens or approx_output_chars // 4
+            if input_tokens or booked_out:
+                try:
+                    self.track_usage(
+                        tokens=input_tokens + booked_out,
+                        cost=self._calculate_cost_split(
+                            input_tokens, booked_out,
+                        ),
+                        input_tokens=input_tokens,
+                        output_tokens=booked_out,
+                        duration=time.monotonic() - t_start,
+                    )
+                except Exception as book_exc:  # noqa: BLE001 — best-effort booking
+                    logger.debug(
+                        "stream failure usage booking skipped: %s",
+                        book_exc,
+                    )
+            raise self._convert_stream_failure(exc) from exc
         finally:
             resp.close()
 
@@ -2903,7 +3039,12 @@ class AnthropicProvider(LLMProvider):
                 self._note_instructor_failure(e)
 
         # Fallback: JSON-in-prompt
-        return self._structured_fallback(prompt, schema, pydantic_model, system_prompt, timeout_s=kwargs.get("timeout_s"))
+        return self._structured_fallback(
+            prompt, schema, pydantic_model, system_prompt,
+            timeout_s=kwargs.get("timeout_s"),
+            max_tokens=kwargs.get("max_tokens"),
+            temperature=kwargs.get("temperature"),
+        )
 
     # ------------------------------------------------------------------
     # Tool-use turn primitive — Anthropic-native.
@@ -3313,69 +3454,110 @@ class AnthropicProvider(LLMProvider):
         t_start = time.monotonic()
         current_tool_id = ""
         input_tokens = output_tokens = cache_read = cache_write = 0
+        # Characters of output received so far — the mid-stream
+        # failure path books an output estimate from this when no
+        # message_delta usage arrived before the disconnect.
+        approx_output_chars = 0
         stop = StopReason.ERROR
 
-        with self.client.messages.stream(**send_kwargs) as stream:
-            for event in stream:
-                event_type = getattr(event, "type", "")
+        try:
+            with self.client.messages.stream(**send_kwargs) as stream:
+                for event in stream:
+                    event_type = getattr(event, "type", "")
 
-                if event_type == "content_block_start":
-                    cb = getattr(event, "content_block", None)
-                    if cb and getattr(cb, "type", "") == "tool_use":
-                        current_tool_id = getattr(cb, "id", "")
+                    if event_type == "content_block_start":
+                        cb = getattr(event, "content_block", None)
+                        if cb and getattr(cb, "type", "") == "tool_use":
+                            current_tool_id = getattr(cb, "id", "")
+                            yield StreamChunk(
+                                type="tool_call_start",
+                                tool_call_id=current_tool_id,
+                                tool_call_name=getattr(cb, "name", ""),
+                            )
+                    elif event_type == "text":
+                        text = getattr(event, "text", "")
+                        approx_output_chars += len(text)
                         yield StreamChunk(
-                            type="tool_call_start",
-                            tool_call_id=current_tool_id,
-                            tool_call_name=getattr(cb, "name", ""),
+                            type="text_delta",
+                            text=text,
                         )
-                elif event_type == "text":
-                    yield StreamChunk(
-                        type="text_delta",
-                        text=getattr(event, "text", ""),
-                    )
-                elif event_type == "input_json":
-                    yield StreamChunk(
-                        type="tool_call_delta",
-                        tool_call_id=current_tool_id,
-                        tool_call_input_delta=getattr(
-                            event, "partial_json", "",
-                        ),
-                    )
-                elif event_type == "content_block_stop":
-                    if current_tool_id:
+                    elif event_type == "input_json":
+                        partial = getattr(event, "partial_json", "")
+                        approx_output_chars += len(partial)
                         yield StreamChunk(
-                            type="tool_call_end",
+                            type="tool_call_delta",
                             tool_call_id=current_tool_id,
+                            tool_call_input_delta=partial,
                         )
-                        current_tool_id = ""
-                elif event_type == "message_start":
-                    msg = getattr(event, "message", None)
-                    if msg:
-                        u = getattr(msg, "usage", None)
+                    elif event_type == "content_block_stop":
+                        if current_tool_id:
+                            yield StreamChunk(
+                                type="tool_call_end",
+                                tool_call_id=current_tool_id,
+                            )
+                            current_tool_id = ""
+                    elif event_type == "message_start":
+                        msg = getattr(event, "message", None)
+                        if msg:
+                            u = getattr(msg, "usage", None)
+                            if u:
+                                input_tokens = (
+                                    getattr(u, "input_tokens", 0) or 0
+                                )
+                                cache_read = (
+                                    getattr(u, "cache_read_input_tokens", 0)
+                                    or 0
+                                )
+                                cache_write = (
+                                    getattr(u, "cache_creation_input_tokens", 0)
+                                    or 0
+                                )
+                    elif event_type == "message_delta":
+                        delta = getattr(event, "delta", None)
+                        if delta:
+                            sr = getattr(delta, "stop_reason", "")
+                            stop = _ANTHROPIC_STOP_REASON_MAP.get(
+                                sr or "", StopReason.ERROR,
+                            )
+                        u = getattr(event, "usage", None)
                         if u:
-                            input_tokens = (
-                                getattr(u, "input_tokens", 0) or 0
+                            output_tokens = (
+                                getattr(u, "output_tokens", 0) or 0
                             )
-                            cache_read = (
-                                getattr(u, "cache_read_input_tokens", 0)
-                                or 0
-                            )
-                            cache_write = (
-                                getattr(u, "cache_creation_input_tokens", 0)
-                                or 0
-                            )
-                elif event_type == "message_delta":
-                    delta = getattr(event, "delta", None)
-                    if delta:
-                        sr = getattr(delta, "stop_reason", "")
-                        stop = _ANTHROPIC_STOP_REASON_MAP.get(
-                            sr or "", StopReason.ERROR,
-                        )
-                    u = getattr(event, "usage", None)
-                    if u:
-                        output_tokens = (
-                            getattr(u, "output_tokens", 0) or 0
-                        )
+        except Exception as exc:
+            # Mid-stream disconnect (or a failure opening the stream):
+            # the usage chunk + track_usage below never run, so tokens
+            # the API already billed would go unbooked. Book what the
+            # received events reported — input/cache from
+            # message_start; output from message_delta when it arrived,
+            # else a 4-chars/token estimate over the delta text
+            # received — then raise the sanitised typed error the
+            # non-streaming paths use.
+            booked_out = output_tokens or approx_output_chars // 4
+            if input_tokens or booked_out or cache_read or cache_write:
+                try:
+                    cost = self.compute_cost(TurnResponse(
+                        content=[], stop_reason=StopReason.ERROR,
+                        input_tokens=input_tokens,
+                        output_tokens=booked_out,
+                        cache_read_tokens=cache_read,
+                        cache_write_tokens=cache_write,
+                    ))
+                    self.track_usage(
+                        tokens=input_tokens + booked_out,
+                        cost=cost,
+                        input_tokens=input_tokens,
+                        output_tokens=booked_out,
+                        duration=time.monotonic() - t_start,
+                        cache_read_tokens=cache_read,
+                        cache_write_tokens=cache_write,
+                    )
+                except Exception as book_exc:  # noqa: BLE001 — best-effort booking
+                    logger.debug(
+                        "stream failure usage booking skipped: %s",
+                        book_exc,
+                    )
+            raise self._convert_stream_failure(exc) from exc
 
         duration = time.monotonic() - t_start
 
@@ -3854,9 +4036,18 @@ class GeminiProvider(LLMProvider):
             result_dict = validated.model_dump()
             full_response = json.dumps(result_dict, indent=2)
 
+            # Per-call usage rides on the response — the client's
+            # aggregate-counter before/after diff multiply-books
+            # concurrent calls' spend under parallel workers (see the
+            # Anthropic instructor leg's identical note).
             return StructuredResponse(
                 result=result_dict,
                 raw=full_response,
+                cost=cost,
+                tokens_used=tokens_used,
+                duration=duration,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
                 resolved_model=extract_resolved_model(response),
             )
 
@@ -3872,7 +4063,14 @@ class GeminiProvider(LLMProvider):
                 "Gemini native structured generation failed (falling back): %s",
                 escape_nonprintable(redact_secrets(str(e)))[:512],
             )
-            return self._structured_fallback(prompt, schema, pydantic_model, system_prompt, timeout_s=kwargs.get("timeout_s"))
+            return self._structured_fallback(
+                prompt, schema, pydantic_model, system_prompt,
+                timeout_s=kwargs.get("timeout_s"),
+                # max_tokens was pop()'d into max_out above (config
+                # default already merged) — forward the resolved value.
+                max_tokens=max_out,
+                temperature=kwargs.get("temperature"),
+            )
         except Exception:
             # Auth, network, quota — don't waste a second call
             raise
@@ -4035,6 +4233,11 @@ class ClaudeCodeLLMProvider(LLMProvider):
         self._resumable = resumable
         self._session_id: str | None = None
         self._messages_seen: int = 0
+        # Content blocks of the last turn THIS provider emitted in the
+        # current resumable session — used to recognise (and skip) the
+        # loop's echo of our own turn in the unseen message slice; the
+        # CC session already holds that turn server-side.
+        self._last_turn_content: list[TextBlock | ToolCall] | None = None
         # Per-call timeout: prefer explicit kwarg, then ModelConfig.timeout,
         # then a generous default (Claude Code subprocess + tool-use can
         # take several minutes on real workloads).
@@ -4057,6 +4260,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
         """Discard resume state so the next ``turn()`` starts fresh."""
         self._session_id = None
         self._messages_seen = 0
+        self._last_turn_content = None
 
     def context_window(self) -> int:
         return self.config.max_context
@@ -4528,7 +4732,23 @@ class ClaudeCodeLLMProvider(LLMProvider):
             prompt = self._render_history_for_cc(messages)
         else:
             sys_combined = None
-            new_msgs = messages[self._messages_seen :]
+            new_msgs = list(messages[self._messages_seen :])
+            # The tool-use loop appends OUR previous turn back onto the
+            # history as an assistant message, so it always leads the
+            # unseen slice — but the CC session already holds that turn
+            # server-side; re-rendering it into the prompt duplicates
+            # the model's own output every resumed turn (token bloat
+            # linear in turn count). Skip leading assistant messages
+            # whose content matches exactly what this provider emitted
+            # last turn; assistant messages injected by callers carry
+            # different content and are preserved.
+            while (
+                new_msgs
+                and new_msgs[0].role == "assistant"
+                and self._last_turn_content is not None
+                and list(new_msgs[0].content) == self._last_turn_content
+            ):
+                new_msgs = new_msgs[1:]
             prompt = self._render_history_for_cc(new_msgs) if new_msgs else ""
 
         cc_config = CCDispatchConfig(
@@ -4646,13 +4866,17 @@ class ClaudeCodeLLMProvider(LLMProvider):
                     error_message=f"structured parse: {result['error']}",
                 )
 
-        return self._parse_turn_structured_result(
+        turn_resp = self._parse_turn_structured_result(
             result,
             tools,
             cost_usd=sr.cost_usd,
             input_tokens=sr.input_tokens,
             output_tokens=sr.output_tokens,
         )
+        # Remember what this turn emitted so the next resumed turn can
+        # recognise the loop's echo of it (see the unseen-slice skip).
+        self._last_turn_content = list(turn_resp.content)
+        return turn_resp
 
     @staticmethod
     def _parse_stream_content(text: str) -> dict[str, Any]:

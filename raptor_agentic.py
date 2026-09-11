@@ -23,9 +23,13 @@ import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
+from typing import NoReturn
 
-# Add to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Add the repo root to sys.path. resolve() first: invoked through a
+# symlink (or relatively on interpreters that don't absolutise
+# __file__), the unresolved parent points at the wrong tree and
+# core/packages imports resolve against it.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core.config import RaptorConfig
 from core.json import load_json, save_json
@@ -36,6 +40,76 @@ from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
 from core.security.cc_trust import check_repo_claude_trust, set_trust_override
 
 logger = get_logger()
+
+
+def _kill_process_tree(process: "subprocess.Popen") -> None:
+    """SIGKILL the child's whole process group, then the child itself.
+
+    The long-running children here are spawned with
+    ``start_new_session=True``, so each leads its own session/process
+    group. Killing only the direct child on a phase timeout orphans
+    its already-spawned grandchildren (LLM workers, scanner
+    subprocesses), which keep running — and spending — after the
+    operator's timeout fired. ``killpg`` reaps the tree the
+    sessionization isolated; the direct ``kill()`` fallback covers a
+    group that is already gone or a child that never made it to
+    ``setsid``.
+    """
+    import signal
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    with contextlib.suppress(OSError):
+        process.kill()
+
+
+def _count_dropped_suppressions(path: Path) -> int:
+    """Count the records in ``suppressions.jsonl`` that describe an
+    actual drop.
+
+    The file is a shared audit surface: writers also append
+    record-only rows with ``dropped: false`` (evidence that a finding
+    SURVIVED to the LLM), so a raw line count over-reports and can
+    falsely trip the >=50% build-mismatch warning. A record with no
+    ``dropped`` key predates the field and always described a drop.
+    Blank and malformed lines are skipped; extra keys are tolerated.
+    """
+    import json
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return 0
+    count = 0
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(record, dict) and record.get("dropped", True) is True:
+            count += 1
+    return count
+
+
+def _fail_run_and_exit(out_dir: Path, reason: str) -> NoReturn:
+    """Stamp the run failed, then hard-exit.
+
+    Direct ``python3 raptor_agentic.py`` invocations (a documented
+    usage) have no wrapper to backstop the lifecycle: a bare
+    ``sys.exit(1)`` after ``start_run`` leaves ``.raptor-run.json``
+    at status "running" forever, which /project status, the live-run
+    contention gate, and stale-run tooling then treat as a live run.
+    Best-effort — a missing or corrupt run marker must never mask the
+    original failure (the wrapper's own ``fail_run`` on rc!=0 is
+    idempotent against an already-failed run).
+    """
+    with contextlib.suppress(Exception):
+        from core.run import fail_run
+        fail_run(out_dir, reason)
+    sys.exit(1)
 
 
 def _materialise_threat_model_phase(
@@ -520,6 +594,14 @@ def run_command_streaming(
                 "falling back to env-direct: %s",
                 exc,
             )
+            # Make the env-direct fallback real: the safe env built
+            # above carries neither the dispatcher socket nor any API
+            # keys (they stay out by design when the relay works), so
+            # without re-adding the keys the child would silently run
+            # with no external-LLM access at all. get_llm_env is the
+            # same env-direct posture raptor.py itself falls back to
+            # when the dispatcher fails to start.
+            child_env = RaptorConfig.get_llm_env()
             token_fd = None
     else:
         token_fd = None
@@ -547,12 +629,15 @@ def run_command_streaming(
             start_new_session=True,
         )
         # The child has inherited the FD; close our copy so the
-        # pipe's EOF tracks the child's lifetime, not ours.
+        # pipe's EOF tracks the child's lifetime, not ours. Clear the
+        # local afterwards so the error paths below never double-close
+        # a number the OS may have already reused.
         if token_fd is not None:
             try:
                 os.close(token_fd)
             except OSError:
                 pass
+            token_fd = None
 
         stdout_lines = []
         stderr_lines = []
@@ -621,8 +706,10 @@ def run_command_streaming(
         # via SIGCHLD (or until our parent process exited),
         # potentially holding open pipe FDs and sandbox resources.
         # The follow-up `wait(timeout=5)` collects the exit status
-        # and frees the kernel slot.
-        process.kill()
+        # and frees the kernel slot. Group kill, not just the child —
+        # see _kill_process_tree: grandchildren (LLM workers) must not
+        # keep spending after the timeout.
+        _kill_process_tree(process)
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
@@ -642,11 +729,17 @@ def run_command_streaming(
         # executable, exec failure) — kill() on the unbound name
         # raised UnboundLocalError here pre-fix, masking the real
         # error instead of returning the graceful (-1, "", str(e)).
+        # In that same case the relayed token FD was never handed to a
+        # child and never closed above — close it here or every failed
+        # spawn leaks one fd.
+        if token_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(token_fd)
         if process is not None:
             # kill() on an already-dead child raises OSError; wait() can
             # time out (SubprocessError). A miswired handle propagates.
             with contextlib.suppress(OSError, subprocess.SubprocessError):
-                process.kill()
+                _kill_process_tree(process)
                 process.wait(timeout=5)
         return -1, "", str(e)
 
@@ -754,6 +847,38 @@ def _candidate_replay_binaries(binary_path: Path) -> list[str]:
     return list(dict.fromkeys(candidates))
 
 
+# Sanitizer report markers that count as crash evidence on replay.
+# LeakSanitizer is deliberately absent: a benign leak reported at
+# process exit is not a reproduction of the fuzzed crash.
+_REPLAY_CRASH_MARKERS = (
+    b"ERROR: AddressSanitizer",
+    b"ERROR: MemorySanitizer",
+    b"ERROR: ThreadSanitizer",
+    b"UndefinedBehaviorSanitizer",
+    b"AddressSanitizer:DEADLYSIGNAL",
+    b"Segmentation fault",
+    b"stack smashing detected",
+)
+
+
+def _replay_reproduced(returncode: int, stderr_data: bytes) -> bool:
+    """Whether a replay run counts as reproducing the crash.
+
+    Any-nonzero-exit is too loose: a replay binary that exits 1 on a
+    usage error (it wanted argv while the input arrived on stdin), or
+    that merely reports a benign leak at exit, is not a reproduction —
+    and those entries ride into the /validate handoff as dynamic
+    confirmation. Count only real crash evidence: death by signal
+    (negative returncode, or the shell-style 128+signal some sandbox
+    wrappers surface) or a sanitizer crash report on stderr.
+    """
+    if returncode < 0 or returncode >= 128:
+        return True
+    if returncode == 0:
+        return False
+    return any(marker in stderr_data for marker in _REPLAY_CRASH_MARKERS)
+
+
 def _replay_fuzz_crashes(*, binary_path: Path, crash_files: list[Path], out_dir: Path) -> dict:
     """Replay crash inputs against ASAN/debug sibling binaries and save logs.
 
@@ -773,7 +898,11 @@ def _replay_fuzz_crashes(*, binary_path: Path, crash_files: list[Path], out_dir:
         return results
 
     env = RaptorConfig.get_safe_env()
-    env.setdefault("ASAN_OPTIONS", "abort_on_error=1:symbolize=1:detect_leaks=1")
+    # detect_leaks=0: LeakSanitizer fires at process exit on benign
+    # leaks and (with abort_on_error) turns a clean replay into a
+    # nonzero exit — replay is asking "does this input crash the
+    # binary", not "does the binary leak".
+    env.setdefault("ASAN_OPTIONS", "abort_on_error=1:symbolize=1:detect_leaks=0")
     env.setdefault("UBSAN_OPTIONS", "abort_on_error=1:symbolize=1:print_stacktrace=1")
 
     for crash_file in crash_files:
@@ -815,7 +944,9 @@ def _replay_fuzz_crashes(*, binary_path: Path, crash_files: list[Path], out_dir:
                     "returncode": proc.returncode,
                     "stdout": str(stdout_path),
                     "stderr": str(stderr_path),
-                    "reproduced": proc.returncode != 0,
+                    "reproduced": _replay_reproduced(
+                        proc.returncode, proc.stderr or b"",
+                    ),
                 })
             except subprocess.TimeoutExpired as e:
                 stdout_path.write_bytes(e.stdout or b"")
@@ -825,7 +956,10 @@ def _replay_fuzz_crashes(*, binary_path: Path, crash_files: list[Path], out_dir:
                     "returncode": "timeout",
                     "stdout": str(stdout_path),
                     "stderr": str(stderr_path),
-                    "reproduced": True,
+                    # A hang only reproduces a hang: for a timeout-
+                    # class input the replay confirmed the finding;
+                    # for a crash-class input it did not crash.
+                    "reproduced": crash_file.name.startswith("timeout-"),
                 })
             except (OSError, subprocess.SubprocessError, ValueError) as e:
                 # Narrowed from `except Exception` per PR #488 review.
@@ -2187,15 +2321,14 @@ Examples:
     original_repo_path = repo_path
 
     # Clean up stale raptor_git_* dirs leaked by prior runs killed with
-    # SIGKILL (atexit handlers don't fire on SIGKILL).
-    import glob as _glob
-    import shutil as _shutil
-    import tempfile as _tempfile
-    for _stale in _glob.glob(os.path.join(_tempfile.gettempdir(), "raptor_git_*")):
-        try:
-            _shutil.rmtree(_stale)
-        except OSError:
-            pass
+    # SIGKILL (atexit handlers don't fire on SIGKILL). Defer to the
+    # shared tmp reaper: it covers the raptor_git_ prefix and applies
+    # the age floor, ownership, and liveness gates. The pre-fix bare
+    # glob+rmtree here deleted EVERY raptor_git_* unconditionally, so
+    # two concurrent agentic runs destroyed each other's live clone
+    # scratch at start.
+    from core.run.tmp_reaper import reap_stale_tmp
+    reap_stale_tmp()
 
     # Check for .git directory (required for semgrep)
     git_dir = repo_path / ".git"
@@ -2882,7 +3015,9 @@ Examples:
             )
             rc = semgrep_proc.returncode
         except subprocess.TimeoutExpired:
-            semgrep_proc.kill()
+            # Group kill — see _kill_process_tree: the scanner's own
+            # subprocesses must not survive the phase timeout.
+            _kill_process_tree(semgrep_proc)
             # Bound the post-kill drain — pre-fix bare
             # ``communicate()`` had no timeout and could wedge on a
             # child stuck in uninterruptible IO inside the sandbox.
@@ -2925,7 +3060,10 @@ Examples:
             except Exception as e:  # noqa: BLE001
                 logger.warning("failed to write semgrep timeout marker: %s", e)
             if not run_codeql:
-                sys.exit(1)
+                _fail_run_and_exit(
+                    out_dir,
+                    f"Semgrep scan timed out ({args.phase_timeout}s)",
+                )
 
         if rc == SANDBOX_ENGAGE_EXIT_CODE:
             # The semgrep subprocess reported the sandbox could not engage
@@ -2933,7 +3071,7 @@ Examples:
             # run loud — never fall through into LLM analysis on a silent
             # "0 findings". Kill the sibling codeql child first.
             if codeql_proc and codeql_proc.poll() is None:
-                codeql_proc.kill()
+                _kill_process_tree(codeql_proc)
                 try:
                     codeql_proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
@@ -2977,7 +3115,7 @@ Examples:
         elif rc != -1:  # -1 is timeout, already reported
             print(f"✗ Semgrep scan failed (exit code {rc})", file=sys.stderr)
             if not run_codeql:
-                sys.exit(1)
+                _fail_run_and_exit(out_dir, f"Semgrep scan failed (exit code {rc})")
 
     # ---- Collect CodeQL results ----
     if codeql_proc:
@@ -2988,7 +3126,8 @@ Examples:
             )
             rc = codeql_proc.returncode
         except subprocess.TimeoutExpired:
-            codeql_proc.kill()
+            # Group kill — see _kill_process_tree.
+            _kill_process_tree(codeql_proc)
             # See Semgrep post-kill drain above for the rationale.
             try:
                 codeql_drain.collect(timeout=30)
@@ -3044,7 +3183,7 @@ Examples:
             logger.warning("CodeQL scan failed - rc=%d", rc)
             if args.codeql_only:
                 print("✗ CodeQL-only mode failed", file=sys.stderr)
-                sys.exit(1)
+                _fail_run_and_exit(out_dir, "CodeQL-only mode failed")
         else:
             codeql_out_dir = out_dir / "codeql"
             codeql_report = codeql_out_dir / "codeql_report.json"
@@ -3212,11 +3351,13 @@ Examples:
             all_sarif_files.append(normalized_path)
         elif not all_sarif_files:
             print("\n✗ No findings in imported SARIF and no scan results", file=sys.stderr)
-            sys.exit(1)
+            _fail_run_and_exit(
+                out_dir, "no findings in imported SARIF and no scan results",
+            )
 
     if not all_sarif_files:
         print("\n✗ No SARIF files generated from scanning", file=sys.stderr)
-        sys.exit(1)
+        _fail_run_and_exit(out_dir, "no SARIF files generated from scanning")
 
     # Combine metrics
     threat_model_findings_count = (
@@ -3358,8 +3499,9 @@ Examples:
         )
     suppression_file = out_dir / "suppressions.jsonl"
     if suppression_file.exists():
-        with suppression_file.open(encoding="utf-8") as _fh:
-            suppressed = sum(1 for _ in _fh)
+        # dropped:true records only — the file also carries record-only
+        # evidence rows (see _count_dropped_suppressions).
+        suppressed = _count_dropped_suppressions(suppression_file)
         if suppressed > 0:
             _enrichment_lines.append(
                 f"  Binary oracle: {suppressed} findings suppressed (absent)"
@@ -4097,12 +4239,10 @@ Examples:
     # ``--no-binary-oracle`` is the right escape hatch.
     _suppr_path = out_dir / "suppressions.jsonl"
     if _suppr_path.is_file():
-        try:
-            _suppr_count = sum(
-                1 for _ in _suppr_path.read_text(encoding="utf-8").splitlines() if _.strip()
-            )
-        except OSError:
-            _suppr_count = 0
+        # dropped:true records only — record-only (dropped:false) rows
+        # describe findings that SURVIVED to the LLM and must not
+        # inflate the count that trips the build-mismatch warning.
+        _suppr_count = _count_dropped_suppressions(_suppr_path)
         if _suppr_count > 0:
             _candidates = total_findings or _suppr_count
             _pct = (_suppr_count / _candidates * 100) if _candidates else 0

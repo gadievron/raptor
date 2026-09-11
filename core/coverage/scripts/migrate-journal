@@ -72,6 +72,7 @@ _MAX_CHECKLIST_BYTES = 256 * 1024 * 1024
 
 _META_STATUS_RE = re.compile(r"status=(\S+)")
 _META_SOURCE_RE = re.compile(r"source=(\S+)")
+_META_HASH_RE = re.compile(r"hash=(\S+)")
 _META_LINES_RE = re.compile(r"lines=(\d+)-(\d+)")
 
 
@@ -120,31 +121,10 @@ def _iter_annotation_entries(project_dir: Path) -> Iterable[Dict[str, Any]]:
         current_status: Optional[str] = None
         current_source: Optional[str] = None
         current_hash: Optional[str] = None
-        for line in text.splitlines():
-            if line.startswith("## ") and not line.startswith("## _"):
-                if current_func and current_source == "llm" and current_status:
-                    yield {
-                        "file": source_file,
-                        "function": current_func,
-                        "status": current_status,
-                        "hash": current_hash,
-                        "ts": datetime.fromtimestamp(
-                            ann_path.stat().st_mtime, tz=timezone.utc,
-                        ).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                    }
-                current_func = line[3:].strip()
-                current_status = None
-                current_source = None
-                current_hash = None
-            elif current_func and line.startswith("<!-- meta:"):
-                sm = _META_STATUS_RE.search(line)
-                if sm:
-                    current_status = sm.group(1)
-                src = _META_SOURCE_RE.search(line)
-                if src:
-                    current_source = src.group(1)
-        if current_func and current_source == "llm" and current_status:
-            yield {
+        current_lines: Optional[tuple] = None
+
+        def _entry() -> Dict[str, Any]:
+            rec: Dict[str, Any] = {
                 "file": source_file,
                 "function": current_func,
                 "status": current_status,
@@ -153,6 +133,38 @@ def _iter_annotation_entries(project_dir: Path) -> Iterable[Dict[str, Any]]:
                     ann_path.stat().st_mtime, tz=timezone.utc,
                 ).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             }
+            if current_lines is not None:
+                rec["line_start"], rec["line_end"] = current_lines
+            return rec
+
+        for line in text.splitlines():
+            if line.startswith("## ") and not line.startswith("## _"):
+                if current_func and current_source == "llm" and current_status:
+                    yield _entry()
+                current_func = line[3:].strip()
+                current_status = None
+                current_source = None
+                current_hash = None
+                current_lines = None
+            elif current_func and line.startswith("<!-- meta:"):
+                sm = _META_STATUS_RE.search(line)
+                if sm:
+                    current_status = sm.group(1)
+                src = _META_SOURCE_RE.search(line)
+                if src:
+                    current_source = src.group(1)
+                # hash + lines make the migrated entry staleness-
+                # anchorable; without them every migrated entry
+                # carried source_hash="" / line_start=0 and the
+                # migration's staleness anchoring was silently inert.
+                hm = _META_HASH_RE.search(line)
+                if hm:
+                    current_hash = hm.group(1)
+                lm = _META_LINES_RE.search(line)
+                if lm:
+                    current_lines = (int(lm.group(1)), int(lm.group(2)))
+        if current_func and current_source == "llm" and current_status:
+            yield _entry()
 
 
 def _iter_checked_by_entries(project_dir: Path) -> Iterable[Dict[str, Any]]:

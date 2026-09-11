@@ -114,6 +114,13 @@ def main() -> int:
     if cm is None:
         sys.stderr.write(f"error: reading {context_map_path}: file vanished\n")
         return 1
+    # A top-level JSON array/string parses fine but is bad input
+    # (exit 1), not a substrate failure (exit 2) — reject it before
+    # it reaches enrich_context_map.
+    if not isinstance(cm, dict):
+        sys.stderr.write(
+            f"error: {context_map_path} is not a JSON object\n")
+        return 1
 
     build_flags = None
     if args.source is not None:

@@ -140,7 +140,20 @@ def _read_existing_key(path: Path):
                 f"chmod 600 {path}",
             )
             return _REFUSED
-        return os.read(fd, _KEY_LEN * 4)
+        # A single os.read may return fewer bytes than requested
+        # (network filesystems); a short read would land a healthy key
+        # in the wrong-length refusal, so loop to EOF. The cap stays at
+        # _KEY_LEN * 4 — genuinely oversized files still fail-close in
+        # the caller's length check.
+        chunks: list[bytes] = []
+        remaining = _KEY_LEN * 4
+        while remaining > 0:
+            chunk = os.read(fd, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
     except OSError:
         return None
     finally:

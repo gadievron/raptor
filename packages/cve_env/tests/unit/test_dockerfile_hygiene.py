@@ -319,3 +319,77 @@ def test_phase67_validate_dockerfile_handles_multiline_run_continuation() -> Non
     assert not bad, (
         f"multi-line RUN with backslash continuation falsely flagged as empty: {bad!r}"
     )
+
+
+# ── implicit :latest (tagless FROM) ────────────────────────────────────────
+
+
+def test_tagless_from_rejected_as_implicit_latest() -> None:
+    """``FROM nginx`` floats on :latest at build time — the exact drift the
+    explicit-tag reject exists to stop; omitting the tag must not bypass it."""
+    issues = validate_dockerfile_semantics("FROM nginx\nRUN echo hi\n")
+    assert any("implicit :latest" in i for i in issues)
+
+
+def test_tagged_and_digest_pinned_from_still_accepted() -> None:
+    assert validate_dockerfile_semantics("FROM nginx:1.20\nRUN echo hi\n") == []
+    digest = "a" * 64
+    assert (
+        validate_dockerfile_semantics(f"FROM alpine@sha256:{digest}\nRUN x\n")
+        == []
+    )
+
+
+def test_tagless_from_of_stage_alias_accepted() -> None:
+    """Multi-stage: ``FROM builder`` references a declared stage, not a
+    registry image — no tag to require."""
+    text = (
+        "FROM golang:1.19 AS builder\n"
+        "RUN make\n"
+        "FROM builder\n"
+        "RUN echo hi\n"
+    )
+    assert validate_dockerfile_semantics(text) == []
+
+
+def test_from_scratch_accepted() -> None:
+    assert validate_dockerfile_semantics("FROM scratch\nCOPY a /a\n") == []
+
+
+# ── COPY/ADD exec (JSON-array) form ────────────────────────────────────────
+
+
+def test_copy_json_exec_form_accepted_without_space() -> None:
+    """Docker's documented exec form has no mandated space after the comma;
+    whitespace tokenization miscounted it as one argument."""
+    text = 'FROM nginx:1.2\nCOPY ["src","dst"]\n'
+    assert validate_dockerfile_semantics(text) == []
+
+
+def test_copy_json_exec_form_single_element_rejected() -> None:
+    text = 'FROM nginx:1.2\nCOPY ["only-one"]\n'
+    issues = validate_dockerfile_semantics(text)
+    assert any("source and destination" in i for i in issues)
+
+
+def test_copy_json_exec_form_malformed_rejected() -> None:
+    text = 'FROM nginx:1.2\nCOPY ["src","dst\n'
+    issues = validate_dockerfile_semantics(text)
+    assert any("JSON form is malformed" in i for i in issues)
+
+
+def test_add_json_exec_form_remote_url_flagged() -> None:
+    text = 'FROM nginx:1.2\nADD ["https://evil/x.tar","/x"]\n'
+    issues = validate_dockerfile_semantics(text)
+    assert any("remote URL" in i for i in issues)
+
+
+# ── LABEL backslash collapse ───────────────────────────────────────────────
+
+
+def test_sanitize_label_escaped_backslash_pair_preserved() -> None:
+    r"""``LABEL a="x\\" b="y"`` (value = one literal backslash) is legal; the
+    collapse must yield TWO backslashes, not one — a single backslash turns
+    the closing quote into an escaped quote and corrupts the line."""
+    line = 'LABEL a="x\\\\" b="y"'
+    assert sanitize_dockerfile(line) == line

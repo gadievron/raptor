@@ -28,17 +28,28 @@ import scala.util.Try
 val dangerousSinks = __DANGEROUS_SINKS__
 __SEMANTICS_DECL__
 
+// jsonEsc — the one escape helper for every value interpolated into a
+// JSON-string context: backslash before quote; \r stripped; \n, the
+// remaining C0 controls (tab included — strict json.loads rejects all
+// raw control chars) and U+0085/U+2028/U+2029 (Python str.splitlines
+// splits on these) flatten to single spaces so a record stays one
+// MARKER:{json} line.
+def jsonEsc(v: String): String = v.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", " ").flatMap(c => if (c.toInt < 0x20 || c.toInt == 0x85 || c.toInt == 0x2028 || c.toInt == 0x2029) " " else c.toString)
+
 def flowToJson(flow: io.joern.dataflowengineoss.language.Path): String = {
   val steps = flow.elements.map { e =>
     val ln = e.lineNumber.getOrElse(0)
-    val cd = e.code.take(200).replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", "")
+    // .take(200) on the RAW string BEFORE jsonEsc — escape-then-
+    // truncate can bisect an injected \" and leave a dangling
+    // backslash.
+    val cd = jsonEsc(e.code.take(200))
     val (fn, fl) = e match {
       case n: CfgNode =>
         (Try(n.method.name).getOrElse(""), Try(n.method.filename).getOrElse(""))
       case _ => ("", "")
     }
-    val fnEsc = fn.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ")
-    val flEsc = fl.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ")
+    val fnEsc = jsonEsc(fn)
+    val flEsc = jsonEsc(fl)
     s"""{"line":$ln,"code":"$cd","function":"$fnEsc","file":"$flEsc"}"""
   }.mkString(",")
   "JOERN_FLOW:[" + steps + "]"

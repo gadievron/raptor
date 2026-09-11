@@ -199,6 +199,7 @@ def rewrite_for_localhost(
     (otherwise the compose path would be exempt from auto-cleanup).
     """
     source_dir = compose_file.parent
+    _require_stageable_size(source_dir)
     # Hand-rolled (not scratch_dir): ownership transfers to the caller,
     # who runs cleanup_staging() after down_stack. The raptor-compose-
     # prefix is listed in core.run.tmp_reaper's static tuple, so a
@@ -227,10 +228,44 @@ def rewrite_for_localhost(
     try:
         _rewrite_ports_in_place(staged_compose, labels=labels,
                                 allow_devices=allow_devices)
-    except ComposeError:
+    except BaseException:
+        # Any failure — ComposeError or an unanticipated one — must
+        # release the keepalive-pinned staging dir; a ComposeError-only
+        # clause leaked the tmpdir on e.g. hostile-bytes decode errors.
         cleanup_staging(staging)
         raise
     return staged_compose, staging
+
+
+#: Staging copy budget. Trade-off, documented both ways: too low refuses
+#: legitimate compose projects with fat build contexts (2 GiB clears every
+#: vulhub-style stack by orders of magnitude); too high lets a hostile
+#: repo's multi-GiB tree fill a tmpfs-backed /tmp via the pre-sanitize
+#: copytree. The gate runs BEFORE any byte is copied.
+_STAGING_MAX_BYTES = 2 << 30
+
+
+def _require_stageable_size(source_dir: Path) -> None:
+    """Refuse staging when ``source_dir`` exceeds the copy budget.
+
+    Sums ``lstat`` sizes (symlinks never followed — the copy itself is
+    ``symlinks=True``) and stops walking as soon as the budget is
+    exceeded, so a huge hostile tree costs a bounded scan, not a full
+    disk accounting.
+    """
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(source_dir, followlinks=False):
+        for name in filenames:
+            try:
+                total += os.lstat(os.path.join(dirpath, name)).st_size
+            except OSError:
+                continue
+            if total > _STAGING_MAX_BYTES:
+                raise ComposeError(
+                    f"compose source dir {source_dir} exceeds the "
+                    f"{_STAGING_MAX_BYTES}-byte staging budget — refusing "
+                    "to copy it to the staging tmpdir"
+                )
 
 
 def cleanup_staging(staging: str | Path) -> None:
@@ -303,7 +338,11 @@ def _mounts_docker_socket(volume: Any) -> bool:
     return source_norm in ('/', '/var', '/var/run', '/run')
 
 
-_SAFE_DEVICE_PREFIXES = (
+# Exact-match only: a prefix match would keep "/dev/nullXYZ", and any
+# allowlisted directory prefix would keep "/dev/fd/../../../dev/sda"-style
+# traversals. /dev/fd/<N> children are matched separately after lexical
+# normalization.
+_SAFE_DEVICES: frozenset[str] = frozenset({
     "/dev/null",
     "/dev/zero",
     "/dev/urandom",
@@ -311,8 +350,47 @@ _SAFE_DEVICE_PREFIXES = (
     "/dev/stdin",
     "/dev/stdout",
     "/dev/stderr",
-    "/dev/fd/",
-)
+})
+_SAFE_DEVICE_FD_DIR = "/dev/fd"
+
+
+_ASCII_DIGITS = frozenset("0123456789")
+
+
+def _safe_device_source(src: str) -> str | None:
+    """The NORMALIZED source when it is an allowlisted pseudo-device,
+    else None.
+
+    Normalized lexically first (``os.path.normpath`` collapses ``..``,
+    ``//`` and trailing separators — ``/dev/fd/../../../dev/sda``
+    becomes ``/dev/sda`` and fails the allowlist). The safe names are
+    then matched EXACTLY; realpath-ing them instead would resolve
+    ``/dev/stdin`` through /proc/self/fd to whatever this process's
+    stdin happens to be, breaking legitimate mappings while the daemon
+    resolves the path in its own context anyway. ``/dev/fd/<N>`` is the
+    one directory family kept, and only with an ASCII-digit child
+    (``str.isdigit`` admits Unicode digit codepoints that mean nothing
+    to the daemon); any other suffix has no legitimate compose use.
+
+    Returning the normalized form (rather than a bool over the raw
+    string) is load-bearing: the KEPT value is what reaches dockerd,
+    and dockerd resolves ``..`` through symlinks — ``/dev/fd/0/../1``
+    normalizes to the allowlisted ``/dev/fd/1`` lexically but names a
+    different object under symlink resolution, so the raw spelling
+    must never be forwarded.
+    """
+    src = src.strip()
+    if not src:
+        return None
+    norm = os.path.normpath(src)
+    if norm in _SAFE_DEVICES:
+        return norm
+    prefix = _SAFE_DEVICE_FD_DIR + "/"
+    if norm.startswith(prefix):
+        child = norm[len(prefix):]
+        if child and all(c in _ASCII_DIGITS for c in child):
+            return norm
+    return None
 
 
 def _filter_devices(spec: dict, *, allow_all: bool = False) -> None:
@@ -330,15 +408,22 @@ def _filter_devices(spec: dict, *, allow_all: bool = False) -> None:
     kept = []
     for dev in devices:
         if isinstance(dev, str):
-            src = dev.split(":")[0]
+            src, sep, rest = dev.partition(":")
+            norm = _safe_device_source(src)
+            if norm is not None:
+                # Forward the NORMALIZED source — see
+                # _safe_device_source on why the raw spelling must
+                # never reach dockerd.
+                kept.append(f"{norm}{sep}{rest}" if sep else norm)
+                continue
         elif isinstance(dev, dict):
             # ``compose config`` normalizes devices to the long form
             # ``{source, target, permissions}``.
-            src = str(dev.get("source") or "")
-        else:
-            src = ""
-        if any(src == p or src.startswith(p) for p in _SAFE_DEVICE_PREFIXES):
-            kept.append(dev)
+            norm = _safe_device_source(str(dev.get("source") or ""))
+            if norm is not None:
+                kept.append({**dev, "source": norm})
+                continue
+        logger.warning("compose sanitize: dropping device %r", dev)
     if kept:
         spec["devices"] = kept
     else:
@@ -448,6 +533,13 @@ def _load_gated_document(path: Path, *, what: str) -> Any:
     except OSError as exc:
         raise ComposeError(
             f"compose {what} {path.name!r} is not readable: {exc}"
+        ) from exc
+    except UnicodeDecodeError as exc:
+        # Hostile bytes must fail as ComposeError like every other parse
+        # failure — a raw UnicodeDecodeError bypasses the callers'
+        # ComposeError-scoped staging cleanup.
+        raise ComposeError(
+            f"compose {what} {path.name!r} is not valid UTF-8: {exc}"
         ) from exc
     except yaml.YAMLError as exc:
         raise ComposeError(
@@ -1290,38 +1382,71 @@ def up_stack(
     # Sanitized stacks run on internal (no-egress) networks where port
     # publishing is unavailable — the reachable endpoint is then the
     # container's own network address (the host holds the bridge-side
-    # interface). Resolve it per unpublished container, best-effort.
-    containers = tuple(
-        _with_container_endpoint(c) if c.host_port is None else c
-        for c in containers
-    )
+    # interface). Resolve it for the unpublished containers,
+    # best-effort, with ONE batched inspect.
+    containers = _with_container_endpoints(containers)
     primary = pick_primary(containers)
     return containers, primary
 
 
-def _with_container_endpoint(container: ComposeContainer) -> ComposeContainer:
-    """Fill an unpublished container's endpoint from ``docker inspect``.
+def _with_container_endpoints(
+    containers: tuple[ComposeContainer, ...],
+) -> tuple[ComposeContainer, ...]:
+    """Fill unpublished containers' endpoints from ``docker inspect``.
 
-    Returns the container unchanged when no address or exposed port can
-    be determined (callers treat a port-less container as non-primary).
+    One inspect invocation for ALL unpublished containers (docker
+    accepts multiple ids; a per-container spawn paid one subprocess
+    per service). Output lines carry each container's own Id so the
+    mapping survives docker skipping unknown ids (non-zero rc with
+    partial stdout). Containers whose address or exposed port cannot
+    be determined pass through unchanged (callers treat a port-less
+    container as non-primary).
     """
+    unpublished = [c for c in containers if c.host_port is None]
+    if not unpublished:
+        return containers
     outcome = run_cli(
         [
             "docker", "inspect", "--format",
-            '{"nets":{{json .NetworkSettings.Networks}},'
+            '{"id":{{json .Id}},'
+            '"nets":{{json .NetworkSettings.Networks}},'
             '"exposed":{{json .Config.ExposedPorts}}}',
-            container.container_id,
+            *[c.container_id for c in unpublished],
         ],
-        timeout=10.0,
+        timeout=10.0 + 2.0 * len(unpublished),
     )
-    if outcome.returncode != 0 or not (outcome.stdout or "").strip():
-        return container
-    try:
-        info = json.loads(outcome.stdout)
-    except json.JSONDecodeError:
-        return container
-    if not isinstance(info, dict):
-        return container
+    if not (outcome.stdout or "").strip():
+        return containers
+    info_by_id: dict[str, dict[str, Any]] = {}
+    for line in outcome.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            info = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(info, dict) and isinstance(info.get("id"), str):
+            info_by_id[info["id"]] = info
+    def _resolve(container: ComposeContainer) -> ComposeContainer:
+        if container.host_port is not None:
+            return container
+        # compose ps ids may be short-form; .Id is the full hash.
+        info = next(
+            (v for k, v in info_by_id.items()
+             if k.startswith(container.container_id)),
+            None,
+        )
+        if info is None:
+            return container
+        return _endpoint_from_inspect(container, info)
+    return tuple(_resolve(c) for c in containers)
+
+
+def _endpoint_from_inspect(
+    container: ComposeContainer, info: dict[str, Any],
+) -> ComposeContainer:
+    """Build the endpoint-carrying container from one inspect record."""
     ip = ""
     nets = info.get("nets")
     if isinstance(nets, dict):

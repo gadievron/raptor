@@ -103,8 +103,11 @@ def _sweep_dead_sessions(root: Path) -> None:
             continue
         try:
             os.kill(pid, 0)
-        except ProcessLookupError:
-            pass          # dead — reclaim below
+        except (ProcessLookupError, OverflowError):
+            # dead — or a pid beyond pid_t (a planted huge-digit dir
+            # name), which no live process can hold; reclaim below.
+            # OverflowError is not an OSError and crashed the sweep.
+            pass
         except OSError:
             continue      # EPERM etc.: someone lives there; skip
         else:

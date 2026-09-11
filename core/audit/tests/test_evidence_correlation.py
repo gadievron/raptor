@@ -471,3 +471,84 @@ def test_all_emitted_prefilter_rule_ids_are_mapped():
     assert emitted <= set(PREFILTER_RULE_FAMILY), (
         f"unmapped prefilter rule ids: {emitted - set(PREFILTER_RULE_FAMILY)}"
     )
+
+
+class TestCritiqueCorrelation:
+    """_run_critique's finding pass must apply the same evidence↔
+    hypothesis correlation as _sweep_validate: an unrelated window hit
+    must not stamp critique:prefilter:* (permanently tool-grounding a
+    hallucinated finding past all re-validation)."""
+
+    def _run(self, tmp_path, monkeypatch, *, hypothesis, hits):
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            _run_critique,
+        )
+
+        outcome = _mk_outcome(hypothesis)
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+        result.findings = 1
+        _patch_common(monkeypatch, hits=hits, chain_confirms=[])
+        _run_critique(result, _mk_config(tmp_path))
+        return result.outcomes[0]
+
+    def test_correlated_hit_stamps_critique_evidence(
+        self, tmp_path, monkeypatch,
+    ):
+        out = self._run(
+            tmp_path, monkeypatch,
+            hypothesis="use after free of request buffer",
+            hits=[TestSweepValidateCorrelation.UAF_HIT],
+        )
+        assert out.evidence_tool == "critique:prefilter:use-after-free"
+
+    def test_uncorrelated_hit_does_not_stamp(self, tmp_path, monkeypatch):
+        out = self._run(
+            tmp_path, monkeypatch,
+            hypothesis="SQL injection through user-controlled query",
+            hits=[TestSweepValidateCorrelation.UAF_HIT],
+        )
+        assert not (out.evidence_tool or "").startswith("critique:")
+        ctx = (out.review_result or {}).get("uncorrelated_tool_hits")
+        assert ctx and ctx[0]["rule_id"] == "use-after-free"
+
+
+class TestPrefilterPromotionGuardVeto:
+    """The correlated-prefilter promotion lane must consult the
+    sink-guard veto like every other promotion lane."""
+
+    def _run(self, tmp_path, monkeypatch, *, guard_reason):
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            _promote_suspicious,
+        )
+
+        outcome = _mk_outcome("use after free of request buffer")
+        outcome.status = "suspicious"
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+        result.suspicious = 1
+        _patch_common(
+            monkeypatch,
+            hits=[TestSweepValidateCorrelation.UAF_HIT],
+            chain_confirms=[],
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._guard_blocks_promotion",
+            lambda *a, **kw: guard_reason,
+        )
+        _promote_suspicious(result, _mk_config(tmp_path))
+        return result
+
+    def test_guard_veto_blocks_promotion(self, tmp_path, monkeypatch):
+        result = self._run(
+            tmp_path, monkeypatch, guard_reason="all sinks guarded",
+        )
+        assert result.outcomes[0].status == "suspicious"
+        assert result.sweep_promoted == 0
+
+    def test_no_guard_promotes(self, tmp_path, monkeypatch):
+        result = self._run(tmp_path, monkeypatch, guard_reason=None)
+        assert result.outcomes[0].status == "finding"
+        assert result.sweep_promoted == 1

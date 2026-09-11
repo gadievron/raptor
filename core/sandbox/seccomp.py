@@ -573,7 +573,35 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     callers that may convert via `profile_dict["seccomp"] or None`
     (context.py) and callers that pass the raw profile name.
     """
-    if not profile or profile == "none" or not check_seccomp_available():
+    if not profile or profile == "none":
+        return None
+    if not check_seccomp_available():
+        # A profile was REQUESTED but the filter cannot engage — the
+        # child runs without the socket-family blocklist (AF_UNIX →
+        # docker.sock on Landlock-only hosts), the io_uring/keyring/bpf
+        # escape-primitive blocks, and the UDP/DNS-exfil block. This
+        # must never be silent. Refuse-vs-warn is decided PER POSTURE
+        # upstream of this builder:
+        #   - strict fail-closes at profile resolution (context.py
+        #     strict_required gate) and never reaches here;
+        #   - run_untrusted / run_untrusted_networked fail-close in
+        #     _require_userns_or_optin (RAPTOR_ALLOW_DEGRADED_UNTRUSTED
+        #     is the explicit override, which warns per call there);
+        #   - default run()/sandbox() postures degrade with THIS
+        #     once-per-process warning (kernel/library capability does
+        #     not change at runtime; scan loops spawn hundreds of
+        #     children).
+        if state.warn_once("_seccomp_filter_lost_warned"):
+            logger.warning(
+                "Sandbox: seccomp profile %r was requested but "
+                "libseccomp is unavailable or non-functional — "
+                "children run WITHOUT the seccomp layer: the "
+                "socket-family blocklist (incl. AF_UNIX → "
+                "docker.sock), the io_uring/keyring/bpf "
+                "escape-primitive blocks and the UDP block are all "
+                "inactive. Install libseccomp (libseccomp2 package) "
+                "to restore the filter.", profile,
+            )
         return None
 
     lib = state._libseccomp_cache  # CDLL captured at check time

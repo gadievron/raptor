@@ -160,3 +160,57 @@ def test_llmclient_default_banner_unchanged(mock_detect, monkeypatch):
     msgs = cap.messages()
     assert (any(m.startswith("Primary model:") for m in msgs)
             or any("no primary model" in m for m in msgs)), msgs
+
+
+class TestPinnedMaxTokensCap:
+    """The pinned model's own published output cap must win over the
+    base config's value — ``max(base, pinned)`` sent the base model's
+    larger limit to a smaller-cap pinned model, a non-retryable 400 on
+    every call."""
+
+    @staticmethod
+    def _install_base(monkeypatch, max_tokens: int):
+        import core.llm.config as cfg_mod
+        from core.llm.config import ModelConfig
+        base = ModelConfig(
+            provider="anthropic", model_name="claude-base-model",
+            api_key="test-fake-key", max_tokens=max_tokens,
+        )
+        monkeypatch.setitem(
+            cfg_mod._PROVIDER_BUILDERS, "anthropic", lambda: base,
+        )
+
+    @staticmethod
+    def _install_limits(monkeypatch, table: dict):
+        import core.llm.model_data as model_data
+        monkeypatch.setattr(
+            model_data, "resolve_model_limits",
+            lambda name: table.get(name),
+        )
+
+    def test_smaller_cap_pinned_model_gets_its_own_cap(self, monkeypatch):
+        self._install_base(monkeypatch, max_tokens=64000)
+        self._install_limits(monkeypatch, {
+            "claude-small-test": {"max_output": 8192, "max_context": 200000},
+        })
+        cfg = _pinned_llm_config("anthropic/claude-small-test")
+        assert cfg.primary_model.max_tokens == 8192
+
+    def test_larger_cap_pinned_model_not_clamped_by_base(self, monkeypatch):
+        """Other direction: the original max() intent — a base config
+        sized for a small default model must not clamp a pinned model
+        with a larger published cap."""
+        self._install_base(monkeypatch, max_tokens=4096)
+        self._install_limits(monkeypatch, {
+            "claude-big-test": {"max_output": 32000, "max_context": 200000},
+        })
+        cfg = _pinned_llm_config("anthropic/claude-big-test")
+        assert cfg.primary_model.max_tokens == 32000
+
+    def test_unknown_model_keeps_base_value(self, monkeypatch):
+        """No published limits: the base's operator-sized value beats
+        the blind 4096 floor (pre-fix behaviour preserved)."""
+        self._install_base(monkeypatch, max_tokens=64000)
+        self._install_limits(monkeypatch, {})
+        cfg = _pinned_llm_config("anthropic/claude-unknown-test")
+        assert cfg.primary_model.max_tokens == 64000

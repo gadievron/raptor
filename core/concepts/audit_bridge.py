@@ -403,7 +403,10 @@ def _guard_in_scope(inv: dict[str, Any], file_path: str) -> bool:
     for ev in inv.get("evidence") or []:
         if isinstance(ev, dict) and ev.get("file"):
             scopes.append(str(ev["file"]))
-        elif isinstance(ev, str) and ev:
+        elif isinstance(ev, str) and ev.strip():
+            # strip() guard: a whitespace-only evidence string (a
+            # supported schema shape from LLM-authored models) makes
+            # split() return [] and the [0] index raise.
             head = ev.split()[0].split(":")[0]
             if "/" in head or "." in PurePosixPath(head).name:
                 scopes.append(head)
@@ -657,21 +660,54 @@ def primers_from_domain_model(
 
     candidates: list[tuple[float, str]] = []
 
-    # --- Concepts (simple schema: name/kind/description/invariants as strings) ---
+    # --- Concepts (Concept.to_dict schema: id/description/evidence/...) ---
+    # Two invariant shapes feed a concept's primer:
+    #   (a) inline concept["invariants"] entries — plain strings or
+    #       dicts (a shape core/audit constructs directly);
+    #   (b) the model's TOP-LEVEL invariants list, joined by concept
+    #       id (Invariant.concept) — the shape every study writer
+    #       actually produces (Concept itself carries no invariants
+    #       field, so a top-level join is what makes these primers
+    #       reachable from real domain-model.json files).
+    invs_by_concept: dict[str, list[dict[str, Any]]] = {}
+    for inv in model.get("invariants", []):
+        cid = str(inv.get("concept") or "")
+        if cid:
+            invs_by_concept.setdefault(cid, []).append(inv)
     for concept in model.get("concepts", []):
-        inv_list = concept.get("invariants", [])
+        cid = str(concept.get("id") or "")
+        inv_list: list[Any] = list(concept.get("invariants") or [])
+        inv_list.extend(invs_by_concept.get(cid, []))
         if not inv_list:
             continue
         score = _relevance_score(concept, file_path, function_name, source)
         if score <= 1.0:
             continue
-        kind_label = (concept.get("kind") or "domain concept").upper().replace("_", " ")
-        lines = [f"DOMAIN-SPECIFIC: {kind_label} — {concept.get('name', '?')}"]
+        label = (cid or str(concept.get("name") or "?"))
+        label = label.replace("_", " ").replace(".", " — ")
+        lines = [f"DOMAIN-SPECIFIC: CONCEPT — {label}"]
         if concept.get("description"):
-            lines.append(concept["description"])
+            lines.append(str(concept["description"]))
         lines.append("")
-        lines.append("Check each invariant — a violation is a bug:")
-        lines.extend(f"- {inv}" for inv in inv_list)
+        lines.append(
+            "Check each invariant against the source. Receipt-backed "
+            "tiers ([verbatim]/[mechanical]) quote this codebase — a "
+            "violation is a real bug; [unverified] entries are hints "
+            "to check, never established facts."
+        )
+        for inv in inv_list:
+            if isinstance(inv, str):
+                # Bare-string invariants carry no provenance stamp —
+                # fail closed to the unverified hint tier.
+                stmt, tag = inv, _tier_tag({})
+            elif isinstance(inv, dict):
+                stmt = str(inv.get("statement") or inv.get("description") or "")
+                tag = _tier_tag(inv)
+            else:
+                continue
+            if not stmt:
+                continue
+            lines.append(f"- {tag} {stmt}")
         candidates.append((score, "\n".join(lines)))
 
     # --- Paired operations → check for unbalanced acquire/release ---

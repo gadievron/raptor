@@ -171,6 +171,32 @@ def test_price_for_regional_bedrock_no_surcharge_when_geo_only():
     assert price_for("us.anthropic.claude-opus-4-1") == bare
 
 
+def test_regional_surcharge_applies_to_dated_ids():
+    """The global-CRIS allowlist holds bare names, so the dated suffix
+    must be normalised before the membership test — a dated regional
+    id otherwise booked at 1.0× (~10% under-booking) while its undated
+    form booked 1.10×."""
+    from core.llm.model_data import (
+        _BEDROCK_REGIONAL_SURCHARGE,
+        _bedrock_cost_multiplier,
+    )
+    assert _bedrock_cost_multiplier(
+        "us.anthropic.claude-opus-4-7-20260115",
+    ) == _BEDROCK_REGIONAL_SURCHARGE
+    # Adjacent behaviour unchanged: undated regional still surcharged,
+    # global-prefixed and non-CRIS models still 1.0× (dated or not).
+    assert _bedrock_cost_multiplier(
+        "us.anthropic.claude-opus-4-7",
+    ) == _BEDROCK_REGIONAL_SURCHARGE
+    assert _bedrock_cost_multiplier(
+        "global.anthropic.claude-opus-4-7-20260115",
+    ) == 1.0
+    assert _bedrock_cost_multiplier(
+        "us.anthropic.claude-opus-4-1-20250805",
+    ) == 1.0
+    assert _bedrock_cost_multiplier("claude-opus-4-7-20260115") == 1.0
+
+
 def test_price_for_unknown_bedrock_model_returns_default():
     """A Bedrock id whose BARE name isn't in MODEL_COSTS returns the
     default — no spurious cost tracking from a hallucinated entry."""

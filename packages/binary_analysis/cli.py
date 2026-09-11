@@ -33,6 +33,7 @@ from typing import Any, TYPE_CHECKING
 # positional-walk fallback that silently imports a different checkout.
 sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
+from core.hash import sha256_file
 from core.json import dumps_display
 from core.config import RaptorConfig
 from core.json import load_json, save_json
@@ -588,6 +589,24 @@ def _run_trace_parser(args: argparse.Namespace) -> int:
     binary = Path(manifest.binary_path).expanduser().resolve()
     if not binary.is_file():
         print(f"raptor-binary: mapped binary no longer exists: {binary}", file=sys.stderr)
+        return 2
+    # Verify content identity BEFORE the Frida phase spawns the binary:
+    # the file at the manifest path may have been swapped (rebuild, or a
+    # hostile replacement in a shared workspace) since the original map
+    # run, and the evidence-refresh gate inside
+    # append_runtime_evidence_to_run only runs after execution.
+    try:
+        current_sha = sha256_file(binary)
+    except OSError as exc:
+        print(f"raptor-binary: cannot hash mapped binary {binary}: {exc}", file=sys.stderr)
+        return 2
+    if manifest.binary_sha256 and current_sha != manifest.binary_sha256:
+        print(
+            f"raptor-binary: mapped binary has changed since the map run "
+            f"(sha256 {current_sha} != manifest {manifest.binary_sha256}); "
+            f"refusing to execute it — re-run the map on the current binary",
+            file=sys.stderr,
+        )
         return 2
 
     runtime_dir = run_dir / "parser-runtime"

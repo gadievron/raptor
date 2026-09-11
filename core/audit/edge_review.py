@@ -287,11 +287,15 @@ def build_edge_prompt(
     parts = [
         f"## Edge contract audit: {sanitise_for_prompt(loc, 'identifier', rec['caller_file'])}",
         f"**Why this edge is an obligation:** {sanitise_for_prompt(reason, 'identifier', rec['caller_file'])}",
-        f"\n### Caller: {sanitise_for_prompt(rec['caller'], 'identifier', rec['caller_file'])} ({rec['caller_file']})",
+        # The parenthetical file names are sanitised like the same
+        # fields inside ``loc`` above — a crafted repo path in the
+        # raw interpolation could forge heading text in this trusted
+        # region.
+        f"\n### Caller: {sanitise_for_prompt(rec['caller'], 'identifier', rec['caller_file'])} ({sanitise_for_prompt(rec['caller_file'], 'path', rec['caller_file'])})",
         "```",
         sanitise_for_prompt(caller_src, "source", rec["caller_file"]),
         "```",
-        f"\n### Callee: {sanitise_for_prompt(rec['callee'], 'identifier', rec['callee_file'])} ({rec['callee_file']})",
+        f"\n### Callee: {sanitise_for_prompt(rec['callee'], 'identifier', rec['callee_file'])} ({sanitise_for_prompt(rec['callee_file'], 'path', rec['callee_file'])})",
         "```",
         sanitise_for_prompt(callee_src, "source", rec["callee_file"]),
         "```",

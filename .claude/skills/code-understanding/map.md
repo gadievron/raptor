@@ -457,10 +457,12 @@ This is **opt-in** because:
 - the observation is one execution path — entry points the binary
   didn't reach in this run aren't refuted, just unconfirmed.
 
-Run the probe via the CLI shim and merge the JSON output:
+Run the probe via the CLI shim and merge the JSON output (this
+command is not on the auto-approve allowlist, so expect a permission
+prompt — appropriate, since the probe executes the target binary):
 
 ```bash
-raptor-sandbox-observe --json --out "$WORKDIR/probe" -- \
+libexec/raptor-sandbox-observe --json --out "$WORKDIR/probe" -- \
     /path/to/binary [args...] > "$WORKDIR/probe.json"
 
 python3 -c "

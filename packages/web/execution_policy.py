@@ -27,10 +27,19 @@ def _origin(url: str) -> tuple[str, str, int]:
     if not parsed.scheme or not parsed.hostname:
         raise WebPolicyError(f"Web scope target must be an absolute URL: {url}")
     default_port = 443 if parsed.scheme.lower() == "https" else 80
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        # urlparse defers port validation to attribute access: an
+        # out-of-range or non-numeric port (a hostile crawled anchor
+        # like http://h:99999/x) raises a plain ValueError that would
+        # sail past every 'except WebPolicyError' handler and kill the
+        # calling phase. Classify it as a policy denial instead.
+        raise WebPolicyError(f"Invalid port in web target URL: {url}") from exc
     return (
         parsed.scheme.lower(),
         parsed.hostname.lower(),
-        parsed.port or default_port,
+        port or default_port,
     )
 
 
@@ -38,6 +47,11 @@ def _origin_text(origin: tuple[str, str, int]) -> str:
     scheme, host, port = origin
     default_port = 443 if scheme == "https" else 80
     suffix = "" if port == default_port else f":{port}"
+    # urlparse strips the brackets from IPv6 hostnames; re-bracket so
+    # the rendered origin round-trips through _origin (the receipt's
+    # allowed_origins are re-parsed at construction).
+    if ":" in host:
+        host = f"[{host}]"
     return f"{scheme}://{host}{suffix}"
 
 

@@ -83,6 +83,22 @@ class TestChunkedCollection:
         assert not [f for f in found if f.get("tool") == "CodeQL"]
         assert any("measurement cap" in r.message for r in caplog.records)
 
+    def test_oversized_combined_sarif_is_recovered(self, tmp_path,
+                                                   monkeypatch):
+        # The merge has no output cap: per-tool files each under the
+        # guard can merge into an over-guard combined.sarif, which
+        # load_sarif would refuse — a run scoring ZERO findings with
+        # no error. The combined view must chunk like a per-tool file.
+        big = _write(tmp_path / "combined.sarif",
+                     _sarif_doc("CodeQL", 40))
+        _write(tmp_path / "codeql_java.sarif", _sarif_doc("CodeQL", 2))
+        monkeypatch.setattr(runner_mod, "_SARIF_CHUNK_THRESHOLD",
+                            big.stat().st_size - 1)
+        monkeypatch.setattr(runner_mod, "_SARIF_CHUNK_TARGET",
+                            big.stat().st_size // 4)
+        found = collect_findings(tmp_path)
+        assert len([f for f in found if f.get("tool") == "CodeQL"]) == 40
+
     def test_normal_sizes_unchanged(self, tmp_path):
         _write(tmp_path / "combined.sarif", _sarif_doc("Semgrep OSS", 4))
         _write(tmp_path / "codeql_java.sarif", _sarif_doc("CodeQL", 2))

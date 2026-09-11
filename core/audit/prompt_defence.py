@@ -17,8 +17,12 @@ and ``scan_for_injection()``.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
+from typing import Any
+
+logger = logging.getLogger(__name__)
 
 _MAX_FUNCTION_NAME = 256
 _MAX_VARIABLE_NAME = 256
@@ -173,6 +177,31 @@ def sanitise_name(name: str, max_length: int = _MAX_FUNCTION_NAME) -> str:
     if len(cleaned) > max_length:
         cleaned = cleaned[:max_length] + "...[truncated]"
     return cleaned
+
+
+_FLATTEN_RE = re.compile(r"[\r\n\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+")
+
+
+def defend_prompt_field(value: Any, max_length: int = 200) -> str:
+    """Render untrusted text safely inside a TRUSTED prompt region
+    whose structure is line-shaped (headings, labelled list rows):
+    newlines and control chars flatten to a single space, envelope-tag
+    and markdown-heading shapes are neutralised, length is bounded.
+
+    Use this — not bare ``neutralize_tag_forgery`` (which preserves
+    newlines) — whenever the field is interpolated into a line whose
+    SHAPE carries trust (a forged newline would mint a new trusted
+    line). Render-time only: callers keep original values for lookups.
+    """
+    text = _FLATTEN_RE.sub(" ", str(value))
+    try:
+        from core.security.prompt_envelope import neutralize_tag_forgery
+        text = neutralize_tag_forgery(text)
+    except Exception:
+        logger.debug("prompt field defence degraded", exc_info=True)
+    if len(text) > max_length:
+        text = text[:max_length] + "...[truncated]"
+    return text
 
 
 def sanitise_path(path: str) -> str:

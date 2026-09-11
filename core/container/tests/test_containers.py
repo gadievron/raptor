@@ -144,17 +144,24 @@ def test_permanent_failure_does_not_retry() -> None:
 
 
 def test_stop_refuses_unowned_container() -> None:
+    # The ownership gate is the SHARED container_has_label (exec
+    # module) — its run_cli is the one the inspect goes through.
+    import core.container.exec as cex
+
     def inspect_other(cmd: list[str], **_kw: Any) -> RunOutcome:
         return RunOutcome(returncode=0, stdout="someone-else\n", stderr="",
                           timed_out=False)
 
-    with patch.object(cc, "run_cli", side_effect=inspect_other) as m:
+    with (patch.object(cex, "run_cli", side_effect=inspect_other) as gate,
+          patch.object(cc, "run_cli") as stopper):
         ok = cc.stop_container("cid", required_label=("o", "mine"))
     assert ok is False
-    assert m.call_count == 1  # inspect only; no stop/rm issued
+    assert gate.call_count == 1   # inspect only ...
+    assert stopper.call_count == 0  # ... no stop/rm issued
 
 
 def test_stop_removes_owned_container() -> None:
+    import core.container.exec as cex
     captured: list[list[str]] = []
 
     def fake(cmd: list[str], **_kw: Any) -> RunOutcome:
@@ -163,7 +170,8 @@ def test_stop_removes_owned_container() -> None:
                           timed_out=False)
 
     ok = None
-    with patch.object(cc, "run_cli", side_effect=fake):
+    with (patch.object(cex, "run_cli", side_effect=fake),
+          patch.object(cc, "run_cli", side_effect=fake)):
         ok = cc.stop_container("cid", required_label=("o", "mine"))
     assert ok is True
     assert ["docker", "stop", "cid"] in captured

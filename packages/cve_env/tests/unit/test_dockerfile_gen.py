@@ -410,3 +410,110 @@ def test_phase37_4_apt_unsafe_no_apt_no_change() -> None:
     assert r.ok is True
     # No apt-get line, so no flags either.
     assert "Acquire::" not in r.dockerfile_text
+
+
+# ── single-line directive values (injection defence) ──────────────────────
+
+
+def test_render_rejects_newline_in_workdir() -> None:
+    """A multi-line workdir would emit an extra Dockerfile directive that
+    the install_steps-only pin gates never scan — must hard-reject."""
+    r = render_dockerfile(
+        base_image=_DIGEST,
+        install_steps=[],
+        workdir="/app\nRUN apt-get update && apt-get install -y apache2",
+        cve_named_packages=["apache2"],
+    )
+    assert r.ok is False
+    assert any("workdir" in i and "newlines" in i for i in r.issues)
+    assert "RUN apt-get" not in r.dockerfile_text
+
+
+def test_render_rejects_newline_in_cmd_entry() -> None:
+    r = render_dockerfile(
+        base_image=_DIGEST,
+        install_steps=[],
+        cmd=["sh", "-c", "echo hi\nRUN evil"],
+    )
+    assert r.ok is False
+    assert any(i.startswith("cmd[2]") for i in r.issues)
+
+
+def test_render_rejects_newline_and_space_in_copy_ops() -> None:
+    for dst in ("/y\nRUN evil", "/y /etc"):
+        r = render_dockerfile(
+            base_image=_DIGEST,
+            install_steps=[],
+            copy_ops=[{"src": "x", "dst": dst}],
+        )
+        assert r.ok is False, dst
+        assert any("copy_ops[0].dst" in i for i in r.issues)
+    r = render_dockerfile(
+        base_image=_DIGEST,
+        install_steps=[],
+        copy_ops=[{"src": "x\nRUN evil", "dst": "/y"}],
+    )
+    assert r.ok is False
+    assert any("copy_ops[0].src" in i for i in r.issues)
+
+
+def test_render_rejects_newline_in_base_image() -> None:
+    r = render_dockerfile(
+        base_image=_DIGEST + "\nRUN evil",
+        install_steps=[],
+    )
+    assert r.ok is False
+    assert any("base_image" in i and "newlines" in i for i in r.issues)
+
+
+def test_render_single_line_values_still_accepted() -> None:
+    """Companion direction: ordinary single-line values keep rendering."""
+    r = render_dockerfile(
+        base_image=_DIGEST,
+        install_steps=["apt-get install -y curl=1.0"],
+        workdir="/srv/app",
+        cmd=["nginx", "-g", "daemon off;"],
+        copy_ops=[{"src": "conf/", "dst": "/etc/nginx/"}],
+    )
+    assert r.ok is True, r.issues
+
+
+# ── apt_packages version pins survive the render ──────────────────────────
+
+
+def test_render_keeps_version_pinned_apt_package() -> None:
+    """A `pkg=version` entry must reach the emitted RUN line — an emit-time
+    re-filter once dropped pinned entries silently, producing an ok=True
+    render whose container lacked the very package under test."""
+    r = render_dockerfile(
+        base_image=_DIGEST,
+        install_steps=[],
+        apt_packages=["apache2=2.4.41-4ubuntu3.14", "curl"],
+    )
+    assert r.ok is True, r.issues
+    apt_line = next(
+        ln for ln in r.dockerfile_text.splitlines() if "apt-get" in ln
+    )
+    assert "apache2=2.4.41-4ubuntu3.14" in apt_line
+    assert "curl" in apt_line
+
+
+def test_render_keeps_epoch_glob_and_arch_apt_pins() -> None:
+    r = render_dockerfile(
+        base_image=_DIGEST,
+        install_steps=[],
+        apt_packages=["libssl1.1:amd64=1:1.1.1f-1ubuntu2", "nginx=1.18.*"],
+    )
+    assert r.ok is True, r.issues
+    assert "libssl1.1:amd64=1:1.1.1f-1ubuntu2" in r.dockerfile_text
+    assert "nginx=1.18.*" in r.dockerfile_text
+
+
+def test_render_rejects_malformed_apt_package_hard() -> None:
+    """Malformed entries are a hard error (ok=False), never a silent drop."""
+    for pkg in ("bad pkg", "pkg\nRUN evil", "=1.2.3", "pkg=1.2;rm -rf /"):
+        r = render_dockerfile(
+            base_image=_DIGEST, install_steps=[], apt_packages=[pkg]
+        )
+        assert r.ok is False, pkg
+        assert any("apt_packages[0]" in i for i in r.issues), pkg

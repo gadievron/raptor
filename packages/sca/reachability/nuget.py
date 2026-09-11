@@ -79,12 +79,17 @@ def resolve_dep(
     """Match ``dep_name`` as a namespace prefix in the scan.
 
     A namespace ``Foo.Bar.Baz`` matches a dep ``Foo.Bar`` and any
-    sub-namespace. Confidence is ``medium`` for matches because
+    sub-namespace. NuGet package ids are case-insensitive, so the
+    comparison folds case — ``<PackageReference
+    Include="newtonsoft.json">`` must still match ``using
+    Newtonsoft.Json;``. Confidence is ``medium`` for matches because
     NuGet package id ↔ namespace correspondence isn't guaranteed.
     """
     matches: list[tuple[Path, int, bool]] = []
+    dep_lower = dep_name.lower()
     for ns, hits in scan.items():
-        if ns == dep_name or ns.startswith(dep_name + "."):
+        ns_lower = ns.lower()
+        if ns_lower == dep_lower or ns_lower.startswith(dep_lower + "."):
             matches.extend(hits)
 
     if not matches:

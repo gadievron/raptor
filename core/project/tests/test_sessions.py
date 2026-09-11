@@ -167,6 +167,34 @@ class SessionsRegistryTest(_RegistryCase):
         self.assertFalse(
             (self.sessions_dir / f"{os.getpid()}.run").exists())
 
+    def test_zero_padded_entry_never_touches_real_pids_files(self):
+        # A planted '0<pid>' entry that reads as stale must not lock or
+        # unlink the LIVE canonical pid's ledger and lock files — the
+        # derived-int aliasing was the '007 prunes pid 7' hole.
+        pid = os.getpid()
+        sessions.record_session("myapp", pid=pid)
+        sessions.ledger_record_start(self._tmp.name, pid=pid)
+        padded = self.sessions_dir / f"0{pid}"
+        padded.write_text("v=2\nproject=x\nstarttime=1\nboot_id=x\n",
+                          encoding="utf-8")
+        sessions.read_sessions()
+        self.assertTrue((self.sessions_dir / f"{pid}.run").exists())
+        self.assertTrue((self.sessions_dir / str(pid)).exists())
+        # The padded name is not a canonical pid file — left alone, not
+        # judged (and certainly not pruned via the aliased pid).
+        self.assertTrue(padded.exists())
+
+    def test_unicode_digit_filenames_do_not_crash_prune(self):
+        # str.isdigit accepts '²' but int('²') raises — a planted
+        # superscript filename crashed the whole read/prune pre-fix.
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        for name in ("²", "².run", "².run.lock"):
+            (self.sessions_dir / name).write_text("", encoding="utf-8")
+        entries = sessions.read_sessions()  # must not raise
+        self.assertNotIn(2, entries)
+        # Non-canonical names are never reaped.
+        self.assertTrue((self.sessions_dir / "².run").exists())
+
     def test_foreign_boot_never_pruned_never_returned(self):
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         entry = self.sessions_dir / str(DEAD_PID)

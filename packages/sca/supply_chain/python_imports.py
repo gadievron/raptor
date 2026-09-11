@@ -46,7 +46,9 @@ from pathlib import Path
 
 from .._test_paths import is_test_path as _shared_is_test_path
 from ..discovery import EXCLUDED_DIR_NAMES
-from ..models import Confidence, Dependency, Manifest, PinStyle
+from ..models import Confidence, Dependency, Manifest
+from ._closest_manifest import project_host_dep
+from ._closest_manifest import rel_to_target as _rel
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -436,42 +438,10 @@ def _looks_like_test_path(path: Path, target: Path) -> bool:
 def _project_host_dep(
     manifests: list[Manifest], path: Path, target: Path,
 ) -> Dependency:
-    closest: Manifest | None = None
-    for m in manifests:
-        if m.is_lockfile:
-            continue
-        try:
-            common = os.path.commonpath([m.path.parent, path])
-        except ValueError:
-            continue
-        if not closest or len(common) > len(
-            os.path.commonpath([closest.path.parent, path])
-        ):
-            closest = m
-    declared_in = closest.path if closest else target
-    ecosystem = closest.ecosystem if closest else "Project"
-    return Dependency(
-        ecosystem=ecosystem,
-        name="<project>",
-        version=None,
-        declared_in=declared_in,
-        scope="main",
-        is_lockfile=False,
-        pin_style=PinStyle.UNKNOWN,
-        direct=True,
-        purl="",
-        parser_confidence=Confidence(
-            "low",
-            reason="placeholder for python-import-time finding host",
-        ),
+    return project_host_dep(
+        manifests, path, target,
+        reason="placeholder for python-import-time finding host",
     )
-
-
-def _rel(path: Path, target: Path) -> Path:
-    try:
-        return path.relative_to(target)
-    except ValueError:
-        return path
 
 
 __all__ = ["ImportTimeFinding", "scan_target"]

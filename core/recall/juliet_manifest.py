@@ -27,12 +27,12 @@ from __future__ import annotations
 
 import argparse
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 from core.json import save_json
 from core.recall.manifest import SCHEMA_VERSION
+from core.recall.pinned_clone import verify_pinned_clone
 
 #: Public mirror of the NIST Juliet Java suite (v1.2 content).
 JULIET_REPO_URL = "https://github.com/find-sec-bugs/juliet-test-suite"
@@ -79,24 +79,9 @@ def _verify_clone(clone_dir: Path) -> None:
             f"acquire with: {_ACQUIRE_HINT}"
         )
         raise JulietManifestError(msg)
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(clone_dir), "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=60, check=False,
-        )
-        head = proc.stdout.strip().lower()
-    except (OSError, subprocess.SubprocessError) as exc:
-        msg = f"cannot sha-verify {clone_dir}: {exc}"
-        raise JulietManifestError(msg) from exc
-    if proc.returncode != 0 or not head:
-        msg = f"cannot sha-verify {clone_dir}: {proc.stderr.strip()}"
-        raise JulietManifestError(msg)
-    if head != JULIET_PINNED_SHA:
-        msg = (
-            f"{clone_dir} is at {head[:12]}, labels are pinned to "
-            f"{JULIET_PINNED_SHA[:12]} — {_ACQUIRE_HINT}"
-        )
-        raise JulietManifestError(msg)
+    verify_pinned_clone(clone_dir, JULIET_PINNED_SHA,
+                        error_cls=JulietManifestError,
+                        hint=_ACQUIRE_HINT)
 
 
 def split_bad_good_spans(

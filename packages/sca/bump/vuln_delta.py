@@ -40,6 +40,20 @@ from ..osv import OsvClient, OsvResult
 logger = logging.getLogger(__name__)
 
 
+class VulnDeltaDegraded(RuntimeError):
+    """The OSV lookup behind a bump's vuln delta failed.
+
+    ``OsvResult.advisories`` is documented empty on transient remote
+    failure, so a silent empty delta is indistinguishable from a
+    genuinely-clean bump: a failed TARGET lookup would fail open
+    (new CVEs invisible → Clean → auto-apply), and a failed CURRENT
+    lookup would mark every target advisory as "new" (all-false
+    findings). Neither outcome is safe to return — callers catch
+    this and surface an explicit degraded verdict (at least Review)
+    instead.
+    """
+
+
 def evaluate_bump_vulns(
     *,
     ecosystem: str,
@@ -58,24 +72,60 @@ def evaluate_bump_vulns(
     KEV / EPSS enrichment is plumbed through if clients are
     supplied — the verdict ladder uses both for escalation
     (KEV → Block; high EPSS + critical → Block).
+
+    Raises :class:`VulnDeltaDegraded` when either query slot's OSV
+    lookup failed (exception, or the client's transient-failure
+    telemetry advanced) — the delta cannot be trusted, so it is
+    never silently reported as empty.
     """
     current_dep = _synthesise(ecosystem, name, current_version)
     target_dep = _synthesise(ecosystem, name, target_version)
+    # ``OsvClient.failed_lookups`` / ``failed_dep_keys`` are cumulative
+    # transient-failure telemetry on the client instance; snapshot
+    # before the query so the delta attributes THIS call's failures.
+    # ``getattr`` keeps duck-typed stubs without the telemetry working
+    # (they simply can't signal degradation).
+    failed_before: int = getattr(osv_client, "failed_lookups", 0)
+    keys_before: int = len(getattr(osv_client, "failed_dep_keys", []))
     try:
         results = osv_client.query_batch([current_dep, target_dep])
-    except Exception:                    # noqa: BLE001
+    except Exception as e:               # noqa: BLE001
         logger.warning(
             "sca.bump: OSV query failed for %s:%s@(%s→%s); "
-            "skipping vuln delta",
+            "vuln delta unavailable",
             ecosystem, name, current_version, target_version,
             exc_info=True,
         )
-        return []
+        raise VulnDeltaDegraded(
+            f"OSV query failed for {ecosystem}:{name}"
+            f"@({current_version}→{target_version}): {e}"
+        ) from e
+    failed_after: int = getattr(osv_client, "failed_lookups", 0)
+    if failed_after > failed_before:
+        # Attribute the failure to a slot when the (capped) key
+        # sample grew; otherwise report both slots as suspect.
+        new_failed = set(
+            getattr(osv_client, "failed_dep_keys", [])[keys_before:],
+        )
+        slots = [
+            label
+            for label, dep in (("current", current_dep),
+                               ("target", target_dep))
+            if dep.key() in new_failed
+        ] or ["current/target"]
+        raise VulnDeltaDegraded(
+            f"transient OSV lookup failure on the "
+            f"{' + '.join(slots)} version slot(s) for "
+            f"{ecosystem}:{name}@({current_version}→{target_version})"
+        )
     # ``query_batch`` returns ``OsvResult`` per dep, in input
     # order. We always pass [current, target] so we know which is
     # which.
     if len(results) < 2:
-        return []
+        raise VulnDeltaDegraded(
+            f"OSV returned {len(results)} result slot(s) for "
+            f"{ecosystem}:{name} (expected 2)"
+        )
     current_result, target_result = results[0], results[1]
     new_advisories = _advisory_delta(
         target_advisories=target_result.advisories,

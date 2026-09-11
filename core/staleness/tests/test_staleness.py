@@ -134,6 +134,27 @@ class TestCheckSpans:
         )
         assert results[0].status == "deleted"
 
+    def test_formfeed_for_newline_swap_detected(self, tmp_path: Path):
+        # splitlines() treats \f as a line break, so rewriting
+        # "foo\nbar\n" as "foo\fbar\n" left the line LIST identical
+        # and the modified span read back "current" — invisible edit.
+        # \n-only splitting must report it modified.
+        f = tmp_path / "a.c"
+        f.write_text("foo\nbar\n")
+        h = hash_span(f, 1, 2)
+        f.write_text("foo\fbar\n")
+        results = check_spans(f, [Span(1, 2, h)])
+        assert results[0].status == "modified"
+
+    def test_unchanged_multiline_file_still_current(self, tmp_path: Path):
+        # Equality direction for the \n-split change: an ordinary
+        # trailing-newline file round-trips as current.
+        f = tmp_path / "a.c"
+        f.write_text("foo\nbar\nbaz\n")
+        h = hash_span(f, 1, 3)
+        results = check_spans(f, [Span(1, 3, h)])
+        assert results[0].status == "current"
+
     def test_no_stored_hash(self, tmp_path: Path):
         f = tmp_path / "a.c"
         f.write_text("int x;\n")
@@ -373,6 +394,21 @@ class TestPathTraversal:
 
         results = check_spans(
             outside, [Span(1, 1, "abc")], root=root,
+        )
+        assert results[0].status == "unknown"
+
+    def test_embedded_nul_path_is_unknown_not_crash(self, tmp_path: Path):
+        """A hostile CheckItem path with an embedded NUL raises
+        ValueError from resolve() — must degrade to "unknown" like any
+        other unresolvable path, not crash the whole batch."""
+        from pathlib import Path as _P
+
+        root = tmp_path / "project"
+        root.mkdir()
+        evil = _P(str(root) + "/a\x00b.c")
+        results = check_batch(
+            [CheckItem(evil, 1, 1, "abc123def456")],
+            root=root,
         )
         assert results[0].status == "unknown"
 

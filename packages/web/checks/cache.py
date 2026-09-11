@@ -12,6 +12,7 @@ Reference: James Kettle, PortSwigger Research
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from packages.web.checks.base import PROBE_HOST, Check, CheckCategory, registry
@@ -28,9 +29,12 @@ _UNKEYED_HEADERS = [
     "X-Forwarded-Scheme",
 ]
 
+# Headers that indicate a CACHE served or recorded the response.
+# 'Via' is deliberately absent: it only marks a proxy hop (RFC 9110),
+# so treating it as cache evidence flagged every proxied deployment.
 _CACHE_INDICATORS = {
     "X-Cache", "CF-Cache-Status", "X-Cache-Hit", "X-Varnish",
-    "Age", "Via", "X-Drupal-Cache", "X-Proxy-Cache",
+    "Age", "X-Drupal-Cache", "X-Proxy-Cache",
 }
 
 _PROBE_VALUE = PROBE_HOST
@@ -114,13 +118,38 @@ class CacheDeceptionCheck(Check):
                 if any(k in path for k in ("account", "profile", "settings", "dashboard")):
                     sensitive_paths.insert(0, urlparse(url).path)
 
+        # Catch-all calibration: if a static-file suffix under a path
+        # that cannot be sensitive also answers 200, the target routes
+        # every unknown path to the same handler (SPA shell) — a 200 on
+        # /account/nonexistent.css then proves nothing about deception.
+        import secrets
+        control_status: int | None = None
+        control_length: int | None = None
+        try:
+            control = client.get(
+                f"/raptor-{secrets.token_hex(8)}/nonexistent.css",
+            )
+            control_status = control.status_code
+            control_length = len(control.content or b"")
+        except Exception:
+            pass
+
+        def _matches_control(resp) -> bool:
+            if control_status is None or resp.status_code != control_status:
+                return False
+            if control_length is None:
+                return True
+            length = len(resp.content or b"")
+            bigger = max(length, control_length) or 1
+            return abs(length - control_length) / bigger <= 0.1
+
         for path in sensitive_paths[:3]:
             try:
                 # Try appending a static-file suffix to a sensitive path
                 deception_path = path.rstrip("/") + "/nonexistent.css"
                 resp = client.get(deception_path)
 
-                if resp.status_code == 200:
+                if resp.status_code == 200 and not _matches_control(resp):
                     # Check if the response contains profile/account data
                     body = resp.text if isinstance(resp.text, str) else ""
                     has_user_data = any(
@@ -214,10 +243,24 @@ class RequestSmugglingCheck(Check):
             f"{prefix}"
         )
         return [
-            ("CL.TE", clte, "fast_400"),
-            ("TE.CL", tecl, "fast_400"),
+            ("CL.TE", clte, "stalled_no_response"),
+            ("TE.CL", tecl, "stalled_no_response"),
             ("CL.0", clzero, "double_response"),
         ]
+
+    # Response STATUS lines only: anchored at line start with a status
+    # code, so an error page quoting the request line ("GET /x HTTP/1.1")
+    # or a header/body containing the digits (Content-Length: 2400)
+    # never counts.
+    _STATUS_LINE_RE = re.compile(r"(?m)^HTTP/1\.[01] (\d{3})")
+
+    # A read that ran into the socket timeout with no parseable status
+    # line means the server sat on the ambiguous framing waiting for
+    # more body — the classic desync prerequisite. Anything answered
+    # promptly (including the RFC-recommended immediate 400 rejection
+    # of requests carrying both Content-Length and Transfer-Encoding)
+    # is NOT evidence.
+    _STALL_SECONDS = 4.0
 
     def run(self, client, target_url, session=None, discovery=None):
         from urllib.parse import urlparse
@@ -227,19 +270,22 @@ class RequestSmugglingCheck(Check):
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
         use_tls = parsed.scheme == "https"
 
+        from packages.web.checks.base import note_transport_error
+
         for variant, request_text, signal in self._probe_requests(host):
             response, duration = self._raw_exchange(
                 host, port, use_tls, request_text,
             )
             if response is None:
+                # Raw-socket probes bypass WebClient's counter; a failed
+                # exchange is still transport degradation, not a clean run.
+                note_transport_error(client)
                 continue
-            hit = (
-                signal == "fast_400"
-                and "400" in response and duration < 1
-            ) or (
-                signal == "double_response"
-                and response.count("HTTP/1.") >= 2
-            )
+            status_lines = self._STATUS_LINE_RE.findall(response)
+            if signal == "stalled_no_response":
+                hit = duration >= self._STALL_SECONDS and not status_lines
+            else:  # double_response
+                hit = len(status_lines) >= 2
             if not hit:
                 continue
             return [self._result(
@@ -247,9 +293,10 @@ class RequestSmugglingCheck(Check):
                 evidence=(
                     f"{variant} probe: "
                     + (
-                        f"server returned 400 in {duration:.2f}s -- "
-                        "possible back-end desync."
-                        if signal == "fast_400" else
+                        f"server produced no response for {duration:.2f}s -- "
+                        "it appears to be waiting for more body under the "
+                        "ambiguous framing (possible back-end desync)."
+                        if signal == "stalled_no_response" else
                         "two HTTP responses returned for one request -- "
                         "the body was parsed as a second request."
                     )

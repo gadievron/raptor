@@ -325,7 +325,7 @@ Triggered on PRs touching any manifest, lockfile,
 Dockerfile/Containerfile, docker-compose file, CI workflow, or
 pre-commit config, it:
 
-1. Scans the PR head.
+1. Scans the PR merge result (the PR as merged into `main`).
 2. Scans `main` as baseline.
 3. Diffs the two findings sets.
 4. Posts the markdown delta as a PR comment (idempotent -- updates the

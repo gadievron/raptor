@@ -5,15 +5,16 @@ Storage layout under the configured root directory::
 
     {root}/
         manifests/
-            <sha256>.json          # Witness.to_dict() per witness
+            <sha256>.json           # Witness.to_dict() per hash (latest)
+            <sha256>.history.jsonl  # superseded manifests for that hash
         blobs/
-            <sha256>.bin           # raw bytes (de-duplicated by hash)
-        index.json                 # listing of all known hashes
+            <sha256>.bin            # raw bytes (de-duplicated by hash)
 
 Same bytes seen by multiple pipelines collapse to a single blob —
-the hash key naturally de-duplicates. Two ``Witness`` records can
-share a single ``blobs/<sha256>.bin`` if their bytes happen to
-match; each has its own manifest with its own provenance.
+the hash key naturally de-duplicates. Manifests are keyed by the
+same hash, so a replayed identical byte-sequence is last-writer-wins
+on ``<sha256>.json``; the superseded record's provenance is appended
+to ``<sha256>.history.jsonl`` rather than erased.
 
 The store is process-local: no concurrent-writer locking. Each
 pipeline run gets its own ``{out_dir}/witnesses/`` root, so
@@ -29,7 +30,14 @@ import logging
 from pathlib import Path
 
 from core.atomic_fs import write_bytes_atomically, write_text_atomically
-from core.json import load_json
+from core.json import append_jsonl, load_json
+from core.witness.provenance import (
+    PROVENANCE_KEY as _PROVENANCE_TOKEN_KEY,
+)
+from core.witness.provenance import (
+    stamp_witness_manifest,
+    verify_witness_manifest,
+)
 from core.witness.types import Witness, compute_bytes_hash
 from typing import TYPE_CHECKING
 
@@ -162,18 +170,30 @@ class WitnessStore:
         # ``outcome_detail`` fail loudly here, not after we've
         # already written the blob. Common offenders:
         # :class:`pathlib.Path`, :class:`datetime`, ``bytes``,
-        # custom classes. The fix at the call site is to stringify.
+        # custom classes — and non-finite floats (``allow_nan=False``:
+        # the default would happily WRITE ``NaN``, which the strict
+        # loader in :meth:`get_witness` then rejects forever —
+        # evidence persisted but permanently unreadable). The fix at
+        # the call site is to stringify / sanitise.
+        manifest_dict = witness.to_dict()
+        # Witness-provenance stamp: manifests live inside run output
+        # trees a disk-staging attacker can pre-populate, and their
+        # projections feed threat-status flips via collect_outcomes.
+        # Consumers that grant mechanical weight verify this content
+        # MAC on read; no usable key → unstamped (records demote to
+        # evidence-only weight downstream, never an error here).
+        stamp_witness_manifest(manifest_dict)
         try:
             manifest_text = (
-                json.dumps(witness.to_dict(), indent=2) + "\n"
+                json.dumps(manifest_dict, indent=2, allow_nan=False) + "\n"
             )
         except (TypeError, ValueError) as exc:
             msg = (
                 f"witness manifest is not JSON-serialisable "
                 f"({type(exc).__name__}: {exc}); convert any "
-                f"Path / datetime / bytes / custom-class values in "
-                f"outcome_detail to strings before constructing the "
-                f"Witness"
+                f"Path / datetime / bytes / custom-class / non-finite "
+                f"float values in outcome_detail to strings before "
+                f"constructing the Witness"
             )
             raise WitnessStoreError(msg) from exc
 
@@ -192,6 +212,42 @@ class WitnessStore:
         # dedup-by-hash, but the exceptions surfaced up).
         if not blob_path.exists():
             write_bytes_atomically(blob_path, data, tmp_prefix=".blob-")
+
+        # Same-hash manifests are last-writer-wins, but the SUPERSEDED
+        # record's provenance (source / outcome / produced_by) must
+        # not be erased: replaying identical bytes from a different
+        # pipeline used to silently destroy e.g. the fuzzer's
+        # sanitizer-report provenance for that hash. Preserve the
+        # prior record by appending it to a per-hash history trail
+        # before the overwrite. Best-effort: a malformed prior
+        # manifest (nothing trustworthy to preserve) or a failed
+        # append is logged, never blocks the put.
+        if manifest_path.is_file():
+            prior = load_json(manifest_path, max_bytes=_MAX_MANIFEST_BYTES)
+            # Timestamp-insensitive compare: a pure refresh (same
+            # provenance, new clock reading) is an idempotent
+            # overwrite, not a supersession worth a history row. The
+            # provenance token is excluded for the same reason — it is
+            # derived from the content (timestamp included), so a pure
+            # refresh re-mints a different token without any
+            # provenance-worthy change underneath.
+            _volatile = ("timestamp", _PROVENANCE_TOKEN_KEY)
+            if isinstance(prior, dict) and (
+                {k: v for k, v in prior.items() if k not in _volatile}
+                != {k: v for k, v in manifest_dict.items()
+                    if k not in _volatile}
+            ):
+                history_path = (
+                    self._manifests_dir / f"{witness.bytes_hash}.history.jsonl"
+                )
+                try:
+                    append_jsonl(history_path, prior, compact=True)
+                except (OSError, TypeError, ValueError) as exc:
+                    logger.warning(
+                        "WitnessStore.put: could not preserve superseded "
+                        "manifest for %s: %s",
+                        witness.bytes_hash[:16], exc,
+                    )
 
         # Atomic manifest write. Same reasoning: a torn manifest
         # left get_witness raising forever with no recovery path
@@ -281,11 +337,24 @@ class WitnessStore:
                     f"manifest at {manifest_path} vanished during read"
                 )
                 raise WitnessStoreError(msg)
+            if not isinstance(data, dict):
+                # A JSON array/string/number parses fine under strict
+                # load_json but from_dict would raise AttributeError —
+                # outside the WitnessStoreError contract.
+                msg = (
+                    f"manifest at {manifest_path} is not a JSON object "
+                    f"(got {type(data).__name__})"
+                )
+                raise WitnessStoreError(msg)
             witness = Witness.from_dict(data)
         except json.JSONDecodeError as exc:
             msg = f"manifest at {manifest_path} is malformed JSON: {exc}"
             raise WitnessStoreError(msg) from exc
-        except (KeyError, ValueError) as exc:
+        except (KeyError, ValueError, TypeError, AttributeError) as exc:
+            # TypeError / AttributeError: field values with the wrong
+            # shape inside an otherwise-object manifest (e.g. a string
+            # where from_dict expects a dict) — same contract as any
+            # other invalid structure.
             msg = f"manifest at {manifest_path} has invalid structure: {exc}"
             raise WitnessStoreError(msg) from exc
         if witness.bytes_hash.lower() != bytes_hash.lower():
@@ -294,6 +363,11 @@ class WitnessStore:
                 f"{witness.bytes_hash[:16]!r}... — inconsistent with "
                 f"its address; refusing the record"
             )
+        # Mechanical-provenance annotation (never a refusal): consumers
+        # that grant provenance weight — threat-status flips via
+        # collect_outcomes — read this; everyone else keeps the record
+        # at evidence weight regardless.
+        witness.provenance_verified = verify_witness_manifest(data)
         return witness
 
     def list_witnesses(self) -> Iterator[Witness]:
@@ -329,8 +403,18 @@ class WitnessStore:
                         manifest,
                     )
                     continue
+                if not isinstance(data, dict):
+                    logger.warning(
+                        "WitnessStore: skipping non-object manifest %s",
+                        manifest,
+                    )
+                    continue
                 witness = Witness.from_dict(data)
-            except (json.JSONDecodeError, KeyError, ValueError, TypeError, OSError) as exc:
+            except (json.JSONDecodeError, KeyError, ValueError,
+                    TypeError, AttributeError, OSError) as exc:
+                # AttributeError: wrong-shaped field values inside an
+                # object manifest — must skip the row, not abort the
+                # whole enumeration and drop every later valid witness.
                 logger.warning(
                     "WitnessStore: skipping malformed manifest %s: %s",
                     manifest, exc,
@@ -343,6 +427,10 @@ class WitnessStore:
                     manifest, witness.bytes_hash[:16],
                 )
                 continue
+            # Same annotation as get_witness: unverified records still
+            # enumerate (evidence weight), they just carry no
+            # mechanical provenance.
+            witness.provenance_verified = verify_witness_manifest(data)
             yield witness
 
     def blob_path(self, bytes_hash: str) -> Path | None:

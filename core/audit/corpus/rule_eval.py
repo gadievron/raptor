@@ -379,8 +379,8 @@ def discover_rules(engines: list[str]) -> tuple[list[RuleInfo], list[str]]:
 
 
 # ---------------------------------------------------------------------------
-# Graduated rules — synthesized checkers promoted by RuleLibrary
-# .graduate / core.audit.checker_library.graduate_checkers into
+# Graduated rules — synthesized checkers promoted by
+# packages.checker_synthesis.library.RuleLibrary.graduate into
 # ``<project_dir>/engine-rules/``.
 # ---------------------------------------------------------------------------
 

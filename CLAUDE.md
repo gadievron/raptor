@@ -217,10 +217,11 @@ The `/crash-analysis` command provides autonomous root-cause analysis for C/C++ 
 
 **Agents:**
 - `crash-analysis-agent` - Main orchestrator
-- `crash-analyzer-agent` - Deep root-cause analysis using rr traces
-- `crash-analyzer-checker-agent` - Validates analysis rigorously
-- `function-trace-generator-agent` - Creates function execution traces
-- `coverage-analysis-generator-agent` - Generates gcov coverage data
+- `crash-report-fetcher` - Fetches the bug-tracker report into `bug-report.json`
+- `crash-analyzer` - Deep root-cause analysis using rr traces
+- `crash-analysis-checker` - Validates analysis rigorously
+- `function-trace-generator` - Creates function execution traces
+- `coverage-analyzer` - Generates gcov coverage data
 
 **Skills** (in `.claude/skills/crash-analysis/`):
 - `rr-debugger` - Deterministic record-replay debugging

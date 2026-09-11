@@ -261,11 +261,17 @@ def test_short_circuit_skips_full_when_cell_trusted(llm, tmp_path, monkeypatch):
     cheap reasoning."""
     client, prov = llm
     sc = ModelScorecard(client.config.scorecard_path)
-    for _ in range(150):
-        sc.record_event(
-            "sca:major_bump:PyPI", "haiku-stub",
-            EventType.CHEAP_SHORT_CIRCUIT, "correct",
-        )
+    # One batched write: 150 record_event calls are 150 full
+    # flock/rewrite cycles — seconds on slow CI disks.
+    sc.record_events([
+        {
+            "decision_class": "sca:major_bump:PyPI",
+            "model": "haiku-stub",
+            "event_type": EventType.CHEAP_SHORT_CIRCUIT,
+            "outcome": "correct",
+        }
+        for _ in range(150)
+    ])
     client._scorecard = None        # force reload
     _patch_grep_to_return_call_sites(monkeypatch)
     prov.cheap_responder = _cheap_safe_response

@@ -252,6 +252,12 @@ def _classify_addl_spec(
         return "", None, PinStyle.UNKNOWN
     name = m.group(1)
     rest = m.group(3).strip()
+    # ``name@<spec>`` (npm tag-separator form): drop the separator
+    # BEFORE classification. Leaving it attached meant ``pkg@^1.0`` /
+    # ``pkg@~2.0`` fell through every range check and was recorded
+    # EXACT with the operator embedded in the version string.
+    if rest.startswith("@"):
+        rest = rest[1:].strip()
     return _wrap_version(name, rest)
 
 

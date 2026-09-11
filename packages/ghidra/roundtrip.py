@@ -39,11 +39,23 @@ def redb_cache_candidates(gpr_path: Path) -> List[Path]:
         from core.project.project import ProjectManager
         mgr = ProjectManager()
         name = mgr.get_active()
-        if name:
-            project = mgr.load(name)
-            from .attach import attach_dir
-            candidates.append(
-                attach_dir(project, gpr_path) / "re-database.json")
+        # load() returns None when the registered project's state file
+        # vanished or is corrupt — degrade to the global slot rather
+        # than raising into the blanket except (which would also drop
+        # the legacy stem candidate).
+        project = mgr.load(name) if name else None
+        if project is not None:
+            # Each candidate appended in its own try: a failure
+            # computing the attach slot must not discard the legacy
+            # stem slot that is still perfectly resolvable.
+            try:
+                from .attach import attach_dir
+                candidates.append(
+                    attach_dir(project, gpr_path) / "re-database.json")
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "failed to resolve attach cache candidate",
+                    exc_info=True)
             candidates.append(
                 Path(project.output_dir)
                 / f"ghidra-{gpr_path.stem}"

@@ -159,6 +159,12 @@ class GhidraBridge:
         bin_path = binary_path
         if bin_path is None and ghidra_db.binary_path:
             candidate = Path(ghidra_db.binary_path)
+            # A relative metadata path is relative to the project, not
+            # to whatever the process CWD happens to be — anchor it at
+            # the .gpr's directory so a bundled sibling binary is found
+            # (and the CWD is never probed for attacker-chosen names).
+            if not candidate.is_absolute():
+                candidate = self.gpr_path.parent / candidate
             # The metadata path is a free string inside the (attacker-
             # controlled) project — honour it only when it points at a
             # file shipped alongside the project itself, never at

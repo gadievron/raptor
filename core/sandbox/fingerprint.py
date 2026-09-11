@@ -132,12 +132,15 @@ _DOMAINNAME = "localdomain"
 # "sha256('raptor-sandbox-v1')" was the prior implementation but
 # being open-source it was a single grep away from a one-line bypass.
 def _derive_machine_id() -> str:
-    # Use RAPTOR_DIR (operator's install path) as the per-install
-    # entropy. Falls back to this module's directory if RAPTOR_DIR
-    # is unset — that path is also install-specific.
-    seed = os.environ.get("RAPTOR_DIR") or os.path.dirname(
-        os.path.abspath(__file__)
-    )
+    # Per-install entropy from this module's own directory — install-
+    # specific AND environment-independent. The previous env-first
+    # form (RAPTOR_DIR with a module-dir fallback) made the persona
+    # identity depend on whether RAPTOR_DIR happened to be exported:
+    # the same install produced different machine-id (and every value
+    # derived from the seed) between launcher-spawned and bare-shell
+    # invocations, breaking the cross-run determinism this constant
+    # promises.
+    seed = os.path.dirname(os.path.abspath(__file__))
     return hashlib.sha256(
         b"raptor-fingerprint-v1\0" + seed.encode("utf-8", errors="replace")
     ).hexdigest()[:32]
@@ -602,9 +605,11 @@ def _derive_uptime_and_processes() -> tuple[int, int]:
     target. Different installs see different values (cross-operator
     output drift, but local determinism).
     """
-    seed = os.environ.get("RAPTOR_DIR") or os.path.dirname(
-        os.path.abspath(__file__)
-    )
+    # Environment-independent, like _derive_machine_id: an env-first
+    # RAPTOR_DIR read made the fake uptime/processes (and the meminfo
+    # figures seeded from _MACHINE_ID) differ between env-set and
+    # env-unset invocations of the same install.
+    seed = os.path.dirname(os.path.abspath(__file__))
     h = hashlib.sha256(
         b"raptor-fingerprint-uptime-v1\0" + seed.encode("utf-8", errors="replace")
     ).digest()

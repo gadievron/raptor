@@ -347,6 +347,18 @@ def _probe_unix_scope_uncached() -> bool:
                 lib.seccomp_notify_fd.argtypes = [ctypes.c_void_p]
                 lib.seccomp_load.restype = ctypes.c_int
                 lib.seccomp_load.argtypes = [ctypes.c_void_p]
+                # Every call taking the ctx needs explicit argtypes:
+                # without them ctypes passes the 64-bit ctx pointer as
+                # a C int, truncating it — SIGSEGV inside libseccomp,
+                # which this probe then mis-reads as "unix scope
+                # unavailable" and caches process-wide.
+                lib.seccomp_syscall_resolve_name.restype = ctypes.c_int
+                lib.seccomp_syscall_resolve_name.argtypes = [
+                    ctypes.c_char_p]
+                lib.seccomp_rule_add_array.restype = ctypes.c_int
+                lib.seccomp_rule_add_array.argtypes = [
+                    ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int,
+                    ctypes.c_uint, ctypes.c_void_p]
                 _SCMP_ACT_ALLOW = 0x7FFF0000
                 _SCMP_ACT_NOTIFY = 0x7FC00000
                 # seccomp_load requires NO_NEW_PRIVS without

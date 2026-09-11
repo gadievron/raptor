@@ -1,14 +1,11 @@
 """Tests for packages/fuzzing/afl_runner.py."""
 
 import os
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from packages.fuzzing.afl_runner import AFLRunner
 
@@ -60,6 +57,9 @@ class TestCreateDefaultCorpus:
         # under test.
         runner = AFLRunner.__new__(AFLRunner)
         runner.output_dir = output_dir
+        # __init__ assigns seed_profile before resolving the corpus;
+        # mirror that contract here.
+        runner.seed_profile = "default"
         return runner
 
     def test_corpus_anchored_to_output_dir_not_cwd(self, tmp_path):
@@ -106,6 +106,39 @@ class TestCreateDefaultCorpus:
         assert result.is_absolute()
         assert output_dir in result.parents or result.parent == output_dir
 
+    def test_ctor_seed_profile_reaches_default_corpus(self, tmp_path,
+                                                      monkeypatch):
+        # The default-corpus path resolves the corpus during __init__;
+        # seed_profile must be assigned first or a non-default profile
+        # is silently dropped (the old getattr fallback masked it).
+        from packages.fuzzing import afl_runner as mod
+
+        binary = tmp_path / "bin"
+        binary.write_bytes(b"\x7fELF")
+        binary.chmod(0o755)
+        seen = {}
+
+        def fake_prepare(corpus_dir, profile="default"):
+            seen["profile"] = profile
+            return {"seed_count": 1}
+
+        monkeypatch.setattr(mod, "prepare_builtin_seed_corpus",
+                            fake_prepare)
+        # Ctor plumbing only — no real AFL++ needed. Stub the
+        # availability probe and command validation (the
+        # test_host_mode_never_stages pattern) so the test runs on
+        # hosts without afl-fuzz installed.
+        monkeypatch.setattr(mod.shutil, "which",
+                            lambda *_a, **_k: "/usr/bin/afl-fuzz")
+        monkeypatch.setattr(AFLRunner, "_validate_afl_command",
+                            lambda self: None)
+        AFLRunner(
+            binary_path=binary,
+            output_dir=tmp_path / "out",
+            seed_profile="network",
+        )
+        assert seen["profile"] == "network"
+
     def test_seeds_have_expected_content(self, tmp_path):
         output_dir = tmp_path / "fuzz_run"
         output_dir.mkdir()
@@ -135,6 +168,9 @@ class TestMergeCrashFiles:
     def _make_runner(self, output_dir: Path) -> AFLRunner:
         runner = AFLRunner.__new__(AFLRunner)
         runner.output_dir = output_dir
+        # __init__ assigns seed_profile before resolving the corpus;
+        # mirror that contract here.
+        runner.seed_profile = "default"
         return runner
 
     def _plant_crash(self, output_dir: Path, instance: str, name: str,
@@ -249,6 +285,7 @@ class TestSandboxedCampaign:
         runner.sandbox_rootfs = None
         runner.binary_in_rootfs = None
         runner.cmplog_in_rootfs = None
+        runner._resolved_binary_mode = None
         return runner
 
     @staticmethod
@@ -308,6 +345,41 @@ class TestSandboxedCampaign:
         assert len(main_cmds) == 1 and "main" in main_cmds[0]
         assert len(secondary_cmds) == 1 and "secondary1" in secondary_cmds[0]
 
+    def test_secondaries_read_corpus_not_resume_stdin(self, tmp_path,
+                                                      monkeypatch):
+        # AFL++ '-i -' is in-place RESUME of an existing -o dir and
+        # FATALs on a fresh campaign ("Resume attempted but old output
+        # directory not found"), so secondaries launched with '-i -'
+        # died at startup and every --parallel N>1 run silently
+        # degraded to the single main instance. Every instance must
+        # read the real corpus dir.
+        import subprocess as sp
+
+        from packages.fuzzing import afl_runner as mod
+
+        self._instrumented(monkeypatch)
+        calls = []
+
+        def fake_sandbox_run(cmd, **kwargs):
+            calls.append(list(cmd))
+            return sp.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
+
+        monkeypatch.setattr(mod, "_sandbox_run", fake_sandbox_run)
+
+        runner = self._make_runner(tmp_path)
+        runner.run_fuzzing(duration=0, parallel_jobs=3)
+
+        assert len(calls) == 3
+        secondary_cmds = [c for c in calls if "-S" in c]
+        main_cmds = [c for c in calls if "-M" in c]
+        assert len(secondary_cmds) == 2 and len(main_cmds) == 1
+        for cmd in calls:
+            i_idx = cmd.index("-i")
+            # Negative direction: never the startup-aborting resume arg.
+            assert cmd[i_idx + 1] != "-"
+            # Positive direction: the actual corpus dir.
+            assert cmd[i_idx + 1] == str(runner.corpus_dir)
+
     def test_sandbox_setup_error_fails_loud(self, tmp_path, monkeypatch):
         from core.sandbox import SandboxSetupError
         from packages.fuzzing import afl_runner as mod
@@ -326,6 +398,34 @@ class TestSandboxedCampaign:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUntrustedOutputHygiene:
+    """Instance log tails and fuzzer_stats live in target-writable
+    space and are relayed to the operator's terminal — escape
+    sequences must be stripped at the read boundary."""
+
+    def test_tail_file_strips_escapes(self, tmp_path):
+        log = tmp_path / "stderr.log"
+        log.write_bytes(b"\x1b]0;owned\x07PROGRAM ABORT\x1b[2Jhidden")
+        tail = AFLRunner._tail_file(log)
+        assert "\x1b" not in tail
+        assert "PROGRAM ABORT" in tail
+
+    def test_get_stats_strips_escapes(self, tmp_path):
+        runner = AFLRunner.__new__(AFLRunner)
+        runner.output_dir = tmp_path
+        stats_dir = tmp_path / "main"
+        stats_dir.mkdir(parents=True)
+        (stats_dir / "fuzzer_stats").write_text(
+            "execs_done   : 123\nbanner : \x1b[31mowned\x1b[0m\n",
+            encoding="utf-8",
+        )
+        stats = runner.get_stats()
+        # Numeric consumers unaffected...
+        assert stats["execs_done"] == "123"
+        # ...and no escape bytes survive to the log sinks.
+        assert "\x1b" not in stats["banner"]
 
 
 class TestRootfsMode:
@@ -757,3 +857,171 @@ class TestCmplogInRootfs:
                            output_dir=tmp_path / "out",
                            cmplog_in_rootfs="/src-cmplog/app")
         assert runner.cmplog_in_rootfs is None
+
+
+# ---------------------------------------------------------------------------
+# run_showmap() — batch-mode coverage
+# ---------------------------------------------------------------------------
+
+class TestShowmapCoverage:
+    """afl-showmap only supports ``@@`` substitution in ``-i`` batch
+    mode (single-run mode hard-aborts on it), reads no env var naming
+    an input file, and prints its coverage summary as a banner — the
+    runner must build a batch-mode command and parse what the tool
+    actually emits."""
+
+    _BANNER = ("[+] A coverage of 123 edges were achieved out of "
+               "65536 existing (0.19%) with 42 input files.")
+
+    def _runner(self, tmp_path: Path, input_mode: str = "file") -> AFLRunner:
+        # Bypass __init__: no AFL toolchain needed to exercise command
+        # construction and output parsing.
+        runner = AFLRunner.__new__(AFLRunner)
+        runner.output_dir = tmp_path / "out"
+        runner.output_dir.mkdir(parents=True, exist_ok=True)
+        runner.corpus_dir = tmp_path / "corpus"
+        runner.corpus_dir.mkdir(parents=True, exist_ok=True)
+        (runner.corpus_dir / "seed0").write_bytes(b"A")
+        runner.binary = tmp_path / "bin" / "app"
+        runner.binary.parent.mkdir(parents=True, exist_ok=True)
+        runner.binary.write_bytes(b"\x7fELF")
+        runner.afl_fuzz = "afl-fuzz"
+        runner.sandbox_rootfs = None
+        runner.binary_in_rootfs = None
+        runner.input_mode = input_mode
+        runner._resolved_binary_mode = None
+        return runner
+
+    def _capture_cmd(self, monkeypatch, stderr: str = "", rc: int = 0) -> dict:
+        import subprocess as sp
+
+        from packages.fuzzing import afl_runner as mod
+        seen: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            seen["cmd"] = cmd
+            seen.update(kwargs)
+            return sp.CompletedProcess(cmd, rc, stdout="", stderr=stderr)
+
+        monkeypatch.setattr(mod, "_sandbox_run", fake_run)
+        return seen
+
+    def test_file_mode_uses_batch_input_never_bare_at_file(
+            self, tmp_path, monkeypatch):
+        runner = self._runner(tmp_path, input_mode="file")
+        seen = self._capture_cmd(monkeypatch, stderr=self._BANNER)
+        coverage = runner.run_showmap()
+        cmd = seen["cmd"]
+        # Batch mode: -i <inputs> -C -o <map file>; @@ only AFTER --.
+        assert "-i" in cmd and "-C" in cmd
+        assert cmd[cmd.index("-i") + 1] == str(runner.corpus_dir)
+        assert cmd[cmd.index("-o") + 1] != "/dev/null"
+        assert cmd[-1] == "@@"
+        assert cmd.index("--") < cmd.index("@@")
+        assert coverage["edges_covered"] == "123"
+        assert coverage["edges_total"] == "65536"
+        assert coverage["coverage_percent"] == "0.19"
+        assert coverage["inputs_processed"] == "42"
+
+    def test_stdin_mode_omits_at_file(self, tmp_path, monkeypatch):
+        runner = self._runner(tmp_path, input_mode="stdin")
+        seen = self._capture_cmd(monkeypatch, stderr=self._BANNER)
+        coverage = runner.run_showmap()
+        assert "@@" not in seen["cmd"]
+        assert "-i" in seen["cmd"]
+        assert coverage["edges_covered"] == "123"
+
+    def test_queue_preferred_over_seed_corpus(self, tmp_path, monkeypatch):
+        runner = self._runner(tmp_path)
+        queue = runner.output_dir / "main" / "queue"
+        queue.mkdir(parents=True)
+        (queue / "id:000000,orig:seed0").write_bytes(b"A")
+        seen = self._capture_cmd(monkeypatch, stderr=self._BANNER)
+        runner.run_showmap()
+        assert seen["cmd"][seen["cmd"].index("-i") + 1] == str(queue)
+
+    def test_binary_only_mode_mirrored(self, tmp_path, monkeypatch):
+        runner = self._runner(tmp_path)
+        runner._resolved_binary_mode = "qemu"
+        seen = self._capture_cmd(monkeypatch, stderr=self._BANNER)
+        runner.run_showmap()
+        assert "-Q" in seen["cmd"]
+        assert seen["cmd"].index("-Q") < seen["cmd"].index("--")
+
+    def test_no_inputs_returns_empty(self, tmp_path, monkeypatch):
+        runner = self._runner(tmp_path)
+        for entry in runner.corpus_dir.iterdir():
+            entry.unlink()
+        seen = self._capture_cmd(monkeypatch)
+        assert runner.run_showmap() == {}
+        assert "cmd" not in seen  # never executed without inputs
+
+    def test_failure_without_signal_returns_empty(self, tmp_path,
+                                                  monkeypatch):
+        runner = self._runner(tmp_path)
+        self._capture_cmd(monkeypatch, stderr="PROGRAM ABORT", rc=1)
+        assert runner.run_showmap() == {}
+
+    def test_edge_map_fallback_when_banner_format_drifts(self, tmp_path):
+        map_file = tmp_path / "map.txt"
+        map_file.write_text("001234:1\n004567:25\n\nnot-an-edge\n")
+        coverage = AFLRunner._parse_showmap_output(map_file, "no banner here")
+        assert coverage == {"edges_covered": "2"}
+
+    def test_banner_wins_over_edge_map(self, tmp_path):
+        map_file = tmp_path / "map.txt"
+        map_file.write_text("001234:1\n")
+        coverage = AFLRunner._parse_showmap_output(map_file, self._BANNER)
+        assert coverage["edges_covered"] == "123"
+
+    def test_missing_map_and_banner_is_empty(self, tmp_path):
+        coverage = AFLRunner._parse_showmap_output(
+            tmp_path / "absent.txt", "PROGRAM ABORT")
+        assert coverage == {}
+
+    def test_stale_edge_map_from_prior_run_not_counted(self, tmp_path,
+                                                       monkeypatch):
+        # A reused output_dir holds a previous invocation's edge map;
+        # a FAILED run must not fabricate coverage from it via the
+        # edge-map fallback.
+        runner = self._runner(tmp_path)
+        stale = runner.output_dir / "showmap-edges.txt"
+        stale.write_text("001234:1\n004567:2\n")
+        self._capture_cmd(monkeypatch, stderr="PROGRAM ABORT", rc=1)
+        assert runner.run_showmap() == {}
+        assert not stale.exists()
+
+    def test_fresh_edge_map_from_this_run_still_counted(self, tmp_path,
+                                                        monkeypatch):
+        import subprocess as sp
+
+        from packages.fuzzing import afl_runner as mod
+        runner = self._runner(tmp_path)
+        # Stale map from a prior run must not leak into the count; the
+        # map THIS run writes is what gets parsed (banner drifted away).
+        (runner.output_dir / "showmap-edges.txt").write_text("000001:1\n")
+
+        def fake_run(cmd, **kwargs):
+            map_path = Path(cmd[cmd.index("-o") + 1])
+            map_path.write_text("001234:1\n004567:2\n009999:3\n")
+            return sp.CompletedProcess(cmd, 0, stdout="",
+                                       stderr="unrecognised banner shape")
+
+        monkeypatch.setattr(mod, "_sandbox_run", fake_run)
+        assert runner.run_showmap() == {"edges_covered": "3"}
+
+
+class TestStatusPathsFound:
+    """The live status line must resolve the discovery count through
+    the shared cross-version key list — modern AFL++ renamed
+    ``paths_found`` to ``corpus_count``/``queued_paths``."""
+
+    def test_modern_key_resolved_not_na(self):
+        assert AFLRunner._status_paths_found({"corpus_count": "8"}) == 8
+        assert AFLRunner._status_paths_found({"queued_paths": "5"}) == 5
+
+    def test_legacy_key_still_resolved(self):
+        assert AFLRunner._status_paths_found({"paths_found": "3"}) == 3
+
+    def test_no_discovery_key_reads_na(self):
+        assert AFLRunner._status_paths_found({"execs_done": "1"}) == "N/A"

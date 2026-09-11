@@ -51,6 +51,31 @@ class TestValidateVector:
     def test_garbage(self):
         assert not validate_vector("not a vector")
 
+    def test_reordered_metrics_accepted(self):
+        # CVSS v3.1 spec §6 Table 15: metrics may appear in any order.
+        assert validate_vector("CVSS:3.1/AC:L/AV:N/PR:N/UI:N/S:U/C:H/I:H/A:H")
+
+    def test_reordered_with_extension_first(self):
+        assert validate_vector("CVSS:3.1/E:H/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H")
+
+    def test_reordered_missing_metric_rejected(self):
+        assert not validate_vector("CVSS:3.1/AC:L/AV:N/PR:N/UI:N/S:U/C:H/I:H")
+
+    def test_reordered_duplicate_key_rejected(self):
+        assert not validate_vector("CVSS:3.1/AC:L/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H")
+
+    def test_reordered_invalid_base_value_rejected(self):
+        assert not validate_vector("CVSS:3.1/AC:L/AV:X/PR:N/UI:N/S:U/C:H/I:H/A:H")
+
+    def test_trailing_newline_rejected(self):
+        assert not validate_vector("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H\nrm -rf")
+
+    def test_non_string_input_rejected(self):
+        assert not validate_vector(None)
+        assert not validate_vector(["CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"])
+        assert not validate_vector({"AV": "N"})
+        assert not validate_vector(9.8)
+
 
 class TestParseVector:
     def test_parse_all_metrics(self):
@@ -173,6 +198,18 @@ class TestComputeScoreSafe:
         assert score == 9.8
         assert label == "Critical"
 
+    def test_reordered_vector_scores(self):
+        score, label = compute_score_safe("CVSS:3.1/AC:L/AV:N/PR:N/UI:N/S:U/C:H/I:H/A:H")
+        assert score == 9.8
+        assert label == "Critical"
+
+    def test_non_string_returns_none(self):
+        # The "safe" contract covers LLM structured-output glitches
+        # where cvss_vector arrives as a list / dict / number.
+        assert compute_score_safe({"AV": "N"}) == (None, None)
+        assert compute_score_safe(["CVSS:3.1/AV:N"]) == (None, None)
+        assert compute_score_safe(9.8) == (None, None)
+
 
 class TestScoreFinding:
     """Tests for score_finding — single finding dict."""
@@ -202,6 +239,15 @@ class TestScoreFinding:
         f = {"cvss_vector": "not-a-vector"}
         score_finding(f)
         assert "cvss_score_estimate" not in f
+
+    def test_non_string_vector_unchanged(self):
+        # One finding carrying a structured (non-string) cvss_vector
+        # must not raise and abort the caller's whole findings loop.
+        from packages.cvss import score_finding
+        for bad in (["CVSS:3.1/AV:N"], {"AV": "N"}, 9.8):
+            f = {"cvss_vector": bad}
+            score_finding(f)
+            assert "cvss_score_estimate" not in f
 
     def test_overwrites_existing_score(self):
         from packages.cvss import score_finding

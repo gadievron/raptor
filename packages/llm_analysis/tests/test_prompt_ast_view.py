@@ -295,3 +295,25 @@ class TestRobustness:
         # Bad chain → "?" placeholder.
         assert "calls inside body (1)" in text
         assert "?" in text
+
+
+class TestLinesTypeDefence:
+    """``lines`` travels through JSON round-trips like calls_made /
+    returns — corrupted shapes (int, dict, short list) must not crash
+    the renderer."""
+
+    def test_int_lines_does_not_crash(self):
+        text = _render_ast_view_block(_av(lines=5))
+        assert "host function" in text
+
+    def test_dict_lines_does_not_crash(self):
+        text = _render_ast_view_block(_av(lines={"start": 1}))
+        assert "host function" in text
+
+    def test_one_element_list_does_not_crash(self):
+        text = _render_ast_view_block(_av(lines=[7]))
+        assert "host function" in text
+
+    def test_valid_lines_still_rendered(self):
+        text = _render_ast_view_block(_av(lines=(3, 9)))
+        assert ":3-9]" in text

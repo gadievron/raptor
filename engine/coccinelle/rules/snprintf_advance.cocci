@@ -23,13 +23,18 @@
 //   recognised as safe.
 // - snprintf wrappers that return the clamped value are not tracked.
 //
+// The rules are `exists` (some-path): an advance nested inside a
+// conditional (`if (n > 0) buf += n;` — a guard, but the wrong one)
+// is still an unchecked advance on that path. Paths that DO pass
+// through `n >= remaining` stay excluded by the when-guard.
+//
 // Covers CWE-120 (Buffer Copy without Checking Size of Input) /
 // CWE-787 (Out-of-bounds Write).
 // @role: detection
 
 // Declaration form: T n = snprintf(buf, remaining, ...);
 
-@snprintf_decl@
+@snprintf_decl exists@
 expression buf, remaining;
 identifier n;
 type T;
@@ -68,7 +73,7 @@ for _p in p:
 
 // Assignment form: n = snprintf(buf, remaining, ...);
 
-@snprintf_assign@
+@snprintf_assign exists@
 expression buf, remaining, n;
 position p;
 @@
@@ -101,4 +106,36 @@ for _p in p:
           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
           "rule": "snprintf_advance",
           "message": "snprintf return value '%s' used to advance '%s' without truncation check — if output was truncated, pointer moves past buffer end" % (n, buf)}
+    sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
+
+// Direct form: buf += snprintf(...) — the return value is consumed
+// in the advance itself, so no truncation check is even possible
+// before the pointer moves.
+
+@snprintf_direct@
+expression buf;
+position p;
+@@
+
+(
+* buf += snprintf@p(...)
+|
+* buf = buf + snprintf@p(...)
+|
+* buf += vsnprintf@p(...)
+|
+* buf = buf + vsnprintf@p(...)
+)
+
+@script:python@
+p << snprintf_direct.p;
+buf << snprintf_direct.buf;
+@@
+
+import json, sys
+for _p in p:
+    _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
+          "line_end": int(_p.line_end), "col_end": int(_p.column_end),
+          "rule": "snprintf_advance",
+          "message": "snprintf return value added directly to '%s' with no truncation check possible — if output was truncated, pointer moves past buffer end" % buf}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")

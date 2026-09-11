@@ -7,6 +7,8 @@ import json
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from cve_env.tools.github_fetch import github_fetch
 from cve_env.tools.web_fetch import FetchResult
 
@@ -452,3 +454,43 @@ def test_github_fetch_blocks_poc_repo_before_network() -> None:
     assert not r.ok
     assert r.reason_class == "poc_repo_blocked"
     assert "environments, not exploits" in r.reason.lower()
+
+
+class TestOwnerRepoCharset:
+    """owner/repo are interpolated into the API URL path; anything outside
+    GitHub's identifier charset must be refused before any network call —
+    a '/'+'?' payload would rewrite the API route past the PoC-repo gate
+    and decouple the sanitizer's path-keyed decision from the fetched
+    resource."""
+
+    @pytest.mark.parametrize(
+        ("owner", "repo"),
+        [
+            ("someuser/CVE-2021-44228/contents/exploit.py?", "z"),
+            ("user", "repo/../../other"),
+            ("user", "repo?ref=x"),
+            ("us er", "repo"),
+            ("user", "repo#frag"),
+            ("user%2f", "repo"),
+        ],
+    )
+    def test_path_injection_shapes_rejected_pre_network(
+        self, owner: str, repo: str
+    ) -> None:
+        with patch("cve_env.tools.github_fetch.web_fetch") as mock_fetch:
+            r = github_fetch(owner=owner, repo=repo, path="safe.yml")
+        assert r.ok is False
+        assert "identifier charset" in r.reason
+        mock_fetch.assert_not_called()
+
+    def test_valid_identifiers_still_fetch(self) -> None:
+        ok_result = MagicMock()
+        ok_result.ok = True
+        ok_result.status = 200
+        ok_result.body = "[]"
+        with patch(
+            "cve_env.tools.github_fetch.web_fetch", return_value=ok_result
+        ) as mock_fetch:
+            r = github_fetch(owner="vulhub", repo="vulhub", path="README.md")
+        assert r.ok is True
+        mock_fetch.assert_called_once()

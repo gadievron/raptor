@@ -64,6 +64,36 @@ class TestProjectReport(unittest.TestCase):
             self.assertEqual(stats["findings"], 3)  # a.c, b.c, c.c
             self.assertEqual(stats["runs"], 2)
 
+    def test_newest_run_wins_equal_status_ties(self):
+        """The merged report honours the latest-wins contract: run
+        enumeration is newest-first, so the report must feed the merge
+        folds oldest-first (pre-fix the OLDEST run won every tie, and
+        the SCA fold kept the oldest row outright)."""
+        with TemporaryDirectory() as d:
+            key = {"file": "a.c", "function": "main", "line": 10}
+            p = self._make_project(
+                d,
+                {
+                    "scan-20260401-100000": [
+                        {"id": "F-001", "note": "old", **key}],
+                    "scan-20260402-100000": [
+                        {"id": "F-001", "note": "new", **key}],
+                },
+                sca_runs={
+                    "scan-20260401-100000": [
+                        dict(_sca_row("leftpad"), note="old")],
+                    "scan-20260402-100000": [
+                        dict(_sca_row("leftpad"), note="new")],
+                },
+            )
+            generate_project_report(p)
+            data = json.loads(
+                (p.output_path / "_report" / "findings.json").read_text())
+            self.assertEqual(
+                [f["note"] for f in data["findings"]], ["new"])
+            self.assertEqual(
+                [f["note"] for f in data["sca_findings"]], ["new"])
+
     def test_sca_findings_in_report(self):
         """SCA findings (from each run's sca/ subdir) are counted and
         appear in the aggregate report markdown under their own section."""
@@ -349,6 +379,17 @@ class TestMarkdownInertness(unittest.TestCase):
         code = [{
             "id": "F-1", "file": "a.c", "severity": "high",
             "title": "Overflow\n# injected heading",
+        }]
+        md = render_grouped_findings_markdown(code, "proj")
+        self.assertNotIn("# injected heading", md.splitlines())
+
+    def test_grouped_markdown_severity_cannot_inject_heading(self):
+        # severity is a finding-derived string too: a newline-bearing
+        # value injected a live heading line into the report pre-fix.
+        code = [{
+            "id": "F-1", "file": "a.c",
+            "severity": "high\n# injected heading",
+            "title": "Overflow",
         }]
         md = render_grouped_findings_markdown(code, "proj")
         self.assertNotIn("# injected heading", md.splitlines())

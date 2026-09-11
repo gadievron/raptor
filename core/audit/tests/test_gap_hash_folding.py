@@ -160,6 +160,67 @@ class TestHashAwareFolding:
         )
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
+    def test_missing_file_does_not_abort_fold_for_other_files(
+        self, tmp_path,
+    ):
+        # Two reviewed files, one deleted since its review. The
+        # deleted file's entry resurfaces (drift) — but the INTACT
+        # file's verified entry must still fold. Pre-fix the
+        # missing-file branch unpacked the fold's 4-tuples into 3
+        # names, so ANY journaled file missing from disk raised
+        # ValueError, the best-effort except aborted the ENTIRE
+        # project-index fold, and every prior verdict was re-bought.
+        # (The single-file missing-source test above passes either
+        # way: an aborted fold also leaves that one file uncovered.)
+        target = _write_target(tmp_path)
+        # Name sorts/inserts the deleted file first so its branch
+        # runs before the intact file is credited.
+        (target / "aaa_gone.c").write_text(
+            _ORIGINAL_SOURCE, encoding="utf-8")
+        gone_hash = hash_span(target / "aaa_gone.c", 1, 5)
+        kept_hash = hash_span(target / "auth.c", 1, 5)
+
+        project = tmp_path / "project"
+        run_dir = project / "run1"
+        run_dir.mkdir(parents=True)
+        for file, source_hash in (
+            ("aaa_gone.c", gone_hash),
+            ("auth.c", kept_hash),
+        ):
+            append_entry(run_dir, ReviewJournalEntry(
+                ts=now_iso(),
+                run_id="run1",
+                file=file,
+                function="check_pw",
+                verdict="clean",
+                source_hash=source_hash,
+                line_start=1,
+                line_end=5,
+            ))
+        merge_into_index(project, run_dir)
+        (target / "aaa_gone.c").unlink()
+
+        checklist = _checklist(target)
+        checklist["files"].append({
+            "path": "aaa_gone.c",
+            "language": "c",
+            "items": [{
+                "name": "check_pw",
+                "kind": "function",
+                "line_start": 1,
+                "line_end": 5,
+            }],
+        })
+        gaps = compute_gaps(checklist, [], project_dir=project)
+        keys = _gap_keys(gaps)
+        assert "aaa_gone.c:check_pw" in keys, (
+            "deleted file's review is drift — must resurface"
+        )
+        assert "auth.c:check_pw" not in keys, (
+            "the intact file's verified review must still fold — one "
+            "missing file must not abort the whole project-index fold"
+        )
+
     def test_no_target_path_keeps_covered(self, tmp_path):
         target = _write_target(tmp_path)
         stored = hash_span(target / "auth.c", 1, 5)

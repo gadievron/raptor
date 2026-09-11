@@ -65,22 +65,24 @@ def detect_dependency_counts(target_path: Path) -> DependencyCounts:
     prev_parse = parsers_logger.level
     discovery_logger.setLevel(logging.WARNING)
     parsers_logger.setLevel(logging.WARNING)
+    # ONE try/except/finally spanning everything after the level
+    # clamp: any gap between the clamp and the restore (e.g. the
+    # lockfile filter tripping over sca ManifestInfo contract drift)
+    # would both leave the sca loggers clamped process-wide AND
+    # propagate out of this best-effort helper, turning /describe
+    # into a hard crash instead of an empty deps field.
+    counts: dict[str, int] = {}
+    truncated = False
     try:
         manifests = find_manifests(target_path)
-    except Exception:  # noqa: BLE001
-        discovery_logger.setLevel(prev_disc)
-        parsers_logger.setLevel(prev_parse)
-        return DependencyCounts()
 
-    # Drop lockfiles (transitive view); keep direct-manifest
-    # files where the operator wrote their dep list.
-    direct = [m for m in manifests if not m.is_lockfile]
-    truncated = len(direct) > _MAX_MANIFESTS_TO_PARSE
-    if truncated:
-        direct = direct[:_MAX_MANIFESTS_TO_PARSE]
+        # Drop lockfiles (transitive view); keep direct-manifest
+        # files where the operator wrote their dep list.
+        direct = [m for m in manifests if not m.is_lockfile]
+        truncated = len(direct) > _MAX_MANIFESTS_TO_PARSE
+        if truncated:
+            direct = direct[:_MAX_MANIFESTS_TO_PARSE]
 
-    counts: dict[str, int] = {}
-    try:
         for manifest in direct:
             try:
                 deps = parse_manifest(manifest)
@@ -90,6 +92,8 @@ def detect_dependency_counts(target_path: Path) -> DependencyCounts:
                 continue
             eco = manifest.ecosystem or "unknown"
             counts[eco] = counts.get(eco, 0) + len(deps)
+    except Exception:  # noqa: BLE001 — best-effort by contract
+        return DependencyCounts()
     finally:
         discovery_logger.setLevel(prev_disc)
         parsers_logger.setLevel(prev_parse)

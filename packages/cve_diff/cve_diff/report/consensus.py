@@ -78,13 +78,25 @@ class ConsensusReport:
         return sum(1 for m in self.methods if m.found)
 
     def matches_pipeline_pick(self, picked_slug: str, picked_sha: str) -> bool:
-        """Did the agent's submission match the consensus?"""
+        """Did the agent's submission match the consensus?
+
+        SHA comparison is a SYMMETRIC mutual-prefix check (both sides
+        ≥7 chars, compared over the first ``SHA_DISPLAY_LEN``): a
+        legitimate short-SHA pick against a full 40-char consensus (or
+        vice versa) is the same commit — an asymmetric one-way
+        ``startswith`` false-negatived exactly that case and printed a
+        spurious "differs from consensus" for correct picks.
+        """
         if not self.consensus_slug:
             return False
         ps = normalize_slug(picked_slug or "")
+        psha = (picked_sha or "").lower()
+        csha = (self.consensus_sha or "").lower()
         return (
             ps == self.consensus_slug
-            and (picked_sha or "").lower().startswith(self.consensus_sha[:SHA_DISPLAY_LEN].lower())
+            and len(psha) >= 7 and len(csha) >= 7
+            and (psha.startswith(csha[:SHA_DISPLAY_LEN])
+                 or csha.startswith(psha[:SHA_DISPLAY_LEN]))
         )
 
     def to_dict(self) -> dict:

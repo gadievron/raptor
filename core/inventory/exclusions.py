@@ -277,44 +277,7 @@ def should_exclude(
     for nested build-output dir names (see ``PKG_EXEMPTIBLE_BUILD_DIRS``);
     without it, matching is pure-string and behaves as before.
     """
-    filepath_lower = filepath.lower()
-    path_parts_lower = filepath_lower.split(os.sep)
-
-    for pattern in exclude_patterns:
-        pattern_lower = pattern.lower()
-        # Directory pattern (ends with /)
-        if pattern.endswith('/'):
-            dir_name = pattern_lower[:-1]
-            # When the directory pattern contains glob metacharacters
-            # (e.g. ``*.egg-info/``, ``cmake-build-*/``), match each path
-            # component via fnmatch. Plain ``in`` would only catch a literal
-            # path segment named ``*.egg-info``, which never exists.
-            if any(c in dir_name for c in "*?["):
-                if any(fnmatch.fnmatch(part, dir_name) for part in path_parts_lower):
-                    return True
-            elif dir_name in ROOT_ANCHORED_EXCLUDE_DIRS:
-                # First-party-collision-prone name (examples/ samples/ docs/ …):
-                # only a TOP-LEVEL dir of this name is a throwaway demo/docs dir.
-                # A nested occurrence is a package/source segment, so matching it
-                # anywhere would silently exclude first-party source. Anchor to
-                # the first path component (mirrors the walk-time prune).
-                if path_parts_lower and path_parts_lower[0] == dir_name:
-                    return True
-            elif dir_name in path_parts_lower:
-                if _pkg_exempt(dir_name, filepath, path_parts_lower, target_root):
-                    continue
-                return True
-        # Glob pattern
-        elif '*' in pattern:
-            if fnmatch.fnmatch(os.path.basename(filepath_lower), pattern_lower):
-                return True
-            if fnmatch.fnmatch(filepath_lower, pattern_lower):
-                return True
-        # Exact filename or path segment match
-        elif pattern_lower in path_parts_lower or pattern_lower == os.path.basename(filepath_lower):
-            return True
-
-    return False
+    return match_exclusion_reason(filepath, exclude_patterns, target_root)[0]
 
 
 def match_exclusion_reason(
@@ -329,29 +292,52 @@ def match_exclusion_reason(
     """
     filepath_lower = filepath.lower()
     path_parts_lower = filepath_lower.split(os.sep)
+    # Directory-shaped patterns describe DIRECTORIES. The final path
+    # component is the file's basename, so it must never be tested
+    # against them — otherwise a FILE named after a build dir (a
+    # shebang dispatch script `build`, `script/test`, `pkg.egg-info`)
+    # is silently dropped as if it were an excluded directory.
+    dir_parts_lower = path_parts_lower[:-1]
 
     for pattern in exclude_patterns:
         pattern_lower = pattern.lower()
+        # Directory pattern (ends with /)
         if pattern.endswith('/'):
             dir_name = pattern_lower[:-1]
+            # When the directory pattern contains glob metacharacters
+            # (e.g. ``*.egg-info/``, ``cmake-build-*/``), match each path
+            # component via fnmatch. Plain ``in`` would only catch a literal
+            # path segment named ``*.egg-info``, which never exists.
             if any(c in dir_name for c in "*?["):
-                if any(fnmatch.fnmatch(part, dir_name) for part in path_parts_lower):
+                if any(fnmatch.fnmatch(part, dir_name) for part in dir_parts_lower):
                     return True, "pattern_match", pattern
             elif dir_name in ROOT_ANCHORED_EXCLUDE_DIRS:
-                # Anchor first-party-collision-prone names to the top level
-                # (see should_exclude) so nested package/source segments named
-                # samples/ examples/ docs/ … are not silently excluded.
-                if path_parts_lower and path_parts_lower[0] == dir_name:
+                # First-party-collision-prone name (examples/ samples/ docs/ …):
+                # only a TOP-LEVEL dir of this name is a throwaway demo/docs dir.
+                # A nested occurrence is a package/source segment, so matching it
+                # anywhere would silently exclude first-party source. Anchor to
+                # the first path component (mirrors the walk-time prune).
+                if dir_parts_lower and dir_parts_lower[0] == dir_name:
                     return True, "pattern_match", pattern
-            elif dir_name in path_parts_lower:
+            elif dir_name in dir_parts_lower:
                 if _pkg_exempt(dir_name, filepath, path_parts_lower, target_root):
                     continue
                 return True, "pattern_match", pattern
+        # Glob pattern
         elif '*' in pattern:
             if fnmatch.fnmatch(os.path.basename(filepath_lower), pattern_lower):
                 return True, "pattern_match", pattern
-            if fnmatch.fnmatch(filepath_lower, pattern_lower):
+            # Full-path fnmatch only for path-shaped globs (containing a
+            # separator): fnmatch's ``*`` crosses ``/``, so testing a
+            # basename-shaped glob like ``test_*`` against the whole path
+            # would exclude entire first-party top-level trees
+            # (``test_utils/prod/main.py``). The basename match above
+            # already covers what basename-shaped globs intend.
+            if ('/' in pattern or os.sep in pattern) and fnmatch.fnmatch(
+                filepath_lower, pattern_lower
+            ):
                 return True, "pattern_match", pattern
+        # Exact filename or path segment match
         elif pattern_lower in path_parts_lower or pattern_lower == os.path.basename(filepath_lower):
             return True, "pattern_match", pattern
 

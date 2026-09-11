@@ -48,6 +48,22 @@ class TestClassifier:
         assert classify_error_text("read timed out") == "timeout"
         assert classify_error_text("deadline exceeded") == "timeout"
 
+    def test_rate_limit_shapes_are_not_schema_errors(self):
+        # The underscored provider error type and 429 statuses are the
+        # same non-schema class as the spaced "rate limit".
+        assert classify_error_text(
+            "Error code: 429 - {'type': 'rate_limit_error'}") == "auth"
+        assert classify_error_text("rate_limit_error") == "auth"
+        assert classify_error_text("429 RESOURCE_EXHAUSTED") == "auth"
+        assert classify_error_text("HTTP 429 Too Many Requests") == "auth"
+
+    def test_unrelated_429_numerics_stay_error(self):
+        # Boundary/context anchoring: a stack-trace line number or an
+        # embedded numeric must not classify as a rate limit.
+        assert classify_error_text(
+            'File "x.py", line 429, in foo') == "error"
+        assert classify_error_text("request id 14290 failed") == "error"
+
     def test_precedence_blocked_over_auth_over_timeout(self):
         assert classify_error_text(
             "content filter triggered after timeout") == "blocked"
@@ -120,3 +136,53 @@ class TestUnwrap:
     def test_default_result_type(self):
         assert isinstance(unwrap_structured_response(None),
                           StructuredCallResult)
+
+
+class TestChainWalkingClassifiers:
+    """Shared home for the blocked/refused predicates: every consumer
+    must see a block hidden behind the all-models-failed wrapper's
+    __cause__, and refusal vocabulary must stay narrower than the
+    content-filter set (transport blocks must not classify refusal)."""
+
+    def _wrapped(self, cause_msg: str) -> RuntimeError:
+        cause = RuntimeError(cause_msg)
+        wrapper = RuntimeError("All cloud models failed (tried 1 model(s)).")
+        wrapper.__cause__ = cause
+        return wrapper
+
+    def test_content_filter_seen_through_cause_chain(self):
+        from core.llm.structured_call import is_content_filter_error
+        exc = self._wrapped("request blocked by content filter")
+        assert is_content_filter_error(exc)
+
+    def test_refusal_seen_through_cause_chain(self):
+        from core.llm.structured_call import is_refusal_error
+        exc = self._wrapped(
+            "Anthropic model refused request (stop_reason=refusal)")
+        assert is_refusal_error(exc)
+
+    def test_transport_block_is_not_a_refusal(self):
+        from core.llm.structured_call import (
+            is_content_filter_error,
+            is_refusal_error,
+        )
+        exc = self._wrapped("403: request blocked by security policy")
+        assert not is_refusal_error(exc)
+        assert is_content_filter_error(exc)
+
+    def test_plain_transport_error_is_neither(self):
+        from core.llm.structured_call import (
+            is_content_filter_error,
+            is_refusal_error,
+        )
+        exc = self._wrapped("connection reset by peer")
+        assert not is_refusal_error(exc)
+        assert not is_content_filter_error(exc)
+
+    def test_connection_refused_is_not_a_refusal(self):
+        from core.llm.structured_call import is_refusal_error
+        assert not is_refusal_error(
+            self._wrapped("[Errno 111] Connection refused"))
+        exc = RuntimeError("All cloud models failed (tried 1 model(s)).")
+        exc.__cause__ = ConnectionRefusedError(111, "Connection refused")
+        assert not is_refusal_error(exc)

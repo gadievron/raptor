@@ -23,6 +23,13 @@ from core.startup import init as startup_init
 @pytest.fixture
 def isolated_home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    # check_llm honours RAPTOR_CONFIG (conftest pins it at a
+    # nonexistent path); these tests exercise the HOME-default
+    # location, so route the override at the isolated home's config.
+    monkeypatch.setenv(
+        "RAPTOR_CONFIG",
+        str(tmp_path / ".config" / "raptor" / "models.json"),
+    )
     for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
                 "MISTRAL_API_KEY", "AWS_BEARER_TOKEN_BEDROCK"):
         monkeypatch.delenv(var, raising=False)

@@ -276,3 +276,62 @@ class TestSchemaContract:
             'void f(void) { g(); h(); i(); }\n'
         )
         assert all(c.receiver_class is None for c in g.calls)
+
+
+# ---------------------------------------------------------------------------
+# Function-pointer declarations — bare-name calls through them
+# ---------------------------------------------------------------------------
+
+
+class TestFnPointerDeclarations:
+    """tree-sitter-c nests fn-ptr declarators with function_declarator
+    OUTERMOST; the pre-pass previously assumed the inverted nesting,
+    matched nothing, and bare ``handler(1)`` calls were never flagged
+    as indirect dispatch."""
+
+    def test_initialised_fn_ptr_bare_call_flagged(self):
+        g = extract_call_graph_c(
+            "void (*handler)(int) = handler_impl;\n"
+            "void use(void) { handler(1); }\n"
+        )
+        assert INDIRECTION_FN_POINTER in g.indirection
+
+    def test_uninitialised_fn_ptr_flagged(self):
+        g = extract_call_graph_c(
+            "void (*cb)(void);\n"
+            "void go(void) { cb(); }\n"
+        )
+        assert INDIRECTION_FN_POINTER in g.indirection
+
+    def test_fn_ptr_array_collected(self):
+        # Subscripted callees (table[0](1)) have no nameable chain, so
+        # the observable fix here is the pre-pass itself: the array
+        # declarator shape must land in _fn_ptr_vars.
+        from core.inventory.call_graph import (
+            _CCallGraph,
+            _get_ts_parser,
+            _import_grammar,
+        )
+        ts_c = _import_grammar("tree_sitter_c")
+        tree = _get_ts_parser(ts_c.language).parse(
+            b"int (*table[2])(int);\n")
+        walker = _CCallGraph()
+        walker._collect_fn_ptr_declarations(tree.root_node)
+        assert walker._fn_ptr_vars == {"table"}
+
+    def test_pointer_return_type_fn_ptr_flagged(self):
+        g = extract_call_graph_c(
+            "void *(*alloc_fn)(int) = my_alloc;\n"
+            "void go(void) { alloc_fn(4); }\n"
+        )
+        assert INDIRECTION_FN_POINTER in g.indirection
+
+    def test_prototypes_and_plain_pointers_not_flagged(self):
+        # Counter-direction: prototypes / data pointers must not turn
+        # every direct call into "indirect".
+        g = extract_call_graph_c(
+            "int proto(int);\n"
+            "int *p;\n"
+            "void f(void) { proto(1); }\n"
+        )
+        assert INDIRECTION_FN_POINTER not in g.indirection

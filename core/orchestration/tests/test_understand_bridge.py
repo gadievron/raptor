@@ -2077,3 +2077,122 @@ class TestUrlTargets:
         )
         assert result_dir == new
         assert stale == set()
+
+
+class TestMalformedShapesDegradeGracefully:
+    """LLM-shaped/corrupt artifacts skip-with-warning instead of
+    crashing the bridge (the file's established degradation pattern)."""
+
+    def test_array_shaped_checklist_does_not_kill_discovery(
+            self, tmp_path):
+        # One candidate carrying an ARRAY-shaped checklist.json must
+        # not take down ranking — the healthy sibling still wins.
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "app.py").write_text("x = 1\n")
+        project_dir = tmp_path / "project"
+        validate_dir = project_dir / "validate-20260403-120000"
+        validate_dir.mkdir(parents=True)
+
+        bad = _make_understand_dir(project_dir,
+                                   "understand-20260401-120000")
+        _write_json(bad / "checklist.json", ["not", "an", "object"])
+        time.sleep(0.01)
+        good = _make_understand_dir(project_dir,
+                                    "understand-20260402-120000")
+        from core.hash import sha256_file
+        _write_json(good / "checklist.json", {
+            "target_path": str(target),
+            "files": [{"path": "app.py",
+                       "sha256": sha256_file(target / "app.py")}],
+        })
+
+        result_dir, stale = find_understand_output(
+            validate_dir, target_path=str(target))
+        assert result_dir == good
+        assert stale == set()
+
+    def test_array_shaped_checklist_skipped_in_target_search(
+            self, tmp_path, monkeypatch):
+        # Global-tier candidates gate on the recorded target — an
+        # array-shaped checklist must skip the candidate, not crash.
+        out_root = tmp_path / "out"
+        out_root.mkdir()
+        from core.config import RaptorConfig
+        monkeypatch.setattr(RaptorConfig, "get_out_dir",
+                            classmethod(lambda cls: out_root))
+        validate_dir = tmp_path / "standalone" / "validate-1"
+        validate_dir.mkdir(parents=True)
+        bad = _make_understand_dir(out_root, "understand-bad")
+        _write_json(bad / "checklist.json", ["oops"])
+
+        result_dir, _stale = find_understand_output(
+            validate_dir, target_path="./vulns")
+        assert result_dir is None
+
+    def test_string_summary_trace_still_imports(self, tmp_path):
+        # LLM traces routinely render `summary` as a plain string —
+        # the import must proceed (without a trace_verdict).
+        understand_dir = tmp_path / "understand"
+        validate_dir = tmp_path / "validate"
+        understand_dir.mkdir()
+        validate_dir.mkdir()
+        _write_json(understand_dir / "context-map.json",
+                    MINIMAL_CONTEXT_MAP)
+        trace = dict(MINIMAL_FLOW_TRACE)
+        trace["summary"] = "flow confirmed, SQLi likely"
+        _write_json(understand_dir / "flow-trace-EP-001.json", trace)
+
+        result = load_understand_context(understand_dir, validate_dir)
+        assert result["flow_traces"]["imported_as_paths"] == 1
+        paths = json.loads(
+            (validate_dir / "attack-paths.json").read_text())
+        assert "trace_verdict" not in paths[0]
+
+    def test_non_dict_entries_in_existing_paths_tolerated(
+            self, tmp_path):
+        understand_dir = tmp_path / "understand"
+        validate_dir = tmp_path / "validate"
+        understand_dir.mkdir()
+        validate_dir.mkdir()
+        _write_json(understand_dir / "context-map.json",
+                    MINIMAL_CONTEXT_MAP)
+        _write_json(understand_dir / "flow-trace-EP-001.json",
+                    MINIMAL_FLOW_TRACE)
+        _write_json(validate_dir / "attack-paths.json",
+                    ["stray-string", {"id": "other"}])
+
+        result = load_understand_context(understand_dir, validate_dir)
+        assert result["flow_traces"]["imported_as_paths"] == 1
+
+    def test_string_trust_boundaries_do_not_crash_surface_merge(
+            self, tmp_path):
+        understand_dir = tmp_path / "understand"
+        validate_dir = tmp_path / "validate"
+        understand_dir.mkdir()
+        validate_dir.mkdir()
+        cm = json.loads(json.dumps(MINIMAL_CONTEXT_MAP))
+        cm["trust_boundaries"] = ["JWT auth middleware"]
+        cm["boundary_details"] = [{"id": "TB-001", "gaps": ["none"]}]
+        _write_json(understand_dir / "context-map.json", cm)
+
+        result = load_understand_context(understand_dir, validate_dir)
+        assert result["context_map_loaded"] is True
+        assert result["attack_surface"]["trust_boundaries"] == 1
+
+    def test_non_string_trace_id_falls_back_to_stem(self, tmp_path):
+        understand_dir = tmp_path / "understand"
+        validate_dir = tmp_path / "validate"
+        understand_dir.mkdir()
+        validate_dir.mkdir()
+        _write_json(understand_dir / "context-map.json",
+                    MINIMAL_CONTEXT_MAP)
+        trace = dict(MINIMAL_FLOW_TRACE)
+        trace["id"] = {"nested": "id"}  # unhashable pre-fix
+        _write_json(understand_dir / "flow-trace-EP-001.json", trace)
+
+        result = load_understand_context(understand_dir, validate_dir)
+        assert result["flow_traces"]["imported_as_paths"] == 1
+        paths = json.loads(
+            (validate_dir / "attack-paths.json").read_text())
+        assert paths[0]["id"] == "flow-trace-EP-001"

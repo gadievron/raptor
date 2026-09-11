@@ -101,6 +101,27 @@ _TERMINATED_TO_STOP_REASON: dict[str, str] = {
 }
 
 
+def _write_refusal_log(
+    scanner: RefusalScanner, *, final_status: str, verify_passed: bool
+) -> None:
+    """Persist the run's refusal forensics to ``refusals-log.md``.
+
+    Fills each event's post-hoc fields (subsequent turns, retry pattern,
+    recovery) from the observed trail, then appends the markdown log.
+    Telemetry only — must never affect the build result."""
+    if not scanner.events:
+        return
+    try:
+        scanner.finalize(
+            final_outcome_status=final_status, verify_passed=verify_passed
+        )
+        from cve_env.agent.refusals import append_events, default_log_path
+
+        append_events(scanner.events, log_path=default_log_path())
+    except Exception:  # noqa: BLE001 — forensics must not break the build
+        logger.debug("refusal-log write failed", exc_info=True)
+
+
 def _resolve_provider(model: str):
     """Provider resolution mirroring the cve-diff convention: family →
     provider, dispatcher when RAPTOR_LLM_SOCKET is up, Claude Code
@@ -201,6 +222,11 @@ def build_core(
             state.stage_calls[state.last_tool_stage] = (
                 state.stage_calls.get(state.last_tool_stage, 0) + 1
             )
+            refusal_scanner.observe({
+                "turn": state.turn,
+                "kind": "assistant_tool_use",
+                "tool_name": name,
+            })
             writer.write(
                 cve_id=cve.cve_id,
                 entry=AuditEntry(
@@ -221,7 +247,13 @@ def build_core(
                 _track_tool_result(
                     state, tool_name, payload,
                     refusal_event_count=len(refusal_scanner.events),
+                    cve_version=cve.version,
                 )
+            refusal_scanner.observe({
+                "turn": state.turn,
+                "kind": "tool_result",
+                "tool_name": tool_name,
+            })
             tool_status = ("tool_error" if event.result.is_error
                            else "tool_ok")
             writer.write(
@@ -297,6 +329,12 @@ def build_core(
                     )
                 else:
                     _budget_stop["flag"] = True
+            # The turn's cost/token usage is written exactly once: on the
+            # first text-block entry, or on a dedicated row for turns with
+            # no text. The per-CVE audit JSONL is the owner of the full
+            # agentic payload — cost queries over it must be able to sum
+            # cost_usd per turn.
+            turn_cost_written = False
             for block in event.response.content:
                 if isinstance(block, TextBlock) and block.text:
                     state.final_text = block.text
@@ -314,8 +352,32 @@ def build_core(
                             turn=state.turn,
                             status="llm_turn",
                             llm_message={"text": block.text[:4000]},
+                            cost_usd=(
+                                0.0 if turn_cost_written
+                                else float(event.cost_usd or 0.0)
+                            ),
+                            input_tokens=(
+                                0 if turn_cost_written
+                                else event.response.input_tokens
+                            ),
+                            output_tokens=(
+                                0 if turn_cost_written
+                                else event.response.output_tokens
+                            ),
                         ),
                     )
+                    turn_cost_written = True
+            if not turn_cost_written:
+                writer.write(
+                    cve_id=cve.cve_id,
+                    entry=AuditEntry(
+                        turn=state.turn,
+                        status="llm_turn",
+                        cost_usd=float(event.cost_usd or 0.0),
+                        input_tokens=event.response.input_tokens,
+                        output_tokens=event.response.output_tokens,
+                    ),
+                )
 
     try:
         provider = _resolve_provider(model)
@@ -387,6 +449,11 @@ def build_core(
                 status=_terminal_status_for_result(state, stop_reason.lower()),
                 reason=f"{type(exc).__name__}: {exc}"[:400],
             ),
+        )
+        _write_refusal_log(
+            refusal_scanner,
+            final_status=status,
+            verify_passed=state.verify_passed,
         )
         return Outcome(
             cve_id=cve.cve_id,
@@ -470,6 +537,11 @@ def build_core(
             status=_terminal_status_for_result(state, stop_reason.lower()),
             reason=f"{status}: {reason}"[:400],
         ),
+    )
+    _write_refusal_log(
+        refusal_scanner,
+        final_status=outcome.status,
+        verify_passed=state.verify_passed,
     )
     if outcome.status == "success":
         # Record the proven environment as a core.env replay spec next

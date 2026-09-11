@@ -6,6 +6,7 @@ This module transforms RAPTOR from a fixed pipeline into an intelligent agent
 that makes decisions based on fuzzing state and learned knowledge.
 """
 
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -105,6 +106,9 @@ class FuzzingPlanner:
     4. Learns from successes and failures
     """
 
+    # Most-recent decision records retained for the summary report.
+    _DECISION_HISTORY_MAX = 1000
+
     def __init__(
         self,
         memory=None,
@@ -119,7 +123,14 @@ class FuzzingPlanner:
         """
         self.memory = memory
         self.sage_strategy_rows: list[dict[str, Any]] = list(sage_strategy_rows or [])
-        self.decision_history: list[dict[str, Any]] = []
+        # Bounded: one record per poll accumulates for the whole
+        # campaign, and the final report only needs the recent tail.
+        # total_decisions in get_decision_summary still reports the
+        # true count.
+        self.decision_history: deque[dict[str, Any]] = deque(
+            maxlen=self._DECISION_HISTORY_MAX,
+        )
+        self._decisions_total = 0
         logger.info("Autonomous Fuzzing Planner initialised")
 
     def decide_next_action(self, state: FuzzingState) -> Action:
@@ -153,20 +164,24 @@ class FuzzingPlanner:
             action = Action.CONTINUE_FUZZING
             reasoning = f"Found {state.crashes_last_minute} crashes in last minute - keep going"
 
-        # 2. Check if coverage is stalled
+        # 2. Check if we should stop (no progress, long time). This
+        # must be evaluated BEFORE the coverage-stall rule: a long
+        # dead campaign always has stalled coverage too, so ordering
+        # the stall rule first would shadow the stop condition in
+        # exactly the no-progress scenario it targets.
+        elif state.elapsed_time() > 3600 and state.total_crashes == 0:
+            action = Action.STOP_FUZZING
+            reasoning = "Over 1 hour with no crashes - likely not vulnerable"
+
+        # 3. Check if coverage is stalled
         elif state.is_coverage_stalled(threshold_seconds=180):
             action = Action.CHANGE_MUTATOR
             reasoning = f"Coverage stalled for {state.coverage_plateau_duration:.0f}s - try different mutator"
 
-        # 3. Check if we're making progress
+        # 4. Check if we're making progress
         elif state.total_coverage > 0 and state.execs_per_sec > 10:
             action = Action.CONTINUE_FUZZING
             reasoning = "Making steady progress with good throughput"
-
-        # 4. Check if we should stop (no progress, long time)
-        elif state.elapsed_time() > 3600 and state.total_crashes == 0:
-            action = Action.STOP_FUZZING
-            reasoning = "Over 1 hour with no crashes - likely not vulnerable"
 
         # 5. Default: keep fuzzing
         else:
@@ -178,6 +193,7 @@ class FuzzingPlanner:
         logger.info("Reasoning: %s", reasoning)
 
         # Record decision in history
+        self._decisions_total += 1
         self.decision_history.append({
             "time": state.current_time,
             "action": action.value,
@@ -215,8 +231,10 @@ class FuzzingPlanner:
             logger.info("Autonomous decision: EXTEND fuzzing beyond target duration")
             return True
 
-        # Check if we've exceeded target duration (if set)
-        if target_duration and state.elapsed_time() >= target_duration:
+        # Check if we've exceeded target duration (if set). Explicit
+        # None check: a target_duration of 0 means "stop now", not
+        # "unset / fuzz forever" — a truthiness test conflated the two.
+        if target_duration is not None and state.elapsed_time() >= target_duration:
             # But if we're finding crashes, keep going!
             if state.crashes_last_minute > 0:
                 logger.info("Target duration reached, but found %s crashes recently", state.crashes_last_minute)
@@ -367,8 +385,13 @@ class FuzzingPlanner:
         return strategy
 
     def get_decision_summary(self) -> dict:
-        """Get summary of all decisions made."""
+        """Get summary of all decisions made.
+
+        ``decisions`` carries only the most recent
+        ``_DECISION_HISTORY_MAX`` records; ``total_decisions`` is the
+        true campaign-wide count.
+        """
         return {
-            "total_decisions": len(self.decision_history),
-            "decisions": self.decision_history,
+            "total_decisions": self._decisions_total,
+            "decisions": list(self.decision_history),
         }

@@ -1037,3 +1037,26 @@ def test_prompt_forbids_raw_bash_docker_pull() -> None:
     assert "source_build" in window, (
         f"docker-pull prohibition must steer toward source_build, got: {window!r}"
     )
+
+
+def test_system_prompt_has_single_turn_horizon() -> None:
+    """The composed prompt must carry exactly ONE turn horizon — the
+    runtime caps block. A hardcoded 'stop after N turns' literal in the
+    prose contradicted the enforced cap and halved an instruction-
+    following agent's budget."""
+    import re
+
+    from cve_env.agent.loop import _compose_system_prompt
+
+    text = _compose_system_prompt(
+        None,
+        max_turns=24,
+        max_cost_usd=5.0,
+        max_extensions=0,
+        extension_pct=0.0,
+    )
+    assert "Turn cap: 24" in text
+    assert re.search(r"at most \d+ turns", text) is None
+    # The tool-belt header carries no hardcoded count to drift from the
+    # registered belt.
+    assert re.search(r"Tool belt \(\d+ tools\)", text) is None

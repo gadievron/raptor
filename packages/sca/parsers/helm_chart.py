@@ -40,6 +40,7 @@ What we don't cover:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, TYPE_CHECKING
 
 from ..models import Confidence, Dependency, PinStyle
@@ -232,9 +233,40 @@ def chart_repository_hosts(target: Path) -> list[str]:
             if repo.startswith("oci://"):
                 continue
             try:
-                host = urlparse(repo).hostname
+                parsed = urlparse(repo)
+                host = parsed.hostname
+                has_userinfo = parsed.username is not None
             except ValueError:
                 continue
-            if host:
-                found.add(host)
+            # Chart.yaml content is target-controlled and this list
+            # feeds the egress-proxy allowlist — only well-formed
+            # hosts may pass. Userinfo URLs are refused outright
+            # (credential-looking repos shouldn't silently widen
+            # egress), and anything that isn't a clean DNS name /
+            # IP literal (whitespace, control chars, stray
+            # punctuation urlparse tolerates) is dropped with a
+            # warning instead of being written into the allowlist.
+            if not host:
+                continue
+            if has_userinfo or not _SAFE_HOST_RE.fullmatch(host):
+                logger.warning(
+                    "sca.parsers.helm_chart: refusing repository host "
+                    "%r from %s for the egress allowlist "
+                    "(malformed host or embedded userinfo)",
+                    host, path,
+                )
+                continue
+            found.add(host)
     return sorted(found)
+
+
+# DNS label chain (RFC 952/1123 shape), IPv4, or IPv6 literal
+# (urlparse strips the brackets). Everything else — spaces, control
+# characters, ``_``-prefixed labels, empty labels — is refused.
+_SAFE_HOST_RE = re.compile(
+    r"^(?:"
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*"
+    r"|[0-9A-Fa-f:]{2,45}"
+    r")$"
+)

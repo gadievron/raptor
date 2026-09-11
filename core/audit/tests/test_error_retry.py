@@ -319,3 +319,122 @@ class TestRetryErrorOutcomes:
             None, time.monotonic(), None,
         )
         assert result.error_retries == 0
+
+
+class TestRetryGapSpan:
+    """The retry must rebuild the gap WITH its line span — a span-less
+    gap made the retry review the file's opening lines and re-journal
+    a wrong-source verdict as authoritative."""
+
+    _make_config = staticmethod(TestRetryErrorOutcomes._make_config)
+
+    @staticmethod
+    def _checklist_with_span(file, fn, line_start, line_end):
+        return {
+            "files": [{
+                "path": file,
+                "items": [{
+                    "name": fn,
+                    "line_start": line_start,
+                    "line_end": line_end,
+                }],
+            }],
+        }
+
+    def _run(self, checklist, outcome_line=0):
+        import time
+
+        captured_gaps = []
+
+        def fake_build(config, gap, cl, cm, *a, **kw):
+            captured_gaps.append(dict(gap))
+            return {"file": gap["file"], "function": gap["name"]}
+
+        result = OrchestratorResult()
+        error_outcome = ReviewOutcome(
+            file="src/auth.c", function="check_pw",
+            status="error", body="json fail",
+            error_class="json_parse",
+        )
+        error_outcome.line = outcome_line
+        _tally_outcome(result, error_outcome)
+
+        recovered = ReviewOutcome(
+            file="src/auth.c", function="check_pw",
+            status="clean", body="looks safe",
+        )
+        with patch(
+            "core.audit.orchestrator._build_context",
+            side_effect=fake_build,
+        ):
+            result = _retry_error_outcomes(
+                result, self._make_config(), lambda ctx, cfg: recovered,
+                checklist, None, None, time.monotonic(), None,
+            )
+        return captured_gaps, result
+
+    def test_checklist_span_used(self):
+        checklist = self._checklist_with_span("src/auth.c", "check_pw", 42, 90)
+        gaps, result = self._run(checklist)
+        assert gaps and gaps[0]["line_start"] == 42
+        assert gaps[0]["line_end"] == 90
+        # The recovered verdict carries the function's line, not 0.
+        assert result.outcomes[0].line == 42
+
+    def test_outcome_line_fallback(self):
+        # Function missing from the checklist: outcome.line (stamped
+        # from the original gap's line_start) restores the start.
+        checklist = {"files": []}
+        gaps, result = self._run(checklist, outcome_line=57)
+        assert gaps and gaps[0].get("line_start") == 57
+        assert result.outcomes[0].line == 57
+
+
+class TestRetryContextReducedTag:
+    """Both context-stripping lanes (truncation AND timeout) must tag
+    recovered verdicts context_reduced; non-stripping lanes must not."""
+
+    _make_config = staticmethod(TestRetryErrorOutcomes._make_config)
+    _make_checklist = staticmethod(TestRetryErrorOutcomes._make_checklist)
+
+    def _recovering_run(self, error_class):
+        import time
+
+        result = OrchestratorResult()
+        error_outcome = ReviewOutcome(
+            file="a.c", function="f",
+            status="error", body="fail",
+            error_class=error_class,
+        )
+        _tally_outcome(result, error_outcome)
+
+        recovered = ReviewOutcome(
+            file="a.c", function="f", status="clean", body="ok",
+        )
+        recovered.review_result = {}
+        with patch(
+            "core.audit.orchestrator._build_context",
+            return_value={"file": "a.c", "function": "f"},
+        ):
+            result = _retry_error_outcomes(
+                result, self._make_config(), lambda ctx, cfg: recovered,
+                self._make_checklist([("a.c", "f")]), None,
+                None, time.monotonic(), None,
+            )
+        return result.outcomes[0]
+
+    def test_truncation_recovery_tagged(self):
+        out = self._recovering_run("truncation")
+        assert out.context_reduced is True
+        assert out.review_result["context_reduced"] is True
+
+    def test_timeout_recovery_tagged(self):
+        out = self._recovering_run("timeout")
+        assert out.context_reduced is True
+
+    def test_json_parse_recovery_untagged(self):
+        # json_parse retries keep full context — the tag would force a
+        # needless full-context re-review next run.
+        out = self._recovering_run("json_parse")
+        assert not out.context_reduced
+        assert "context_reduced" not in out.review_result

@@ -500,3 +500,62 @@ class TestCensusBlockIsolationWiring:
         assert (
             "lifecycle channel prepass block failed" in src
         )
+
+
+# Source-field NULL write: the freed owner's SAME-NAMED field is
+# nulled post-free (the idiomatic `obj->port = NULL;` hygiene line) —
+# the alias on the OTHER holder still dangles.
+BIO_SOURCE_NULL = """
+int ndef_setup(struct ctx *c, struct bio *b) {
+    c->cached = b->cached;
+    if (init_failed(b)) {
+        BIO_free(b);
+        b->cached = NULL;
+        return 0;
+    }
+    return 1;
+}
+struct pool *ctx_pool(struct ctx *h) {
+    return h->cached;
+}
+"""
+
+
+@requires_ts
+class TestInvalidationHolderConstraint:
+    """The same-function null-write receipt must hit the ALIAS-HOLDING
+    base: an unconstrained `\\w+->field = NULL` match let the post-free
+    hygiene write on the freed SOURCE refute a real stale alias on a
+    different holder (the census arm has always required
+    ``w.owner == edge.holder``).
+
+    Gated like the other census-exercising classes: without the
+    tree-sitter C grammar the census is regex-tier and
+    ``run_ptr_lifecycle_check`` refuses to adjudicate (inconclusive,
+    census-degraded) — both directions of this contract need the
+    full-tier census to bind."""
+
+    def test_source_field_null_write_does_not_refute(self):
+        res = run_ptr_lifecycle_check(
+            Path("/nonexistent"), "src/bio.c", "ndef_setup", HYP,
+            source_texts={"src/bio.c": BIO_SOURCE_NULL},
+            domain_vocab=_Vocab(deallocators={"BIO_free"}),
+        )
+        assert res.outcome == "confirmed"
+        assert res.to_dict()["invalidation_search"]["found"] is None
+
+    def test_holder_null_write_still_refutes(self):
+        # Two-direction guard: the constraint must not break the
+        # legitimate receipt — nulling the HOLDER's alias field after
+        # the free still refutes.
+        twin = BIO_SOURCE_NULL.replace(
+            "        b->cached = NULL;\n",
+            "        c->cached = NULL;\n",
+        )
+        res = run_ptr_lifecycle_check(
+            Path("/nonexistent"), "src/bio.c", "ndef_setup", HYP,
+            source_texts={"src/bio.c": twin},
+            domain_vocab=_Vocab(deallocators={"BIO_free"}),
+        )
+        assert res.outcome == "refuted"
+        assert res.to_dict()["invalidation_search"]["kind"] == "null-write"

@@ -74,7 +74,13 @@ class TestCwe377InsecureTempFile:
 
     def test_fallback_chain(self):
         types = {e["type"] for e in _cwe_fallback_chain("CWE-377")}
-        assert types >= {"coccinelle", "codeql"}
+        assert "coccinelle" in types
+        # The dispatch table's codeql value is a pack query ID
+        # ("py/insecure-temporary-file") no resolver in this codebase
+        # maps to a query file — run_codeql_sweep requires a file, so
+        # the entry is not emitted (honest degradation instead of an
+        # error on every dispatch).
+        assert "codeql" not in types
 
     def test_keyword_inference(self):
         assert infer_cwe_from_hypothesis(

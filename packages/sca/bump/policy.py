@@ -49,6 +49,8 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .._exclude import matches_exclude
+
 logger = logging.getLogger(__name__)
 
 
@@ -289,8 +291,16 @@ def _locator_match(pattern: str, locator: str) -> bool:
 
 def _path_match(pattern: str, candidate_path: str) -> bool:
     """Match a candidate's file path (target-relative, POSIX) against an
-    operator glob. ``*`` already spans ``/`` in fnmatch, so both
-    ``test/data/*`` and ``test/data/**`` match nested files. Case-sensitive
-    — source paths are on Linux. Backslashes are normalised so a
-    Windows-authored candidate path still matches a POSIX pattern."""
-    return fnmatch.fnmatchcase(candidate_path.replace("\\", "/"), pattern)
+    operator glob. Delegates to :func:`packages.sca._exclude.matches_exclude`
+    so the two operator surfaces documented as sharing one convention
+    (``--exclude`` globs and ``skip: path:`` rules) really do behave
+    identically — including the leading-``**/`` root anchor, which raw
+    fnmatch misses for root-level directories (``**/tests/**`` must
+    match a top-level ``tests/`` here just as it does in ``--exclude``).
+    ``*`` already spans ``/`` in fnmatch, so both ``test/data/*`` and
+    ``test/data/**`` match nested files. Case-sensitive — source paths
+    are on Linux. Backslashes are normalised inside ``matches_exclude``
+    so a Windows-authored candidate path still matches a POSIX
+    pattern (the path is pre-normalised here because the shared
+    matcher only normalises the pattern side)."""
+    return matches_exclude(candidate_path.replace("\\", "/"), [pattern])

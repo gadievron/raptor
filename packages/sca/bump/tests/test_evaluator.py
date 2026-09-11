@@ -277,6 +277,56 @@ def test_maintainer_change_added_maintainer_fires() -> None:
     assert "compromised-attacker" in f.detail
 
 
+def test_maintainer_change_fires_through_real_npm_client_strip_path() -> None:
+    """End-to-end through the REAL ``NpmClient``: the packument goes
+    through ``_strip_npm_metadata`` before the detector reads it. The
+    strip list used to drop ``maintainers`` at both the per-version
+    and top level, so a maintainer takeover could never fire against
+    the real client — only against unstripped test stubs. Regression:
+    the takeover packument must yield a maintainer_change finding
+    through the stripped envelope."""
+    from packages.sca.registries.npm import NpmClient
+
+    packument = {
+        "name": "ua-parser-js",
+        "maintainers": [{"name": "compromised-attacker"}],
+        "readme": "big readme",                    # still stripped
+        "versions": {
+            "0.7.28": {
+                "version": "0.7.28",
+                "maintainers": [{"name": "faisalman"}],
+                "devDependencies": {"mocha": "^9"},   # still stripped
+            },
+            "0.7.29": {
+                "version": "0.7.29",
+                "maintainers": [{"name": "faisalman"},
+                                 {"name": "compromised-attacker"}],
+            },
+        },
+    }
+
+    class _Http:
+        def get_json(self, url, **kw):
+            return packument
+
+    npm = NpmClient(_Http(), cache=None)
+    now = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    findings = evaluate_bump_supply_chain(
+        ecosystem="npm", name="ua-parser-js",
+        current_version="0.7.28", target_version="0.7.29",
+        pypi_client=None, npm_client=npm, now=now,
+    )
+    mc = [f for f in findings if f.kind == "maintainer_change"]
+    assert len(mc) == 1, (
+        "maintainer takeover must fire through the real strip path"
+    )
+    assert "compromised-attacker" in mc[0].evidence["added"]
+    # Other direction: the strip still removes what it should.
+    meta = npm.get_metadata("ua-parser-js")
+    assert "readme" not in meta
+    assert "devDependencies" not in meta["versions"]["0.7.28"]
+
+
 def test_maintainer_change_unchanged_set_silent() -> None:
     """Same maintainers in both versions → no finding. The
     common case for routine patch bumps."""

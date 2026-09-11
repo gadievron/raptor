@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.inventory.binary_builder import binary_path_key
+from core.json import save_json
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +154,10 @@ def write_attack_surface_from_bookmarks(
     }
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    surface_path.write_text(json.dumps(existing, indent=2))
+    # Atomic replace: these are shared pipeline artifacts concurrent
+    # readers open lock-free — truncate-in-place gives them an
+    # empty-file window.
+    save_json(surface_path, existing)
 
     logger.info(
         "bookmarks bridge: %d finding(s) → attack-surface.json",
@@ -218,7 +222,9 @@ def write_checklist_from_bookmarks(
                     return 0
                 for fe in existing.get("files", []):
                     if fe.get("path") == path_key:
-                        fe["items"].extend(items)
+                        # a hand-edited entry may lack "items"; the
+                        # read loop above already tolerates that shape
+                        fe.setdefault("items", []).extend(items)
                         break
                 else:
                     existing.setdefault("files", []).append({
@@ -235,7 +241,7 @@ def write_checklist_from_bookmarks(
                 )
                 existing["total_functions"] = existing["total_items"]
                 existing["_bookmark_import"] = True
-                checklist_path.write_text(json.dumps(existing, indent=2))
+                save_json(checklist_path, existing)
                 return len(items)
         except (json.JSONDecodeError, OSError):
             pass
@@ -259,7 +265,7 @@ def write_checklist_from_bookmarks(
         "_bookmark_import": True,
     }
 
-    checklist_path.write_text(json.dumps(checklist, indent=2))
+    save_json(checklist_path, checklist)
 
     logger.info(
         "bookmarks bridge: %d function(s) → checklist.json",

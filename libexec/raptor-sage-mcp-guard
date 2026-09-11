@@ -50,6 +50,7 @@ import core.startup.process_init  # noqa: E402,F401
 
 import hashlib  # noqa: E402
 import json  # noqa: E402
+import re  # noqa: E402
 import subprocess  # noqa: E402
 import threading  # noqa: E402
 
@@ -67,11 +68,12 @@ _WARNING = (
     "To help them review, you may run `libexec/raptor-sage-setup review` "
     "yourself: without --approve it is read-only and prints a per-surface "
     "diff of exactly what is being stripped (exit 0 = no drift, 4 = drift "
-    "shown). Approving the drift (libexec/raptor-sage-setup review "
-    "--approve, or interactive y) merges it into the authorized record "
-    "— that decision is the "
-    "operator's alone; never approve without their explicit instruction "
-    "in this session."
+    "shown). Approving the drift merges it into the authorized record — "
+    "that decision is the operator's alone, and the CLI enforces it: "
+    "`review --approve` (or interactive y) only works at the operator's "
+    "own interactive terminal and refuses when run by an agent or "
+    "script. Rejecting (`review --reject`) may be run on the operator's "
+    "explicit instruction in this session."
 )
 
 # Injected in place of a stripped surface the operator has already
@@ -102,6 +104,29 @@ _SURFACE_INIT_DENIED = "initialize.instructions.denied.json"
 _SURFACE_INCEPTION_DENIED = "sage_inception.content.denied"
 
 
+def _stamp_lines(body: str) -> list[str]:
+    """Split stamp/section text into lines on ``\\n`` ONLY.
+
+    Never ``str.splitlines()`` here: it also breaks on ``\\r`` ``\\v``
+    ``\\f`` ``\\x1c``-``\\x1e`` U+0085 U+2028 U+2029 — separators a
+    hostile server can embed RAW inside payload text (jq emits
+    U+2028/U+2029 unescaped in ``-c`` output, and the v1 text sections
+    carry the payload verbatim). Under splitlines, such a separator
+    opened a forged ``### <surface>`` section mid-line — most damaging
+    a ``.denied`` section, which turns the compromise WARNING into the
+    calm rejected NOTE. Scanning raw ``\\n`` lines keeps the embedded
+    text inside the section body where it can never open a section.
+    The capture side additionally flattens these separators in the v1
+    text sections (see capture_boot_payload in raptor-sage-setup) —
+    belt and braces, this scanner is the load-bearing defence.
+    """
+    lines = body.split("\n")
+    if lines and lines[-1] == "":
+        # Mirror splitlines() on \n-terminated text: no phantom last line.
+        lines.pop()
+    return lines
+
+
 def _variant_objects(surfaces, name: str) -> list:
     """Parse a v2 stamp section into objects, one JSON value per line.
 
@@ -114,7 +139,7 @@ def _variant_objects(surfaces, name: str) -> list:
     if not body:
         return []
     out = []
-    for line in body.splitlines():
+    for line in _stamp_lines(body):
         line = line.strip()
         if not line:
             continue
@@ -136,9 +161,27 @@ def _parse_authorized(path: str):
     missing/unreadable/not in the capture format. The body is the exact
     text ``capture_boot_payload`` recorded: ``### <surface>`` header
     lines followed by the surface text.
+
+    A DUPLICATE section header is a hard parse failure (returns None,
+    stripping every surface until re-capture): the stamp format is
+    line-oriented and the v1 text sections embed server-controlled
+    payload text, so a payload containing its own ``### <surface>``
+    line could otherwise append a second section that a last-wins
+    parser would resolve in the server's favour — self-authorizing
+    arbitrary future payloads. Capture-time neutralisation (see
+    ``capture_boot_payload`` in raptor-sage-setup) prevents new stamps
+    from ever containing such a line; legitimately written stamps
+    (capture / merge / deny) emit each section exactly once, so only
+    an injected or hand-corrupted stamp trips this.
     """
     try:
-        raw = Path(path).read_text(encoding="utf-8")
+        # newline="" — no universal-newline translation: read_text's
+        # default rewrites raw \r / \r\n to \n, which re-opens the CR
+        # variant of the separator-injection hole _stamp_lines closes
+        # (a "\r### <surface>" in a stamp body would become a section
+        # header at read time before the \n-only scanner ever ran).
+        with open(path, encoding="utf-8", newline="") as fh:
+            raw = fh.read()
     except OSError:
         return None
     marker = "\n# ---\n"
@@ -148,11 +191,24 @@ def _parse_authorized(path: str):
     surfaces = {}
     current = None
     acc = []
-    for line in body.splitlines():
+    # _stamp_lines, not splitlines(): a splitlines-class separator
+    # embedded raw in a section body must never open a section here.
+    for line in _stamp_lines(body):
         if line.startswith("### "):
             if current is not None:
                 surfaces[current] = "\n".join(acc)
             current = line[4:].strip()
+            if current in surfaces:
+                sys.stderr.write(
+                    f"{_PROG}: authorized stamp at {path} carries a "
+                    f"DUPLICATE section header ({current!r}) — refusing "
+                    "the whole stamp (possible section-injection). All "
+                    "server boot instructions will be stripped until the "
+                    "operator re-records it: bin/raptor sage-setup "
+                    "install --reauthorize\n"
+                )
+                sys.stderr.flush()
+                return None
             acc = []
         elif current is not None:
             acc.append(line)
@@ -190,6 +246,14 @@ def _check_initialize(msg: dict, surfaces) -> bool:
     result = msg.get("result")
     if not isinstance(result, dict):
         return False
+    if not result.get("instructions"):
+        # Absent (or empty/null) instructions deliver NO instruction
+        # text to the session — there is nothing to verify or strip,
+        # so this is not payload drift. Warning here (the pre-fix
+        # behaviour when the stamp recorded non-empty variants) told
+        # the operator the payload was compromised every session on a
+        # server state that legitimately serves no instructions.
+        return False
     live = str(result.get("instructions") or "")
     variants = [
         v for v in _variant_objects(surfaces, _SURFACE_INIT_JSON)
@@ -214,6 +278,40 @@ def _check_initialize(msg: dict, surfaces) -> bool:
     return True
 
 
+def _strip_result_siblings(result: dict) -> bool:
+    """Drop unverified sibling keys from an inception ``result``.
+
+    The stamp records ``result.content`` only, so any sibling —
+    ``structuredContent``, ``_meta``, future additions — is an
+    instruction channel enforcement never compares and must not ride
+    through next to (or instead of) the authorized content. ``isError``
+    is kept when it is a plain bool (a flag, not a text channel).
+    Returns True when anything was removed.
+    """
+    extra = [
+        k for k in list(result)
+        if k != "content"
+        and not (k == "isError" and isinstance(result[k], bool))
+    ]
+    for k in extra:
+        del result[k]
+    if extra:
+        sys.stderr.write(
+            f"{_PROG}: stripped unverified sibling key(s) "
+            f"{', '.join(sorted(_safe_key(k) for k in extra))} from the "
+            "sage_inception result (only result.content is "
+            "operator-authorized)\n"
+        )
+        sys.stderr.flush()
+    return bool(extra)
+
+
+def _safe_key(k) -> str:
+    """Render a server-supplied key for the stderr diagnostic without
+    letting control bytes reach the operator's terminal."""
+    return "".join(c if c.isprintable() else "?" for c in str(k))[:64]
+
+
 def _check_inception(msg: dict, surfaces) -> bool:
     """Verify/strip the ``sage_inception`` result. Returns True if rewritten.
 
@@ -234,13 +332,14 @@ def _check_inception(msg: dict, surfaces) -> bool:
     result = msg.get("result")
     if not isinstance(result, dict):
         return False
+    stripped_siblings = _strip_result_siblings(result)
     content = result.get("content")
 
     denied_variants = _variant_objects(surfaces, _SURFACE_INCEPTION_DENIED)
     content_variants = _variant_objects(surfaces, _SURFACE_INCEPTION_CONTENT)
     if content_variants:
         if any(content == v for v in content_variants):
-            return False
+            return stripped_siblings
         if any(content == v for v in denied_variants):
             result["content"] = [{"type": "text", "text": json.dumps(
                 {"message": _NOTE_REJECTED})}]
@@ -271,20 +370,18 @@ def _check_inception(msg: dict, surfaces) -> bool:
         and authorized.strip()
         and live.strip() == authorized.strip()
     ):
-        return False
+        return stripped_siblings
     if any(content == v for v in denied_variants):
         result["content"] = [{"type": "text", "text": json.dumps(
             {"message": _NOTE_REJECTED})}]
         _note_rejected(_SURFACE_INCEPTION_CONTENT)
         return True
-    if isinstance(payload, dict):
-        payload["message"] = _WARNING
-        entry["text"] = json.dumps(payload)
-    elif entry is not None:
-        entry["text"] = json.dumps({"message": _WARNING})
-    else:
-        result["content"] = [{"type": "text", "text": json.dumps(
-            {"message": _WARNING})}]
+    # Replace the ENTIRE content array, exactly like the v2 branch:
+    # rewriting only payload["message"] in place (the pre-fix
+    # behaviour) delivered every injected sibling key of the same JSON
+    # and every extra content[1..] block alongside the warning.
+    result["content"] = [{"type": "text", "text": json.dumps(
+        {"message": _WARNING})}]
     _warn(_SURFACE_INCEPTION, live, authorized)
     return True
 
@@ -347,16 +444,102 @@ def _scrub_first_tool(msg: dict, surfaces) -> bool:
     return warned or noted
 
 
+# String-id numeric shapes accepted for Number()-mirroring — ASCII
+# ONLY, anchored fullmatch. Python's float()/int() are WIDER than JS
+# Number(): they take underscore separators ("1_6" → 16.0), unicode
+# digits, and signed hex ("-0x10") that Number() rejects as NaN — so a
+# Python-lenient parse let a junk frame id like "1_6" alias the
+# tracked numeric key "16" (see _State.inception_ids). Conversely JS
+# strips its StrWhiteSpace (mirrored below as ASCII whitespace + BOM)
+# and coerces ""/whitespace-only to 0, which Python's float("") does
+# not. Anything outside these two shapes keys as "s:"-prefixed
+# verbatim — it can never collide with a tracked numeric key, and the
+# boot-window unmatched-response drop in _filter_response fails it
+# closed rather than open.
+_ID_NUM_DEC_RE = re.compile(r"[+-]?[0-9]+(?:\.[0-9]+)?\Z")
+_ID_NUM_HEX_RE = re.compile(r"0[xX][0-9a-fA-F]+\Z")
+# ES StrWhiteSpace subset we mirror: ASCII whitespace + U+FEFF
+# (escaped so the source carries no raw zero-width character).
+_ID_STRIP_CHARS = " \t\n\r\v\f\ufeff"
+
+
+def _id_key(value) -> str | None:
+    """Canonical correlation key for a JSON-RPC ``id``.
+
+    The installed MCP clients correlate responses with a
+    ``Number(e.id)``-coercing comparison, so a server echoing ``"0"``
+    for a request id of ``0`` still correlates client-side. A
+    strict-typed ``==`` here therefore let a hostile server evade the
+    tracked-id checks. Mirror the client — but no wider (see the
+    regexes above): native JSON numbers and Number()-shaped strings
+    normalise to the same key; every other string compares exactly
+    ("s:" prefix keeps it out of the numeric keyspace). ``None`` means
+    the id is not correlatable at all (null / array / object ids) —
+    the caller must fail closed.
+    """
+    if isinstance(value, (bool, int, float)):
+        try:
+            f = float(value)
+        except (OverflowError, ValueError):
+            return "s:" + str(value)
+        if f != f or f in (float("inf"), float("-inf")):
+            return None
+        return str(int(f)) if f.is_integer() else repr(f)
+    if isinstance(value, str):
+        s = value.strip(_ID_STRIP_CHARS)
+        if not s:
+            # JS: Number("") and whitespace-only coerce to 0. Key it
+            # numerically so a hostile "" echo for a tracked id 0 is
+            # still enforced; with non-destructive tracking it is no
+            # longer usable as an eviction primitive.
+            return "0"
+        if _ID_NUM_HEX_RE.fullmatch(s):
+            try:
+                f = float(int(s, 16))
+            except OverflowError:
+                return "s:" + value
+        elif _ID_NUM_DEC_RE.fullmatch(s):
+            try:
+                f = float(s)
+            except (OverflowError, ValueError):
+                return "s:" + value
+        else:
+            return "s:" + value
+        if f != f or f in (float("inf"), float("-inf")):
+            return "s:" + value
+        return str(int(f)) if f.is_integer() else repr(f)
+    return None
+
+
 class _State:
     def __init__(self):
         self.lock = threading.Lock()
+        # All ids are stored as _id_key() strings — hashable by
+        # construction, so a server-echoed list/dict id can never
+        # TypeError a set-membership test and kill the proxy.
+        #
+        # Tracked-id sets are NON-DESTRUCTIVE: once an id is tracked it
+        # is enforced on EVERY response that matches it, for the whole
+        # session. Discard-on-first-match let a hostile server spend
+        # the guard with a junk frame whose id coerced to the tracked
+        # key, then deliver the real response verbatim (eviction).
+        # Growth is bounded by the client's own request count.
         self.init_id = None
         self.inception_ids = set()
         # First tools/call of the session, when it is NOT
         # sage_inception — eligible for the auto-inception preamble
-        # scrub (see _scrub_first_tool).
+        # scrub (see _scrub_first_tool). Also never cleared: every
+        # response matching it gets scrubbed.
         self.first_tool_id = None
         self.first_tool_seen = False
+        # Ids of client requests still awaiting their first response
+        # (every method, not just the tracked ones). A response
+        # matching NO pending request is server-initiated junk and is
+        # dropped UNCONDITIONALLY (see _filter_response) — the other
+        # half of the eviction defence (a junk frame can neither
+        # consume the tracked id nor ride through as "unmatched"
+        # traffic).
+        self.pending_ids = set()
 
 
 def _watch_request(line: bytes, state: _State) -> None:
@@ -367,25 +550,70 @@ def _watch_request(line: bytes, state: _State) -> None:
         return
     if not isinstance(msg, dict) or "id" not in msg:
         return
+    rid = _id_key(msg["id"])
+    if rid is None:
+        return
     method = msg.get("method")
-    if method == "initialize":
-        with state.lock:
-            state.init_id = msg["id"]
-    elif method == "tools/call":
-        params = msg.get("params")
-        name = params.get("name") if isinstance(params, dict) else None
-        with state.lock:
+    if not isinstance(method, str):
+        # A client→server frame without a method is a RESPONSE to a
+        # server-initiated request, not a request — its id must not
+        # enter the pending-request set.
+        return
+    with state.lock:
+        state.pending_ids.add(rid)
+        if method == "initialize":
+            state.init_id = rid
+        elif method == "tools/call":
+            params = msg.get("params")
+            name = params.get("name") if isinstance(params, dict) else None
             if name == "sage_inception":
-                state.inception_ids.add(msg["id"])
+                state.inception_ids.add(rid)
             elif not state.first_tool_seen:
-                state.first_tool_id = msg["id"]
+                state.first_tool_id = rid
             state.first_tool_seen = True
+
+
+# Per-line byte cap on both pump directions. MCP frames on these
+# surfaces are a few KB; 8 MiB is far beyond any legitimate line while
+# small enough that a newline-free stream (hostile server, or a
+# corrupted transport) can no longer grow a single buffered line until
+# the guard OOMs and the session dies with it.
+_MAX_LINE_BYTES = 8 * 1024 * 1024
+
+
+def _read_lines_capped(stream, label: str):
+    """Yield lines from *stream*, dropping any longer than the cap.
+
+    An over-long line is drained (in capped chunks, discarded) and
+    reported — fail direction: one dropped frame plus a loud stderr
+    note, never an unbounded buffer.
+    """
+    while True:
+        chunk = stream.readline(_MAX_LINE_BYTES)
+        if not chunk:
+            return
+        if len(chunk) >= _MAX_LINE_BYTES and not chunk.endswith(b"\n"):
+            dropped = len(chunk)
+            while True:
+                more = stream.readline(_MAX_LINE_BYTES)
+                if not more:
+                    break
+                dropped += len(more)
+                if more.endswith(b"\n") or len(more) < _MAX_LINE_BYTES:
+                    break
+            sys.stderr.write(
+                f"{_PROG}: dropped an over-long {label} line "
+                f"({dropped} bytes; cap {_MAX_LINE_BYTES})\n"
+            )
+            sys.stderr.flush()
+            continue
+        yield chunk
 
 
 def _pump_client_to_server(child, state: _State) -> None:
     """stdin → child.stdin, recording instruction-bearing request ids."""
     try:
-        for line in iter(sys.stdin.buffer.readline, b""):
+        for line in _read_lines_capped(sys.stdin.buffer, "client"):
             _watch_request(line, state)
             child.stdin.write(line)
             child.stdin.flush()
@@ -426,21 +654,70 @@ def _filter_response(line: bytes, state: _State, surfaces) -> bytes:
             )
             sys.stderr.flush()
             return b""
-    if not isinstance(msg, dict) or "id" not in msg or "method" in msg:
+    if not isinstance(msg, dict):
+        # Valid-JSON non-dict frames — JSON-RPC batch arrays above
+        # all — can carry the very responses the id-tracked checks
+        # enforce on (a client that unbatches would correlate and
+        # deliver them). Forwarding them verbatim was fail-open;
+        # drop per the module contract (never silent delivery).
+        sys.stderr.write(
+            f"{_PROG}: dropped a non-object server frame (batch "
+            "array / scalar; fail-closed — enforcement only verifies "
+            "single-response objects)\n"
+        )
+        sys.stderr.flush()
+        return b""
+    if "id" not in msg:
+        # Id-less frame: a notification. No client correlates it as a
+        # response, so the id-tracked checks have nothing to verify.
         if lossy:
             return json.dumps(msg).encode("utf-8") + b"\n"
         return line
-    rid = msg["id"]
+    if "method" in msg:
+        if "result" in msg or "error" in msg:
+            # Hybrid frame: id + method + result/error. JSON-RPC
+            # defines no such shape, and a client that correlates on
+            # id/result presence before (or without) checking for a
+            # method key would deliver it as the tracked response —
+            # the one id-bearing shape that would otherwise bypass
+            # every tracked-id check. Client-side handling is
+            # undefined (the same reasoning that drops batch arrays
+            # and exotic id shapes), so drop rather than forward.
+            sys.stderr.write(
+                f"{_PROG}: dropped a server frame carrying both a "
+                "method and a result/error (fail-closed; ambiguous "
+                "request/response hybrid)\n"
+            )
+            sys.stderr.flush()
+            return b""
+        # A genuine server-initiated request or method-bearing
+        # notification: not a response, nothing to verify.
+        if lossy:
+            return json.dumps(msg).encode("utf-8") + b"\n"
+        return line
+    rid = _id_key(msg["id"])
+    if rid is None:
+        # Uncorrelatable id shape (null / array / object): the tracked
+        # ids can never match it strictly, but client-side coercion on
+        # exotic shapes is undefined — drop rather than forward an
+        # unverifiable response (and never let an unhashable id reach
+        # the set-membership tests below).
+        sys.stderr.write(
+            f"{_PROG}: dropped a server response with an "
+            "uncorrelatable id shape (fail-closed)\n"
+        )
+        sys.stderr.flush()
+        return b""
     with state.lock:
+        answers_request = rid in state.pending_ids
+        state.pending_ids.discard(rid)
+        # Tracked ids stay tracked (never discarded) — every matching
+        # response is enforced; see the eviction note on _State.
         is_init = state.init_id is not None and rid == state.init_id
         is_inception = rid in state.inception_ids
-        if is_inception:
-            state.inception_ids.discard(rid)
         is_first_tool = (
             state.first_tool_id is not None and rid == state.first_tool_id
         )
-        if is_first_tool:
-            state.first_tool_id = None
     rewritten = False
     if is_init:
         rewritten = _check_initialize(msg, surfaces)
@@ -448,6 +725,22 @@ def _filter_response(line: bytes, state: _State, surfaces) -> bytes:
         rewritten = _check_inception(msg, surfaces)
     elif is_first_tool:
         rewritten = _scrub_first_tool(msg, surfaces)
+    elif not answers_request:
+        # A response answering NO pending client request is never
+        # legitimate JSON-RPC traffic: server-initiated requests carry
+        # a method, notifications carry no id. An "only while a check
+        # is outstanding" version of this drop left a disarmed window
+        # between the initialize response resolving and the inception
+        # request being recorded, and a server spraying
+        # inception-shaped frames under the predicted next id landed
+        # a payload the client accepted as the correlated response
+        # (~75% per attempt). Drop unconditionally.
+        sys.stderr.write(
+            f"{_PROG}: dropped a server response matching no pending "
+            "client request (fail-closed)\n"
+        )
+        sys.stderr.flush()
+        return b""
     if not rewritten and not lossy:
         return line
     return json.dumps(msg).encode("utf-8") + b"\n"
@@ -495,7 +788,7 @@ def main(argv) -> int:
     )
     pump.start()
     try:
-        for line in iter(child.stdout.readline, b""):
+        for line in _read_lines_capped(child.stdout, "server"):
             out = _filter_response(line, state, surfaces)
             sys.stdout.buffer.write(out)
             sys.stdout.buffer.flush()

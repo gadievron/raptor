@@ -356,20 +356,63 @@ def _find_regions(
     return regions, unresolved
 
 
+def _balanced_call_args(view: str, open_paren: int) -> str | None:
+    """Argument text of the call whose ``(`` sits at *open_paren*
+    (balanced-paren scan), or None when unterminated."""
+    depth = 0
+    for i in range(open_paren, len(view)):
+        c = view[i]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return view[open_paren + 1:i]
+    return None
+
+
+def _strip_wrapping_parens(arg: str) -> str:
+    """Peel balanced outer parens: ``(handler)`` names ``handler``."""
+    while arg.startswith("(") and arg.endswith(")"):
+        inner = arg[1:-1].strip()
+        depth = 0
+        for c in inner:
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth < 0:
+                    return arg  # not a wrapping pair: "(a),(b)"
+        if depth != 0:
+            return arg
+        arg = inner
+    return arg
+
+
 def _registered_callback_names(source: str, vocab: Any) -> set[str]:
     """Identifier arguments of ``callback_registers`` verb calls —
     the names an in-region direct call may invoke as a callback.
     Scans the sanitized view: a comment naming a register verb must
-    not plant a callback name (false 'confirmed' direction)."""
+    not plant a callback name (false 'confirmed' direction).
+
+    Argument extraction is balanced-paren, not up-to-the-last-``)``:
+    the greedy ``[^;]*`` capture turned ``register_cb((handler));``
+    into arg ``(handler)`` and ``register_cb(h) && log(x);`` into
+    ``h) && log(x`` — both dropped, leaving the registered set empty
+    and the consumer emitting an affirmative "no invocation inside
+    the region" refutation over a region that calls the handler.
+    Only bare identifiers (optionally paren-wrapped) count, so the
+    fix cannot ADD spurious names in the confirmed direction."""
     registers = set(getattr(vocab, "callback_registers", None) or ())
     names: set[str] = set()
     view = "\n".join(_scan_lines_cached(source))
     for verb in registers:
-        for m in re.finditer(
-            rf"\b{re.escape(verb)}\s*\(([^;]*)\)", view,
-        ):
-            for arg in m.group(1).split(","):
-                arg = arg.strip()
+        for m in re.finditer(rf"\b{re.escape(verb)}\s*\(", view):
+            args_text = _balanced_call_args(view, m.end() - 1)
+            if args_text is None:
+                continue
+            for arg in args_text.split(","):
+                arg = _strip_wrapping_parens(arg.strip())
                 if re.fullmatch(r"[A-Za-z_]\w*", arg) and \
                         arg not in _C_KEYWORDS:
                     names.add(arg)

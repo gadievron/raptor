@@ -24,7 +24,7 @@ import json
 from collections import Counter
 from typing import Any, TYPE_CHECKING
 
-from core.recall.matcher import path_matches
+from core.recall.matcher import canonical_cwe, path_basename, path_matches
 from core.recall.score import LABEL_CLASS
 
 if TYPE_CHECKING:
@@ -78,8 +78,11 @@ def _record_matches(rec: dict[str, Any], entry: dict[str, Any],
     # cross-CWE misattribution on file-level entries). A record
     # WITHOUT a cwe keeps matching (refusal direction: unknown
     # provenance still blocks enforcement via the damage count).
-    rec_cwe = str(rec.get("cwe") or "")
-    entry_cwe = str(entry.get("cwe") or "")
+    # Both sides go through the canonical CWE-N form first so a
+    # producer writing '79' or 'cwe-79' is not misread as cross-CWE
+    # (which would exonerate the record from the damage count).
+    rec_cwe = canonical_cwe(rec.get("cwe"))
+    entry_cwe = canonical_cwe(entry.get("cwe"))
     if rec_cwe and entry_cwe:
         try:
             from packages.checker_synthesis.cwe_families import cwe_siblings
@@ -150,13 +153,28 @@ def apply_would_suppress(
                          if not r.get("_malformed")
                          and str(r.get("verdict", "")) != "sanitizer_dominated"]
 
+    # Live records indexed by path basename (the matcher's index):
+    # _record_matches requires path agreement, which requires equal
+    # final components, so the bucket walk prunes the per-entry scan
+    # without changing which pairs can match — the full entries x live
+    # cross is quadratic at benchmark scale. Bucket order preserves
+    # live order, so first-match selection is unchanged.
+    live_by_basename: dict[str, list[dict[str, Any]]] = {}
+    for r in live:
+        key = path_basename(r.get("file_path"))
+        live_by_basename.setdefault(key, []).append(r)
+
+    def _candidates(entry: dict[str, Any]) -> list[dict[str, Any]]:
+        return live_by_basename.get(
+            path_basename(str(entry.get("file", ""))), [])
+
     fp_suppressed: list[dict[str, Any]] = []
     fp_by_cwe_raw: Counter[str] = Counter()
     fp_by_cwe_warm: Counter[str] = Counter()
     for entry in report.get("clean_region_fps", []):
         cwe = str(entry.get("cwe", "unknown"))
         fp_by_cwe_raw[cwe] += 1
-        hit = next((r for r in live
+        hit = next((r for r in _candidates(entry)
                     if _record_matches(r, entry, line_drift=line_drift)),
                    None)
         if hit is not None:
@@ -178,7 +196,7 @@ def apply_would_suppress(
     damage_measured = matched_expected is not None
     true_suppressed: list[dict[str, Any]] = []
     for entry in matched_expected or []:
-        hit = next((r for r in live
+        hit = next((r for r in _candidates(entry)
                     if _record_matches(r, entry, line_drift=line_drift,
                                        missing_line_matches=True)),
                    None)

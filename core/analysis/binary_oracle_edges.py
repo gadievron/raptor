@@ -248,7 +248,17 @@ def _try_graph_store(binary_path: Path) -> BinaryEdgeIndex | None:
         out_dir = raptor_dir / "out"
         if out_dir.is_dir():
             search_dirs.append(out_dir)
-        active = raptor_dir / ".active"
+    # The last-activated project bookmark lives in the projects root
+    # (``core.project.project.PROJECTS_DIR / ".active"``), not under
+    # RAPTOR_DIR — the old RAPTOR_DIR-relative path never existed, so
+    # the project-dir search leg never fired.
+    projects_dir: Path | None
+    try:
+        from core.project.project import PROJECTS_DIR as projects_dir
+    except ImportError:
+        projects_dir = None
+    if projects_dir is not None:
+        active = Path(projects_dir) / ".active"
         if active.is_symlink() or active.exists():
             try:
                 project_dir = active.resolve()
@@ -290,8 +300,14 @@ def _try_graph_store(binary_path: Path) -> BinaryEdgeIndex | None:
                     continue
                 src = e.get("source") or {}
                 tgt = e.get("target") or {}
-                caller = src.get("name", "")
-                callee = tgt.get("name", "")
+                # Graph-store node names come from r2 and carry its
+                # ``sym.`` / ``fcn.`` / … prefixes; the inventory join
+                # downstream is by BARE source-function name, and this
+                # store result SHADOWS fresh r2 extraction (which does
+                # clean), so uncleaned names silently dropped every
+                # join.
+                caller = _clean_r2_function_name(src.get("name", ""))
+                callee = _clean_r2_function_name(tgt.get("name", ""))
                 if caller and callee:
                     edges.append(BinaryCallEdge(
                         caller=caller,
@@ -432,6 +448,14 @@ def extract_direct_call_edges(
         addr = _fn_addr(f)
         script_lines.append(f"echo BATCH {addr}")
         script_lines.append(f"axffj @ {addr}")
+    # Tier 2 rides the SAME r2 session: ``av`` reuses the ``aaa``
+    # analysis state already built above. A separate ``r2 -c "aaa;
+    # av"`` invocation re-ran the heavy analyse-all a second time —
+    # doubling the dominant cost of edge extraction per binary. The
+    # sentinel line splits the transcript so vtable text can't bleed
+    # into the last axffj batch's JSON.
+    script_lines.append(f"echo {_VTABLE_SENTINEL}")
+    script_lines.append("av")
     # The r2 script lives in its OWN scratch directory, never in the
     # target build dir: writing RAPTOR-controlled files into the tree
     # being analysed both litters it and hands an attacker-writable
@@ -453,7 +477,9 @@ def extract_direct_call_edges(
                 capture_output=True, text=True, check=False,
                 timeout=timeout, errors="replace",
             )
-            _parse_axffj_batch(proc.stdout, addr_to_name, index)
+            axffj_part, vtable_part = _split_at_vtable_sentinel(
+                proc.stdout or "")
+            _parse_axffj_batch(axffj_part, addr_to_name, index)
     except (subprocess.TimeoutExpired, subprocess.SubprocessError,
             OSError) as e:
         # OSError also covers scratch-dir / script creation failure —
@@ -471,7 +497,7 @@ def extract_direct_call_edges(
     # vtables and prints each slot's method; we treat every slot as a
     # potentially-dispatched callee with a synthetic ``<vtable@<addr>>``
     # caller. No-op on C binaries with no vtables.
-    vtable_edges = _extract_vtable_edges(binary_path, timeout=timeout)
+    vtable_edges = _parse_vtable_output(vtable_part, str(binary_path))
     for edge in vtable_edges:
         index.edges.append(edge)
         index.callees.add(edge.callee)
@@ -495,42 +521,47 @@ def extract_direct_call_edges(
 _VTABLE_HEADER_RE = re.compile(r"Vtable Found at 0x([0-9a-fA-F]+)")
 _VTABLE_SLOT_RE = re.compile(r"^\s*0x[0-9a-fA-F]+\s*:\s*(\S+)")
 
+# Transcript separator between the axffj batches and the trailing
+# ``av`` output in the single-session script (see
+# ``extract_direct_call_edges``). Distinct from the ``BATCH `` prefix
+# and never produced by r2 itself.
+_VTABLE_SENTINEL = "RAPTOR_VTABLES"
 
-def _extract_vtable_edges(
-    binary_path: Path,
-    *,
-    timeout: int = 300,
+
+def _split_at_vtable_sentinel(output: str) -> tuple[str, str]:
+    """Split a combined script transcript into ``(axffj_part,
+    vtable_part)`` at the first :data:`_VTABLE_SENTINEL` line. A
+    transcript without the sentinel (r2 killed before reaching it)
+    is all axffj — the vtable part degrades to empty."""
+    before: list[str] = []
+    after: list[str] = []
+    seen = False
+    for raw_line in output.splitlines():
+        plain = re.sub(r"\x1b\[[\d;]*m", "", raw_line).strip()
+        if not seen and plain == _VTABLE_SENTINEL:
+            seen = True
+            continue
+        (after if seen else before).append(raw_line)
+    return "\n".join(before), "\n".join(after)
+
+
+def _parse_vtable_output(
+    output: str,
+    binary_path: str,
 ) -> list[BinaryCallEdge]:
-    """Run r2 ``av`` and emit one synthetic edge per vtable slot:
-    ``<vtable@<addr>>`` → ``method``. Each method that appears in any
-    vtable slot is, by construction, a candidate target for the
+    """Parse r2 ``av`` text and emit one synthetic edge per vtable
+    slot: ``<vtable@<addr>>`` → ``method``. Each method that appears in
+    any vtable slot is, by construction, a candidate target for the
     binary's virtual dispatch sites — affirmative reachability evidence
     source extraction often misses.
 
-    Returns an empty list when r2 finds no vtables (pure C binary,
-    stripped binary where vtable detection fails) — over-approximating
-    vtables would create false-promote, which the suppression direction
-    can't tolerate."""
-    if not shutil.which("r2"):
-        return []
-    from core.sandbox import run as _sandbox_run
-    try:
-        proc = _sandbox_run(
-            ["r2", "-q", "-c", "aaa; av", str(binary_path)],
-            target=str(binary_path.parent), block_network=True,
-            capture_output=True, text=True, check=False, timeout=timeout,
-            errors="replace",
-        )
-    except (subprocess.TimeoutExpired, subprocess.SubprocessError,
-            OSError) as e:
-        logger.warning(
-            "binary_oracle_edges: av (vtable) aborted for %s: %s",
-            binary_path, e,
-        )
-        return []
+    Returns an empty list when the text carries no vtables (pure C
+    binary, stripped binary where vtable detection fails) — over-
+    approximating vtables would create false-promote, which the
+    suppression direction can't tolerate."""
     edges: list[BinaryCallEdge] = []
     current_vtable: str | None = None
-    for line in (proc.stdout or "").splitlines():
+    for line in (output or "").splitlines():
         # Strip ANSI escapes r2 emits in interactive-style output.
         plain = re.sub(r"\x1b\[[\d;]*m", "", line)
         m_hdr = _VTABLE_HEADER_RE.search(plain)
@@ -556,7 +587,7 @@ def _extract_vtable_edges(
             continue
         edges.append(BinaryCallEdge(
             caller=current_vtable, callee=method,
-            binary_path=str(binary_path),
+            binary_path=binary_path,
         ))
     return edges
 

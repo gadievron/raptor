@@ -866,3 +866,25 @@ def test_shell_prose_with_embedded_pip_install_does_not_extract(
     assert not extracted_names, (
         f"parser extracted from prose comment: {extracted_names}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Symlink refusal (matches every sibling parser's read policy)
+# ---------------------------------------------------------------------------
+
+def test_symlinked_dockerfile_refused(tmp_path: Path) -> None:
+    # Inline-install sources come from the target repo; a symlinked
+    # Dockerfile pointing outside the tree must be refused, not read
+    # — same follow_symlinks=False contract as the manifest parsers.
+    real = tmp_path / "outside.Dockerfile.txt"
+    real.write_text("RUN pip install foo==1.0\n", encoding="utf-8")
+    link = tmp_path / "Dockerfile"
+    link.symlink_to(real)
+    assert parse_dockerfile(link) == []
+
+
+def test_regular_dockerfile_still_parsed(tmp_path: Path) -> None:
+    p = tmp_path / "Dockerfile"
+    p.write_text("RUN pip install foo==1.0\n", encoding="utf-8")
+    deps = parse_dockerfile(p)
+    assert [(d.name, d.version) for d in deps] == [("foo", "1.0")]

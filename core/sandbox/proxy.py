@@ -707,11 +707,15 @@ def _unix_peer_credentials(sock) -> "tuple[int, int] | None":
     import socket as _socket
     import struct as _struct
     try:
+        # struct ucred is (pid_t pid, uid_t uid, gid_t gid): pid is
+        # signed, uid/gid are UNSIGNED 32-bit. Unpacking uid as signed
+        # ('3i') decodes uid >= 2^31 (SSSD/AD idmap ranges) as negative,
+        # so the peer gate would reject the sandbox's own children.
         raw = sock.getsockopt(
             _socket.SOL_SOCKET, _socket.SO_PEERCRED,
-            _struct.calcsize("3i"),
+            _struct.calcsize("iII"),
         )
-        pid, uid, _gid = _struct.unpack("3i", raw)
+        pid, uid, _gid = _struct.unpack("iII", raw)
     except (OSError, AttributeError, ValueError):
         return None
     return pid, uid
@@ -801,6 +805,22 @@ def _loopback_peer_uid(peer, sockname) -> "int | None":
     except OSError:
         return None
     return None
+
+
+class _Gate2BlockedError(OSError):
+    """A dial attempt hit gate 2 (blocked resolved IP).
+
+    OSError subclass so the happy-eyeballs race machinery — which
+    catches (OSError, TimeoutError) to try the next address — treats
+    it like any failed attempt, while the CONNECT handler can still
+    tell a policy denial apart from a connect failure and emit
+    ``denied_resolved_ip`` (banner + audit record) instead of the
+    triage-invisible ``upstream_failed``.
+    """
+
+    def __init__(self, blocked_ip: str) -> None:
+        super().__init__(f"IP {blocked_ip} blocked by gate 2")
+        self.blocked_ip = blocked_ip
 
 
 def _ip_is_blocked(ip_str: str) -> bool:
@@ -2291,12 +2311,16 @@ class EgressProxy:
 
         # Gate-2 (resolved-IP block) lives in _attempt so EVERY dialed
         # address — raced or walked as fallback — is re-checked.
+        # A hit raises the typed _Gate2BlockedError (never a plain
+        # OSError) so the caller classifies it as a policy denial
+        # (denied_resolved_ip: banner + audit record + 403), not a
+        # connect failure (upstream_failed + 502) that hides the
+        # rebinding/metadata-probe signal from triage.
         async def _attempt(entry):
             family, _socktype, _proto, _, sockaddr = entry
             ip = sockaddr[0]
             if _ip_is_blocked(ip):
-                msg = f"IP {ip} blocked by gate 2"
-                raise OSError(msg)
+                raise _Gate2BlockedError(ip)
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(host=ip, port=port,
                                          family=family),
@@ -2306,12 +2330,21 @@ class EgressProxy:
 
         async def _walk_serial(entries):
             last_exc: Exception | None = None
+            gate2_exc: _Gate2BlockedError | None = None
             for entry in entries:
                 try:
                     return await _attempt(entry)
+                except _Gate2BlockedError as e:
+                    # Policy denial outranks connect failures: when the
+                    # whole walk fails, surface the gate-2 hit even if a
+                    # later address failed with an ordinary OSError.
+                    gate2_exc = e
+                    continue
                 except (OSError, asyncio.TimeoutError) as e:
                     last_exc = e
                     continue
+            if gate2_exc is not None:
+                raise gate2_exc
             raise last_exc if last_exc is not None else OSError(
                 "no addresses to dial"
             )
@@ -3035,16 +3068,25 @@ class EgressProxy:
                 return
 
             # Policy gate 2: reject resolved IPs that point to loopback /
-            # private / link-local. The check runs against the FIRST
-            # candidate (and the happy-eyeballs dial below also re-runs
-            # gate 2 on each per-attempt connect) so a multi-A-record
-            # hostname where one record is private and another is public
-            # still gets caught. The "first record wins gate 2" semantic
-            # matches the original code; happy-eyeballs only changes
-            # which record we end up CONNECTING to, not which we VET.
+            # private / link-local. EVERY returned record is vetted, not
+            # just the first — fail-closed on mixed public/private
+            # answers, matching _vet_upstream_target: a hostname whose
+            # answer mixes a public and a private record is a rebinding /
+            # split-horizon signal, and happy-eyeballs may dial ANY of
+            # the records, so vetting only addrinfo[0] would let a
+            # blocked non-first record surface as an opaque connect
+            # failure instead of a recorded denial. The per-attempt
+            # re-check inside _happy_eyeballs_connect remains as
+            # belt-and-braces.
             _family, _socktype, _proto, _, sockaddr = addrinfo[0]
             resolved_ip = sockaddr[0]
             event["resolved_ip"] = resolved_ip
+            for _entry in addrinfo:
+                _candidate = _entry[4][0]
+                if _ip_is_blocked(_candidate):
+                    resolved_ip = _candidate
+                    event["resolved_ip"] = resolved_ip
+                    break
             if _ip_is_blocked(resolved_ip):
                 # Gate 2 is the proxy's DNS-rebinding / IP-poisoning
                 # defense — always on whenever the proxy is in the loop,
@@ -3088,6 +3130,32 @@ class EgressProxy:
                 up_reader, up_writer, dialed_ip = (
                     await self._happy_eyeballs_connect(addrinfo, port)
                 )
+            except _Gate2BlockedError as e:
+                # Belt-and-braces per-attempt gate-2 hit (the pre-vet
+                # loop above should already have denied): surface it as
+                # the policy denial it is — banner + denied_resolved_ip
+                # event + audit-mode summary record + 403 — never as an
+                # upstream_failed connect error that hides the signal.
+                logger.warning(
+                    "egress proxy: DENY %s:%s — resolved to blocked IP %s",
+                    host, port, e.blocked_ip,
+                )
+                event["resolved_ip"] = e.blocked_ip
+                event.update(
+                    result="denied_resolved_ip",
+                    reason=f"resolved to blocked range: {e.blocked_ip}",
+                    duration=time.monotonic() - t_start,
+                )
+                self._record(event)
+                with self._audit_lock:
+                    _audit_now = (lane.audit_log_only
+                                  if lane is not None
+                                  else self._audit_log_only)
+                if _audit_now:
+                    _record_proxy_denial(host, port, e.blocked_ip,
+                                         "resolved_ip_blocked")
+                await self._write_error(writer, 403, "Forbidden")
+                return
             except (OSError, asyncio.TimeoutError) as e:
                 logger.warning(
                     "egress proxy: upstream connect failed %s:%s (%s): %s",

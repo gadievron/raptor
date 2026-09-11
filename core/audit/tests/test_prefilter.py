@@ -491,6 +491,33 @@ void hash_input(char *buf, int len) {
     assert not result.skip_llm
 
 
+def test_sink_unreachable_openssl_prefix_not_skipped(tmp_path):
+    # The OpenSSL prefixes were spelled uppercase in the vocab while
+    # every consumer matches the LOWERCASED view — the exclusion was
+    # dead and an SSL_VERIFY_NONE misconfiguration in a small
+    # sink-unreachable function was hard-suppressed pre-LLM.
+    source = """\
+void setup_tls(struct conn *c) {
+    SSL_CTX_set_verify(c->ctx, SSL_VERIFY_NONE, 0);
+}"""
+    result = run_prefilter(
+        target_path=tmp_path,
+        file_path="tls.c",
+        function_name="setup_tls",
+        source=source,
+        line_start=1,
+        sink_unreachable=True,
+    )
+    assert not result.skip_llm
+
+
+def test_crypto_vocab_entries_all_lowercase():
+    # Every consumer lowercases before matching; an uppercase entry
+    # can never fire.  Guard the vocab against re-introducing one.
+    from core.audit.prefilter import _CRYPTO_APIS
+    assert all(api == api.lower() for api in _CRYPTO_APIS)
+
+
 def test_sink_unreachable_mutex_not_skipped(tmp_path):
     source = """\
 void inc(struct counter *c) {

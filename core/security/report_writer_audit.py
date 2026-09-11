@@ -276,6 +276,21 @@ def _target_names(target: ast.AST) -> list[str]:
     return []
 
 
+def _dotted_name(node: ast.AST) -> str:
+    """Best-effort dotted source name for a receiver expression.
+
+    ``self.lines`` → ``"self.lines"``; a non-Name/Attribute link in the
+    chain (call, subscript, …) contributes nothing, so
+    ``build().lines`` → ``"lines"``.
+    """
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _dotted_name(node.value)
+        return f"{base}.{node.attr}" if base else node.attr
+    return ""
+
+
 class _Scanner(ast.NodeVisitor):
     """Walk one module, tracking function frames and one-level taint."""
 
@@ -357,8 +372,12 @@ class _Scanner(ast.NodeVisitor):
             if func.attr in _SINK_METHODS:
                 return list(node.args)
             if func.attr in _ACCUMULATE_METHODS:
-                receiver = func.value
-                receiver_name = receiver.id if isinstance(receiver, ast.Name) else ""
+                # Receivers are frequently Attribute chains
+                # (``self.lines.append``, ``report.rows.extend``), not
+                # bare Names — match tokens across the whole dotted
+                # chain so method-style report writers are not
+                # invisible to the audit.
+                receiver_name = _dotted_name(func.value)
                 if any(tok in receiver_name.lower() for tok in _ACCUMULATOR_TOKENS):
                     return list(node.args)
             return None

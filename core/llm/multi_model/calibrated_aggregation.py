@@ -17,7 +17,8 @@ Design constraints:
   record with ``aggregation_method = "vote"`` and a non-null
   ``aggregation_fallback_reason``. The posterior is the legacy
   ``is_exploitable`` boolean cast to 0.0 / 1.0 so triage ordering
-  still has something usable.
+  still has something usable; an abstaining record (no boolean
+  verdict) yields an inconclusive 0.5 posterior with a full-width CI.
 * **Pure function.** No IO; no scorecard reads; no logging. The
   orchestrator owns side effects. This module is reusable from
   test code and the (future) offline replay harness.
@@ -98,6 +99,7 @@ def _records_from_finding(
         finding.get("rule_id"), decision_class_prefix,
     )
     out: list[PanelRecord] = []
+    seen_models: set[str] = set()
     for entry in analyses:
         if not isinstance(entry, dict) or "error" in entry:
             continue
@@ -107,6 +109,12 @@ def _records_from_finding(
         verdict = entry.get("is_exploitable")
         if not isinstance(verdict, bool):
             continue
+        if model in seen_models:
+            # One model is one panel member. A duplicated same-model
+            # entry (retries, merged runs) must not pass the panel-size
+            # gate or double-weight the EM — keep the first record.
+            continue
+        seen_models.add(model)
         out.append(PanelRecord(
             finding_id=finding_id,
             decision_class=decision_class,
@@ -122,20 +130,34 @@ def _vote_fallback_verdict(
 ) -> CalibratedVerdict:
     """Build a vote-derived verdict when D–S cannot run on this finding.
 
-    The posterior is the legacy ``is_exploitable`` cast to 0.0 / 1.0.
-    The CI degenerates to ``(posterior, posterior)`` — there is no
-    calibrated uncertainty when no panel exists. Phase 3 callers can
-    detect the fallback via ``aggregation_method`` rather than by
-    inspecting the CI width.
+    For a concluded legacy verdict the posterior is ``is_exploitable``
+    cast to 0.0 / 1.0 and the CI degenerates to
+    ``(posterior, posterior)`` — there is no calibrated uncertainty
+    when no panel exists. An abstention (``is_exploitable`` is None /
+    missing / non-bool) casts no vote at all: the result is
+    inconclusive — midpoint posterior with a maximally wide CI — never
+    a confident negative. Phase 3 callers can detect the fallback via
+    ``aggregation_method`` rather than by inspecting the CI width.
     """
     decision_class = _decision_class_for(
         finding.get("rule_id"), decision_class_prefix,
     )
     raw = finding.get("is_exploitable")
-    posterior = 1.0 if raw is True else 0.0
+    if raw is True:
+        posterior = 1.0
+        interval = (1.0, 1.0)
+    elif raw is False:
+        posterior = 0.0
+        interval = (0.0, 0.0)
+    else:
+        # Abstention: no verdict exists to cast into the vote, so the
+        # aggregate must fail toward inconclusive, not toward a
+        # zero-posterior "definitely not exploitable".
+        posterior = 0.5
+        interval = (0.0, 1.0)
     return CalibratedVerdict(
         posterior_true_positive=posterior,
-        credible_interval=(posterior, posterior),
+        credible_interval=interval,
         n_models=0,
         decision_class=decision_class,
         aggregation_method=METHOD_VOTE,

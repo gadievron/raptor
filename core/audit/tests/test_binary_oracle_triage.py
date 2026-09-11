@@ -301,3 +301,86 @@ class TestDemoteAbsentPromotions:
         result.outcomes.append(_promoted_outcome())
         result.findings = 1
         assert _demote_absent_promotions(result, config) == 0
+
+
+class TestDemoteAbsentPromotionLanes:
+    """All three static-promotion lanes are demotable in absent
+    functions: sweep, precondition-verified, and secondary-hypothesis
+    — none prove the compiler kept the code."""
+
+    def _body_outcome(self, body):
+        o = ReviewOutcome(
+            file="a.c",
+            function="foo",
+            status="finding",
+            body=body,
+            evidence_tool="semgrep:x",
+            review_result={},
+        )
+        o.line = 10
+        return o
+
+    def _demote(self, tmp_path, body):
+        config = _config(tmp_path, binary_verdicts={"foo": "absent"})
+        result = OrchestratorResult()
+        result.outcomes.append(self._body_outcome(body))
+        result.findings = 1
+        n = _demote_absent_promotions(result, config)
+        return n, result
+
+    def test_precondition_verified_lane_demoted(self, tmp_path):
+        n, result = self._demote(
+            tmp_path,
+            "[precondition-verified via precondition:value_range] All 2 "
+            "stated precondition(s) verified\n\noverflow",
+        )
+        assert n == 1
+        assert result.outcomes[0].status == "dormant"
+
+    def test_secondary_hypothesis_lane_demoted(self, tmp_path):
+        n, result = self._demote(
+            tmp_path,
+            "[secondary-hypothesis-confirmed via smt:check-overflow] "
+            "claim\n\noverflow",
+        )
+        assert n == 1
+        assert result.outcomes[0].status == "dormant"
+
+    def test_llm_native_finding_untouched(self, tmp_path):
+        # A finding NOT minted by a static promotion lane keeps its
+        # status — this pass only demotes pattern-proved promotions.
+        n, result = self._demote(
+            tmp_path, "plain reviewer-written finding body",
+        )
+        assert n == 0
+        assert result.outcomes[0].status == "finding"
+
+
+class TestAbsentSinkUnreachableExemption:
+    def test_sink_with_sink_unreachable_still_exempt(self):
+        # The removed binary_absent+sink_unreachable rule fired
+        # EXACTLY for the sink/trust-boundary residue the exemption
+        # comment protects (every other case already returned above),
+        # silently skipping callback-dispatched sinks.
+        tr = classify_function(
+            file="a.c", function="foo", sloc=40,
+            binary_absent=True, sink_unreachable=True, is_sink=True,
+        )
+        assert tr.bucket != TriageBucket.SKIP
+
+    def test_trust_boundary_with_sink_unreachable_still_exempt(self):
+        tr = classify_function(
+            file="a.c", function="foo", sloc=40,
+            binary_absent=True, sink_unreachable=True,
+            is_trust_boundary=True,
+        )
+        assert tr.bucket != TriageBucket.SKIP
+
+    def test_plain_absent_function_still_skips(self):
+        # Two-direction guard: the non-exempt absent population keeps
+        # its skip through the first rule.
+        tr = classify_function(
+            file="a.c", function="foo", sloc=40,
+            binary_absent=True, sink_unreachable=True,
+        )
+        assert tr.bucket == TriageBucket.SKIP

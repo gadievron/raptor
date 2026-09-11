@@ -187,20 +187,23 @@ def build_patch_prompt_bundle_from_finding(
     extra_blocks: tuple[UntrustedBlock, ...] = (),
 ) -> PromptBundle:
     """Bundle equivalent of ``build_patch_prompt_from_finding``."""
-    if (
-        finding.get("source_type") == "dependency"
-        or finding.get("vuln_type", "").startswith("sca:")
-        or finding.get("rule_id", "").startswith("sca:")
-    ):
+    # Shared None-safe predicate — see finding_kinds for why a local
+    # ``finding.get("vuln_type", "").startswith(...)`` copy crashes on
+    # present-but-None values.
+    from packages.llm_analysis.finding_kinds import is_sca_finding
+    if is_sca_finding(finding):
         return build_sca_patch_prompt_bundle(finding, profile=profile)
+    # ``or``-coalesced: .get defaults only cover ABSENT keys, and the
+    # schema allows explicit nulls for these fields — a None slot
+    # value crashes the envelope renderer.
     return build_patch_prompt_bundle(
-        rule_id=finding.get("rule_id", "unknown"),
-        file_path=finding.get("file_path", "unknown"),
-        start_line=finding.get("start_line", 0),
-        end_line=finding.get("end_line", finding.get("start_line", 0)),
-        message=finding.get("message", ""),
-        analysis=finding.get("analysis", {}),
-        code=finding.get("code", ""),
+        rule_id=finding.get("rule_id") or "unknown",
+        file_path=finding.get("file_path") or "unknown",
+        start_line=finding.get("start_line") or 0,
+        end_line=finding.get("end_line") or finding.get("start_line") or 0,
+        message=finding.get("message") or "",
+        analysis=finding.get("analysis") or {},
+        code=finding.get("code") or "",
         full_file_content=full_file_content,
         feasibility=finding.get("feasibility"),
         attack_path=attack_path,

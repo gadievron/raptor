@@ -769,8 +769,8 @@ def _failure_disposition(error: Exception) -> str:
     from transport failures in the telemetry rollup."""
     if _is_quota_error(error):
         return "quota"
-    from core.llm.structured_call import is_content_filter_text
-    if is_content_filter_text(str(error)):
+    from core.llm.structured_call import is_content_filter_error
+    if is_content_filter_error(error):
         return "blocked"
     if _is_auth_error(error):
         return "auth"
@@ -801,12 +801,41 @@ def _is_response_shape_failure(error: Exception) -> bool:
         # Retryable (a bad sample, like malformed JSON) but still a
         # response-shape failure — record it explicitly.
         return True
+    if isinstance(error, json.JSONDecodeError):
+        # Malformed JSON from the model is retryable AND a response-
+        # shape failure; the disposition check below would otherwise
+        # hide it behind the "retryable" label.
+        return True
     if _failure_disposition(error) != "fatal":
+        return False
+    err = str(error).lower()
+    # A fatal HTTP 400 is a request/transport boundary outcome (bad
+    # request parameters, oversized payload), not evidence about the
+    # model's ability to emit schema-conformant output.
+    if _HTTP_400_STATUS_RE.search(err):
         return False
     # Empty content is a model/transport boundary outcome (refusal
     # variants, output-budget exhaustion), not a shape problem.
-    err = str(error).lower()
     return "empty content" not in err and "empty response" not in err
+
+
+# Status codes carried in error TEXT need boundary-anchored matching:
+# a bare substring check on "500" would also hit unrelated numerics
+# ("request 1500", stack-trace line numbers). Each pattern accepts the
+# status either with an explicit context word ("code: 500"), at the
+# start of the message (google-genai's "500 INTERNAL ..." shape), or
+# followed by its canonical reason phrase.
+_GATEWAY_STATUS_RE = re.compile(r"\b50[234]\b")
+_HTTP_500_STATUS_RE = re.compile(
+    r"\b(?:http|status|code)\s*:?\s*500\b"
+    r"|^\s*500\b"
+    r"|\b500\s+internal\b",
+)
+_HTTP_400_STATUS_RE = re.compile(
+    r"\b(?:http|status|code)\s*:?\s*400\b"
+    r"|^\s*400\b"
+    r"|\b400\s+(?:bad request|invalid_argument)\b",
+)
 
 
 def _safe_counter(obj: Any, name: str) -> int:
@@ -839,6 +868,14 @@ def is_timeout_error(error: Exception) -> bool:
     if "Timeout" in type(error).__name__:
         return True
     error_str = str(error).lower()
+    # A gateway status in the text ("502/503/504 Gateway Timeout") is a
+    # fast server-side transient, not a client-side timeout — it must
+    # ride the ordinary retryable path instead of burning the (possibly
+    # zero) timeout retry cap. Genuine client-side timeouts arrive as
+    # TimeoutError subclasses or *Timeout exception types (matched
+    # above) or as wrapped "timed out" messages with no gateway status.
+    if _GATEWAY_STATUS_RE.search(error_str):
+        return False
     return "timed out" in error_str or "timeout" in error_str
 
 
@@ -862,10 +899,13 @@ def _is_retryable_error(error: Exception) -> bool:
     if _is_quota_error(error):
         return True
 
-    # Check exception types
+    # Check exception types. "ServerError" also covers SDK 5xx types
+    # that don't spell out "Internal" — google-genai raises a bare
+    # ``ServerError`` for every 5xx (its 4xx counterpart is
+    # ``ClientError``, which stays non-retryable).
     error_type = type(error).__name__
     retryable_types = ("Timeout", "ConnectionError", "APIConnectionError",
-                       "InternalServerError", "ServiceUnavailableError")
+                       "ServerError", "ServiceUnavailableError")
     if any(t in error_type for t in retryable_types):
         return True
 
@@ -875,6 +915,12 @@ def _is_retryable_error(error: Exception) -> bool:
                           "502", "503", "504",
                           "internal server error", "service unavailable")
     if any(p in error_str for p in retryable_patterns):
+        return True
+
+    # HTTP 500 in the text ("500 INTERNAL", "code: 500") is the same
+    # transient class as 502/503/504. Boundary-anchored — a bare "500"
+    # substring would also match unrelated numerics like request ids.
+    if _HTTP_500_STATUS_RE.search(error_str):
         return True
 
     # JSON parse failures from LLM output are retryable — the model
@@ -1011,7 +1057,8 @@ def _pinned_llm_config(model_name: str) -> 'LLMConfig':
     #      the config file)
     from core.llm.model_data import resolve_model_limits
     limits = resolve_model_limits(model_name) or {}
-    max_tokens = limits.get("max_output", 4096)
+    known_max_output = limits.get("max_output")
+    max_tokens = known_max_output or 4096
     max_context = limits.get("max_context", 32000)
 
     builder = _PROVIDER_BUILDERS.get(provider)
@@ -1034,9 +1081,51 @@ def _pinned_llm_config(model_name: str) -> 'LLMConfig':
             max_tokens=max_tokens, max_context=max_context,
         )
     else:
+        # The pinned model's own published output cap wins over the
+        # base config's value: ``max(base, pinned)`` sent the base
+        # model's larger limit on every call to a smaller-cap pinned
+        # model — a non-retryable 400, before the first retry. Only
+        # when the pinned model has NO published limit do we keep the
+        # old max() (the base's value was sized for this provider and
+        # beats the blind 4096 floor).
+        pinned_max = (
+            known_max_output if known_max_output
+            else max(base.max_tokens, max_tokens)
+        )
         primary = replace(base, model_name=model_name, role="code",
-                          max_tokens=max(base.max_tokens, max_tokens))
+                          max_tokens=pinned_max)
     return LLMConfig(primary_model=primary, fallback_models=[])
+
+
+class _KeyLockHandle:
+    """Context-manager hand-out for a per-cache-key dedupe lock.
+
+    The lock registry evicts cold entries past a cap, and eviction
+    must never drop a lock that a caller is about to acquire: between
+    ``_key_lock`` returning and the caller entering ``with``, the lock
+    is held by nobody, so a bare ``acquire(blocking=False)`` probe
+    reads it as uncontended — evicting it there hands the next caller
+    for the same key a FRESH lock and two provider calls run
+    concurrently for one key. Every hand-out is therefore refcounted
+    in the registry; the count drops only after release, and eviction
+    skips keys with live hand-outs.
+    """
+
+    __slots__ = ("_client", "_key", "lock")
+
+    def __init__(self, client: "LLMClient", key: str,
+                 lock: threading.Lock) -> None:
+        self._client = client
+        self._key = key
+        self.lock = lock
+
+    def __enter__(self) -> "_KeyLockHandle":
+        self.lock.acquire()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self.lock.release()
+        self._client._release_key_lock(self._key)
 
 
 class LLMClient:
@@ -1133,6 +1222,9 @@ class LLMClient:
         self._key_locks: OrderedDict[str, threading.Lock] = OrderedDict()
         self._key_locks_guard = threading.Lock()
         self._key_locks_cap = 4096
+        # Live hand-out counts per key — a handed-out lock must never
+        # be evicted even before its holder acquires it (see _key_lock).
+        self._key_lock_refs: dict[str, int] = {}
         # Lazy-built model scorecard. Stays None until a consumer
         # asks for it via the ``scorecard`` property; constructing
         # one is cheap but it does open a file handle and create
@@ -1379,13 +1471,21 @@ class LLMClient:
         with self._stats_lock:
             self.short_circuits += 1
 
-    def _key_lock(self, cache_key: str) -> "threading.Lock":
-        """Return (creating if needed) a per-key lock used to dedupe
-        concurrent calls with the same cache key. The guard lock is
-        only held briefly to insert into the dict; the per-key lock
-        itself is acquired by the caller for the duration of the
-        check-call-save sequence."""
+    def _key_lock(self, cache_key: str) -> "_KeyLockHandle":
+        """Return (creating if needed) a per-key lock hand-out used to
+        dedupe concurrent calls with the same cache key. The guard lock
+        is only held briefly to insert into the dict; the per-key lock
+        itself is acquired by the caller (via the handle's ``with``)
+        for the duration of the check-call-save sequence. Each hand-out
+        is refcounted so eviction never drops a key whose lock has been
+        handed out but not yet acquired (see ``_KeyLockHandle``)."""
         with self._key_locks_guard:
+            # getattr: tests build clients via ``__new__`` and wire the
+            # registry attributes by hand; the refcount table follows
+            # the same lazy tolerance.
+            refs = getattr(self, "_key_lock_refs", None)
+            if refs is None:
+                refs = self._key_lock_refs = {}
             lock = self._key_locks.get(cache_key)
             if lock is None:
                 lock = threading.Lock()
@@ -1419,7 +1519,13 @@ class LLMClient:
                     candidate_key, candidate_lock = next(
                         iter(self._key_locks.items()),
                     )
-                    if candidate_lock.acquire(blocking=False):
+                    # A live hand-out means a caller holds a handle to
+                    # this exact lock object even if it hasn't acquired
+                    # yet — the probe below would misread that gap as
+                    # uncontended, so check the refcount first.
+                    if refs.get(candidate_key, 0) > 0:
+                        self._key_locks.move_to_end(candidate_key)
+                    elif candidate_lock.acquire(blocking=False):
                         # No-one holds it — release and drop.
                         candidate_lock.release()
                         self._key_locks.pop(candidate_key, None)
@@ -1432,7 +1538,21 @@ class LLMClient:
                 # Touch existing entries so the LRU eviction picks the
                 # genuinely cold keys, not a still-active one.
                 self._key_locks.move_to_end(cache_key)
-            return lock
+            refs[cache_key] = refs.get(cache_key, 0) + 1
+            return _KeyLockHandle(self, cache_key, lock)
+
+    def _release_key_lock(self, cache_key: str) -> None:
+        """Drop one hand-out reference for *cache_key* (called by
+        ``_KeyLockHandle.__exit__`` after releasing the lock)."""
+        with self._key_locks_guard:
+            refs = getattr(self, "_key_lock_refs", None)
+            if not refs:
+                return
+            remaining = refs.get(cache_key, 0) - 1
+            if remaining > 0:
+                refs[cache_key] = remaining
+            else:
+                refs.pop(cache_key, None)
 
     @staticmethod
     def _kwargs_for_cache_key(kwargs: dict[str, Any] | None) -> str:
@@ -1728,10 +1848,21 @@ class LLMClient:
         self, prompt: str, system_prompt: str | None, model: str,
         kwargs: dict[str, Any] | None = None,
     ) -> str:
-        """Generate cache key for prompt."""
-        content = (
-            f"{model}:{system_prompt or ''}:{prompt}:"
-            f"{self._kwargs_for_cache_key(kwargs)}"
+        """Generate cache key for prompt.
+
+        Components are JSON-list-encoded (every string quoted and
+        escaped) instead of ``:``-joined: with a bare join,
+        (system='A', prompt='B:C') and (system='A:B', prompt='C')
+        produced the same digest, so the second caller replayed the
+        first caller's cached response. Changing the key formula
+        orphans existing cache entries — cost-only impact (one fresh
+        generation per unique call), bounded by the 24h TTL that
+        already expires them.
+        """
+        from core.json import dumps_canonical
+        content = dumps_canonical(
+            [model, system_prompt or "", prompt,
+             self._kwargs_for_cache_key(kwargs)],
         )
         return sha256_string(content)
 
@@ -1921,7 +2052,12 @@ class LLMClient:
         and includes generation kwargs so callers passing different
         temperatures (etc.) don't collide either — even though provider
         impls don't currently honour those kwargs, future plumbing is
-        cache-correct from day one."""
+        cache-correct from day one.
+
+        Components are JSON-list-encoded, not ``:``-joined — see
+        ``_get_cache_key`` for the delimiter-injection collision this
+        closes and the (cost-only, TTL-bounded) cache invalidation the
+        formula change implies."""
         # sort_keys → stable digest regardless of dict insertion order.
         # default=str → swallow non-serialisable schema embellishments.
         try:
@@ -1930,17 +2066,22 @@ class LLMClient:
             # Schemas should always serialise; if a caller passes something
             # weird, fall back to repr — still deterministic for that caller.
             schema_json = repr(schema)
-        content = (
-            f"v{self._STRUCTURED_CACHE_VERSION}:"
-            f"{model}:{system_prompt or ''}:{prompt}:{schema_json}:"
-            f"{self._kwargs_for_cache_key(kwargs)}"
+        from core.json import dumps_canonical
+        content = dumps_canonical(
+            [f"v{self._STRUCTURED_CACHE_VERSION}", model,
+             system_prompt or "", prompt, schema_json,
+             self._kwargs_for_cache_key(kwargs)],
         )
         return sha256_string(content)
 
     def _get_cached_structured_response(
         self, cache_key: str,
-    ) -> tuple[dict[str, Any], str] | None:
-        """Retrieve cached (result_dict, raw) tuple if available."""
+    ) -> tuple[dict[str, Any], str, str | None] | None:
+        """Retrieve cached (result_dict, raw, serving_model) if
+        available. ``serving_model`` is the model that actually
+        produced the entry (a fallback's name when the primary failed
+        at write time); None for entries written before the field
+        existed."""
         if not self.config.enable_caching:
             return None
 
@@ -1962,7 +2103,13 @@ class LLMClient:
             logger.debug("Structured cache stale (TTL): %s", cache_key)
             return None
         logger.debug("Structured cache hit: %s", cache_key)
-        return data["result"], data["raw"]
+        # "model" is the SERVING model recorded at write time (MAC-
+        # covered like the rest of the entry). Tolerate its absence —
+        # legacy entries predate the field.
+        model = data.get("model")
+        return data["result"], data["raw"], (
+            model if isinstance(model, str) and model else None
+        )
 
     def _save_structured_to_cache(
         self, cache_key: str, response: "StructuredResponse",
@@ -2428,7 +2575,14 @@ class LLMClient:
 
                 timeout_failures = 0
                 last_safe_e = ""
-                for attempt in range(self.config.max_retries):
+                # ``max_retries`` counts TOTAL attempts here; clamp to
+                # at least one so ``max_retries=0`` means "single
+                # attempt, no retries" — matching the providers' own
+                # ``range(max_retries + 1)`` convention (they pass 0
+                # deliberately for exactly that) — instead of an empty
+                # loop that left ``attempt`` unbound and raised
+                # UnboundLocalError at the give-up log below.
+                for attempt in range(max(self.config.max_retries, 1)):
                     attempt_start = time.monotonic()
                     try:
                         if attempt > 0:
@@ -2850,8 +3004,14 @@ class LLMClient:
         # for full rationale).
         with self._key_lock(cache_key):
             cached = self._get_cached_structured_response(cache_key)
+            cached_model: str | None = None
             if cached is not None:
-                cached_result, cached_raw = cached
+                # Tolerant unpack: the reader returns (result, raw,
+                # serving_model); older stubs and overrides may still
+                # hand back a bare (result, raw) pair.
+                cached_result, cached_raw = cached[0], cached[1]
+                if len(cached) > 2:
+                    cached_model = cached[2]
                 # Strict schema floor applies to cache replays too —
                 # entries written before the floor existed (or by an
                 # older RAPTOR) may carry smuggled fields. Treat a
@@ -2886,7 +3046,11 @@ class LLMClient:
                     raw=cached_raw,
                     cost=0.0,
                     tokens_used=0,
-                    model=model_config.model_name,
+                    # The SERVING model recorded at write time — a
+                    # fallback-served entry must not replay as if the
+                    # primary produced it. Legacy entries without the
+                    # field keep the requested model's name.
+                    model=cached_model or model_config.model_name,
                     # Lowercase — same normalisation as generate()'s
                     # cached path (see the comment there): a mixed-case
                     # LLMConfig provider would otherwise split
@@ -2937,7 +3101,11 @@ class LLMClient:
 
                 timeout_failures = 0
                 last_safe_e = ""
-                for attempt in range(self.config.max_retries):
+                # Clamp to at least one attempt — ``max_retries=0``
+                # means "single attempt, no retries"; see ``generate``
+                # above for the convention and the UnboundLocalError
+                # this closes.
+                for attempt in range(max(self.config.max_retries, 1)):
                     attempt_start = time.monotonic()
                     try:
                         if attempt > 0:

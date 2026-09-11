@@ -283,3 +283,39 @@ class TestEdgeCases:
         # Bundled dir currently has only general — but that's fine,
         # picker just returns it.
         assert any(s.name == "general" for s in out)
+
+
+class TestKeywordPrefixConvention:
+    """A keyword written with a trailing ``_``/``-`` matches as a
+    PREFIX of a function-name token; plain keywords stay exact-token
+    matches."""
+
+    def test_trailing_underscore_stem_matches_token_prefix(self):
+        from core.llm.cwe_strategies.picker import _keyword_score
+
+        score = _keyword_score("check_authorization", ["authoriz_"])
+        assert score == len("authoriz")
+        # Also fires when the stem equals the whole token.
+        assert _keyword_score("do_authoriz", ["authoriz_"]) == len("authoriz")
+
+    def test_plain_keyword_stays_exact_token_match(self):
+        from core.llm.cwe_strategies.picker import _keyword_score
+
+        # Same stem WITHOUT the trailing separator: exact-token only.
+        assert _keyword_score("check_authorization", ["authoriz"]) == 0
+        assert _keyword_score("check_authoriz", ["authoriz"]) == len("authoriz")
+
+    def test_stem_does_not_match_shorter_token(self):
+        from core.llm.cwe_strategies.picker import _keyword_score
+
+        # "auth" is not prefixed by "authoriz" — no match.
+        assert _keyword_score("auth_check", ["authoriz_"]) == 0
+
+    def test_stem_keyword_routes_strategy_selection(self):
+        stem_strat = _strat("auth_privilege", keywords=("authoriz_",))
+        out = pick_strategies(
+            file_path="src/acl.c",
+            function_name="check_authorization",
+            strategies=[GENERAL_STRAT, stem_strat],
+        )
+        assert "auth_privilege" in [s.name for s in out]

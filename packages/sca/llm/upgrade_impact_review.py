@@ -123,10 +123,19 @@ def assess_upgrade_impact(
 
     call_sites = _grep_call_sites(target, dep)
     if not call_sites:
+        # Zero grep hits is a heuristic result, not proof of non-use:
+        # the import patterns are best-effort per ecosystem and miss
+        # dynamic imports, re-exports, and unconventional module names.
+        # Report "safe" but at low confidence with an honest summary
+        # rather than a confident verdict.
         return UpgradeImpactVerdict(
             verdict="safe",
-            confidence="medium",
-            summary=f"No call sites found for {dep.name} — upgrade is safe",
+            confidence="low",
+            summary=(
+                f"Heuristic import grep found no call sites for "
+                f"{dep.name}; usage may exist via patterns the grep "
+                f"cannot see — verify before relying on this verdict"
+            ),
         )
 
     # Fast-tier prefilter. Asks the cheap model "is this upgrade
@@ -261,22 +270,45 @@ def _grep_call_sites(target: Path, dep: Dependency) -> list[str]:
 
 
 def _import_patterns(dep: Dependency) -> list[re.Pattern]:
-    """Build regex patterns to find import/usage of a dependency."""
+    """Build regex patterns to find import/usage of a dependency.
+
+    Ecosystem name-mapping quirks are delegated to the reachability
+    layer's resolvers so the grep looks for what source code actually
+    writes, not the registry-facing package name:
+
+    - PyPI distribution names diverge from import-module names
+      (``pyyaml`` → ``import yaml``) — candidates come from
+      :func:`packages.sca.reachability.python._candidate_modules`
+      (curated map + PEP 503/8 heuristics).
+    - Maven groupIds diverge from Java package prefixes
+      (``com.google.guava`` → ``com.google.common``) — prefixes come
+      from :func:`packages.sca.reachability.maven._candidate_prefixes`
+      (curated map + groupId heuristics).
+    - Packagist names are lowercase but PHP ``use`` statements are
+      PascalCase and case-sensitive (``symfony/console`` →
+      ``use Symfony\\Component\\Console\\...``) — match the PascalCase
+      vendor namespace case-insensitively.
+    """
     name = dep.name
     patterns = []
 
     if dep.ecosystem == "PyPI":
-        module = name.replace("-", "_").replace(".", "_")
-        patterns.append(re.compile(rf"\b(?:import|from)\s+{re.escape(module)}\b"))
+        from ..reachability.python import _candidate_modules
+        for module in _candidate_modules(name):
+            patterns.append(
+                re.compile(rf"\b(?:import|from)\s+{re.escape(module)}\b"),
+            )
     elif dep.ecosystem == "npm":
         bare = name.split("/")[-1] if "/" in name else name
         patterns.append(re.compile(rf"""(?:require\s*\(\s*|from\s+)['"]({re.escape(name)})"""))
         if bare != name:
             patterns.append(re.compile(rf"""(?:require\s*\(\s*|from\s+)['"]({re.escape(bare)})"""))
     elif dep.ecosystem in ("Maven", "Gradle"):
-        parts = name.split(":")
-        if len(parts) >= 2:
-            patterns.append(re.compile(rf"\bimport\s+{re.escape(parts[0])}\."))
+        from ..reachability.maven import _candidate_prefixes
+        for prefix in _candidate_prefixes(name):
+            patterns.append(re.compile(
+                rf"\bimport\s+(?:static\s+)?{re.escape(prefix)}\.",
+            ))
     elif dep.ecosystem == "Go":
         patterns.append(re.compile(rf'"{re.escape(name)}'))
     elif dep.ecosystem == "Cargo":
@@ -286,7 +318,15 @@ def _import_patterns(dep: Dependency) -> list[re.Pattern]:
     elif dep.ecosystem == "NuGet":
         patterns.append(re.compile(rf"\busing\s+{re.escape(name)}\b"))
     elif dep.ecosystem == "Packagist":
-        ns = name.replace("/", "\\")
-        patterns.append(re.compile(rf"\buse\s+{re.escape(ns)}"))
+        vendor = name.split("/", 1)[0]
+        from ..reachability.composer import _to_pascal
+        vendor_pascal = _to_pascal(vendor)
+        # Vendor-namespace match only: the second PSR-4 segment often
+        # differs from the composer package name (symfony/console maps
+        # to Symfony\Component\Console). Case-insensitive because the
+        # composer name is lowercase while PHP code is PascalCase.
+        patterns.append(re.compile(
+            rf"\buse\s+{re.escape(vendor_pascal)}\\", re.IGNORECASE,
+        ))
 
     return patterns

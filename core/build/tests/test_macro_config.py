@@ -78,7 +78,11 @@ def test_kconfig(tmp_path):
     mc = extract_macro_config(tmp_path)
     assert mc.source == "kconfig"
     assert mc.is_defined("CONFIG_FOO") is True
-    assert mc.is_defined("CONFIG_MOD") is True   # =m also defined
+    # =m defines only the _MODULE spelling — autoconf.h never defines
+    # CONFIG_MOD itself for tristate modules, so the bare name must be
+    # known-undefined (the #else arm is what every TU compiles).
+    assert mc.is_defined("CONFIG_MOD") is False
+    assert mc.is_defined("CONFIG_MOD_MODULE") is True
     assert mc.is_defined("CONFIG_BAR") is False
     assert mc.is_defined("CONFIG_UNSEEN") is None
 

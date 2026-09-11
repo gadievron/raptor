@@ -275,3 +275,41 @@ def test_broken_chart_in_fixture_tree_logs_debug_not_warning(
     prod_recs = [r for r in records if "deploy" in str(r.args[0])]
     assert fixture_recs and all(r.levelname == "DEBUG" for r in fixture_recs)
     assert prod_recs and all(r.levelname == "WARNING" for r in prod_recs)
+
+
+# ---------------------------------------------------------------------------
+# Repository-host vetting for the egress allowlist
+# ---------------------------------------------------------------------------
+
+def _write_repo_chart(tmp_path: Path, repository: str) -> None:
+    (tmp_path / "Chart.yaml").write_text(
+        "apiVersion: v2\n"
+        "name: x\n"
+        "version: 1.0.0\n"
+        "dependencies:\n"
+        "  - name: dep\n"
+        "    version: 1.0.0\n"
+        f'    repository: "{repository}"\n',
+        encoding="utf-8",
+    )
+
+
+def test_repository_hosts_reject_userinfo(tmp_path: Path) -> None:
+    # Chart.yaml is target-controlled and this list feeds the egress
+    # proxy allowlist — credential-bearing URLs must not widen egress.
+    from packages.sca.parsers.helm_chart import chart_repository_hosts
+    _write_repo_chart(tmp_path, "https://user:pw@repo.example.com/charts")
+    assert chart_repository_hosts(tmp_path) == []
+
+
+def test_repository_hosts_reject_malformed_host(tmp_path: Path) -> None:
+    from packages.sca.parsers.helm_chart import chart_repository_hosts
+    _write_repo_chart(tmp_path, "https://bad host/charts")
+    assert chart_repository_hosts(tmp_path) == []
+
+
+def test_repository_hosts_accept_clean_dns_names(tmp_path: Path) -> None:
+    # Other direction: well-formed hosts still flow through.
+    from packages.sca.parsers.helm_chart import chart_repository_hosts
+    _write_repo_chart(tmp_path, "https://charts.bitnami.com/bitnami")
+    assert chart_repository_hosts(tmp_path) == ["charts.bitnami.com"]

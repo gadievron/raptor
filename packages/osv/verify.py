@@ -26,6 +26,26 @@ if TYPE_CHECKING:
     from .client import OsvClient
 
 
+# Minimum SHA length for a match verdict, on BOTH sides — the same
+# floor nvd/verify.py enforces, kept in lockstep so the two oracles
+# grade identically. Git's documented short-sha ambiguity threshold is
+# 7-8 chars; two unrelated commits coinciding on 7 hex chars is an
+# operationally meaningful false-positive risk (MATCH_EXACT minted for
+# a wrong commit), while 12 hex chars (16^12 ≈ 2.8×10^14) is
+# effectively unique within any one repo. Below the floor the verdict
+# degrades to DISPUTE, never to a match.
+_MIN_MATCH_SHA_LEN = 12
+
+
+def _sha_match(psha: str, sha: str) -> bool:
+    """True when both SHAs are ≥12 chars and share their first 12."""
+    return (
+        len(psha) >= _MIN_MATCH_SHA_LEN
+        and len(sha) >= _MIN_MATCH_SHA_LEN
+        and psha[:_MIN_MATCH_SHA_LEN] == sha[:_MIN_MATCH_SHA_LEN]
+    )
+
+
 def _extract_pairs(
     record: OsvRecord,
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
@@ -132,9 +152,19 @@ def verify(
     pslug = normalize_slug(picked_slug)
     psha = picked_sha.lower()
 
+    if len(psha) < _MIN_MATCH_SHA_LEN:
+        return OracleVerdict(
+            cve_id=cve_id, picked_slug=picked_slug, picked_sha=picked_sha,
+            verdict=Verdict.DISPUTE, source=source_label,
+            expected_slugs=expected_slugs, expected_shas=expected_shas,
+            notes=(
+                f"picked_sha is only {len(psha)} chars — below the "
+                f"{_MIN_MATCH_SHA_LEN}-char minimum for a safe match verdict"
+            ),
+        )
+
     for s, sha in ref_pairs:
-        if s == pslug and len(psha) >= 7 and len(sha) >= 7 \
-                and sha.startswith(psha[:12]) and psha.startswith(sha[:12]):
+        if s == pslug and _sha_match(psha, sha):
             return OracleVerdict(
                 cve_id=cve_id, picked_slug=picked_slug, picked_sha=picked_sha,
                 verdict=Verdict.MATCH_EXACT, source=source_label,
@@ -142,8 +172,7 @@ def verify(
             )
 
     for s, sha in range_pairs:
-        if len(psha) >= 7 and len(sha) >= 7 \
-                and sha.startswith(psha[:12]) and psha.startswith(sha[:12]):
+        if _sha_match(psha, sha):
             if s == pslug:
                 return OracleVerdict(
                     cve_id=cve_id, picked_slug=picked_slug, picked_sha=picked_sha,
@@ -170,11 +199,7 @@ def verify(
     # were misclassified as hallucinations, blocking valid
     # cve_diff results.
     for s, sha in ref_pairs:
-        if (
-            s != pslug
-            and len(psha) >= 7 and len(sha) >= 7
-            and sha.startswith(psha[:12]) and psha.startswith(sha[:12])
-        ):
+        if s != pslug and _sha_match(psha, sha):
             return OracleVerdict(
                 cve_id=cve_id, picked_slug=picked_slug, picked_sha=picked_sha,
                 verdict=Verdict.MIRROR_DIFFERENT_SLUG, source=source_label,

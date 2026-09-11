@@ -97,8 +97,7 @@ class BrowserEngine:
         cookies: dict[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
     ) -> None:
-        parsed = urlparse(base_url)
-        self._origin = (parsed.scheme.lower(), parsed.netloc.lower())
+        self._origin = self._normalized_origin(base_url)
         self._base_url = base_url.rstrip("/")
         self._timeout_ms = timeout_ms
         self._screenshots_dir = screenshots_dir
@@ -184,12 +183,30 @@ class BrowserEngine:
 
     # -- scope gate ------------------------------------------------------
 
-    def _same_origin(self, url: str, *, scheme_map: dict | None = None) -> bool:
+    @staticmethod
+    def _normalized_origin(
+        url: str, *, scheme_map: dict | None = None,
+    ) -> tuple[str, str, int]:
+        """(scheme, hostname, port) with default ports normalized.
+
+        Chromium emits WHATWG-normalized request URLs (default port
+        removed), so comparing raw netlocs against an operator base_url
+        carrying an explicit default port ('http://host:80') mismatched
+        on every request and silently aborted the whole browser phase.
+        """
         parsed = urlparse(url)
         scheme = parsed.scheme.lower()
         if scheme_map:
             scheme = scheme_map.get(scheme, scheme)
-        return (scheme, parsed.netloc.lower()) == self._origin
+        default_port = 443 if scheme == "https" else 80
+        try:
+            port = parsed.port
+        except ValueError:
+            port = -1  # invalid port never matches a real origin
+        return (scheme, (parsed.hostname or "").lower(), port or default_port)
+
+    def _same_origin(self, url: str, *, scheme_map: dict | None = None) -> bool:
+        return self._normalized_origin(url, scheme_map=scheme_map) == self._origin
 
     _MAX_REDIRECT_HOPS = 5
 

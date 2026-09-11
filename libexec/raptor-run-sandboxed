@@ -30,6 +30,7 @@ Exit codes:
 """
 
 import logging
+import subprocess
 import sys
 
 # RAPTOR imports
@@ -146,6 +147,18 @@ try:
                 print(f"[sandbox] {item}", file=sys.stderr)
 except SandboxSetupError as e:
     _die(f"sandbox isolation could not engage: {e}", code=SANDBOX_ENGAGE_EXIT_CODE)
+except subprocess.TimeoutExpired as e:
+    # The run() backstop (timeout=1800 above) raises TimeoutExpired, not
+    # OSError — without this clause a hung child produced a raw traceback
+    # and exit 1 instead of the documented `[sandbox] ERROR` + exit 2.
+    # The exception carries whatever the child wrote before the kill;
+    # pass it through so partial output isn't discarded.
+    for stream, data in ((sys.stdout, e.output), (sys.stderr, e.stderr)):
+        if data:
+            stream.write(data if isinstance(data, str)
+                         else data.decode("utf-8", errors="replace"))
+            stream.flush()
+    _die(f"sandbox invocation failed: {e.__class__.__name__}: {e}", code=2)
 except (OSError, RuntimeError, ValueError) as e:
     _die(f"sandbox invocation failed: {e.__class__.__name__}: {e}", code=2)
 

@@ -20,6 +20,10 @@ Accepts: project output dir, run dir, target path, or project name.
 """
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # ─── trust-marker check (do not import; inline by design) ───
 # fmt: off
@@ -201,7 +205,11 @@ def _journal_marks(run_dir, marked, verdict_by_key):
         target = checklist.get("target_path") or ""
         ranges = {}
         for f in checklist.get("files", []):
-            for it in f.get("items", []) or f.get("functions", []) or []:
+            # Key-presence semantics, same as _checklist_item_keys and the
+            # store fold: an `items` key — even an empty list — supersedes
+            # legacy `functions`. A truthiness fallback here would journal
+            # line ranges from `functions` entries the fold never credits.
+            for it in f.get("items", f.get("functions", [])) or []:
                 if it.get("name"):
                     ranges[(f.get("path"), it["name"])] = (
                         it.get("line_start") or 0, it.get("line_end"),
@@ -258,7 +266,37 @@ def _checklist_item_keys(checklist: dict) -> set[tuple[str, str]] | None:
     return keys or None
 
 
-def _cmd_mark(mark_targets: list[str], run_dir: Path | None,
+def _build_path_normaliser(
+    run_dir: Path,
+) -> "tuple[set[tuple[str, str]] | None, Callable[[str], str] | None]":
+    """(valid_keys, normalise_path) for the run's checklist.
+
+    Operators spell paths the way tools do (absolute, ./-prefixed,
+    relative to another root) while the inventory keys on
+    target-relative paths. The store importer resolves
+    functions_analysed entries through _to_inventory_path; mark AND
+    unmark must accept exactly the spellings the fold would credit and
+    resolve to the stored key so the join lands. Returns (None, None)
+    when the checklist yields no keys (nothing to normalise against).
+    """
+    checklist = _load_run_checklist(run_dir)
+    if not checklist:
+        return None, None
+    valid_keys = _checklist_item_keys(checklist)
+    if valid_keys is None:
+        return None, None
+    from core.coverage.importer import _inventory_paths, _to_inventory_path
+    from core.coverage.summary import _inventory_name_index
+    inv_paths = _inventory_paths(checklist)
+    inv_index = _inventory_name_index(inv_paths)
+
+    def normalise_path(p: str) -> str:
+        return _to_inventory_path(p, inv_paths, inv_index)
+
+    return valid_keys, normalise_path
+
+
+def _cmd_mark(mark_targets: list, run_dir: Path | None,
               statuses: dict[tuple[str, str], str] | None = None) -> None:
     """Mark items as reviewed in the coverage record."""
     if not run_dir:
@@ -294,33 +332,24 @@ def _cmd_mark(mark_targets: list[str], run_dir: Path | None,
     # (file, item) pair must not record phantom review credit — the store
     # and journal folds join on the checklist, so a phantom entry claims
     # coverage no gap query can ever surface or withdraw.
-    checklist = _load_run_checklist(run_dir)
-    valid_keys = _checklist_item_keys(checklist) if checklist else None
-    normalise_path = None
-    if valid_keys is not None:
-        # Operators spell paths the way tools do (absolute, ./-prefixed,
-        # relative to another root) while the inventory keys on
-        # target-relative paths. The store importer resolves
-        # functions_analysed entries through _to_inventory_path; the gate
-        # must accept exactly the spellings the fold would credit, and
-        # store the resolved key so the join lands.
-        from core.coverage.importer import _inventory_paths, _to_inventory_path
-        from core.coverage.summary import _inventory_name_index
-        inv_paths = _inventory_paths(checklist)
-        inv_index = _inventory_name_index(inv_paths)
-
-        def normalise_path(p: str) -> str:
-            return _to_inventory_path(p, inv_paths, inv_index)
+    valid_keys, normalise_path = _build_path_normaliser(run_dir)
 
     statuses = dict(statuses or {})
     added = 0
     marked = []
     unmatched = []
     for target in mark_targets:
-        if ":" not in target:
-            print(f"WARNING: skipping '{target}' (expected file:function)", file=sys.stderr)
-            continue
-        file_path, func_name = target.rsplit(":", 1)
+        # --mark-file passes structured (file, item) pairs so item names
+        # containing ':' (e.g. C++ qualified names) survive intact; the
+        # CLI --mark form stays a 'file:item' string.
+        if isinstance(target, tuple):
+            file_path, func_name = target
+        else:
+            if ":" not in target:
+                print(f"WARNING: skipping '{target}' (expected file:function)",
+                      file=sys.stderr)
+                continue
+            file_path, func_name = target.rsplit(":", 1)
         if normalise_path is not None:
             raw_key = (file_path, func_name)
             file_path = normalise_path(file_path)
@@ -369,6 +398,13 @@ def _cmd_unmark(unmark_targets, run_dir):
         print("No LLM coverage record found.")
         return
 
+    # Unmark must resolve operator path spellings exactly the way mark
+    # does — mark stores the checklist-normalised key, so an unmark that
+    # kept the raw spelling would remove nothing and leave the journaled
+    # review credit standing. The raw key is kept alongside so legacy
+    # records stored before normalisation still match.
+    _valid_keys, normalise_path = _build_path_normaliser(run_dir)
+
     to_remove = set()
     for target in unmark_targets:
         if ":" not in target:
@@ -376,6 +412,8 @@ def _cmd_unmark(unmark_targets, run_dir):
             continue
         file_path, func_name = target.rsplit(":", 1)
         to_remove.add((file_path, func_name))
+        if normalise_path is not None:
+            to_remove.add((normalise_path(file_path), func_name))
 
     original = len(llm_record.get("functions_analysed", []))
     llm_record["functions_analysed"] = [
@@ -475,8 +513,14 @@ def main():
     def _take_opt(flag, av):
         if flag in av:
             i = av.index(flag)
-            if i + 1 < len(av):
-                return av[i + 1], av[:i] + av[i + 2:]
+            if i + 1 >= len(av):
+                # A value-taking flag with no value must not silently
+                # degrade to the default summary view — the operator
+                # asked for an import/format/tool and would get no
+                # diagnostic that the request was discarded.
+                print(f"ERROR: {flag} requires a value", file=sys.stderr)
+                sys.exit(1)
+            return av[i + 1], av[:i] + av[i + 2:]
         return None, av
     import_path, argv = _take_opt("--import", argv)
     import_fmt, argv = _take_opt("--format", argv)
@@ -493,28 +537,36 @@ def main():
     unmark_targets = []
     if "--mark-file" in argv:
         idx = argv.index("--mark-file")
-        if idx + 1 < len(argv):
-            mark_file = Path(argv[idx + 1])
-            if not mark_file.exists():
-                print(f"ERROR: file not found: {mark_file}", file=sys.stderr)
-                sys.exit(1)
-            from core.json import load_json
-            entries = load_json(mark_file)
-            if not isinstance(entries, list):
-                print("ERROR: mark file must be a JSON array of {file, item} objects",
-                      file=sys.stderr)
-                sys.exit(1)
-            for e in entries:
-                f = e.get("file", "")
-                name = e.get("item") or e.get("function") or e.get("global") or e.get("macro", "")
-                if f and name:
-                    mark_targets.append(f"{f}:{name}")
-                    # Optional per-entry verdict for the journaled mark
-                    # (clean when absent). Journal verdict enum only.
-                    st = e.get("status")
-                    if st in ("clean", "suspicious", "finding", "dormant"):
-                        mark_statuses[(f, name)] = st
-            argv = argv[:idx] + argv[idx + 2:]
+        if idx + 1 >= len(argv):
+            # Same contract as _take_opt: a dangling value-taking flag
+            # errors instead of silently running the default summary.
+            print("ERROR: --mark-file requires a value", file=sys.stderr)
+            sys.exit(1)
+        mark_file = Path(argv[idx + 1])
+        if not mark_file.exists():
+            print(f"ERROR: file not found: {mark_file}", file=sys.stderr)
+            sys.exit(1)
+        from core.json import load_json
+        entries = load_json(mark_file)
+        if not isinstance(entries, list):
+            print("ERROR: mark file must be a JSON array of {file, item} objects",
+                  file=sys.stderr)
+            sys.exit(1)
+        for e in entries:
+            f = e.get("file", "")
+            name = e.get("item") or e.get("function") or e.get("global") or e.get("macro", "")
+            if f and name:
+                # Keep the structured pair — flattening to 'file:item'
+                # and re-splitting on the last colon mangles item names
+                # containing ':' (C++ 'ns::fn') and orphans their
+                # per-entry status.
+                mark_targets.append((f, name))
+                # Optional per-entry verdict for the journaled mark
+                # (clean when absent). Journal verdict enum only.
+                st = e.get("status")
+                if st in ("clean", "suspicious", "finding", "dormant"):
+                    mark_statuses[(f, name)] = st
+        argv = argv[:idx] + argv[idx + 2:]
     # Process --mark / --unmark in a SINGLE pass so flag order
     # doesn't matter. Pre-fix the if-else sequence below
     # processed `--mark` first then truncated `argv` to
@@ -539,6 +591,12 @@ def main():
             if a.startswith("--"):
                 break
             out.append(a)
+        if not out:
+            # A --mark/--unmark with no targets must not fall through
+            # to the default summary as if nothing was requested.
+            print(f"ERROR: {flag} requires at least one file:item argument",
+                  file=sys.stderr)
+            sys.exit(1)
         return out
     mark_extra = _slurp_after("--mark")
     unmark_extra = _slurp_after("--unmark")

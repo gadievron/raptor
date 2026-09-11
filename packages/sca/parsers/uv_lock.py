@@ -114,9 +114,12 @@ def _build_dep(
         source = {}
 
     # Skip the project's own row (``virtual``) and local
-    # editables / directories — these aren't registry-published
-    # deps.
-    if any(k in source for k in ("virtual", "editable", "directory", "url", "path")):
+    # editables / directories / paths — these aren't
+    # registry-published deps. ``url`` sources stay IN: a direct
+    # sdist/wheel URL (``source = { url = "https://.../foo-1.2.tar.gz" }``)
+    # is a real third-party package with a concrete name + version —
+    # exactly what OSV matches on — so dropping it hid its advisories.
+    if any(k in source for k in ("virtual", "editable", "directory", "path")):
         return None
 
     # Git sources keep the version (some commit SHA or tag) but

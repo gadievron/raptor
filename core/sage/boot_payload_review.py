@@ -90,6 +90,25 @@ def _load_guard():
     return mod
 
 
+def _nl_lines(text: str) -> list[str]:
+    """Split section/stamp text on ``\\n`` ONLY — mirror of the
+    guard's ``_stamp_lines``.
+
+    Never ``str.splitlines()``: it also breaks on ``\\r`` ``\\v``
+    ``\\f`` ``\\x1c``-``\\x1e`` U+0085 U+2028 U+2029, which a hostile
+    server can embed RAW in payload text (jq emits U+2028/U+2029
+    unescaped), opening a forged ``### <surface>`` section mid-line —
+    a forged ``.denied`` section would make review count a hostile
+    variant as already decided. Raw-``\\n`` scanning keeps embedded
+    text inside the section body.
+    """
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        # Mirror splitlines() on \n-terminated text: no phantom last line.
+        lines.pop()
+    return lines
+
+
 def parse_sections(text: str) -> dict:
     """Parse ``### <surface>`` sections from a capture or stamp body.
 
@@ -97,6 +116,17 @@ def parse_sections(text: str) -> dict:
     stamp file (header + ``# ---`` marker); the guard's own parser
     requires the marker, this one tolerates its absence so live
     captures don't need a fake header.
+
+    Raises ``ValueError`` on a duplicate section header — mirroring
+    the guard's hard rejection. The capture pipeline neutralises
+    header-shaped lines inside embedded payload text and every writer
+    emits each section once, so a duplicate only ever means section
+    injection or corruption; a last-wins (or first-wins-silent) parse
+    would let the injected copy steer what review authorizes.
+
+    Line scanning is raw-``\\n`` only (``_nl_lines``) so a
+    splitlines-class separator embedded in payload text can never open
+    a section.
     """
     marker = "\n# ---\n"
     if marker in text:
@@ -104,11 +134,17 @@ def parse_sections(text: str) -> dict:
     surfaces: dict = {}
     current = None
     acc: list = []
-    for line in text.splitlines():
+    for line in _nl_lines(text):
         if line.startswith("### "):
             if current is not None:
                 surfaces[current] = "\n".join(acc)
             current = line[4:].strip()
+            if current in surfaces:
+                raise ValueError(
+                    f"duplicate section header {current!r} — refusing to "
+                    "parse (possible section injection); re-capture with "
+                    "bin/raptor sage-setup install"
+                )
             acc = []
         elif current is not None:
             acc.append(line)
@@ -120,9 +156,10 @@ def parse_sections(text: str) -> dict:
 def _json_lines(section_body: str | None) -> list:
     """One JSON value per non-empty line; garbage lines are skipped
     (mirrors the guard's ``_variant_objects`` fail direction: never
-    authorize on unparseable input)."""
+    authorize on unparseable input; raw-``\\n`` scanning so an embedded
+    U+2028-class separator cannot split a variant line)."""
     out = []
-    for line in (section_body or "").splitlines():
+    for line in _nl_lines(section_body or ""):
         line = line.strip()
         if not line:
             continue
@@ -153,15 +190,22 @@ def _inception_message(content) -> str:
 
 def _init_variants(guard, surfaces: dict | None) -> list[str]:
     """Authorized initialize.instructions texts (v2 ``.json`` records,
-    or the v1 single text as fallback)."""
+    or the v1 single text as fallback).
+
+    Empty/whitespace-only variants are dropped on both the stamp and
+    the live side: an absent-or-empty ``instructions`` field delivers
+    no instruction text, the guard neither verifies nor strips it, and
+    review flagging it as "pending" would demand a decision about
+    nothing (and merging ``""`` as an authorized variant would record
+    a meaningless wildcard-shaped entry)."""
     v2 = [
         v for v in guard._variant_objects(surfaces, SURFACE_INIT_JSON)
-        if isinstance(v, str)
+        if isinstance(v, str) and v.strip()
     ]
     if v2:
         return v2
     v1 = (surfaces or {}).get(SURFACE_INIT)
-    return [v1] if v1 is not None else []
+    return [v1] if v1 is not None and v1.strip() else []
 
 
 def _init_denied(guard, surfaces: dict | None) -> list[str]:
@@ -287,9 +331,28 @@ def _print_summary(report: dict) -> None:
         print(f"  {surface}: " + ", ".join(parts))
 
 
+def _neutralize_headers(text: str) -> str:
+    """Quote-prefix header-shaped lines in embedded payload text —
+    same neutralisation ``capture_boot_payload`` applies at capture
+    time, kept here so a merge/deny rewrite can never reintroduce a
+    parseable ``### `` line from older (pre-neutralisation) text.
+
+    splitlines() here is DELIBERATE (unlike the parsers): it flattens
+    the splitlines-class separators (\\r \\v \\f U+2028 ...) in legacy
+    text into ``\\n`` while quoting any header-shaped line they hid,
+    so the re-rendered stamp is inert under both old (splitlines) and
+    new (raw-``\\n``) parsers."""
+    return "\n".join(
+        ("> " + line) if line.startswith("### ") else line
+        for line in text.splitlines()
+    )
+
+
 def _render_body(init_text: str, msg_text: str,
                  init_variants: list, content_variants: list,
                  init_denied: list, content_denied: list) -> str:
+    init_text = _neutralize_headers(init_text)
+    msg_text = _neutralize_headers(msg_text)
     lines = [f"### {SURFACE_INIT}", init_text, f"### {SURFACE_INIT_JSON}"]
     lines += [json.dumps(v) for v in init_variants]
     lines += [f"### {SURFACE_INCEPTION}", msg_text,
@@ -404,11 +467,17 @@ def main(argv: list[str]) -> int:
     guard = _load_guard()
     auth = guard._parse_authorized(args.authorized)
     try:
-        live = parse_sections(
-            Path(args.live).read_text(encoding="utf-8"))
+        # newline="" — no universal-newline translation (a raw \r in
+        # the capture must not become a line break before the \n-only
+        # section scanner runs; see _nl_lines).
+        with open(args.live, encoding="utf-8", newline="") as fh:
+            live = parse_sections(fh.read())
     except OSError as exc:
         print(f"boot_payload_review: cannot read live capture: {exc}",
               file=sys.stderr)
+        return 3
+    except ValueError as exc:
+        print(f"boot_payload_review: {exc}", file=sys.stderr)
         return 3
     if not live:
         print("boot_payload_review: live capture has no surfaces",

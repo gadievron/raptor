@@ -251,6 +251,14 @@ def _parse_lines(spec: str) -> tuple[int, int]:
 
 def cmd_add(opts: argparse.Namespace) -> int:
     base = _resolve_base(opts.base)
+    # Validate the source path up front: the hash computation below
+    # opens the file, so a traversal / absolute path must be rejected
+    # before any filesystem access — not later at write time.
+    try:
+        annotation_path(base, opts.file)
+    except ValueError as e:
+        sys.stderr.write(f"raptor-annotate: {e}\n")
+        return 2
     metadata = _parse_meta(opts.meta or [])
     for reserved in PROVENANCE_KEYS:
         if reserved in metadata:

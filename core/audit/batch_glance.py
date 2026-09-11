@@ -9,7 +9,6 @@ repetitions and (N-1) round trips.  For 600 GLANCE items at batch size
 from __future__ import annotations
 
 import json
-import re
 import logging
 import time
 from collections import deque
@@ -34,8 +33,11 @@ _BATCH_SYSTEM_PROMPT = with_audit_framing(
     "and could contain a vulnerability.\n\n"
     "Respond with a JSON array, one object per function, in the same order "
     "as presented. Each object must have:\n"
-    '  {"file": "<file>", "function": "<name>", "status": "clean"|"suspicious", '
-    '"body": "<one sentence>"}\n\n'
+    '  {"file": "<file>", "function": "<name>", "line_start": <number>, '
+    '"status": "clean"|"suspicious", "body": "<one sentence>"}\n\n'
+    "Copy file, function, and line_start EXACTLY from the function list "
+    "entry (line_start is the first number of its line range) — they key "
+    "your answer back to the right function.\n\n"
     'Use "suspicious" only when there is a concrete reason (e.g. unchecked '
     "input, missing bounds check, unsafe pattern). Default to \"clean\".",
 )
@@ -100,7 +102,13 @@ def format_batch_prompt(
             kind="source-code",
             origin=origin,
         ))
-        listing.append(f"{i}. {ctx['file']}:{ctx['function']}")
+        # line range in the listing: same-file same-name siblings
+        # (static #if branches, overloads) are only distinguishable by
+        # line_start, which the response schema echoes back.
+        listing.append(
+            f"{i}. {ctx['file']}:{ctx['function']}"
+            f":{ctx.get('line_start', '?')}-{ctx.get('line_end', '?')}"
+        )
 
     slots = {
         "function_list": TaintedString(
@@ -123,7 +131,13 @@ def format_batch_prompt(
 # element is dropped and the affected function falls back to individual
 # review, exactly like any other malformed element. Same floor policy
 # as core.llm.response_validation.unknown_response_fields.
-_BATCH_ELEMENT_KEYS = frozenset({"file", "function", "status", "body"})
+# ``line_start`` is the disambiguating echo field: without it, results
+# keyed file:function collapsed same-file same-name siblings and their
+# verdicts swapped. It stays OPTIONAL at parse time (an element without
+# it still matches when its file:function is unique in the batch).
+_BATCH_ELEMENT_KEYS = frozenset({
+    "file", "function", "line_start", "status", "body",
+})
 _BATCH_STATUSES = frozenset({"clean", "suspicious"})
 
 
@@ -198,33 +212,14 @@ def _response_text(response: Any) -> str:
     return str(response)
 
 
-# Refusal-SPECIFIC vocabulary. Deliberately narrower than the
-# content-filter keyword set: providers phrase model refusals with
-# "refused"/"refusal" (providers.py raises "model refused request
-# (stop_reason=refusal, ...)"), while transport-layer blocks (proxy /
-# WAF 403 bodies echoed into SDK exceptions) say "blocked"/"denied" —
-# matching those here would send a retryable outage into bisection
-# (up to 2N-1 doomed calls) AND stamp it error_class="refusal", which
-# the orchestrator's end-of-run re-queue deliberately skips.
-_REFUSAL_TEXT_RE = re.compile(r"refus", re.IGNORECASE)
-
-
 def _is_refusal_error(exc: BaseException) -> bool:
-    """True when *exc* — or any exception on its cause/context chain —
-    is a MODEL refusal (not a transport/content block).
+    """MODEL refusal (never a transport/content block): a refusal must
+    not bucket retryable — an identical retry cannot change it — and a
+    transport block must not trigger paid bisection. Vocabulary and
+    chain walk live in the one shared home."""
+    from core.llm.structured_call import is_refusal_error
 
-    The provider raises the refusal as ``RuntimeError("Anthropic model
-    refused request (stop_reason=refusal, ...)")``; the client's
-    all-models-failed wrapper re-raises ``from last_error``, so the
-    refusal vocabulary reliably survives on ``__cause__`` even when
-    the wrapper's own message has been sanitised. The chain walk is
-    the shared, depth-bounded one every other classifier uses.
-    """
-    from core.llm.client import _exception_chain
-
-    return any(
-        _REFUSAL_TEXT_RE.search(str(e)) for e in _exception_chain(exc)
-    )
+    return is_refusal_error(exc)
 
 
 def _classify_batch_error(exc: Exception) -> str:
@@ -335,21 +330,44 @@ def make_batch_review_fn(
 
         results = parse_batch_response(raw_text, contexts)
 
-        # Build a keyed lookup from LLM results by file:function.
-        # Positional fallback is intentionally omitted — if the LLM
-        # reorders items, index-based matching misattributes verdicts.
-        # Unmatched functions get status="error" and fall back to
-        # individual review.
+        # Keyed lookup by file:function:line_start (line_start is the
+        # echo field the schema requires the model to copy). A bare
+        # file:function key collapsed same-file same-name siblings —
+        # one result served BOTH contexts and verdicts swapped.
+        # Fallback: an element without a usable line_start still
+        # matches by file:function, but ONLY when that pair is unique
+        # among the batch's contexts (ambiguous pairs error-route to
+        # individual review rather than guess). Positional matching
+        # stays intentionally omitted — if the LLM reorders items,
+        # index-based matching misattributes verdicts.
+        def _echo_line(value: Any) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return -1
+
+        ctx_pair_counts: dict[str, int] = {}
+        for ctx in contexts:
+            pair = f"{ctx['file']}:{ctx['function']}"
+            ctx_pair_counts[pair] = ctx_pair_counts.get(pair, 0) + 1
+
         results_by_key: dict[str, dict[str, Any]] = {}
+        results_by_pair: dict[str, dict[str, Any]] = {}
         for r in results:
             if isinstance(r, dict) and r.get("file") and r.get("function"):
-                rkey = f"{r['file']}:{r['function']}"
-                results_by_key[rkey] = r
+                pair = f"{r['file']}:{r['function']}"
+                line = _echo_line(r.get("line_start"))
+                if line >= 0:
+                    results_by_key[f"{pair}:{line}"] = r
+                results_by_pair[pair] = r
 
         outcomes: list[ReviewOutcome] = []
         for _i, ctx in enumerate(contexts):
-            ckey = f"{ctx['file']}:{ctx['function']}"
+            pair = f"{ctx['file']}:{ctx['function']}"
+            ckey = f"{pair}:{ctx.get('line_start', 0)}"
             r = results_by_key.get(ckey)
+            if r is None and ctx_pair_counts.get(pair, 0) == 1:
+                r = results_by_pair.get(pair)
             if r is not None:
                 status = r.get("status", "suspicious")
                 if status not in ("clean", "suspicious"):

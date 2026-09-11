@@ -291,8 +291,18 @@ def _classify_url(
     (used by SBOM tooling for human display) is ``<owner>/<repo>``
     for GitHub or the full URL path for generic.
     """
-    parsed = urlparse(_normalise_git_url(url))
-    host = (parsed.hostname or "").lower()
+    try:
+        parsed = urlparse(_normalise_git_url(url))
+        host = (parsed.hostname or "").lower()
+    except ValueError:
+        # ``urlparse`` raises on malformed bracket syntax ("Invalid
+        # IPv6 URL"). URL content is attacker-controlled; one bad URL
+        # must skip its own row, not kill the whole file's parse.
+        logger.warning(
+            "sca.parsers.gitmodules: unparseable submodule URL %r "
+            "— entry skipped", url,
+        )
+        return _GENERIC_ECOSYSTEM, None, ""
     repo_path = parsed.path.lstrip("/")
     # Strip a trailing ``.git`` for a cleaner name + purl.
     repo_path = repo_path.removesuffix(".git")
@@ -322,8 +332,25 @@ def _generic_purl(host: str, repo_path: str, sha: str | None) -> str:
 def _normalise_git_url(url: str) -> str:
     """Convert ``git@github.com:owner/repo.git`` SSH-style refs to a
     parseable ``https://github.com/owner/repo.git`` form. Leaves
-    ``https://...`` and ``git://...`` URLs alone."""
+    ``https://...`` and ``git://...`` URLs alone.
+
+    SCP-style refs may carry a bracketed IPv6 host
+    (``git@[2001:db8::1]:path/repo.git``): the host/path separator is
+    the colon AFTER the closing bracket. Splitting on the first colon
+    produced ``https://[/...`` which ``urlparse`` rejects with
+    ``ValueError: Invalid IPv6 URL``.
+    """
     if url.startswith("git@") and ":" in url:
-        host_part, _, path_part = url[len("git@"):].partition(":")
+        rest = url[len("git@"):]
+        if rest.startswith("["):
+            bracket_end = rest.find("]:")
+            if bracket_end == -1:
+                # No host/path separator after the bracket — leave the
+                # URL as-is; the caller's ValueError guard skips it.
+                return url
+            host_part = rest[:bracket_end + 1]
+            path_part = rest[bracket_end + 2:]
+            return f"https://{host_part}/{path_part}"
+        host_part, _, path_part = rest.partition(":")
         return f"https://{host_part}/{path_part}"
     return url

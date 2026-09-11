@@ -49,16 +49,29 @@ def _metric_inc(key: str, n: int = 1) -> None:
         _sage_metrics[key] += n
 
 _ollama_has_gpu: bool | None = None
+_ollama_gpu_checked_at: float = 0.0
 
 
 def _ollama_gpu_available() -> bool:
     """Detect GPU by checking size_vram on Ollama's loaded models.
 
-    Cached for the process lifetime. Falls back to False on any error.
+    A positive result is latched for the process lifetime. A negative
+    result (probe error, Ollama still starting, no model loaded yet)
+    is cached only for ``_CLIENT_NONE_TTL_S`` — the same TTL the
+    client's negative cache uses — and re-probed after: a permanently
+    latched False here disabled every SAGE pipeline hook for the rest
+    of a long run whenever the sidecar came up late. Honours
+    ``SAGE_OLLAMA_URL`` (same knob the direct-embed path in
+    core/sage/client.py reads); default is the compose-mapped port.
     """
-    global _ollama_has_gpu
-    if _ollama_has_gpu is not None:
-        return _ollama_has_gpu
+    global _ollama_has_gpu, _ollama_gpu_checked_at
+    if _ollama_has_gpu:
+        return True
+    if (
+        _ollama_has_gpu is False
+        and (time.time() - _ollama_gpu_checked_at) <= _CLIENT_NONE_TTL_S
+    ):
+        return False
     try:
         import httpx
 
@@ -68,7 +81,10 @@ def _ollama_gpu_available() -> bool:
         # a GPU host silently misreports as CPU-only (halved recall
         # workers, direct-embed path chosen on a wrong premise).
         ensure_loopback_no_proxy()
-        resp = httpx.get("http://localhost:11435/api/ps", timeout=5)
+        base = os.environ.get(
+            "SAGE_OLLAMA_URL", "http://localhost:11435"
+        ).rstrip("/")
+        resp = httpx.get(f"{base}/api/ps", timeout=5)
         if resp.status_code == 200:
             for model in resp.json().get("models", []):
                 # Full offload (size_vram >= size), not size_vram > 0:
@@ -86,7 +102,8 @@ def _ollama_gpu_available() -> bool:
         _ollama_has_gpu = False
     except Exception:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         _ollama_has_gpu = False
-    return _ollama_has_gpu
+    _ollama_gpu_checked_at = time.time()
+    return False
 
 
 def _recall_workers() -> int:
@@ -457,6 +474,13 @@ def recall_context_for_codeql_build(
             min_confidence=0.5,
         )
         merged = _merge_recall_rows(findings, methodology, top_k=8)
+        # Stamp the CALLER's repo key onto every returned row so the
+        # downstream MAC check (`infer_codeql_build_from_sage_recall_row`)
+        # binds to the repo being analysed, not to whatever repo the
+        # row claims — see that function's docstring.
+        caller_repo = _repo_key(repo_path)
+        for row in merged:
+            row["_caller_repo_key"] = caller_repo
         _metric_inc("recall_hits", len(merged))
         return merged
     except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
@@ -511,6 +535,7 @@ def store_codeql_build_reliability(
 
 def infer_codeql_build_from_sage_recall_row(
     row: dict[str, Any] | None,
+    repo_path: str | None = None,
 ) -> dict[str, str]:
     """Extract a build hint from a SAGE CodeQL build-reliability row.
 
@@ -529,11 +554,18 @@ def infer_codeql_build_from_sage_recall_row(
     ``build_command`` additionally requires the row's MAC token (minted
     by ``store_codeql_build_reliability`` on this install) to verify
     over the decision fields (kind, repo key, outcome, build command,
-    languages). Rows without a valid token still yield ``outcome`` /
-    ``languages`` as hints, but never a replayable command — an
-    unverified row must not produce a BuildSystem. The parsed command
-    is instead surfaced as ``unverified_build_command`` so the consumer
-    can show it to the operator as a hint (never execute it).
+    languages). The ``repo`` field is bound to the CALLER's repo —
+    ``repo_path`` when given, else the ``_caller_repo_key`` annotation
+    ``recall_context_for_codeql_build`` stamps on every row it returns
+    (mirroring ``recall_prior_finding_verdict``). The rows live in the
+    global ``raptor-methodology`` domain, so verifying against a repo
+    key parsed from the row itself would let repo A's build command
+    (possibly synthesised by a hostile repo A) verify — and EXECUTE —
+    inside repo B's checkout. Rows without a valid caller-bound token
+    still yield ``outcome`` / ``languages`` as hints, but never a
+    replayable command — the parsed command is instead surfaced as
+    ``unverified_build_command`` so the consumer can show it to the
+    operator as a hint (never execute it).
     """
     if not row:
         return {}
@@ -552,15 +584,18 @@ def infer_codeql_build_from_sage_recall_row(
     if m_cmd and out.get("outcome") == "success":
         cmd = m_cmd.group(1).strip()
         if cmd and cmd != "auto":
-            m_repo = re.search(r"\|\|repo=([0-9a-f]{12})\|\|", text)
+            if repo_path:
+                caller_key = _repo_key(repo_path)
+            else:
+                caller_key = str(row.get("_caller_repo_key") or "")
             fields = {
                 "kind": "codeql_build",
-                "repo": m_repo.group(1) if m_repo else "",
+                "repo": caller_key,
                 "outcome": out["outcome"],
                 "build_command": cmd,
                 "languages": out.get("languages", ""),
             }
-            if _row_mac_ok("codeql_build", fields, token):
+            if caller_key and _row_mac_ok("codeql_build", fields, token):
                 out["build_command"] = cmd
             else:
                 out["unverified_build_command"] = cmd

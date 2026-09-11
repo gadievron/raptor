@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-28T20:31:09Z",
+    "fetched_at": "2026-09-01T11:17:59Z",
     "git_ref": "v4.2.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of rails-4.2",
@@ -30,13 +30,17 @@
           "https://github.com/bcrypt-ruby/bcrypt-ruby",
           "https://github.com/bcrypt-ruby/bcrypt-ruby/releases/tag/v3.1.22"
         ],
-        "severity": null,
-        "severity_fallback": "medium",
+        "severity": {
+          "score": 4.5,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:L/AC:H/AT:P/PR:N/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N/E:U"
+        },
         "summary": "bcrypt-ruby has an Integer Overflow that Causes Zero Key-Strengthening Iterations at Cost=31 on JRuby"
       },
-      "cvss_score": null,
+      "cvss_score": 4.5,
       "dep_name": "bcrypt",
       "dep_version": "3.1.7",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.00228,
       "exploit_evidence": {
@@ -46,10 +50,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:bcrypt:3.1.7:GHSA-f27w-vcwj-c954",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/bcrypt@3.1.7",
-      "raptor_risk_estimate": 3.924542143199999,
+      "raptor_risk_estimate": 4.415109911099999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -63,13 +72,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 45.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.400463484,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.924542143199999,
+        "final": 4.415109911099999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -78,7 +87,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -111,8 +125,9 @@
       "cvss_score": 3.7,
       "dep_name": "dalli",
       "dep_version": "2.2.1",
+      "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.01284,
+      "epss": 0.01321,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -120,10 +135,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:dalli:2.2.1:GHSA-3xg8-cc8f-9wv2",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/dalli@2.2.1",
-      "raptor_risk_estimate": 11.43393402767652,
+      "raptor_risk_estimate": 11.43925333416567,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -140,10 +160,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40585225199999997,
+        "epss_multiplier": 0.406041063,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.43393402767652,
+        "final": 11.43925333416567,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -153,7 +173,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -184,6 +209,7 @@
       "cvss_score": null,
       "dep_name": "jquery-rails",
       "dep_version": "4.0",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.04519,
       "exploit_evidence": {
@@ -193,8 +219,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:jquery-rails:4.0:GHSA-4whc-pp4x-9pf3",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/jquery-rails@4.0",
       "raptor_risk_estimate": 2.808359995405314,
       "reachability": {
@@ -223,7 +254,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -264,6 +300,7 @@
       "cvss_score": 6.1,
       "dep_name": "jquery-rails",
       "dep_version": "4.0",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.87218,
       "exploit_evidence": {
@@ -275,8 +312,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:jquery-rails:4.0:GHSA-6c3j-c64m-qhgq",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/jquery-rails@4.0",
       "raptor_risk_estimate": 17.75420259593879,
       "reachability": {
@@ -305,7 +347,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -342,6 +389,7 @@
       "cvss_score": 6.9,
       "dep_name": "jquery-rails",
       "dep_version": "4.0",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.99019,
       "exploit_evidence": {
@@ -353,8 +401,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:jquery-rails:4.0:GHSA-gxr4-xjj5-5px2",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/jquery-rails@4.0",
       "raptor_risk_estimate": 19.020427872949146,
       "reachability": {
@@ -383,7 +436,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -418,6 +476,7 @@
       "cvss_score": 6.9,
       "dep_name": "jquery-rails",
       "dep_version": "4.0",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.8383,
       "exploit_evidence": {
@@ -429,8 +488,13 @@
         "kev_listed": true,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:jquery-rails:4.0:GHSA-jpcq-cgw6-v4j6",
       "in_kev": true,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/jquery-rails@4.0",
       "raptor_risk_estimate": 23.3820084108101,
       "reachability": {
@@ -459,7 +523,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -494,8 +563,9 @@
       "cvss_score": 6.1,
       "dep_name": "jquery-rails",
       "dep_version": "4.0",
+      "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.30845,
+      "epss": 0.29726,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -503,10 +573,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:jquery-rails:4.0:GHSA-rmxg-73gg-4p98",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/jquery-rails@4.0",
-      "raptor_risk_estimate": 5.644977033902256,
+      "raptor_risk_estimate": 5.587074839198263,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -521,10 +596,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.556702035,
+        "epss_multiplier": 0.550991778,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.644977033902256,
+        "final": 5.587074839198263,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.67849,
@@ -533,7 +608,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -567,6 +647,7 @@
       "cvss_score": 7.5,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.04362,
       "exploit_evidence": {
@@ -576,8 +657,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-242x-7cm6-4w8j",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 7.7461518802499985,
       "reachability": {
@@ -590,8 +676,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -612,7 +698,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -645,6 +736,7 @@
       "cvss_score": 5.9,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.03503,
       "exploit_evidence": {
@@ -654,8 +746,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-286v-pcf5-25rc",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 6.030276319094999,
       "reachability": {
@@ -668,8 +765,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -690,7 +787,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -713,6 +815,7 @@
       "cvss_score": null,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.0035,
       "exploit_evidence": {
@@ -722,8 +825,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-2qc6-mcvw-92cw",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 3.9306432899999995,
       "reachability": {
@@ -736,8 +844,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -758,7 +866,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -791,6 +904,7 @@
       "cvss_score": 7.5,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.01447,
       "exploit_evidence": {
@@ -800,8 +914,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-2rr5-8q37-2w7h",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 7.472819253374999,
       "reachability": {
@@ -814,8 +933,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -836,7 +955,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -860,6 +984,7 @@
       "cvss_score": null,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": null,
       "exploit_evidence": {
@@ -869,8 +994,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-353f-x4gh-cqq8",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 6.4136099999999985,
       "reachability": {
@@ -883,8 +1013,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -905,7 +1035,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -938,6 +1073,7 @@
       "cvss_score": 5.3,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.06457,
       "exploit_evidence": {
@@ -947,8 +1083,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-4hm9-844j-jmxp",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 5.612767171935,
       "reachability": {
@@ -961,8 +1102,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -983,7 +1124,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -1016,6 +1162,7 @@
       "cvss_score": 8.8,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.21458,
       "exploit_evidence": {
@@ -1025,8 +1172,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-59gp-qqm7-cw4j",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 10.969731751440001,
       "reachability": {
@@ -1039,8 +1191,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -1061,7 +1213,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -1082,13 +1239,17 @@
           "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-5prr-v3j2-97mh",
           "https://github.com/sparklemotion/nokogiri"
         ],
-        "severity": null,
-        "severity_fallback": "medium",
+        "severity": {
+          "score": 6.3,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:L/SC:N/SI:N/SA:N"
+        },
         "summary": "Nokogiri: Possible Out-of-Bounds Read in `Nokogiri::XML::NodeSet#[]`"
       },
-      "cvss_score": null,
+      "cvss_score": 6.3,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.00426,
       "exploit_evidence": {
@@ -1098,10 +1259,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-5prr-v3j2-97mh",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
-      "raptor_risk_estimate": 3.9344440044,
+      "raptor_risk_estimate": 6.196749306929999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1112,20 +1278,20 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 63.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.401473878,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.9344440044,
+        "final": 6.196749306929999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1134,7 +1300,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -1154,13 +1325,17 @@
           "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-5v8h-3h3q-446p",
           "https://github.com/sparklemotion/nokogiri"
         ],
-        "severity": null,
-        "severity_fallback": "low",
+        "severity": {
+          "score": 1.7,
+          "severity": "low",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N/E:U"
+        },
         "summary": "Nokogiri: Possible Use-After-Free when `Nokogiri::XML::Document#encoding=` raises an exception"
       },
-      "cvss_score": null,
+      "cvss_score": 1.7,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.00341,
       "exploit_evidence": {
@@ -1170,10 +1345,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-5v8h-3h3q-446p",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
-      "raptor_risk_estimate": 0.09825483013499997,
+      "raptor_risk_estimate": 1.6703321122949994,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1184,20 +1364,20 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 1.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 17.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.40104012299999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 0.09825483013499997,
+        "final": 1.6703321122949994,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1206,7 +1386,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -1235,6 +1420,7 @@
       "cvss_score": null,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.0018,
       "exploit_evidence": {
@@ -1244,8 +1430,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-5w6v-399v-w3cc",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 3.922141692,
       "reachability": {
@@ -1258,8 +1449,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -1280,7 +1471,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -1313,8 +1509,9 @@
       "cvss_score": 7.5,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.03529,
+      "epss": 0.0365,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1322,10 +1519,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-6qvp-r6r3-9p7h",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
-      "raptor_risk_estimate": 7.668043448624999,
+      "raptor_risk_estimate": 7.6793893312499995,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1336,8 +1538,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -1346,10 +1548,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.417308487,
+        "epss_multiplier": 0.41792595,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.668043448624999,
+        "final": 7.6793893312499995,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1358,7 +1560,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -1391,6 +1598,7 @@
       "cvss_score": 7.5,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.02168,
       "exploit_evidence": {
@@ -1400,8 +1608,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-6wj9-77wq-jq7p",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 7.540425710999998,
       "reachability": {
@@ -1414,8 +1627,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -1436,7 +1649,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -1469,6 +1687,7 @@
       "cvss_score": 7.5,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.07836,
       "exploit_evidence": {
@@ -1478,8 +1697,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-7553-jr98-vx47",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 16.47229970250247,
       "reachability": {
@@ -1492,8 +1716,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -1515,7 +1739,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -1540,6 +1769,7 @@
       "cvss_score": null,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.00515,
       "exploit_evidence": {
@@ -1549,8 +1779,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-7rrm-v45f-jp64",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 3.9388948409999998,
       "reachability": {
@@ -1563,8 +1798,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -1585,7 +1820,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -1617,6 +1857,7 @@
       "cvss_score": 2.6,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.00198,
       "exploit_evidence": {
@@ -1626,8 +1867,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-8678-w3jw-xfc2",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 2.5499772097799998,
       "reachability": {
@@ -1640,8 +1886,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -1662,7 +1908,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -1695,8 +1946,9 @@
       "cvss_score": 6.5,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.03029,
+      "epss": 0.02706,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1704,10 +1956,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-882p-jqgm-f45g",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
-      "raptor_risk_estimate": 6.605005017974999,
+      "raptor_risk_estimate": 6.578756334149999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1718,8 +1975,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -1728,10 +1985,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.41475698699999997,
+        "epss_multiplier": 0.413108718,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.605005017974999,
+        "final": 6.578756334149999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1740,7 +1997,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -1772,8 +2034,9 @@
       "cvss_score": 7.5,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.0464,
+      "epss": 0.04626,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1781,10 +2044,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-8c56-cpmw-89x7",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
-      "raptor_risk_estimate": 7.772219279999999,
+      "raptor_risk_estimate": 7.770906533249999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1795,8 +2063,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -1805,10 +2073,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.42297792,
+        "epss_multiplier": 0.422906478,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.772219279999999,
+        "final": 7.770906533249999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1817,7 +2085,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -1837,13 +2110,17 @@
           "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-9cv2-cfxc-v4v2",
           "https://github.com/sparklemotion/nokogiri"
         ],
-        "severity": null,
-        "severity_fallback": "low",
+        "severity": {
+          "score": 1.7,
+          "severity": "low",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N/E:U"
+        },
         "summary": "Nokogiri: Null Pointer Dereference calling methods on uninitialized wrapper classes"
       },
-      "cvss_score": null,
+      "cvss_score": 1.7,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.0046,
       "exploit_evidence": {
@@ -1853,10 +2130,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-9cv2-cfxc-v4v2",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
-      "raptor_risk_estimate": 0.09840360809999998,
+      "raptor_risk_estimate": 1.6728613376999997,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1867,20 +2149,20 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 1.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 17.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.40164738,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 0.09840360809999998,
+        "final": 1.6728613376999997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1889,7 +2171,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -1919,6 +2206,7 @@
       "cvss_score": 7.5,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.00278,
       "exploit_evidence": {
@@ -1928,8 +2216,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-c4rq-3m3g-8wgx",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 7.363204899749999,
       "reachability": {
@@ -1942,8 +2235,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -1964,7 +2257,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -1997,6 +2295,7 @@
       "cvss_score": 7.5,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.05189,
       "exploit_evidence": {
@@ -2006,8 +2305,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-cf46-6xxh-pc75",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 7.823697706124999,
       "reachability": {
@@ -2020,8 +2324,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -2042,7 +2346,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -2074,6 +2383,7 @@
       "cvss_score": 8.6,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.00301,
       "exploit_evidence": {
@@ -2083,8 +2393,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-cgx6-hpwq-fhv5",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 8.44561458321,
       "reachability": {
@@ -2097,8 +2412,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -2119,7 +2434,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -2153,6 +2473,7 @@
       "cvss_score": 9.8,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.05899,
       "exploit_evidence": {
@@ -2162,8 +2483,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-cr5j-953j-xw5p",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 10.309956353970001,
       "reachability": {
@@ -2176,8 +2502,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -2198,7 +2524,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -2232,6 +2563,7 @@
       "cvss_score": 7.5,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.03519,
       "exploit_evidence": {
@@ -2241,8 +2573,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-crjr-9rc5-ghw8",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 7.667105772374999,
       "reachability": {
@@ -2255,8 +2592,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -2277,7 +2614,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -2303,6 +2645,7 @@
       "cvss_score": null,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.00441,
       "exploit_evidence": {
@@ -2312,8 +2655,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-fq42-c5rg-92c2",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 3.935194145399999,
       "reachability": {
@@ -2326,8 +2674,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -2348,7 +2696,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -2381,8 +2734,9 @@
       "cvss_score": 9.8,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.09287,
+      "epss": 0.08559,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2390,10 +2744,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-fr52-4hqw-p27f",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
-      "raptor_risk_estimate": 10.725064379609998,
+      "raptor_risk_estimate": 10.63586761377,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2404,8 +2763,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -2414,10 +2773,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44669156099999996,
+        "epss_multiplier": 0.442976577,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.725064379609998,
+        "final": 10.63586761377,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -2426,7 +2785,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -2457,6 +2821,7 @@
       "cvss_score": 7.5,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": null,
       "exploit_evidence": {
@@ -2466,8 +2831,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-gx8x-g87m-h5q6",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 12.025518749999998,
       "reachability": {
@@ -2480,8 +2850,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -2502,7 +2872,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -2536,6 +2911,7 @@
       "cvss_score": 7.5,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.51733,
       "exploit_evidence": {
@@ -2545,8 +2921,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-jc36-42cf-vqwj",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 24.872046338882136,
       "reachability": {
@@ -2559,8 +2940,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -2582,7 +2963,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -2615,6 +3001,7 @@
       "cvss_score": 8.6,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.0828,
       "exploit_evidence": {
@@ -2624,8 +3011,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-jw9f-hh49-cvp9",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 9.3035183388,
       "reachability": {
@@ -2638,8 +3030,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -2660,7 +3052,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -2694,6 +3091,7 @@
       "cvss_score": 7.8,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.00187,
       "exploit_evidence": {
@@ -2703,8 +3101,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-mrxw-mxhj-p664",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 7.648858927709999,
       "reachability": {
@@ -2717,8 +3120,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -2739,7 +3142,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -2759,13 +3167,17 @@
           "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-p67v-3w7g-wjg7",
           "https://github.com/sparklemotion/nokogiri"
         ],
-        "severity": null,
-        "severity_fallback": "low",
+        "severity": {
+          "score": 1.7,
+          "severity": "low",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N/E:U/U:Clear"
+        },
         "summary": "Nokogiri: Possible Use-After-Free when directly using `NokogirI::XML::XPathContext` beyond document lifetime"
       },
-      "cvss_score": null,
+      "cvss_score": 1.7,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.00402,
       "exploit_evidence": {
@@ -2775,10 +3187,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-p67v-3w7g-wjg7",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
-      "raptor_risk_estimate": 0.09833109446999998,
+      "raptor_risk_estimate": 1.6716286059899994,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2789,20 +3206,20 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 1.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 17.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.40135140599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 0.09833109446999998,
+        "final": 1.6716286059899994,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -2811,7 +3228,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -2844,8 +3266,9 @@
       "cvss_score": 8.8,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.02171,
+      "epss": 0.02177,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2853,10 +3276,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-pf6m-fxpq-fg8v",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
-      "raptor_risk_estimate": 8.84776289628,
+      "raptor_risk_estimate": 8.84842302036,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2867,8 +3295,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -2877,10 +3305,10 @@
         "cvss_base": 88.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.410378613,
+        "epss_multiplier": 0.410409231,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.84776289628,
+        "final": 8.84842302036,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -2889,7 +3317,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -2910,13 +3343,17 @@
           "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-phwj-rprq-35pp",
           "https://github.com/sparklemotion/nokogiri"
         ],
-        "severity": null,
-        "severity_fallback": "low",
+        "severity": {
+          "score": 1.7,
+          "severity": "low",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N/E:U"
+        },
         "summary": "Nokogiri: Possible Use-After-Free when setting an attribute value via `Nokogiri::XML::Attr#value=` or `#content=`"
       },
-      "cvss_score": null,
+      "cvss_score": 1.7,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.0046,
       "exploit_evidence": {
@@ -2926,10 +3363,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-phwj-rprq-35pp",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
-      "raptor_risk_estimate": 0.09840360809999998,
+      "raptor_risk_estimate": 1.6728613376999997,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2940,20 +3382,20 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 1.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 17.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.40164738,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 0.09840360809999998,
+        "final": 1.6728613376999997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -2962,7 +3404,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -2988,6 +3435,7 @@
       "cvss_score": null,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.0035,
       "exploit_evidence": {
@@ -2997,8 +3445,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-pxvg-2qj5-37jq",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 3.9306432899999995,
       "reachability": {
@@ -3011,8 +3464,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -3033,7 +3486,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -3063,6 +3521,7 @@
       "cvss_score": 9.8,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.0523,
       "exploit_evidence": {
@@ -3072,8 +3531,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-qxcg-xjjg-66mj",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 10.227988446900001,
       "reachability": {
@@ -3086,8 +3550,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -3108,7 +3572,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -3141,8 +3610,9 @@
       "cvss_score": 8.8,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.04168,
+      "epss": 0.02938,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3150,10 +3620,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-r58r-74gx-6wx3",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
-      "raptor_risk_estimate": 9.06747419424,
+      "raptor_risk_estimate": 8.93214875784,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -3164,8 +3639,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -3174,10 +3649,10 @@
         "cvss_base": 88.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.420569304,
+        "epss_multiplier": 0.414292614,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.06747419424,
+        "final": 8.93214875784,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -3186,7 +3661,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -3215,8 +3695,9 @@
       "cvss_score": null,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.00193,
+      "epss": 0.00122,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3224,10 +3705,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-r95h-9x8f-r3f7",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
-      "raptor_risk_estimate": 3.9227918141999996,
+      "raptor_risk_estimate": 3.9192411467999992,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -3238,8 +3724,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -3248,10 +3734,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400284879,
+        "epss_multiplier": 0.399922566,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.9227918141999996,
+        "final": 3.9192411467999992,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -3260,7 +3746,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -3290,6 +3781,7 @@
       "cvss_score": 5.3,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.00304,
       "exploit_evidence": {
@@ -3299,8 +3791,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-v2fc-qm4h-8hqv",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 5.205054286319999,
       "reachability": {
@@ -3313,8 +3810,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -3335,7 +3832,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -3368,6 +3870,7 @@
       "cvss_score": 8.8,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.03653,
       "exploit_evidence": {
@@ -3377,8 +3880,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-v4f8-2847-rwm7",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 9.010813544040001,
       "reachability": {
@@ -3391,8 +3899,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -3413,7 +3921,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -3444,6 +3957,7 @@
       "cvss_score": 7.5,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": null,
       "exploit_evidence": {
@@ -3453,8 +3967,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-v6gp-9mmm-c6p5",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 12.025518749999998,
       "reachability": {
@@ -3467,8 +3986,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -3489,7 +4008,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -3523,6 +4047,7 @@
       "cvss_score": 7.5,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.01817,
       "exploit_evidence": {
@@ -3532,8 +4057,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-vmfx-gcfq-wvm2",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 7.507513274624999,
       "reachability": {
@@ -3546,8 +4076,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -3568,7 +4098,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -3601,8 +4136,9 @@
       "cvss_score": 4.3,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.01077,
+      "epss": 0.01167,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3610,10 +4146,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-vr8q-g5c7-m54m",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
-      "raptor_risk_estimate": 4.264525133084999,
+      "raptor_risk_estimate": 4.269363542534999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -3624,8 +4165,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -3634,10 +4175,10 @@
         "cvss_base": 43.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.404795931,
+        "epss_multiplier": 0.405255201,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.264525133084999,
+        "final": 4.269363542534999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -3646,7 +4187,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -3675,6 +4221,7 @@
       "cvss_score": null,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.00418,
       "exploit_evidence": {
@@ -3684,8 +4231,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-vvfq-8hwr-qm4m",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 3.9340439292,
       "reachability": {
@@ -3698,8 +4250,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -3720,7 +4272,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -3746,6 +4303,7 @@
       "cvss_score": null,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.00125,
       "exploit_evidence": {
@@ -3755,8 +4313,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-wfpw-mmfh-qq69",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 3.919391175,
       "reachability": {
@@ -3769,8 +4332,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -3791,7 +4354,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -3811,13 +4379,17 @@
           "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-wjv4-x9w8-wm3h",
           "https://github.com/sparklemotion/nokogiri"
         ],
-        "severity": null,
-        "severity_fallback": "low",
+        "severity": {
+          "score": 1.7,
+          "severity": "low",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N/E:U"
+        },
         "summary": "Nokogiri: Possible Use-After-Free when setting `Document#root=` to an invalid node type"
       },
-      "cvss_score": null,
+      "cvss_score": 1.7,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.00402,
       "exploit_evidence": {
@@ -3827,10 +4399,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-wjv4-x9w8-wm3h",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
-      "raptor_risk_estimate": 0.09833109446999998,
+      "raptor_risk_estimate": 1.6716286059899994,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -3841,20 +4418,20 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 1.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 17.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.40135140599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 0.09833109446999998,
+        "final": 1.6716286059899994,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -3863,7 +4440,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -3896,8 +4478,9 @@
       "cvss_score": 7.5,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.0601,
+      "epss": 0.05928,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3905,10 +4488,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-x2fm-93ww-ggvx",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
-      "raptor_risk_estimate": 7.900680926249998,
+      "raptor_risk_estimate": 7.892991981,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -3919,8 +4507,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -3929,10 +4517,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.42996903,
+        "epss_multiplier": 0.429550584,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.900680926249998,
+        "final": 7.892991981,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -3941,7 +4529,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -3975,8 +4568,9 @@
       "cvss_score": 6.1,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.0241,
+      "epss": 0.01962,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3984,10 +4578,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-x7rv-cr6v-4vm4",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
-      "raptor_risk_estimate": 6.151335547349999,
+      "raptor_risk_estimate": 6.1171691252699985,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -3998,8 +4597,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -4008,10 +4607,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.41159823,
+        "epss_multiplier": 0.40931208599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.151335547349999,
+        "final": 6.1171691252699985,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -4020,7 +4619,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -4050,6 +4654,7 @@
       "cvss_score": null,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.00342,
       "exploit_evidence": {
@@ -4059,8 +4664,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-xc9x-jj77-9p9j",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 3.9302432147999995,
       "reachability": {
@@ -4073,8 +4683,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -4095,7 +4705,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -4129,6 +4744,7 @@
       "cvss_score": 8.2,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.0323,
       "exploit_evidence": {
@@ -4138,8 +4754,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-xh29-r2w5-wx8m",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 16.008724421196916,
       "reachability": {
@@ -4152,8 +4773,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -4175,7 +4796,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -4206,6 +4832,7 @@
       "cvss_score": 6.5,
       "dep_name": "nokogiri",
       "dep_version": "1.4.5",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": null,
       "exploit_evidence": {
@@ -4215,8 +4842,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-xxx9-3xcr-gjj3",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/nokogiri@1.4.5",
       "raptor_risk_estimate": 10.422116249999998,
       "reachability": {
@@ -4229,8 +4861,8 @@
           "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
           "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
-          "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "guides/rails_guides/kindle.rb:6",
+          "guides/rails_guides/markdown.rb:4"
         ],
         "verdict": "imported"
       },
@@ -4251,7 +4883,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -4284,6 +4921,7 @@
       "cvss_score": 6.4,
       "dep_name": "rake",
       "dep_version": "10.3",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.01359,
       "exploit_evidence": {
@@ -4293,8 +4931,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:rake:10.3:GHSA-jppv-gw3r-w3q8",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/rake@10.3",
       "raptor_risk_estimate": 6.369764439359999,
       "reachability": {
@@ -4327,7 +4970,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -4361,6 +5009,7 @@
       "cvss_score": 6.8,
       "dep_name": "redcarpet",
       "dep_version": "3.1.2",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.0157,
       "exploit_evidence": {
@@ -4370,8 +5019,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:redcarpet:3.1.2:GHSA-q3wr-qw3g-3p4h",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/redcarpet@3.1.2",
       "raptor_risk_estimate": 6.7858130885999985,
       "reachability": {
@@ -4403,7 +5057,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -4426,13 +5085,17 @@
           "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/sqlite3/CVE-2026-54619.yml",
           "https://github.com/sparklemotion/sqlite3-ruby"
         ],
-        "severity": null,
-        "severity_fallback": "low",
+        "severity": {
+          "score": 2.0,
+          "severity": "low",
+          "vector": "CVSS:4.0/AV:L/AC:H/AT:N/PR:L/UI:N/VC:L/VI:L/VA:L/SC:N/SI:N/SA:N"
+        },
         "summary": "sqlite3-ruby has Use-After-Free When Redefining SQLite Functions with Different Arity"
       },
-      "cvss_score": null,
+      "cvss_score": 2.0,
       "dep_name": "sqlite3",
       "dep_version": "1.3.6",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.00107,
       "exploit_evidence": {
@@ -4442,10 +5105,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:sqlite3:1.3.6:GHSA-28hh-pr2h-2w89",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/sqlite3@1.3.6",
-      "raptor_risk_estimate": 0.09796227514499999,
+      "raptor_risk_estimate": 1.9592455028999998,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -4459,13 +5127,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 1.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 20.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.399846021,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 0.09796227514499999,
+        "final": 1.9592455028999998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -4474,7 +5142,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -4509,6 +5182,7 @@
       "cvss_score": 9.8,
       "dep_name": "uglifier",
       "dep_version": "1.3.0",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.03559,
       "exploit_evidence": {
@@ -4518,8 +5192,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:uglifier:1.3.0:GHSA-34r7-q49f-h37c",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/uglifier@1.3.0",
       "raptor_risk_estimate": 6.800676564143307,
       "reachability": {
@@ -4548,7 +5227,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     },
     {
       "advisory": {
@@ -4577,6 +5261,7 @@
       "cvss_score": null,
       "dep_name": "web-console",
       "dep_version": "2.0",
+      "direct": true,
       "ecosystem": "RubyGems",
       "epss": 0.44708,
       "exploit_evidence": {
@@ -4592,8 +5277,13 @@
           "exploit_multi/http/rails_web_console_v2_code_exec"
         ]
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:RubyGems:web-console:2.0:GHSA-67j6-xv27-w6ww",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      },
       "purl": "pkg:gem/web-console@2.0",
       "raptor_risk_estimate": 13.19295892796911,
       "reachability": {
@@ -4622,7 +5312,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "medium",
+        "numeric": 0.7
+      }
     }
   ]
 }

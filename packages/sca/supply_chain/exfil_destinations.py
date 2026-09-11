@@ -35,7 +35,9 @@ from pathlib import Path
 from core.json import load_json_bounded
 
 from ..discovery import EXCLUDED_DIR_NAMES
-from ..models import Confidence, Dependency, Manifest, PinStyle
+from ..models import Confidence, Dependency, Manifest
+from ._closest_manifest import project_host_dep
+from ._closest_manifest import rel_to_target as _rel
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -63,9 +65,18 @@ _SCAN_EXTS: set[str] = {
 _MAX_BYTES_PER_FILE = 1024 * 1024
 _DEFAULT_MAX_DEPTH = 12
 
-# Generic URL regex — captures `<scheme>://<host>[:port][/path][?qs]`.
+# Generic URL regex — captures
+# `<scheme>://[userinfo@]<host>[:port][/path][?qs]`. The optional
+# userinfo section (``user:pass@``) is consumed BEFORE the host
+# capture: URL semantics resolve ``https://api.github.com@pastebin.com/x``
+# to host ``pastebin.com`` (everything before ``@`` is userinfo the
+# server never sees), so a regex that captured the userinfo as the
+# host would evaluate the decoy name while the runtime connects to
+# the real destination. The group requires a literal ``@`` to consume
+# anything, so plain URLs are unaffected.
 _URL_RE = re.compile(
-    rb"\bhttps?://(?P<host>[A-Za-z0-9.\-]+)(?::\d+)?(?P<rest>[^\s'\"<>`)\]]*)"
+    rb"\bhttps?://(?:[A-Za-z0-9._%+:\-]*@)?"
+    rb"(?P<host>[A-Za-z0-9.\-]+)(?::\d+)?(?P<rest>[^\s'\"<>`)\]]*)"
 )
 
 
@@ -194,7 +205,14 @@ def _scan_file(
     if not data:
         return
     seen: set[tuple[str, str]] = set()         # (category, host) dedup per file
+    # Line numbers via a rolling (last_pos, last_line) cursor — the
+    # naive ``data.count(b"\n", 0, m.start())`` per finding is
+    # O(matches × file_length), which dominates on URL-heavy files.
+    last_pos = 0
+    last_line = 1
     for m in _URL_RE.finditer(data):
+        last_line += data.count(b"\n", last_pos, m.start())
+        last_pos = m.start()
         url_bytes = m.group(0)
         host_bytes = m.group("host") or b""
         try:
@@ -209,7 +227,7 @@ def _scan_file(
             if key in seen:
                 continue
             seen.add(key)
-            line = data.count(b"\n", 0, m.start()) + 1
+            line = last_line
             yield ExfilFinding(
                 dependency=_project_host_dep(manifests, path, target),
                 detail=(
@@ -309,42 +327,10 @@ def _walk_source_files(target: Path, *, max_depth: int) -> Iterable[Path]:
 def _project_host_dep(
     manifests: list[Manifest], path: Path, target: Path,
 ) -> Dependency:
-    closest: Manifest | None = None
-    for m in manifests:
-        if m.is_lockfile:
-            continue
-        try:
-            common = os.path.commonpath([m.path.parent, path])
-        except ValueError:
-            continue
-        if not closest or len(common) > len(
-            os.path.commonpath([closest.path.parent, path])
-        ):
-            closest = m
-    declared_in = closest.path if closest else target
-    ecosystem = closest.ecosystem if closest else "Project"
-    return Dependency(
-        ecosystem=ecosystem,
-        name="<project>",
-        version=None,
-        declared_in=declared_in,
-        scope="main",
-        is_lockfile=False,
-        pin_style=PinStyle.UNKNOWN,
-        direct=True,
-        purl="",
-        parser_confidence=Confidence(
-            "low",
-            reason="placeholder for known-exfil finding host",
-        ),
+    return project_host_dep(
+        manifests, path, target,
+        reason="placeholder for known-exfil finding host",
     )
-
-
-def _rel(path: Path, target: Path) -> Path:
-    try:
-        return path.relative_to(target)
-    except ValueError:
-        return path
 
 
 __all__ = ["ExfilFinding", "scan_target"]

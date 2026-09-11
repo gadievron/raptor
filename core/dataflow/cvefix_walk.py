@@ -20,6 +20,7 @@ input. The git/CodeQL steps are module-level functions so tests stub them.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sqlite3
 import stat
@@ -47,6 +48,13 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 DEFAULT_CODEQL_BIN = "codeql"
+
+# Abbreviated-to-full commit hash, hex only — the same shape the GHSA
+# harvester enforces at parse time. CVEfixes-DB metadata is only
+# semi-trusted, so DB-sourced hashes are re-validated here before they
+# reach a git argv: a poisoned row whose "hash" starts with '-'
+# (e.g. ``--upload-pack=<cmd>``) would otherwise parse as a git option.
+_COMMIT_HASH_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 # Package repos autobuild may fetch from. A build needing other repos fails the
 # egress allowlist and falls back to buildless (graceful) — see _run_autobuild_sandboxed.
@@ -320,6 +328,10 @@ def _run_autobuild_sandboxed(cmd, *, work_root: Path, codeql_bin: str,
 
 
 def _fetch_pair(repo_url: str, fix_hash: str, dest: Path, timeout: int) -> bool:
+    # Hex-validate BEFORE any git invocation (see _COMMIT_HASH_RE): a
+    # non-hash "hash" from a poisoned metadata row never reaches argv.
+    if not _COMMIT_HASH_RE.fullmatch(fix_hash):
+        return False
     shutil.rmtree(dest, ignore_errors=True)
     dest.mkdir(parents=True, exist_ok=True)
     if not _run_git(["init", "-q", str(dest)], 30):
@@ -327,8 +339,11 @@ def _fetch_pair(repo_url: str, fix_hash: str, dest: Path, timeout: int) -> bool:
     if not _run_git(["-C", str(dest), "remote", "add", "origin", repo_url], 30):
         return False
     # --depth 2 brings the fix + its single parent.  network=True: the
-    # fetch is the one step that legitimately needs a transport.
-    return _run_git(["-C", str(dest), "fetch", "-q", "--depth", "2", "origin", fix_hash],
+    # fetch is the one step that legitimately needs a transport.  The
+    # "--" pins the hash as a positional refspec (defence-in-depth on
+    # top of the hex gate above).
+    return _run_git(["-C", str(dest), "fetch", "-q", "--depth", "2", "origin",
+                     "--", fix_hash],
                     timeout, network=True)
 
 
@@ -338,7 +353,12 @@ _DEFAULT_TUNABLES = CodeQLTunables()
 def _build_db(src: Path, commit: str, db: Path, lang: str, codeql_bin: str, timeout: int,
               build_mode: str | None = None,
               tunables: CodeQLTunables = _DEFAULT_TUNABLES) -> bool:
-    if not _run_git(["-C", str(src), "checkout", "-q", commit], 60):
+    # Same hex gate as _fetch_pair — DB-sourced hashes never reach git
+    # argv unvalidated.  The trailing "--" pins the hash as a revision
+    # (a "--" BEFORE it would flip checkout into path mode).
+    if not _COMMIT_HASH_RE.fullmatch(commit):
+        return False
+    if not _run_git(["-C", str(src), "checkout", "-q", commit, "--"], 60):
         return False
     cmd = [codeql_bin, "database", "create", str(db), f"--language={lang}",
            f"--source-root={src}", "--overwrite"]

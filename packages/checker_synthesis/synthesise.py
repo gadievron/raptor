@@ -251,7 +251,13 @@ def _run_coccinelle(
     rule_path: Path, target: Path,
 ) -> tuple[list[Match], list[str]]:
     from packages.coccinelle.runner import run_rule
-    result = run_rule(target, rule_path)
+    # no_includes: the synthesis sweep runs over untrusted target
+    # repos (controls, fixtures, and the full repo sweep all route
+    # here). Letting spatch chase the target's #include graph both
+    # widens the parser attack surface on target-controlled headers
+    # and floods the fail-closed control chain with parse-error
+    # noise — same posture as the library replay sweep.
+    result = run_rule(target, rule_path, no_includes=True)
     matches: list[Match] = []
     for m in getattr(result, "matches", []) or []:
         # SpatchMatch shape — access defensively.
@@ -920,17 +926,24 @@ def synthesise_and_run(
 
 
 def _fp_rate(result: CheckerSynthesisResult) -> float | None:
-    """Fraction of triaged matches classified as false positive.
+    """Fraction of classified matches judged false positive.
 
-    Returns None when the rate can't be computed (no triage,
-    everything skipped). Excludes ``skipped`` from the denominator
-    — those are budget-truncated, not classified.
+    Returns None when the rate can't be computed (no triage, nothing
+    classified). The denominator is ``variant`` + ``false_positive``
+    only — the same definition the rule library persists — so the
+    convergence decision and the library's stored precision agree.
+    Counting ``uncertain`` (or ``skipped``) toward the denominator
+    let a rule with 1 FP + 4 uncertain "converge" at fp_rate 0.2
+    while the library recorded the identical triage as fp_rate 1.0.
     """
-    triaged = [t for t in result.triage if t.status != "skipped"]
-    if not triaged:
+    classified = [
+        t for t in result.triage
+        if t.status in ("variant", "false_positive")
+    ]
+    if not classified:
         return None
-    fps = [t for t in triaged if t.status == "false_positive"]
-    return len(fps) / len(triaged)
+    fps = [t for t in classified if t.status == "false_positive"]
+    return len(fps) / len(classified)
 
 
 def synthesise_with_refinement(
@@ -1069,5 +1082,16 @@ def synthesise_with_refinement(
             f"refinement: did not converge in {max_iterations} "
             f"iterations (best fp_rate={best_rate:.2f} > threshold "
             f"{max_acceptable_fp_rate:.2f})"
+        )
+    # Every iteration writes the SAME rule file (rule_id restarts its
+    # attempt counter per synthesise_and_run call), so after the loop
+    # the file on disk holds the LAST iteration's body while ``best``
+    # may be an earlier iteration. Re-write the file with the returned
+    # result's own body so rule_path content and rule.body agree —
+    # downstream promotion copies rule_path bytes and hashes rule.body,
+    # and those must be the same rule.
+    if best.rule is not None and best.rule_path is not None:
+        write_text_atomically(
+            Path(best.rule_path), best.rule.body, tmp_prefix=".rule-",
         )
     return best

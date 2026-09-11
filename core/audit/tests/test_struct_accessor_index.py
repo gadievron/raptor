@@ -5,6 +5,7 @@ from __future__ import annotations
 from core.audit.struct_accessor_index import (
     AccessorRecord,
     CoAccessorGroup,
+    build_index_from_joern,
     build_index_from_source,
     format_co_accessor_context,
     get_co_accessors,
@@ -13,6 +14,75 @@ from core.audit.struct_accessor_index import (
 
 def _gap(name, file, source):
     return {"name": name, "file": file, "source": source}
+
+
+class _FakeResult:
+    def __init__(self, data, errors=None):
+        self.data = data
+        self.errors = errors or []
+
+
+class _FakeServer:
+    def __init__(self, data):
+        self._data = data
+        self.queries: list[str] = []
+
+    def query(self, query, timeout=90):
+        self.queries.append(query)
+        return _FakeResult(self._data)
+
+
+class TestBuildIndexFromJoern:
+    def test_field_identifier_rows_indexed(self):
+        server = _FakeServer([
+            ["ep_remove", "fs/eventpoll.c", "rdllink", 12],
+            ["ep_insert", "fs/eventpoll.c", "rdllink", 44],
+        ])
+        index = build_index_from_joern(server)
+        assert set(index) == {"rdllink"}
+        assert {r.function for r in index["rdllink"]} == {
+            "ep_remove", "ep_insert",
+        }
+        # The query asks for the access's field-identifier argument,
+        # never for call NAMES (operator pseudo-names).
+        assert "nameExact" in server.queries[0]
+        assert "argument(2)" in server.queries[0]
+
+    def test_operator_pseudo_names_dropped(self):
+        # A backend handing back call names produces
+        # "<operator>.fieldAccess" for EVERY access — collapsing the
+        # whole index onto one pseudo-field.  Such rows must be
+        # dropped, never indexed.
+        server = _FakeServer([
+            ["f", "a.c", "<operator>.fieldAccess", 1],
+            ["g", "a.c", "<operator>.indirectFieldAccess", 2],
+        ])
+        assert build_index_from_joern(server) == {}
+
+    def test_full_access_expression_rows_parse(self):
+        # Older transports return the whole access expression; the
+        # last path segment is the field.
+        server = _FakeServer([
+            ["f", "a.c", "pkt->payload_len", 3],
+            ["g", "b.c", "hdr.payload_len", 9],
+        ])
+        index = build_index_from_joern(server)
+        assert set(index) == {"payload_len"}
+        assert len(index["payload_len"]) == 2
+
+    def test_noise_and_short_fields_excluded(self):
+        server = _FakeServer([
+            ["f", "a.c", "next", 1],   # noise field
+            ["f", "a.c", "id", 2],     # too short
+        ])
+        assert build_index_from_joern(server) == {}
+
+    def test_query_failure_returns_empty(self):
+        class _Boom:
+            def query(self, query, timeout=90):
+                raise RuntimeError("no cpg loaded")
+
+        assert build_index_from_joern(_Boom()) == {}
 
 
 class TestBuildIndexFromSource:

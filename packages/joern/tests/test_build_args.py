@@ -257,13 +257,21 @@ class TestBuildCpgWiring:
 
 class TestCacheKey:
     def _build_runner(self, cache_dir, calls):
-        # Fake joern-parse: records argv and materializes cpg.bin so the
-        # cached-build path writes its manifest.
+        # Fake joern-parse: records argv and materializes a structurally
+        # valid cpg.bin (flatgraph tail manifest with a METHOD row) so
+        # the cached-build path admits it — the cache gates refuse to
+        # manifest an anchor-less blob (truncated-write signature).
+        import json as _json
+        payload = b"FLATGRAPH" + _json.dumps({
+            "version": 1,
+            "nodes": [{"nodeLabel": "METHOD", "nnodes": 5}],
+        }).encode()
+
         def fake_runner(cmd, **kw):
             calls.append(cmd)
             out = cmd[cmd.index("--output") + 1]
             Path(out).parent.mkdir(parents=True, exist_ok=True)
-            Path(out).write_bytes(b"cpg")
+            Path(out).write_bytes(payload)
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         return fake_runner
 

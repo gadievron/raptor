@@ -40,6 +40,40 @@ class TestHexHelpers:
         )
 
 
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="SO_PEERCRED is Linux-only; _unix_peer_credentials returns "
+           "None (fail-closed) on other platforms",
+)
+class TestUnixPeerCredentials:
+    """struct ucred decode: pid is signed, uid/gid are UNSIGNED
+    32-bit. A signed uid decode ('3i') turned uids >= 2^31 (SSSD /
+    AD-idmap ranges) negative, and the unix-lane peer gate then
+    rejected the sandbox's own children — all sandboxed egress dead
+    on such hosts."""
+
+    class _FakeSock:
+        def __init__(self, raw: bytes) -> None:
+            self._raw = raw
+
+        def getsockopt(self, level, opt, buflen):
+            return self._raw[:buflen]
+
+    def test_ordinary_uid_decodes(self):
+        import struct
+        raw = struct.pack("iII", 1234, 1000, 1000)
+        assert proxy_mod._unix_peer_credentials(
+            self._FakeSock(raw)) == (1234, 1000)
+
+    def test_uid_above_2_31_decodes_unsigned(self):
+        import struct
+        uid = 2**31 + 5
+        raw = struct.pack("iII", 4321, uid, uid)
+        creds = proxy_mod._unix_peer_credentials(self._FakeSock(raw))
+        assert creds == (4321, uid)
+        assert creds[1] >= 0, "uid_t must never decode negative"
+
+
 @pytest.mark.skipif(sys.platform != "linux",
                     reason="/proc/net/tcp is Linux-only")
 class TestLoopbackPeerUidLookup:

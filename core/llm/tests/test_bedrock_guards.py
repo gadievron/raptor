@@ -150,7 +150,7 @@ class TestPreflight:
 
 class TestPreflightClassification:
 
-    def _classify(self, monkeypatch, code, body=b"{}"):
+    def _classify(self, monkeypatch, code, body=b"{}", headers=None):
         import core.llm.bedrock_preflight as pf
         from core.llm.dispatcher.auth import CredentialStore, PreparedRequest
         prepared = PreparedRequest(
@@ -163,7 +163,7 @@ class TestPreflightClassification:
 
         def _raise(*a, **kw):
             raise urllib.error.HTTPError(
-                "https://bedrock-stub.test/x", code, "err", None,
+                "https://bedrock-stub.test/x", code, "err", headers,
                 __import__("io").BytesIO(body),
             )
         monkeypatch.setattr(pf.urllib.request, "urlopen", _raise)
@@ -185,3 +185,52 @@ class TestPreflightClassification:
 
     def test_5xx_is_transient(self, monkeypatch):
         assert self._classify(monkeypatch, 503) == ""
+
+    def test_validation_exception_body_is_warning(self, monkeypatch):
+        """A 400 ValidationException is the SERVICE rejecting the
+        request before any model runs (typo'd model id) — exactly what
+        preflight exists to catch; it must warn, not pass."""
+        out = self._classify(
+            monkeypatch, 400,
+            body=json.dumps({
+                "__type": "ValidationException",
+                "message": "The provided model identifier is invalid.",
+            }).encode(),
+        )
+        assert out and "rejected by the service" in out
+
+    def test_model_identifier_invalid_message_is_warning(self, monkeypatch):
+        out = self._classify(
+            monkeypatch, 400,
+            body=json.dumps({
+                "message": "The provided model identifier is invalid.",
+            }).encode(),
+        )
+        assert out and "rejected by the service" in out
+
+    def test_errortype_header_is_warning(self, monkeypatch):
+        out = self._classify(
+            monkeypatch, 400, body=b"{}",
+            headers={"x-amzn-errortype":
+                     "ValidationException:http://internal"},
+        )
+        assert out and "rejected by the service" in out
+
+    def test_validation_warning_not_cached_as_ok(self, monkeypatch, tmp_path):
+        """The ValidationException outcome must re-probe on the next
+        run — caching it ok would mask the misconfiguration for 24h."""
+        import core.llm.bedrock_preflight as pf
+        monkeypatch.setattr(pf, "_CACHE_PATH", tmp_path / "preflight.json")
+        calls = []
+
+        def _probe(creds, mc):
+            calls.append(mc.model_name)
+            return "Bedrock preflight: rejected by the service"
+        monkeypatch.setattr(pf, "_probe_one", _probe)
+        monkeypatch.setattr(
+            pf, "_configured_bedrock_models", lambda: [_mc()])
+        from core.llm.dispatcher.auth import CredentialStore
+        w1 = pf.preflight_configured_bedrock(CredentialStore())
+        w2 = pf.preflight_configured_bedrock(CredentialStore())
+        assert len(w1) == 1 and len(w2) == 1
+        assert len(calls) == 2

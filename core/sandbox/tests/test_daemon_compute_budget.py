@@ -46,7 +46,15 @@ class TestHexDigitBudget:
         got = _parse_bytes_to_int(b"0x" + b"f" * (8 * 1024 * 1024))
         elapsed = time.monotonic() - t0
         assert got is None
-        assert elapsed < 1.0
+        # The contract is rejected-not-parsed: a lost digit budget
+        # returns a 33-million-bit int and fails the None assertion
+        # by itself (hex parsing is linear in CPython — ~20 ms here).
+        # The wall-clock check is only a belt-and-braces backstop
+        # against future superlinear scanning; the budgeted path
+        # already regex-scans the full 8 MB (~0.2 s idle-host), so
+        # keep the bound generous enough for scheduler jitter on a
+        # loaded runner.
+        assert elapsed < 5.0
 
     def test_over_budget_hex_never_truncates(self):
         # One digit over budget: must be no-match, not a silently

@@ -532,22 +532,36 @@ def _invalidation_receipt(
     (depth ≤ 2, capped). Returns the receipt when found (→ refuted),
     else None (alias live)."""
     if edge.kind == "field":
-        pattern = re.compile(
-            rf"\b\w+\s*->\s*{re.escape(edge.name)}\s*=\s*"
-            rf"(?:NULL|nullptr|0)\b",
-        )
+        # The NULL write must hit the ALIAS-HOLDING base: an
+        # unconstrained `\w+->field = NULL` match let a write to any
+        # same-named field — most idiomatically the post-free
+        # `obj->port = NULL;` on the freed SOURCE — refute the edge on
+        # the still-dangling `child->port` (the census arm below has
+        # always required ``w.owner == edge.holder``; this arm was
+        # missing the same constraint). An edge without a recorded
+        # holder cannot be attributed, so it earns no same-function
+        # receipt (alias stays live — inconclusive, never refuted).
+        if not edge.holder:
+            pattern = None
+        else:
+            pattern = re.compile(
+                rf"\b{re.escape(edge.holder)}\s*->\s*"
+                rf"{re.escape(edge.name)}\s*=\s*"
+                rf"(?:NULL|nullptr|0)\b",
+            )
     else:
         pattern = re.compile(
             rf"\b{re.escape(edge.name)}\s*=\s*(?:NULL|nullptr|0)\b",
         )
-    for offset in range(event_line - function_span.start,
-                        len(lines)):
-        if pattern.search(lines[offset]):
-            return {
-                "kind": "null-write",
-                "line": function_span.start + offset,
-                "code": lines[offset].strip()[:200],
-            }
+    if pattern is not None:
+        for offset in range(event_line - function_span.start,
+                            len(lines)):
+            if pattern.search(lines[offset]):
+                return {
+                    "kind": "null-write",
+                    "line": function_span.start + offset,
+                    "code": lines[offset].strip()[:200],
+                }
     # Census-wide NULL writes to the alias field on the same holder
     # (invalidate-in-helper).
     if edge.kind == "field":

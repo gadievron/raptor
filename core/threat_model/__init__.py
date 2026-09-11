@@ -8,15 +8,18 @@ before an LLM starts reading target code.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import heapq
 import logging
+import os
 from pathlib import Path
 import re
 from typing import Any, TYPE_CHECKING
 
+from core.atomic_fs import write_text_atomically
 from core.json import load_json, save_json
 from core.security.log_sanitisation import escape_nonprintable
 from core.security.redaction import (
@@ -26,7 +29,7 @@ from core.security.redaction import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +65,11 @@ _EVIDENCE_RAW_KEY_ALLOWLIST = frozenset({
     "stdout_excerpt", "stderr_excerpt",
     "url", "path", "line", "duration_ms",
     "sandbox_outcome", "sanitizer", "rule_id",
+    # Mechanical-provenance tier of the record (set by
+    # collect_outcomes from MAC verification; gates status flips) —
+    # persisted so operators reading the model can weigh the
+    # evidence row accordingly.
+    "provenance_verified",
 })
 
 
@@ -214,14 +222,21 @@ def _looks_like_credential_value(token: str) -> bool:
     """
     if len(token) < 20:
         return False
-    if _HEX_TOKEN_RE.fullmatch(token):
+    # search, not fullmatch: a hex secret glued to a label
+    # (``key_3f2a...``) is still a hex secret — fullmatch let any
+    # non-hex prefix/suffix character exempt the whole token.
+    if _HEX_TOKEN_RE.search(token):
         return True
     digits = sum(c.isdigit() for c in token)
-    return (
-        digits >= 2
-        and any(c.islower() for c in token)
-        and any(c.isupper() for c in token)
-    )
+    if digits < 2:
+        return False
+    if any(c.islower() for c in token) and any(c.isupper() for c in token):
+        return True
+    # Single-case tokens: identifiers carry separators
+    # (``SHA256_DIGEST_LENGTH``, ``config.v2.key``); a long
+    # separator-free single-case alnum run with digits is a
+    # base64ish/serial secret shape that the mixed-case rule missed.
+    return token.isalnum()
 
 
 def _redact_free_text(value: str) -> str:
@@ -600,12 +615,32 @@ def blank_for_project(project: Any) -> ThreatModel:
     )
 
 
+def _cm_entries(context_map: dict[str, Any]) -> list[Any]:
+    """Entry-point records with the legacy-schema fallback (``sources``).
+
+    One helper, every consumer: the fallback chain used to be copied
+    per call site and two copies had dropped it, so legacy-schema maps
+    produced flow summaries/data-flows with bare IDs and lost
+    locations.
+    """
+    if "entry_points" in context_map:
+        return context_map["entry_points"] or []
+    return context_map.get("sources") or []
+
+
+def _cm_sinks(context_map: dict[str, Any]) -> list[Any]:
+    """Sink records with the legacy-schema fallback (``sinks``)."""
+    if "sink_details" in context_map:
+        return context_map["sink_details"] or []
+    return context_map.get("sinks") or []
+
+
 def from_context_map(project: Any, context_map: dict[str, Any]) -> ThreatModel:
     """Build a starter model from an ``/understand`` context-map."""
     model = blank_for_project(project)
     model.source = "context-map"
     model.entry_points = _summaries_from_entries(
-        context_map["entry_points"] if "entry_points" in context_map else context_map.get("sources") or [],
+        _cm_entries(context_map),
         default_label="entry",
     )
     model.trust_boundaries = _summaries_from_entries(
@@ -613,7 +648,7 @@ def from_context_map(project: Any, context_map: dict[str, Any]) -> ThreatModel:
         default_label="boundary",
     )
     sinks = _summaries_from_entries(
-        context_map["sink_details"] if "sink_details" in context_map else context_map.get("sinks") or [],
+        _cm_sinks(context_map),
         default_label="sink",
     )
     model.domain_packs = _derive_domain_packs(context_map)
@@ -623,8 +658,8 @@ def from_context_map(project: Any, context_map: dict[str, Any]) -> ThreatModel:
     model.focus_areas = derive_focus_areas(model.entry_points, sinks)
     unchecked_flows = _summaries_from_unchecked_flows(
         context_map.get("unchecked_flows") or [],
-        context_map.get("entry_points") or [],
-        context_map.get("sink_details") or [],
+        _cm_entries(context_map),
+        _cm_sinks(context_map),
     )
     # Redacted-at-source: the summaries below carry only finding
     # labels (variable name, file:line, trust tag) — credential-shaped
@@ -717,6 +752,34 @@ def load_model(path: Path) -> ThreatModel | None:
     return ThreatModel.from_dict(data)
 
 
+@contextlib.contextmanager
+def _model_write_lock(json_path: Path) -> Iterator[None]:
+    """Exclusive sidecar flock for threat-model writes.
+
+    Serialises the ``expected_mtime`` check with the write it guards
+    — unlocked, the check-then-act window let two concurrent savers
+    both pass the mtime compare and the second silently overwrite the
+    first (the documented concurrent-/agentic lost-update scenario).
+    The lock file is deliberately never unlinked (same doctrine as
+    ``core.project.oplock``): unlink-after-unlock races split lockers
+    across two inodes. Hosts without ``fcntl`` fall back to the
+    unlocked mtime guard.
+    """
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover — non-POSIX fallback
+        yield
+        return
+    lock_path = json_path.with_name(json_path.name + ".lock")
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
 def save_model(
     model: ThreatModel,
     json_path: Path,
@@ -728,30 +791,34 @@ def save_model(
     provided, refuses to write if the on-disk file's mtime has
     changed — defends against the lost-update race where two
     concurrent /agentic runs (or /agentic + ``threat-model lint``)
-    each load, mutate, and save without coordinating.
+    each load, mutate, and save without coordinating. The check and
+    the write run under one exclusive lock so two savers can't both
+    pass the compare.
 
     Callers that loaded the model should capture
     ``json_path.stat().st_mtime`` at load time and pass it in.
     Callers writing a brand-new model leave ``expected_mtime``
     None (the no-op path).
     """
-    if expected_mtime is not None and json_path.exists():
-        try:
-            actual_mtime = json_path.stat().st_mtime
-        except OSError:
-            actual_mtime = None
-        if actual_mtime != expected_mtime:
-            msg = (
-                f"threat model at {json_path} was modified by another "
-                f"writer (expected mtime {expected_mtime}, found "
-                f"{actual_mtime}); refusing to overwrite. Reload and "
-                f"retry."
-            )
-            raise RuntimeError(msg)
-    model.updated_at = datetime.now(timezone.utc).isoformat()
-    json_path.parent.mkdir(parents=True, exist_ok=True)
-    save_json(json_path, model.to_dict())
-    markdown_path.write_text(render_markdown(model), encoding="utf-8")
+    with _model_write_lock(json_path):
+        if expected_mtime is not None and json_path.exists():
+            try:
+                actual_mtime = json_path.stat().st_mtime
+            except OSError:
+                actual_mtime = None
+            if actual_mtime != expected_mtime:
+                msg = (
+                    f"threat model at {json_path} was modified by another "
+                    f"writer (expected mtime {expected_mtime}, found "
+                    f"{actual_mtime}); refusing to overwrite. Reload and "
+                    f"retry."
+                )
+                raise RuntimeError(msg)
+        model.updated_at = datetime.now(timezone.utc).isoformat()
+        save_json(json_path, model.to_dict())
+        # Atomic like the JSON sibling — a reader (or a crash) mid-
+        # write must never observe a truncated THREAT_MODEL.md.
+        write_text_atomically(markdown_path, render_markdown(model))
 
 
 def save_report(
@@ -1045,7 +1112,14 @@ def lint_model(model: ThreatModel) -> list[dict[str, Any]]:
             _issue(issues, "warning", f"accepted_risks.{rid}", f"Accepted risk {rid} has no review date.")
         elif isinstance(accepted_until, str):
             try:
-                expiry = datetime.fromisoformat(accepted_until)
+                # Normalise the Z suffix before parsing: CPython
+                # <3.11 fromisoformat rejects it, which downgraded a
+                # genuinely EXPIRED risk to an "unparseable date"
+                # warning on supported interpreters (floor is 3.10).
+                expiry = datetime.fromisoformat(
+                    accepted_until.replace("Z", "+00:00")
+                    if accepted_until.endswith("Z") else accepted_until
+                )
                 if expiry.tzinfo is None:
                     expiry = expiry.replace(tzinfo=timezone.utc)
                 if expiry < now_utc:
@@ -1063,7 +1137,7 @@ def lint_model(model: ThreatModel) -> list[dict[str, Any]]:
 def diff_context_map(model: ThreatModel, context_map: dict[str, Any]) -> dict[str, Any]:
     """Compare a model with a fresh ``context-map.json``."""
     fresh_entries = set(_summaries_from_entries(
-        context_map["entry_points"] if "entry_points" in context_map else context_map.get("sources") or [],
+        _cm_entries(context_map),
         default_label="entry",
     ))
     fresh_boundaries = set(_summaries_from_entries(
@@ -1072,8 +1146,8 @@ def diff_context_map(model: ThreatModel, context_map: dict[str, Any]) -> dict[st
     ))
     fresh_flows = set(_summaries_from_unchecked_flows(
         context_map.get("unchecked_flows") or [],
-        context_map.get("entry_points") or [],
-        context_map.get("sink_details") or [],
+        _cm_entries(context_map),
+        _cm_sinks(context_map),
     ))
     model_entries = set(model.entry_points)
     model_boundaries = set(model.trust_boundaries)
@@ -1155,10 +1229,37 @@ def link_verified_outcomes(model: ThreatModel, outcomes: Iterable[Any]) -> Threa
         }
         model.evidence = _merge_records(model.evidence, [ev])
         for threat in model.threats:
-            if _outcome_matches_threat(data, threat):
+            kind = _outcome_match_kind(data, threat)
+            if kind is not None:
                 evidence_ids = set(str(e) for e in threat.get("evidence_ids") or [])
                 evidence_ids.add(evidence_id)
                 threat["evidence_ids"] = sorted(evidence_ids)
+                # Status flips require IDENTITY, not category kinship:
+                # outcome records are unauthenticated disk artifacts
+                # (labeled-attempt pools / witness stores an attacker
+                # can pre-stage), and the CWE->category fallback made
+                # ONE such record mass-refute (or mass-confirm) EVERY
+                # threat of its category in the persisted model.
+                # Category matches attach evidence for the operator to
+                # weigh; only a record naming this exact threat moves
+                # its status.
+                if kind != "id":
+                    continue
+                # Identity alone is still forgeable: threat ids are
+                # content-derived and attacker-predictable, so a
+                # disk-staged record can name an exact threat. Flips
+                # additionally require mechanical provenance —
+                # ``collect_outcomes`` sets
+                # ``evidence["provenance_verified"]`` only when the
+                # record's witness-provenance MAC verified under this
+                # install's key (and strips the key from substrates it
+                # cannot vouch for). Unverified id matches keep
+                # attaching evidence above for the operator to weigh;
+                # they just cannot move status.
+                ev_map = data.get("evidence")
+                if not (isinstance(ev_map, dict)
+                        and ev_map.get("provenance_verified") is True):
+                    continue
                 if data.get("status") == "verified":
                     threat["status"] = "confirmed"
                 elif data.get("status") == "refuted":
@@ -1364,8 +1465,8 @@ def _vuln_classes_for_packs(packs: list[str]) -> list[str]:
 
 
 def _data_flows_from_context_map(context_map: dict[str, Any]) -> list[dict[str, Any]]:
-    entries = context_map.get("entry_points") or []
-    sinks = context_map["sink_details"] if "sink_details" in context_map else context_map.get("sinks") or []
+    entries = _cm_entries(context_map)
+    sinks = _cm_sinks(context_map)
     entries_by_id = _records_by_id(entries)
     sinks_by_id = _records_by_id(sinks)
     out: list[dict[str, Any]] = []
@@ -1376,17 +1477,33 @@ def _data_flows_from_context_map(context_map: dict[str, Any]) -> list[dict[str, 
         sink_id = str(flow.get("sink") or "")
         entry = entries_by_id.get(entry_id, {})
         sink = sinks_by_id.get(sink_id, {})
+        boundary = flow.get("missing_boundary") or flow.get("boundary")
         out.append({
-            "id": str(flow.get("id") or f"DF-{i + 1:03d}"),
-            "source": _entry_title(entry, entry_id),
-            "sink": _sink_title(sink, sink_id),
-            "entry_point_id": entry_id,
-            "sink_id": sink_id,
-            "boundary": flow.get("missing_boundary") or flow.get("boundary") or "No checked boundary recorded",
-            "risk": flow.get("severity") or "medium",
+            # Content-derived id, never positional: positional ids
+            # collide ACROSS regenerated maps (flow #3 today is a
+            # different flow than flow #3 last run), and the left-wins
+            # merge then silently drops the new flow and mislinks
+            # threats' data_flow_ids. Same flow => same id, so merge-
+            # by-id degenerates to the intended merge-by-content.
+            # Severity is part of the content: two flows differing
+            # only in severity are distinct records — hashing without
+            # it let the left-wins merge keep the low-severity twin.
+            # Every string is _clip_str-capped: the context map is an
+            # adversarial-input boundary like from_dict, and this path
+            # previously landed unbounded strings in data_flows.
+            "id": _clip_str(str(flow.get("id") or _stable_id("DF", [
+                entry_id, sink_id, boundary, flow.get("severity"),
+            ]))),
+            "source": _clip_str(_entry_title(entry, entry_id)),
+            "sink": _clip_str(_sink_title(sink, sink_id)),
+            "entry_point_id": _clip_str(entry_id),
+            "sink_id": _clip_str(sink_id),
+            "boundary": _clip_str(
+                boundary or "No checked boundary recorded"),
+            "risk": _clip_str(flow.get("severity") or "medium"),
             "attacker_controlled": True,
-            "source_location": _location(entry),
-            "sink_location": _location(sink),
+            "source_location": _clip_str(_location(entry)),
+            "sink_location": _clip_str(_location(sink)),
         })
     return out
 
@@ -1396,13 +1513,19 @@ def _threats_from_context_map(
     data_flows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     threats: list[dict[str, Any]] = []
-    for i, flow in enumerate(data_flows):
+    for flow in data_flows:
         severity = _normalise_severity(flow.get("risk"))
         score = _risk_score(severity, has_trust_boundary=True)
         category = _category_from_sink(str(flow.get("sink") or ""))
         threats.append({
-            "id": f"T-{i + 1:03d}",
-            "title": f"Unchecked flow from {flow.get('source') or '?'} to {flow.get('sink') or '?'}",
+            # Content-derived (see _data_flows_from_context_map): a
+            # positional id made the default enrich path drop NEW
+            # threats whose position collided with an existing one.
+            "id": _stable_id("T", ["flow", flow.get("id")]),
+            "title": _clip_str(
+                f"Unchecked flow from {flow.get('source') or '?'} "
+                f"to {flow.get('sink') or '?'}"
+            ),
             "category": category,
             "stride": _stride_for_category(category),
             "status": "needs_evidence",
@@ -1416,21 +1539,20 @@ def _threats_from_context_map(
             "validation": "Trace the flow and confirm/refute with the strongest available oracle: web probe, sandbox replay, CodeQL path proof, SCA reachability, or fuzz witness.",
             "source": "context-map.unchecked_flows",
         })
-    offset = len(threats)
     # Iterate the redacted copies only — the threat title feeds
     # render_markdown / save / export like every other model field.
-    for j, redacted_entry in enumerate(
-        _sanitised_hardcoded_literal_entries(
-            _context_map_value(context_map, "hardcoded_secrets")
-        )
+    for redacted_entry in _sanitised_hardcoded_literal_entries(
+        _context_map_value(context_map, "hardcoded_secrets")
     ):
         if not isinstance(redacted_entry, dict):
             continue
+        entry_title = _entry_title(redacted_entry, "secret")
         threats.append({
-            "id": f"T-{offset + j + 1:03d}",
+            "id": _stable_id(
+                "T", ["secret", entry_title, _location(redacted_entry)],
+            ),
             "title": (
-                "Hardcoded secret or backdoor credential: "
-                f"{_entry_title(redacted_entry, 'secret')}"
+                f"Hardcoded secret or backdoor credential: {entry_title}"
             ),
             "category": "secret_exposure",
             "stride": ["information_disclosure", "elevation_of_privilege"],
@@ -1590,6 +1712,39 @@ def _copy_records(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return [dict(r) for r in records if isinstance(r, dict)]
 
 
+#: Recursion floor for _clip_value — real record fields nest 2-3
+#: levels; anything deeper is hostile shape and gets stringified.
+_CLIP_MAX_DEPTH = 4
+
+
+def _clip_value(value: Any, depth: int = 0) -> Any:
+    """Recursively cap a record field value.
+
+    The old per-record comprehension clipped strings and lists of
+    strings but passed DICT values (and anything nested inside a
+    list) through verbatim — a 100 KB nested dict rode straight into
+    the persisted model. Scalars pass through; containers are
+    entry-capped and recursed; anything past the depth floor or of
+    an unexpected type is stringified-and-clipped.
+    """
+    if isinstance(value, str):
+        return _clip_str(value)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if depth >= _CLIP_MAX_DEPTH:
+        return _clip_str(str(value))
+    if isinstance(value, list):
+        return [
+            _clip_value(v, depth + 1) for v in value[:_MAX_LIST_ENTRIES]
+        ]
+    if isinstance(value, dict):
+        return {
+            _clip_str(str(k)): _clip_value(v, depth + 1)
+            for k, v in list(value.items())[:_MAX_LIST_ENTRIES]
+        }
+    return _clip_str(str(value))
+
+
 def _records(key: str, data: dict[str, Any]) -> list[dict[str, Any]]:
     value = data.get(key)
     if not isinstance(value, list):
@@ -1598,10 +1753,7 @@ def _records(key: str, data: dict[str, Any]) -> list[dict[str, Any]]:
     for item in value[:_MAX_LIST_ENTRIES]:
         if isinstance(item, dict):
             out.append({
-                k: (_clip_str(v) if isinstance(v, str)
-                    else [_clip_str(x) for x in v[:_MAX_LIST_ENTRIES]] if isinstance(v, list)
-                    else v)
-                for k, v in item.items()
+                _clip_str(str(k)): _clip_value(v) for k, v in item.items()
             })
         elif isinstance(item, str) and item.strip():
             out.append({"id": _stable_id(key.upper(), [item]), "name": _clip_str(item)})
@@ -1760,17 +1912,32 @@ def _outcome_summary(data: dict[str, Any]) -> str:
     return " - ".join(bits)
 
 
-def _outcome_matches_threat(data: dict[str, Any], threat: dict[str, Any]) -> bool:
+def _outcome_match_kind(
+    data: dict[str, Any], threat: dict[str, Any],
+) -> str | None:
+    """Match strength between an outcome record and a threat.
+
+    ``"id"`` — the record names this exact threat (finding_id equals
+    the threat / entry-point / sink id).  ``"category"`` — CWE-family
+    fallback only: the record is about the same vulnerability CLASS,
+    not this threat.  ``None`` — no relation.
+    """
     finding_id = str(data.get("finding_id") or "")
     if finding_id and finding_id in {
         str(threat.get("id") or ""),
         str(threat.get("entry_point_id") or ""),
         str(threat.get("sink_id") or ""),
     }:
-        return True
+        return "id"
     cwe_num = _extract_cwe_number(data.get("cwe_id"))
     category = str(threat.get("category") or "").lower()
-    return bool(cwe_num and (cwe_num == "78" and category == "command_execution" or cwe_num == "89" and category == "sql_injection" or cwe_num == "1336" and "template" in category or cwe_num == "22" and category == "path_traversal"))
+    if bool(cwe_num and (cwe_num == "78" and category == "command_execution" or cwe_num == "89" and category == "sql_injection" or cwe_num == "1336" and "template" in category or cwe_num == "22" and category == "path_traversal")):
+        return "category"
+    return None
+
+
+def _outcome_matches_threat(data: dict[str, Any], threat: dict[str, Any]) -> bool:
+    return _outcome_match_kind(data, threat) is not None
 
 
 def _mermaid_id(value: str) -> str:

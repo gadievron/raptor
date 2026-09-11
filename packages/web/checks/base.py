@@ -24,6 +24,23 @@ if TYPE_CHECKING:
 PROBE_HOST = "evil-raptor-probe.example.com"
 
 
+def note_transport_error(client: object, count: int = 1) -> None:
+    """Count a transport-level probe failure against the scan client.
+
+    Most probes traverse WebClient, whose get/post maintain the
+    ``transport_errors`` counter the scanner diffs around each check to
+    tell degraded coverage from a clean pass. A few probes legitimately
+    bypass WebClient (raw-socket framing probes, off-origin HTTP
+    downgrade fetches, verbs the client does not speak) — those sites
+    call this so their failures still register as degradation instead
+    of silently reading as clean. No-op for client doubles without the
+    integer counter.
+    """
+    counter = getattr(client, "transport_errors", None)
+    if isinstance(counter, int) and not isinstance(counter, bool):
+        client.transport_errors = counter + count
+
+
 class CheckCategory(str, Enum):
     AUTHN       = "V2"    # Authentication
     SESSION     = "V3"    # Session Management

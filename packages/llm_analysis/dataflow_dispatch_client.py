@@ -21,6 +21,31 @@ from core.llm.coerce import structured_result
 logger = logging.getLogger(__name__)
 
 
+def _cost_model_key(model: Any) -> str:
+    """Cost-attribution key for a model spec — never its repr.
+
+    The key becomes the ``cost_by_model`` label emitted verbatim into
+    the run report, which operators share when reporting issues.
+    ModelConfig-style dataclasses carry ``api_key`` as a repr-visible
+    field, so falling back to ``str(model)`` would write credential
+    material into that artifact. Read the known name attributes
+    (``model_name`` on ModelConfig, ``model`` on plain client shapes)
+    and otherwise fall back to the class name, which is structurally
+    incapable of carrying secrets. Non-string attribute values are
+    ignored for the same reason — only a plain string name is trusted
+    as a label.
+    """
+    if model is None:
+        return "unknown"
+    if isinstance(model, str):
+        return model or "unknown"
+    for attr in ("model_name", "model"):
+        value = getattr(model, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return type(model).__name__
+
+
 class DispatchClient:
     """Wrap a dispatch_fn so it satisfies LLMClientProtocol.
 
@@ -82,11 +107,7 @@ class DispatchClient:
         cost = getattr(response, "cost", 0.0) or 0.0
         if cost and self._cost_tracker is not None:
             try:
-                model_name = (
-                    getattr(self._model, "model", None)
-                    or str(self._model)
-                )
-                self._cost_tracker.add_cost(model_name, cost)
+                self._cost_tracker.add_cost(_cost_model_key(self._model), cost)
             except Exception as e:  # noqa: BLE001 — cost accounting must never sink the validation
                 logger.debug(
                     "cost_tracker.add_cost failed: %s", e,

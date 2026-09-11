@@ -21,6 +21,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from core.json.utils import _reject_non_finite
+
 
 def strip_jsonc_comments(text: str) -> str:
     """Remove ``//`` and ``/* */`` comments that are OUTSIDE string literals.
@@ -103,10 +105,16 @@ def load_jsonc(text: str) -> Any:
     """Parse JSONC ``text``: strip comments (string-aware) and tolerate
     trailing commas (``{ "a": 1, }``), then ``json.loads``. Raises
     ``json.JSONDecodeError`` on genuinely malformed input, like ``json.loads``.
+
+    Non-finite constants (``NaN`` / ``Infinity`` / ``-Infinity``) are
+    rejected with ``ValueError`` — same policy as the rest of
+    ``core.json``: JSONC consumers read third-party manifests, and a
+    smuggled ``Infinity`` flowing into downstream arithmetic surfaces
+    as an uncovered crash far from the parse.
     """
     cleaned = strip_jsonc_comments(text)
     cleaned = _strip_trailing_commas(cleaned)
-    return json.loads(cleaned)
+    return json.loads(cleaned, parse_constant=_reject_non_finite)
 
 
 __all__ = ["load_jsonc", "strip_jsonc_comments"]

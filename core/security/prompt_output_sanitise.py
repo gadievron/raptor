@@ -38,7 +38,22 @@ from core.security.prompt_envelope import _strip_autofetch_markup
 # a leading-pipe row plus a forged delimiter row rendered as a
 # fake metrics table in operator-facing reports; blockquote leads
 # reformatted attacker prose as authoritative quotation.
-_LINE_LEAD_MD_RE = re.compile(r'(?m)^([ \t]*)([`*_#|>]+)')
+# REPEATED runs (separated by spaces/tabs) are consumed together:
+# stripping only the first run left `# # X` as ` # X`, which markdown
+# (up to 3 leading spaces) still renders as an h1.
+_LINE_LEAD_MD_RE = re.compile(
+    r'(?m)^([ \t]*)([`*_#|>]+(?:[ \t]+[`*_#|>]+)*)'
+)
+
+# Line-leading list markers (`- item`, `+ item`, `1. item`, `1) item`)
+# — CommonMark only forms a list item when the char AFTER the marker
+# is a space/tab, so a ZWSP inserted between them defangs the
+# construct while the visible text (numbering included) survives;
+# stripping, as the class above does, would delete meaningful "1." /
+# "-" prefixes from prose. `*` bullets are already stripped by the
+# class above. `--flag` / `1.5` stay untouched (no space after the
+# marker shape).
+_LIST_MARKER_RE = re.compile(r'(?m)^([ \t]*)([-+]|\d{1,9}[.)])([ \t])')
 
 # Block-structure forgery lines: a line consisting solely of
 # space / tab / `|` / `:` / `-` / `=` with at least one `-` or `=` is
@@ -104,6 +119,12 @@ def sanitise_string(s: str, *, max_chars: int = 500) -> str:
     s = _MD_STRUCTURE_LINE_RE.sub('', s)
     s = _LINE_LEAD_MD_RE.sub(lambda m: m.group(1), s)
     s = escape_nonprintable(s, preserve_newlines=True)
+    # ZWSP insertion AFTER escape_nonprintable (same ordering as
+    # sanitise_code's fence-break ZWSP) — the escape pass would turn
+    # an earlier-inserted ZWSP into a visible literal backslash-u200b.
+    s = _LIST_MARKER_RE.sub(
+        lambda m: m.group(1) + m.group(2) + '​' + m.group(3), s,
+    )
     if len(s) > max_chars:
         s = s[: max_chars - 1] + _ELLIPSIS
     return s

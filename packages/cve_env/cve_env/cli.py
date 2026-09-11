@@ -86,6 +86,20 @@ def _attempt_replay(cve: CveRecord, prefill_from: str | None):
             verify_passed=True,
             verify_result=env.verify_result,
         )
+    if env is not None:
+        # Not returning a verdict — tear the instance down on THIS path
+        # too. provision() can come back ok with verification skipped
+        # (e.g. a degenerate recorded spec with an empty verify plan),
+        # and a container left running here carries only the
+        # raptor-env.id label: invisible to the cve-id cleanup, no down
+        # token printed.
+        try:
+            env.teardown()
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            print("replay: teardown failed — remove leftovers with "
+                  f"`docker ps --filter label=raptor-env.id="
+                  f"{getattr(env, 'provision_id', '?')}`",
+                  file=sys.stderr)
     print(
         f"replay: {result.reason or 'verify failed'} — falling through "
         f"to the agent build",
@@ -961,7 +975,12 @@ def _print_human_report(outcome: Any) -> None:  # noqa: ANN401
 
     icon = "?"
     summary = outcome.status
-    if outcome.verify_passed and outcome.num_turns > 0:
+    # num_turns > 0 distinguishes a real agent run; the $0 replay path is
+    # a legitimate zero-turn success (stop_reason="replay") and must not
+    # fall through to the "?" rendering.
+    if outcome.verify_passed and (
+        outcome.num_turns > 0 or outcome.stop_reason == "replay"
+    ):
         if outcome.status == "success":
             icon = "✓ BUILT"
             summary = (

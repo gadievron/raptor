@@ -157,3 +157,57 @@ __metadata:
 """
     deps = parse(_write(tmp_path, body))
     assert deps == []
+
+
+# ---------------------------------------------------------------------------
+# npm: alias descriptors resolve to the installed package
+# ---------------------------------------------------------------------------
+
+def test_classic_alias_resolves_to_real_package(tmp_path: Path) -> None:
+    # ``"myalias@npm:realpkg@^1.0"`` installs realpkg — OSV must be
+    # queried for realpkg, not the alias, or the installed package's
+    # advisories are invisible.
+    body = (
+        "# yarn lockfile v1\n\n"
+        '"myalias@npm:realpkg@^1.0.0":\n'
+        '  version "1.0.2"\n'
+        '  resolved "https://registry.yarnpkg.com/realpkg/-/realpkg-1.0.2.tgz"\n'
+    )
+    p = tmp_path / "yarn.lock"
+    p.write_text(body, encoding="utf-8")
+    [d] = parse(p)
+    assert d.name == "realpkg"
+    assert d.version == "1.0.2"
+
+
+def test_berry_alias_resolves_to_real_scoped_package(tmp_path: Path) -> None:
+    body = (
+        "__metadata:\n"
+        "  version: 8\n"
+        '"myalias@npm:@scope/real@^1.0":\n'
+        '  version: 1.4.0\n'
+        '  resolution: "@scope/real@npm:1.4.0"\n'
+    )
+    p = tmp_path / "yarn.lock"
+    p.write_text(body, encoding="utf-8")
+    [d] = parse(p)
+    assert d.name == "@scope/real"
+    assert d.version == "1.4.0"
+
+
+def test_plain_berry_protocol_descriptor_keeps_name(tmp_path: Path) -> None:
+    # Other direction: ``lodash@npm:^4.17.21`` is the ordinary Berry
+    # protocol form (range after ``npm:``), NOT an alias — the name
+    # must stay lodash.
+    body = (
+        "__metadata:\n"
+        "  version: 8\n"
+        '"lodash@npm:^4.17.21":\n'
+        '  version: 4.17.21\n'
+        '  resolution: "lodash@npm:4.17.21"\n'
+    )
+    p = tmp_path / "yarn.lock"
+    p.write_text(body, encoding="utf-8")
+    [d] = parse(p)
+    assert d.name == "lodash"
+    assert d.version == "4.17.21"

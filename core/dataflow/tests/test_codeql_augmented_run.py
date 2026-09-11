@@ -297,6 +297,24 @@ def test_baseline_first_call_has_no_extension_pack(tmp_path: Path):
     assert "--additional-packs" not in calls[0]
 
 
+def test_baseline_and_augmented_both_force_rerun(tmp_path: Path):
+    """Both legs must carry --rerun: the evaluation cache does not key
+    on data-extension rows, so a baseline served from a prior pack-
+    influenced run's cache would converge on the augmented result and
+    zero out the measured delta."""
+    runner, calls = _make_runner()
+    pack = _mk_pack(tmp_path)
+    run_baseline_and_augmented(
+        tmp_path / "db",
+        ["q.ql"],
+        pack,
+        tmp_path / "results",
+        runner=runner,
+    )
+    assert "--rerun" in calls[0]  # baseline
+    assert "--rerun" in calls[1]  # augmented
+
+
 def test_augmented_second_call_has_extension_pack(tmp_path: Path):
     runner, calls = _make_runner()
     pack = _mk_pack(tmp_path)

@@ -24,6 +24,7 @@ import logging
 import re
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -193,7 +194,12 @@ def _changed_pre_lines(before: str, after: str) -> tuple[int, int, int]:
     """(first, last, count) of pre-image lines the fix touched (1-based).
 
     Counts lines in `replace`/`delete` opcodes — the code the fix
-    removed or rewrote, i.e. the vulnerable form.
+    removed or rewrote, i.e. the vulnerable form. Pure `insert`
+    opcodes count too, anchored on the pre-image line at the insertion
+    point: a fix that only ADDS a guard (the archetypal missing-check
+    CVE fix, and exactly what the synthesis prompt targets) leaves no
+    replaced/deleted line, yet the unguarded pre-image code right at
+    the insertion point IS the vulnerable form and must yield a seed.
     """
     before_lines = before.splitlines()
     after_lines = after.splitlines()
@@ -204,8 +210,16 @@ def _changed_pre_lines(before: str, after: str) -> tuple[int, int, int]:
         if tag in ("replace", "delete") and i2 > i1:
             if first == 0:
                 first = i1 + 1
-            last = i2
+            last = max(last, i2)
             count += i2 - i1
+        elif tag == "insert" and before_lines:
+            # 1-based pre-image line following the insertion point
+            # (clamped for inserts at EOF).
+            anchor = min(i1 + 1, len(before_lines))
+            if first == 0 or anchor < first:
+                first = anchor
+            last = max(last, anchor)
+            count += 1
     return first, last, count
 
 
@@ -311,6 +325,13 @@ def synthesise_checker_from_cve(
         return report
 
     library = RuleLibrary(library_dir) if promote else None
+    # Target identity for the promoted entry's TargetRecord. Without
+    # it the entry persists with targets=[], and every replay surface
+    # requires at least one tested target — the rule would be reported
+    # as promoted yet never replayed. Shares the sweep's hash
+    # convention so future sweeps over the same repo dedup correctly.
+    from .replay_sweep import _target_hash
+    repo_target_hash = _target_hash(Path(repo_root))
     for bundle in bundles:
         result = synthesise_with_refinement(
             bundle.seed, Path(repo_root), Path(out_dir), llm,
@@ -320,7 +341,12 @@ def synthesise_checker_from_cve(
         report.results.append(result)
         if library is None or result.rule is None:
             continue
-        entry = library.promote(result, source=bundle.seed.provenance)
+        entry = library.promote(
+            result,
+            target_hash=repo_target_hash,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            source=bundle.seed.provenance,
+        )
         if entry is not None:
             report.promoted_rule_ids.append(entry.rule_id)
         elif result.rule_tier == "library":

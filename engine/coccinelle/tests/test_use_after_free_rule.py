@@ -78,6 +78,22 @@ class TestPositives:
         assert len(results) == 1
         assert "passed to use_it" in results[0]["message"]
 
+    def test_delete_inside_non_safe_iterator_fires(self, tmp_path):
+        # A NON-safe iterator advances by reading the freed node, so
+        # kfree inside the body is a genuine UAF via the back edge —
+        # the _safe-family suppression must not swallow it.
+        results = _run_rule(tmp_path, """\
+            void bug(struct list_head *head)
+            {
+                struct entry *e;
+                list_for_each_entry(e, head, list) {
+                    if (e->dead)
+                        kfree(e);
+                }
+            }
+        """)
+        assert len(results) >= 1
+
 
 class TestNegatives:
     def test_canonical_list_free_loop_does_not_fire(self, tmp_path):
@@ -119,6 +135,43 @@ class TestNegatives:
                 kfree(p);
                 p = kmalloc(sizeof(*p), GFP_KERNEL);
                 p->x = 1;
+            }
+        """)
+        assert results == []
+
+    def test_safe_iterator_delete_idiom_does_not_fire(self, tmp_path):
+        # The canonical CORRECT list deletion idiom: the _safe iterator
+        # prefetches the next node, so the cursor is reassigned inside
+        # the macro at every step. That hidden reassignment is
+        # invisible to `when != E = E2`, and the loop back edge from
+        # kfree(e) to the next iteration's e->fld read looked like a
+        # UAF before the _safe-family suppression.
+        results = _run_rule(tmp_path, """\
+            void prune(struct list_head *head)
+            {
+                struct entry *e, *n;
+                list_for_each_entry_safe(e, n, head, list) {
+                    if (e->dead) {
+                        list_del(&e->list);
+                        kfree(e);
+                    }
+                }
+            }
+        """)
+        assert results == []
+
+    def test_hlist_safe_iterator_delete_idiom_does_not_fire(self, tmp_path):
+        results = _run_rule(tmp_path, """\
+            void prune(struct hlist_head *head)
+            {
+                struct entry *e;
+                struct hlist_node *n;
+                hlist_for_each_entry_safe(e, n, head, node) {
+                    if (e->dead) {
+                        hlist_del(&e->node);
+                        kfree(e);
+                    }
+                }
             }
         """)
         assert results == []

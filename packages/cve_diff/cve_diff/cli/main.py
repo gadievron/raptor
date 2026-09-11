@@ -240,23 +240,25 @@ app = typer.Typer(
 )
 
 
-# Match the surrender-reason fragment produced by the agent layer:
-# `DiscoveryError: CVE-X: agent surrendered (REASON): ...`. Only the
-# budget_* family is eligible for interactive extension.
+# Match the surrender-reason fragment produced by the agent layer.
+# The caller matches against ``str(exc)`` of the caught DiscoveryError,
+# and DiscoveryError has no custom __str__, so the text starts with the
+# CVE id, NOT with a "DiscoveryError:" class-name prefix — pipeline
+# raises ``DiscoveryError(f"{cve_id}: agent surrendered ({reason}): …")``.
+# (An earlier class-name anchor made this regex unmatchable and the
+# whole interactive budget-extension flow dead code.)
 #
-# `\b` word boundary on the leading `agent` so we don't match
-# substrings of compound words (`maintainer-agent surrendered`).
-# Anchored to the canonical "DiscoveryError" prefix on the same
-# line so a CVE description that happens to quote the marker
-# phrase (security advisories sometimes quote tool output
-# verbatim, especially for CVEs about tool behaviour) doesn't
-# trigger a false-positive "offer budget extension" prompt.
-# `re.MULTILINE` so `^` matches a line start anywhere in the
-# (potentially multi-line) error text.
+# Anchored to the canonical start-of-string CVE-id prefix so a CVE
+# description that happens to QUOTE the marker phrase deeper in the
+# error text (security advisories sometimes quote tool output
+# verbatim) doesn't trigger a false-positive "offer budget extension"
+# prompt. The reason alternation lists exactly the budget reasons the
+# agent loop emits (``budget_s`` is the wall-clock cap; there is no
+# ``budget_tokens`` surrender reason).
 _BUDGET_REASON_RE = re.compile(
-    r"^DiscoveryError:.*?\bagent surrendered "
-    r"\((budget_cost_usd|budget_iterations|budget_tokens|budget_s)\)",
-    re.MULTILINE,
+    r"\ACVE-\d{4}-\d{4,}: agent surrendered "
+    r"\((budget_cost_usd|budget_iterations|budget_s)\)",
+    re.IGNORECASE,
 )
 
 

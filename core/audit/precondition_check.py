@@ -45,6 +45,12 @@ GRADE_CONTEXT_MAP = "context_map"
 GRADE_LEXICAL = "lexical"
 GRADE_ABSENCE = "absence"
 
+# Visited-set bound for the upward reachability BFS.  Context maps
+# carry at most a few thousand call edges, so real walks exhaust well
+# below this; the cap only guards a degenerate map, and hitting it
+# yields inconclusive — a truncated walk is never negative evidence.
+_REACHABILITY_NODE_CAP = 10_000
+
 
 @dataclass
 class CheckResult:
@@ -104,8 +110,21 @@ def verify_preconditions(
     verdict = PreconditionVerdict()
 
     for pc in preconditions:
+        # Precondition records are LLM-written: a malformed record
+        # (non-dict entry, string-shaped location) must degrade to an
+        # inconclusive check, never abort the whole verification pass.
+        if not isinstance(pc, dict):
+            verdict.checks.append(CheckResult(
+                check_type="unknown",
+                assumption=str(pc)[:120],
+                verdict="inconclusive",
+                evidence="malformed precondition record",
+            ))
+            continue
         check_type = pc.get("check_type", "")
         location = pc.get("location", {})
+        if not isinstance(location, dict):
+            location = {}
         loc_file = location.get("file", "")
         loc_func = location.get("function", "")
         expect_absent = pc.get("expect_absent", True)
@@ -548,25 +567,41 @@ def _check_attacker_control(
 
     is_entry = func in entry_points or f"{file}:{func}" in entry_points
 
-    # Check call edges: is this function called (transitively) from an entry?
-    callers_of_func = set()
+    # Full upward BFS over the call edges.  A fixed hop cap turned
+    # "beyond the horizon" into a refutation: a 3-hop-reachable
+    # function read as unreachable and the claim came back
+    # contradicted on bounded negative evidence.  The walk now
+    # exhausts the edge list (visited-set bounded); only a truncated
+    # walk leaves ``reach_truncated`` set, and that must degrade to
+    # inconclusive, never to contradicted.
+    callers_by_callee: dict[str, set[str]] = {}
     for edge in context_map.get("call_edges", []):
-        if edge.get("callee") == func:
-            callers_of_func.add(edge.get("caller", ""))
+        callee = edge.get("callee") or ""
+        caller = edge.get("caller") or ""
+        if callee and caller:
+            callers_by_callee.setdefault(callee, set()).add(caller)
 
-    reachable = is_entry or bool(callers_of_func & entry_points)
+    reachable = is_entry
+    reach_truncated = False
     if not reachable:
-        # Check 2-hop
-        for caller in callers_of_func:
-            for edge in context_map.get("call_edges", []):
-                if (
-                    edge.get("callee") == caller
-                    and edge.get("caller", "") in entry_points
-                ):
-                    reachable = True
-                    break
-            if reachable:
+        seen = {func}
+        frontier = [func]
+        while frontier and not reachable:
+            if len(seen) > _REACHABILITY_NODE_CAP:
+                reach_truncated = True
                 break
+            nxt: list[str] = []
+            for f in frontier:
+                for caller in callers_by_callee.get(f, ()):
+                    if caller in entry_points:
+                        reachable = True
+                        break
+                    if caller not in seen:
+                        seen.add(caller)
+                        nxt.append(caller)
+                if reachable:
+                    break
+            frontier = nxt
 
     if expect_absent:
         # LLM claims attacker does NOT control input
@@ -576,6 +611,16 @@ def _check_attacker_control(
                 assumption="",
                 verdict="contradicted",
                 evidence=f"{func} IS reachable from entry points",
+            )
+        if reach_truncated:
+            return CheckResult(
+                check_type="attacker_controls_input",
+                assumption="",
+                verdict="inconclusive",
+                evidence=(
+                    f"reachability walk for {func} truncated at the "
+                    "node cap — cannot support the unreachability claim"
+                ),
             )
         return CheckResult(
             check_type="attacker_controls_input",
@@ -595,6 +640,17 @@ def _check_attacker_control(
             verdict="supported",
             evidence=f"{func} is reachable from entry points",
             grade=GRADE_CONTEXT_MAP,
+        )
+    if reach_truncated:
+        return CheckResult(
+            check_type="attacker_controls_input",
+            assumption="",
+            verdict="inconclusive",
+            evidence=(
+                f"reachability walk for {func} truncated at the node "
+                "cap — beyond-horizon is not evidence of "
+                "unreachability"
+            ),
         )
     return CheckResult(
         check_type="attacker_controls_input",
@@ -638,6 +694,15 @@ _SINK_CALL_PATTERNS = [
     re.compile(r"\bsubprocess\.\w+\s*\("),
 ]
 
+# Call-shaped tokens that are control flow / operators, not callees —
+# for the leaf-function test in _check_reaches_sink (multi-language:
+# the scan runs over C-family and Python sources alike).
+_NON_CALL_KEYWORDS = frozenset({
+    "if", "for", "while", "switch", "return", "sizeof", "defined",
+    "do", "else", "case", "typeof", "alignof", "assert", "elif",
+    "with", "not", "and", "or", "in", "except", "lambda",
+})
+
 
 def _check_reaches_sink(
     source: str, file: str, func: str,
@@ -672,11 +737,32 @@ def _check_reaches_sink(
                     f"doesn't disprove the finding)"
                 ),
             )
+        # Direct-scan absence only certifies a LEAF function: a
+        # wrapper whose helper calls strcpy reaches sinks
+        # transitively — the very case the docstring and the mirror
+        # branch (expect_absent=False, no sink -> inconclusive)
+        # refuse to conclude on. A false "supported" here filled
+        # all_supported and corroborated promotions on a wrong
+        # premise.
+        callees = {
+            m.group(1) for m in re.finditer(r"\b([A-Za-z_]\w*)\s*\(", view)
+        } - _NON_CALL_KEYWORDS - {func}
+        if callees:
+            return CheckResult(
+                check_type="function_reaches_sink",
+                assumption="",
+                verdict="inconclusive",
+                evidence=(
+                    f"no direct sink calls in {func}, but it calls "
+                    f"{len(callees)} other function(s) — transitive "
+                    f"sink reachability unknown"
+                ),
+            )
         return CheckResult(
             check_type="function_reaches_sink",
             assumption="",
             verdict="supported",
-            evidence=f"no sink calls found in {func}",
+            evidence=f"no sink calls found in {func} (leaf function)",
             grade=GRADE_ABSENCE,
         )
     if has_sink:

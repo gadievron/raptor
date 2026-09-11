@@ -716,6 +716,7 @@ def build_spec_prompt(
     source: str,
     *,
     model_id: str = "",
+    hardened: bool = False,
 ) -> tuple[str, str]:
     """Envelope the spec-inference prompt: source in an
     ``UntrustedBlock``, identifiers in slots, instructions in system.
@@ -741,6 +742,16 @@ def build_spec_prompt(
     # infer_spec_with_llm_sync; prose spec fields only ever ADD to a
     # mechanically-derived spec whose consumers treat llm_inference
     # sources as medium-confidence hints.
+    if hardened:
+        # Escape ladder for preflight-flagged sources (see
+        # build_summary_prompt): datamark_payload forces sentinel
+        # interleaving regardless of the model profile — the
+        # interleaving is the admission argument for sending a
+        # flagged source at all.
+        return envelope_prompt(
+        _LLM_SPEC_SYSTEM, (block,), slots, model_id=model_id,
+            datamark_payload=True,
+        )
     return envelope_prompt(
         _LLM_SPEC_SYSTEM, (block,), slots, model_id=model_id,
         transparent_payload=True,
@@ -876,20 +887,24 @@ def infer_spec_with_llm_sync(
     if not source:
         return mechanical_spec
 
-    # Injection preflight over the source BEFORE spending the call —
-    # the spec class renders its payload plaintext (build_spec_prompt),
-    # so a source carrying known injection phrasing keeps the
-    # mechanical spec only.
+    # Injection preflight over the source BEFORE choosing the
+    # rendering — the spec class defaults to a plaintext payload
+    # (build_spec_prompt); flagged sources escalate to the hardened
+    # datamarked rendering, failure keeps the mechanical spec.
     from core.security.prompt_input_preflight import preflight
 
     pf = preflight(source)
-    if pf.has_injection_indicators:
+    hardened = bool(pf.has_injection_indicators)
+    if hardened:
+        # Escape ladder instead of a flat skip (mirrors the summary
+        # class): flagged sources get one hardened (datamarked)
+        # attempt; any failure keeps the mechanical spec exactly like
+        # the old skip.
         logger.warning(
             "spec_inference: injection indicators (%s) in %s:%s source "
-            "— skipping LLM spec inference (mechanical spec only)",
+            "— using hardened (datamarked) rendering for spec inference",
             ",".join(pf.indicators), file_path, function_name,
         )
-        return mechanical_spec
 
     try:
         if client is None:
@@ -898,12 +913,21 @@ def infer_spec_with_llm_sync(
         prompt, system_prompt = build_spec_prompt(
             function_name, file_path, source,
             model_id=getattr(client, "model_name", "") or "",
+            hardened=hardened,
         )
         response = client.generate(
             prompt, system_prompt=system_prompt, task_type="audit",
             call_class="spec_inference",
         )
-        text = response.text if hasattr(response, "text") else str(response)
+        # The production client returns LLMResponse, whose payload is
+        # ``.content`` — ``str(response)`` is the dataclass repr,
+        # which never parses as a spec, so the paid leg silently
+        # produced nothing.  ``.text`` kept for other client shapes.
+        text = getattr(response, "content", None)
+        if not isinstance(text, str):
+            text = getattr(response, "text", None)
+        if not isinstance(text, str):
+            text = str(response)
     except Exception:  # noqa: BLE001 — inference is best-effort; fall back to mechanical spec
         logger.debug("LLM spec inference unavailable for %s:%s", file_path, function_name)
         return mechanical_spec

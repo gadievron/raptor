@@ -123,6 +123,21 @@ class TestDecisionLog:
         records = log.read_all()
         assert len(records) == 200
 
+    def test_read_all_skips_malformed_and_non_object_lines(self, log_path):
+        """read_all rides the shared hardened JSONL loader — same
+        best-effort policy as the previous inline parse: a malformed or
+        non-object line (foreign writer, truncated append) is skipped
+        without losing the well-formed records around it."""
+        log = DecisionLog(log_path)
+        log.record(DecisionRecord(selected_model="m1", reason="r1"))
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write("{not json\n")
+            f.write('["array", "line"]\n')
+        log.record(DecisionRecord(selected_model="m2", reason="r2"))
+
+        records = log.read_all()
+        assert [r.selected_model for r in records] == ["m1", "m2"]
+
     def test_read_empty(self, log_path):
         log = DecisionLog(log_path)
         assert log.read_all() == []

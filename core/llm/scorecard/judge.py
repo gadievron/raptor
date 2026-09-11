@@ -89,6 +89,18 @@ def record_judge_outcomes(
         primary_model = str(result.get("analysed_by") or "?")
         primary_vote = bool(primary_verdicts_before_judge[fid])
 
+        # Exact tie across primary + judges (e.g. 2-vs-2): the
+        # finalised verdict is a mechanical tie-break, not a panel
+        # majority, so scoring voters against it would arbitrarily
+        # declare one side "incorrect". Skip — same rationale as the
+        # consensus producer's even-split skip.
+        votes = [primary_vote] + [
+            bool(ja.get("is_exploitable")) for ja in judge_analyses
+        ]
+        n_pos = sum(1 for v in votes if v)
+        if n_pos * 2 == len(votes):
+            continue
+
         # Primary's outcome
         primary_correct = (primary_vote == final_verdict)
         if _record_one(

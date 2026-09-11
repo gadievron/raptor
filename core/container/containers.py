@@ -481,18 +481,12 @@ def stop_container(
     arbitrary host containers.
     """
     if required_label is not None:
+        # The shared gate, not an inline copy: two byte-for-byte
+        # implementations of the ownership check WILL drift, and the
+        # weaker one would be the teardown path.
+        from core.container.exec import container_has_label
         key, value = required_label
-        outcome = run_cli(
-            [
-                "docker",
-                "inspect",
-                "--format",
-                f'{{{{index .Config.Labels "{key}"}}}}',
-                container_id,
-            ],
-            timeout=5.0,
-        )
-        if outcome.returncode != 0 or (outcome.stdout or "").strip() != value:
+        if not container_has_label(container_id, key, value):
             logger.warning(
                 "stop_container: %s lacks label %s=%s; refusing",
                 container_id, key, value,

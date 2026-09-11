@@ -21,8 +21,11 @@ import os
 import sys
 from pathlib import Path
 
-# Add to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Add the repo root to sys.path. resolve() first: invoked through a
+# symlink (or relatively on interpreters that don't absolutise
+# __file__), the unresolved parent points at the wrong tree and
+# core/packages imports resolve against it.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core.config import RaptorConfig
 from core.json import save_json
@@ -162,6 +165,21 @@ def run_autonomous_workflow(args: argparse.Namespace) -> None:
     if args.scan_only:
         logger.info("Scan-only mode - skipping autonomous analysis")
         agent.print_summary(scan_result)
+        # Scan-only is the DEFAULT dispatch mode (`raptor.py codeql`
+        # injects --scan-only), and Phase 1 — language detection,
+        # build, DB creation, query execution — really ran. Record
+        # the build outcome so cross-run reliability memory learns
+        # from the common invocation, not only from --analyze runs.
+        store_codeql_build_reliability(
+            repo_path=args.repo,
+            languages=languages or [],
+            build_command=args.build_command or "auto",
+            auto_detect_outcome=(
+                "success" if scan_result.total_findings > 0
+                else "no_findings"
+            ),
+            analyses_completed=0,
+        )
         return
 
     if scan_result.total_findings == 0:

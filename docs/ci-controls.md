@@ -21,7 +21,7 @@ This page is split into:
 | Prompt-envelope audit | Pytest | Registered prompt construction paths |
 | Code scanning | GitHub CodeQL Advanced | Python, C/C++, GitHub Actions |
 | Slash-command metadata lint | In-tree Python checker | `.claude/commands/*.md` dispatch metadata |
-| Dependency regression gate | RAPTOR SCA | PR head versus `main` dependency surface |
+| Dependency regression gate | RAPTOR SCA | PR merge result versus `main` dependency surface |
 | Corpus label schema lint | In-tree Python linter | Corpus label JSON files |
 | Corpus label pin lint (PR) | In-tree Python linter | Changed label files in a PR |
 | SARIF known-FP suppressions | In-tree Python script | CodeQL SARIF output |
@@ -59,7 +59,7 @@ This page is split into:
 | [`corpus-labels.yml`](../.github/workflows/corpus-labels.yml) `pin-lint-sweep` | Full pin lint over ALL corpus labels with `--fetch-missing`; catches upstream drift (force-pushed branches, deleted tags) between PRs | Weekly | `pin-lint.log` in workflow artefacts |
 | [`sca-self-bump.yml`](../.github/workflows/sca-self-bump.yml) | Runs RAPTOR SCA against RAPTOR's own dependency surfaces and proposes clean upgrades | Weekly | Auto-PR with `raptor-sca fix --harden` and `raptor-sca bump` output |
 | [`sca-compromise-check.yml`](../.github/workflows/sca-compromise-check.yml) | Verifies known supply-chain incidents are still detected from metadata alone | Weekly and relevant PRs | Per-fixture PASS / FAIL over `test/data/sca-e2e/compromise-corpus/` |
-| [`sca-stress-sweep.yml`](../.github/workflows/sca-stress-sweep.yml) | Detects parser, advisory, and performance drift across a broad OSS project sample set | Weekly | `stress_baseline.json` under `packages/sca/data/calibration/` plus sweep artefacts |
+| [`sca-stress-sweep.yml`](../.github/workflows/sca-stress-sweep.yml) | Detects parser, advisory, and performance drift across a broad OSS project sample set. Warn-level drift opens an automatic baseline-refresh PR; fail-level drift stays red until an operator investigates and re-dispatches with `refresh-baseline: true`, which captures the new baseline via the same reviewable PR — refused whenever any scan errored, the sweep is incomplete, or the driver itself crashed (never a baseline from a broken run) | Weekly | `stress_baseline.json` under `packages/sca/data/calibration/` plus sweep artefacts |
 | [`refresh-sca-calibration.yml`](../.github/workflows/refresh-sca-calibration.yml) | Refreshes KEV / EPSS / exploit-signal calibration data and validates scoring quality | Weekly | `packages/sca/data/calibration/validation/*.json` |
 | [`refresh-sca-project-samples.yml`](../.github/workflows/refresh-sca-project-samples.yml) | Refreshes RAPTOR-generated SCA output for curated OSS project samples | Monthly | `packages/sca/data/calibration/project_samples/` |
 | [`refit-sca-calibration.yml`](../.github/workflows/refit-sca-calibration.yml) | Re-fits risk-score multipliers when the calibration corpus says the current weights drifted | Monthly | Auto-PR against `packages/sca/risk.py` and refit reports |

@@ -168,8 +168,10 @@ def test_vote_fallback_missing_is_exploitable():
         "F1": _make_finding("F1", "rule-a"),  # no is_exploitable
     }
     verdicts = calibrate_results(results)
-    # Missing or non-True → treated as 0.0 (matches legacy truthy check).
-    assert verdicts["F1"].posterior_true_positive == 0.0
+    # An abstention casts no vote: inconclusive midpoint with a
+    # full-width CI — never a confident negative.
+    assert verdicts["F1"].posterior_true_positive == 0.5
+    assert verdicts["F1"].credible_interval == (0.0, 1.0)
 
 
 def test_single_valid_panel_entry_falls_back_to_vote():
@@ -405,3 +407,90 @@ def test_custom_decision_class_prefix():
         results, decision_class_prefix="codeql",
     )
     assert verdicts["F1"].decision_class == "codeql:rule-a"
+
+
+# ---------------------------------------------------------------------------
+# Abstention handling in the vote fallback
+# ---------------------------------------------------------------------------
+
+
+def test_vote_fallback_none_verdict_is_inconclusive():
+    """``is_exploitable: None`` is an abstention, not a negative vote:
+    the fallback must yield the inconclusive shape (0.5 posterior,
+    full-width CI), never the max-confidence negative (0.0, (0, 0))."""
+    results = {
+        "F1": {"finding_id": "F1", "rule_id": "rule-a",
+               "is_exploitable": None},
+    }
+    verdicts = calibrate_results(results)
+    v = verdicts["F1"]
+    assert v.aggregation_method == METHOD_VOTE
+    assert v.posterior_true_positive == 0.5
+    assert v.credible_interval == (0.0, 1.0)
+
+
+def test_vote_fallback_concluded_verdicts_stay_confident():
+    """The flip only affects abstentions: concluded booleans keep the
+    legacy 0.0/1.0 cast with degenerate CI."""
+    results = {
+        "POS": _make_finding("POS", "rule-a", is_exploitable=True),
+        "NEG": _make_finding("NEG", "rule-a", is_exploitable=False),
+    }
+    verdicts = calibrate_results(results)
+    assert verdicts["POS"].posterior_true_positive == 1.0
+    assert verdicts["POS"].credible_interval == (1.0, 1.0)
+    assert verdicts["NEG"].posterior_true_positive == 0.0
+    assert verdicts["NEG"].credible_interval == (0.0, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# Same-model dedupe ahead of the panel-size gate
+# ---------------------------------------------------------------------------
+
+
+def test_same_model_duplicates_do_not_form_a_panel():
+    """Two records from the SAME model are one panel member: they must
+    not pass the >=2 gate and run EM as a fake two-model panel."""
+    results = {
+        "F1": _make_finding("F1", "rule-a",
+                            is_exploitable=True,
+                            analyses=[
+                                _entry("m1", True),
+                                _entry("m1", True),
+                            ]),
+    }
+    verdicts = calibrate_results(results)
+    v = verdicts["F1"]
+    assert v.aggregation_method == METHOD_VOTE
+    assert "insufficient_panel_size_1" == v.aggregation_fallback_reason
+
+
+def test_same_model_duplicate_keeps_first_record():
+    """With a real second model present, the duplicate same-model entry
+    is dropped (first record wins) and the panel size is honest."""
+    results = {
+        "F1": _make_finding("F1", "rule-a", analyses=[
+            _entry("m1", True),
+            _entry("m1", False),   # later same-model record: ignored
+            _entry("m2", True),
+        ]),
+    }
+    verdicts = calibrate_results(results)
+    v = verdicts["F1"]
+    assert v.aggregation_method == METHOD_DAWID_SKENE
+    assert v.n_models == 2
+    # Both counted votes are True (m1's first record + m2) → the
+    # posterior leans positive; the ignored False must not drag it to
+    # a split.
+    assert v.posterior_true_positive > 0.5
+
+
+def test_distinct_models_unaffected_by_dedupe():
+    results = {
+        "F1": _make_finding("F1", "rule-a", analyses=[
+            _entry("m1", True), _entry("m2", True),
+        ]),
+    }
+    verdicts = calibrate_results(results)
+    assert verdicts["F1"].aggregation_method == METHOD_DAWID_SKENE
+    assert verdicts["F1"].n_models == 2

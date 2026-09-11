@@ -35,11 +35,12 @@ _IMPORT_SINGLE_RE = re.compile(
     r'^\s*import\s+(?:[A-Za-z_][A-Za-z0-9_]*\s+)?"([^"]+)"',
     re.MULTILINE,
 )
-# Block form: ``import (\n  "foo"\n  alias "bar"\n)``
-_IMPORT_BLOCK_RE = re.compile(
-    r"^\s*import\s*\(\s*([^)]*)\)",
-    re.MULTILINE | re.DOTALL,
-)
+# Block form: ``import (\n  "foo"\n  alias "bar"\n)``. Only the
+# opener is matched by regex — the body is parsed line-wise, because
+# a greedy-to-first-')' body match truncates the block at any ')'
+# inside a trailing comment (``"fmt" // formatting (stdlib)``) and
+# silently drops every subsequent import.
+_IMPORT_BLOCK_OPEN_RE = re.compile(r"^\s*import\s*\(")
 _BLOCK_LINE_RE = re.compile(
     r'^\s*(?:[A-Za-z_][A-Za-z0-9_]*\s+)?"([^"]+)"',
     re.MULTILINE,
@@ -167,18 +168,51 @@ def _grep_symbols(
 # Internals
 # ---------------------------------------------------------------------------
 
+def _code_before_close(line: str) -> tuple[str, bool]:
+    """Split a block-body line at the first unquoted ``)`` or ``//``.
+
+    Returns ``(code, closed)`` where ``code`` is the prefix that can
+    carry an import spec and ``closed`` says whether an unquoted
+    ``)`` — the block terminator — appeared before any line comment.
+    A ``)`` inside a quoted import path or a ``//`` comment must NOT
+    close the block.
+    """
+    in_quote = False
+    for i, ch in enumerate(line):
+        if ch == '"':
+            in_quote = not in_quote
+        elif not in_quote:
+            if ch == ")":
+                return line[:i], True
+            if ch == "/" and line[i:i + 2] == "//":
+                return line[:i], False
+    return line, False
+
+
 def _imports_in(text: str) -> Iterable[tuple[str, int]]:
     # Single-line.
     for m in _IMPORT_SINGLE_RE.finditer(text):
         yield m.group(1), text.count("\n", 0, m.start()) + 1
-    # Block form.
-    for block in _IMPORT_BLOCK_RE.finditer(text):
-        block_start = block.start(1)
-        body = block.group(1)
-        for line_m in _BLOCK_LINE_RE.finditer(body):
-            line_no = (text.count("\n", 0, block_start)
-                        + body.count("\n", 0, line_m.start()) + 1)
-            yield line_m.group(1), line_no
+    # Block form — parsed line-wise from ``import (`` to the line
+    # carrying the unquoted closing ``)``.
+    in_block = False
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        if not in_block:
+            open_m = _IMPORT_BLOCK_OPEN_RE.match(line)
+            if not open_m:
+                continue
+            # Same-line body (``import ( "fmt" )``) is legal Go.
+            code, closed = _code_before_close(line[open_m.end():])
+            line_m = _BLOCK_LINE_RE.match(code.lstrip())
+            if line_m:
+                yield line_m.group(1), line_no
+            in_block = not closed
+        else:
+            code, closed = _code_before_close(line)
+            line_m = _BLOCK_LINE_RE.match(code)
+            if line_m:
+                yield line_m.group(1), line_no
+            in_block = not closed
 
 
 def _walk_go_sources(

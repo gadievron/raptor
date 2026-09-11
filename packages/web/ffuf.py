@@ -1332,14 +1332,27 @@ class FfufRunner:
         return value
 
     def _summarize_result(self, result: dict[str, Any]) -> dict[str, Any]:
-        """Keep ffuf report entries compact, typed, and secret-redacted."""
+        """Keep ffuf report entries compact, typed, and secret-redacted.
+
+        Display fields (``url``, ``input``) are redacted/flattened/
+        truncated for logs and reports. When sanitization changed a
+        value, the verbatim original rides alongside under a ``*_raw``
+        key: consumers that REPLAY a matched value (the first-party
+        re-verification of sweep candidates, crawl seeding) must send
+        exactly what ffuf sent — replaying the display form silently
+        discards genuine hits. Persisted copies of these entries go
+        through the scanner's artifact redaction boundary.
+        """
+        raw_url = str(result.get("url", ""))
         summary: dict[str, Any] = {
-            "url": self._clean_summary_text(result.get("url", "")),
+            "url": self._clean_summary_text(raw_url),
             "status": self._clean_summary_int(result.get("status")),
             "length": self._clean_summary_int(result.get("length")),
             "words": self._clean_summary_int(result.get("words")),
             "lines": self._clean_summary_int(result.get("lines")),
         }
+        if raw_url and summary["url"] != raw_url:
+            summary["url_raw"] = raw_url
         # vhost runs answer "which Host matched", not "which URL": ffuf
         # reports the substituted Host value in the per-result host field.
         host = result.get("host")
@@ -1351,11 +1364,18 @@ class FfufRunner:
         # ffuf bookkeeping, not an input.
         inputs = result.get("input")
         if isinstance(inputs, dict):
-            cleaned = {
-                str(keyword): self._clean_summary_text(value)
-                for keyword, value in inputs.items()
-                if str(keyword) != "FFUFHASH"
-            }
+            cleaned = {}
+            raw_inputs = {}
+            for keyword, value in inputs.items():
+                key = str(keyword)
+                if key == "FFUFHASH":
+                    continue
+                cleaned_value = self._clean_summary_text(value)
+                cleaned[key] = cleaned_value
+                if cleaned_value != str(value):
+                    raw_inputs[key] = str(value)
             if cleaned:
                 summary["input"] = cleaned
+            if raw_inputs:
+                summary["input_raw"] = raw_inputs
         return summary

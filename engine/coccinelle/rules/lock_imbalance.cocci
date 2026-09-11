@@ -51,6 +51,11 @@ constant C;
 
 // @vocab: lock_acquires
 \(mutex_lock\|mutex_lock_interruptible\|mutex_lock_killable\)(&M);
+// The release guard must extend in lockstep with the acquire
+// alternation above: a learned acquire wrapper without its matching
+// release wrapper in the when-guard turns every balanced
+// wrapper-locked function into an imbalance verdict.
+// @vocab: lock_releases
 ... when != mutex_unlock(&M)
 (
 * return@p -C;

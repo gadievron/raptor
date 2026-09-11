@@ -33,8 +33,11 @@ MEMORY_SINKS: frozenset = frozenset({
 
 _FUNCTION_DEFINITION = "function_definition"
 _CALL_EXPRESSION = "call_expression"
+_COMMENT = "comment"
 _IDENTIFIER = "identifier"
 _FIELD_IDENTIFIER = "field_identifier"
+_QUALIFIED_IDENTIFIER = "qualified_identifier"
+_ARRAY_DECLARATOR = "array_declarator"
 _FIELD_EXPRESSION = "field_expression"
 _POINTER_EXPRESSION = "pointer_expression"
 _PARENTHESIZED_EXPRESSION = "parenthesized_expression"
@@ -190,10 +193,26 @@ def _function_name(fn_def_node) -> str | None:
 
 
 def _declarator_name(fn_declarator_node) -> str | None:
-    """Get the identifier from a function_declarator."""
+    """Get the function name from a function_declarator.
+
+    A C free function names the declarator with a plain identifier.
+    C++ class methods use a ``field_identifier`` (in-class
+    definition) or a ``qualified_identifier`` (out-of-line
+    ``Foo::bar``); accepting only the plain identifier silently
+    skipped every class method — no summary, no flows, no opaque
+    marker. The qualified form yields the bare method name (last
+    ``::`` segment) to match the inventory's bare-name keying that
+    consumers join taint approximations against.
+    """
     for c in fn_declarator_node.children:
-        if c.is_named and c.type == _IDENTIFIER:
+        if not c.is_named:
+            continue
+        if c.type in (_IDENTIFIER, _FIELD_IDENTIFIER):
             return c.text.decode("utf-8", errors="replace")
+        if c.type == _QUALIFIED_IDENTIFIER:
+            text = c.text.decode("utf-8", errors="replace")
+            name = text.split("::")[-1].strip()
+            return name or None
     return None
 
 
@@ -235,26 +254,36 @@ def _extract_params(fn_node) -> list[str]:
                     name = _param_name(pc)
                     if name:
                         params.append(name)
+                    elif pc.text != b"void":
+                        # Unnamed / unextractable parameter (abstract
+                        # declarator, exotic shape). Hold its slot with
+                        # a placeholder — "<" can't appear in a C
+                        # identifier, so it never matches a body use —
+                        # because dropping the slot shifted every LATER
+                        # param's index and mis-bound their flows to
+                        # the wrong position. Bare ``void`` is the
+                        # empty parameter list, not a parameter.
+                        params.append(f"<unnamed:{len(params)}>")
     return params
 
 
 def _param_name(param_decl) -> str | None:
     """Extract the parameter name from a parameter_declaration.
 
-    Handles: int x, const char *buf, struct foo *ptr, etc.
-    The name is the last identifier (or the identifier inside a
-    pointer_declarator).
+    Handles: int x, const char *buf, struct foo *ptr, char buf[64],
+    void (*cb)(int), etc. The name is the last identifier, or the
+    first identifier inside a pointer / array / function-pointer
+    declarator (the declaree precedes array sizes and inner
+    parameter lists in pre-order, so the first hit is the name).
     """
     last_id = None
     for c in param_decl.children:
         if c.type == _IDENTIFIER:
             last_id = c.text.decode("utf-8", errors="replace")
-        elif c.type == _POINTER_DECLARATOR:
+        elif c.type in (
+            _POINTER_DECLARATOR, _ARRAY_DECLARATOR, _FUNCTION_DECLARATOR,
+        ):
             inner_id = _find_identifier(c)
-            if inner_id is not None:
-                last_id = inner_id
-        elif c.type == _FUNCTION_DECLARATOR:
-            inner_id = _declarator_name(c)
             if inner_id is not None:
                 last_id = inner_id
     return last_id
@@ -318,7 +347,10 @@ def _check_arguments(
         if child.type == _ARGUMENT_LIST:
             arg_idx = 0
             for arg in child.children:
-                if not arg.is_named:
+                # Comments are NAMED nodes in tree-sitter: counting
+                # them (``f(dst, /* note */ src, n)``) shifted every
+                # later argument's recorded position.
+                if not arg.is_named or arg.type == _COMMENT:
                     continue
                 param_name = _argument_is_param(arg, param_set)
                 if param_name is not None:

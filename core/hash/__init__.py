@@ -143,8 +143,7 @@ def sha256_tree(
     #   * Mix a truncation marker into the digest when the cap
     #     fires, so a truncated tree can never hash-collide with
     #     an untruncated tree that happens to contain only the
-    #     hashed prefix. Untruncated trees
-    #     keep their pre-fix digests (back-compat).
+    #     hashed prefix.
     import os as __os
     # max_file_size was defaulted from config above, so it is never
     # None here — the fallback is simply 100x the per-file cap.
@@ -191,11 +190,27 @@ def sha256_tree(
             if cumulative_bytes + st.st_size > cumulative_cap:
                 truncated_at = p.relative_to(root).as_posix()
                 break
-            # surrogateescape round-trips non-UTF-8 bytes in filenames; plain
-            # .encode() raises UnicodeEncodeError for those.
-            h.update(p.relative_to(root).as_posix().encode(
+            # Length-framed per-file record. Pre-fix the relpath bytes
+            # and content bytes were concatenated raw into ONE running
+            # digest — no separator or length framing — so name/content
+            # boundary shifts collided trivially ({'a': 'bc'} and
+            # {'ab': 'c'} both hashed as sha256('abc')). Now each
+            # record is <name-len (8B LE)> <name bytes> <content
+            # sha256 digest> — unambiguously parseable, so distinct
+            # trees can no longer share a digest by moving bytes
+            # across the name/content boundary. (Digest values change
+            # for every tree vs the pre-fix scheme; in-tree consumers
+            # only stamp the value into run manifests as provenance —
+            # nothing caches across the change.)
+            #
+            # surrogateescape round-trips non-UTF-8 bytes in filenames;
+            # plain .encode() raises UnicodeEncodeError for those.
+            name_bytes = p.relative_to(root).as_posix().encode(
                 _FS_ENCODING, errors=_FS_ERRORS,
-            ))
+            )
+            h.update(len(name_bytes).to_bytes(8, "little"))
+            h.update(name_bytes)
+            content_h = hashlib.sha256()
             with __os.fdopen(fd, "rb") as f:
                 fd = -1  # fdopen now owns it; don't close twice
                 # Bound the read to the fstat'd size. Without this,
@@ -204,16 +219,16 @@ def sha256_tree(
                 # fstat was meant to make authoritative — the read
                 # loop would consume the grown contents to EOF. For
                 # stable files this reads exactly st.st_size bytes,
-                # so digests are unchanged and remain chunk-size-
-                # independent.
+                # so digests remain chunk-size-independent.
                 remaining = st.st_size
                 while remaining > 0:
                     chunk = f.read(min(chunk_size, remaining))
                     if not chunk:
                         break  # file shrank mid-read; racy anyway
-                    h.update(chunk)
+                    content_h.update(chunk)
                     cumulative_bytes += len(chunk)
                     remaining -= len(chunk)
+            h.update(content_h.digest())
         finally:
             if fd >= 0:
                 try:

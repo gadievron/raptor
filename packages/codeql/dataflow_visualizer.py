@@ -9,13 +9,16 @@ Creates visual representations of CodeQL dataflow paths in multiple formats:
 """
 
 import json
+import os
 import sys
 from html import escape
 from pathlib import Path
 
-# Add parent directory to path for imports
-# packages/codeql/dataflow_visualizer.py -> repo root
-sys.path.insert(0, str(Path(__file__).parents[2]))
+# `os.environ["RAPTOR_DIR"]` (no fallback) is the canonical project
+# root marker — see CLAUDE.md "Python path safety"; a KeyError surfaces
+# the configuration problem at startup instead of a positional walk
+# silently breaking under relocation.
+sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.logging import get_logger
 from packages.codeql.dataflow_validator import DataflowPath
@@ -669,7 +672,14 @@ class DataflowVisualizer:
         if dataflow.sanitizers:
             lines.append("")
             lines.append("**Detected Sanitizers:**")
-            lines.extend(f"- {san}" for san in dataflow.sanitizers)
+            # Same provenance and threat as rule_id/message above:
+            # sanitizer labels come from SARIF flow-step text quoting
+            # the target's source (function names etc.), so they get
+            # the same defang before landing in the report markdown.
+            lines.extend(
+                f"- {sanitise_string(str(san), max_chars=256)}"
+                for san in dataflow.sanitizers
+            )
 
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))
@@ -678,19 +688,26 @@ class DataflowVisualizer:
 
     def _escape_mermaid(self, text: str) -> str:
         """Escape text for Mermaid syntax."""
+        # Node labels are single-line: a literal newline (multi-line
+        # SARIF step label) splits the node declaration mid-statement
+        # and the whole .mmd fails to render.
+        text = ' '.join(text.split())
+
         # Truncate long text
         if len(text) > 60:
             text = text[:57] + "..."
 
-        # Escape special characters
+        # Escape special characters. '#' first: every later
+        # replacement introduces '&#NN;' entities, so escaping '#'
+        # after them would mangle the entities themselves.
+        text = text.replace('#', '&#35;')
         text = text.replace('"', '&quot;')
         text = text.replace('[', '&#91;')
         text = text.replace(']', '&#93;')
         text = text.replace('(', '&#40;')
         text = text.replace(')', '&#41;')
         text = text.replace('<', '&lt;')
-        text = text.replace('>', '&gt;')
-        return text.replace('#', '&#35;')
+        return text.replace('>', '&gt;')
 
 
     def generate_ascii(self, dataflow: DataflowPath, finding_id: str) -> Path:

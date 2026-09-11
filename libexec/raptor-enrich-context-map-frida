@@ -38,6 +38,7 @@ import logging  # noqa: E402
 
 from core.artifacts.context_map_budget import (  # noqa: E402
     CONTEXT_MAP_CONSUMER_MAX_BYTES as _MAX_CONTEXT_MAP_BYTES,
+    enforce_context_map_budget,
 )
 from core.json import load_json, save_json  # noqa: E402
 
@@ -98,16 +99,28 @@ def main() -> int:
                   file=sys.stderr)
             return 1
 
-    result = enrich_context_map_with_frida(
-        ctx, search_dirs, target_path=target_path)
+    # Same skip-silent contract for the merge itself: the map is
+    # LLM-authored and evidence is scavenged from sibling run dirs, so
+    # a malformed element must not fail the caller's pipeline.
+    try:
+        result = enrich_context_map_with_frida(
+            ctx, search_dirs, target_path=target_path)
+    except Exception as e:  # noqa: BLE001 — best-effort by contract
+        logger.debug("frida enrichment skipped: merge failed: %s", e,
+                     exc_info=True)
+        return 0
     if result != ctx:
+        # A merged map must not leave here over the consumer byte cap —
+        # strict downstream readers (including this shim's next run)
+        # refuse an oversize file.
+        enforce_context_map_budget(result)
         save_json(ctx_path, result)
         enriched = sum(
-            1 for ep in result.get("entry_points", [])
-            if ep.get("runtime_confirmed")
+            1 for ep in (result.get("entry_points") or [])
+            if isinstance(ep, dict) and ep.get("runtime_confirmed")
         ) + sum(
-            1 for sd in result.get("sink_details", [])
-            if sd.get("runtime_confirmed")
+            1 for sd in (result.get("sink_details") or [])
+            if isinstance(sd, dict) and sd.get("runtime_confirmed")
         )
         if enriched:
             print(f"  Frida: {enriched} entry points/sinks runtime-confirmed")

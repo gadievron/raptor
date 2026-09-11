@@ -14,10 +14,12 @@ class FakeFlow:
 
 
 class FakeServer:
-    def __init__(self, verdicts=None, flows=None, error=False):
+    def __init__(self, verdicts=None, flows=None, error=False,
+                 degraded=False):
         self.verdicts = verdicts or {}
         self.flows = flows or {}
         self.error = error
+        self.degraded = degraded
         self.exists_queries = []
         self.flow_queries = []
 
@@ -27,10 +29,15 @@ class FakeServer:
             raise RuntimeError("joern down")
         return self.verdicts.get((source_method, sink_call), False)
 
-    def run_taint_query(self, source_method, sink_call, **kwargs):
+    def run_taint_query(self, source_method, sink_call, *,
+                        errors_out=None, **kwargs):
         self.flow_queries.append((source_method, sink_call))
         if self.error:
             raise RuntimeError("joern down")
+        if self.degraded:
+            if errors_out is not None:
+                errors_out.append("server restarting")
+            return []
         return self.flows.get((source_method, sink_call), [])
 
 
@@ -197,6 +204,15 @@ class TestConfirmFindingFlow:
         assert result["confirmed"] is False
         assert result["proximity_floor"] is None
         assert result["steps"] == []
+
+    def test_degraded_query_not_booked_as_negative(self):
+        # errors_out populated + no flows is AMBIGUOUS — Stage B treats
+        # confirmed:false as evidence against the finding, so a
+        # server-degraded query must book confirmed:null instead.
+        result = confirm_finding_flow(
+            _finding(), FakeServer(degraded=True), _checklist())
+        assert result["confirmed"] is None
+        assert "degraded" in result["skipped"]
 
     def test_sink_falls_back_to_call_graph(self):
         finding = _finding()

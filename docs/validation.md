@@ -22,7 +22,7 @@ assessment work.
 | Flag | Purpose |
 |------|---------|
 | `--vuln-type <type>` | Restrict to a single vulnerability class (e.g. `command_injection`, `format_string`) |
-| `--findings <file>` | Validate pre-existing findings from a SARIF or JSON file instead of scanning first |
+| `--findings <file>` | Validate pre-existing findings from a SARIF or JSON file instead of scanning first — accepts a findings container, a bare finding list, or a `/understand --hunt` `variants.json` (false-positive variants are excluded on import) |
 | `--binary <path>` | Provide a compiled binary for Stage E feasibility analysis |
 | `--skip-feasibility` | Skip Stage E entirely (useful when no binary is available) |
 | `--dynamic` / `--no-dynamic` | Grant/deny dynamic execution (Stage E auto sink-watch, witness execution); explicit flag wins, else the project's `dynamic` trust marker, else off |

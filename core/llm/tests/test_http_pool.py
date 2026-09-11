@@ -57,6 +57,29 @@ class TestPoolLimits:
         limits = http_pool.pool_limits()
         assert limits.keepalive_expiry == 60.0
 
+    @pytest.mark.parametrize("var, default", [
+        ("RAPTOR_HTTP_MAX_KEEPALIVE", 20),
+        ("RAPTOR_HTTP_MAX_CONNECTIONS", 100),
+    ])
+    def test_fractional_count_below_one_falls_back(
+        self, monkeypatch, var, default,
+    ):
+        # 0.5 passes the strictly-positive check but truncates to 0
+        # connections — a pool that stalls every request. Anything
+        # that truncates below 1 must fall back to the default.
+        monkeypatch.setenv(var, "0.5")
+        limits = http_pool.pool_limits()
+        assert limits.max_keepalive_connections >= 1
+        assert limits.max_connections >= 1
+        got = (limits.max_keepalive_connections
+               if var == "RAPTOR_HTTP_MAX_KEEPALIVE"
+               else limits.max_connections)
+        assert got == default
+
+    def test_valid_integer_count_still_honoured(self, monkeypatch):
+        monkeypatch.setenv("RAPTOR_HTTP_MAX_CONNECTIONS", "8")
+        assert http_pool.pool_limits().max_connections == 8
+
 
 class TestSdkHttpClient:
 

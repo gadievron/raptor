@@ -26,7 +26,11 @@ class FakeCrashContext:
     signal: int = 11
     function_name: Optional[str] = "vuln_func"
     stack_trace: str = "STACK_TRACE_MARKER_abc123"
-    registers: str = "RAX=0xdeadbeef RBX=0x41414141"
+    # dict[str, str], matching the real CrashContext contract
+    # (registers parsed from the debugger, not a pre-rendered string).
+    registers: dict = field(default_factory=lambda: {
+        "rax": "0xdeadbeef", "rbx": "0x41414141",
+    })
     binary_info: dict = field(default_factory=lambda: {"aslr_enabled": True})
     size: int = 256
 
@@ -171,3 +175,59 @@ class TestRefineExploitContract:
             max_iterations=2,
         )
         assert result is None
+
+
+class TestMemoryValidationBoost:
+    """The turn-3 memory-validation confidence boost is earned only
+    when memory AGREES with the verdict; a contradiction warning must
+    never raise confidence."""
+
+    @staticmethod
+    def _run_with_memory(probability: float) -> dict:
+        # Both turns say low -> turn-2 agreement lands confidence at
+        # 0.8 (< 0.9), so the memory-validation turn runs.
+        llm = _mock_llm([
+            "Exploitability: low. Stack overflow near return.",
+            "Exploitability: low. Attacker controls neither location "
+            "nor value.",
+        ])
+        memory = MagicMock()
+        memory.is_crash_likely_exploitable.return_value = probability
+        analyser = MultiTurnAnalyser(llm_client=llm, memory=memory)
+        return analyser.analyse_crash_deeply(FakeCrashContext(), max_turns=3)
+
+    def test_consistent_memory_boosts_confidence(self):
+        result = self._run_with_memory(0.5)  # consistent with "low"
+        assert result["confidence"] == 0.9  # 0.8 + 0.1
+        assert any(
+            s["question"] == "Memory validation"
+            for s in result["reasoning_steps"]
+        )
+
+    def test_contradicting_memory_does_not_boost(self):
+        result = self._run_with_memory(0.9)  # contradicts "low"
+        assert result["confidence"] == 0.8  # no boost
+        # The warning is still recorded for the operator.
+        steps = [
+            s for s in result["reasoning_steps"]
+            if s["question"] == "Memory validation"
+        ]
+        assert steps and "Warning" in steps[0]["response"]
+
+
+class TestQuickValidateCode:
+    """The lexical pre-check must not flag valid C: '\\T' occurs in
+    Windows-path string literals and '\\0x' is a well-defined literal
+    (octal \\0 escape followed by 'x')."""
+
+    def test_windows_path_literal_passes(self):
+        code = 'int main(void){ fopen("C:\\\\Temp\\\\x", "r"); return 0; }'
+        assert _analyser()._quick_validate_code(code) == []
+
+    def test_nul_then_x_shellcode_literal_passes(self):
+        code = 'const char sc[] = "\\0x90\\0x90"; int main(void){return 0;}'
+        assert _analyser()._quick_validate_code(code) == []
+
+    def test_mangled_preprocessor_still_flagged(self):
+        code = '#ifdef "__FOO\nint main(void){return 0;}'
+        assert _analyser()._quick_validate_code(code)

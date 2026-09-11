@@ -35,3 +35,37 @@ def _reset_llm_egress_state(monkeypatch):
     from core.testing import reset_llm_egress_state
 
     yield from reset_llm_egress_state(monkeypatch)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_sigterm_disposition():
+    """The orchestrator installs a process-wide SIGTERM salvage
+    handler (install_sigterm_grace, reached by any test that runs the
+    orchestrator in-process) and the CLI never uninstalls it. Leaked
+    past the test it poisons every LATER test in the same worker
+    process: fork children inherit the disposition, so SIGTERM starts
+    a salvage drain in the child instead of killing it — observed as
+    pool-teardown tests SIGKILLing provably responsive workers after
+    their full grace. Restore the disposition (production
+    uninstall first, belt-and-braces direct restore second) around
+    every audit test."""
+    import signal
+
+    try:
+        prev = signal.getsignal(signal.SIGTERM)
+    except (ValueError, OSError):  # non-main thread / exotic platform
+        yield
+        return
+    yield
+    from core.audit import orchestrator as _orch
+
+    _orch.uninstall_sigterm_grace()
+    try:
+        if (prev is not None
+                and signal.getsignal(signal.SIGTERM) is not prev):
+            # prev None = C-installed prior handler (getsignal cannot
+            # represent it and signal.signal cannot re-install it) —
+            # leave whatever is current rather than raise TypeError.
+            signal.signal(signal.SIGTERM, prev)
+    except (TypeError, ValueError, OSError):
+        pass

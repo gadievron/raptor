@@ -228,3 +228,42 @@ def test_orphan_field_outside_section_ignored(tmp_path):
     )
     deps = parse(p)
     assert {d.name for d in deps} == {"o/x"}
+
+
+# ---------------------------------------------------------------------------
+# URL robustness
+# ---------------------------------------------------------------------------
+
+def test_bracketed_ipv6_scp_url_parses(tmp_path):
+    # SCP-style refs may carry a bracketed IPv6 host; splitting on the
+    # first colon produced ``https://[/...`` which urlparse rejects
+    # with ``ValueError: Invalid IPv6 URL`` — and the exception killed
+    # the parse of the WHOLE file.
+    p = _write_gitmodules(
+        tmp_path,
+        '[submodule "v6"]\n'
+        '\tpath = v6\n'
+        '\turl = git@[2001:db8::1]:vendor/lib.git\n',
+    )
+    [d] = parse(p)
+    assert d.name == "2001:db8::1/vendor/lib"
+
+
+def test_unparseable_url_skips_row_not_file(tmp_path, caplog):
+    # A hostile/malformed URL must drop only its own row; the sibling
+    # submodule still parses.
+    import logging
+    p = _write_gitmodules(
+        tmp_path,
+        '[submodule "bad"]\n'
+        '\tpath = bad\n'
+        '\turl = https://[not-a-bracket-host\n'
+        '[submodule "good"]\n'
+        '\tpath = good\n'
+        '\turl = https://github.com/o/r.git\n',
+    )
+    with caplog.at_level(logging.WARNING):
+        deps = parse(p)
+    assert [d.name for d in deps] == ["o/r"]
+    assert any("unparseable submodule URL" in r.getMessage()
+               for r in caplog.records)

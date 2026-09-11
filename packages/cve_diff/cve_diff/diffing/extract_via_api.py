@@ -121,11 +121,19 @@ def extract_via_api(
     for entry in files_raw:
         if not isinstance(entry, dict):
             continue
-        path = entry.get("filename") or ""
-        if not path:
+        # Per-field type guards: the top-level checks prove dict/list
+        # shape only. A tampered / contract-drifted response with a
+        # non-str filename or patch must skip the entry, not raise
+        # AttributeError past the AnalysisError-only handlers in the
+        # agreement cross-check (turning an auxiliary signal failure
+        # into a hard run failure).
+        path = entry.get("filename")
+        if not isinstance(path, str) or not path:
             continue
         file_names.append(path)
-        patch = entry.get("patch") or ""
+        patch = entry.get("patch")
+        if not isinstance(patch, str):
+            patch = ""
         if patch:
             # Synthesize a `diff --git` header so the output looks like
             # what `git diff` produces.

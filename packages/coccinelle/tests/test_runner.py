@@ -872,6 +872,85 @@ class TestRunRulesBatched:
             assert not r.ok
             assert "not installed" in r.errors[0].lower()
 
+    def test_batched_results_match_run_rule_contract(self, tmp_path):
+        """Batch results must honour the single-rule SpatchResult
+        contract: files_examined populated (coverage read zero from the
+        batch path pre-fix) and per-result errors lists that are NOT
+        the same aliased object (mutating one silently edited all)."""
+        r1 = tmp_path / "rule_x.cocci"
+        r1.write_text("@r@\nposition p;\n@@\nmalloc@p(...)\n")
+        r2 = tmp_path / "rule_y.cocci"
+        r2.write_text("@s@\nposition p;\n@@\nfree@p(...)\n")
+        target_dir = tmp_path / "src"
+        target_dir.mkdir()
+        (target_dir / "test.c").write_text("void f() {}\n")
+        (target_dir / "test.h").write_text("void f(void);\n")
+
+        mock_proc = MagicMock()
+        mock_proc.stdout = ""
+        mock_proc.stderr = "warning: something odd\n"
+        mock_proc.returncode = 0
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ), patch("packages.coccinelle.runner._sandboxed_run",
+                 return_value=mock_proc):
+            results = run_rules_batched(
+                target_dir, [r1, r2], env=dict(os.environ),
+            )
+
+        rx, ry = results["rule_x"], results["rule_y"]
+        expected = sorted([
+            str(target_dir / "test.c"), str(target_dir / "test.h"),
+        ])
+        assert rx.files_examined == expected
+        assert ry.files_examined == expected
+        assert rx.errors is not ry.errors
+        rx.errors.append("consumer mutation")
+        assert "consumer mutation" not in ry.errors
+
+
+class TestRunRulesTreeWalkOnce:
+    def test_run_rules_walks_target_once(self, tmp_path):
+        """The C/H enumeration is loop-invariant: N rules must not
+        trigger N full tree walks."""
+        from packages.coccinelle import runner as runner_mod
+
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        for name in ("a", "b", "c"):
+            (rules_dir / f"{name}.cocci").write_text(
+                "@r@\nposition p;\n@@\nmalloc@p(...)\n"
+            )
+        target_dir = tmp_path / "src"
+        target_dir.mkdir()
+        (target_dir / "one.c").write_text("void f() {}\n")
+
+        calls = []
+        real_walk = runner_mod._walk_c_h
+
+        def counting_walk(target):
+            calls.append(target)
+            return real_walk(target)
+
+        mock_proc = MagicMock()
+        mock_proc.stdout = ""
+        mock_proc.stderr = ""
+        mock_proc.returncode = 0
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ), patch("packages.coccinelle.runner._walk_c_h",
+                 side_effect=counting_walk), patch(
+            "packages.coccinelle.runner._sandboxed_run",
+            return_value=mock_proc,
+        ):
+            results = run_rules(target_dir, rules_dir, env=dict(os.environ))
+
+        assert len(results) == 3
+        assert len(calls) == 1
+        # The shared walk still lands in every result.
+        for r in results:
+            assert r.files_examined == [str(target_dir / "one.c")]
+
 
 @pytest.mark.skipif(
     not is_available(),
@@ -1131,7 +1210,7 @@ class TestShippedRulesIntegration:
                 if (atomic_read(&o->refcnt) == 1)
                     obj_destroy(o);
             }
-            void bug_dec_test_kfree(struct obj *o) {
+            void ok_dec_test_kfree(struct obj *o) {
                 if (atomic_dec_and_test(&o->refcnt)) {
                     kfree(o);
                 }
@@ -1143,7 +1222,10 @@ class TestShippedRulesIntegration:
             allow_scripting=True,
         )
         assert result.returncode == 0
-        assert result.match_count >= 3
+        # Only the two atomic_read shapes are races. The
+        # dec_and_test-guarded free is the canonical atomic refcount
+        # put and must not be counted.
+        assert result.match_count == 2
 
     def test_atomic_check_then_act_clean(self, tmp_path):
         target = tmp_path / "test.c"

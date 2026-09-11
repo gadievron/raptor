@@ -101,10 +101,12 @@ _STACK_ARRAY_RE = re.compile(
     r'(\w+)\s*\[\s*(\d+)\s*\]',
 )
 
-# Comparison: if (var < N) or if (var > N) or similar
+# Comparison: if (var < N) or if (var > N) or similar.  The operator
+# is captured — equality tests and lower bounds must not read as
+# bounds checks (see _is_bounds_checked).
 _COMPARISON_RE = re.compile(
     r'\b(?:if|while)\s*\([^)]*?'
-    r'(\w+)\s*(?:[<>]=?|==|!=)\s*(\w+|\d+(?:x[\da-fA-F]+)?)'
+    r'(\w+)\s*([<>]=?|==|!=)\s*(\w+|\d+(?:x[\da-fA-F]+)?)'
     r'[^)]*\)',
 )
 
@@ -138,24 +140,43 @@ def _is_bounds_checked(
     limit: str,
     copy_pos: int,
 ) -> bool:
-    """Check if var_name is compared against limit before copy_pos.
+    """Check if var_name is bounded against limit before copy_pos.
 
-    Looks for if/while conditions that compare var_name against
-    a constant or against the same limit expression.
+    Looks for if/while conditions that compare var_name against a
+    constant or against the same limit expression.  Equality tests
+    (``==`` / ``!=``) never bound a copy length — ``if (count != 0)``
+    used to suppress an unchecked memcpy — and a constant comparison
+    counts only when its direction actually caps the variable
+    (``count < N`` / ``N > count``); a lower bound (``count > 0``)
+    caps nothing.  A comparison against the exact limit expression is
+    accepted in either direction: ``count < size`` guards the copy,
+    ``count > size`` guards a bail, and without branch context both
+    read as a check performed against the right quantity.
     """
     prefix = source[:copy_pos]
     for m in _COMPARISON_RE.finditer(prefix):
         lhs = m.group(1).strip()
-        rhs = m.group(2).strip()
-        if var_name in (lhs, rhs):
-            other = rhs if lhs == var_name else lhs
-            if other == limit:
-                return True
-            limit_int = _try_parse_int(limit)
-            other_int = _try_parse_int(other)
-            if limit_int is not None and other_int is not None:
-                if other_int <= limit_int:
-                    return True
+        op = m.group(2)
+        rhs = m.group(3).strip()
+        if var_name not in (lhs, rhs):
+            continue
+        if op in ("==", "!="):
+            continue
+        var_is_lhs = lhs == var_name
+        other = rhs if var_is_lhs else lhs
+        if other == limit:
+            return True
+        caps_above = (
+            (var_is_lhs and op in ("<", "<="))
+            or (not var_is_lhs and op in (">", ">="))
+        )
+        if not caps_above:
+            continue
+        limit_int = _try_parse_int(limit)
+        other_int = _try_parse_int(other)
+        if limit_int is not None and other_int is not None \
+                and other_int <= limit_int:
+            return True
     return False
 
 
@@ -352,6 +373,93 @@ _CALL_WITH_ARGS_RE = re.compile(
 )
 
 
+def _param_copy_findings(
+    callee: str,
+    source: str,
+    param_name: str,
+    alloc_size: Optional[int],
+    file: str,
+) -> List[HeapCopyFinding]:
+    """Copies in *source* whose destination is *param_name*, judged
+    against the CALLER's allocation size.
+
+    check_decompiled_function only reports copies into buffers the
+    callee itself allocates, so the headline cross-function scenario —
+    caller allocates, callee copies into the parameter — matched
+    nothing and the pass was dead.  Findings only when the caller's
+    size is known; an unknown allocation is inconclusive, never a
+    finding.
+    """
+    findings: List[HeapCopyFinding] = []
+    if alloc_size is None:
+        return findings
+    for m in _STD_COPY_RE.finditer(source):
+        fn_name = m.group(1)
+        dst = m.group(2).strip()
+        len_expr = m.group(4).strip()
+        dst_base = dst.split('[')[0].split('+')[0].strip()
+        if dst_base != param_name:
+            continue
+        line = _find_line_number(source, m.start())
+        len_int = _try_parse_int(len_expr)
+        if len_int is not None:
+            if len_int > alloc_size:
+                findings.append(HeapCopyFinding(
+                    function=callee,
+                    file=file,
+                    line=line,
+                    copy_call=fn_name,
+                    dest_var=param_name,
+                    dest_size=str(alloc_size),
+                    copy_size=len_expr,
+                    evidence=(
+                        f"constant copy size ({len_int}) exceeds the "
+                        f"caller's allocation ({alloc_size})"
+                    ),
+                    confidence="high",
+                ))
+        else:
+            len_var = len_expr.split('[')[0].split('(')[0].strip()
+            if not _is_bounds_checked(
+                source, len_var, str(alloc_size), m.start(),
+            ):
+                findings.append(HeapCopyFinding(
+                    function=callee,
+                    file=file,
+                    line=line,
+                    copy_call=fn_name,
+                    dest_var=param_name,
+                    dest_size=str(alloc_size),
+                    copy_size=len_expr,
+                    evidence=(
+                        f"copy length '{len_var}' into the caller's "
+                        f"{alloc_size}-byte buffer not checked in the "
+                        f"callee"
+                    ),
+                    confidence="medium",
+                ))
+    for m in _STRCPY_RE.finditer(source):
+        dst = m.group(2).strip()
+        dst_base = dst.split('[')[0].split('+')[0].strip()
+        if dst_base != param_name:
+            continue
+        findings.append(HeapCopyFinding(
+            function=callee,
+            file=file,
+            line=_find_line_number(source, m.start()),
+            copy_call="strcpy",
+            dest_var=param_name,
+            dest_size=str(alloc_size),
+            copy_size="strlen(src)+1",
+            evidence=(
+                f"strcpy into the caller's {alloc_size}-byte buffer "
+                f"— no length bound"
+            ),
+            confidence="medium",
+        ))
+    return findings
+
+
 def check_cross_function(
     functions: Sequence[Dict[str, Any]],
     xrefs: Optional[Sequence[Dict[str, Any]]] = None,
@@ -408,12 +516,19 @@ def check_cross_function(
                 alloc_size = allocs[arg_base]
                 param_name = f"param_{pos + 1}"
                 callee_src = func_map[callee]
-                callee_findings = check_decompiled_function(
-                    callee, callee_src, file=file,
+                # Checked-copy wrappers with the parameter as dest
+                # come from the callee's own analysis; plain copies
+                # into the parameter need the caller's size, which
+                # only this pass knows.
+                callee_findings = [
+                    cf for cf in check_decompiled_function(
+                        callee, callee_src, file=file,
+                    )
+                    if cf.dest_var == param_name
+                ] + _param_copy_findings(
+                    callee, callee_src, param_name, alloc_size, file,
                 )
                 for cf in callee_findings:
-                    if cf.dest_var != param_name:
-                        continue
                     cf.is_cross_function = True
                     size_note = (
                         f" (allocated {alloc_size} bytes)"

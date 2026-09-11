@@ -185,6 +185,10 @@ def test_probe_missing_tool_gracefully_unvalidated(tmp_path, monkeypatch):
     assert BuildDetector(repo).validate_build_command(bs) is False
 
 
+# slow: real `mvn --version` = genuine JVM startup cost on a loaded runner;
+# the probe behaviour stays default-tier-covered by the mocked/shim siblings
+# above (test_probe_never_runs_with_repo_cwd[maven] and the shim end-to-end).
+@pytest.mark.slow
 @pytest.mark.skipif(shutil.which("mvn") is None, reason="mvn not installed")
 def test_real_maven_probe_ignores_repo_jvm_config(tmp_path):
     """With real Maven installed: a hostile `.mvn/jvm.config` must not

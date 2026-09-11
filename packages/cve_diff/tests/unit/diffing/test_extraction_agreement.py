@@ -188,3 +188,26 @@ def test_summarize_two_source_clone_plus_patch_url_for_cgit() -> None:
     assert len(out["sources"]) == 2
     src_names = {s["name"] for s in out["sources"]}
     assert src_names == {"clone", "patch_url"}
+
+
+def test_summarize_no_agreeing_pair_is_not_majority_agree() -> None:
+    """Pairwise {partial, disagree, disagree}: an outlier exists but NO
+    two sources actually matched — the top-level verdict must not
+    overstate integrity as majority_agree."""
+    clone = _bundle(files=["a", "b", "c", "d", "e"], bytes_size=1000)
+    api = _bundle(files=["a", "b", "c", "d"], bytes_size=900)      # partial vs clone
+    patch = _bundle(files=["docs/notes.md"], bytes_size=5000)      # disagrees with both
+    summary = ea._summarize_n([("clone", clone), ("api", api), ("patch_url", patch)])
+    assert summary["verdict"] == "partial"
+    assert "outliers" not in summary
+
+
+def test_summarize_majority_agree_still_requires_agree_pair() -> None:
+    """The positive direction: two matching sources + one outlier IS
+    majority_agree, naming the outlier."""
+    clone = _bundle(files=["src/a.c"], bytes_size=1000)
+    api = _bundle(files=["src/a.c"], bytes_size=1005)              # agrees with clone
+    patch = _bundle(files=["docs/notes.md"], bytes_size=5000)      # disagrees with both
+    summary = ea._summarize_n([("clone", clone), ("api", api), ("patch_url", patch)])
+    assert summary["verdict"] == "majority_agree"
+    assert summary["outliers"] == ["patch_url"]

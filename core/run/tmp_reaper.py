@@ -409,6 +409,47 @@ def _socket_answers(sock_path: Path) -> bool:
         s.close()
 
 
+# Bounded deep-scan budget for the internal-activity probe. Hitting the
+# cap reads as "in use" — an unjudgeable dir is kept, and since the cap
+# fires on every sweep, a dead dir with more entries than the budget is
+# NEVER reaped by this sweep (deliberate fail-toward-keeping: giant
+# strays are the operator's call, not an automated sweep's).
+_DEEP_SCAN_MAX_ENTRIES = 4096
+
+
+def _recent_activity(path: Path, now: float, max_age: float) -> bool:
+    """Any entry beneath *path* modified within the age floor?
+
+    The top-level mtime freezes at creation for most covered dirs (a
+    git clone scratch, a joern workspace): a live run older than the
+    floor whose tools still write INSIDE the dir must not be reaped on
+    the top-level timestamp alone (keepalive-registered dirs refresh
+    the top level; unregistered ones only show internal activity).
+    Bounded walk — no symlink follow, lstat-only, early exit on the
+    first fresh entry, hard entry cap — so a planted deep tree cannot
+    turn the sweep into a filesystem crawl. Walk errors and the cap
+    both read as activity (fail toward keeping, matching the sweep's
+    never-delete-live posture); a dir over the cap is therefore kept
+    on EVERY sweep, permanently exempt from this reaper.
+    """
+    seen = 0
+    try:
+        for root, dirs, files in os.walk(path, followlinks=False):
+            for name in dirs + files:
+                seen += 1
+                if seen > _DEEP_SCAN_MAX_ENTRIES:
+                    return True
+                try:
+                    st = os.lstat(os.path.join(root, name))
+                except OSError:
+                    continue
+                if now - st.st_mtime < max_age:
+                    return True
+    except OSError:
+        return True
+    return False
+
+
 def _dir_in_use(path: Path, live_cwds: set[str]) -> bool:
     """Liveness probes for a candidate dir: cwd references, live sockets.
 
@@ -499,6 +540,11 @@ def _reap(now: float | None) -> list[Path]:
             continue
         if now - st.st_mtime < max_age:
             continue
+        # Internal-activity probe: the top-level mtime freezes at
+        # creation for most covered dirs, so a >floor LIVE campaign
+        # writing inside its scratch would otherwise be reaped mid-run.
+        if _recent_activity(path, now, max_age):
+            continue
         if live_cwds is None:
             live_cwds = _live_cwds()
         if _dir_in_use(path, live_cwds):
@@ -565,8 +611,13 @@ def reap_stale_runs(parent: Path, now: float | None = None) -> list[Path]:
         auto-deleted. Running runs belong to the liveness machinery
         (`_cleanup_abandoned`, the lifecycle hook), not to age sweeps.
       - Only past the age floor: ``RAPTOR_RUN_REAP_MAX_AGE_D`` (default
-        30 days, 0 disables), judged by the run's own start timestamp
-        with dir mtime as fallback.
+        30 days, 0 disables), judged by the run's END timestamp (when
+        it failed), falling back to the start timestamp — clamped by
+        the dir mtime so a freshly SWEEP-failed old run (sweeps record
+        no end_timestamp) gets a full window, not instant deletion —
+        see :func:`_run_age_seconds`.
+      - In-use probe before deletion: a dir some live process has as
+        its cwd (or with a socket still answering) is skipped.
       - lstat-only + current-euid ownership, same posture as the tmp
         sweep; non-run dirs (logs/, llm_cache/, projects/) carry no run
         metadata and are never touched.
@@ -605,6 +656,7 @@ def _reap_runs(parent: Path, now: float | None) -> list[Path]:
         now = time.time()
     euid = os.geteuid()
     reaped: list[Path] = []
+    live_cwds: set[str] | None = None
     for d in children:
         try:
             st = d.lstat()
@@ -630,6 +682,15 @@ def _reap_runs(parent: Path, now: float | None) -> list[Path]:
             continue
         age = _run_age_seconds(meta, st, now)
         if age < max_age:
+            continue
+        # In-use probe: a failed status is a claim, not proof nothing
+        # is still reading the dir (an operator inspecting the journal,
+        # a resume about to flip it back to running). A live process
+        # cwd'd inside — or a socket still answering — keeps the dir
+        # this sweep, same probes as the tmp sweep.
+        if live_cwds is None:
+            live_cwds = _live_cwds()
+        if _dir_in_use(d, live_cwds):
             continue
         # Everything above was decided against the lstat() snapshot
         # `st`; deletion is by pathname. A writer with access to the
@@ -667,19 +728,38 @@ def _reap_runs(parent: Path, now: float | None) -> list[Path]:
 
 
 def _run_age_seconds(meta: dict, st: os.stat_result, now: float) -> float:
-    """Age from the run's own start timestamp; dir mtime as fallback."""
-    ts = meta.get("timestamp")
-    if isinstance(ts, str):
-        from datetime import datetime, timezone
+    """Age from the run's END timestamp, then start — clamped by the
+    dir-mtime evidence (``min``).
 
+    The END timestamp (when the run actually failed / was cancelled)
+    comes first: aging from the START deleted a long-lived run right
+    after it failed — a multi-week campaign that failed yesterday was
+    already "30 days old" by its start stamp, and the next sweep
+    rmtree'd its journal and partial results.
+
+    The mtime clamp covers the sweep-failed path: both abandon sweeps
+    call ``fail_run(..., record_timing=False)``, which records NO
+    ``end_timestamp`` (sweeps make no timing claim) — but their
+    metadata rewrite refreshes the dir mtime, so never reporting an
+    age older than the mtime evidence restarts the reap window for a
+    freshly-swept old-start run instead of deleting it on the very
+    next sweep.
+    """
+    from datetime import datetime, timezone
+
+    mtime_age = now - st.st_mtime
+    for key in ("end_timestamp", "timestamp"):
+        ts = meta.get(key)
+        if not isinstance(ts, str):
+            continue
         try:
-            started = datetime.fromisoformat(ts)
-            if started.tzinfo is None:
-                started = started.replace(tzinfo=timezone.utc)
-            return now - started.timestamp()
+            stamped = datetime.fromisoformat(ts)
         except ValueError:
-            pass
-    return now - st.st_mtime
+            continue
+        if stamped.tzinfo is None:
+            stamped = stamped.replace(tzinfo=timezone.utc)
+        return min(now - stamped.timestamp(), mtime_age)
+    return mtime_age
 
 
 def reap_stale_logs(now: float | None = None) -> list[Path]:

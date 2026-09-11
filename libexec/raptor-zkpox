@@ -148,6 +148,11 @@ def _cmd_reproduce(args) -> int:
     except ValueError as e:
         sys.stderr.write(f"manifest.json is not valid JSON: {e}\n")
         return 2
+    except OSError as e:
+        # An unreadable manifest (permissions, I/O error) must land on
+        # the diagnostic exit-2 path, not escape as a traceback.
+        sys.stderr.write(f"cannot read manifest.json: {e}\n")
+        return 2
     if not isinstance(manifest, dict):
         sys.stderr.write("manifest.json is not a JSON object\n")
         return 2
@@ -166,7 +171,13 @@ def _cmd_reproduce(args) -> int:
     # Verify witness.bin against the manifest before constructing the
     # bundle — a swapped/truncated witness must not silently drive an
     # N-run reproduction of the wrong bytes.
-    witness_bytes = witness_path.read_bytes()
+    try:
+        witness_bytes = witness_path.read_bytes()
+    except OSError as e:
+        # is_file() above doesn't guarantee the read succeeds
+        # (permissions, races) — keep the exit-code contract.
+        sys.stderr.write(f"cannot read witness.bin: {e}\n")
+        return 2
     from core.hash import sha256_bytes
     actual_hash = sha256_bytes(witness_bytes)
     if actual_hash != manifest["witness_hash"]:

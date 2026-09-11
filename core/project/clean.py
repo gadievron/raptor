@@ -26,8 +26,8 @@ def _run_dir_size(d: Path) -> int:
     return size
 
 
-def split_live_runs(dirs) -> tuple[list, list]:
-    """Partition run dirs into ``(rest, live)``.
+def run_is_live(d: Path) -> bool:
+    """Is *d* a run some in-flight process still owns?
 
     A run is *live* when its metadata says ``status=running`` AND
     either its recorded tool worker OR its owning SESSION is still
@@ -40,29 +40,40 @@ def split_live_runs(dirs) -> tuple[list, list]:
     gate refuses to start next to must not be deletable). Runs whose
     worker AND session are both dead are stale abandons; the sweep
     machinery marks them failed, and clean may reclaim them.
+
+    Runs that recorded NO pids at all (pre-recording legacy metadata)
+    are unjudgeable by liveness: they get a grace-age gate — recent
+    write activity inside the run dir reads as live — instead of
+    falling open to deletable.
     """
     from core.json import load_json
     from core.run.metadata import (
         RUN_METADATA_FILE,
+        _run_recently_active,
         _session_alive_for_meta,
         _tool_pid_alive,
     )
+    try:
+        meta = load_json(Path(d) / RUN_METADATA_FILE,
+                         max_bytes=1024 * 1024)
+    except Exception:  # noqa: BLE001 — unreadable metadata is not live
+        meta = None
+    if not (isinstance(meta, dict) and meta.get("status") == "running"):
+        return False
+    if (_tool_pid_alive(meta.get("tool_pid"))
+            or _session_alive_for_meta(meta)):
+        return True
+    if meta.get("session_pid") is None and meta.get("tool_pid") is None:
+        return _run_recently_active(Path(d))
+    return False
 
+
+def split_live_runs(dirs) -> tuple[list, list]:
+    """Partition run dirs into ``(rest, live)`` — see :func:`run_is_live`."""
     live: list = []
     rest: list = []
     for d in dirs:
-        try:
-            meta = load_json(Path(d) / RUN_METADATA_FILE,
-                             max_bytes=1024 * 1024)
-        except Exception:  # noqa: BLE001 — unreadable metadata is not live
-            meta = None
-        if (isinstance(meta, dict)
-                and meta.get("status") == "running"
-                and (_tool_pid_alive(meta.get("tool_pid"))
-                     or _session_alive_for_meta(meta))):
-            live.append(d)
-        else:
-            rest.append(d)
+        (live if run_is_live(Path(d)) else rest).append(d)
     return rest, live
 
 
@@ -222,6 +233,17 @@ def execute_clean(plan: dict[str, Any],
                     f"path {real!r} escapes containment root {common!r}"
                 )
                 raise RuntimeError(msg) from None
+        # Liveness re-check immediately before the delete: the plan can
+        # be arbitrarily stale by now (an unbounded operator confirm
+        # sits between plan and execute, and a planned run can be
+        # resumed — or a new one started at the same name — in that
+        # gap). A plan-time check alone rmtree'd in-flight runs.
+        if run_is_live(Path(d)):
+            skipped = plan.setdefault("skipped_live", [])
+            name = Path(d).name
+            if name not in skipped:
+                skipped.append(name)
+            continue
         try:
             shutil.rmtree(d)
         except FileNotFoundError:

@@ -201,6 +201,28 @@ class TestStripShellComments:
         result = strip_shell_comments(src)
         assert "fine" in result
 
+    def test_parameter_length_expansion_preserved(self):
+        # ${#...} is parameter-length expansion, not a comment — the
+        # "{ precedes #" heuristic alone truncated the line, making
+        # distinct expressions normalise identically.
+        src = "len=${#arr[@]}\ncount=${#var}\n"
+        result = strip_shell_comments(src)
+        assert "${#arr[@]}" in result
+        assert "${#var}" in result
+
+    def test_comment_after_brace_group_still_stripped(self):
+        # Two-direction: a real comment following "{" has whitespace
+        # between, so it still strips.
+        src = "{ # setup block\n  echo hi\n}\n"
+        result = strip_shell_comments(src)
+        assert "setup block" not in result
+        assert "echo hi" in result
+
+    def test_comment_after_subshell_still_stripped(self):
+        src = "( # subshell note\n  echo hi )\n"
+        result = strip_shell_comments(src)
+        assert "subshell note" not in result
+
 
 # -------------------------------------------------------------------
 # Dispatch

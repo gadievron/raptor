@@ -429,7 +429,7 @@ def test_build_db_passes_tunables_into_create_command(monkeypatch, tmp_path: Pat
     src.mkdir()
     db = tmp_path / "db"
     t = cvefix_walk.CodeQLTunables(threads=8, ram_mb=4096, max_disk_cache_mb=1024)
-    ok = cvefix_walk._build_db(src, "abc", db, "python", "codeql", 120, None, tunables=t)
+    ok = cvefix_walk._build_db(src, "abc1234", db, "python", "codeql", 120, None, tunables=t)
     assert ok
     cmd = captured["cmd"]
     # git checkout routes through _run_git (stubbed); _run sees only codeql.
@@ -537,7 +537,7 @@ def test_fetch_pair_argv_is_hardened(monkeypatch, tmp_path: Path):
     assert "protocol.allow=never" not in fetch_cmd  # fetch needs a transport
     assert fetch_cmd[len(net_prefix):] == [
         "-C", str(tmp_path / "d"), "fetch", "-q",
-        "--depth", "2", "origin", sha,
+        "--depth", "2", "origin", "--", sha,
     ]
     for c in calls:
         # List argv only — never a shell string.
@@ -545,6 +545,49 @@ def test_fetch_pair_argv_is_hardened(monkeypatch, tmp_path: Path):
         assert all(isinstance(a, str) for a in c["cmd"])
         assert not c.get("shell")
         assert c.get("env") is not None
+
+
+def test_fetch_pair_rejects_non_hex_hash_before_any_git_call(
+        monkeypatch, tmp_path: Path):
+    """DB-sourced hashes are only semi-trusted: a poisoned row whose
+    'hash' starts with '-' (e.g. ``--upload-pack=<cmd>``) must be
+    rejected by the hex gate BEFORE any git invocation. Counter-leg:
+    a valid full hash still runs the fetch sequence."""
+    git_calls = []
+    monkeypatch.setattr(
+        cvefix_walk, "_run_git",
+        lambda *a, **k: git_calls.append(a) or True,
+    )
+    for bad in ("--upload-pack=touch${IFS}x", "-q", "HEAD", "fix1", "abc",
+                "A" * 40, ""):
+        assert not cvefix_walk._fetch_pair(
+            "https://github.com/o/r", bad, tmp_path / "d", 60)
+    assert git_calls == []
+
+    assert cvefix_walk._fetch_pair(
+        "https://github.com/o/r", "f" * 40, tmp_path / "d", 60)
+    assert len(git_calls) == 3  # init, remote add, fetch
+
+
+def test_build_db_rejects_non_hex_hash_before_any_git_call(
+        monkeypatch, tmp_path: Path):
+    """Same gate on the checkout leg: an option-shaped commit never
+    reaches git argv; a valid hash proceeds through checkout."""
+    git_calls = []
+    monkeypatch.setattr(
+        cvefix_walk, "_run_git",
+        lambda *a, **k: git_calls.append(a) or True,
+    )
+    monkeypatch.setattr(cvefix_walk, "_run", lambda cmd, timeout: True)
+    src = tmp_path / "src"
+    src.mkdir()
+    assert not cvefix_walk._build_db(
+        src, "--force", tmp_path / "db", "python", "codeql", 60)
+    assert git_calls == []
+
+    assert cvefix_walk._build_db(
+        src, "0123abc", tmp_path / "db", "python", "codeql", 60)
+    assert len(git_calls) == 1
 
 
 def test_run_git_builds_argv_from_shared_helpers(monkeypatch):
@@ -586,8 +629,9 @@ def test_build_db_checkout_routes_through_run_git(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(cvefix_walk, "_run", lambda cmd, timeout: True)
     src = tmp_path / "src"
     src.mkdir()
-    assert cvefix_walk._build_db(src, "abc", tmp_path / "db", "python", "codeql", 60)
-    assert git_calls == [(["-C", str(src), "checkout", "-q", "abc"], False)]
+    sha = "abc1234"
+    assert cvefix_walk._build_db(src, sha, tmp_path / "db", "python", "codeql", 60)
+    assert git_calls == [(["-C", str(src), "checkout", "-q", sha, "--"], False)]
 
 
 def _hermetic_git_env(home: Path) -> dict:

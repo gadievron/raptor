@@ -184,3 +184,27 @@ class TestNoHiddenLists:
         ev = bind_return_contract("do_auth", language="c", context=ctx)
         assert ev is not None
         assert ev.source == "wur"
+
+
+class TestWurWrappedDeclarator:
+    def test_name_before_trailing_attribute_harvested(self):
+        # Wrapped declarator: the name precedes the alias line — the
+        # forward-only window never harvested this style.
+        header = (
+            "int foo(int a,\n"
+            "        int b) __attribute__((warn_unused_result));\n"
+        )
+        names = harvest_wur_declarations({"api.h": header})
+        assert "foo" in names
+
+    def test_attribute_first_still_binds_forward(self):
+        # Two-direction guard: attribute-on-its-own-line binds to the
+        # FOLLOWING declaration, not a preceding unrelated one.
+        header = (
+            "int bar(int x);\n"
+            "__attribute__((warn_unused_result))\n"
+            "int foo(void);\n"
+        )
+        names = harvest_wur_declarations({"api.h": header})
+        assert "foo" in names
+        assert "bar" not in names

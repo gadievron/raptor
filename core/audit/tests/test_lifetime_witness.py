@@ -1854,3 +1854,175 @@ static int h(struct dev *dev)
         )
         assert not r.discharged
         assert "combines unpin and put stems" in r.reason
+
+
+# ---------------------------------------------------------------------------
+# Refusal gaps: shapes the witness previously discharged while
+# the claimed bug was real. Every fix fails toward refusal (claim
+# stays alive), never toward discharge.
+# ---------------------------------------------------------------------------
+
+
+class TestMemberCalleeRelease:
+    def test_ops_table_free_refuses_nouse(self, tmp_path):
+        # ``r->ops->free(p)`` was invisible to release_sites (member
+        # callee) AND the verb fallback (_idents yields identifiers
+        # only) — nouse discharged over a function whose real free
+        # happened through the ops table.
+        src = """
+static void f(struct req *r)
+{
+\tchar *p = r->buf;
+\tr->ops->free(p);
+\tsink(*p);
+\tkfree(p);
+}
+"""
+        r = _check(
+            tmp_path, src,
+            "Use-after-free: p freed then dereferenced",
+            {"CWE-416"},
+        )
+        assert not r.discharged
+
+    def test_plain_release_still_discharges(self, tmp_path):
+        # Two-direction guard: the field_identifier scan must not
+        # refuse functions with only ordinary direct releases.
+        src = """
+static void f(char *p)
+{
+\tsink(*p);
+\tkfree(p);
+}
+"""
+        r = _check(
+            tmp_path, src,
+            "Use-after-free: p freed at line 5 then used",
+            {"CWE-416"},
+        )
+        assert r.discharged
+
+
+class TestDerivedAndGlobalStores:
+    def test_derived_pointer_store_refuses(self, tmp_path):
+        # q = p + 8 still points into p's allocation; storing it into
+        # a struct field escapes the freed memory into a name the
+        # tracker cannot see (consume(s->stash) after the free).
+        src = """
+static void g(struct s *s, char *p)
+{
+\tchar *q = p + 8;
+\ts->stash = q;
+\tkfree(p);
+\tconsume(s->stash);
+}
+"""
+        r = _check(
+            tmp_path, src,
+            "Use-after-free of p through the stashed derived pointer",
+            {"CWE-416"},
+        )
+        assert not r.discharged
+
+    def test_global_identifier_store_refuses(self, tmp_path):
+        # A file-scope global is an identifier too: ``g_saved = p;``
+        # is a store into memory a callee reads after the free.
+        src = """
+static void h(char *p)
+{
+\tg_saved = p;
+\tkfree(p);
+\thelper();
+}
+"""
+        r = _check(
+            tmp_path, src,
+            "Use-after-free: p escapes through g_saved and helper() "
+            "dereferences it after the kfree",
+            {"CWE-416"},
+        )
+        assert not r.discharged
+
+    def test_local_alias_copy_still_permitted(self, tmp_path):
+        # Two-direction guard: local alias propagation stays exempt
+        # (it is tracked by _compute_sets, not an escape).
+        src = """
+static void k(char *p)
+{
+\tchar *q;
+\tq = p;
+\tsink(*q);
+\tkfree(p);
+}
+"""
+        r = _check(
+            tmp_path, src,
+            "Use-after-free: p freed at line 6 then used",
+            {"CWE-416"},
+        )
+        assert r.discharged
+
+
+class TestBracketRebindGaps:
+    def test_update_expression_refuses(self, tmp_path):
+        # ``p++`` rebinds the pointer between acquire and release —
+        # put_obj receives p+1, not the acquired object.
+        src = """
+static void m(struct task *t)
+{
+\tstruct pctx *ctx;
+\tctx = get_task_ctx(t);
+\tctx++;
+\tput_ctx(ctx);
+}
+"""
+        r = _check(
+            tmp_path, src,
+            "Use-after-free: ctx freed by put_ctx and used after",
+            {"CWE-416"},
+        )
+        assert not r.discharged
+
+    def test_parenthesized_lhs_counts_as_definition(self, tmp_path):
+        # ``(ctx) = o;`` is the same rebinding as ``ctx = o;`` — it
+        # must count toward the single-definition premise (two defs
+        # -> refusal).
+        src = """
+static void m2(struct task *t, struct pctx *o)
+{
+\tstruct pctx *ctx;
+\tctx = get_task_ctx(t);
+\t(ctx) = o;
+\tput_ctx(ctx);
+}
+"""
+        r = _check(
+            tmp_path, src,
+            "Use-after-free: ctx freed by put_ctx and used after",
+            {"CWE-416"},
+        )
+        assert not r.discharged
+
+
+class TestChainedAssignmentMacro:
+    def test_chained_assignment_macro_refuses(self, tmp_path):
+        # ``#define CHAIN(x) chain_tmp = x = g_other`` assigns THROUGH
+        # the parameter; the old comparison exemption certified it
+        # inert (maximal-munch tokenizing makes a bare `=` on both
+        # sides of the marker impossible for real comparisons).
+        src = """
+static void m3(struct task *t)
+{
+\tstruct pctx *ctx;
+\tctx = get_task_ctx(t);
+\tCHAIN(ctx);
+\tput_ctx(ctx);
+}
+"""
+        r = _check(
+            tmp_path, src,
+            "Use-after-free: ctx freed by put_ctx and used after",
+            {"CWE-416"},
+            prelude="#define CHAIN(x) chain_tmp = x = g_other\n",
+        )
+        assert not r.discharged

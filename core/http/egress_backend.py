@@ -59,8 +59,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 
-import urllib3
-
 from core.http import DEFAULT_USER_AGENT
 from core.http.urllib_backend import UrllibClient
 
@@ -89,18 +87,18 @@ class EgressClient(UrllibClient):
         proxy_url = f"http://127.0.0.1:{proxy.port}"
         # urllib3.ProxyManager forwards every request through the proxy
         # unconditionally — no no_proxy autodetect (unlike the stdlib
-        # urllib.request.ProxyHandler we used pre-pooling). retries=False
-        # so urllib3's retry doesn't fight UrllibClient's own.
-        # maxsize matches UrllibClient (10) — connections to the proxy.
-        # Each carries its own CONNECT tunnel; 10 simultaneous tunnels
-        # is well within the in-process proxy's 64-tunnel cap.
-        from core.http.urllib_backend import _DEFAULT_POOL_MAXSIZE
-        proxy_pool = urllib3.ProxyManager(
-            proxy_url,
-            retries=False,
-            cert_reqs="CERT_REQUIRED",
-            maxsize=_DEFAULT_POOL_MAXSIZE,
-        )
+        # urllib.request.ProxyHandler we used pre-pooling). Built via
+        # the shared helper so this pool carries the SAME secure
+        # defaults as every other pool construction — notably the
+        # certifi CA pin (pre-fix this pool alone fell back to the
+        # system trust store: stale-CA MITM residual, plus hard
+        # failure on hosts with no system bundle). retries=False so
+        # urllib3's retry doesn't fight UrllibClient's own; maxsize
+        # matches UrllibClient (10) — connections to the proxy, each
+        # carrying its own CONNECT tunnel, well within the in-process
+        # proxy's 64-tunnel cap.
+        from core.http.urllib_backend import _new_proxy_manager
+        proxy_pool = _new_proxy_manager(proxy_url)
         logger.debug(
             "core.http.EgressClient: routing via in-process proxy at %s",
             proxy_url,

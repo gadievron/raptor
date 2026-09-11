@@ -11,12 +11,47 @@ from __future__ import annotations
 
 import re
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlunparse
 
 from packages.web.checks.base import Check, CheckCategory, registry
 
 if TYPE_CHECKING:
     pass
+
+
+def _baseline_body(client) -> str:
+    """The homepage body, used to subtract always-present indicator text.
+
+    The generic transport-error indicators (Connection refused, ...)
+    appear verbatim on diagnostics pages and error-verbose apps; a
+    pattern that already matches WITHOUT any probe is page furniture,
+    not evidence that the probe caused an outbound request.
+    """
+    try:
+        resp = client.get("/")
+        body = resp.text
+        return body if isinstance(body, str) else ""
+    except Exception:
+        return ""
+
+
+def _active_indicators(baseline_body: str) -> list[re.Pattern]:
+    return [
+        pattern for pattern in _SSRF_INDICATORS
+        if not pattern.search(baseline_body)
+    ]
+
+
+def _url_with_param(url: str, param: str, value: str) -> str:
+    """*url* with ``param`` replaced (not duplicated) in its query."""
+    parsed = urlparse(url)
+    query = [
+        (name, existing)
+        for name, existing in parse_qsl(parsed.query, keep_blank_values=True)
+        if name != param
+    ]
+    query.append((param, value))
+    return urlunparse(parsed._replace(query=urlencode(query)))
 
 # Parameter names commonly used to pass URLs into the server
 _URL_PARAM_NAMES = {
@@ -53,31 +88,37 @@ class SsrfParameterCheck(Check):
         findings = []
         tested: set = set()
 
-        # Check discovery data for URL-shaped parameters
-        params_to_test = []
+        # Probe each URL-shaped parameter AT THE URL WHERE IT WAS
+        # DISCOVERED: a real /proxy?url= handler ignores the parameter
+        # when it arrives on '/', so probing the root misses every
+        # non-root SSRF. Parameters known only by name fall back to '/'.
+        params_to_test: list[tuple[str, str]] = []
         if discovery:
-            for param in discovery.get("parameters", []):
-                if param.lower() in _URL_PARAM_NAMES:
-                    params_to_test.append(param)
             for url in discovery.get("urls", []):
                 parsed = urlparse(url)
                 for param in parse_qs(parsed.query):
                     if param.lower() in _URL_PARAM_NAMES:
-                        params_to_test.append(param)
+                        params_to_test.append((param, url))
+            for param in discovery.get("parameters", []):
+                if param.lower() in _URL_PARAM_NAMES:
+                    params_to_test.append((param, "/"))
 
-        for param in params_to_test[:10]:
+        baseline = _baseline_body(client)
+        indicators = _active_indicators(baseline)
+
+        for param, source_url in params_to_test[:10]:
             if param in tested:
                 continue
             tested.add(param)
 
             for payload in _SSRF_PAYLOADS[:2]:
                 try:
-                    resp = client.get("/", params={param: payload})
+                    resp = client.get(_url_with_param(source_url, param, payload))
                     body = resp.text if isinstance(resp.text, str) else ""
-                    for pattern in _SSRF_INDICATORS:
+                    for pattern in indicators:
                         if pattern.search(body):
                             findings.append(self._result(
-                                passed=False, url=target_url,
+                                passed=False, url=source_url if source_url != "/" else target_url,
                                 evidence=(
                                     f"?{param}={payload} triggered SSRF indicator: "
                                     f"{pattern.pattern[:50]}"
@@ -117,12 +158,18 @@ class BlindSsrfHeaderCheck(Check):
             "X-Real-IP": "169.254.169.254",
         }
 
+        # Subtract indicator text that is already on the un-probed page:
+        # a diagnostics page mentioning "Connection refused" would
+        # otherwise flag every header.
+        baseline = _baseline_body(client)
+        indicators = _active_indicators(baseline)
+
         for header, value in ssrf_headers.items():
             try:
                 resp = client.get("/", headers={header: value})
                 body = resp.text if isinstance(resp.text, str) else ""
                 # Look for metadata indicators -- only flag if we see actual evidence
-                for pattern in _SSRF_INDICATORS:
+                for pattern in indicators:
                     if pattern.search(body):
                         return [self._result(
                             passed=False, url=target_url,

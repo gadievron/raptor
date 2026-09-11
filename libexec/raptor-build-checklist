@@ -31,16 +31,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 
 
-def main():
-    # Use argparse so unknown --flags raise instead of silently
-    # being filtered out. Pre-fix `[a for a in sys.argv[1:]
-    # if not a.startswith('--')]` discarded EVERY --flag without
-    # logging which ones got dropped. If an operator passed
-    # `--out /custom` thinking it'd override the positional
-    # output_dir, the flag was silently ignored and the
-    # positional defaulted (or raised "Usage" if positional
-    # was missing). Confusing failure mode — the operator's
-    # explicit intent didn't take effect with no breadcrumb.
+def main() -> None:
+    # Strict argparse: an unknown --flag must error loudly. The old
+    # `[a for a in sys.argv[1:] if not a.startswith('--')]` filter
+    # discarded EVERY --flag with no breadcrumb, and a later
+    # parse_known_args variant was worse than silent: a value-taking
+    # unknown flag shifted its value into the positional slots
+    # (`--out /custom /src /outdir` bound target='/custom' and
+    # output_dir='/src'), so the checklist was silently built for the
+    # wrong tree and written into the source root. parse_args makes
+    # the caller's mistake a usage error at the call site instead.
     import argparse
     ap = argparse.ArgumentParser(
         prog="raptor-build-checklist",
@@ -52,11 +52,7 @@ def main():
         "--scope", action="append", default=None,
         help="Restrict to these subdirectories (repeatable)",
     )
-    # Tolerate well-known launcher flags that may be passed
-    # through but aren't relevant here. parse_known_args puts
-    # them in `_extras`; we don't act on them but document
-    # their presence so future readers see why we accept them.
-    parsed, _extras = ap.parse_known_args(sys.argv[1:])
+    parsed = ap.parse_args(sys.argv[1:])
     target = parsed.target
     output_dir = parsed.output_dir
 

@@ -486,6 +486,146 @@ def test_charset_declines_across_function_boundary_js(tmp_path: Path):
     assert "function boundary" in r.reasoning
 
 
+def test_known_safe_call_branch_wrapped_declines_js(tmp_path: Path):
+    """A branch-wrapped sanitizer must never certify SOUND for a
+    non-Python language: ``validator.escape`` is in the curated table,
+    but the flow is live whenever ``opts.clean`` is false — the sound
+    tier's zero-false-suppression guarantee requires unconditional
+    execution."""
+    (tmp_path / "app.js").write_text(
+        "function serve(req, res, opts) {\n"                    # 1
+        "    let name = req.query.name;\n"                       # 2
+        "    if (opts.clean) {\n"                                # 3
+        "        name = validator.escape(name);\n"               # 4 — wrapped
+        "    }\n"                                                # 5
+        "    res.send('<b>' + name + '</b>');\n"                 # 6 — sink
+        "}\n"
+    )
+    diff = "+        name = validator.escape(name);\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "name = validator.escape(name);",
+        "variable_name": "name", "charset": "", "forbidden": "",
+        "library_call": "validator.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.js", sink_line=6, sink_class="xss",
+        language="javascript", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+    assert "unconditionally" in r.reasoning
+
+
+def test_known_safe_call_unconditional_still_sound_js(tmp_path: Path):
+    """Two-direction: the same curated call executed unconditionally
+    in the sink's function keeps its SOUND verdict."""
+    (tmp_path / "app.js").write_text(
+        "function serve(req, res) {\n"                           # 1
+        "    let name = req.query.name;\n"                        # 2
+        "    name = validator.escape(name);\n"                    # 3 — safe call
+        "    res.send('<b>' + name + '</b>');\n"                  # 4 — sink
+        "}\n"
+    )
+    diff = "+    name = validator.escape(name);\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "name = validator.escape(name);",
+        "variable_name": "name", "charset": "", "forbidden": "",
+        "library_call": "validator.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.js", sink_line=4, sink_class="xss",
+        language="javascript", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.SOUND
+
+
+def test_known_safe_call_braceless_multiline_if_declines_js(tmp_path: Path):
+    """Java/JS-legal braceless MULTI-LINE if: the guard opens no block,
+    so the brace tracker sees nothing and the same-line keyword check
+    misses it — the dangling-guard check must catch the validator
+    hanging off the previous line's `if (cond)`."""
+    (tmp_path / "app.js").write_text(
+        "function serve(req, res, opts) {\n"                    # 1
+        "    let y = req.query.name;\n"                           # 2
+        "    if (opts.clean)\n"                                   # 3 — dangling guard
+        "        y = validator.escape(y);\n"                      # 4 — guarded stmt
+        "    res.send('<b>' + y + '</b>');\n"                     # 5 — sink
+        "}\n"
+    )
+    diff = "+        y = validator.escape(y);\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "y = validator.escape(y);",
+        "variable_name": "y", "charset": "", "forbidden": "",
+        "library_call": "validator.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.js", sink_line=5, sink_class="xss",
+        language="javascript", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+    assert "unconditionally" in r.reasoning
+
+
+def test_known_safe_call_blank_line_before_sanitizer_still_sound_js(tmp_path: Path):
+    """Two-direction for the dangling-guard check: an unconditional
+    sanitizer whose nearest preceding NON-BLANK line is a plain
+    statement (blank line skipped) must keep its SOUND verdict."""
+    (tmp_path / "app.js").write_text(
+        "function serve(req, res) {\n"                           # 1
+        "    let name = req.query.name;\n"                        # 2
+        "\n"                                                      # 3 — blank
+        "    name = validator.escape(name);\n"                    # 4 — safe call
+        "    res.send('<b>' + name + '</b>');\n"                  # 5 — sink
+        "}\n"
+    )
+    diff = "+    name = validator.escape(name);\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "name = validator.escape(name);",
+        "variable_name": "name", "charset": "", "forbidden": "",
+        "library_call": "validator.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.js", sink_line=5, sink_class="xss",
+        language="javascript", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.SOUND
+
+
+def test_known_safe_call_branch_wrapped_declines_python_in_with(tmp_path: Path):
+    """Python direction of the same gate: a conditional nested inside a
+    ``with`` block (which the top-level-only scan skipped) must still
+    read as branch-wrapped."""
+    (tmp_path / "app.py").write_text(
+        "from werkzeug.security import safe_join\n"              # 1
+        "def f(path, opts):\n"                                    # 2
+        "    abs_path = req()\n"                                  # 3
+        "    with lock:\n"                                        # 4
+        "        if opts.clean:\n"                                # 5
+        "            abs_path = safe_join(BASE, path)\n"          # 6 — wrapped
+        "    return open(abs_path)\n"                             # 7 — sink
+    )
+    diff = "+            abs_path = safe_join(BASE, path)\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "abs_path = safe_join(BASE, path)",
+        "variable_name": "abs_path", "charset": "", "forbidden": "",
+        "library_call": "werkzeug.security.safe_join",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=7, sink_class="pathtrav",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+
+
 # ---------------------------------------------------------------------------
 # Post-fix source read containment
 # ---------------------------------------------------------------------------

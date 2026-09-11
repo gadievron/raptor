@@ -16,9 +16,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
-# Add parent directory to path for imports
-# packages/codeql/query_runner.py -> repo root
-sys.path.insert(0, str(Path(__file__).parents[2]))
+# `os.environ["RAPTOR_DIR"]` (no fallback) is the canonical project
+# root marker — see CLAUDE.md "Python path safety"; a KeyError surfaces
+# the configuration problem at startup instead of a positional walk
+# silently breaking under relocation.
+sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.config import RaptorConfig
 from core.logging import get_logger

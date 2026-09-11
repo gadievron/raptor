@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ruff: noqa: RUF100, I001
 # (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
-"""Study loop: prep → study → drain reading list.
+"""Study loop: prep → study, seeded from the reading list.
 
 Two modes:
 
@@ -9,12 +9,14 @@ Two modes:
    call → print identifiers/concepts, done.
 
 2. **Study** (identifiers/concepts given, or reading list on disk):
-   drain loop — pop pending identifiers from the reading list, run
-   prep + study-run for each batch, mark studied items resolved,
-   repeat until the reading list is empty.
+   single pass — pending reading-list items seed the prep scope, then
+   prep + study-run execute once.  Resolution bookkeeping lives with
+   the study pipeline and its callers (core.concepts.study saves the
+   updated list; the audit orchestrator marks items resolved);
+   whatever remains pending is reported at the end for the next run.
 
    The reading list is the work queue.  Audit (or the operator) pushes
-   items onto it; study pops them off.  Study-run may add genuine
+   items onto it; study consumes them.  Study-run may add genuine
    concept dependencies ("I can't explain Y without understanding X")
    but never tangential references.
 
@@ -203,6 +205,7 @@ def _load_prior_knowledge(output_dir: Path, concepts_dir: Path | None) -> None:
 def _promote_to_project(output_dir: Path, concepts_dir: Path | None) -> None:
     if concepts_dir is None:
         return
+    promoted = 0
     for name in ("domain-model.json", "reading-list.json", "patterns.json"):
         src = output_dir / name
         if not src.is_file():
@@ -222,8 +225,13 @@ def _promote_to_project(output_dir: Path, concepts_dir: Path | None) -> None:
             print(f"study-loop: WARNING: failed to promote {name}: {exc}",
                   file=sys.stderr)
             continue
-    print(f"study-loop: promoted domain model to {concepts_dir}",
-          file=sys.stderr)
+        promoted += 1
+    # Only report success when something actually landed — a run that
+    # produced no artifacts (or whose copies all failed) must not claim
+    # the project concepts dir was refreshed.
+    if promoted:
+        print(f"study-loop: promoted domain model to {concepts_dir}",
+              file=sys.stderr)
 
 
 def _store_in_sage(output_dir: Path, target: str) -> None:
@@ -293,6 +301,13 @@ _OVERVIEW_SCHEMA = {
 }
 
 
+# Same source/header surface the prep pipeline studies — overview mode
+# must not reject C++-only trees that the rest of the pipeline supports.
+_OVERVIEW_EXTENSIONS = frozenset(
+    (".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hxx"))
+_OVERVIEW_HEADER_EXTENSIONS = frozenset((".h", ".hpp", ".hxx"))
+
+
 def _overview_from_directory(
     target: Path,
     model: str | None = None,
@@ -301,17 +316,29 @@ def _overview_from_directory(
 
     Returns (identifiers, concepts, summary, subject_title).
     """
-    c_files = sorted(target.rglob("*.[ch]"))
+    # The target may be a single file (per the CLI help) — rglob on a
+    # non-directory yields nothing, so handle it explicitly.
+    if target.is_file():
+        c_files = (
+            [target] if target.suffix in _OVERVIEW_EXTENSIONS else []
+        )
+        listing_base = target.parent
+    else:
+        c_files = sorted(
+            f for f in target.rglob("*")
+            if f.suffix in _OVERVIEW_EXTENSIONS
+        )
+        listing_base = target
     if not c_files:
         return [], [], "", ""
 
     file_listing = "\n".join(
-        str(f.relative_to(target)) for f in c_files[:200]
+        str(f.relative_to(listing_base)) for f in c_files[:200]
     )
 
     struct_names: list[str] = []
     for h in c_files:
-        if h.suffix != ".h":
+        if h.suffix not in _OVERVIEW_HEADER_EXTENSIONS:
             continue
         try:
             text = h.read_text(encoding="utf-8", errors="replace")
@@ -670,14 +697,25 @@ def _collect_key_files(
         key_files.append(entry)
 
     # --- Documentation: rank by relevance, keep top 3. ---
-    identifiers = set(study_data.get("identifiers", "").split(","))
+    # study-prep writes "identifiers": null (not a missing key) for
+    # concept-only studies, so .get's default never applies — coalesce
+    # explicitly before splitting.
+    identifiers = set((study_data.get("identifiers") or "").split(","))
     identifiers.discard("")
+    # Doc paths are usually absolute, but older study lists carry
+    # source-root-relative ones; a bare open() would resolve those
+    # against the process CWD (the launcher dir, not the target) and
+    # silently score 0.  Resolve against the recorded root instead.
+    doc_root = study_data.get("source_root") or target_str
     scored_docs: list[tuple[float, dict]] = []
     for doc in study_data.get("related_docs", []):
         fpath = doc.get("file", "")
         if not fpath or fpath in seen:
             continue
-        score = _score_doc_relevance(fpath, identifiers)
+        score_path = fpath
+        if not os.path.isabs(fpath):
+            score_path = str(Path(doc_root) / fpath)
+        score = _score_doc_relevance(score_path, identifiers)
         if score > 0:
             scored_docs.append((score, doc))
 

@@ -117,3 +117,34 @@ def test_import_understand_writes_touched(tmp_path):
     marks = import_understand(store, tmp_path, _CHECKLIST)
     assert marks >= 1
     assert load_touched(tmp_path), "edges-touched.json should be written"
+
+
+class TestNormaliseTracePath:
+
+    def test_out_of_tree_dotdot_path_returns_none(self):
+        from core.coverage.edges import normalise_trace_path
+
+        # lstrip("./") used to charset-strip "../shared/util.c" into
+        # the inventory key; and the suffix arm used to accept the
+        # ".." prefix as separator-aligned.
+        assert normalise_trace_path(
+            "../shared/util.c", {"shared/util.c"}) is None
+
+    def test_dot_slash_prefix_stripped_once(self):
+        from core.coverage.edges import normalise_trace_path
+
+        assert normalise_trace_path(
+            "./shared/util.c", {"shared/util.c"}) == "shared/util.c"
+
+    def test_hidden_file_name_not_mangled(self):
+        from core.coverage.edges import normalise_trace_path
+
+        # lstrip would have stripped the leading dot off ".hidden.c".
+        assert normalise_trace_path(
+            ".hidden.c", {".hidden.c"}) == ".hidden.c"
+
+    def test_absolute_in_tree_suffix_still_matches(self):
+        from core.coverage.edges import normalise_trace_path
+
+        assert normalise_trace_path(
+            "/repo/shared/util.c", {"shared/util.c"}) == "shared/util.c"

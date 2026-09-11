@@ -32,7 +32,6 @@ always intervals.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -81,7 +80,26 @@ def coverage_store_lock(coverage_path):
     path = Path(coverage_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
-    fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
+    # O_NOFOLLOW: the lock file lives in a run directory that sandboxed
+    # target code may hold a write grant on — a symlink planted at
+    # coverage.json.lock would otherwise make the operator-side process
+    # create and flock an attacker-chosen path. A refused symlink
+    # degrades to the no-lock path (same as non-POSIX) with a loud
+    # warning rather than crashing the best-effort snapshot writers.
+    flags = (
+        os.O_WRONLY | os.O_CREAT
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    try:
+        fd = os.open(str(lock_path), flags, 0o600)
+    except OSError as exc:
+        _get_logger(__name__).warning(
+            "coverage store lock %s: refusing to open (%s); proceeding "
+            "WITHOUT cross-process lock — investigate a planted symlink "
+            "at that path", lock_path, exc)
+        yield
+        return
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         try:
@@ -134,6 +152,23 @@ def _overlap_count(intervals: list[Interval], lo: int, hi: int) -> int:
 
 _BITMAP_THRESHOLD = 50
 
+# Cap on how many line numbers a single (file, tool) contribution may
+# materialise as a Python set. The set backend stores one int per
+# covered VALUE (~55 bytes each), so magnitudes matter, and two inputs
+# legitimately or maliciously reach address/huge magnitudes: binary
+# items mark ADDRESS-space intervals (a 5 MB .text is ~5M values →
+# ~270 MB as a set), and forged journal/checklist spans can declare
+# multi-billion-line ranges (the journal-parse clamp covers only ONE
+# of the inputs feeding mark()). Above the cap the contribution stays
+# in (or demotes back to) the interval-list representation, which is
+# O(#intervals) regardless of span width.
+# Trade-off, both directions: LOWER costs re-coalescing perf for
+# genuinely dense line coverage (interval marks are O(K log K) each);
+# HIGHER re-opens the per-contribution memory detonation. 1M covers
+# any real source file's line count while keeping the worst case
+# ~55 MB per contribution.
+_BITMAP_MAX_LINES = 1_000_000
+
 # Byte budget for loading coverage.json. Even very large projects'
 # stores are tens of MiB; 256 MiB is generous headroom while keeping
 # a hostile store (e.g. from an imported project archive) unread.
@@ -166,6 +201,12 @@ def _cov_covers_line(value, line: int) -> bool:
 
 def _cov_overlap(value, lo: int, hi: int) -> int:
     if isinstance(value, set):
+        # Iterate the SMALLER side: a range() scan over an
+        # address-magnitude or forged multi-billion-line query range
+        # is a CPU detonation; membership over the set is bounded by
+        # the set's own size (already capped at _BITMAP_MAX_LINES).
+        if hi - lo + 1 > len(value):
+            return sum(1 for ln in value if lo <= ln <= hi)
         return sum(1 for ln in range(lo, hi + 1) if ln in value)
     return _overlap_count(value, lo, hi)
 
@@ -192,7 +233,13 @@ def content_identity(checklist: dict[str, Any]) -> str | None:
     ]
     if not entries:
         return None
-    digest = hashlib.sha256("\n".join(sorted(entries)).encode("utf-8")).hexdigest()
+    # surrogateescape (via the core.hash chokepoint) round-trips
+    # non-UTF-8 bytes in paths — JSON happily carries lone surrogates
+    # from non-UTF-8 filenames, and a raw .encode("utf-8") crashed the
+    # whole identity computation on the first one. Identical output
+    # for valid UTF-8.
+    from core.hash import sha256_string
+    digest = sha256_string("\n".join(sorted(entries)))
     return f"content:{digest[:16]}"
 
 
@@ -265,7 +312,11 @@ class CoverageStore:
                 data = load_json(
                     self.path, strict=True, max_bytes=_MAX_STORE_BYTES,
                 )
-            except (ValueError, OSError) as exc:
+            except (ValueError, OSError, RecursionError) as exc:
+                # RecursionError: Python <= 3.13's stdlib parser is
+                # recursive — a nesting-bomb coverage.json (orjson
+                # absent) must degrade to empty like any other corrupt
+                # store, per the contract above.
                 _get_logger(__name__).warning(
                     "coverage store %s: unreadable (%s); starting empty",
                     self.path, exc)
@@ -304,13 +355,26 @@ class CoverageStore:
         entry = self._entry(file)
         existing = entry["tools"].get(tool, [])
         newly = (end - start + 1) - _cov_overlap(existing, start, end)
+        width = end - start + 1
         if isinstance(existing, set):
-            existing.update(range(start, end + 1))   # already a bitmap
+            if len(existing) + width > _BITMAP_MAX_LINES:
+                # Address-magnitude / forged span: expanding it into
+                # the set would materialise one int per value. Demote
+                # the contribution back to intervals instead.
+                entry["tools"][tool] = _coalesce(
+                    _set_to_intervals(existing) + [[start, end]])
+            else:
+                existing.update(range(start, end + 1))   # already a bitmap
         else:
             merged = _coalesce(existing + [[start, end]])
-            if len(merged) > _BITMAP_THRESHOLD:
+            if (len(merged) > _BITMAP_THRESHOLD
+                    and _covered_count(merged) <= _BITMAP_MAX_LINES):
                 # Sparse/heavy contribution — switch to a line set so further
-                # marks don't keep re-coalescing a long list.
+                # marks don't keep re-coalescing a long list. Gated on the
+                # covered-line COUNT as well as the interval count: the
+                # set costs memory per covered VALUE, so wide (address-
+                # space, forged) spans must stay intervals however many
+                # fragments they arrive in.
                 bits: set = set()
                 for lo, hi in merged:
                     bits.update(range(lo, hi + 1))

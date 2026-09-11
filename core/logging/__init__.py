@@ -26,6 +26,8 @@ _RESERVED_LOGRECORD_NAMES = frozenset({
     "stack_info", "lineno", "funcName", "created", "msecs",
     "relativeCreated", "thread", "threadName", "processName",
     "process", "message", "asctime",
+    # LogRecord attribute since Python 3.12 (asyncio task name).
+    "taskName",
 })
 
 CONSOLE_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
@@ -324,13 +326,17 @@ class RaptorLogger:
         """
         exc_info = kwargs.pop('exc_info', False)
         stack_info = kwargs.pop('stack_info', False)
+        # Caller-relative frame depth, stdlib semantics: 1 = the frame
+        # that called the level method. The wrappers add one frame of
+        # their own, compensated at the self.logger.<level> call sites.
+        stacklevel = kwargs.pop('stacklevel', 1)
         extra = {}
         for k, v in kwargs.items():
             if k in _RESERVED_LOGRECORD_NAMES:
                 extra[f"extra_{k}"] = v
             else:
                 extra[k] = v
-        return exc_info, stack_info, extra
+        return exc_info, stack_info, stacklevel, extra
 
     # ── Level methods ──────────────────────────────────────────────
     #
@@ -353,28 +359,56 @@ class RaptorLogger:
 
     def debug(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Log debug message."""
-        exc_info, stack_info, extra = self._split_kwargs(kwargs)
-        self.logger.debug(message, *args, extra=extra, exc_info=exc_info, stack_info=stack_info)
+        exc_info, stack_info, stacklevel, extra = self._split_kwargs(kwargs)
+        self.logger.debug(message, *args, extra=extra, exc_info=exc_info,
+                          stack_info=stack_info, stacklevel=stacklevel + 1)
 
     def info(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Log info message."""
-        exc_info, stack_info, extra = self._split_kwargs(kwargs)
-        self.logger.info(message, *args, extra=extra, exc_info=exc_info, stack_info=stack_info)
+        exc_info, stack_info, stacklevel, extra = self._split_kwargs(kwargs)
+        self.logger.info(message, *args, extra=extra, exc_info=exc_info,
+                         stack_info=stack_info, stacklevel=stacklevel + 1)
 
     def warning(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Log warning message."""
-        exc_info, stack_info, extra = self._split_kwargs(kwargs)
-        self.logger.warning(message, *args, extra=extra, exc_info=exc_info, stack_info=stack_info)
+        exc_info, stack_info, stacklevel, extra = self._split_kwargs(kwargs)
+        self.logger.warning(message, *args, extra=extra, exc_info=exc_info,
+                            stack_info=stack_info, stacklevel=stacklevel + 1)
 
     def error(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Log error message."""
-        exc_info, stack_info, extra = self._split_kwargs(kwargs)
-        self.logger.error(message, *args, extra=extra, exc_info=exc_info, stack_info=stack_info)
+        exc_info, stack_info, stacklevel, extra = self._split_kwargs(kwargs)
+        self.logger.error(message, *args, extra=extra, exc_info=exc_info,
+                          stack_info=stack_info, stacklevel=stacklevel + 1)
 
     def critical(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Log critical message."""
-        exc_info, stack_info, extra = self._split_kwargs(kwargs)
-        self.logger.critical(message, *args, extra=extra, exc_info=exc_info, stack_info=stack_info)
+        exc_info, stack_info, stacklevel, extra = self._split_kwargs(kwargs)
+        self.logger.critical(message, *args, extra=extra, exc_info=exc_info,
+                             stack_info=stack_info, stacklevel=stacklevel + 1)
+
+    def exception(self, message: str, *args: Any, **kwargs: Any) -> None:
+        """Log an ERROR with exception info (stdlib ``Logger.exception``).
+
+        Except-handler call sites (``logger.exception(...)`` in the
+        agentic / fuzz / web degradation paths) rely on this existing;
+        its absence turned every graceful-degradation handler into an
+        AttributeError that masked the original error.
+        """
+        kwargs.setdefault('exc_info', True)
+        exc_info, stack_info, stacklevel, extra = self._split_kwargs(kwargs)
+        self.logger.error(message, *args, extra=extra, exc_info=exc_info,
+                          stack_info=stack_info, stacklevel=stacklevel + 1)
+
+    def log(self, level: int, message: str, *args: Any, **kwargs: Any) -> None:
+        """Log at an explicit numeric level (stdlib ``Logger.log``)."""
+        exc_info, stack_info, stacklevel, extra = self._split_kwargs(kwargs)
+        self.logger.log(level, message, *args, extra=extra, exc_info=exc_info,
+                        stack_info=stack_info, stacklevel=stacklevel + 1)
+
+    def setLevel(self, level: int | str) -> None:  # noqa: N802 — stdlib Logger API shape
+        """Set the underlying logger's level (stdlib ``Logger.setLevel``)."""
+        self.logger.setLevel(level)
 
     def log_security_event(
         self, event_type: str, message: str, **kwargs: Any

@@ -275,22 +275,11 @@ while [ -L "$SCRIPT" ]; do
     [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
 done
 unset _symhops''',
-        # env-strip self-resolution loop: namespaced variables because
-        # it runs in the operator's launcher scope before RAPTOR_DIR
-        # exists; cd -P + BASH_SOURCE by design (BSD readlink lacks -f).
-        r'''_raptor_self="${BASH_SOURCE[0]}"
-_symhops=0
-while [ -L "$_raptor_self" ]; do
-    _symhops=$((_symhops + 1))
-    if [ "$_symhops" -gt 32 ]; then
-        echo "raptor: symlink hop limit exceeded resolving $0" >&2
-        exit 1
-    fi
-    _raptor_link_dir="$(cd -P "$(dirname "$_raptor_self")" && pwd)"
-    _raptor_self="$(readlink "$_raptor_self")"
-    [[ "$_raptor_self" != /* ]] && _raptor_self="$_raptor_link_dir/$_raptor_self"
-done
-unset _symhops''',
+        # Exactly ONE walk by design: the env-strip fragment is
+        # sourced via the RAPTOR_DIR this walk produced. A second
+        # walk resolved dirname/readlink through the scrubbed
+        # (possibly operator-kept) PATH and could disagree with
+        # this pinned one.
     ],
     "bin/raptor-sca": [("raptor-sca", 1, ())],
     "libexec/raptor-agentic": [("raptor-agentic", 1, ())],
@@ -310,12 +299,13 @@ unset _symhops''',
 }
 
 # Dangerous-env-strip sourcing line per carrier. The root-variable
-# prefix is the per-script parameter (llm-scorecard resolves REPO_ROOT;
-# bin/raptor sources before RAPTOR_DIR exists).
+# prefix is the per-script parameter (llm-scorecard resolves
+# REPO_ROOT; everything else sources via the already-resolved
+# RAPTOR_DIR — never a re-derived path).
 ENV_STRIP_LINES = {
     "bin/cve-diff": '. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"',
     "bin/cve-env": '. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"',
-    "bin/raptor": '. "$_raptor_self_dir/../core/security/_dangerous_env_strip.sh"',
+    "bin/raptor": '. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"',
     "bin/raptor-sca": '. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"',
     "libexec/raptor-agentic": '. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"',
     "libexec/raptor-frida": '. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"',

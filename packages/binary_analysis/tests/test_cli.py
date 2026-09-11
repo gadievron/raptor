@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+from core.hash import sha256_file
 from packages.binary_analysis.cli import _build_parser, _normalise_argv, _print_report, main
 from packages.binary_analysis.manifest import BinaryManifest
 from packages.binary_analysis.pipeline import BinaryAnalysisResult
@@ -150,7 +151,9 @@ def test_trace_parser_refreshes_existing_investigation_run(tmp_path: Path, capsy
     manifest = BinaryManifest(
         schema_version=1,
         binary_path=str(binary.resolve()),
-        binary_sha256="a" * 64,
+        # Real digest: trace-parser verifies content identity before
+        # executing the mapped binary.
+        binary_sha256=sha256_file(binary),
         size_bytes=binary.stat().st_size,
         executable=True,
         target_kind="elf",
@@ -223,6 +226,71 @@ def test_trace_parser_refreshes_existing_investigation_run(tmp_path: Path, capsy
     stdout = capsys.readouterr().out
     assert "Mode: trace-parser" in stdout
     assert "Parser boundary candidates: 1" in stdout
+
+
+def _write_trace_parser_run(tmp_path: Path, *, sha: str) -> tuple[Path, Path]:
+    binary = tmp_path / "sample"
+    binary.write_bytes(b"\x7fELF" + b"\x00" * 32)
+    binary.chmod(0o755)
+    run_dir = tmp_path / "out"
+    run_dir.mkdir()
+    manifest = BinaryManifest(
+        schema_version=1,
+        binary_path=str(binary.resolve()),
+        binary_sha256=sha,
+        size_bytes=binary.stat().st_size,
+        executable=True,
+        target_kind="elf",
+        arch="x86",
+        bits=64,
+        binary_format="elf",
+    )
+    (run_dir / "binary-manifest.json").write_text(json.dumps(manifest.to_dict()))
+    return binary, run_dir
+
+
+def test_trace_parser_refuses_swapped_binary_before_execution(
+    tmp_path: Path, capsys,
+) -> None:
+    # The file at the manifest path changed since the map run: refuse
+    # BEFORE the Frida phase would spawn it — the post-hoc evidence gate
+    # is too late to prevent execution.
+    _, run_dir = _write_trace_parser_run(tmp_path, sha="b" * 64)
+
+    with patch("packages.binary_analysis.cli._run_active_phase") as run_active:
+        rc = main(["trace-parser", str(run_dir)])
+
+    assert rc == 2
+    run_active.assert_not_called()
+    err = capsys.readouterr().err
+    assert "refusing to execute" in err
+
+
+def test_trace_parser_matching_hash_reaches_frida_phase(tmp_path: Path) -> None:
+    binary, run_dir = _write_trace_parser_run(tmp_path, sha="")
+    manifest_payload = json.loads((run_dir / "binary-manifest.json").read_text())
+    manifest_payload["binary_sha256"] = sha256_file(binary)
+    (run_dir / "binary-manifest.json").write_text(json.dumps(manifest_payload))
+    failed_phase = {
+        "kind": "parser_trace",
+        "status": "failed",
+        "returncode": 1,
+        "output_dir": str(run_dir / "parser-runtime"),
+        "stdout": str(run_dir / "parser-runtime" / "stdout.log"),
+        "stderr": str(run_dir / "parser-runtime" / "stderr.log"),
+        "command": ["raptor-frida"],
+    }
+
+    with patch(
+        "packages.binary_analysis.cli._run_active_phase",
+        return_value=failed_phase,
+    ) as run_active:
+        rc = main(["trace-parser", str(run_dir)])
+
+    # The gate passed (phase invoked); the stubbed phase failure is the
+    # exit path — no real execution happens in this test.
+    run_active.assert_called_once()
+    assert rc == 1
 
 
 def test_wrapper_help_is_available() -> None:

@@ -149,7 +149,24 @@ _DECODER_STEM_RE = re.compile(
 _FIELD_ACCESS_RE = re.compile(
     r"([A-Za-z_]\w*)\s*(?:->|\.)\s*([A-Za-z_]\w*)",
 )
-_WRITE_TAIL_RE = re.compile(r"^\s*(\+\+|--|(?:[+\-|&^]|<<|>>)?=(?!=))")
+# Full access chain (``conn->pktns->largest_acked``): base identifier
+# plus one-or-more field segments.  Each segment repetition starts at
+# a REQUIRED ``->``/``.`` delimiter (an identifier can never begin
+# with ``-`` or ``.``), so unlike the retired
+# ``(?:ident(?:->|.))+name`` shape there is no ambiguous split and
+# matching stays linear.  A pairwise regex saw only the first hop of
+# a multi-level chain — the terminal field's write was censused as a
+# READ of the middle segment, leaving the written field with zero
+# write sites (vacuous preservation from census blindness).
+_FIELD_CHAIN_RE = re.compile(
+    r"([A-Za-z_]\w*)((?:\s*(?:->|\.)\s*[A-Za-z_]\w*)+)",
+)
+_CHAIN_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
+# Write tails: simple/compound assignment (all C compound operators —
+# ``*=`` ``/=`` ``%=`` included; their omission read multiplicative
+# updates as pure reads) and postfix ``++``/``--``.  Prefix
+# ``++``/``--`` is detected from the text before the chain.
+_WRITE_TAIL_RE = re.compile(r"^\s*(\+\+|--|(?:[+\-*/%|&^]|<<|>>)?=(?!=))")
 _BACKTICK_IDENT_RE = re.compile(r"`([A-Za-z_][\w.]*)\s*(?:\(\s*\))?`")
 _IDENT_RE = re.compile(r"\b([A-Za-z_]\w{2,})\b")
 _COND_LABEL_RE = re.compile(r"^(?:If|While|ElIf)\s*\((.+)\)$",
@@ -287,11 +304,20 @@ def _invariant_receipt(
     ``None`` — in which case only the ``-unreceipted`` detection
     variant may confirm."""
     norm = re.sub(r"\s+", "", invariant)
+    if not norm:
+        return None
+    # Token-boundary containment, not bare substring: "x <= 10" is
+    # NOT receipted by "max_x <= 100" (the substring match handed the
+    # unrelated entry's provenance chain and receipt grade to a
+    # different variable's invariant).
+    bounded = re.compile(
+        rf"(?<![A-Za-z0-9_]){re.escape(norm)}(?![A-Za-z0-9_.])",
+    )
     for entry in (domain_model or {}).get("invariants") or []:
         if not isinstance(entry, dict):
             continue
         statement = str(entry.get("statement") or "")
-        if norm not in re.sub(r"\s+", "", statement):
+        if not bounded.search(re.sub(r"\s+", "", statement)):
             continue
         provenance = str(entry.get("provenance") or "")
         if provenance in ("", "llm_prior"):
@@ -340,47 +366,69 @@ def build_state_field_index(
 
         for line_no, raw in enumerate(source.splitlines(), start=1):
             code = raw.split("//", 1)[0]
-            for m in _FIELD_ACCESS_RE.finditer(code):
-                base, fld = m.group(1), m.group(2)
-                if len(fields) >= MAX_CENSUS_FIELDS and fld not in fields:
-                    skipped = True
-                    continue
-                bucket = fields.setdefault(
-                    fld, {"writes": [], "reads": []},
-                )
+            for m in _FIELD_CHAIN_RE.finditer(code):
+                idents = _CHAIN_IDENT_RE.findall(m.group(0))
                 tail = code[m.end():]
                 wm = _WRITE_TAIL_RE.match(tail)
+                # Prefix increment/decrement writes the terminal field
+                # with no assignment tail (``++conn->pkt_count;``).
+                prefix_incdec = code[:m.start()].rstrip() \
+                    .endswith(("++", "--"))
                 func, _params = _function_at(line_no)
-                site: dict[str, Any] = {
-                    "file": fp,
-                    "line": line_no,
-                    "function": func,
-                    "code": raw.strip()[:200],
-                    "base": base,
-                    "field": fld,
-                }
-                if wm:
-                    kind = "writes"
-                    op = wm.group(1)
-                    rhs = tail[wm.end():].split(";", 1)[0].strip()
-                    site["rhs"] = rhs[:200]
-                    site["rhs_class"] = (
-                        "unknown" if op in ("++", "--")
-                        else _classify_rhs(rhs)
+                # idents[0] is the base identifier; every following
+                # segment is a field.  Non-terminal segments are READS
+                # (the chain dereferences them); only the terminal
+                # segment can be the written field.
+                for depth in range(1, len(idents)):
+                    fld = idents[depth]
+                    if len(fields) >= MAX_CENSUS_FIELDS \
+                            and fld not in fields:
+                        skipped = True
+                        continue
+                    bucket = fields.setdefault(
+                        fld, {"writes": [], "reads": []},
                     )
-                    if op != "=":
-                        # Compound assignment reads the field too.
+                    site: dict[str, Any] = {
+                        "file": fp,
+                        "line": line_no,
+                        "function": func,
+                        "code": raw.strip()[:200],
+                        "base": idents[depth - 1],
+                        "field": fld,
+                    }
+                    terminal = depth == len(idents) - 1
+                    if terminal and wm:
+                        kind = "writes"
+                        op = wm.group(1)
+                        rhs = tail[wm.end():].split(";", 1)[0].strip()
+                        site["rhs"] = rhs[:200]
+                        site["rhs_class"] = (
+                            "unknown" if op in ("++", "--")
+                            else _classify_rhs(rhs)
+                        )
+                        if op != "=":
+                            # Compound assignment reads the field too.
+                            ro = dict(site)
+                            ro.pop("rhs", None)
+                            ro.pop("rhs_class", None)
+                            if len(bucket["reads"]) < MAX_SITES_PER_FIELD:
+                                bucket["reads"].append(ro)
+                    elif terminal and prefix_incdec:
+                        kind = "writes"
+                        site["rhs"] = ""
+                        site["rhs_class"] = "unknown"
+                        # Increment reads the field too.
                         ro = dict(site)
                         ro.pop("rhs", None)
                         ro.pop("rhs_class", None)
                         if len(bucket["reads"]) < MAX_SITES_PER_FIELD:
                             bucket["reads"].append(ro)
-                else:
-                    kind = "reads"
-                if len(bucket[kind]) >= MAX_SITES_PER_FIELD:
-                    skipped = True
-                    continue
-                bucket[kind].append(site)
+                    else:
+                        kind = "reads"
+                    if len(bucket[kind]) >= MAX_SITES_PER_FIELD:
+                        skipped = True
+                        continue
+                    bucket[kind].append(site)
 
     return {"fields": fields, "tier": "regex", "skipped": skipped}
 
@@ -502,9 +550,16 @@ def _branch_guards(
             if len(succs) != 2:
                 continue
             for succ, polarity in ((succs[0], True), (succs[1], False)):
-                if succ is site_node or (
-                    len(preds.get(succ, [])) == 1
-                    and dom.dominates(succ, site_node)
+                # The single-predecessor requirement applies to the
+                # site node itself too: a fall-through JOIN reached
+                # directly by one branch edge is also reached around
+                # the branch, so the edge's polarity constrains
+                # nothing there — recording it minted a guard the
+                # code does not have (and a vacuously-guarded
+                # preservation proof from it).
+                if len(preds.get(succ, [])) == 1 and (
+                    succ is site_node
+                    or dom.dominates(succ, site_node)
                 ):
                     if polarity:
                         conditions.append(cond)
@@ -630,17 +685,25 @@ def check_invariant_multi_site(
     variables = _invariant_variables(invariant)
     fields = index.get("fields") or {}
     sites: list[dict[str, Any]] = []
+    capped = False
     for var in sorted(variables):
         for site in (fields.get(var) or {}).get("writes") or []:
-            sites.append(site)
             if len(sites) >= max_sites:
+                capped = True
                 break
-        if len(sites) >= max_sites:
+            sites.append(site)
+        if capped:
             break
 
     if not sites:
+        # Vacuous: the regex census found NO write site for any
+        # invariant variable.  That is bounded negative evidence — the
+        # census can be blind (macro-hidden writes, pointer aliases),
+        # so the flag lets the adjudicator keep this away from an
+        # authoritative refutation.
         return {
             "outcome": "preserved",
+            "vacuous": True,
             "sites": [],
             "reason": (
                 "no census write site mutates an invariant variable "
@@ -692,11 +755,28 @@ def check_invariant_multi_site(
             "(inductive step, dominating guards encoded)"
         )
     elif verdicts <= {"preserved", "preserved_nonneg"}:
-        outcome = "preserved"
-        reason = (
-            f"all {len(per_site)} census write site(s) preserve the "
-            "invariant (inductive step; base case not checked)"
-        )
+        if skipped or capped:
+            # Budget-skipped or cap-truncated sites were never
+            # checked: "every CHECKED site preserves" over a partial
+            # census is bounded evidence, not a preservation proof —
+            # it must not become an authoritative refutation.  (With
+            # every site skipped, per_site is empty and the vacuous
+            # set comparison above would otherwise claim "all 0
+            # sites preserve".)
+            outcome = "inconclusive"
+            reason = (
+                f"{len(per_site)} checked site(s) preserve the "
+                "invariant but the census was truncated "
+                f"({skipped} skipped on budget, cap "
+                f"{'reached' if capped else 'not reached'}) — "
+                "not refuting on a partial census"
+            )
+        else:
+            outcome = "preserved"
+            reason = (
+                f"all {len(per_site)} census write site(s) preserve "
+                "the invariant (inductive step; base case not checked)"
+            )
     else:
         outcome = "inconclusive"
         undecided = [
@@ -824,6 +904,15 @@ def _adjudicate_invariant(
     }
 
     if multi["outcome"] == "preserved":
+        if multi.get("vacuous"):
+            # Zero census write sites is absence of evidence, not a
+            # preservation proof — the census is regex-bounded and can
+            # miss the very mutation the hypothesis names.  Never an
+            # authoritative refutation.
+            return _inconclusive(
+                REASON_CENSUS_DEGRADED,
+                multi["reason"] + " — not refuting on an empty census",
+            )
         return StateEvidence(
             outcome="refuted",
             reason=multi["reason"],

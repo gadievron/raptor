@@ -203,6 +203,50 @@ class TestAnchorPairs:
         assert all(r["dominated"] for r in res.releases)
         assert "BIO_get_cipher_status" in res.releases[0]["dominator"]
 
+    def test_release_in_comment_does_not_confirm(self, tmp_path):
+        # A block comment mentioning BIO_write before the check is
+        # prose, not a release site — raw-text matching minted a
+        # confirmed release-before-verify from it.  Matching runs on
+        # the sanitized view; only the real (dominated) write counts.
+        src = (
+            "int cms_copy_safe(BIO *out, BIO *cms, unsigned char *buf)\n"
+            "{\n"
+            "    int total = collect_all(cms, buf);\n"
+            "    /* legacy: BIO_write(out, buf, n) leaked here */\n"
+            "    if (BIO_get_cipher_status(cms) <= 0)\n"
+            "        return -1;\n"
+            '    log_msg("BIO_write(out, ...) pending");\n'
+            "    BIO_write(out, buf, total);\n"
+            "    return 1;\n"
+            "}\n"
+        )
+        _write(tmp_path, "src/cms_smime.c", src)
+        res = run_release_order_check(
+            tmp_path, "src/cms_smime.c", "cms_copy_safe", HYP,
+        )
+        assert res.outcome == "refuted"
+        assert all(r["dominated"] for r in res.releases)
+
+    def test_finalizer_in_comment_does_not_bind(self, tmp_path):
+        # The other direction: a comment mentioning the finalizer must
+        # not bind the vocabulary — an unauthenticated pipeline stays
+        # out of this channel's claim.
+        src = (
+            "int plain_copy(BIO *out, BIO *cms, unsigned char *buf)\n"
+            "{\n"
+            "    int i = BIO_read(cms, buf, 1024);\n"
+            "    /* BIO_get_cipher_status(cms) not needed here */\n"
+            "    BIO_write(out, buf, i);\n"
+            "    return 1;\n"
+            "}\n"
+        )
+        _write(tmp_path, "src/plain.c", src)
+        res = run_release_order_check(
+            tmp_path, "src/plain.c", "plain_copy", HYP,
+        )
+        assert res.outcome == "inconclusive"
+        assert REASON_FINALIZER_UNRESOLVED in res.reason
+
     def test_tmpout_internal_refuted(self, tmp_path):
         _write(tmp_path, "src/cms_smime.c", TMPOUT_INTERNAL)
         res = run_release_order_check(

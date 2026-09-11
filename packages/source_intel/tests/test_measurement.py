@@ -469,3 +469,19 @@ def test_no_model_flag_uses_client_default(harness, monkeypatch, capsys):
     assert len(harness.calls) == 1
     assert harness.calls[0]["args"] == ()
     assert harness.calls[0]["kwargs"] == {}
+
+
+def test_aggregate_baseline_perfect_si_regressed_is_not_neutral():
+    # Perfect baseline + SI-introduced errors: the headline metric
+    # must be unmistakably negative, not a neutral 0.0 that hides a
+    # pure SI-induced regression behind the exit-gate line.
+    rows = [
+        _row(baseline_correct=True, si_correct=False, delta="regressed"),
+        _row(baseline_correct=True, si_correct=True, delta="same"),
+    ]
+    s = M._aggregate(rows)
+    assert s["baseline_errors"] == 0
+    assert s["si_errors"] == 1
+    assert s["regressed"] == 1
+    assert s["err_reduction"] == float("-inf")
+    assert s["err_reduction"] < 0

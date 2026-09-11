@@ -222,6 +222,57 @@ class TestPropagateTaintUpward:
         inherited = propagate_taint_upward(callee, caller, [])
         assert inherited == []
 
+    def test_two_hop_propagation_via_recovered_index(self):
+        # sink_wrapper: param 0 (data) -> memcpy.  mid calls it with
+        # its own param buf (index 0, pinned by a precondition record).
+        # top calls mid with its own param input.  The rule must climb
+        # BOTH hops — the first inheritance used to stamp
+        # source_index=-1, which no arg_map (keyed on callee param
+        # indices >= 0) could ever match, capping propagation at one hop.
+        leaf = FunctionSummary(function="sink_wrapper", file="lib.c")
+        leaf.taint_rules.append(TaintRule(
+            source_param="data", source_index=0,
+            sink_call="memcpy", sink_arg_index=1, hop_count=1,
+        ))
+
+        mid = FunctionSummary(function="mid", file="mid.c")
+        mid.preconditions.append(Precondition(
+            param="buf", param_index=0, conditions=["len checked"],
+        ))
+        hop1 = propagate_taint_upward(
+            leaf, mid, [{"callee_index": 0, "caller_param": "buf"}],
+        )
+        assert len(hop1) == 1
+        assert hop1[0].source_param == "buf"
+        assert hop1[0].source_index == 0  # pinned from mid's records
+
+        top = FunctionSummary(function="top", file="top.c")
+        hop2 = propagate_taint_upward(
+            mid, top, [{"callee_index": 0, "caller_param": "input"}],
+        )
+        # Both mid's rules (the precondition-pinned inherited one)
+        # resolve to callee index 0 -> caller param input, deduped to one.
+        assert len(hop2) == 1
+        assert hop2[0].source_param == "input"
+        assert hop2[0].sink_call == "memcpy"
+        assert hop2[0].hop_count == 3
+
+    def test_unpinnable_inherited_rule_stays_unmatched(self):
+        # Direction check: with NO name->index evidence in the callee
+        # summary, an inherited (-1) rule must not guess an index —
+        # the hop is conservatively skipped, not misattributed.
+        mid = FunctionSummary(function="mid", file="mid.c")
+        mid.taint_rules.append(TaintRule(
+            source_param="buf", source_index=-1,
+            sink_call="memcpy", sink_arg_index=1, hop_count=2,
+        ))
+        top = FunctionSummary(function="top", file="top.c")
+        hop = propagate_taint_upward(
+            mid, top, [{"callee_index": 0, "caller_param": "input"}],
+        )
+        assert hop == []
+        assert top.taint_rules == []
+
 
 class TestResolveSccSummaries:
     def test_propagates_within_scc(self):

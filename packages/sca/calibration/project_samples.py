@@ -1007,6 +1007,25 @@ def _sanitise_findings(
             # AND Automatable=yes — see risk.py).
             "ssvc_exploitation": sca.get("ssvc_exploitation"),
             "ssvc_automatable": sca.get("ssvc_automatable"),
+            # Remaining risk-model inputs the refitter rebuilds
+            # scores from. Without them, every archived finding was
+            # rebuilt with invented defaults (direct, depth 0, full
+            # confidence): the depth + exposure constants were
+            # untunable (candidates always tied baseline) and the
+            # rest of the grid search tuned against a ranking that
+            # didn't match production scoring. Confidence blocks
+            # are scrubbed to level + numeric — the free-text
+            # ``reason`` can reference files under the discarded
+            # clone root, and the risk formula only reads numeric.
+            "direct": sca.get("direct"),
+            "exposure_factor": sca.get("exposure_factor"),
+            "transitive_depth": sca.get("transitive_depth"),
+            "parser_confidence": _confidence_scrubbed(
+                sca.get("parser_confidence"),
+            ),
+            "version_match_confidence": _confidence_scrubbed(
+                sca.get("version_match_confidence"),
+            ),
         })
     # Stable, total ordering so a refresh only diffs on real changes. The
     # pipeline emits findings in a concurrency-dependent order, which made
@@ -1020,6 +1039,23 @@ def _sanitise_findings(
         f.get("dep_name") or "",
         f.get("dep_version") or "",
     ))
+    return out
+
+
+def _confidence_scrubbed(raw: Any) -> dict[str, Any] | None:
+    """Reduce a confidence summary block to ``level`` + ``numeric``.
+
+    The ``reason`` free text can embed file paths under the
+    (discarded) clone root — same class of leak the finding-level
+    path strip prevents — and the risk formula only ever reads
+    ``numeric``, so the archive keeps just the machine fields.
+    """
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, Any] = {"level": raw.get("level")}
+    numeric = raw.get("numeric")
+    if isinstance(numeric, (int, float)):
+        out["numeric"] = float(numeric)
     return out
 
 

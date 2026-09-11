@@ -26,9 +26,21 @@ position p1, p2;
 |
   hlist_add_head_rcu@p1(&ptr->member, ...)
 )
+// Any grace-period wait defuses the match, not just synchronize_rcu:
+// synchronize_net/synchronize_srcu are documented grace-period
+// equivalents, rcu_barrier waits for all in-flight callbacks, and
+// handing the pointer to call_rcu/call_srcu transfers the free to a
+// post-grace-period callback.
   ... when != synchronize_rcu(...)
       when != synchronize_rcu_expedited(...)
+      when != synchronize_net(...)
+      when != synchronize_srcu(...)
+      when != synchronize_srcu_expedited(...)
+      when != rcu_barrier(...)
+      when != srcu_barrier(...)
       when != kfree_rcu(ptr, ...)
+      when != call_rcu(&ptr->member, ...)
+      when != call_srcu(..., &ptr->member, ...)
 (
   kfree@p2(ptr)
 |

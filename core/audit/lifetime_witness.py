@@ -944,8 +944,12 @@ def _scan_expansion(
             if envt in ("=", "+=", "-=", "*=", "/=", "%=", "&=", "^=",
                         "|=", "<<=", ">>=", "++", "--", "(") or \
                     eprv in ("++", "--"):
-                if not (envt == "=" and eprv in ("=", "!", "<", ">")):
-                    flagged.add(s)
+                # No comparison exemption: the tokenizer is
+                # maximal-munch (`==`/`!=`/`<=`/`>=` are single
+                # tokens), so a bare `=` on BOTH sides of the marker
+                # can only be chained assignment (`a = MARKER = b`) —
+                # which rebinds the parameter and must flag.
+                flagged.add(s)
             if eprv == "&" and envt not in ("->", ".", "["):
                 unary = eprv2 in (
                     "", "(", "[", ",", ";", "{", "}", "=", "return",
@@ -1857,9 +1861,16 @@ class _Analysis:
                     sites.append(nid)
         # Release verbs appearing anywhere else refuse: the raw CFG
         # cannot see what a laundered callee or a stored function
-        # value releases.
+        # value releases.  field_identifier occurrences are scanned
+        # too: a member-callee release (``r->ops->free(p)``) never
+        # surfaces through _call_callee_name OR _idents, so it was
+        # invisible to both passes — the nouse/async arms then proved
+        # "no release before X" over a function whose real free
+        # happened through the ops table.
         body = self.fn_node.child_by_field_name("body")
-        for occ in _idents(body):
+        for occ in _walk_nodes(body):
+            if occ.type not in ("identifier", "field_identifier"):
+                continue
             if not pred(_node_text(occ), self.vocab):
                 continue
             if occ.id in site_callee_ids:
@@ -1911,10 +1922,21 @@ class _Analysis:
                     rhs = n.child_by_field_name("right")
                     if left is None or rhs is None:
                         continue
-                    if left.type == "identifier":
+                    if left.type == "identifier" and (
+                        _node_text(left) in self.locals
+                    ):
+                        # Local alias propagation — _compute_sets
+                        # tracks it.  A file-scope global is an
+                        # identifier too (``g_saved = p;`` is a store
+                        # into memory a callee or the caller reads
+                        # after the free), so only names this function
+                        # declares are exempt.
                         continue
+                    # Derived names (pointer arithmetic results —
+                    # still inside the freed allocation) escape
+                    # through memory exactly like bare aliases.
                     rhs_idents = {_node_text(x) for x in _idents(rhs)}
-                    if rhs_idents & self.aliases:
+                    if rhs_idents & (self.aliases | self.derived):
                         raise ProofRefusal(
                             "tracked pointer stored into memory "
                             f"({_node_text(n)[:60]!r})"
@@ -2029,13 +2051,28 @@ def _arm_bracket(an: _Analysis, pointer: str) -> LifetimeProof:
     body = an.fn_node.child_by_field_name("body")
     defs: list[Any] = []
     for n in _walk_nodes(body):
-        if n.type == "assignment_expression":
-            left = n.child_by_field_name("left")
+        if n.type == "update_expression":
+            # ``p++`` / ``--p`` rebinds the pointer between acquire
+            # and release: neither an assignment_expression nor an
+            # init_declarator, so the def-collector never saw it and
+            # certified "single acquire definition" over a mutated
+            # pointer (the release then drops p+1, not the acquired
+            # object).
+            if pointer in {_node_text(x) for x in _idents(n)}:
+                raise ProofRefusal(
+                    f"{pointer} is mutated by ++/-- between acquire "
+                    f"and release"
+                )
+        elif n.type == "assignment_expression":
+            left = _strip_parens_casts(n.child_by_field_name("left"))
             op = n.child_by_field_name("operator")
             if (
                 left is not None and left.type == "identifier"
                 and _node_text(left) == pointer
             ):
+                # left is paren-stripped: ``(p) = x`` is the same
+                # definition as ``p = x`` and must count toward the
+                # single-definition premise.
                 if op is None or _node_text(op) != "=":
                     raise ProofRefusal(
                         f"compound assignment to {pointer}"

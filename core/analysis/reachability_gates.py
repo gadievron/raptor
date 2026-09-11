@@ -10,11 +10,15 @@ Consumers: /audit orchestrator, /validate demoter, /agentic dedup,
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from pathlib import Path
 from typing import Any
+
+from core.analysis._joern_lines import (
+    extract_scalar_marker,
+    parse_marker_records,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +30,18 @@ logger = logging.getLogger(__name__)
 # (set, regex, guard-query string, unguarded_sinks.sc) that drifted.
 DANGEROUS_LIBC_SINKS: frozenset[str] = frozenset({
     "memcpy", "memmove", "strcpy", "strncpy", "strcat", "strncat",
+    # stpcpy: same unbounded-copy hazard as strcpy (returns the end
+    # pointer instead of the start) — kept in step with the
+    # function-taxonomy sink vocabulary.
+    "stpcpy",
     "sprintf", "snprintf", "vsprintf", "vsnprintf",
     "gets", "fgets",
     "system", "popen", "execve", "execvp", "execl", "execlp",
     # Full exec-family coverage (previously only in the regex copy).
     "execv", "execle", "execvpe", "execlpe",
+    # Process-spawn family beyond exec* — same command-execution class,
+    # kept in step with the function-taxonomy sink vocabulary.
+    "posix_spawn", "posix_spawnp", "fexecve",
     "scanf", "sscanf", "fscanf",
     "sqlite3_exec", "mysql_query",
 })
@@ -82,16 +93,28 @@ _CONDUIT_PHRASES: tuple[str, ...] = (
     r"\binvokes\b.*\bwithout\b",
 )
 
+# Dual-emit doctrine (same as unguarded_sinks.sc): the summary is
+# println'd for the subprocess transport AND returned as the final
+# expression so the server transport (/query-sync drops println,
+# echo-frames the final expression) still carries it. The marker
+# payload keeps unguarded_sinks.sc's ``unguarded/total`` semantics so
+# the two JOERN_GUARD_SUMMARY emitters can't be misread against each
+# other. The bare ``s"$guarded/$total"`` final expression this
+# replaces was int-parsed from raw stdout — the server echo framing
+# (``val res0: String = "..."``) made every parse fail, pinning the
+# gate at GUARD_UNAVAILABLE for whole joern-enabled runs.
 _GUARD_QUERY_TEMPLATE = r'''import io.shiftleft.semanticcpg.language._
 
 val fn = cpg.method.name("__FUNCTION__")
 val sinkNames = List(__SINK_NAMES__)
-val sinkCalls = fn.call.name(sinkNames.mkString("|"))
+val sinkCalls = fn.call.name(sinkNames.mkString("|")).l
 val total = sinkCalls.size
-val structurallyGuarded = sinkCalls.where(_.dominatedBy.isControlStructure).size
-val controlGuarded = sinkCalls.where(_.controlledBy.isControlStructure).size
+val structurallyGuarded = sinkCalls.count(_.dominatedBy.isControlStructure.l.nonEmpty)
+val controlGuarded = sinkCalls.count(_.controlledBy.isControlStructure.l.nonEmpty)
 val guarded = Math.max(structurallyGuarded, controlGuarded)
-s"$guarded/$total"
+val summary = s"JOERN_GUARD_SUMMARY:${total - guarded}/$total"
+println(summary)
+summary
 '''
 
 # parents: [0]=analysis, [1]=core, [2]=repo root
@@ -199,6 +222,17 @@ def is_entry_unreachable(
 
     if joern_server is not None:
         joern_callers = _joern_find_callers(function_name, joern_server)
+        if joern_callers is None:
+            # Degraded consultation (dead server / query error /
+            # garbled reply): the cross-check that exists precisely to
+            # catch the indirect calls the graph missed could not run,
+            # so "no callers" is unverified — a transient hiccup must
+            # not demote a finding.
+            logger.debug(
+                "entry-unreachability not asserted for %s: Joern caller "
+                "consultation unavailable", function_name,
+            )
+            return False
         if joern_callers:
             logger.debug(
                 "entry-unreachability overridden by Joern: %s has %d caller(s)",
@@ -212,11 +246,26 @@ def is_entry_unreachable(
 def _joern_find_callers(
     function_name: str,
     joern_server,
-) -> list[dict[str, str]]:
-    """Query Joern for call sites that invoke function_name."""
+) -> list[dict[str, str]] | None:
+    """Query Joern for call sites that invoke function_name.
+
+    Tri-state result, mirroring the :data:`GUARD_UNAVAILABLE`
+    doctrine: an empty LIST means a healthy query genuinely found zero
+    callers (safe to treat as unreachability evidence); ``None`` means
+    the consultation degraded (dead server, query error or exception,
+    or a reply whose only records were undecodable) — consumers must
+    read it as "cannot verify", never as proof of zero callers.
+    Deterministic non-answers (unqueryable function name, missing
+    query file) keep the empty-list shape: the Joern cross-check is
+    structurally impossible there and the call-graph verdict stands.
+    """
     if not joern_server.is_alive():
-        return []
-    if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", function_name):
+        return None
+    # fullmatch, not match-with-``$``: ``$`` also matches just before a
+    # trailing newline, so ``name\n`` would pass a ``^...$`` gate and
+    # reach the query-template interpolation below. Same discipline at
+    # every identifier gate in this module.
+    if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", function_name):
         return []
 
     query_path = _QUERIES_DIR / "callers.sc"
@@ -226,19 +275,40 @@ def _joern_find_callers(
     query = query_path.read_text().replace("__FUNCTION__", function_name)
     try:
         result = joern_server.query(query, timeout=15, validate=False)
-        if result.errors:
-            return []
-        callers = []
-        for line in (result.raw_output or "").splitlines():
-            if line.startswith("JOERN_CALLER:"):
-                try:
-                    callers.append(json.loads(line[len("JOERN_CALLER:"):]))
-                except (json.JSONDecodeError, ValueError):
-                    continue
+        # server.query runs a JOERN_FLOW scan over EVERY query's
+        # stdout and folds that scan's parse noise into
+        # ``result.errors`` ("failed to parse flow: ..."): echoed
+        # script source, res-binder echoes without a val line, or
+        # repo text that happens to contain the JOERN_FLOW marker.
+        # Those phantom errors say nothing about THIS query — keying
+        # degradation on them turned healthy zero-caller answers into
+        # permanent None (gate silently dark). Only errors OUTSIDE
+        # that shape (query failed / server exited / timeout) degrade;
+        # decode failures for OUR marker come from
+        # ``parse_marker_records`` below. Residual: a genuine failure
+        # whose message embeds the literal flow-scan prefix would be
+        # ignored — no current error producer has that shape.
+        if any(
+            "failed to parse flow:" not in str(e)
+            for e in (result.errors or [])
+        ):
+            return None
+        records, decode_errors = parse_marker_records(
+            result.raw_output or "", "JOERN_CALLER:",
+        )
+        callers = [r for r in records if isinstance(r, dict)]
+        if not callers and decode_errors:
+            # Records were printed but none decoded — a garbled
+            # transcript is not evidence of zero callers.
+            logger.debug(
+                "joern callers reply for %s garbled: %s",
+                function_name, decode_errors[:3],
+            )
+            return None
         return callers
     except Exception:
         logger.debug("joern callers query failed for %s", function_name, exc_info=True)
-        return []
+        return None
 
 
 # ─── Conduit detection ───────────────────────────────────────────────────────
@@ -331,7 +401,7 @@ def check_sink_guarded(
     if not joern_server.is_alive():
         return GUARD_UNAVAILABLE
 
-    if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", function_name):
+    if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", function_name):
         return None
 
     query = _GUARD_QUERY_TEMPLATE.replace(
@@ -340,18 +410,33 @@ def check_sink_guarded(
 
     try:
         result = joern_server.query(query, timeout=30, validate=False)
-        if result.errors:
-            logger.debug("guard query error for %s: %s", function_name, result.errors)
+        # The marker is the authoritative carrier on BOTH transports
+        # (dual-emit). Parse it FIRST: ``result.errors`` is not a
+        # reliable degradation signal here — server.query runs a
+        # JOERN_FLOW scan over every query's stdout and folds that
+        # scan's parse noise into ``errors`` (see the matching filter
+        # in ``_joern_find_callers``), so a healthy guard answer can
+        # arrive alongside phantom errors. A transcript with NO
+        # parseable marker (compile error, server died mid-query,
+        # garbled reply) is the actual degraded case.
+        summary = extract_scalar_marker(
+            result.raw_output or "", "JOERN_GUARD_SUMMARY:",
+        )
+        if summary is None:
+            if result.errors:
+                logger.debug(
+                    "guard query error for %s: %s",
+                    function_name, result.errors,
+                )
             return GUARD_UNAVAILABLE
-        output = (result.raw_output or "").strip()
-        if "/" not in output:
+        m = re.fullmatch(r"(\d+)/(\d+)", summary)
+        if m is None:
             return GUARD_UNAVAILABLE
-        guarded_s, total_s = output.rsplit("/", 1)
-        guarded = int(guarded_s)
-        total = int(total_s)
+        unguarded = int(m.group(1))
+        total = int(m.group(2))
         if total == 0:
             return None
-        return "guarded" if guarded == total else "unguarded"
+        return "guarded" if unguarded == 0 else "unguarded"
     except Exception:
         logger.debug("guard query exception for %s", function_name, exc_info=True)
         return GUARD_UNAVAILABLE
@@ -369,7 +454,7 @@ def query_unguarded_sinks(
     """
     if joern_server is None or not joern_server.is_alive():
         return []
-    if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", function_name):
+    if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", function_name):
         return []
 
     query_path = _QUERIES_DIR / "unguarded_sinks.sc"
@@ -383,13 +468,12 @@ def query_unguarded_sinks(
         result = joern_server.query(query, timeout=30, validate=False)
         if result.errors:
             return []
-        sinks = []
-        for line in (result.raw_output or "").splitlines():
-            if line.startswith("JOERN_UNGUARDED:"):
-                try:
-                    sinks.append(json.loads(line[len("JOERN_UNGUARDED:"):]))
-                except (json.JSONDecodeError, ValueError):
-                    continue
+        # Transport-tolerant parse: on the server transport the
+        # records ride the final expression's value echo.
+        records, _decode_errors = parse_marker_records(
+            result.raw_output or "", "JOERN_UNGUARDED:",
+        )
+        sinks = [r for r in records if isinstance(r, dict)]
         # Deterministic order: Joern's traversal order is not stable
         # across server sessions, and these records feed the review
         # prompt — unordered evidence made reviewer input (and hence
@@ -413,9 +497,9 @@ def query_sink_arg_index(
     """
     if joern_server is None or not joern_server.is_alive():
         return []
-    if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", function_name):
+    if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", function_name):
         return []
-    if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", sink_name):
+    if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", sink_name):
         return []
 
     query_path = _QUERIES_DIR / "sink_arg_index.sc"
@@ -431,13 +515,12 @@ def query_sink_arg_index(
         result = joern_server.query(query, timeout=30, validate=False)
         if result.errors:
             return []
-        args = []
-        for line in (result.raw_output or "").splitlines():
-            if line.startswith("JOERN_SINK_ARG:"):
-                try:
-                    args.append(json.loads(line[len("JOERN_SINK_ARG:"):]))
-                except (json.JSONDecodeError, ValueError):
-                    continue
+        # Transport-tolerant parse — same doctrine as
+        # query_unguarded_sinks.
+        records, _decode_errors = parse_marker_records(
+            result.raw_output or "", "JOERN_SINK_ARG:",
+        )
+        args = [r for r in records if isinstance(r, dict)]
         # Deterministic order — same doctrine as query_unguarded_sinks.
         args.sort(key=lambda a: (
             str(a.get("sink") or ""),
@@ -540,9 +623,15 @@ _NEGATION_WORDS = frozenset({
     "unfortunately", "incorrectly", "improperly",
 })
 
+# The verb must sit in the SAME sentence/line as "if a caller" —
+# ``[^.\n]{0,120}`` blocks the sentence-crossing matches the previous
+# greedy ``.*`` + DOTALL allowed (an "if a caller" aside in one
+# paragraph paired with an unrelated "passes" pages later demoted
+# real findings as self-contradiction).
 _HYPOTHETICAL_CALLER_VIOLATION = re.compile(
-    r"\bif\s+a\s+caller\b.*\b(?:violates?|provides?|passes?|supplies?)\b",
-    re.IGNORECASE | re.DOTALL,
+    r"\bif\s+a\s+caller\b[^.\n]{0,120}?"
+    r"\b(?:violates?|provides?|passes?|supplies?)\b",
+    re.IGNORECASE,
 )
 
 

@@ -66,6 +66,7 @@ pin) and 4.16.0; all PoC cases finish in 7-9 ms.
 from __future__ import annotations
 
 import ast
+import logging
 import re as _re
 from dataclasses import dataclass, field
 from enum import Enum
@@ -338,12 +339,43 @@ _RUBY_GUARD_IF_NOT_MATCH = _re.compile(
 )
 
 
+def _string_escape_decode(body: str) -> str:
+    r"""Decode the string-LITERAL escape layer of a regex written inside
+    a non-raw Python (or Java) string.
+
+    The regex engine never sees the source spelling — ``"\\-"`` in
+    source reaches it as ``\-`` (one backslash).  Tokenizing the SOURCE
+    spelling misreads the doubled backslash as an escaped-backslash
+    atom, so ``[A-Za-z0-9\\-_]`` modeled a ``\``..``_`` RANGE instead
+    of a literal ``-`` — the charset model omitted a character the real
+    validator accepts, a false SOUND.  Only the quoting-relevant
+    escapes are collapsed (``\\``, ``\'``, ``\"``); every other escape
+    is left intact so the regex-layer safety gate still sees — and
+    rejects — shorthand classes like ``\d`` (and Python itself leaves
+    unknown string escapes intact, so this matches its semantics).
+    """
+    out: list[str] = []
+    i, n = 0, len(body)
+    while i < n:
+        if body[i] == "\\" and i + 1 < n and body[i + 1] in ("\\", "'", '"'):
+            out.append(body[i + 1])
+            i += 2
+        else:
+            out.append(body[i])
+            i += 1
+    return "".join(out)
+
+
 def _strip_string_literal(raw: str) -> str:
-    """Strip Python string-literal quoting (and the `r` prefix) from a
-    token captured by ``_RE_MATCH_CALL``.  Returns the inner regex body."""
+    """Strip Python string-literal quoting from a token captured by
+    ``_RE_MATCH_CALL`` and, for non-raw literals, decode the string
+    escape layer — the regex body is returned as the regex ENGINE
+    receives it, not as it is spelled in source."""
+    is_raw = raw.startswith("r")
     raw = raw.removeprefix("r")
     if len(raw) >= 2 and raw[0] in ("'", '"') and raw[-1] == raw[0]:
-        return raw[1:-1]
+        body = raw[1:-1]
+        return body if is_raw else _string_escape_decode(body)
     return raw
 
 
@@ -420,10 +452,12 @@ def _try_charset_sub_validator(line: str) -> ValidatorSpec | None:
     cs = _SUB_CHARSET.match(pattern)
     if not cs or not _charset_body_is_safe(cs.group(1)):
         return None
-    # Store the RAW class body: _expand_charset_body is the single
-    # escape interpreter.  Unescaping here and expanding later double-
-    # processes the body — a stored ``\\`` swallows the following char
-    # (``[/\\.]`` lost the backslash from the forbidden set).
+    # Store the class body with REGEX escapes intact (the string-literal
+    # layer was already decoded by _strip_string_literal for non-raw
+    # literals): _expand_charset_body is the single REGEX-escape
+    # interpreter.  Unescaping the regex layer here and expanding later
+    # double-processes the body — a stored ``\\`` swallows the following
+    # char (``[/\\.]`` lost the backslash from the forbidden set).
     return ValidatorSpec(
         kind="charset_sub", var_name=m.group("var"),
         forbidden=cs.group(1), source_line=line.strip(),
@@ -444,12 +478,23 @@ def _try_jsts_validator(line: str) -> ValidatorSpec | None:
 
 
 def _try_java_validator(line: str) -> ValidatorSpec | None:
-    """Java ``String.matches`` guard-and-exit shape."""
+    """Java ``String.matches`` guard-and-exit shape.
+
+    The captured class body is the SOURCE spelling of a Java string
+    literal (Java has no raw strings), so the string-escape layer is
+    decoded before the safety gate and the charset tokenizer — every
+    escaped-hyphen Java charset (``"[A-Za-z0-9\\\\-_]+"``) otherwise
+    tokenizes as escaped-backslash + range and drops the literal ``-``
+    from the model.
+    """
     m = _JAVA_GUARD.search(line)
-    if m is None or not _charset_body_is_safe(m.group("chars")):
+    if m is None:
+        return None
+    chars = _string_escape_decode(m.group("chars"))
+    if not _charset_body_is_safe(chars):
         return None
     return ValidatorSpec(
-        kind="charset", var_name=m.group("var"), charset=m.group("chars"),
+        kind="charset", var_name=m.group("var"), charset=chars,
         source_line=line.strip(),
     )
 
@@ -627,6 +672,22 @@ def _function_containing(tree: ast.AST, line: int) -> ast.AST | None:
     return best
 
 
+def _walk_same_scope(root: ast.AST):
+    """Yield ``root``'s descendants without descending into nested
+    function / lambda / class scopes.  The nested-scope NODE itself is
+    yielded (its ``def`` line is a binding in the enclosing scope) but
+    its body is not — names assigned there belong to the nested scope.
+    """
+    stack = list(ast.iter_child_nodes(root))
+    while stack:
+        node = stack.pop()
+        yield node
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.Lambda, ast.ClassDef)):
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+
+
 def _block_uses_raise(body: list) -> bool:
     """True iff the block exits via ``raise`` specifically (not Return /
     sys.exit).  Used to detect Bug 19: a ``raise`` exit inside a
@@ -772,34 +833,73 @@ def _variable_reassigned_between(
         line = getattr(node, "lineno", None)
         if line is None or not (after_line < line < before_line):
             continue
-        # Forms whose target is an AST node (Name / Tuple / Starred).
-        targets: list = []
-        if isinstance(node, ast.Assign):
-            targets = list(node.targets)
-        elif isinstance(
-            node,
-            (ast.AugAssign, ast.AnnAssign, ast.NamedExpr, ast.For, ast.AsyncFor),
-        ):
-            targets = [node.target]
-        elif isinstance(node, (ast.With, ast.AsyncWith)):
-            for item in node.items:
-                if item.optional_vars is not None:
-                    targets.append(item.optional_vars)
-        for t in targets:
-            if _target_rebinds(t, var_name):
+        if _node_rebinds_var(node, var_name):
+            return True
+    return False
+
+
+def _node_rebinds_var(node: ast.AST, var_name: str) -> bool:
+    """True iff a single AST node rebinds ``var_name`` (all the forms
+    documented on :func:`_variable_reassigned_between`)."""
+    # Forms whose target is an AST node (Name / Tuple / Starred).
+    targets: list = []
+    if isinstance(node, ast.Assign):
+        targets = list(node.targets)
+    elif isinstance(
+        node,
+        (ast.AugAssign, ast.AnnAssign, ast.NamedExpr, ast.For, ast.AsyncFor),
+    ):
+        targets = [node.target]
+    elif isinstance(node, (ast.With, ast.AsyncWith)):
+        for item in node.items:
+            if item.optional_vars is not None:
+                targets.append(item.optional_vars)
+    for t in targets:
+        if _target_rebinds(t, var_name):
+            return True
+    # Forms whose binding name is a plain string attribute.
+    # ``except SomeError as x`` binds x in the surrounding scope
+    # (unbound at end of handler in Py3, but during the handler
+    # body x IS the exception, not the sanitized value).
+    if isinstance(node, ast.ExceptHandler) and node.name == var_name:
+        return True
+    # Nested function / class definitions inside the body shadow
+    # the outer name with a function/class object — rare but
+    # possible in fix code.
+    return bool(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                  ast.ClassDef)) and node.name == var_name)
+
+
+def _rebound_in_loop_containing_sink(
+    tree: ast.AST, var_name: str, validator_line: int, sink_line: int,
+) -> bool:
+    """True iff ``var_name`` is rebound anywhere inside a loop whose
+    span contains the sink line (the validator's own line is exempt —
+    for ``charset_sub`` the rebind IS the sanitization).
+
+    Loop back-edge soundness: the flat ``(validator, sink)`` interval
+    treats the function as straight-line code, but when the sink sits
+    inside a loop, a rebind textually AFTER the sink (or before the
+    validator) reaches the sink on the NEXT iteration —
+    ``x = re.sub(...)`` before the loop, then
+    ``for item in items: open(x); x = item.raw_name`` sends the raw
+    value into the sink from iteration 2 on.  Any same-name rebind
+    sharing a loop with the sink therefore invalidates dominance.
+    Conservative: per-iteration re-validation patterns are declined
+    too — the sound direction; Tier 2 takes those cases.
+    """
+    for loop in ast.walk(tree):
+        if not isinstance(loop, (ast.For, ast.AsyncFor, ast.While)):
+            continue
+        end = getattr(loop, "end_lineno", None)
+        if end is None or not (loop.lineno <= sink_line <= end):
+            continue
+        for node in ast.walk(loop):
+            line = getattr(node, "lineno", None)
+            if line is None or line == validator_line:
+                continue
+            if _node_rebinds_var(node, var_name):
                 return True
-        # Forms whose binding name is a plain string attribute.
-        # ``except SomeError as x`` binds x in the surrounding scope
-        # (unbound at end of handler in Py3, but during the handler
-        # body x IS the exception, not the sanitized value).
-        if isinstance(node, ast.ExceptHandler) and node.name == var_name:
-            return True
-        # Nested function / class definitions inside the body shadow
-        # the outer name with a function/class object — rare but
-        # possible in fix code.
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
-                              ast.ClassDef)) and node.name == var_name:
-            return True
     return False
 
 
@@ -913,12 +1013,18 @@ def _maybe_record_parity(
             value_bound_verdict=verdict,
         )
         append_parity_record(log_path, record)
-    except OSError:
-        # Telemetry is best-effort; append_parity_record already
-        # swallows write failures, so only residual filesystem errors
-        # remain legitimate. A TypeError from a drifted record-builder
-        # signature must propagate, not vanish.
-        pass
+    except Exception:
+        # Blanket by design (matches _value_bound_dominates): the
+        # resolver/evaluator stack behind value_bound_verdict_for
+        # raises on realistic inputs — RecursionError from ast.parse
+        # on deeply nested code, KeyError from malformed inventory —
+        # and shadow-mode telemetry observing a run must never break
+        # it.  A narrower OSError-only catch let those escape into the
+        # consumer's blanket handler, discarding the whole Tier 0/1B
+        # verdict for the finding being observed.
+        logging.getLogger(__name__).debug(
+            "parity telemetry failed", exc_info=True,
+        )
 
 
 def _record_value_bound_audit(finding, result) -> None:
@@ -1298,9 +1404,12 @@ def _python_chain_reaches_sink(
     Without the kill, ``y = name; y = request.args.get('raw')`` left
     ``y`` "validated" at the sink and the Tier 0 verdict suppressed a
     live flow.  Assignments are processed in source order (single
-    forward pass) so a later rebind wins over earlier derivation;
-    loop-carried back-edges are not modeled, which can only SHRINK the
-    chain (fewer SOUND verdicts — the conservative direction).
+    forward pass) so a later rebind wins over earlier derivation.
+    Loop-carried back-edges ARE modeled in the kill direction: a
+    rebind sharing a loop with the sink removes the member (see
+    :func:`_rebound_in_loop_containing_sink` — a rebind after the sink
+    reaches it on the next iteration, so ignoring back-edges here was
+    NOT conservative).  Back-edges never GROW the chain.
 
     Conservative w.r.t. control flow (every assignment is treated as
     reachable) — soundness for the Tier 0 verdict still rests on the
@@ -1308,8 +1417,14 @@ def _python_chain_reaches_sink(
     the validator's constraint applies to what reaches the sink.
     """
     chain: set = {start_var}
+    # Scope filter: an assignment inside a NESTED function defined
+    # between validator and sink binds the nested scope's name, not the
+    # enclosing one — a bare line-window ast.walk treated it as
+    # straight-line same-scope code and extended the validated chain
+    # across scopes (false SOUND).  Walk only the sink's own scope.
+    scope_root = _function_containing(tree, sink_line) or tree
     assigns = [
-        node for node in ast.walk(tree)
+        node for node in _walk_same_scope(scope_root)
         if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign))
         and validator_line <= (getattr(node, "lineno", None) or 0) <= sink_line
         and node.value is not None
@@ -1359,6 +1474,16 @@ def _python_chain_reaches_sink(
             # Rebind from non-chain RHS: the target no longer carries
             # the validated value.
             chain -= target_names
+    # Loop back-edge kill: a rebind textually AFTER the sink (or before
+    # the validator) still reaches the sink on the next iteration when
+    # it shares a loop with the sink — the flat forward pass cannot see
+    # it, so such members leave the chain (shrink-only: conservative).
+    chain = {
+        var for var in chain
+        if not _rebound_in_loop_containing_sink(
+            tree, var, validator_line, sink_line,
+        )
+    }
     if not chain:
         return False
     return any(_re.search(rf"\b{_re.escape(var)}\b", sink_line_text) for var in chain)
@@ -1490,7 +1615,11 @@ def _lexical_substitution_dominates(
         return False
     if not _same_function_in_order(tree, validator_line, sink_line):
         return False
-    return not _variable_reassigned_between(
+    if _variable_reassigned_between(tree, var_name, validator_line, sink_line):
+        return False
+    # Loop back-edge: a rebind outside the flat interval still reaches
+    # the sink on the next iteration when both share a loop.
+    return not _rebound_in_loop_containing_sink(
         tree, var_name, validator_line, sink_line,
     )
 

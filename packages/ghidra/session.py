@@ -257,7 +257,7 @@ class GhidraSession:
         if ghidra_ver:
             metadata["ghidra_version"] = str(ghidra_ver)
 
-        return REDatabase(
+        db = REDatabase(
             source_tool="ghidra",
             binary_path=str(program.getExecutablePath()),
             architecture=arch,
@@ -272,6 +272,18 @@ class GhidraSession:
             bookmarks=bookmarks,
             metadata=metadata,
         )
+
+        # Ghidra's IMPORTED source type conflates debug-info and symbol
+        # table names; split the provisional tag with a section probe
+        # when the original binary is reachable (best-effort — same as
+        # the headless-export parse seam).
+        try:
+            from core.analysis.binary_provenance import refine_import_provenance
+            refine_import_provenance(db)
+        except Exception:
+            logger.debug("import-provenance refinement failed", exc_info=True)
+
+        return db
 
     def decompile_function(
         self,
@@ -392,6 +404,20 @@ class GhidraSession:
     def _export_functions(self, program, decompile: bool) -> list[REFunction]:
         from ghidra.program.model.symbol import SourceType
 
+        from .model import looks_tool_synthetic
+        from .parser import _function_name_provenance
+
+        # Mirror of the headless exporter's symbol-source mapping: the
+        # raw source type is what mints the name-provenance tag, and a
+        # placeholder-looking name must flag auto-named regardless of
+        # what the symbol claims (forged/stripped-then-repacked names).
+        source_names = {
+            SourceType.DEFAULT: "default",
+            SourceType.ANALYSIS: "analysis",
+            SourceType.IMPORTED: "imported",
+            SourceType.USER_DEFINED: "user_defined",
+        }
+
         functions = []
         fm = program.getFunctionManager()
         it = fm.getFunctions(True)
@@ -400,9 +426,11 @@ class GhidraSession:
             entry = func.getEntryPoint()
             name = str(func.getName())
 
+            sym_source = func.getSymbol().getSource()
+            source_name = source_names.get(sym_source, str(sym_source))
             is_auto = (
-                func.getSymbol().getSource() == SourceType.ANALYSIS
-                or name.startswith("FUN_")
+                sym_source == SourceType.ANALYSIS
+                or looks_tool_synthetic(name)
             )
 
             sig = None
@@ -436,6 +464,9 @@ class GhidraSession:
                 is_external=bool(func.isExternal()),
                 decompilation=decomp_text,
                 source_tool="ghidra",
+                name_provenance=_function_name_provenance(
+                    {"symbol_source": source_name}, name, is_auto,
+                ),
             ))
         return functions
 

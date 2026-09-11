@@ -30,6 +30,9 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
+from core.artifacts.context_map_budget import (  # noqa: E402
+    enforce_context_map_budget,
+)
 from core.json import load_json, save_json  # noqa: E402
 from core.orchestration.context_map_imports import (  # noqa: E402
     enrich_context_map_imports,
@@ -98,6 +101,10 @@ def main() -> int:
 
     count = enrich_context_map_imports(context_map, checklist)
     if count:
+        # The imports array can be large on big polyglot targets — keep
+        # the write inside the consumer byte cap, or strict downstream
+        # readers refuse the oversize map.
+        enforce_context_map_budget(context_map)
         save_json(context_map_path, context_map)
         print(
             f"raptor-enrich-context-map-imports: {count} import(s) "

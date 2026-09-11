@@ -211,3 +211,33 @@ def test_high_severity_slopsquat_not_downgraded() -> None:
     # current severity is already ``high``, so the max(target,
     # current) keeps it at ``high``.
     assert slop.severity == "high"
+
+
+def test_capitalised_severity_ranks_correctly() -> None:
+    """Severity comparison is case-insensitive: a finding already at
+    ``High`` (capitalised — LLM verdicts and hand-edited findings do
+    this) must not be "escalated" DOWN to ``medium`` by the
+    low_bus_factor lift, which is what a case-sensitive rank table
+    (ranking unknown strings 0) used to do."""
+    dep = _dep()
+    findings: List[SupplyChainFinding] = [
+        _slop_finding(dep, "High"),
+        _registry_finding(dep, "low_bus_factor"),
+    ]
+    _escalate_cross_detector(findings)
+    slop = next(f for f in findings if f.kind == "slopsquat_suspect")
+    assert slop.severity == "High"
+
+
+def test_none_severity_escalates() -> None:
+    """``none`` is a valid severity in the canonical rank table
+    (rank 0); the conjunction lift must raise it like ``info``."""
+    dep = _dep()
+    findings: List[SupplyChainFinding] = [
+        _slop_finding(dep, "none"),
+        _registry_finding(dep, "recent_publish"),
+        _registry_finding(dep, "low_bus_factor"),
+    ]
+    _escalate_cross_detector(findings)
+    slop = next(f for f in findings if f.kind == "slopsquat_suspect")
+    assert slop.severity == "critical"

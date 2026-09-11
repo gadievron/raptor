@@ -31,10 +31,10 @@ def test_cheap_did_not_claim_fp_never_short_circuits(tmp_path):
     skip the analysis the cheap model explicitly asked for."""
     sc = ModelScorecard(tmp_path / "sc.json")
     # Build a cell with strong trust track record.
-    for _ in range(200):
-        sc.record_event(
-            "x:y", "m", EventType.CHEAP_SHORT_CIRCUIT, "correct",
-        )
+    sc.record_events([
+        {"decision_class": "x:y", "model": "m",
+         "event_type": EventType.CHEAP_SHORT_CIRCUIT, "outcome": "correct"}
+    ] * 200)
     decision = prefilter_decision(
         sc, decision_class="x:y", model="m", cheap_says_fp=False,
     )
@@ -43,10 +43,10 @@ def test_cheap_did_not_claim_fp_never_short_circuits(tmp_path):
 
 def test_cheap_says_fp_with_trusted_cell_short_circuits(tmp_path):
     sc = ModelScorecard(tmp_path / "sc.json")
-    for _ in range(200):
-        sc.record_event(
-            "x:y", "m", EventType.CHEAP_SHORT_CIRCUIT, "correct",
-        )
+    sc.record_events([
+        {"decision_class": "x:y", "model": "m",
+         "event_type": EventType.CHEAP_SHORT_CIRCUIT, "outcome": "correct"}
+    ] * 200)
     decision = prefilter_decision(
         sc, decision_class="x:y", model="m", cheap_says_fp=True,
     )

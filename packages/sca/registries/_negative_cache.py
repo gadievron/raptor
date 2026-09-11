@@ -17,9 +17,12 @@ published to npm) re-queried the registry on every detector call.
 The May 2026 200-project sweep saw thousands of duplicate 404s
 for the same names.
 
-This helper makes negative caching the default. The cached
-sentinel is returned without re-hitting the registry until the
-TTL expires.
+This helper makes negative caching the default for AUTHORITATIVE
+not-found failures (404/410). The cached sentinel is returned
+without re-hitting the registry until the TTL expires. Transient
+failures (timeout, 5xx, circuit break, parse error) are NOT
+cached — a registry outage must not poison every lookup with a
+"package doesn't exist" answer for a full TTL window.
 
 ``try_get`` + ``MISSING`` distinguishes "no entry" from "entry
 holds the sentinel" so the negative entry serves correctly.
@@ -41,6 +44,29 @@ logger = logging.getLogger(__name__)
 # expected, non-fatal outcome (the caller falls back to a sentinel). Distinct
 # from a network/timeout/5xx error, which is a real (often transient) problem.
 _NOT_FOUND_STATUSES = frozenset({404, 410})
+
+
+def should_negative_cache(exc: Exception) -> bool:
+    """True when a fetch failure is an AUTHORITATIVE not-found that may
+    be cached as the sentinel for the full TTL.
+
+    Only a real 404/410 qualifies — the registry affirmatively said
+    "no such package". A timeout, connection error, 5xx, or open
+    circuit breaker says nothing about the package's existence;
+    caching those as not-found lets one registry outage poison every
+    dependency's lookup for a whole TTL window (advisory checks,
+    version lists, and metadata detectors would all silently see
+    "package doesn't exist" for 24h). Transient failures stay
+    UNCACHED so the next call retries.
+
+    ``exc`` is inspected for the ``status`` / ``circuit_break``
+    attributes set by :class:`core.http.HttpError`; exceptions
+    without a status (parse errors, network failures) are treated
+    as transient.
+    """
+    if getattr(exc, "circuit_break", False):
+        return False
+    return getattr(exc, "status", None) in _NOT_FOUND_STATUSES
 
 
 def log_fetch_failure(
@@ -87,8 +113,11 @@ def fetch_or_negative_cache(
         :meth:`JsonCache.put` separately with the desired window.
       fetch: zero-arg callable that returns the upstream payload.
         Raised exceptions are caught and treated as negative.
-      negative_value: value returned (and cached) on fetch failure.
-        Defaults to ``None``; pass ``[]`` for version-list endpoints.
+      negative_value: value returned on fetch failure. Defaults to
+        ``None``; pass ``[]`` for version-list endpoints. Cached only
+        when the failure is an authoritative not-found (404/410, per
+        :func:`should_negative_cache`); transient failures return the
+        sentinel UNCACHED so the next call retries.
       log_prefix: prefix for the log line on fetch failure; passed
         through to :func:`log_fetch_failure`.
       item_name: name of the item being fetched, included in the
@@ -103,7 +132,7 @@ def fetch_or_negative_cache(
         data = fetch()
     except Exception as e:                                # noqa: BLE001
         log_fetch_failure(logger, log_prefix, item_name, e)
-        if cache is not None:
+        if cache is not None and should_negative_cache(e):
             cache.put(key, negative_value, ttl_seconds=ttl_seconds)
         return negative_value
     if cache is not None:
@@ -111,4 +140,8 @@ def fetch_or_negative_cache(
     return data
 
 
-__all__ = ["fetch_or_negative_cache", "log_fetch_failure"]
+__all__ = [
+    "fetch_or_negative_cache",
+    "log_fetch_failure",
+    "should_negative_cache",
+]

@@ -374,7 +374,10 @@ def test_verified_candidates_captured_from_cgit_fetch(monkeypatch: pytest.Monkey
                                    "slug": {"type": "string"},
                                    "sha": {"type": "string"}},
                     "required": ["host", "slug", "sha"]},
-        impl=lambda **_: json.dumps({"url": "https://x", "body": "fix"}),
+        impl=lambda **_: json.dumps({
+            "url": "https://x",
+            "body": "commit 3ee6b0b3674df3a1bee3146d40b1d62cb0e2a9e3 fix",
+        }),
     )
     _patch_provider(monkeypatch, [
         _tc_response(ToolCall(id=f"t{i}", name="cgit_fetch",
@@ -405,7 +408,8 @@ def test_verified_candidates_captured_from_gitlab_commit(monkeypatch: pytest.Mon
                                    "slug": {"type": "string"},
                                    "sha": {"type": "string"}},
                     "required": ["host", "slug", "sha"]},
-        impl=lambda **_: json.dumps({"id": "x", "title": "fix", "message": "m"}),
+        impl=lambda **_: json.dumps(
+            {"id": "deadbeef1234567", "title": "fix", "message": "m"}),
     )
     _patch_provider(monkeypatch, [
         _tc_response(ToolCall(id=f"t{i}", name="gitlab_commit",
@@ -498,6 +502,11 @@ def _ok_result(call_id: str, content: str = '{"url": "u", "body": "ok"}') -> Too
     return ToolResult(tool_use_id=call_id, content=content)
 
 
+def _cgit_body(sha: str) -> str:
+    """A minimal cgit commit-page tool response confirming ``sha``."""
+    return json.dumps({"url": "u", "body": f"<html>commit {sha} parent</html>"})
+
+
 def _scripted_loop_result() -> ToolLoopResult:
     return ToolLoopResult(
         final_text="",
@@ -558,9 +567,11 @@ def test_parallel_cgit_dispatch_attributes_each_return_to_its_own_input(
         emit(ToolCallDispatched(iteration=0, call=call_a))
         emit(ToolCallDispatched(iteration=0, call=call_b))
         emit(ToolCallReturned(iteration=0, call_id="c1",
-                              result=_ok_result("c1"), duration_s=0.0))
+                              result=_ok_result("c1", _cgit_body(_SHA_A)),
+                              duration_s=0.0))
         emit(ToolCallReturned(iteration=0, call_id="c2",
-                              result=_ok_result("c2"), duration_s=0.0))
+                              result=_ok_result("c2", _cgit_body(_SHA_B)),
+                              duration_s=0.0))
         return _scripted_loop_result()
 
     result = _run_with_script(monkeypatch, script, "cgit_fetch")
@@ -580,15 +591,16 @@ def test_out_of_order_gitlab_returns_still_attributed_by_call_id(
                       input={"host": "h", "slug": "grp/alpha", "sha": _SHA_A})
     call_b = ToolCall(id="g2", name="gitlab_commit",
                       input={"host": "h", "slug": "grp/beta", "sha": _SHA_B})
-    body = json.dumps({"id": _SHA_A, "title": "fix"})
+    body_a = json.dumps({"id": _SHA_A, "title": "fix"})
+    body_b = json.dumps({"id": _SHA_B, "title": "fix"})
 
     def script(emit: Callable) -> ToolLoopResult:
         emit(ToolCallDispatched(iteration=0, call=call_a))
         emit(ToolCallDispatched(iteration=0, call=call_b))
         emit(ToolCallReturned(iteration=0, call_id="g2",
-                              result=_ok_result("g2", body), duration_s=0.0))
+                              result=_ok_result("g2", body_b), duration_s=0.0))
         emit(ToolCallReturned(iteration=0, call_id="g1",
-                              result=_ok_result("g1", body), duration_s=0.0))
+                              result=_ok_result("g1", body_a), duration_s=0.0))
         return _scripted_loop_result()
 
     result = _run_with_script(monkeypatch, script, "gitlab_commit")
@@ -613,7 +625,8 @@ def test_cgit_return_after_unrelated_dispatch_uses_own_input(
         emit(ToolCallDispatched(iteration=0, call=cgit))
         emit(ToolCallDispatched(iteration=0, call=other))
         emit(ToolCallReturned(iteration=0, call_id="c1",
-                              result=_ok_result("c1"), duration_s=0.0))
+                              result=_ok_result("c1", _cgit_body(_SHA_A)),
+                              duration_s=0.0))
         emit(ToolCallReturned(iteration=0, call_id="o1",
                               result=_ok_result("o1", '{"x": 1}'), duration_s=0.0))
         return _scripted_loop_result()
@@ -845,22 +858,30 @@ def test_verified_sha_gate_skipped_for_non_github_urls(
 def test_sha_not_found_gate_rejects_404_submit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # A VERIFIED sha that 404s on the first membership check (stale
+    # cache / wrong repo) must get sha_not_found feedback; the retry of
+    # the same verified sha then resolves and is accepted.
+    full = "fb4415d8aee6c10a4ce3328c42b9c2e4eb5bbafb"
+    checks: list[str] = []
+
+    def _exists(slug: str, sha: str) -> bool:
+        checks.append(sha)
+        return len(checks) > 1
+
     monkeypatch.setattr(
-        "cve_diff.infra.github_client.commit_exists",
-        lambda slug, sha: not (
-            len(sha) == 40 and sha.startswith("fb4415d8aee6c14")),
+        "cve_diff.infra.github_client.commit_exists", _exists,
     )
-    gh = _gh_tool("curl/curl", "fb4415d8aee6")
+    gh = _gh_tool("curl/curl", full)
     fake = _patch_provider(monkeypatch, [
         _tc_response(ToolCall(id="t1", name="gh_commit_detail",
-                              input={"slug": "curl/curl", "sha": "fb4415d8aee6"})),
+                              input={"slug": "curl/curl", "sha": full})),
         _tc_response(_submit_call(
-            fix_commit="fb4415d8aee6c14a9ec300ca28dfe318fe85e1cc",
-            rationale="hallucinated tail",
+            fix_commit=full,
+            rationale="first try (404s)",
             repository_url="https://github.com/curl/curl")),
         _tc_response(_submit_call(
-            fix_commit="fb4415d8aee6",
-            rationale="verified prefix",
+            fix_commit=full,
+            rationale="retry",
             repository_url="https://github.com/curl/curl")),
     ])
     cfg = AgentConfig(
@@ -872,7 +893,7 @@ def test_sha_not_found_gate_rejects_404_submit(
     result = AgentLoop().run(cfg, AgentContext(cve_id="CVE-2023-38545"))
     assert isinstance(result, AgentOutput), \
         f"expected AgentOutput, got {type(result).__name__}: {getattr(result,'reason','')}"
-    assert result.value == "fb4415d8aee6"
+    assert result.value == full
     assert len(fake.calls) == 3
     third_call_msgs = fake.calls[2]["messages"]
     rejection_found = False
@@ -882,6 +903,45 @@ def test_sha_not_found_gate_rejects_404_submit(
                     and "sha_not_found" in block.content):
                 rejection_found = True
     assert rejection_found, "404 feedback never sent to the agent"
+
+
+def test_verified_sha_gate_rejects_extension_of_verified_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A full-length sha that merely EXTENDS a verified abbreviation is
+    a confabulated middle — the gate must reject it; the verified value
+    itself still passes."""
+    monkeypatch.setattr("cve_diff.infra.github_client.commit_exists",
+                        lambda slug, sha: True)
+    gh = _gh_tool("curl/curl", "fb4415d8aee6")  # verifies a 12-char prefix
+    fake = _patch_provider(monkeypatch, [
+        _tc_response(ToolCall(id="t1", name="gh_commit_detail",
+                              input={"slug": "curl/curl", "sha": "fb4415d8aee6"})),
+        _tc_response(_submit_call(
+            fix_commit="fb4415d8aee6c14a9ec300ca28dfe318fe85e1cc",
+            rationale="hallucinated tail",
+            repository_url="https://github.com/curl/curl")),
+        _tc_response(_submit_call(
+            fix_commit="fb4415d8aee6",
+            rationale="the value actually verified",
+            repository_url="https://github.com/curl/curl")),
+    ])
+    cfg = AgentConfig(
+        system_prompt="sys", user_message="go",
+        tools=(gh,), validator=_pass_validator,
+        budget_tokens=1_000_000, budget_cost_usd=1.0, budget_s=60.0,
+        max_iterations=10,
+    )
+    result = AgentLoop().run(cfg, AgentContext(cve_id="CVE-2023-38545"))
+    assert isinstance(result, AgentOutput)
+    assert result.value == "fb4415d8aee6"
+    assert len(fake.calls) == 3
+    rejection_found = any(
+        isinstance(block, ToolResult) and block.is_error
+        and "not" in block.content and "verified" in block.content
+        for msg in fake.calls[2]["messages"] for block in msg.content
+    )
+    assert rejection_found, "unverified-extension feedback never sent"
 
 
 def test_sha_not_found_gate_surrenders_after_three_404s(
@@ -984,20 +1044,26 @@ def test_telemetry_unverified_submits_counter(
 def test_telemetry_not_found_submits_counter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    full = "fb4415d8aee6c10a4ce3328c42b9c2e4eb5bbafb"
+    checks: list[str] = []
+
+    def _exists(slug: str, sha: str) -> bool:
+        checks.append(sha)
+        return len(checks) > 1
+
     monkeypatch.setattr(
-        "cve_diff.infra.github_client.commit_exists",
-        lambda slug, sha: len(sha) != 40,
+        "cve_diff.infra.github_client.commit_exists", _exists,
     )
-    gh = _gh_tool("curl/curl", "fb4415d8aee6")
+    gh = _gh_tool("curl/curl", full)
     _patch_provider(monkeypatch, [
         _tc_response(ToolCall(id="t1", name="gh_commit_detail",
-                              input={"slug": "curl/curl", "sha": "fb4415d8aee6"})),
+                              input={"slug": "curl/curl", "sha": full})),
         _tc_response(_submit_call(
-            fix_commit="fb4415d8aee6c14a9ec300ca28dfe318fe85e1cc",
-            rationale="hallucinated",
+            fix_commit=full,
+            rationale="404s first",
             repository_url="https://github.com/curl/curl")),
         _tc_response(_submit_call(
-            fix_commit="fb4415d8aee6", rationale="real",
+            fix_commit=full, rationale="real",
             repository_url="https://github.com/curl/curl")),
     ])
     cfg = AgentConfig(
@@ -1072,3 +1138,149 @@ def test_turn_completed_emits_run_local_telemetry(
     assert rec["tokens_in"] == 100
     assert rec["tokens_out"] == 50
     assert rec["cost_usd"] > 0
+
+
+def test_cgit_error_page_does_not_verify(monkeypatch: pytest.MonkeyPatch) -> None:
+    """cgit answers nonexistent object ids with HTTP 200 + an error page
+    that ECHOES the requested id — a content-blind 2xx check would mint
+    a bogus verified pair from it."""
+    sha = "3ee6b0b3674df3a1bee3146d40b1d62cb0e2a9e3"
+    cgit_tool = Tool(
+        name="cgit_fetch",
+        description="stub",
+        parameters={"type": "object",
+                    "properties": {"host": {"type": "string"},
+                                   "slug": {"type": "string"},
+                                   "sha": {"type": "string"}},
+                    "required": ["host", "slug", "sha"]},
+        impl=lambda **_: json.dumps({
+            "url": "https://x",
+            "body": f"<html>Bad object id: {sha}</html>",
+        }),
+    )
+    _patch_provider(monkeypatch, [
+        _tc_response(ToolCall(id=f"t{i}", name="cgit_fetch",
+                              input={"host": "https://git.savannah.gnu.org",
+                                     "slug": "bash", "sha": sha}))
+        for i in range(5)
+    ])
+    cfg = AgentConfig(
+        system_prompt="sys", user_message="go",
+        tools=(cgit_tool,), validator=_pass_validator,
+        budget_tokens=1_000_000, budget_cost_usd=1.0, budget_s=60.0,
+        max_iterations=3,
+    )
+    result = AgentLoop().run(cfg, AgentContext(cve_id="CVE-X"))
+    assert isinstance(result, AgentSurrender)
+    assert result.verified_candidates == ()
+
+
+def test_cgit_body_without_sha_does_not_verify(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 2xx page that never mentions the dispatched sha confirms nothing."""
+    cgit_tool = Tool(
+        name="cgit_fetch",
+        description="stub",
+        parameters={"type": "object",
+                    "properties": {"host": {"type": "string"},
+                                   "slug": {"type": "string"},
+                                   "sha": {"type": "string"}},
+                    "required": ["host", "slug", "sha"]},
+        impl=lambda **_: json.dumps({"url": "https://x", "body": "unrelated page"}),
+    )
+    _patch_provider(monkeypatch, [
+        _tc_response(ToolCall(id="t0", name="cgit_fetch",
+                              input={"host": "https://git.savannah.gnu.org",
+                                     "slug": "bash",
+                                     "sha": "3ee6b0b3674df3a1bee3146d40b1d62cb0e2a9e3"})),
+        _tc_response(ToolCall(id="t1", name="cgit_fetch",
+                              input={"host": "https://git.savannah.gnu.org",
+                                     "slug": "bash",
+                                     "sha": "3ee6b0b3674df3a1bee3146d40b1d62cb0e2a9e3"})),
+    ])
+    cfg = AgentConfig(
+        system_prompt="sys", user_message="go",
+        tools=(cgit_tool,), validator=_pass_validator,
+        budget_tokens=1_000_000, budget_cost_usd=1.0, budget_s=60.0,
+        max_iterations=2,
+    )
+    result = AgentLoop().run(cfg, AgentContext(cve_id="CVE-X"))
+    assert isinstance(result, AgentSurrender)
+    assert result.verified_candidates == ()
+
+
+def test_gate_hard_stop_actually_stops_the_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The third unverified submit must terminate the run immediately —
+    the loop must not keep iterating (and burning budget) after the
+    strike-out."""
+    gh = _gh_tool("acme/widget", "real00000000")
+    bad_submit = _submit_call(
+        fix_commit="phantom00000", rationale="still wrong",
+        repository_url="https://github.com/acme/widget")
+    fake = _patch_provider(monkeypatch, [
+        _tc_response(bad_submit),
+        _tc_response(bad_submit),
+        _tc_response(bad_submit),
+        _tc_response(bad_submit),  # must never be requested
+        _tc_response(bad_submit),
+    ])
+    monkeypatch.setattr("cve_diff.infra.github_client.commit_exists",
+                        lambda slug, sha: True)
+    cfg = AgentConfig(
+        system_prompt="sys", user_message="go",
+        tools=(gh,), validator=_pass_validator,
+        budget_tokens=1_000_000, budget_cost_usd=1.0, budget_s=60.0,
+        max_iterations=10,
+    )
+    result = AgentLoop().run(cfg, AgentContext(cve_id="CVE-X"))
+    assert isinstance(result, AgentSurrender)
+    assert result.reason == "submit_unverified_sha"
+    assert len(fake.calls) == 3
+
+
+def test_provider_error_termination_maps_to_llm_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """terminated_by='provider_error' is a transient failure, not a model
+    decision — it must surface as the retryable llm_error, never as
+    the conclusive model_stopped_without_submit."""
+    def script(emit: Callable) -> ToolLoopResult:
+        r = _scripted_loop_result()
+        return ToolLoopResult(
+            final_text="API Error: 529 Overloaded",
+            terminal_tool_input=None,
+            messages=[],
+            iterations=r.iterations,
+            tool_calls_made=0,
+            total_input_tokens=10,
+            total_output_tokens=5,
+            total_cost_usd=0.0,
+            terminated_by="provider_error",
+        )
+
+    result = _run_with_script(monkeypatch, script, "osv_raw")
+    assert isinstance(result, AgentSurrender)
+    assert result.reason == "llm_error"
+
+
+def test_complete_termination_still_maps_to_model_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def script(emit: Callable) -> ToolLoopResult:
+        r = _scripted_loop_result()
+        return ToolLoopResult(
+            final_text="I could not find it",
+            terminal_tool_input=None,
+            messages=[],
+            iterations=r.iterations,
+            tool_calls_made=0,
+            total_input_tokens=10,
+            total_output_tokens=5,
+            total_cost_usd=0.0,
+            terminated_by="complete",
+        )
+
+    result = _run_with_script(monkeypatch, script, "osv_raw")
+    assert isinstance(result, AgentSurrender)
+    assert result.reason == "model_stopped_without_submit"

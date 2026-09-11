@@ -388,3 +388,131 @@ class TestHeaderShapeCoverage:
         out = parse_elf(p)
         assert out is not None
         assert out.arch == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Section-header-stripped dynamic binaries (sstrip shape)
+# ---------------------------------------------------------------------------
+
+
+_PT_LOAD = 1
+_PT_DYNAMIC = 2
+
+
+def _build_elf64_with_dynsym(
+    *,
+    sections: bool = True,
+    p_type: int = _PT_DYNAMIC,
+    e_shoff_override: int | None = None,
+) -> bytes:
+    """Minimal but complete little-endian ELF64: one program header,
+    .dynsym with two SHN_UNDEF imports (execve, recv), .dynstr,
+    .shstrtab. ``sections=False`` zeroes the section-header fields in
+    the ELF header (the ``sstrip`` shape) while keeping PT_DYNAMIC."""
+    phoff = 64
+    dynstr_off = phoff + 56                       # 120
+    dynstr = b"\x00execve\x00recv\x00"            # execve@1, recv@8
+    dynsym_off = dynstr_off + len(dynstr)         # 136
+    sym = struct.Struct("<IBBHQQ")
+    dynsym = (
+        sym.pack(0, 0, 0, 0, 0, 0)                # null entry
+        + sym.pack(1, 0, 0, 0, 0, 0)              # execve, SHN_UNDEF
+        + sym.pack(8, 0, 0, 0, 0, 0)              # recv, SHN_UNDEF
+    )
+    shstrtab_off = dynsym_off + len(dynsym)       # 208
+    shstrtab = b"\x00.dynsym\x00.dynstr\x00.shstrtab\x00"
+    shoff = shstrtab_off + len(shstrtab)
+    shoff += (-shoff) % 8                          # 8-align the table
+
+    sh = struct.Struct("<IIQQQQIIQQ")
+    shdrs = (
+        sh.pack(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)                    # null
+        + sh.pack(1, 11, 0, 0, dynsym_off, len(dynsym), 2, 0, 8, 24)   # .dynsym
+        + sh.pack(9, 3, 0, 0, dynstr_off, len(dynstr), 0, 0, 1, 0)     # .dynstr
+        + sh.pack(17, 3, 0, 0, shstrtab_off, len(shstrtab), 0, 0, 1, 0)  # .shstrtab
+    )
+
+    e_shoff = shoff if sections else 0
+    if e_shoff_override is not None:
+        e_shoff = e_shoff_override
+    e_shnum = 4 if sections else 0
+    e_shstrndx = 3 if sections else 0
+    ehdr = b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 8 + struct.pack(
+        "<HHIQQQIHHHHHH",
+        0x02, 0x3E, 1,           # e_type, e_machine (x86_64), e_version
+        0,                        # e_entry
+        phoff,                    # e_phoff
+        e_shoff,                  # e_shoff
+        0, 64,                    # e_flags, e_ehsize
+        56, 1,                    # e_phentsize, e_phnum
+        64, e_shnum, e_shstrndx,  # e_shentsize, e_shnum, e_shstrndx
+    )
+    phdr = struct.pack("<IIQQQQQQ", p_type, 0, 0, 0, 0, 0, 0, 0)
+    body = ehdr + phdr + dynstr + dynsym + shstrtab
+    body += b"\x00" * (shoff - len(body))
+    return body + shdrs
+
+
+class TestSectionlessDynamic:
+    """A dynamic binary whose section headers were stripped
+    (``sstrip``) still imports symbols via PT_DYNAMIC — the parser
+    must signal "needs fallback" (None) instead of returning
+    success-shaped metadata with ``imports=set()``, which would let
+    the binary fingerprint as capability-free."""
+
+    def test_full_elf_parses_imports(self, tmp_path):
+        """Baseline direction: section headers intact → tier 0
+        enumerates the imports itself, no fallback needed."""
+        p = tmp_path / "full.elf"
+        p.write_bytes(_build_elf64_with_dynsym(sections=True))
+        out = parse_elf(p)
+        assert out is not None
+        assert out.imports == {"execve", "recv"}
+        assert out.arch == "x86"
+        assert out.bits == 64
+
+    def test_sstripped_dynamic_elf_returns_none(self, tmp_path):
+        """e_shoff=0 but PT_DYNAMIC present → None so the caller's
+        radare2 tier engages and reads the dynamic segment."""
+        p = tmp_path / "sstripped.elf"
+        p.write_bytes(_build_elf64_with_dynsym(sections=False))
+        assert parse_elf(p) is None
+
+    def test_sectionless_static_elf_returns_bare_metadata(self, tmp_path):
+        """No section headers AND no PT_DYNAMIC → genuinely no
+        dynamic imports; header-only metadata is the truthful
+        answer (no pointless fallback)."""
+        p = tmp_path / "static.elf"
+        p.write_bytes(_build_elf64_with_dynsym(
+            sections=False, p_type=_PT_LOAD,
+        ))
+        out = parse_elf(p)
+        assert out is not None
+        assert out.imports == set()
+        assert out.arch == "x86"
+
+    def test_huge_shoff_returns_none_not_raise(self, tmp_path):
+        """e_shoff past off_t range makes ``f.seek`` raise
+        ValueError/OverflowError — the documented contract is
+        None, never an exception out of ``parse_elf``."""
+        p = tmp_path / "huge_shoff.elf"
+        p.write_bytes(_build_elf64_with_dynsym(
+            sections=True, e_shoff_override=2**63 + 16,
+        ))
+        assert parse_elf(p) is None
+
+    def test_huge_dynsym_entsize_no_oom(self, tmp_path):
+        """sh_entsize is attacker-chosen; a pathological value must
+        not drive multi-GB padding reads. The parse either bails to
+        the fallback signal or returns empty imports — never raises
+        and never fabricates imports."""
+        blob = bytearray(_build_elf64_with_dynsym(sections=True))
+        # Patch .dynsym's sh_entsize (last Q of section header #1).
+        shoff = len(blob) - 4 * 64
+        entsize_off = shoff + 64 + 56
+        blob[entsize_off:entsize_off + 8] = struct.pack("<Q", 2**40)
+        p = tmp_path / "bad_entsize.elf"
+        p.write_bytes(bytes(blob))
+        out = parse_elf(p)
+        if out is not None:
+            assert out.imports == set()

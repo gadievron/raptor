@@ -10,9 +10,19 @@
 //                    authority _UNGUARDED_QUERY_SINKS (this file used
 //                    to hardcode a drifting copy of it)
 //
-// Output: JOERN_UNGUARDED: JSON per unguarded sink call.
+// Output: JOERN_UNGUARDED: JSON per unguarded sink call — println'd
+// for the subprocess transport AND carried in the final expression's
+// string echo for the server transport (/query-sync drops println).
 
 import io.shiftleft.semanticcpg.language._
+
+// jsonEsc — the one escape helper for every value interpolated into a
+// JSON-string context: backslash before quote; \r stripped; \n, the
+// remaining C0 controls (tab included — strict json.loads rejects all
+// raw control chars) and U+0085/U+2028/U+2029 (Python str.splitlines
+// splits on these) flatten to single spaces so a record stays one
+// MARKER:{json} line.
+def jsonEsc(v: String): String = v.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", " ").flatMap(c => if (c.toInt < 0x20 || c.toInt == 0x85 || c.toInt == 0x2028 || c.toInt == 0x2029) " " else c.toString)
 
 val fnName = "__FUNCTION__"
 val sinkNames = List(__SINK_NAMES__)
@@ -25,8 +35,11 @@ val results = sinkCalls.flatMap { call =>
   val controlled = call.controlledBy.isControlStructure.l.nonEmpty
   if (!dominated && !controlled) {
     val line = call.lineNumber.getOrElse(0)
-    val code = call.code.take(200).replace("\\", "\\\\").replace("\"", "\\\"")
-    val name = call.name
+    // .take(200) on the RAW string BEFORE jsonEsc — escape-then-
+    // truncate can bisect an injected \" and leave a dangling
+    // backslash.
+    val code = jsonEsc(call.code.take(200))
+    val name = jsonEsc(call.name)
     Some(s"""JOERN_UNGUARDED:{"sink":"$name","line":$line,"code":"$code","guarded":false}""")
   } else None
 }

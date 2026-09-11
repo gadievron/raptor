@@ -156,28 +156,41 @@ def _apply_one_image(
         rf"([\"'\s#]|$)",                  # boundary
         re.MULTILINE,
     )
-    match = pattern.search(text)
-    if match is None:
+    # The same image can be pinned on several lines (two compose
+    # services on ``postgres:16.1``, repeated k8s containers).
+    # Verdicts are computed across ALL matching lines and every
+    # occurrence still at the old tag is rewritten — a first-match
+    # ``count=1`` substitution would bump one service and leave its
+    # twin on the vulnerable tag while the run reports applied.
+    tags = [m.group(2) for m in pattern.finditer(text)]
+    if not tags:
         return text, RewriteResult(
             edit=edit, applied=False, reason="not_found",
         )
-    current_tag = match.group(2)
-    if current_tag == edit.new_value:
-        return text, RewriteResult(
-            edit=edit, applied=False, reason="no_change",
-        )
-    if current_tag != edit.old_value:
+    # Occurrences that actually need the bump: at the old tag and not
+    # already at the new one (a degenerate plan with old == new is
+    # idempotent, not applied).
+    needs_bump = [t for t in tags
+                  if t == edit.old_value and t != edit.new_value]
+    if not needs_bump:
+        if all(t == edit.new_value for t in tags):
+            return text, RewriteResult(
+                edit=edit, applied=False, reason="no_change",
+            )
+        stray = next(t for t in tags if t != edit.new_value)
         return text, RewriteResult(
             edit=edit, applied=False,
             reason=(
-                f"value_mismatch: file has {current_tag!r}, "
+                f"value_mismatch: file has {stray!r}, "
                 f"plan expected {edit.old_value!r}"
             ),
         )
-    new_text = pattern.sub(
-        rf"\g<1>{edit.new_value}\g<3>",
-        text, count=1,
-    )
+
+    def _repl(m: re.Match) -> str:
+        if m.group(2) == edit.old_value:
+            return f"{m.group(1)}{edit.new_value}{m.group(3)}"
+        return m.group(0)
+    new_text = pattern.sub(_repl, text)
     return new_text, RewriteResult(
         edit=edit, applied=True, reason="applied",
     )

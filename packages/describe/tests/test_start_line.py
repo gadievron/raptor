@@ -58,3 +58,21 @@ class TestFormatStartLine:
         # 100 files * 600 lines = 60000 LOC → "60k LOC"
         assert "LOC" in line
         assert "60k" in line or "59k" in line  # boundary tolerance
+
+
+class TestShortLocBoundary:
+    def test_999_600_renders_as_one_point_zero_m(self):
+        from packages.describe.start_line import _short_loc
+        # round(999_600/1000) crosses 1000 below the M threshold — it
+        # must switch to the M format, never render '1000k'.
+        assert _short_loc(999_600) == "1.0M"
+        assert _short_loc(999_499) == "999k"
+        assert _short_loc(1_500_000) == "1.5M"
+        assert _short_loc(52_000) == "52k"
+        assert _short_loc(999) == "999"
+
+    def test_report_short_int_is_the_same_implementation(self):
+        # One shared helper — the two renderers can never drift.
+        from packages.describe.report import _short_int
+        from packages.describe.start_line import _short_loc
+        assert _short_int is _short_loc

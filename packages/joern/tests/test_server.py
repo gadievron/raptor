@@ -224,6 +224,11 @@ class TestJoernServerImportCpg:
 
 
 class TestJoernServerImportCode:
+    """import_code mirrors import_cpg's hardening: strict success
+    check, cpg-binding probe, and import-source bookkeeping so a
+    stuck-query restart() can re-import instead of coming back
+    CPG-less while ensure_alive reports healthy."""
+
     def test_target_not_directory(self, tmp_path):
         srv = JoernServer()
         srv._base_url = "http://127.0.0.1:9999"
@@ -231,6 +236,73 @@ class TestJoernServerImportCode:
         f.write_text("int main(){}", encoding="utf-8")
         ok = srv.import_code(f)
         assert ok is False
+
+    def test_missing_success_key_is_failure(self, tmp_path):
+        # Pre-fix `resp.get("success", True)` counted a malformed
+        # response as success and set _cpg_loaded — every later query
+        # then failed "Not found: cpg" with only per-query warnings.
+        srv = JoernServer()
+        srv._base_url = "http://127.0.0.1:9999"
+        with patch.object(JoernServer, "_post_sync",
+                          return_value={"stdout": "??"}):
+            ok = srv.import_code(tmp_path)
+        assert ok is False
+        assert srv._cpg_loaded is False
+
+    def test_success_requires_verified_cpg_binding(self, tmp_path):
+        srv = JoernServer()
+        srv._base_url = "http://127.0.0.1:9999"
+        responses = [
+            {"success": True, "stdout": "workspace..."},   # importCode
+            {"success": True,
+             "stdout": "-- [E006] Not Found Error: Not found: cpg"},
+        ]
+        with patch.object(JoernServer, "_post_sync",
+                          side_effect=responses):
+            ok = srv.import_code(tmp_path)
+        assert ok is False
+        assert srv._cpg_loaded is False
+
+    def test_verified_import_succeeds_and_records_source(self, tmp_path):
+        srv = JoernServer()
+        srv._base_url = "http://127.0.0.1:9999"
+        responses = [
+            {"success": True, "stdout": "workspace..."},   # importCode
+            {"success": True, "stdout": 'val res0: String = "42"'},
+        ]
+        with patch.object(JoernServer, "_post_sync",
+                          side_effect=responses):
+            ok = srv.import_code(tmp_path, timeout=123)
+        assert ok is True
+        assert srv._cpg_loaded is True
+        # restart() re-imports from whichever source is recorded.
+        assert srv._code_path == tmp_path.resolve()
+        assert srv._cpg_path is None
+        assert srv._last_import_timeout == 123
+
+    def test_restart_reimports_code_source(self, tmp_path):
+        srv = JoernServer()
+        srv._code_path = tmp_path
+        srv._last_import_timeout = 77
+        calls = []
+        with patch.object(JoernServer, "stop"), \
+                patch.object(JoernServer, "start"), \
+                patch.object(
+                    JoernServer, "import_code",
+                    side_effect=lambda p, timeout: calls.append(
+                        (p, timeout)) or True,
+                ):
+            assert srv.restart() is True
+        assert calls == [(tmp_path, 77)]
+
+    def test_restart_fails_when_code_source_vanished(self, tmp_path):
+        # Same fabricated-healthy wedge as the vanished-CPG case: the
+        # restart must report failure, not come back CPG-less.
+        srv = JoernServer()
+        srv._code_path = tmp_path / "gone"
+        with patch.object(JoernServer, "stop"), \
+                patch.object(JoernServer, "start"):
+            assert srv.restart() is False
 
 
 class TestJoernServerCloseWorkspace:
@@ -688,7 +760,10 @@ class TestRunSummaryBatch:
         srv._cpg_loaded = True
         srv._base_url = "http://127.0.0.1:9999"
 
-        raw = 'METHOD:foo|TAINTS:buf|PRE:assert(buf != NULL)|RET:int\n'
+        raw = (
+            'METHOD_SUMMARY:{"method":"foo","found":true,"taints":["buf"],'
+            '"pre":["assert(buf != NULL)"],"ret":["int"]}\n'
+        )
         resp = {"stdout": raw, "stderr": "", "success": True}
         with patch.object(srv, "_post_sync", return_value=resp):
             result = srv.run_summary_batch(["foo"])
@@ -702,7 +777,10 @@ class TestRunSummaryBatch:
         srv._cpg_loaded = True
         srv._base_url = "http://127.0.0.1:9999"
 
-        raw = 'METHOD:bar|TAINTS:|PRE:|RET:void\n'
+        raw = (
+            'METHOD_SUMMARY:{"method":"bar","found":true,"taints":[],'
+            '"pre":[],"ret":["void"]}\n'
+        )
 
         def fake_post_async(query_str):
             return "uuid-summary"
@@ -994,5 +1072,39 @@ class TestHasScalaError:
 
     def test_ansi_wrapped_marker_detected(self):
         from packages.joern.server import _has_scala_error
-        stdout = ("x" * 3000) + "\x1b[31m-- [E007]\x1b[0m mismatch"
+        # Diagnostics start their own line; detection is line-anchored.
+        stdout = ("x" * 3000) + "\n\x1b[31m-- [E007]\x1b[0m mismatch"
         assert _has_scala_error(stdout)
+
+    def test_record_payload_error_string_not_flagged(self):
+        # A successful query whose returned code snippets contain the
+        # target repo's own "error:" strings must not read as failed.
+        from packages.joern.server import _has_scala_error
+        stdout = (
+            'JOERN_CALLER:{"caller":"log_fail","file":"a.c","line":9,'
+            '"code":"fprintf(stderr, \\"error: %s\\", msg)"}\n'
+            'JOERN_UNGUARDED:{"sink":"system","line":3,'
+            '"code":"system(cmd); // Error: unchecked"}\n'
+            'METHOD_SUMMARY:{"method":"m","found":true,'
+            '"pre":["check_error: state"]}\n'
+            "JOERN_CALLERS_DONE"
+        )
+        assert not _has_scala_error(stdout)
+
+    def test_scala2_diagnostic_line_detected(self):
+        from packages.joern.server import _has_scala_error
+        assert _has_scala_error(
+            "query.sc:3: error: not found: value cpgx"
+        )
+
+    def test_bare_error_line_detected(self):
+        from packages.joern.server import _has_scala_error
+        assert _has_scala_error("error: illegal start of definition")
+
+    def test_midline_error_string_not_flagged(self):
+        # Free-floating "error:" inside otherwise healthy output is
+        # content, not a compiler verdict.
+        from packages.joern.server import _has_scala_error
+        assert not _has_scala_error(
+            'res1: String = "handler for error: timeout"'
+        )

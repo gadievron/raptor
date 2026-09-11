@@ -211,9 +211,31 @@ def refine_maven_verdicts(
         elif Verdict.UNCERTAIN in verdicts:
             continue
         else:
-            out[d.key()] = Reachability(
-                verdict="not_function_reachable",
-                confidence=Confidence(
+            # Confidence tracks how much evidence backs the
+            # downgrade. An ``imported``-gated dep had positive
+            # import-level evidence; a ``not_evaluated`` base means
+            # there is NO import evidence at all (no module-level
+            # Maven scanner) and instance-method dispatch — the
+            # dominant Java call shape — is invisible to the static
+            # import map (see Limitation above), so claiming a
+            # high-confidence downgrade would overstate what the
+            # resolver actually saw.
+            base_verdict = out[d.key()].verdict
+            if base_verdict == "not_evaluated":
+                confidence = Confidence(
+                    "medium",
+                    reason=(
+                        f"the {len(paired)} OSV-listed affected "
+                        f"symbol(s) are not called from non-test "
+                        f"Java source via static/class-level "
+                        f"dispatch; capped at medium — no "
+                        f"import-level evidence exists for this dep "
+                        f"and instance-method dispatch is invisible "
+                        f"to the static import map"
+                    ),
+                )
+            else:
+                confidence = Confidence(
                     "high",
                     reason=(
                         f"Maven dep declared but the "
@@ -221,7 +243,10 @@ def refine_maven_verdicts(
                         f"affected symbol(s) are not called from "
                         f"non-test Java source"
                     ),
-                ),
+                )
+            out[d.key()] = Reachability(
+                verdict="not_function_reachable",
+                confidence=confidence,
                 evidence=[],
             )
 

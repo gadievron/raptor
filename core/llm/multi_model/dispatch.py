@@ -46,6 +46,7 @@ import time
 from collections import Counter
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any
 
 from core.llm.multi_model.types import (
@@ -73,6 +74,14 @@ def run_multi_model(
     aggregator: Aggregator | None = None,
     cost_gate: CostGate | None = None,
     max_parallel: int = 3,
+    # Panel wall-clock budget (seconds). 600 covers the observed worst
+    # honest panel member (deep-reasoning models on large findings run
+    # several minutes); raising it lets slower tasks finish instead of
+    # being discarded while their threads keep billing, but stretches
+    # how long one hung provider can stall the whole panel — lowering
+    # it bounds the stall but discards slow-yet-live results. Consumers
+    # with known-long tasks should size it per call.
+    timeout: float = 600.0,
 ) -> MultiModelResult:
     """Run a task across N models in parallel and merge results.
 
@@ -93,6 +102,9 @@ def run_multi_model(
             the aggregator are skipped if budget_ratio() exceeds their
             cutoff_ratio. None disables cost gating entirely.
         max_parallel: Thread pool size for the per-model dispatch.
+        timeout: Panel wall-clock budget in seconds — models that have
+            not completed when it expires are marked failed (their
+            worker threads are abandoned, not joined).
 
     Returns:
         MultiModelResult with merged items, correlation, optional
@@ -127,7 +139,9 @@ def run_multi_model(
     reviewers = list(reviewers or ())
     _validate_inputs(task, models, adapter, reviewers, aggregator, cost_gate)
 
-    per_model_raw, failed_models = _dispatch_parallel(task, models, max_parallel)
+    per_model_raw, failed_models = _dispatch_parallel(
+        task, models, max_parallel, timeout=timeout,
+    )
     # Sort for deterministic adapter input regardless of completion order.
     per_model_raw = dict(sorted(per_model_raw.items()))
     failed_models = sorted(failed_models)
@@ -466,7 +480,12 @@ def _dispatch_parallel(
                 per_model_raw[name] = results
                 if results and all(_is_error(r) for r in results):
                     failed.append(name)
-        except TimeoutError:
+        except (TimeoutError, FuturesTimeoutError):
+            # Both classes: ``as_completed`` raises
+            # ``concurrent.futures.TimeoutError``, which only became an
+            # alias of the builtin in Python 3.11 — on the 3.10 floor a
+            # bare ``except TimeoutError`` misses it and the whole panel
+            # crashes instead of isolating the straggler.
             # Mark models that didn't complete as failed.
             for model in futures.values():
                 if model.model_name not in per_model_raw:

@@ -40,12 +40,15 @@ Implementation notes (verified against Dawid & Skene, 1979 §3):
 """
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from collections.abc import Sequence
 
 from core.llm.scorecard.priors import BetaPrior, posterior_update
 from core.llm.multi_model.panel_log import PanelRecord
+
+logger = logging.getLogger(__name__)
 
 
 # Default starting reliability — both α_m and β_m initialised here.
@@ -97,6 +100,10 @@ class DawidSkeneResult:
     iterations: int
     converged: bool
     class_prior: BetaPrior
+    # Panel records dropped because the same (finding, model) pair
+    # appeared more than once. One model is one independent observation
+    # per finding — the first record wins, repeats never double-count.
+    duplicates_ignored: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -256,8 +263,24 @@ def estimate(
 
     # ----- 1. Index records by finding and model ------------------------
     verdicts_by_finding: dict[str, dict[str, bool]] = {}
+    duplicates_ignored = 0
     for r in records:
-        verdicts_by_finding.setdefault(r.finding_id, {})[r.model] = r.verdict
+        by_model = verdicts_by_finding.setdefault(r.finding_id, {})
+        if r.model in by_model:
+            # A duplicated (finding, model) pair is one voter appearing
+            # twice — e.g. merged cross-run panels. Keep the first
+            # observation; silently letting the last record win would
+            # replace an already-counted vote, and counting both would
+            # double-weight one model.
+            duplicates_ignored += 1
+            continue
+        by_model[r.model] = r.verdict
+    if duplicates_ignored:
+        logger.warning(
+            "dawid_skene: ignored %d duplicate (finding, model) "
+            "record(s) in decision class %r — first observation kept",
+            duplicates_ignored, decision_class,
+        )
     finding_ids = list(verdicts_by_finding.keys())
     model_names = sorted({r.model for r in records})
 
@@ -328,6 +351,7 @@ def estimate(
         iterations=iterations,
         converged=converged,
         class_prior=prior,
+        duplicates_ignored=duplicates_ignored,
     )
 
 

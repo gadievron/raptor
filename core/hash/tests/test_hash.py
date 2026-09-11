@@ -73,6 +73,29 @@ class TestSha256Tree:
 
         assert hash1 != hash2
 
+    def test_name_content_boundary_shift_does_not_collide(self, tmp_path):
+        """Length framing: {'a': 'bc'} and {'ab': 'c'} concatenate to
+        the same raw byte stream — the framed record scheme must keep
+        their digests distinct."""
+        t1 = tmp_path / "t1"
+        t1.mkdir()
+        (t1 / "a").write_bytes(b"bc")
+        t2 = tmp_path / "t2"
+        t2.mkdir()
+        (t2 / "ab").write_bytes(b"c")
+        assert sha256_tree(t1) != sha256_tree(t2)
+
+    def test_identical_trees_still_share_digest(self, tmp_path):
+        """Framing must not break the equality direction: byte-for-byte
+        identical trees at different roots hash identically."""
+        t1 = tmp_path / "t1"
+        t2 = tmp_path / "t2"
+        for t in (t1, t2):
+            (t / "sub").mkdir(parents=True)
+            (t / "a.txt").write_bytes(b"hello")
+            (t / "sub" / "b.bin").write_bytes(b"\x00\x01")
+        assert sha256_tree(t1) == sha256_tree(t2)
+
     def test_hash_file_size_limit(self, tmp_path):
         """Test that large files are skipped when limit is set."""
         # Create a small file
@@ -202,14 +225,17 @@ class TestSha256Tree:
 
 def _expected_tree_digest(root: Path) -> str:
     """Replicate the untruncated on-wire scheme: sorted relpaths,
-    each as posix-encoded bytes followed by file contents."""
+    each record length-framed as <name-len (8B LE)> <name bytes>
+    <sha256(content) digest>."""
     h = hashlib.sha256()
     for p in sorted(root.rglob("*")):
         if not p.is_file() or p.is_symlink():
             continue
-        h.update(p.relative_to(root).as_posix().encode(
-            "utf-8", errors="surrogateescape"))
-        h.update(p.read_bytes())
+        name = p.relative_to(root).as_posix().encode(
+            "utf-8", errors="surrogateescape")
+        h.update(len(name).to_bytes(8, "little"))
+        h.update(name)
+        h.update(hashlib.sha256(p.read_bytes()).digest())
     return h.hexdigest()
 
 
@@ -280,9 +306,9 @@ class TestSha256TreeTruncationMarker:
 
         assert sha256_tree(tree_a) != sha256_tree(tree_b)
 
-    def test_untruncated_digest_unchanged(self, tmp_path):
-        """Back-compat: trees under the cap keep the pre-fix scheme
-        (no marker mixed in)."""
+    def test_untruncated_digest_matches_documented_scheme(self, tmp_path):
+        """Trees under the cap follow the documented length-framed
+        record scheme (no truncation marker mixed in)."""
         (tmp_path / "a.txt").write_bytes(b"hello")
         (tmp_path / "sub").mkdir()
         (tmp_path / "sub" / "b.txt").write_bytes(b"world")
@@ -309,8 +335,9 @@ class TestSha256TreeFstatBoundedRead:
         digest = sha256_tree(tmp_path)
 
         expected = hashlib.sha256()
+        expected.update(len(b"grow.bin").to_bytes(8, "little"))
         expected.update(b"grow.bin")
-        expected.update(b"a" * 4096)
+        expected.update(hashlib.sha256(b"a" * 4096).digest())
         assert digest == expected.hexdigest()
 
     def test_bounded_read_is_chunk_size_independent(self, tmp_path):

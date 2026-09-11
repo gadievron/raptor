@@ -910,7 +910,12 @@ class CodeQLAgent:
             root = query_roots.get(lang)
             if root is None or not root.is_dir():
                 continue
-            db_path = getattr(db, "database_path", None)
+            # successful_dbs maps lang -> database path (dict[str, Path],
+            # the same shape analyze_all_databases consumes) — the values
+            # are NOT result objects, so reading a .database_path
+            # attribute here silently skipped every language and
+            # dead-coded the whole pass.
+            db_path = db
             if not db_path:
                 continue
             conv = rows_from_taint_specs(specs, language=lang)

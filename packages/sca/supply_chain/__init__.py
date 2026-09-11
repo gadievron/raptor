@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 
+from ..findings import severity_rank
 from ..models import (
     Confidence,
     Dependency,
@@ -295,11 +296,11 @@ def evaluate(
 # registry-recency + low-bus-factor stack into the "newly registered
 # bait by an anonymous publisher" archetype.
 
-# Severity-rank table for clamping the escalation result so we
-# can't accidentally DOWNGRADE a finding via a max() call.
-_SEVERITY_RANK = {
-    "info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4,
-}
+# Severity comparisons go through ``findings.severity_rank`` — the
+# canonical case-insensitive table (it also knows ``none``).  A local
+# case-sensitive copy previously ranked capitalised severities
+# (``High``) as 0, which let the escalation below "upgrade" them to
+# a LOWER tier.
 
 
 def _escalate_cross_detector(findings: list[SupplyChainFinding]) -> None:
@@ -352,19 +353,20 @@ def _escalate_cross_detector(findings: list[SupplyChainFinding]) -> None:
             or "maintainer_account_change" in sibling_kinds
         )
 
-        target_rank = _SEVERITY_RANK.get(slop.severity, 0)
+        new_severity = slop.severity
         reasons: list[str] = []
         if has_recent and has_lone_maintainer:
             # Full bait shape: heuristic-shape + just-registered
             # + anonymous publisher. Critical regardless of the
             # heuristic's own score.
-            target_rank = max(target_rank, _SEVERITY_RANK["critical"])
+            new_severity = max(new_severity, "critical",
+                               key=severity_rank)
             reasons.append(
                 "co-occurs with recent_publish + low_bus_factor "
                 "(LLM-hallucination-bait archetype)"
             )
         elif has_recent or has_maint_change:
-            target_rank = max(target_rank, _SEVERITY_RANK["high"])
+            new_severity = max(new_severity, "high", key=severity_rank)
             reasons.append(
                 "co-occurs with "
                 + ("recent_publish " if has_recent else "")
@@ -372,19 +374,16 @@ def _escalate_cross_detector(findings: list[SupplyChainFinding]) -> None:
                 + "— new-package risk amplifies slopsquat shape"
             )
         elif has_lone_maintainer:
-            target_rank = max(target_rank, _SEVERITY_RANK["medium"])
+            new_severity = max(new_severity, "medium", key=severity_rank)
             reasons.append(
                 "co-occurs with low_bus_factor — single-publisher "
                 "package matching slopsquat shape"
             )
 
-        # Apply if it's actually an upgrade.
-        new_severity = next(
-            (s for s, r in _SEVERITY_RANK.items() if r == target_rank),
-            slop.severity,
-        )
-        if (_SEVERITY_RANK.get(new_severity, 0)
-                > _SEVERITY_RANK.get(slop.severity, 0)):
+        # Apply if it's actually an upgrade.  ``max`` above already
+        # keeps the incumbent on ties, so a genuinely higher (or
+        # capitalised-but-equal) existing severity never regresses.
+        if severity_rank(new_severity) > severity_rank(slop.severity):
             slop.severity = new_severity      # type: ignore[assignment]
             existing_evidence = dict(slop.evidence)
             existing_evidence["escalation_reasons"] = reasons

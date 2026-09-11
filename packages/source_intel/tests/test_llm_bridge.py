@@ -151,15 +151,23 @@ def test_collector_uses_cache_when_provided(tmp_path):
     )
 
     class _DummyCache:
+        """Implements the key-carrying cache contract: the collector
+        derives the key once and reuses it for lookup + store, so a
+        tree that drifts during analyze() can't file the result
+        under a fresher hash than the one it was computed from."""
+
         def __init__(self):
             self.gets = 0
             self.puts = 0
 
-        def get(self, target, rules_dir=None):
+        def key_for(self, target, rules_dir=None):
+            return (str(target), "test-rules")
+
+        def get_by_key(self, key):
             self.gets += 1
             return cached
 
-        def put(self, target, rules_dir, result):
+        def put_by_key(self, key, result):
             self.puts += 1
 
     cache = _DummyCache()

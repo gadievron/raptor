@@ -47,7 +47,7 @@ class TestRecordCrossFamilyOutcomes:
         assert n == 1
         stats = sc.get_stats()
         cell = next(s for s in stats if s.model == "gpt-5")
-        ec = cell.events.get(EventType.CROSS_FAMILY_CHECK)
+        ec = cell.events.get(EventType.CROSS_FAMILY_CONSISTENCY)
         assert ec is not None
         assert ec.correct == 1
 
@@ -67,7 +67,7 @@ class TestRecordCrossFamilyOutcomes:
         assert n == 1
         stats = sc.get_stats()
         cell = next(s for s in stats if s.model == "gpt-5")
-        ec = cell.events.get(EventType.CROSS_FAMILY_CHECK)
+        ec = cell.events.get(EventType.CROSS_FAMILY_CONSISTENCY)
         assert ec is not None
         assert ec.incorrect == 1
 
@@ -138,7 +138,7 @@ class TestRecordCrossFamilyOutcomes:
         assert n == 2
         stats = sc.get_stats()
         cell = next(s for s in stats if s.model == "gpt-5")
-        ec = cell.events[EventType.CROSS_FAMILY_CHECK]
+        ec = cell.events[EventType.CROSS_FAMILY_CONSISTENCY]
         assert ec.correct == 1
         assert ec.incorrect == 1
 
@@ -155,7 +155,7 @@ class TestRecordCrossFamilyOutcomes:
         n = record_cross_family_outcomes(sc, results_by_id=results)
         assert n == 1
         cell = next(s for s in sc.get_stats() if s.model == "gpt-5")
-        assert cell.events[EventType.CROSS_FAMILY_CHECK].incorrect == 1
+        assert cell.events[EventType.CROSS_FAMILY_CONSISTENCY].incorrect == 1
 
     def test_skips_empty_checker_model(self, tmp_path: Path):
         sc = ModelScorecard(path=tmp_path / "sc.json")
@@ -174,3 +174,61 @@ class TestRecordCrossFamilyOutcomes:
             cf_agreed=True,
         )}
         assert record_cross_family_outcomes(sc, results_by_id=results) == 0
+
+
+class TestConsistencyNotReliabilityGraded:
+    """A 1-vs-1 primary/checker pair carries no ground truth, so both
+    outcomes must land on the consistency slot — which the calibrated
+    merge's reliability pool excludes — and never on a
+    correctness-graded slot."""
+
+    def test_consistency_slot_excluded_from_reliability_pool(self):
+        from core.audit.calibrated_merge import RELIABILITY_EVENT_TYPES
+
+        assert (EventType.CROSS_FAMILY_CONSISTENCY
+                not in RELIABILITY_EVENT_TYPES)
+
+    def test_dispute_records_neutral_event_only(self, tmp_path: Path):
+        from core.audit.calibrated_merge import RELIABILITY_EVENT_TYPES
+
+        sc = ModelScorecard(path=tmp_path / "sc.json")
+        results = {"F-001": _make_result(
+            "F-001",
+            cf_check={
+                "checker_model": "gpt-5",
+                "verdict": "disputed — conservative override",
+                "checker_ruling": "primary overstated reachability",
+                "trigger": "low_quality",
+            },
+            cf_disputed=True,
+        )}
+        n = record_cross_family_outcomes(sc, results_by_id=results)
+        assert n == 1
+        cell = next(s for s in sc.get_stats() if s.model == "gpt-5")
+        # Neutral shape present.
+        cons = cell.events[EventType.CROSS_FAMILY_CONSISTENCY]
+        assert (cons.correct, cons.incorrect) == (0, 1)
+        # No reliability-pooled slot gained an attribution.
+        for event_type, counts in cell.events.items():
+            if event_type in RELIABILITY_EVENT_TYPES:
+                assert counts.correct == 0
+                assert counts.incorrect == 0
+
+    def test_agreement_records_neutral_event_only(self, tmp_path: Path):
+        from core.audit.calibrated_merge import RELIABILITY_EVENT_TYPES
+
+        sc = ModelScorecard(path=tmp_path / "sc.json")
+        results = {"F-001": _make_result(
+            "F-001",
+            cf_check={"checker_model": "gpt-5", "verdict": "agreed"},
+            cf_agreed=True,
+        )}
+        n = record_cross_family_outcomes(sc, results_by_id=results)
+        assert n == 1
+        cell = next(s for s in sc.get_stats() if s.model == "gpt-5")
+        cons = cell.events[EventType.CROSS_FAMILY_CONSISTENCY]
+        assert (cons.correct, cons.incorrect) == (1, 0)
+        for event_type, counts in cell.events.items():
+            if event_type in RELIABILITY_EVENT_TYPES:
+                assert counts.correct == 0
+                assert counts.incorrect == 0

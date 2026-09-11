@@ -265,8 +265,12 @@ class FuzzingOrchestrator:
             return "libfuzzer"
         if caps.has_afl() and caps.is_linux:
             return "afl"
-        if caps.has_afl() and caps.is_macos and caps.afl_shmem_ok:
-            return "afl"
+        # macOS with broken shared memory must NOT get an AFL plan —
+        # the campaign would die at start while the plan hint promises
+        # a libFuzzer fallback. afl_shmem_ok None (probe inconclusive)
+        # keeps AFL: only a confirmed-broken probe disqualifies.
+        if caps.has_afl() and caps.is_macos:
+            return "afl" if caps.afl_shmem_ok is not False else None
         if caps.has_afl():
             return "afl"
         return None
@@ -515,15 +519,9 @@ class FuzzingOrchestrator:
         try:
             from packages.fuzzing.coverage_bridge import emit_fuzz_coverage
 
-            stats = result.get("stats") or {}
-            iterations = 0
-            for k in ("execs_done", "total_execs", "executions"):
-                try:
-                    iterations = int(stats.get(k) or 0)
-                except (TypeError, ValueError):
-                    iterations = 0
-                if iterations:
-                    break
+            iterations = self._iterations_from_stats(
+                result.get("stats") or {})
+            harness = str(result.get("fuzzer") or "afl")
             cov_path = emit_fuzz_coverage(
                 out_dir,
                 binary=plan.target.path,
@@ -531,6 +529,7 @@ class FuzzingOrchestrator:
                 input_mode=result.get("input_mode", "file"),
                 iterations=iterations,
                 crashes=int(result.get("crashes") or 0),
+                harness=harness,
             )
             if cov_path is None:
                 # Uninstrumented binary target: map PC traces
@@ -544,12 +543,31 @@ class FuzzingOrchestrator:
                     binary=plan.target.path,
                     iterations=iterations,
                     crashes=int(result.get("crashes") or 0),
+                    harness=harness,
                 )
             if cov_path is not None:
                 result["fuzz_coverage"] = str(cov_path)
         except Exception as e:  # noqa: BLE001 — bridge is best-effort
             logger.warning("Fuzz coverage bridge failed (non-fatal): %s", e)
         return result
+
+    @staticmethod
+    def _iterations_from_stats(stats: dict[str, Any]) -> int:
+        """Campaign execution count from either runner's stats dict.
+
+        'execs_done' is AFL's key; 'total_executions' is the libFuzzer
+        stats field — without it every libFuzzer campaign reported
+        iterations=0 to the audit's priority derating.
+        """
+        for k in ("execs_done", "total_executions", "total_execs",
+                  "executions"):
+            try:
+                iterations = int(stats.get(k) or 0)
+            except (TypeError, ValueError):
+                iterations = 0
+            if iterations:
+                return iterations
+        return 0
 
     def _prepare_corpus(
         self,
@@ -756,9 +774,14 @@ class FuzzingOrchestrator:
             telemetry.stop()
         return {
             "fuzzer": "libfuzzer",
+            # Same verdict key the AFL path reports — a harness that
+            # died at startup is a failed campaign, not a clean
+            # zero-findings one.
+            "campaign_failed": result.campaign_failed,
             "crashes": len(result.crashes),
             "timeouts": len(result.timeouts),
             "oom_events": len(result.oom_inputs),
+            "leaks": len(result.leak_inputs),
             "crashes_dir": str(runner.crashes_dir),
             "stats": result.stats.__dict__,
             "telemetry": str(out_dir / "fuzz-summary.json"),

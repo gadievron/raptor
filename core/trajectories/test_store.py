@@ -198,6 +198,28 @@ def test_write_collision_retries_with_random_suffix(tmp_path):
     assert second.parent == first.parent  # same run dir
 
 
+def test_iter_trajectory_json_includes_salvage_files(tmp_path):
+    """A run_id collision makes the second write land at a suffixed
+    salvage name (trajectory-<hex>.json). The reader must iterate
+    those too — data that was written but never readable is data
+    lost. Canonical file first; nothing yielded twice."""
+    from core.trajectories.store import iter_trajectory_json
+
+    rec = _record(run_id="dup")
+    first = write_trajectory(rec, base=tmp_path)
+    second = write_trajectory(rec, base=tmp_path)
+    assert second != first
+
+    yielded = list(iter_trajectory_json(tmp_path))
+    paths = [p for p, _ in yielded]
+    assert first in paths
+    assert second in paths
+    assert len(paths) == len(set(paths)) == 2
+    assert paths[0].name == TRAJECTORY_FILENAME  # canonical first
+    for _p, parsed in yielded:
+        assert parsed["run_id"] == "dup"
+
+
 def test_write_refuses_to_follow_symlink(tmp_path):
     """A symlink planted at the trajectory path must not get its
     target overwritten."""

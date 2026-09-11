@@ -466,3 +466,129 @@ class TestFormatForContext:
     def test_out_of_range_param_index_degrades(self):
         s = self._summary(return_effects=frozenset({(7, "", -1)}))
         assert "`arg7`" in s.format_for_context("oneline")
+
+
+class TestAugmentedAssignKeepsEstablishedTaint:
+    """``q += rhs`` reads q too — the pre-assignment state must
+    survive the augmented write. Erasing it makes a param read as
+    "does not taint return", which the sanitizer-cut consumer can
+    turn into a false clean-wrapper binding (suppression of a real
+    finding via the unsanitized-symbol check)."""
+
+    def test_aug_assign_with_literal_keeps_sanitized_chain(self):
+        _, summaries = _summaries(
+            "def f(a):\n"
+            "    q = escape(a)\n"
+            "    q += 'suffix'\n"
+            "    return q\n"
+        )
+        s = summaries["f"]
+        assert s.param_taints_return(0)
+        assert ("escape", 0) in s.return_sanitizers_for_param(0)
+
+    def test_aug_assign_with_name_unions_both_flows(self):
+        _, summaries = _summaries(
+            "def f(a, b):\n"
+            "    q = escape(a)\n"
+            "    q += b\n"
+            "    return q\n"
+        )
+        s = summaries["f"]
+        assert ("escape", 0) in s.return_sanitizers_for_param(0)
+        # b reaches the return directly (no sanitizer chain)
+        assert (1, "", -1) in s.return_effects
+
+    def test_plain_reassign_still_kills_prior_taint(self):
+        # Direction check: a NON-augmented rewrite must keep killing
+        # the old state — only ``+=`` unions the target's own IN.
+        _, summaries = _summaries(
+            "def f(a):\n"
+            "    q = a\n"
+            "    q = 'constant'\n"
+            "    return q\n"
+        )
+        assert not summaries["f"].param_taints_return(0)
+
+
+class TestFStringCarriesTaint:
+    def test_fstring_interpolation_is_direct_flow(self):
+        _, summaries = _summaries(
+            "def f(a):\n"
+            "    return f'<{a}>'\n"
+        )
+        s = summaries["f"]
+        assert s.param_taints_return(0)
+        assert (0, "", -1) in s.return_effects
+
+    def test_mixed_sanitized_and_fstring_param_stays_dirty(self):
+        # The false clean-wrapper scenario: b's f-string flow must
+        # not vanish while a's sanitized flow is recorded.
+        _, summaries = _summaries(
+            "def f(a, b):\n"
+            "    return escape(a) + f'<{b}>'\n"
+        )
+        s = summaries["f"]
+        assert ("escape", 0) in s.return_sanitizers_for_param(0)
+        assert (1, "", -1) in s.return_effects
+
+    def test_fstring_without_interpolation_carries_nothing(self):
+        _, summaries = _summaries(
+            "def f(a):\n"
+            "    return f'static'\n"
+        )
+        assert not summaries["f"].param_taints_return(0)
+
+
+class TestKeywordAndStarredArgs:
+    def test_external_keyword_arg_survives_with_opaque_position(self):
+        from core.analysis.taint_summaries import _OPAQUE_ARG
+        _, summaries = _summaries(
+            "def f(a):\n"
+            "    return inner(data=a)\n"
+        )
+        s = summaries["f"]
+        assert s.param_taints_return(0)
+        assert (0, "inner", _OPAQUE_ARG) in s.return_effects
+
+    def test_in_module_keyword_maps_to_named_param(self):
+        _, summaries = _summaries(
+            "def ident(x):\n"
+            "    return x\n"
+            "def f(a):\n"
+            "    return ident(x=a)\n"
+        )
+        s = summaries["f"]
+        # Mapped through the callee summary: direct passthrough.
+        assert (0, "", -1) in s.return_effects
+
+    def test_starred_arg_taint_survives_opaque(self):
+        from core.analysis.taint_summaries import _OPAQUE_ARG
+        _, summaries = _summaries(
+            "def f(a):\n"
+            "    return joiner(*a)\n"
+        )
+        assert (0, "joiner", _OPAQUE_ARG) in summaries["f"].return_effects
+
+    def test_positions_after_star_go_opaque(self):
+        from core.analysis.taint_summaries import _OPAQUE_ARG
+        _, summaries = _summaries(
+            "def f(a, b):\n"
+            "    return fmt(*a, b)\n"
+        )
+        s = summaries["f"]
+        # b's real position is unknowable after the unpack — it must
+        # NOT be stamped at a trusted concrete index.
+        assert (1, "fmt", _OPAQUE_ARG) in s.return_effects
+        assert all(
+            not (pi == 1 and c == "fmt" and ai >= 0)
+            for pi, c, ai in s.return_effects
+        )
+
+    def test_positional_args_still_map_by_index(self):
+        # Direction check: without keywords/stars the concrete
+        # positional stamping is unchanged.
+        _, summaries = _summaries(
+            "def f(a):\n"
+            "    return clean(a)\n"
+        )
+        assert (0, "clean", 0) in summaries["f"].return_effects

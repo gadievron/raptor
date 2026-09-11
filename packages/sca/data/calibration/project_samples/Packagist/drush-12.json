@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-28T20:35:30Z",
+    "fetched_at": "2026-09-01T11:30:18Z",
     "git_ref": "12.5.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of drush-12",
@@ -33,13 +33,17 @@
           "https://github.com/drupal/core",
           "https://www.drupal.org/sa-core-2024-004"
         ],
-        "severity": null,
-        "severity_fallback": "medium",
+        "severity": {
+          "score": 6.9,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N"
+        },
         "summary": "Drupal core Access bypass"
       },
-      "cvss_score": null,
+      "cvss_score": 6.9,
       "dep_name": "drupal/core-recommended",
       "dep_version": "10.1.4",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.00408,
       "exploit_evidence": {
@@ -49,10 +53,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core-recommended:10.1.4:GHSA-7cwc-fjqm-8vh8",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core-recommended@10.1.4",
-      "raptor_risk_estimate": 7.2449455332,
+      "raptor_risk_estimate": 12.49753104477,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -63,21 +72,21 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+248 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 69.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.401382024,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.2449455332,
+        "final": 12.49753104477,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -86,7 +95,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -122,6 +136,7 @@
       "cvss_score": 5.4,
       "dep_name": "drupal/core-recommended",
       "dep_version": "10.1.4",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.00327,
       "exploit_evidence": {
@@ -131,8 +146,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core-recommended:10.1.4:GHSA-8mvq-8h2v-j9vf",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core-recommended@10.1.4",
       "raptor_risk_estimate": 9.7706043342675,
       "reachability": {
@@ -145,8 +165,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+248 more)"
         ],
         "verdict": "imported"
@@ -168,7 +188,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -205,6 +230,7 @@
       "cvss_score": 9.8,
       "dep_name": "drupal/core-recommended",
       "dep_version": "10.1.4",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.00904,
       "exploit_evidence": {
@@ -214,8 +240,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core-recommended:10.1.4:GHSA-938f-5r4f-h65v",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core-recommended@10.1.4",
       "raptor_risk_estimate": 17.862047595419998,
       "reachability": {
@@ -228,8 +259,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+248 more)"
         ],
         "verdict": "imported"
@@ -251,7 +282,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -287,6 +323,7 @@
       "cvss_score": 9.8,
       "dep_name": "drupal/core-recommended",
       "dep_version": "10.1.4",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.00956,
       "exploit_evidence": {
@@ -296,8 +333,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core-recommended:10.1.4:GHSA-gvf2-2f4g-jqf4",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core-recommended@10.1.4",
       "raptor_risk_estimate": 17.873782301130003,
       "reachability": {
@@ -310,8 +352,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+248 more)"
         ],
         "verdict": "imported"
@@ -333,7 +375,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -360,15 +407,16 @@
           "https://www.drupal.org/project/drupal/issues/3457781"
         ],
         "severity": {
-          "score": 5.3,
+          "score": 6.3,
           "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N"
         },
         "summary": "Drupal Full Path Disclosure"
       },
-      "cvss_score": 5.3,
+      "cvss_score": 6.3,
       "dep_name": "drupal/core-recommended",
       "dep_version": "10.1.4",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.09269,
       "exploit_evidence": {
@@ -380,8 +428,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core-recommended:10.1.4:GHSA-mg8j-w93w-xjgc",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core-recommended@10.1.4",
       "raptor_risk_estimate": 25.49134280660845,
       "reachability": {
@@ -394,15 +447,15 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+248 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 53.0,
+        "cvss_base": 63.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.44659970699999996,
@@ -417,7 +470,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -454,6 +512,7 @@
       "cvss_score": 9.8,
       "dep_name": "drupal/core-recommended",
       "dep_version": "10.1.4",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.00803,
       "exploit_evidence": {
@@ -463,8 +522,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core-recommended:10.1.4:GHSA-w6rx-9g2x-mg5g",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core-recommended@10.1.4",
       "raptor_risk_estimate": 17.8392551862525,
       "reachability": {
@@ -477,8 +541,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+248 more)"
         ],
         "verdict": "imported"
@@ -500,7 +564,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -527,6 +596,7 @@
       "cvss_score": null,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00324,
       "exploit_evidence": {
@@ -536,8 +606,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2025-005",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 5.066045855219999,
       "reachability": {
@@ -550,8 +625,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -573,7 +648,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -600,6 +680,7 @@
       "cvss_score": null,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00227,
       "exploit_evidence": {
@@ -609,8 +690,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2025-007",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 5.059791643934999,
       "reachability": {
@@ -623,8 +709,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -646,7 +732,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -673,6 +764,7 @@
       "cvss_score": null,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.0026,
       "exploit_evidence": {
@@ -682,8 +774,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2025-008",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 5.061919365299999,
       "reachability": {
@@ -696,8 +793,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -719,7 +816,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -747,6 +849,7 @@
       "cvss_score": null,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00353,
       "exploit_evidence": {
@@ -756,8 +859,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-005",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 5.067915670964999,
       "reachability": {
@@ -770,8 +878,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -793,7 +901,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -821,6 +934,7 @@
       "cvss_score": null,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00353,
       "exploit_evidence": {
@@ -830,8 +944,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-006",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 5.067915670964999,
       "reachability": {
@@ -844,8 +963,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -867,7 +986,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -895,6 +1019,7 @@
       "cvss_score": null,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00339,
       "exploit_evidence": {
@@ -904,8 +1029,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-007",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 5.067013001294998,
       "reachability": {
@@ -918,8 +1048,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -941,7 +1071,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -969,6 +1104,7 @@
       "cvss_score": null,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00221,
       "exploit_evidence": {
@@ -978,8 +1114,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-008",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 5.0594047855049995,
       "reachability": {
@@ -992,8 +1133,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1015,7 +1156,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1043,6 +1189,7 @@
       "cvss_score": null,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00273,
       "exploit_evidence": {
@@ -1052,8 +1199,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-009",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 5.062757558564998,
       "reachability": {
@@ -1066,8 +1218,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1089,7 +1241,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1116,6 +1273,7 @@
       "cvss_score": null,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00122,
       "exploit_evidence": {
@@ -1125,8 +1283,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-010",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 5.053021621409999,
       "reachability": {
@@ -1139,8 +1302,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1162,7 +1325,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1189,6 +1357,7 @@
       "cvss_score": null,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00133,
       "exploit_evidence": {
@@ -1198,8 +1367,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-012",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 5.053730861865,
       "reachability": {
@@ -1212,8 +1386,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1235,7 +1409,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1262,13 +1441,17 @@
           "https://github.com/drupal/core",
           "https://www.drupal.org/sa-core-2025-003"
         ],
-        "severity": null,
-        "severity_fallback": "medium",
+        "severity": {
+          "score": 4.5,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:H/AT:N/PR:H/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N/E:U"
+        },
         "summary": "Drupal Core Improperly Controlled Modification of Dynamically-Determined Object Attributes Vulnerability"
       },
-      "cvss_score": null,
+      "cvss_score": 4.5,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00574,
       "exploit_evidence": {
@@ -1278,10 +1461,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-2qph-q8xw-gv7q",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.082164956469998,
+      "raptor_risk_estimate": 5.717435576028748,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1292,21 +1480,21 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 45.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.402229122,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.082164956469998,
+        "final": 5.717435576028748,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1315,7 +1503,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1351,6 +1544,7 @@
       "cvss_score": 6.1,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00299,
       "exploit_evidence": {
@@ -1360,8 +1554,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-39g6-x4x8-5jcm",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 7.723261766269874,
       "reachability": {
@@ -1374,8 +1573,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1397,7 +1596,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1430,6 +1634,7 @@
       "cvss_score": 5.9,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00375,
       "exploit_evidence": {
@@ -1439,8 +1644,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-52jr-x6h6-xj6g",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 7.4772678740156255,
       "reachability": {
@@ -1453,8 +1663,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1476,7 +1686,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1501,6 +1716,7 @@
       "cvss_score": null,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": null,
       "exploit_evidence": {
@@ -1510,8 +1726,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-6ccv-8fgf-cjpw",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 8.268975749999997,
       "reachability": {
@@ -1524,8 +1745,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1547,7 +1768,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1573,13 +1799,17 @@
           "https://github.com/drupal/core",
           "https://www.drupal.org/sa-core-2024-004"
         ],
-        "severity": null,
-        "severity_fallback": "medium",
+        "severity": {
+          "score": 6.9,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N"
+        },
         "summary": "Drupal core Access bypass"
       },
-      "cvss_score": null,
+      "cvss_score": 6.9,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00408,
       "exploit_evidence": {
@@ -1589,10 +1819,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-7cwc-fjqm-8vh8",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.07146187324,
+      "raptor_risk_estimate": 8.748271731338999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1603,21 +1838,21 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 69.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.401382024,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.07146187324,
+        "final": 8.748271731338999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1626,7 +1861,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1662,6 +1902,7 @@
       "cvss_score": 5.4,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00327,
       "exploit_evidence": {
@@ -1671,8 +1912,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-8mvq-8h2v-j9vf",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 6.839423033987248,
       "reachability": {
@@ -1685,8 +1931,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1708,7 +1954,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1745,6 +1996,7 @@
       "cvss_score": 9.8,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00904,
       "exploit_evidence": {
@@ -1754,8 +2006,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-938f-5r4f-h65v",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 12.503433316793998,
       "reachability": {
@@ -1768,8 +2025,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1791,7 +2048,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1827,6 +2089,7 @@
       "cvss_score": 6.1,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00238,
       "exploit_evidence": {
@@ -1836,8 +2099,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-f3cj-mjqm-fhvj",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 7.717263848694748,
       "reachability": {
@@ -1850,8 +2118,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1873,7 +2141,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1911,6 +2184,7 @@
       "cvss_score": 9.8,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.87892,
       "exploit_evidence": {
@@ -1920,10 +2194,17 @@
         "github_poc_urls": [],
         "has_any": true,
         "kev_listed": true,
-        "msf_modules": []
+        "msf_modules": [
+          "auxiliary_scanner/http/drupal_pgsql_entityquery_sqli"
+        ]
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-ghwc-95x2-682j",
       "in_kev": true,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 46.109284329124776,
       "reachability": {
@@ -1936,8 +2217,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1959,7 +2240,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1995,6 +2281,7 @@
       "cvss_score": 9.8,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00956,
       "exploit_evidence": {
@@ -2004,8 +2291,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-gvf2-2f4g-jqf4",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 12.511647610791,
       "reachability": {
@@ -2018,8 +2310,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2041,7 +2333,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2079,6 +2376,7 @@
       "cvss_score": 5.4,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00487,
       "exploit_evidence": {
@@ -2088,8 +2386,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-m4wj-hhwj-47qp",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 6.853349937467248,
       "reachability": {
@@ -2102,8 +2405,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2125,7 +2428,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2162,6 +2470,7 @@
       "cvss_score": 5.9,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00261,
       "exploit_evidence": {
@@ -2171,8 +2480,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-m6vv-vcj8-w8m7",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 7.466426166514874,
       "reachability": {
@@ -2185,8 +2499,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2208,7 +2522,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2235,15 +2554,16 @@
           "https://www.drupal.org/project/drupal/issues/3457781"
         ],
         "severity": {
-          "score": 5.3,
+          "score": 6.3,
           "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N"
         },
         "summary": "Drupal Full Path Disclosure"
       },
-      "cvss_score": 5.3,
+      "cvss_score": 6.3,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.09269,
       "exploit_evidence": {
@@ -2255,8 +2575,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-mg8j-w93w-xjgc",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 17.84393996462591,
       "reachability": {
@@ -2269,15 +2594,15 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 53.0,
+        "cvss_base": 63.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.44659970699999996,
@@ -2292,7 +2617,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2329,6 +2659,7 @@
       "cvss_score": 9.8,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00803,
       "exploit_evidence": {
@@ -2338,8 +2669,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-w6rx-9g2x-mg5g",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 12.487478630376751,
       "reachability": {
@@ -2352,8 +2688,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2375,7 +2711,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2402,15 +2743,16 @@
           "https://www.drupal.org/sa-core-2025-002"
         ],
         "severity": {
-          "score": 4.6,
+          "score": 5.3,
           "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:U/C:L/I:L/A:N"
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N"
         },
         "summary": "Drupal Core Vulnerable to Forceful Browsing"
       },
-      "cvss_score": 4.6,
+      "cvss_score": 5.3,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00305,
       "exploit_evidence": {
@@ -2420,10 +2762,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-wpp8-fjgf-pwc7",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.824543924053748,
+      "raptor_risk_estimate": 6.710887564670624,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2434,21 +2781,21 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 46.0,
+        "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.40085641499999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.824543924053748,
+        "final": 6.710887564670624,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2457,7 +2804,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2493,6 +2845,7 @@
       "cvss_score": 6.6,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00399,
       "exploit_evidence": {
@@ -2502,8 +2855,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-xmjc-63pr-2mpg",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 8.366954616231748,
       "reachability": {
@@ -2516,8 +2874,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2539,7 +2897,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2573,6 +2936,7 @@
       "cvss_score": 7.5,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00457,
       "exploit_evidence": {
@@ -2582,8 +2946,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-xq54-x54m-vcpx",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/drupal/core@10.1.4",
       "raptor_risk_estimate": 9.514914782034374,
       "reachability": {
@@ -2596,8 +2965,8 @@
           "src/Boot/DrupalBoot8.php:6",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/sql/SqlCommands.php:13",
           "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2619,7 +2988,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2654,6 +3028,7 @@
       "cvss_score": 5.3,
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "7.7.1",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.00233,
       "exploit_evidence": {
@@ -2663,8 +3038,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.7.1:GHSA-94pj-82f3-465w",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
       "raptor_risk_estimate": 9.57819502233375,
       "reachability": {
@@ -2697,7 +3077,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2731,6 +3116,7 @@
       "cvss_score": 5.8,
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "7.7.1",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.00211,
       "exploit_evidence": {
@@ -2740,8 +3126,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.7.1:GHSA-cwxw-98qj-8qjx",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
       "raptor_risk_estimate": 10.478860044442499,
       "reachability": {
@@ -2774,7 +3165,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2808,6 +3204,7 @@
       "cvss_score": 5.3,
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "7.7.1",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.00247,
       "exploit_evidence": {
@@ -2817,8 +3214,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.7.1:GHSA-f283-ghqc-fg79",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
       "raptor_risk_estimate": 9.57990364706625,
       "reachability": {
@@ -2851,7 +3253,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2887,6 +3294,7 @@
       "cvss_score": 6.5,
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "7.7.1",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.00137,
       "exploit_evidence": {
@@ -2896,8 +3304,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.7.1:GHSA-f7vp-7xgx-4w4r",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
       "raptor_risk_estimate": 11.732473924518747,
       "reachability": {
@@ -2930,7 +3343,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2965,6 +3383,7 @@
       "cvss_score": 4.7,
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "7.7.1",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.00167,
       "exploit_evidence": {
@@ -2974,8 +3393,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.7.1:GHSA-g446-98w2-8p5w",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
       "raptor_risk_estimate": 8.48672799295875,
       "reachability": {
@@ -3008,7 +3432,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3042,6 +3471,7 @@
       "cvss_score": 5.9,
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "7.7.1",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.00252,
       "exploit_evidence": {
@@ -3051,8 +3481,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.7.1:GHSA-h95v-h523-3mw8",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
       "raptor_risk_estimate": 10.665100346055,
       "reachability": {
@@ -3085,7 +3520,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3122,6 +3562,7 @@
       "cvss_score": 7.2,
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "7.7.1",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.00213,
       "exploit_evidence": {
@@ -3131,8 +3572,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.7.1:GHSA-v5mv-p594-2x33",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
       "raptor_risk_estimate": 13.00857164811,
       "reachability": {
@@ -3165,7 +3611,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3199,6 +3650,7 @@
       "cvss_score": 5.9,
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "7.7.1",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.00229,
       "exploit_evidence": {
@@ -3208,8 +3660,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.7.1:GHSA-wm3w-8rrp-j577",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
       "raptor_risk_estimate": 10.66197554314125,
       "reachability": {
@@ -3242,7 +3699,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3274,6 +3736,7 @@
       "cvss_score": 5.9,
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "7.7.1",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.00148,
       "exploit_evidence": {
@@ -3283,8 +3746,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.7.1:GHSA-wpwq-4j6v-78m3",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
       "raptor_risk_estimate": 10.650970802445,
       "reachability": {
@@ -3317,7 +3785,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3350,6 +3823,7 @@
       "cvss_score": 5.3,
       "dep_name": "guzzlehttp/psr7",
       "dep_version": "2.5.1",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00198,
       "exploit_evidence": {
@@ -3359,8 +3833,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:guzzlehttp/psr7:2.5.1:GHSA-34xg-wgjx-8xph",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/guzzlehttp/psr7@2.5.1",
       "raptor_risk_estimate": 6.701746422351749,
       "reachability": {
@@ -3393,7 +3872,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3427,6 +3911,7 @@
       "cvss_score": 4.2,
       "dep_name": "guzzlehttp/psr7",
       "dep_version": "2.5.1",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00317,
       "exploit_evidence": {
@@ -3436,8 +3921,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:guzzlehttp/psr7:2.5.1:GHSA-c2w2-prh8-qm98",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/guzzlehttp/psr7@2.5.1",
       "raptor_risk_estimate": 5.31887424640425,
       "reachability": {
@@ -3470,7 +3960,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3504,6 +3999,7 @@
       "cvss_score": 5.3,
       "dep_name": "guzzlehttp/psr7",
       "dep_version": "2.5.1",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.0019,
       "exploit_evidence": {
@@ -3513,8 +4009,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:guzzlehttp/psr7:2.5.1:GHSA-hq7v-mx3g-29hw",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/guzzlehttp/psr7@2.5.1",
       "raptor_risk_estimate": 6.701062972458748,
       "reachability": {
@@ -3547,7 +4048,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3578,6 +4084,7 @@
       "cvss_score": 4.8,
       "dep_name": "guzzlehttp/psr7",
       "dep_version": "2.5.1",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00229,
       "exploit_evidence": {
@@ -3587,8 +4094,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:guzzlehttp/psr7:2.5.1:GHSA-vm85-hxw5-5432",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/guzzlehttp/psr7@2.5.1",
       "raptor_risk_estimate": 6.071904716093998,
       "reachability": {
@@ -3621,7 +4133,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3658,6 +4175,7 @@
       "cvss_score": 7.8,
       "dep_name": "phpunit/phpunit",
       "dep_version": "9.6.13",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.00348,
       "exploit_evidence": {
@@ -3667,8 +4185,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:phpunit/phpunit:9.6.13:GHSA-vvj3-c3rp-c85p",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/phpunit/phpunit@9.6.13",
       "raptor_risk_estimate": 9.578153103850223,
       "reachability": {
@@ -3678,11 +4201,11 @@
           "reason": "vendor referenced only by test code"
         },
         "evidence": [
-          "tests/unit/SiteSpecParserTest.php:8",
-          "tests/unit/SiteAliasFileDiscoveryTest.php:6",
-          "tests/unit/XhProfTest.php:9",
-          "tests/unit/UserAbortExceptionTest.php:8",
-          "tests/unit/SiteAliasFileLoaderTest.php:9",
+          "tests/unish/UnishTestCase.php:10",
+          "tests/unit/ArgsPreprocessorTest.php:8",
+          "tests/unit/ArgsRemapperTest.php:8",
+          "tests/unit/ConfigLocatorTest.php:8",
+          "tests/unit/EnvironmentTest.php:8",
           "... (+9 more)"
         ],
         "verdict": "not_reachable"
@@ -3704,7 +4227,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3738,8 +4266,9 @@
       "cvss_score": 6.7,
       "dep_name": "psy/psysh",
       "dep_version": "v0.11.21",
+      "direct": true,
       "ecosystem": "Packagist",
-      "epss": 0.0028,
+      "epss": 0.00291,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3747,10 +4276,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:psy/psysh:v0.11.21:GHSA-4486-gxhx-5mg7",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/psy/psysh@v0.11.21",
-      "raptor_risk_estimate": 20.79358881501956,
+      "raptor_risk_estimate": 20.796501524074777,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3758,11 +4292,11 @@
           "reason": "vendor `Psy\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
+          "src/Commands/core/CliCommands.php:16",
+          "src/Commands/core/CliCommands.php:17",
           "src/Psysh/DrushCommand.php:10",
           "src/Psysh/DrushHelpCommand.php:6",
-          "src/Psysh/Shell.php:6",
-          "src/Commands/core/CliCommands.php:16",
-          "src/Commands/core/CliCommands.php:17"
+          "src/Psysh/Shell.php:6"
         ],
         "verdict": "imported"
       },
@@ -3771,10 +4305,10 @@
         "cvss_base": 67.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40072884,
+        "epss_multiplier": 0.400784973,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 20.79358881501956,
+        "final": 20.796501524074777,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3784,7 +4318,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3808,13 +4347,17 @@
           "https://github.com/PHPCSStandards/PHP_CodeSniffer/commit/f0e1ebb0563f0e5d7f190497a787bcaf8474f3fe",
           "https://github.com/FriendsOfPHP/security-advisories/blob/master/squizlabs/php_codesniffer/CVE-2026-67434.yaml"
         ],
-        "severity": null,
-        "severity_fallback": "high",
+        "severity": {
+          "score": 7.3,
+          "severity": "high",
+          "vector": "CVSS:4.0/AV:L/AC:L/AT:P/PR:N/UI:P/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+        },
         "summary": "PHP_CodeSniffer gitblame report command injection via crafted filename"
       },
-      "cvss_score": null,
+      "cvss_score": 7.3,
       "dep_name": "squizlabs/php_codesniffer",
       "dep_version": "3.7.2",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.00701,
       "exploit_evidence": {
@@ -3824,10 +4367,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:squizlabs/php_codesniffer:3.7.2:GHSA-hmqg-cxww-wqhq",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/squizlabs/php_codesniffer@3.7.2",
-      "raptor_risk_estimate": 8.634384797527357,
+      "raptor_risk_estimate": 9.00442986027853,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3839,13 +4387,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 70.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 73.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.40287720299999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.634384797527357,
+        "final": 9.00442986027853,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3854,7 +4402,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3889,6 +4442,7 @@
       "cvss_score": 7.3,
       "dep_name": "symfony/http-foundation",
       "dep_version": "v6.3.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.01325,
       "exploit_evidence": {
@@ -3898,8 +4452,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v6.3.4:GHSA-3rg7-wf37-54rm",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/symfony/http-foundation@v6.3.4",
       "raptor_risk_estimate": 9.363320794340625,
       "reachability": {
@@ -3910,10 +4469,10 @@
         },
         "evidence": [
           "doctum-config.php:10",
-          "src/Commands/core/TwigCommands.php:19",
           "src/Commands/core/PhpCommands.php:12",
+          "src/Commands/core/TwigCommands.php:19",
           "drush.php:8",
-          "src/Boot/DrupalBoot8.php:18",
+          "src/Boot/DrupalBoot.php:8",
           "... (+261 more)"
         ],
         "verdict": "imported"
@@ -3935,7 +4494,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3970,6 +4534,7 @@
       "cvss_score": 3.1,
       "dep_name": "symfony/http-foundation",
       "dep_version": "v6.3.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00553,
       "exploit_evidence": {
@@ -3979,8 +4544,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v6.3.4:GHSA-mrqx-rp3w-jpjp",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/symfony/http-foundation@v6.3.4",
       "raptor_risk_estimate": 3.9376284877728733,
       "reachability": {
@@ -3991,10 +4561,10 @@
         },
         "evidence": [
           "doctum-config.php:10",
-          "src/Commands/core/TwigCommands.php:19",
           "src/Commands/core/PhpCommands.php:12",
+          "src/Commands/core/TwigCommands.php:19",
           "drush.php:8",
-          "src/Boot/DrupalBoot8.php:18",
+          "src/Boot/DrupalBoot.php:8",
           "... (+261 more)"
         ],
         "verdict": "imported"
@@ -4016,7 +4586,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4042,13 +4617,17 @@
           "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2026-45067.yaml",
           "https://github.com/symfony/symfony"
         ],
-        "severity": null,
-        "severity_fallback": "high",
+        "severity": {
+          "score": 7.1,
+          "severity": "high",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N"
+        },
         "summary": "Symfony has Email Header / SMTP Command Injection via CRLF in Symfony\\Component\\Mime\\Address"
       },
-      "cvss_score": null,
+      "cvss_score": 7.1,
       "dep_name": "symfony/mime",
       "dep_version": "v6.3.3",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00598,
       "exploit_evidence": {
@@ -4058,10 +4637,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:symfony/mime:v6.3.3:GHSA-qpmx-3rfj-7rhv",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/symfony/mime@v6.3.3",
-      "raptor_risk_estimate": 8.896496682832499,
+      "raptor_risk_estimate": 9.023589492587249,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4070,23 +4654,23 @@
         },
         "evidence": [
           "doctum-config.php:10",
-          "src/Commands/core/TwigCommands.php:19",
           "src/Commands/core/PhpCommands.php:12",
+          "src/Commands/core/TwigCommands.php:19",
           "drush.php:8",
-          "src/Boot/DrupalBoot8.php:18",
+          "src/Boot/DrupalBoot.php:8",
           "... (+261 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 70.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 71.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.402351594,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.896496682832499,
+        "final": 9.023589492587249,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4095,7 +4679,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4121,13 +4710,17 @@
           "https://github.com/symfony/symfony",
           "https://symfony.com/cve-2026-45070"
         ],
-        "severity": null,
-        "severity_fallback": "medium",
+        "severity": {
+          "score": 4.9,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N/E:U"
+        },
         "summary": "Symfony has Email Header Injection via Non-Token Characters in Mime Parameter Names"
       },
-      "cvss_score": null,
+      "cvss_score": 4.9,
       "dep_name": "symfony/mime",
       "dep_version": "v6.3.3",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.0039,
       "exploit_evidence": {
@@ -4137,10 +4730,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:symfony/mime:v6.3.3:GHSA-vqc8-7275-q272",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/symfony/mime@v6.3.3",
-      "raptor_risk_estimate": 5.0703012979499995,
+      "raptor_risk_estimate": 6.211119089988751,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4149,23 +4747,23 @@
         },
         "evidence": [
           "doctum-config.php:10",
-          "src/Commands/core/TwigCommands.php:19",
           "src/Commands/core/PhpCommands.php:12",
+          "src/Commands/core/TwigCommands.php:19",
           "drush.php:8",
-          "src/Boot/DrupalBoot8.php:18",
+          "src/Boot/DrupalBoot.php:8",
           "... (+261 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 49.00000000000001,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.40129017,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.0703012979499995,
+        "final": 6.211119089988751,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4174,7 +4772,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4197,13 +4800,17 @@
           "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/polyfill/CVE-2026-46644.yaml",
           "https://github.com/symfony/polyfill"
         ],
-        "severity": null,
-        "severity_fallback": "low",
+        "severity": {
+          "score": 2.7,
+          "severity": "low",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:L/SA:N/E:U"
+        },
         "summary": "symfony/polyfill-intl-idn: xn-- labels with ASCII-only Punycode payloads are treated as equivalent to their decoded form"
       },
-      "cvss_score": null,
+      "cvss_score": 2.7,
       "dep_name": "symfony/polyfill-intl-idn",
       "dep_version": "v1.27.0",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00538,
       "exploit_evidence": {
@@ -4213,10 +4820,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:symfony/polyfill-intl-idn:v1.27.0:GHSA-2xf4-cg6j-vhgq",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/symfony/polyfill-intl-idn@v1.27.0",
-      "raptor_risk_estimate": 0.12699609514724997,
+      "raptor_risk_estimate": 3.4288945689757493,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4225,23 +4837,23 @@
         },
         "evidence": [
           "doctum-config.php:10",
-          "src/Commands/core/TwigCommands.php:19",
           "src/Commands/core/PhpCommands.php:12",
+          "src/Commands/core/TwigCommands.php:19",
           "drush.php:8",
-          "src/Boot/DrupalBoot8.php:18",
+          "src/Boot/DrupalBoot.php:8",
           "... (+261 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 1.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 27.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.402045414,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 0.12699609514724997,
+        "final": 3.4288945689757493,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4250,7 +4862,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4276,15 +4893,16 @@
           "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2024-51736.yaml"
         ],
         "severity": {
-          "score": 8.4,
+          "score": 8.6,
           "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
         },
         "summary": "Symfony vulnerable to command execution hijack on Windows with Process class"
       },
-      "cvss_score": 8.4,
+      "cvss_score": 8.6,
       "dep_name": "symfony/process",
       "dep_version": "v6.3.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00425,
       "exploit_evidence": {
@@ -4294,10 +4912,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:symfony/process:v6.3.4:GHSA-qq5c-677p-737q",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/symfony/process@v6.3.4",
-      "raptor_risk_estimate": 10.6523717414625,
+      "raptor_risk_estimate": 10.90599964006875,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4306,23 +4929,23 @@
         },
         "evidence": [
           "doctum-config.php:10",
-          "src/Commands/core/TwigCommands.php:19",
           "src/Commands/core/PhpCommands.php:12",
+          "src/Commands/core/TwigCommands.php:19",
           "drush.php:8",
-          "src/Boot/DrupalBoot8.php:18",
+          "src/Boot/DrupalBoot.php:8",
           "... (+261 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 84.00000000000001,
+        "cvss_base": 86.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.401468775,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.6523717414625,
+        "final": 10.90599964006875,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4331,7 +4954,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4364,6 +4992,7 @@
       "cvss_score": null,
       "dep_name": "symfony/routing",
       "dep_version": "v6.3.3",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00348,
       "exploit_evidence": {
@@ -4373,8 +5002,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:symfony/routing:v6.3.3:GHSA-72xp-p242-47p9",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/symfony/routing@v6.3.3",
       "raptor_risk_estimate": 5.0675932889399995,
       "reachability": {
@@ -4385,10 +5019,10 @@
         },
         "evidence": [
           "doctum-config.php:10",
-          "src/Commands/core/TwigCommands.php:19",
           "src/Commands/core/PhpCommands.php:12",
+          "src/Commands/core/TwigCommands.php:19",
           "drush.php:8",
-          "src/Boot/DrupalBoot8.php:18",
+          "src/Boot/DrupalBoot.php:8",
           "... (+261 more)"
         ],
         "verdict": "imported"
@@ -4410,7 +5044,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4437,13 +5076,17 @@
           "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2026-48784.yaml",
           "https://github.com/symfony/symfony"
         ],
-        "severity": null,
-        "severity_fallback": "medium",
+        "severity": {
+          "score": 6.9,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:L/SI:L/SA:N"
+        },
         "summary": "Symfony: UrlGenerator Dot-Segment Encoding Skips Every Other Chained `../` or `./` → Generated URL Collapses Off-Route Under RFC 3986 Normalization"
       },
-      "cvss_score": null,
+      "cvss_score": 6.9,
       "dep_name": "symfony/routing",
       "dep_version": "v6.3.3",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00348,
       "exploit_evidence": {
@@ -4453,10 +5096,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:symfony/routing:v6.3.3:GHSA-h5x3-xfc9-m39h",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/symfony/routing@v6.3.3",
-      "raptor_risk_estimate": 5.0675932889399995,
+      "raptor_risk_estimate": 8.7415984234215,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4465,23 +5113,23 @@
         },
         "evidence": [
           "doctum-config.php:10",
-          "src/Commands/core/TwigCommands.php:19",
           "src/Commands/core/PhpCommands.php:12",
+          "src/Commands/core/TwigCommands.php:19",
           "drush.php:8",
-          "src/Boot/DrupalBoot8.php:18",
+          "src/Boot/DrupalBoot.php:8",
           "... (+261 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 69.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.401075844,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.0675932889399995,
+        "final": 8.7415984234215,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4490,7 +5138,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4525,6 +5178,7 @@
       "cvss_score": 3.1,
       "dep_name": "symfony/validator",
       "dep_version": "v6.3.4",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00455,
       "exploit_evidence": {
@@ -4534,8 +5188,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:symfony/validator:v6.3.4:GHSA-g3rh-rrhp-jhh9",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/symfony/validator@v6.3.4",
       "raptor_risk_estimate": 3.9327315048131237,
       "reachability": {
@@ -4546,10 +5205,10 @@
         },
         "evidence": [
           "doctum-config.php:10",
-          "src/Commands/core/TwigCommands.php:19",
           "src/Commands/core/PhpCommands.php:12",
+          "src/Commands/core/TwigCommands.php:19",
           "drush.php:8",
-          "src/Boot/DrupalBoot8.php:18",
+          "src/Boot/DrupalBoot.php:8",
           "... (+261 more)"
         ],
         "verdict": "imported"
@@ -4571,7 +5230,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4597,13 +5261,17 @@
           "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/yaml/CVE-2026-45304.yaml",
           "https://github.com/symfony/symfony"
         ],
-        "severity": null,
-        "severity_fallback": "low",
+        "severity": {
+          "score": 2.7,
+          "severity": "low",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N/E:U"
+        },
         "summary": "Symfony's YAML Parser Vulnerable to Exponential Memory Allocation via Recursive Collection-Alias Expansion (\"Billion Laughs\")"
       },
-      "cvss_score": null,
+      "cvss_score": 2.7,
       "dep_name": "symfony/yaml",
       "dep_version": "v6.3.3",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.00684,
       "exploit_evidence": {
@@ -4613,10 +5281,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:symfony/yaml:v6.3.3:GHSA-4qpc-3hr4-r2p4",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/symfony/yaml@v6.3.3",
-      "raptor_risk_estimate": 0.18175919146499997,
+      "raptor_risk_estimate": 4.907498169554999,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4625,23 +5298,23 @@
         },
         "evidence": [
           "doctum-config.php:10",
-          "src/Commands/core/TwigCommands.php:19",
           "src/Commands/core/PhpCommands.php:12",
+          "src/Commands/core/TwigCommands.php:19",
           "drush.php:8",
-          "src/Boot/DrupalBoot8.php:18",
+          "src/Boot/DrupalBoot.php:8",
           "... (+261 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 1.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 27.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.40279045199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 0.18175919146499997,
+        "final": 4.907498169554999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4650,7 +5323,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4676,13 +5354,17 @@
           "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/yaml/CVE-2026-45305.yaml",
           "https://github.com/symfony/symfony"
         ],
-        "severity": null,
-        "severity_fallback": "low",
+        "severity": {
+          "score": 2.7,
+          "severity": "low",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N/E:U"
+        },
         "summary": "Symfony's YAML Parser has a ReDoS via Catastrophic Backtracking in Parser::cleanup() Regex"
       },
-      "cvss_score": null,
+      "cvss_score": 2.7,
       "dep_name": "symfony/yaml",
       "dep_version": "v6.3.3",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.00684,
       "exploit_evidence": {
@@ -4692,10 +5374,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:symfony/yaml:v6.3.3:GHSA-9frc-8383-795m",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/symfony/yaml@v6.3.3",
-      "raptor_risk_estimate": 0.18175919146499997,
+      "raptor_risk_estimate": 4.907498169554999,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4704,23 +5391,23 @@
         },
         "evidence": [
           "doctum-config.php:10",
-          "src/Commands/core/TwigCommands.php:19",
           "src/Commands/core/PhpCommands.php:12",
+          "src/Commands/core/TwigCommands.php:19",
           "drush.php:8",
-          "src/Boot/DrupalBoot8.php:18",
+          "src/Boot/DrupalBoot.php:8",
           "... (+261 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 1.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 27.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.40279045199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 0.18175919146499997,
+        "final": 4.907498169554999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4729,7 +5416,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4757,13 +5449,17 @@
           "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/yaml/CVE-2026-45133.yaml",
           "https://github.com/symfony/symfony"
         ],
-        "severity": null,
-        "severity_fallback": "low",
+        "severity": {
+          "score": 2.7,
+          "severity": "low",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N/E:U"
+        },
         "summary": "Symfony hardened the parser when handling untrusted input"
       },
-      "cvss_score": null,
+      "cvss_score": 2.7,
       "dep_name": "symfony/yaml",
       "dep_version": "v6.3.3",
+      "direct": true,
       "ecosystem": "Packagist",
       "epss": 0.0063,
       "exploit_evidence": {
@@ -4773,10 +5469,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:symfony/yaml:v6.3.3:GHSA-c2p3-7m5p-cv8x",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/symfony/yaml@v6.3.3",
-      "raptor_risk_estimate": 0.18163484411249997,
+      "raptor_risk_estimate": 4.9041407910374994,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4785,23 +5486,23 @@
         },
         "evidence": [
           "doctum-config.php:10",
-          "src/Commands/core/TwigCommands.php:19",
           "src/Commands/core/PhpCommands.php:12",
+          "src/Commands/core/TwigCommands.php:19",
           "drush.php:8",
-          "src/Boot/DrupalBoot8.php:18",
+          "src/Boot/DrupalBoot.php:8",
           "... (+261 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 1.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 27.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.40251489,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 0.18163484411249997,
+        "final": 4.9041407910374994,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4810,7 +5511,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4839,6 +5545,7 @@
       "cvss_score": null,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00295,
       "exploit_evidence": {
@@ -4848,8 +5555,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-2g2g-8p8h-fgwm",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/twig/twig@v3.6.1",
       "raptor_risk_estimate": 3.435992801023393,
       "reachability": {
@@ -4878,7 +5590,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4900,13 +5617,17 @@
           "https://github.com/twigphp/Twig",
           "https://symfony.com/cve-2026-46628"
         ],
-        "severity": null,
-        "severity_fallback": "low",
+        "severity": {
+          "score": 1.3,
+          "severity": "low",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:P/VC:N/VI:N/VA:N/SC:L/SI:L/SA:N/E:U"
+        },
         "summary": "Twig: The `spaceless` filter implicitly marks its output as safe"
       },
-      "cvss_score": null,
+      "cvss_score": 1.3,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00295,
       "exploit_evidence": {
@@ -4916,8 +5637,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-4j38-f5cw-54h7",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/twig/twig@v3.6.1",
       "raptor_risk_estimate": 9.877655867267489,
       "reachability": {
@@ -4931,8 +5657,8 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 1.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 13.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.400805385,
         "exploit_evidence_multiplier": 1.0,
@@ -4947,7 +5673,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4969,13 +5700,17 @@
           "https://github.com/twigphp/Twig",
           "https://github.com/twigphp/Twig/releases/tag/v3.27.0"
         ],
-        "severity": null,
-        "severity_fallback": "high",
+        "severity": {
+          "score": 8.7,
+          "severity": "high",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N"
+        },
         "summary": "Twig: Sandbox filter, tag and function allow-list bypass when sandbox state changes between renders for a cached `Template`"
       },
-      "cvss_score": null,
+      "cvss_score": 8.7,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00362,
       "exploit_evidence": {
@@ -4985,10 +5720,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-529h-vh3j-85hq",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 6.0181166901752725,
+      "raptor_risk_estimate": 7.479659314932124,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5000,13 +5740,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 70.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 86.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.401147286,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.0181166901752725,
+        "final": 7.479659314932124,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5015,7 +5755,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -5045,6 +5790,7 @@
       "cvss_score": null,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00418,
       "exploit_evidence": {
@@ -5054,8 +5800,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-5v5v-ww74-355v",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/twig/twig@v3.6.1",
       "raptor_risk_estimate": 3.4413736323348925,
       "reachability": {
@@ -5084,7 +5835,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -5118,6 +5874,7 @@
       "cvss_score": 2.2,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00435,
       "exploit_evidence": {
@@ -5127,8 +5884,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-6377-hfv9-hqf6",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/twig/twig@v3.6.1",
       "raptor_risk_estimate": 1.8931645284570568,
       "reachability": {
@@ -5157,7 +5919,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -5193,6 +5960,7 @@
       "cvss_score": 8.5,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00849,
       "exploit_evidence": {
@@ -5202,8 +5970,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-6j75-5wfj-gh66",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/twig/twig@v3.6.1",
       "raptor_risk_estimate": 7.3529853823492015,
       "reachability": {
@@ -5232,7 +6005,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -5255,13 +6033,17 @@
           "https://github.com/twigphp/Twig",
           "https://symfony.com/cve-2026-46638"
         ],
-        "severity": null,
-        "severity_fallback": "medium",
+        "severity": {
+          "score": 5.8,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:L/UI:N/VC:N/VI:N/VA:N/SC:H/SI:H/SA:H"
+        },
         "summary": "Twig: `{% sandbox %}{% include %}` skips checkSecurity() on cached templates (incomplete fix for CVE-2024-45411)"
       },
-      "cvss_score": null,
+      "cvss_score": 5.8,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00473,
       "exploit_evidence": {
@@ -5271,10 +6053,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-7fxw-r6jv-74c8",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 3.443779695116456,
+      "raptor_risk_estimate": 4.99348055791886,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5286,13 +6073,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 57.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.40171371899999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.443779695116456,
+        "final": 4.99348055791886,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5301,7 +6088,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -5323,13 +6115,17 @@
           "https://github.com/twigphp/Twig",
           "https://symfony.com/cve-2026-46633"
         ],
-        "severity": null,
-        "severity_fallback": "critical",
+        "severity": {
+          "score": 9.3,
+          "severity": "critical",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+        },
         "summary": "Twig: PHP code injection via `{% use %}` template name"
       },
-      "cvss_score": null,
+      "cvss_score": 9.3,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00688,
       "exploit_evidence": {
@@ -5339,10 +6135,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-7p85-w9px-jpjp",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 7.7696667298407895,
+      "raptor_risk_estimate": 8.028655620835483,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5354,13 +6155,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 90.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 93.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.402810864,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.7696667298407895,
+        "final": 8.028655620835483,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5369,7 +6170,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -5399,6 +6205,7 @@
       "cvss_score": null,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00367,
       "exploit_evidence": {
@@ -5408,8 +6215,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-8x9c-rmqh-456c",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/twig/twig@v3.6.1",
       "raptor_risk_estimate": 3.4391425559374404,
       "reachability": {
@@ -5438,7 +6250,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -5468,6 +6285,7 @@
       "cvss_score": null,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00407,
       "exploit_evidence": {
@@ -5477,8 +6295,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-h8vq-8gpg-mhcg",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/twig/twig@v3.6.1",
       "raptor_risk_estimate": 3.4408924197785784,
       "reachability": {
@@ -5507,7 +6330,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -5541,6 +6369,7 @@
       "cvss_score": 2.2,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00429,
       "exploit_evidence": {
@@ -5550,8 +6379,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-jjxq-ff2g-95vh",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/twig/twig@v3.6.1",
       "raptor_risk_estimate": 1.893020164690163,
       "reachability": {
@@ -5580,7 +6414,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -5609,6 +6448,7 @@
       "cvss_score": null,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00483,
       "exploit_evidence": {
@@ -5618,8 +6458,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-p42q-9prx-q5wq",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/twig/twig@v3.6.1",
       "raptor_risk_estimate": 3.444217161076741,
       "reachability": {
@@ -5648,7 +6493,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -5677,6 +6527,7 @@
       "cvss_score": null,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00402,
       "exploit_evidence": {
@@ -5686,8 +6537,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-pr2w-4gpj-cpq4",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/twig/twig@v3.6.1",
       "raptor_risk_estimate": 3.440673686798436,
       "reachability": {
@@ -5716,7 +6572,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -5738,13 +6599,17 @@
           "https://github.com/twigphp/Twig",
           "https://symfony.com/cve-2026-46635"
         ],
-        "severity": null,
-        "severity_fallback": "low",
+        "severity": {
+          "score": 2.1,
+          "severity": "low",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:H/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N"
+        },
         "summary": "Twig: Sandbox property allowlist bypass via the `column` filter (array_column on objects)"
       },
-      "cvss_score": null,
+      "cvss_score": 2.1,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
+      "direct": false,
       "ecosystem": "Packagist",
       "epss": 0.00331,
       "exploit_evidence": {
@@ -5754,10 +6619,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-vcc8-phrv-43wj",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 0.0859391919620104,
+      "raptor_risk_estimate": 1.8047230312022189,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5769,13 +6639,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 1.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 21.000000000000004,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.40098909299999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 0.0859391919620104,
+        "final": 1.8047230312022189,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5784,7 +6654,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     }
   ]
 }

@@ -477,6 +477,37 @@ def test_corrupt_json_falls_through_to_empty(tmp_path):
     sc.record_event("x:y", "m", EventType.CHEAP_SHORT_CIRCUIT, "correct")
 
 
+def test_corrupt_json_quarantined_before_fresh_start(tmp_path):
+    """A write over a corrupt sidecar must preserve the corrupt bytes
+    aside (timestamped ``.corrupt`` sibling, mirroring the
+    ``.unverified`` quarantine) — pre-fix the fresh empty state was
+    atomically persisted OVER the accumulated history with nothing
+    left to inspect or recover."""
+    path = tmp_path / "sc.json"
+    corrupt = "{not valid json — months of history lived here"
+    path.write_text(corrupt, encoding="utf-8")
+    sc = ModelScorecard(path)
+    sc.record_event("x:y", "m", EventType.CHEAP_SHORT_CIRCUIT, "correct")
+    quarantined = list(tmp_path.glob("sc.json.*.corrupt"))
+    assert len(quarantined) == 1
+    assert quarantined[0].read_text(encoding="utf-8") == corrupt
+    # Fresh state proceeded: the sidecar is valid JSON carrying the event.
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert "m" in data["models"]
+
+
+def test_corrupt_json_read_only_leaves_file_in_place(tmp_path):
+    """Other direction: a read-only context persists nothing, so the
+    corrupt file stays put (no quarantine churn from mere reads)."""
+    path = tmp_path / "sc.json"
+    corrupt = "{not valid json"
+    path.write_text(corrupt, encoding="utf-8")
+    sc = ModelScorecard(path)
+    assert sc.should_short_circuit("x:y", "m") == Policy.LEARNING
+    assert path.read_text(encoding="utf-8") == corrupt
+    assert not list(tmp_path.glob("*.corrupt"))
+
+
 def test_schema_version_mismatch_raises(tmp_path):
     """A sidecar from a future schema version refuses to be opened
     — surfacing a hard error beats silently downgrading data."""
@@ -1130,3 +1161,112 @@ def test_safe_coercion_tolerates_wrong_type_scalar_cell_fields(tmp_path):
                        "calls": 2, "cost_usd": 0.5}])
     after = sc.get_stat("x:y", "m")
     assert after.calls == 2 and abs(after.cost_usd - 0.5) < 1e-9
+
+
+class TestRecordEventsBatch:
+    """record_events: one lock/write cycle, same cell state as the
+    per-event path, and all-entries-validated-before-lock atomicity."""
+
+    def test_batch_matches_per_event_recording(self, tmp_path):
+        sc_a = ModelScorecard(tmp_path / "a.json")
+        for _ in range(3):
+            sc_a.record_event("x:y", "m", EventType.MULTI_MODEL_CONSENSUS,
+                              "correct")
+        sc_a.record_event("x:y", "m", EventType.MULTI_MODEL_CONSENSUS,
+                          "incorrect")
+
+        sc_b = ModelScorecard(tmp_path / "b.json")
+        sc_b.record_events(
+            [{"decision_class": "x:y", "model": "m",
+              "event_type": EventType.MULTI_MODEL_CONSENSUS,
+              "outcome": "correct"}] * 3
+            + [{"decision_class": "x:y", "model": "m",
+                "event_type": EventType.MULTI_MODEL_CONSENSUS,
+                "outcome": "incorrect"}]
+        )
+
+        stats_a = sc_a.get_stat("x:y", "m")
+        stats_b = sc_b.get_stat("x:y", "m")
+        counts_a = stats_a.events[EventType.MULTI_MODEL_CONSENSUS]
+        counts_b = stats_b.events[EventType.MULTI_MODEL_CONSENSUS]
+        assert (counts_a.correct, counts_a.incorrect) == (3, 1)
+        assert (counts_b.correct, counts_b.incorrect) == (3, 1)
+
+    def test_bad_entry_rejected_before_any_write(self, tmp_path):
+        path = tmp_path / "sc.json"
+        sc = ModelScorecard(path)
+        with pytest.raises(ValueError):
+            sc.record_events([
+                {"decision_class": "x:y", "model": "m",
+                 "event_type": EventType.MULTI_MODEL_CONSENSUS,
+                 "outcome": "correct"},
+                {"decision_class": "x:y", "model": "m",
+                 "event_type": "not-a-real-event", "outcome": "correct"},
+            ])
+        # Validation runs before the lock: the good entry must NOT
+        # have been persisted (atomic no-write on a bad batch).
+        assert not path.exists() or "m" not in json.dumps(
+            json.loads(path.read_text()))
+
+    def test_missing_model_or_class_rejected(self, tmp_path):
+        sc = ModelScorecard(tmp_path / "sc.json")
+        with pytest.raises(ValueError):
+            sc.record_events([{"decision_class": "", "model": "m",
+                               "event_type": EventType.MULTI_MODEL_CONSENSUS,
+                               "outcome": "correct"}])
+
+    def test_empty_batch_is_noop(self, tmp_path):
+        path = tmp_path / "sc.json"
+        ModelScorecard(path).record_events([])
+        assert not path.exists()
+
+    def test_batch_sample_retained_on_incorrect(self, tmp_path):
+        sc = ModelScorecard(tmp_path / "sc.json", retain_samples=True)
+        sc.record_events([
+            {"decision_class": "x:y", "model": "m",
+             "event_type": EventType.MULTI_MODEL_CONSENSUS,
+             "outcome": "incorrect",
+             "sample": {"this_reasoning": "r1", "other_reasoning": "r2"}},
+        ])
+        stats = sc.get_stat("x:y", "m")
+        assert stats.disagreement_samples
+        assert stats.disagreement_samples[0]["this_reasoning"] == "r1"
+
+
+def test_reset_older_than_keeps_timestampless_cells(tmp_path):
+    """A cell with no ``last_seen_at`` (e.g. adopted legacy history)
+    has unknown age: an age-filtered reset must keep it. Deleting it
+    stays reserved for scoped/full resets."""
+    path = tmp_path / "sc.json"
+    sc = ModelScorecard(path)
+    sc.record_event("legacy", "m", EventType.CHEAP_SHORT_CIRCUIT, "correct")
+    sc.record_event("old", "m", EventType.CHEAP_SHORT_CIRCUIT, "correct")
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    # Strip the legacy cell's timestamp; age the other one out.
+    del on_disk["models"]["m"]["legacy"]["last_seen_at"]
+    long_ago = (
+        datetime.now(timezone.utc) - timedelta(days=200)
+    ).replace(microsecond=0).isoformat()
+    on_disk["models"]["m"]["old"]["last_seen_at"] = long_ago
+    path.write_text(json.dumps(on_disk), encoding="utf-8")
+    integrity.stamp_file(path)
+
+    n = sc.reset(older_than_days=90)
+    assert n == 1
+    remaining = {s.decision_class for s in sc.get_stats()}
+    assert remaining == {"legacy"}
+
+
+def test_reset_full_still_removes_timestampless_cells(tmp_path):
+    """The keep-on-unknown-age rule only applies to the age filter:
+    ``all_=True`` (and scoped resets) still delete such cells."""
+    path = tmp_path / "sc.json"
+    sc = ModelScorecard(path)
+    sc.record_event("legacy", "m", EventType.CHEAP_SHORT_CIRCUIT, "correct")
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    del on_disk["models"]["m"]["legacy"]["last_seen_at"]
+    path.write_text(json.dumps(on_disk), encoding="utf-8")
+    integrity.stamp_file(path)
+
+    assert sc.reset(all_=True) == 1
+    assert sc.get_stats() == []

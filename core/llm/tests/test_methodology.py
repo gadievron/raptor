@@ -53,6 +53,24 @@ class TestStripFrontmatter:
         result = _strip_frontmatter(text)
         assert "Body." in result
 
+    def test_thematic_break_after_h1_preserved(self):
+        # A '---' after the leading H1 is a body thematic break, not a
+        # frontmatter opener — it must not swallow the body.
+        text = "# Title\n---\nBody content.\nMore."
+        assert _strip_frontmatter(text) == "---\nBody content.\nMore."
+
+    def test_only_first_leading_h1_stripped(self):
+        text = "# First\n# Second\nBody."
+        assert _strip_frontmatter(text) == "# Second\nBody."
+
+    def test_unterminated_fence_is_body_content(self):
+        # An unmatched opening '---' is not frontmatter; treating it
+        # as one would silently discard the whole file.
+        text = "---\nnot: closed\nBody continues."
+        assert _strip_frontmatter(text) == (
+            "---\nnot: closed\nBody continues."
+        )
+
 
 class TestLoadMethodology:
     @pytest.fixture(autouse=True)

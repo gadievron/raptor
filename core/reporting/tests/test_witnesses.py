@@ -23,6 +23,18 @@ from core.witness import (  # noqa: E402
     compute_bytes_hash,
 )
 
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolated_witness_mac_key(tmp_path_factory, monkeypatch):
+    # WitnessStore.put stamps manifests with the witness-provenance
+    # MAC (lazily-created key under XDG_DATA_HOME) — keep these tests
+    # off the operator's real key store.
+    monkeypatch.setenv(
+        "XDG_DATA_HOME", str(tmp_path_factory.mktemp("xdg")),
+    )
+
 
 def _put(store: WitnessStore, *, source: WitnessSource,
          outcome: WitnessOutcome, data: bytes,

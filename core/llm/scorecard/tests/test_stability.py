@@ -280,3 +280,77 @@ class TestRecordCrossRunStability:
         assert ec is not None
         assert ec.correct == 2
         assert ec.incorrect == 1
+
+
+class TestSameModelPriorFilter:
+    """Stability is a per-model signal: only a prior verdict produced
+    by the SAME model can book this model's stability/instability. A
+    flip relative to a different model's prior verdict is cross-model
+    disagreement, not instability."""
+
+    def _setup(self, tmp_path: Path, prior_results: list,
+               current_results: dict):
+        prior_dir = tmp_path / "agentic_20260722_100000_pid1_1"
+        prior_dir.mkdir()
+        _write_run_metadata(prior_dir)
+        _write_report(prior_dir, prior_results)
+
+        current_dir = tmp_path / "agentic_20260723_100000_pid2_2"
+        current_dir.mkdir()
+        _write_run_metadata(current_dir)
+
+        sc = ModelScorecard(path=tmp_path / "scorecard.json")
+        return sc, current_dir, current_results
+
+    def test_same_model_flip_still_books_instability(self, tmp_path: Path):
+        prior = [_make_result("F-001", is_exploitable=True, model="model-a")]
+        current = {"F-001": _make_result(
+            "F-001", is_exploitable=False, model="model-a",
+        )}
+        sc, current_dir, results = self._setup(tmp_path, prior, current)
+
+        n = record_cross_run_stability(
+            sc, out_dir=current_dir, results_by_id=results,
+        )
+        assert n == 1
+        cell = next(s for s in sc.get_stats() if s.model == "model-a")
+        ec = cell.events[EventType.CROSS_RUN_STABILITY]
+        assert ec.incorrect == 1
+
+    def test_cross_model_disagreement_records_nothing(self, tmp_path: Path):
+        prior = [_make_result("F-001", is_exploitable=True, model="model-a")]
+        current = {"F-001": _make_result(
+            "F-001", is_exploitable=False, model="model-b",
+        )}
+        sc, current_dir, results = self._setup(tmp_path, prior, current)
+
+        n = record_cross_run_stability(
+            sc, out_dir=current_dir, results_by_id=results,
+        )
+        assert n == 0
+        for cell in sc.get_stats():
+            ec = cell.events.get(EventType.CROSS_RUN_STABILITY)
+            assert ec is None or (ec.correct == 0 and ec.incorrect == 0)
+
+    def test_cross_model_agreement_records_nothing(self, tmp_path: Path):
+        prior = [_make_result("F-001", is_exploitable=True, model="model-a")]
+        current = {"F-001": _make_result(
+            "F-001", is_exploitable=True, model="model-b",
+        )}
+        sc, current_dir, results = self._setup(tmp_path, prior, current)
+
+        assert record_cross_run_stability(
+            sc, out_dir=current_dir, results_by_id=results,
+        ) == 0
+
+    def test_unattributed_prior_records_nothing(self, tmp_path: Path):
+        prior_result = _make_result("F-001", is_exploitable=True)
+        del prior_result["analysed_by"]
+        current = {"F-001": _make_result("F-001", is_exploitable=False)}
+        sc, current_dir, results = self._setup(
+            tmp_path, [prior_result], current,
+        )
+
+        assert record_cross_run_stability(
+            sc, out_dir=current_dir, results_by_id=results,
+        ) == 0

@@ -421,6 +421,40 @@ class TestVerdictFrom:
         ev = self._ev(success=True, matches=[])
         assert verdict_from(ev) == "inconclusive"
 
+    # Rule 2 exception: the adapter marked the empty-match outcome as a
+    # definitive tool result (SMT unsat proving infeasibility). The
+    # LLM's phrasing-aware "confirmed" must survive — inverting it to
+    # refuted would report the opposite of what the tool proved.
+    def test_conclusive_empty_matches_lets_confirmed_stand(self):
+        ev = ToolEvidence(
+            tool="smt", rule="r", success=True, matches=[],
+            empty_matches_conclusive=True,
+        )
+        assert verdict_from(ev, "confirmed") == "confirmed"
+
+    def test_conclusive_empty_matches_still_allows_refuted(self):
+        # Reachability-phrased hypotheses keep their reading: unsat
+        # refutes them, and the ladder passes that through.
+        ev = ToolEvidence(
+            tool="smt", rule="r", success=True, matches=[],
+            empty_matches_conclusive=True,
+        )
+        assert verdict_from(ev, "refuted") == "refuted"
+
+    def test_unflagged_empty_matches_still_downgrade_confirmed(self):
+        # Direction guard: without the adapter's assertion, confirmed
+        # with no matches keeps downgrading to refuted — the exception
+        # must not weaken the general ladder.
+        ev = ToolEvidence(tool="t", rule="r", success=True, matches=[])
+        assert verdict_from(ev, "confirmed") == "refuted"
+
+    def test_conclusive_flag_ignored_on_tool_failure(self):
+        ev = ToolEvidence(
+            tool="smt", rule="r", success=False, error="boom",
+            empty_matches_conclusive=True,
+        )
+        assert verdict_from(ev, "confirmed") == "inconclusive"
+
 
 class TestAggregate:
     def _ev(self, success=True, matches=None, error=""):
@@ -515,13 +549,23 @@ class TestRunnerStillUsesDowngrades:
     def test_runner_tool_failure_inconclusive(self):
         _evaluate_with_refinement, MagicMock = self._setup()
         client = MagicMock()
+        # The LLM claims confirmed and offers a refinement; the
+        # mechanical floor must still hold the verdict at inconclusive
+        # while the refined rule survives for the retry loop.
+        client.generate_structured.return_value = {
+            "verdict": "confirmed",
+            "reasoning": "looks exploitable",
+            "refined_rule": "better rule",
+        }
         ev = ToolEvidence(tool="t", rule="r", success=False, error="boom")
         h = Hypothesis(claim="x", target=Path("/src"))
-        verdict, _, _ = _evaluate_with_refinement(
+        verdict, _, data = _evaluate_with_refinement(
             h, ev, client, task_type="audit")
         assert verdict == "inconclusive"
-        # LLM never called when the tool failed.
-        client.generate_structured.assert_not_called()
+        # The LLM IS consulted on tool failure — rule-compile errors are
+        # the failure class a refinement round can fix.
+        client.generate_structured.assert_called_once()
+        assert data["refined_rule"] == "better rule"
 
 
 # 4. Iteration guard ----------------------------------------------------------
@@ -587,7 +631,35 @@ class TestMustProgress:
             must_progress(prev, curr)
 
     def test_equal_uncertainty_raises_not_just_increase(self):
-        # Strict means strictly less; equal still counts as stalled.
+        # Strict means strictly less; equal still counts as stalled
+        # (below saturation).
+        h1 = Hypothesis(claim="a", target=Path("/src"))
+        h2 = Hypothesis(claim="b", target=Path("/src"))
+        prev = IterationStep(
+            hypothesis=h1,
+            evidence=[
+                self._ev(matches=[{"file": "x", "line": 1}]),
+                self._ev(success=False),
+            ],
+        )
+        curr = IterationStep(
+            hypothesis=h2,
+            evidence=[
+                self._ev(matches=[{"file": "y", "line": 2}]),
+                self._ev(success=False),
+            ],
+        )
+        # Both fractions are 0.5; equal is not strictly less.
+        with pytest.raises(IterationStalled):
+            must_progress(prev, curr)
+
+    def test_saturated_fractions_do_not_stall(self):
+        # When EVERY evidence item is already conclusive (fraction 1.0
+        # on both sides), the fresh round did contribute conclusive
+        # evidence and there is no uncertainty left to decrease —
+        # stalling here would cap refinement of matches-present-but-
+        # LLM-inconclusive hypotheses at two rounds regardless of the
+        # iteration budget.
         h1 = Hypothesis(claim="a", target=Path("/src"))
         h2 = Hypothesis(claim="b", target=Path("/src"))
         prev = IterationStep(
@@ -596,11 +668,12 @@ class TestMustProgress:
         )
         curr = IterationStep(
             hypothesis=h2,
-            evidence=[self._ev(matches=[{"file": "y", "line": 2}])],
+            evidence=[
+                self._ev(matches=[{"file": "x", "line": 1}]),
+                self._ev(matches=[{"file": "y", "line": 2}]),
+            ],
         )
-        # Both have uncertainty 0; equal is not strictly less.
-        with pytest.raises(IterationStalled):
-            must_progress(prev, curr)
+        must_progress(prev, curr)  # does not raise
 
 
 # 5. Bayesian posterior aggregation -------------------------------------------
@@ -652,6 +725,24 @@ class TestPosterior:
         p3 = posterior_update(UNIFORM_PRIOR, confirms=True, weight=3.0)
         assert p3.alpha == p1.alpha + 2.0
         assert p3.mean > p1.mean
+
+    def test_nonpositive_weight_rejected(self):
+        # update() is the only mutation point, so it enforces the
+        # documented alpha/beta > 0 invariant: a negative weight would
+        # let mean escape [0, 1] and silently flip the thresholded
+        # verdict.
+        for bad in (0.0, -1.0, -5.0):
+            with pytest.raises(ValueError, match="positive"):
+                posterior_update(UNIFORM_PRIOR, confirms=True, weight=bad)
+
+    def test_nonfinite_weight_rejected(self):
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            with pytest.raises(ValueError, match="finite|positive"):
+                posterior_update(UNIFORM_PRIOR, confirms=False, weight=bad)
+
+    def test_valid_fractional_weight_still_accepted(self):
+        p = posterior_update(UNIFORM_PRIOR, confirms=True, weight=0.5)
+        assert p.alpha == 1.5
 
 
 class TestPosteriorFrom:

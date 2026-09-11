@@ -78,7 +78,10 @@ def test_redacts_lowercase_auth_schemes():
 
 
 def test_preserves_short_non_authorization_values():
-    value = "Bearer short basic setup tokenization page_token=cursor123"
+    # `page_token=cursor123` is NOT here: `_token`-suffixed assignments
+    # now redact in free text exactly as they always did in URL query
+    # strings (see test_secret_assignment_shapes_redact).
+    value = "Bearer short basic setup tokenization"
 
     assert redact_secrets(value) == value
 
@@ -207,3 +210,89 @@ class TestVendorShapeCoverage:
     ])
     def test_benign_code_and_prose_untouched(self, benign):
         assert redact_secrets(benign) == benign
+
+
+class TestFreeTextAssignments:
+    """is_secret_field_name + assignment wiring for free text (the
+    mechanism URL query redaction always had)."""
+
+    @pytest.mark.parametrize("text,secret", [
+        ("GITLAB_TOKEN=glpat_sekrit201x", "glpat_sekrit201x"),
+        ("npm_token=npmsekrit202", "npmsekrit202"),
+        ("DB_PASSWORD: hunter2hunter2", "hunter2hunter2"),
+        ("api_key: sekrit203abc", "sekrit203abc"),
+        ('"client_secret": "sekrit204abc"', "sekrit204abc"),
+        ("export AWS-SECRET-KEY=sekrit205abc", "sekrit205abc"),
+    ])
+    def test_secret_assignment_shapes_redact(self, text, secret):
+        out = redact_secrets(text)
+        assert secret not in out, out
+        assert "[REDACTED]" in out
+
+    @pytest.mark.parametrize("benign", [
+        # Non-secret names with long values stay put.
+        "version = 1.2.3-release+build99",
+        "hostname: db-primary.internal.example",
+        # Secret-suffixed name but value below the 8-char floor —
+        # prose like "password: short" is not a credential.
+        "password: short",
+        "token: use-it",
+        # Name merely CONTAINING "key" (no secret suffix) stays put.
+        "monkey = bananasplit123",
+    ])
+    def test_benign_assignments_untouched(self, benign):
+        assert redact_secrets(benign) == benign
+
+    def test_json_member_separator_not_swallowed(self):
+        # Unquoted JSON value: pre-fix the value charset included ','
+        # so the replacement consumed the separator and dragged the
+        # next member into [REDACTED].
+        out = redact_secrets('{"access_token": 12345678901, "next": true}')
+        assert "12345678901" not in out
+        assert out == '{"access_token": [REDACTED], "next": true}'
+
+    def test_quoted_json_value_stays_parseable(self):
+        import json as _json
+        out = redact_secrets(
+            '{"access_token": "sekrit212abcd", "next": true}')
+        assert "sekrit212abcd" not in out
+        assert _json.loads(out) == {"access_token": "[REDACTED]",
+                                    "next": True}
+
+    def test_semicolon_separated_assignment_keeps_tail(self):
+        # Cookie/config style `k=v;k2=v2` — the ';' stays outside the
+        # replacement. Trade-off (same as parens): a secret CONTAINING
+        # ','/';' redacts only up to it — this pass is the net under
+        # the URL/vendor passes, not the primary.
+        out = redact_secrets("session_token=sekrit213abc;path=/x")
+        assert "sekrit213abc" not in out
+        assert out.endswith(";path=/x")
+
+
+class TestUrlParensAndCap:
+    def test_paren_wrapped_url_query_secret_redacted(self):
+        out = redact_secrets("(see https://e.example/?token=sekrit210ab)")
+        assert "sekrit210ab" not in out
+        # The prose wrapper survives outside the URL.
+        assert out.endswith(")")
+
+    def test_parens_inside_url_path_do_not_truncate_redaction(self):
+        # Pre-fix the match stopped at '(' and the query escaped whole.
+        out = redact_secrets(
+            "https://e.example/wiki/Foo_(bar)?api_key=sekrit211ab&x=1")
+        assert "sekrit211ab" not in out
+        assert "Foo_(bar)" in out
+
+    def test_paren_url_covered_in_url_only_mode(self):
+        out = redact_url_secrets_only(
+            "https://e.example/a(b)/c?password=sekrit212ab")
+        assert "sekrit212ab" not in out
+
+    def test_secret_beyond_8k_cap_still_redacted(self):
+        # A URL longer than the 8 KB match cap splits; the tail pair
+        # scan must still catch the credential.
+        url = ("https://e.example/?pad=" + "a" * 9000
+               + "&access_token=sekrit213ab")
+        for fn in (redact_secrets, redact_url_secrets_only):
+            out = fn(url)
+            assert "sekrit213ab" not in out, fn.__name__

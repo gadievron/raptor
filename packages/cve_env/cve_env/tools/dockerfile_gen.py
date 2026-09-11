@@ -16,7 +16,54 @@ from typing import Any
 from cve_env.utils.dockerfile_hygiene import validate_dockerfile_semantics
 from cve_env.validators import validate_image_ref
 
-_APT_PACKAGE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9.+\-:=~]+$")
+# Any CR/LF (or other C0 control char) inside a single-directive value
+# would smuggle extra Dockerfile directives (RUN/COPY/...) past the render's
+# dep-drift pin gates, which scan install_steps only. Values carrying them
+# are rejected outright — sanitizing would silently change what the agent
+# asked for.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+# apt package entry grammar: ``name`` or ``name=version``. Name may carry an
+# architecture qualifier (``libssl1.1:amd64``); version pins may carry epoch
+# (``1:2.4-1``), tilde revisions and the ``=X.Y.*`` glob tier.
+_APT_NAME_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9.+:\-]*")
+_APT_VERSION_RE = re.compile(r"[A-Za-z0-9.+:~*\-]+")
+
+
+def _single_line_issue(field_name: str, value: str) -> list[str]:
+    """Reject embedded newlines / control chars in one directive value."""
+    if _CONTROL_CHARS_RE.search(value):
+        return [
+            f"{field_name} must not contain newlines or control characters "
+            "(a multi-line value would inject extra Dockerfile directives)"
+        ]
+    return []
+
+
+def _apt_package_issue(pkg: Any) -> str | None:
+    """Validate one apt_packages entry; return the problem or None.
+
+    Single validation point for both the gate AND the emitted RUN line —
+    an entry can never validate here and then be dropped at emit time. A
+    silently vanished (version-pinned) package would build a container
+    without the very package whose version the run must control.
+    """
+    if not isinstance(pkg, str) or not pkg:
+        return "must be a non-empty string"
+    if _CONTROL_CHARS_RE.search(pkg) or " " in pkg:
+        return "must not contain whitespace or control characters"
+    name, eq, version = pkg.partition("=")
+    if not _APT_NAME_RE.fullmatch(name):
+        return (
+            "package name must be alphanumeric plus dots, plus, hyphen, "
+            f"colon (got {name!r})"
+        )
+    if eq and not _APT_VERSION_RE.fullmatch(version):
+        return (
+            "version pin must be alphanumeric plus dots, plus, hyphen, "
+            f"colon, tilde, star (got {version!r})"
+        )
+    return None
 
 
 @dataclass
@@ -169,12 +216,24 @@ def _validate_copy_ops(copy_ops: list[dict[str, str]]) -> list[str]:
             )
         elif ".." in src.split("/"):
             issues.append(f"copy_ops[{i}].src {src!r} must not contain '..'")
+        elif re.search(r"\s", src) or _CONTROL_CHARS_RE.search(src):
+            # Whitespace inside src/dst changes the COPY line's arity
+            # (extra args) and a newline injects whole directives.
+            issues.append(
+                f"copy_ops[{i}].src {src!r} must not contain whitespace "
+                "or control characters"
+            )
         if not isinstance(dst, str) or not dst:
             issues.append(f"copy_ops[{i}].dst must be a non-empty string")
         elif not dst.startswith("/"):
             issues.append(f"copy_ops[{i}].dst {dst!r} must be an absolute path")
         elif ".." in dst.split("/"):
             issues.append(f"copy_ops[{i}].dst {dst!r} must not contain '..'")
+        elif re.search(r"\s", dst) or _CONTROL_CHARS_RE.search(dst):
+            issues.append(
+                f"copy_ops[{i}].dst {dst!r} must not contain whitespace "
+                "or control characters"
+            )
     return issues
 
 
@@ -213,6 +272,8 @@ def render_dockerfile(
     base_issues = validate_image_ref(base_image)
     if base_issues:
         issues.extend(f"base_image: {msg}" for msg in base_issues)
+    if isinstance(base_image, str):
+        issues.extend(_single_line_issue("base_image", base_image))
 
     if not isinstance(install_steps, list) or not all(
         isinstance(s, str) for s in install_steps
@@ -221,6 +282,16 @@ def render_dockerfile(
 
     if workdir and (not isinstance(workdir, str) or not workdir.startswith("/")):
         issues.append(f"workdir {workdir!r} must be an absolute path")
+    elif workdir and isinstance(workdir, str):
+        issues.extend(_single_line_issue("workdir", workdir))
+
+    if cmd is not None and isinstance(cmd, list):
+        issues.extend(
+            issue
+            for i, c in enumerate(cmd)
+            if isinstance(c, str)
+            for issue in _single_line_issue(f"cmd[{i}]", c)
+        )
 
     clean_copy_ops = list(copy_ops or [])
     if clean_copy_ops:
@@ -237,8 +308,10 @@ def render_dockerfile(
     issues.extend(drift_issues)
 
     clean_apt = list(apt_packages or [])
-    issues.extend(f"apt_packages: {pkg!r} does not match allowed pattern "
-                f"(alphanumeric, dots, plus, hyphen, colon, equals, tilde)" for pkg in clean_apt if not isinstance(pkg, str) or not _APT_PACKAGE_RE.match(pkg))
+    for i, pkg in enumerate(clean_apt):
+        problem = _apt_package_issue(pkg)
+        if problem is not None:
+            issues.append(f"apt_packages[{i}]: {pkg!r} {problem}")
     if issues:
         return DockerfileRenderResult(ok=False, issues=issues, warnings=drift_warnings)
 
@@ -256,11 +329,10 @@ def render_dockerfile(
         if apt_unsafe
         else ""
     )
-    # Validate apt package names: strip embedded newlines and reject
-    # names that don't match the expected pattern.
-    _apt_name_re = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9.+\-]+$')
-    clean_apt = [p.strip().replace('\n', '').replace('\r', '') for p in clean_apt]
-    clean_apt = [p for p in clean_apt if _apt_name_re.match(p)]
+    # Every entry already passed _apt_package_issue (single-line, strict
+    # grammar incl. `=<version>` pins) — emit them verbatim. No re-filter
+    # here: a second, stricter pass once dropped version-pinned entries
+    # silently, shipping a "successful" render without the pinned package.
     if clean_apt:
         apt_line = " ".join(clean_apt)
         lines.append(

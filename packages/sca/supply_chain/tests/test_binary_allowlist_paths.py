@@ -21,6 +21,13 @@ def _write_elf(p: Path) -> None:
     p.write_bytes(b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 100)
 
 
+def _write_macho(p: Path) -> None:
+    """Write a minimal Mach-O-64-magic file at ``p`` (creating
+    parents)."""
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"\xcf\xfa\xed\xfe" + b"\x00" * 100)
+
+
 def _write_package_json(tmp_path: Path) -> Path:
     pkg = tmp_path / "package.json"
     pkg.write_text('{"name": "victim", "version": "1.0.0"}', encoding="utf-8")
@@ -89,14 +96,28 @@ def test_so_under_binding_root_is_allowlisted(tmp_path: Path) -> None:
 
 
 def test_dylib_under_prebuilds_is_allowlisted(tmp_path: Path) -> None:
-    """``prebuilds/darwin-arm64/foo.dylib`` — prebuildify's macOS slot."""
+    """``prebuilds/darwin-arm64/foo.dylib`` — prebuildify's macOS
+    slot; genuine Mach-O content matches the slot's declared magic."""
     _clear_allowlist_cache()
     _write_package_json(tmp_path)
-    _write_elf(tmp_path / "prebuilds" / "darwin-arm64" / "foo.dylib")
+    _write_macho(tmp_path / "prebuilds" / "darwin-arm64" / "foo.dylib")
     hits = binary_in_package.scan_target(tmp_path, [], [])
     assert not any(
         h.relpath.endswith("foo.dylib") for h in hits
     )
+
+
+def test_elf_wearing_dylib_extension_under_prebuilds_flagged(
+    tmp_path: Path,
+) -> None:
+    """An ELF wearing the ``.dylib`` extension in the macOS prebuild
+    slot lies about its content — the slot's magic requirement
+    refuses the suppression (same doctrine as the ``.wasm`` entry)."""
+    _clear_allowlist_cache()
+    _write_package_json(tmp_path)
+    _write_elf(tmp_path / "prebuilds" / "darwin-arm64" / "evil.dylib")
+    hits = binary_in_package.scan_target(tmp_path, [], [])
+    assert any(h.relpath.endswith("evil.dylib") for h in hits)
 
 
 # ---------------------------------------------------------------------------
@@ -229,3 +250,33 @@ def test_so_under_arbitrary_attacker_dir_is_flagged(
     _write_elf(tmp_path / "src" / "helpers" / "x.so")
     hits = binary_in_package.scan_target(tmp_path, [], [])
     assert any(h.relpath.endswith("x.so") for h in hits)
+
+
+# ---------------------------------------------------------------------------
+# prebuilds/ rides only for extension-scoped shared-object slots
+# ---------------------------------------------------------------------------
+
+def test_bare_elf_payload_under_prebuilds_is_flagged(
+    tmp_path: Path,
+) -> None:
+    """An extensionless ELF at ``prebuilds/foo/payload`` is not the
+    prebuildify convention (`prebuilds/<platform>-<arch>/<name>.node`
+    and shared-library extensions) — planting a payload there must
+    not ride the prebuild slot."""
+    _clear_allowlist_cache()
+    _write_package_json(tmp_path)
+    _write_elf(tmp_path / "prebuilds" / "foo" / "payload")
+    hits = binary_in_package.scan_target(tmp_path, [], [])
+    assert any(h.relpath == "prebuilds/foo/payload" for h in hits)
+
+
+def test_node_module_under_prebuilds_still_suppressed(
+    tmp_path: Path,
+) -> None:
+    """The legitimate prebuildify artifact — a ``.node`` NAPI module
+    with genuine native-object magic — still rides."""
+    _clear_allowlist_cache()
+    _write_package_json(tmp_path)
+    _write_elf(tmp_path / "prebuilds" / "linux-x64" / "node.napi.node")
+    hits = binary_in_package.scan_target(tmp_path, [], [])
+    assert not any(h.relpath.endswith("node.napi.node") for h in hits)

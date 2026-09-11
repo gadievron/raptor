@@ -135,8 +135,17 @@ def _resolved_pack_pointers() -> dict[str, Path]:
     if not binary:
         return {}
     try:
+        # Import guarded separately from the subprocess call: core.config
+        # may not be fully initialised in test/script contexts (same
+        # rationale as _pack_roots), and an ImportError escaping here
+        # would crash Tier 1 discovery instead of degrading to the
+        # default-root walk this function's docstring promises.
         from core.config import RaptorConfig
         from core.sandbox.preexec import set_pdeathsig
+    except ImportError as e:
+        logger.debug("codeql resolve qlpacks skipped: %s", e)
+        return {}
+    try:
         proc = subprocess.run(
             [binary, "resolve", "qlpacks", "--format=json"],
             capture_output=True, text=True,
@@ -597,10 +606,15 @@ _RULE_ID_TO_CWE: list = [
         r"|exec[-_]?shell",
         re.IGNORECASE,
     ), "CWE-78"),
+    # NoSQL injection — MUST precede the SQL entry: "nosql-injection"
+    # contains "sql-injection" as a substring, so with SQL first the
+    # first-match-wins loop would misroute NoSQL rule ids to CWE-89
+    # (and Tier 1 would then run the SQL-injection prebuilt query
+    # against a MongoDB-injection claim).
+    (re.compile(r"nosql[-_]?injection|\bnosqli\b|mongo[-_].*injection",
+                re.IGNORECASE), "CWE-943"),
     # SQL injection
     (re.compile(r"sql[-_]?injection|sqli\b", re.IGNORECASE), "CWE-89"),
-    # NoSQL injection
-    (re.compile(r"nosql[-_]?injection|mongo[-_].*injection", re.IGNORECASE), "CWE-943"),
     # Path traversal
     (re.compile(r"path[-_]?traversal|tainted[-_]?path|directory[-_]?traversal",
                 re.IGNORECASE), "CWE-22"),
@@ -641,6 +655,25 @@ _RULE_ID_TO_CWE: list = [
     # Stack trace exposure
     (re.compile(r"stack[-_]?trace|exception[-_]?message[-_]?disclos",
                 re.IGNORECASE), "CWE-209"),
+    # Memory-corruption classes — native-code scanners (sanitizer rule
+    # names, CodeQL cpp packs) use these spellings. Mirrors the
+    # import-time inference vocabulary in core.sarif.import_normalizer
+    # so a finding resolves to the same CWE whichever pipeline leg
+    # infers it. Heap precedes the generic buffer entry so
+    # "heap-buffer-overflow" routes to CWE-122, not CWE-120.
+    (re.compile(r"heap[-_]?(?:buffer[-_]?)?over(?:flow|run)",
+                re.IGNORECASE), "CWE-122"),
+    (re.compile(r"buffer[-_]?over(?:flow|run)|stack[-_]?overflow",
+                re.IGNORECASE), "CWE-120"),
+    (re.compile(r"format[-_]?string", re.IGNORECASE), "CWE-134"),
+    (re.compile(r"integer[-_]?over(?:flow|wrap)", re.IGNORECASE), "CWE-190"),
+    (re.compile(r"double[-_]?free", re.IGNORECASE), "CWE-415"),
+    (re.compile(r"use[-_]?after[-_]?free|\buaf\b", re.IGNORECASE), "CWE-416"),
+    (re.compile(r"null[-_]?(?:pointer[-_]?)?deref", re.IGNORECASE), "CWE-476"),
+    (re.compile(r"out[-_]?of[-_]?bounds[-_]?write|oob[-_]?write",
+                re.IGNORECASE), "CWE-787"),
+    (re.compile(r"out[-_]?of[-_]?bounds[-_]?read|oob[-_]?read",
+                re.IGNORECASE), "CWE-125"),
 ]
 
 

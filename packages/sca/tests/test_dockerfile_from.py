@@ -1086,3 +1086,64 @@ def test_partial_sbom_is_not_cached():
     assert sbom is not None
     assert sbom.layers_failed == 1
     assert digest_cache == {}
+
+
+def test_malformed_manifest_degrades_that_image_only():
+    """A manifest body core.oci refuses (missing config.digest raises
+    ValueError) must warn + return None like every other per-image
+    failure class in fetch_image_sbom — never propagate and abort the
+    whole FROM scan."""
+    manifest = FakeManifestResp(
+        parsed={
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            # No config.digest — parse_image_manifest raises ValueError.
+            "layers": [],
+        },
+        content_type="application/vnd.oci.image.manifest.v1+json",
+        digest="sha256:" + "d" * 64,
+    )
+    client = _make_client(manifests={"1": manifest}, blobs={})
+    sbom = fetch_image_sbom("badimg:1", client=client)
+    assert sbom is None
+
+
+def test_one_malformed_image_does_not_lose_sibling_sboms(tmp_path):
+    """Batch fetch: a malformed manifest for one image must not abort
+    the pooled fetch — the other images' packages still come back."""
+    dpkg_status = (
+        b"Package: zlib1g\n"
+        b"Status: install ok installed\n"
+        b"Version: 1:1.2.13.dfsg-1\n"
+        b"\n"
+    )
+    layer_blob = _make_layer_blob({"var/lib/dpkg/status": dpkg_status})
+    layer_digest = "sha256:" + "a" * 64
+    good = FakeManifestResp(
+        parsed={
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {"digest": "sha256:" + "c" * 64},
+            "layers": [{
+                "digest": layer_digest, "size": len(layer_blob),
+                "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+            }],
+        },
+        content_type="application/vnd.oci.image.manifest.v1+json",
+        digest="sha256:" + "e" * 64,
+    )
+    bad = FakeManifestResp(
+        parsed={
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "layers": [],
+        },
+        content_type="application/vnd.oci.image.manifest.v1+json",
+        digest="sha256:" + "f" * 64,
+    )
+    (tmp_path / "Dockerfile").write_text(
+        "FROM badimg:1 AS builder\nFROM debian:11\n",
+    )
+    client = _make_client(
+        manifests={"1": bad, "11": good}, blobs={layer_digest: layer_blob},
+    )
+    from packages.sca.dockerfile_from import scan_image_sources
+    deps = scan_image_sources(tmp_path, client=client)
+    assert {d.name for d in deps} == {"zlib1g"}

@@ -23,7 +23,6 @@ Also pins:
 from __future__ import annotations
 
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -35,10 +34,6 @@ from unittest.mock import patch
 #   [1] packages/fuzzing/
 #   [2] packages/
 #   [3] <repo root>
-REPO_ROOT = Path(__file__).resolve().parents[3]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
 
 class _ReplayCase(unittest.TestCase):
     """Shared fixture: a fake ELF target (plus asan sibling) and one
@@ -136,12 +131,17 @@ class TestReplayExceptNarrowing(_ReplayCase):
 
 
 class _FakeCompleted:
-    """Minimal stand-in for subprocess.CompletedProcess (bytes streams)."""
+    """Minimal stand-in for subprocess.CompletedProcess (bytes streams).
+
+    returncode -11 = death by SIGSEGV: real crash evidence, so the
+    replay contract marks it reproduced (a plain nonzero exit no
+    longer counts — usage errors and leak reports are not crashes).
+    """
 
     def __init__(self):
         self.stdout = b"replay stdout"
         self.stderr = b"replay stderr"
-        self.returncode = 1
+        self.returncode = -11
 
 
 class TestReplaySandboxIsolation(_ReplayCase):
@@ -191,14 +191,42 @@ class TestReplaySandboxIsolation(_ReplayCase):
 
     def test_replay_entries_still_recorded(self):
         """The isolation kwargs must not change the replay contract:
-        stdout/stderr logs written, reproduced flag from returncode."""
+        stdout/stderr logs written, reproduced flag derived from crash
+        evidence (the fixture exits -11 = SIGSEGV, a reproduction)."""
         result, _ = self._replay_and_capture_kwargs()
         entries = result.get(str(self.crash_file), [])
         self.assertTrue(entries, "no replay entries recorded")
         for entry in entries:
-            self.assertTrue(entry.get("reproduced"))
+            self.assertTrue(entry.get("reproduced"), entry)
             self.assertTrue(Path(entry["stdout"]).exists())
             self.assertTrue(Path(entry["stderr"]).exists())
+
+    def test_exit_one_reproduced_only_with_sanitizer_report(self):
+        """Two-direction pin for the plain-nonzero exit: exit 1 with
+        benign stderr (usage error, leak-at-exit) is NOT a
+        reproduction; the same exit WITH a sanitizer report is."""
+        from raptor_agentic import _replay_fuzz_crashes
+
+        for stderr, expected in (
+            (b"usage: target <file>", False),
+            (b"==7==ERROR: AddressSanitizer: heap-buffer-overflow", True),
+        ):
+            fake = _FakeCompleted()
+            fake.returncode = 1
+            fake.stderr = stderr
+            with patch("core.sandbox.run", return_value=fake):
+                result = _replay_fuzz_crashes(
+                    binary_path=self.binary,
+                    crash_files=[self.crash_file],
+                    out_dir=self.out_dir,
+                )
+            entries = result.get(str(self.crash_file), [])
+            self.assertTrue(entries, "no replay entries recorded")
+            for entry in entries:
+                self.assertIs(
+                    bool(entry.get("reproduced")), expected,
+                    (stderr, entry),
+                )
 
 
 class TestReplayTimeoutStillIsolated(_ReplayCase):
@@ -206,6 +234,25 @@ class TestReplayTimeoutStillIsolated(_ReplayCase):
     the fix touching the sandbox call site)."""
 
     def test_timeout_records_reproduced_entry(self):
+        from raptor_agentic import _replay_fuzz_crashes
+        # A hang only reproduces a hang: use a timeout-class input so
+        # the timed-out replay legitimately counts as reproduced.
+        timeout_input = Path(self.tmp) / "timeout-input"
+        timeout_input.write_bytes(b"\x41" * 16)
+        exc = subprocess.TimeoutExpired(cmd="x", timeout=15,
+                                        output=b"partial", stderr=b"")
+        with patch("core.sandbox.run", side_effect=exc):
+            result = _replay_fuzz_crashes(
+                binary_path=self.binary,
+                crash_files=[timeout_input],
+                out_dir=self.out_dir,
+            )
+        entries = result.get(str(timeout_input), [])
+        self.assertTrue(entries)
+        self.assertEqual(entries[0]["returncode"], "timeout")
+        self.assertTrue(entries[0]["reproduced"])
+
+    def test_timeout_on_crash_input_is_not_reproduction(self):
         from raptor_agentic import _replay_fuzz_crashes
         exc = subprocess.TimeoutExpired(cmd="x", timeout=15,
                                         output=b"partial", stderr=b"")
@@ -218,7 +265,9 @@ class TestReplayTimeoutStillIsolated(_ReplayCase):
         entries = result.get(str(self.crash_file), [])
         self.assertTrue(entries)
         self.assertEqual(entries[0]["returncode"], "timeout")
-        self.assertTrue(entries[0]["reproduced"])
+        # crash-class input that merely hangs: partial logs kept, but
+        # no dynamic-confirmation claim rides into /validate.
+        self.assertFalse(entries[0]["reproduced"])
 
 
 class TestRunCommandStreamingPopenFailure(unittest.TestCase):

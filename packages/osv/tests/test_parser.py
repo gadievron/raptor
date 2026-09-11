@@ -110,7 +110,7 @@ def test_malformed_subobjects_are_skipped() -> None:
                     {
                         "type": "GIT",
                         "events": ["not-a-dict",
-                                   {"introduced": 99},      # non-string val dropped
+                                   {"introduced": True},    # bool val dropped
                                    {"fixed": "abc123"}],
                     },
                 ],
@@ -130,8 +130,8 @@ def test_malformed_subobjects_are_skipped() -> None:
     assert len(rec.affected[0].ranges) == 1
     range_ = rec.affected[0].ranges[0]
     assert range_.type == "GIT"
-    # First event-dict had a non-string value, so it's an empty
-    # dict; second is OK. batch 560 sorts events by event-key
+    # First event-dict had a boolean value ("True" is not a version),
+    # so it's an empty dict; second is OK. Events sort by event-key
     # rank (introduced < fixed/last_affected < limit < unknown);
     # an empty dict has no key and is treated as "unknown",
     # sorting AFTER `fixed`. Order is now (fixed, empty).
@@ -234,4 +234,55 @@ def test_event_reorder_only_for_single_interval_ranges() -> None:
     assert multi.events == (
         {"introduced": "1.1"}, {"fixed": "1.1.4"},
         {"introduced": "1.2"}, {"fixed": "1.2.5"},
+    )
+
+
+def test_string_aliases_field_is_one_alias() -> None:
+    """A bare-string aliases field is one alias, never a per-character
+    iterable (per-char tuples silently pass the per-item str guard)."""
+    rec = parse_record({"id": "OSV-STR", "aliases": "CVE-2021-1234"})
+    assert rec.aliases == ("CVE-2021-1234",)
+
+
+def test_string_versions_field_is_one_version() -> None:
+    """A bare-string versions field is one version — per-char iteration
+    would mint single-character "versions" that downstream ecosystems
+    parse as real versions."""
+    rec = parse_record({
+        "id": "OSV-STR2",
+        "affected": [{"package": {"ecosystem": "PyPI", "name": "x"},
+                      "versions": "1.2.3"}],
+    })
+    assert rec.affected[0].versions == ("1.2.3",)
+
+
+def test_non_list_non_string_aliases_dropped() -> None:
+    rec = parse_record({"id": "OSV-STR3", "aliases": {"nested": True}})
+    assert rec.aliases == ()
+
+
+def test_lowercase_git_range_type_normalised_to_git() -> None:
+    """Case drift from mirrors must stay GIT — rewriting to ECOSYSTEM
+    loses the range's commit data to the verify oracle."""
+    rec = parse_record({
+        "id": "OSV-GIT",
+        "affected": [{"ranges": [{"type": "git",
+                                  "repo": "https://github.com/foo/bar",
+                                  "events": [{"fixed": "a" * 40}]}]}],
+    })
+    assert rec.affected[0].ranges[0].type == "GIT"
+
+
+def test_numeric_introduced_zero_is_kept() -> None:
+    """``{"introduced": 0}`` (JSON number) is the common "vulnerable
+    since the beginning" shape; stripping it deletes the range's lower
+    bound."""
+    rec = parse_record({
+        "id": "OSV-NUM",
+        "affected": [{"ranges": [{"type": "ECOSYSTEM",
+                                  "events": [{"introduced": 0},
+                                             {"fixed": "2.0"}]}]}],
+    })
+    assert rec.affected[0].ranges[0].events == (
+        {"introduced": "0"}, {"fixed": "2.0"},
     )

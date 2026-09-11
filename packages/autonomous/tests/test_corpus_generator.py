@@ -119,3 +119,36 @@ class TestCommandsDetectedOrdering(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFormatDetectionBoundaries(unittest.TestCase):
+    """Format indicators with trailing-space semantics ('get ',
+    'post ') must only match WITHIN one extracted string, never
+    across the boundary between two joined strings."""
+
+    @staticmethod
+    def _analyze_with_strings(stdout: str) -> "CorpusGenerator":
+        class _StringsResult:
+            returncode = 0
+
+        result = _StringsResult()
+        result.stdout = stdout
+        with tempfile.TemporaryDirectory() as tmpdir:
+            binary = Path(tmpdir) / "target"
+            binary.write_bytes(b"dummy")
+            generator = CorpusGenerator(binary)
+            with patch(
+                "packages.autonomous.corpus_generator._run_trusted",
+                return_value=result,
+            ):
+                generator.analyze_binary()
+        return generator
+
+    def test_no_cross_boundary_http_false_positive(self):
+        # 'target' + any following string must not synthesise 'get '.
+        generator = self._analyze_with_strings("target\nwidget\nforget\nother\n")
+        self.assertNotIn("http", generator.detected_formats)
+
+    def test_within_string_http_indicator_still_detected(self):
+        generator = self._analyze_with_strings("get /index.html\nother\n")
+        self.assertIn("http", generator.detected_formats)

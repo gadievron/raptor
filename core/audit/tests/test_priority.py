@@ -627,15 +627,50 @@ class TestLoadToolCoverage:
 
 
 class TestLoadToolFailures:
-    def test_collects_failed_files(self, tmp_path: Path):
+    def test_collects_failed_files_production_shape(
+        self, tmp_path: Path,
+    ):
+        # core.coverage.record builders write dict entries
+        # ({"path", "reason"}); the loader must accept them — the
+        # bare-string shape the old test pinned is written by no
+        # producer, and a dict entry raised TypeError on set.add,
+        # aborting the priority pass on the first real tool failure.
+        run_dir = tmp_path / "run1"
+        run_dir.mkdir()
+        (run_dir / "coverage-semgrep.json").write_text(json.dumps({
+            "files_failed": [
+                {"path": "src/big.c", "reason": "rule timeout"},
+                {"path": "src/broken.c", "reason": "parse error"},
+            ],
+        }))
+        result = load_tool_failures([run_dir])
+        assert "src/big.c" in result
+        assert "src/broken.c" in result
+
+    def test_legacy_bare_string_entries_tolerated(self, tmp_path: Path):
         run_dir = tmp_path / "run1"
         run_dir.mkdir()
         (run_dir / "coverage-semgrep.json").write_text(json.dumps({
             "files_failed": ["src/big.c", "src/broken.c"],
         }))
         result = load_tool_failures([run_dir])
-        assert "src/big.c" in result
-        assert "src/broken.c" in result
+        assert result == {"src/big.c", "src/broken.c"}
+
+    def test_unrecognised_entries_skipped_not_fatal(
+        self, tmp_path: Path,
+    ):
+        run_dir = tmp_path / "run1"
+        run_dir.mkdir()
+        (run_dir / "coverage-x.json").write_text(json.dumps({
+            "files_failed": [
+                {"reason": "no path key"},
+                42,
+                None,
+                {"path": "ok.c", "reason": "kept"},
+            ],
+        }))
+        result = load_tool_failures([run_dir])
+        assert result == {"ok.c"}
 
     def test_empty_dirs_returns_empty(self):
         result = load_tool_failures([])

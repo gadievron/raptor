@@ -12,11 +12,15 @@ Returns versions newest-first with pre-releases (any version containing
 from __future__ import annotations
 
 import logging
-import urllib.parse
 
 from core.json import MISSING, JsonCache
 
-from ._negative_cache import log_fetch_failure
+from ._negative_cache import log_fetch_failure, should_negative_cache
+from ._url import (
+    UnsafeUrlComponentError,
+    quote_segment,
+    registry_cache_key,
+)
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -46,14 +50,6 @@ _CACHE_KEY_PREFIX = "nuget-versions"
 _DEFAULT_TTL = 24 * 3600
 
 
-def _key_component(value: str) -> str:
-    """Percent-encode one cache-key component so the key identity is
-    injective — a raw name containing ``/`` or ``..`` could otherwise
-    alias another package's cache file after JsonCache path
-    sanitisation. Old raw-name entries re-fetch once."""
-    return urllib.parse.quote(value, safe="")
-
-
 class NugetClient:
     """List versions from NuGet's flat-container."""
 
@@ -76,7 +72,13 @@ class NugetClient:
         # NuGet IDs are case-insensitive but the URL path requires
         # lowercase.
         canon = name.lower()
-        cache_key = f"{_CACHE_KEY_PREFIX}:{_key_component(canon)}"
+        try:
+            encoded = quote_segment(canon)
+        except UnsafeUrlComponentError:
+            # Not an ID NuGet could ever serve — not-found path
+            # without touching the cache.
+            return []
+        cache_key = registry_cache_key(_CACHE_KEY_PREFIX, canon)
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -87,10 +89,10 @@ class NugetClient:
 
         try:
             data = self._http.get_json(
-                f"https://api.nuget.org/v3-flatcontainer/{canon}/index.json")
+                f"https://api.nuget.org/v3-flatcontainer/{encoded}/index.json")
         except Exception as e:                # noqa: BLE001
             log_fetch_failure(logger, "sca.registries.nuget", name, e)
-            if self._cache is not None:
+            if self._cache is not None and should_negative_cache(e):
                 self._cache.put(cache_key, [], ttl_seconds=self._ttl)
             return []
 
@@ -147,17 +149,21 @@ def _add_nuspec_methods():
         ``api.nuget.org/v3-flatcontainer/<id>/<ver>/<id>.nuspec``;
         case-insensitive (caller normalises). Returns
         ``{dependency_groups: [{targetFramework, dependencies}]}``."""
-        cache_key = (f"nuget-nuspec:{_key_component(pkg.lower())}:"
-                     f"{_key_component(version)}")
+        lower = pkg.lower()
+        try:
+            encoded = quote_segment(lower)
+            enc_version = quote_segment(version)
+        except UnsafeUrlComponentError:
+            return None
+        cache_key = registry_cache_key("nuget-nuspec", lower, version)
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
                 return cached
         if self._offline:
             return None
-        lower = pkg.lower()
-        url = (f"https://api.nuget.org/v3-flatcontainer/{lower}/"
-                f"{version}/{lower}.nuspec")
+        url = (f"https://api.nuget.org/v3-flatcontainer/{encoded}/"
+                f"{enc_version}/{encoded}.nuspec")
         try:
             resp = self._http.request(
                 "GET", url, raise_on_status=False,
@@ -167,7 +173,7 @@ def _add_nuspec_methods():
                 "sca.registries.nuget: nuspec fetch failed for "
                 "%s@%s: %s", pkg, version, e,
             )
-            if self._cache is not None:
+            if self._cache is not None and should_negative_cache(e):
                 self._cache.put(cache_key, None, ttl_seconds=self._ttl)
             return None
         if resp.status_code != 200:

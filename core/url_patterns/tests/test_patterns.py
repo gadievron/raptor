@@ -43,6 +43,34 @@ def test_kernel_dance_shortlink() -> None:
     assert m.group(1) == "abc1234567"
 
 
+def test_kernel_sha_url_rejects_lookalike_hosts() -> None:
+    """Consumers .search() attacker-influencable advisory reference
+    URLs, so the pattern must be anchored to the scheme + exact host —
+    a lookalike must never steer which commit counts as the upstream
+    fix."""
+    # kernel.org host embedded in the PATH of another host.
+    assert KERNEL_SHA_URL_RE.search(
+        "https://mirror.example.com/git.kernel.org/linus/abc1234567"
+    ) is None
+    # Suffix-matching lookalike hosts.
+    assert KERNEL_SHA_URL_RE.search(
+        "https://notkernel.dance/abc1234567"
+    ) is None
+    assert KERNEL_SHA_URL_RE.search(
+        "https://evil-git.kernel.org.attacker.example/linus/abc1234567"
+    ) is None
+
+
+def test_kernel_shortlink_still_found_embedded_in_prose() -> None:
+    # Anchoring is to the URL's own scheme+host, not the string start:
+    # advisory prose around the URL must keep matching via .search().
+    m = KERNEL_SHA_URL_RE.search(
+        "see the fix at https://git.kernel.org/stable/c/abc1234567 ."
+    )
+    assert m
+    assert m.group(1) == "abc1234567"
+
+
 def test_normalize_slug() -> None:
     assert normalize_slug("Curl/Curl.git") == "curl/curl"
     assert normalize_slug("  owner/repo  ") == "owner/repo"

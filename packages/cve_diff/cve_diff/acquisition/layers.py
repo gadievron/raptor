@@ -207,6 +207,16 @@ class TargetedFetchLayer(AcquisitionLayer):
                     self.name, False,
                     f"fetch {sha[:12]}: {str(e)[:200]}",
                 )
+            except subprocess.TimeoutExpired:
+                # fetch_commit documents TimeoutExpired propagating
+                # unchanged. A slow/hung remote is a per-layer failure —
+                # the cascade must fall through to the next layer (and
+                # ultimately the API extractors), not abort the whole
+                # run with a raw exception.
+                return LayerReport(
+                    self.name, False,
+                    f"fetch {sha[:12]}: timed out",
+                )
 
         if not _commit_exists(dest, ref.fix_commit):
             return LayerReport(
@@ -237,6 +247,11 @@ class ShallowCloneLayer(AcquisitionLayer):
                 )
             except RuntimeError as e:
                 last_err = str(e)[:200]
+                continue
+            except subprocess.TimeoutExpired:
+                # Same contract as fetch_commit above: a clone timeout
+                # is a per-depth failure, not a run-aborting exception.
+                last_err = f"clone timed out @ depth={depth}"
                 continue
             if _commit_exists(dest, ref.fix_commit):
                 return LayerReport(self.name, True, f"depth={depth}")
@@ -289,6 +304,11 @@ class FullCloneLayer(AcquisitionLayer):
             return LayerReport(self.name, False, f"validation: {e}")
         except RuntimeError as e:
             return LayerReport(self.name, False, str(e)[:200])
+        except subprocess.TimeoutExpired:
+            # Full-history clones are the most timeout-prone tier;
+            # surface as a layer failure so the cascade's error rolls
+            # up as AcquisitionError (which the pipeline handles).
+            return LayerReport(self.name, False, "clone timed out")
         if _commit_exists(dest, ref.fix_commit):
             return LayerReport(self.name, True, "")
         return LayerReport(self.name, False, "fix_commit missing after full clone")

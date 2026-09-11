@@ -15,6 +15,7 @@ import logging
 from typing import Any
 
 from . import _MAX_REASONING_CHARS
+from ._batch import record_event_batch
 from .scorecard import EventType, ModelScorecard
 
 logger = logging.getLogger(__name__)
@@ -33,8 +34,8 @@ def record_dataflow_validation_outcomes(
     if scorecard is None:
         return 0
 
-    n_recorded = 0
-    for fid, result in results_by_id.items():
+    pending: list[dict[str, Any]] = []
+    for result in results_by_id.values():
         dv = result.get("dataflow_validation")
         if not isinstance(dv, dict):
             continue
@@ -62,20 +63,15 @@ def record_dataflow_validation_outcomes(
                 "reasoning": reasoning[:_MAX_REASONING_CHARS],
             }
 
-        try:
-            scorecard.record_event(
-                decision_class,
-                model,
-                EventType.DATAFLOW_VALIDATION,
-                outcome,
-                model_version=model_version,
-                sample=sample,
-            )
-            n_recorded += 1
-        except Exception:
-            logger.warning(
-                "dataflow-validation: record_event failed for %s",
-                fid, exc_info=True,
-            )
+        pending.append({
+            "decision_class": decision_class,
+            "model": model,
+            "event_type": EventType.DATAFLOW_VALIDATION,
+            "outcome": outcome,
+            "model_version": model_version,
+            "sample": sample,
+        })
 
-    return n_recorded
+    return record_event_batch(
+        scorecard, pending, log=logger, producer="dataflow-validation",
+    )

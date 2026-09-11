@@ -135,8 +135,10 @@ def safe_member_reason(
 
     name = info.filename or ""
 
-    # Empty name shouldn't really happen but defensive.
-    if not name:
+    # Empty / whitespace-only name shouldn't really happen but
+    # defensive (mirrors the tar twin's check — a " " name is as
+    # degenerate as an empty one).
+    if not name.strip():
         return UnsafeMemberReason.UNRECOGNISED_TYPE
 
     # Directories are valid members but extract_files_from_zip

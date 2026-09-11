@@ -31,8 +31,16 @@ GITHUB_REPO_URL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Left-anchored with the scheme + exact host like the GitHub patterns
+# above: consumers apply .search() to full advisory reference URLs
+# (attacker-influencable lists), so an unanchored host let lookalikes
+# steer which commit is treated as the upstream fix —
+# `https://mirror.example.com/git.kernel.org/linus/<sha>` (host in the
+# PATH) and `https://notkernel.dance/<sha>` (suffix-matching host)
+# both matched as kernel.org fix-commit pointers.
 KERNEL_SHA_URL_RE = re.compile(
-    r"(?:kernel\.dance/|git\.kernel\.org/(?:linus|stable)/(?:c/)?)([a-f0-9]{7,64})\b",
+    r"https?://(?:kernel\.dance/|git\.kernel\.org/(?:linus|stable)/(?:c/)?)"
+    r"([a-f0-9]{7,64})\b",
     re.IGNORECASE,
 )
 

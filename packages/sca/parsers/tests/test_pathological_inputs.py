@@ -232,9 +232,14 @@ def test_requirements_nested_include_inherits_bound(tmp_path, caplog) -> None:
 
 
 def test_requirements_one_level_up_include_still_works(tmp_path) -> None:
-    """The common ``requirements/dev.txt → -r ../base.txt`` layout must
-    keep working under the no-scan_root fallback bound (the manifest's
-    grandparent directory, mirroring the ``sln.py`` legacy bound)."""
+    """The common ``requirements/dev.txt → -r ../base.txt`` layout
+    works whenever the scan root is known — via the pipeline's
+    scan-root context or the explicit parameter. The bare-call
+    fallback bound is the manifest's OWN directory (a grandparent
+    bound would hand a root-level manifest's ``-r ../x`` everything
+    beside the checkout), so there the include is refused and only
+    the local dep survives."""
+    from packages.sca.parsers._safe_read import scan_root_context
     from packages.sca.parsers.requirements import parse
 
     proj = tmp_path / "proj"
@@ -242,8 +247,16 @@ def test_requirements_one_level_up_include_still_works(tmp_path) -> None:
     (proj / "base.txt").write_text("django==4.2.7\n", encoding="utf-8")
     dev = proj / "requirements" / "dev.txt"
     dev.write_text("-r ../base.txt\npytest==8.0.0\n", encoding="utf-8")
-    deps = parse(dev)
-    assert sorted(d.name for d in deps) == ["django", "pytest"]
+
+    with scan_root_context(proj):
+        via_context = parse(dev)
+    assert sorted(d.name for d in via_context) == ["django", "pytest"]
+
+    via_param = parse(dev, scan_root=proj)
+    assert sorted(d.name for d in via_param) == ["django", "pytest"]
+
+    bare = parse(dev)
+    assert sorted(d.name for d in bare) == ["pytest"]
 
 
 # ---------------------------------------------------------------------------

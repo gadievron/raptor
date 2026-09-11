@@ -136,3 +136,44 @@ def test_legit_shape_layer_extracts_under_scaled_budget(
         compressed_size=len(layer),
     )
     assert got["var/lib/dpkg/status"] == data
+
+
+def test_lying_descriptor_cannot_buy_cpu_beyond_fetched_bytes(
+    monkeypatch,
+) -> None:
+    """The amplification the fetched-bytes guard closes: a manifest
+    DECLARING a huge compressed size raised the declared-size budget
+    toward the ceiling while serving a kilobytes-sized bomb — up to
+    ~1600:1 of decompression CPU per fetched byte. The budget must
+    follow the bytes actually served, whatever the descriptor claims."""
+    monkeypatch.setattr(blob_mod, "DECOMPRESSION_BUDGET_FLOOR", 4096)
+    # A REAL expansion: 5 MiB of zeros gzip to a few KiB, so the
+    # fetched-bytes budget (max(4096, 12 * ~5 KiB)) is exceeded by the
+    # actual decompressed output long before 5 MiB.
+    bomb = _gzip_layer_with_member(
+        "var/lib/dpkg/status", b"\0" * (5 * 1024 * 1024))
+    with pytest.raises(blob_mod.DecompressionBudgetExceeded):
+        extract_files_from_layer(
+            iter([bomb]), {"var/lib/dpkg/status"},
+            # The lie: declared compressed size far above the actual
+            # transfer — the OLD budget scaled off this and admitted
+            # the whole 5 MiB expansion.
+            compressed_size=512 * 1024 * 1024,
+        )
+
+
+def test_gunzip_guard_roundtrips_ordinary_layers() -> None:
+    import random
+    data = random.Random(7).randbytes(50_000)
+    layer = _gzip_layer_with_member("lib/apk/db/installed", data)
+    got = extract_files_from_layer(
+        iter([layer]), {"lib/apk/db/installed"},
+        compressed_size=len(layer),
+    )
+    assert got["lib/apk/db/installed"] == data
+
+
+def test_gunzip_guard_translates_corrupt_stream() -> None:
+    from core.tar import TarOpenError
+    with pytest.raises(TarOpenError):
+        list(blob_mod._gunzip_ratio_guarded(iter([b"not gzip at all"])))

@@ -121,6 +121,21 @@ class TestRunPipeline:
         assert got == out
         assert "OUTPUT_DIR" in log.read_text(encoding="utf-8")
 
+    def test_last_sentinel_occurrence_wins(self, tmp_path):
+        # The lifecycle contract is "the LAST line is OUTPUT_DIR=…";
+        # echoed config or nested tool output can print the sentinel
+        # shape earlier and must not steer the binding.
+        early = tmp_path / "echoed_config"
+        early.mkdir()
+        final = tmp_path / "run_out"
+        final.mkdir()
+        log = tmp_path / "pipeline.log"
+        stdout = f"OUTPUT_DIR={early}\nprogress\nOUTPUT_DIR={final}\n"
+        with patch("core.recall.runner.subprocess.run",
+                   return_value=self._proc(stdout)):
+            got = run_pipeline(_manifest(), tmp_path / "t", tmp_path, log)
+        assert got == final
+
     def test_missing_sentinel_errors(self, tmp_path):
         log = tmp_path / "pipeline.log"
         with patch("core.recall.runner.subprocess.run",
@@ -175,7 +190,7 @@ class TestVerifyPinnedClone:
     def test_wrong_sha_refused(self, tmp_path):
         clone = tmp_path / "out" / "f"
         clone.mkdir(parents=True)
-        with patch("core.recall.runner.subprocess.run",
+        with patch("core.recall.pinned_clone.subprocess.run",
                    return_value=SimpleNamespace(
                        stdout="0000000000000000000000000000000000000000\n",
                        stderr="", returncode=0)), \
@@ -185,11 +200,24 @@ class TestVerifyPinnedClone:
     def test_pinned_sha_accepted(self, tmp_path):
         clone = tmp_path / "out" / "f"
         clone.mkdir(parents=True)
-        with patch("core.recall.runner.subprocess.run",
+        with patch("core.recall.pinned_clone.subprocess.run",
                    return_value=SimpleNamespace(
                        stdout="b06d6efaebd577a327514364951916e7df3290b4\n",
                        stderr="", returncode=0)):
             assert verify_pinned_clone(_manifest(), tmp_path) == clone
+
+    def test_short_pin_accepted_as_prefix(self, tmp_path):
+        # The manifest schema accepts >=7-hex pins; a short pin matches
+        # HEAD by prefix, while a full 40-hex pin requires equality.
+        clone = tmp_path / "out" / "f"
+        clone.mkdir(parents=True)
+        m = _manifest()
+        m.pinned_sha = "b06d6efaebd5"
+        with patch("core.recall.pinned_clone.subprocess.run",
+                   return_value=SimpleNamespace(
+                       stdout="b06d6efaebd577a327514364951916e7df3290b4\n",
+                       stderr="", returncode=0)):
+            assert verify_pinned_clone(m, tmp_path) == clone
 
 
 class TestCollectFindings:

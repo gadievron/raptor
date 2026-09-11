@@ -16,13 +16,17 @@ leave the dep alone rather than failing the whole run.
 from __future__ import annotations
 
 import logging
-import urllib.parse
 
 from packaging.version import InvalidVersion, Version
 
 from core.json import MISSING, JsonCache
 
-from ._negative_cache import log_fetch_failure
+from ._negative_cache import log_fetch_failure, should_negative_cache
+from ._url import (
+    UnsafeUrlComponentError,
+    quote_segment,
+    registry_cache_key,
+)
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -33,14 +37,6 @@ logger = logging.getLogger(__name__)
 
 _CACHE_KEY_PREFIX = "pypi-versions"
 _DEFAULT_TTL = 24 * 3600
-
-
-def _key_component(value: str) -> str:
-    """Percent-encode one cache-key component so the key identity is
-    injective — a raw name containing ``/`` or ``..`` could otherwise
-    alias another package's cache file after JsonCache path
-    sanitisation. Old raw-name entries re-fetch once."""
-    return urllib.parse.quote(value, safe="")
 
 
 # Top-level fields with no RAPTOR consumer.
@@ -68,7 +64,14 @@ _PYPI_RELEASE_FILE_STRIP_FIELDS = frozenset((
 # ``license_expression``, ``requires_dist``, ``requires_python``,
 # ``yanked``, ``yanked_reason``, ``version``, ``name`` — and a small
 # few via the per-version block. Everything else in ``info`` is
-# author/project metadata with no security consumer.
+# project metadata with no security consumer.
+#
+# ``maintainer`` / ``maintainer_email`` / ``author`` / ``author_email``
+# are INTENTIONALLY KEPT (not stripped): the registry-metadata
+# supply-chain pass builds its best-effort PyPI maintainer list from
+# exactly these fields (low-bus-factor signal) off the SAME
+# ``get_metadata`` envelope this strip runs on — stripping them
+# silently zeroed that signal against the real client.
 #
 # ``classifiers`` is INTENTIONALLY KEPT (not stripped): older PyPI
 # packages encode their license only in the trove classifier
@@ -80,10 +83,10 @@ _PYPI_RELEASE_FILE_STRIP_FIELDS = frozenset((
 # playwright) as ``license_unknown`` despite their classifiers
 # carrying the SPDX. Surfaced 2026-05-21 by the dogfood scan.
 _PYPI_INFO_STRIP_FIELDS = frozenset((
-    "author", "author_email", "bugtrack_url",
+    "bugtrack_url",
     "description", "description_content_type", "docs_url",
     "download_url", "downloads", "dynamic", "home_page", "keywords",
-    "maintainer", "maintainer_email", "package_url", "platform",
+    "package_url", "platform",
     "project_url", "project_urls", "provides_extra", "release_url",
     "summary",
 ))
@@ -161,7 +164,12 @@ class PyPIClient:
         base = self._base_url
         base = base.removesuffix("/simple")
         base = base.removesuffix("/simple/")
-        return f"{base}/pypi/{name}/json"
+        # Single-segment encode: a hostile manifest name carrying
+        # ``/`` / ``..`` / whitespace must not splice extra path
+        # segments into the (possibly authenticated) registry
+        # request. Raises UnsafeUrlComponentError; callers surface
+        # the not-found sentinel without caching.
+        return f"{base}/pypi/{quote_segment(name)}/json"
 
     def _request_headers(self) -> dict | None:
         if self._auth_header:
@@ -179,7 +187,15 @@ class PyPIClient:
         don't re-query on every detector call.
         """
         canon = _canonical_name(name)
-        cache_key = f"pypi-meta:{_key_component(canon)}"
+        try:
+            url = self._build_url(canon)
+        except UnsafeUrlComponentError:
+            # Not a name PyPI could ever serve — not-found path
+            # without touching the cache in either direction.
+            return None
+        cache_key = registry_cache_key(
+            "pypi-meta", canon, base_url=self._base_url,
+        )
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -188,12 +204,12 @@ class PyPIClient:
             return None
         try:
             data = self._http.get_json(
-                self._build_url(canon),
+                url,
                 headers=self._request_headers(),
             )
         except Exception as e:                # noqa: BLE001
             log_fetch_failure(logger, "sca.registries.pypi", canon, e)
-            if self._cache is not None:
+            if self._cache is not None and should_negative_cache(e):
                 self._cache.put(cache_key, None, ttl_seconds=self._ttl)
             return None
         # Strip security-irrelevant fields before caching. See
@@ -220,15 +236,22 @@ class PyPIClient:
         Same negative-caching policy as ``get_metadata``.
         """
         canon = _canonical_name(name)
-        cache_key = (f"pypi-meta:{_key_component(canon)}:"
-                     f"{_key_component(version)}")
+        try:
+            base = self._build_url(canon).rsplit("/", 1)[0]
+            url = f"{base}/{quote_segment(version)}/json"
+        except UnsafeUrlComponentError:
+            # A version carrying ``/`` / ``..`` could swap which
+            # metadata document an authenticated mirror serves.
+            return None
+        cache_key = registry_cache_key(
+            "pypi-meta", canon, version, base_url=self._base_url,
+        )
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
                 return cached
         if self._offline:
             return None
-        url = f"{self._build_url(canon).rsplit('/', 1)[0]}/{version}/json"
         try:
             data = self._http.get_json(
                 url, headers=self._request_headers(),
@@ -242,7 +265,7 @@ class PyPIClient:
                 "sca.registries.pypi: version-meta fetch failed for "
                 "%r==%r: %s", canon, version, e,
             )
-            if self._cache is not None:
+            if self._cache is not None and should_negative_cache(e):
                 self._cache.put(cache_key, None, ttl_seconds=self._ttl)
             return None
         if self._cache is not None:
@@ -251,7 +274,13 @@ class PyPIClient:
 
     def list_versions(self, name: str) -> list[str]:
         canon = _canonical_name(name)
-        cache_key = f"{_CACHE_KEY_PREFIX}:{_key_component(canon)}"
+        try:
+            url = self._build_url(canon)
+        except UnsafeUrlComponentError:
+            return []
+        cache_key = registry_cache_key(
+            _CACHE_KEY_PREFIX, canon, base_url=self._base_url,
+        )
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -262,12 +291,12 @@ class PyPIClient:
 
         try:
             data = self._http.get_json(
-                self._build_url(canon),
+                url,
                 headers=self._request_headers(),
             )
         except Exception as e:                # noqa: BLE001
             log_fetch_failure(logger, "sca.registries.pypi", canon, e)
-            if self._cache is not None:
+            if self._cache is not None and should_negative_cache(e):
                 self._cache.put(cache_key, [], ttl_seconds=self._ttl)
             return []
 

@@ -101,8 +101,15 @@ def to_repo_relative(
     path = strip_file_uri(path)
     if os.path.isabs(path):
         if strict:
+            # normpath BEFORE the containment split: ``relative_to``
+            # is lexical, so an unnormalised ``/repo/../etc/passwd``
+            # used to come back as ``../etc/passwd`` — non-None for an
+            # escaping path, misleading every consumer that treats
+            # non-None as containment. Normalised, the traversal
+            # collapses first and the escape returns ``None``.
             try:
-                return str(Path(path).relative_to(Path(repo_root).resolve()))
+                return str(Path(os.path.normpath(path)).relative_to(
+                    Path(repo_root).resolve()))
             except (OSError, ValueError):
                 return None
         try:

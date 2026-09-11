@@ -49,8 +49,14 @@ def verdict_from(evidence: Any, llm_claim: Any = "inconclusive") -> Verdict:
       - If the tool didn't run successfully: inconclusive. (The error
         text lives on the evidence object; we don't reproduce it here.)
       - If the tool ran but produced no matches and the LLM claimed
-        confirmed: downgrade to refuted. (You can't confirm without
-        evidence.)
+        confirmed: downgrade to refuted (you can't confirm without
+        evidence) — UNLESS the evidence carries
+        ``empty_matches_conclusive``, the adapter's assertion that the
+        empty-match outcome is itself a definitive tool result. Example:
+        SMT ``unsat`` proves "these constraints are mutually exclusive",
+        which CONFIRMS an infeasibility-phrased hypothesis; inverting
+        the LLM's phrasing-aware reading to refuted would report the
+        exact opposite of what the tool proved.
       - If the tool ran and matches are present but the LLM claimed
         refuted: downgrade to inconclusive. (Matches deserve a human
         look even if the LLM dismissed them.)
@@ -64,6 +70,8 @@ def verdict_from(evidence: Any, llm_claim: Any = "inconclusive") -> Verdict:
     claim = _coerce(llm_claim)
 
     if claim == "confirmed" and not matches:
+        if bool(getattr(evidence, "empty_matches_conclusive", False)):
+            return claim
         return "refuted"
     if claim == "refuted" and matches:
         return "inconclusive"

@@ -174,6 +174,63 @@ def test_harvest_git_repo_missing_repo_reports_error(tmp_path: Path):
     assert result.errors
 
 
+def test_harvest_git_repo_timeout_on_one_commit_does_not_abort(
+    monkeypatch, tmp_path: Path,
+):
+    """One slow ``git show`` must be recorded per-commit (like the
+    non-zero-exit paths) and the rest of the walk must still complete —
+    a propagating TimeoutExpired would discard every finished commit."""
+    import core.dataflow.parser_pack_harvest as pph
+
+    slow_sha, good_sha = "a" * 40, "b" * 40
+
+    def fake_run_git(args, *, allow_promisor_fetch: bool = False):
+        from types import SimpleNamespace
+        if "log" in args:
+            return SimpleNamespace(
+                returncode=0, stdout=f"{slow_sha}\n{good_sha}\n", stderr="",
+            )
+        if "-s" in args:  # commit-message read
+            return SimpleNamespace(
+                returncode=0, stdout="fix parser bug (CVE-2099-12345)",
+                stderr="",
+            )
+        # Full-diff read.
+        if args[-1] == slow_sha:
+            raise subprocess.TimeoutExpired(cmd=args, timeout=60)
+        return SimpleNamespace(returncode=0, stdout=_FIX_DIFF, stderr="")
+
+    monkeypatch.setattr(pph, "_run_git", fake_run_git)
+    source = HarvestSource(
+        library="expat", api_patterns=("^XML_",), repo_dir=str(tmp_path),
+    )
+    result = harvest_git_repo(source)
+    # The slow commit is an error entry; the good one still harvested.
+    assert result.commits_walked == 1
+    assert any("timed out" in e for e in result.errors)
+    assert "XML_ParseBuffer" in result.names
+
+
+def test_harvest_git_repo_log_timeout_recorded_not_raised(
+    monkeypatch, tmp_path: Path,
+):
+    """A timed-out ``git log`` yields an errored (empty) result for
+    this source so a multi-source harvest keeps going."""
+    import core.dataflow.parser_pack_harvest as pph
+
+    def fake_run_git(args, *, allow_promisor_fetch: bool = False):
+        raise subprocess.TimeoutExpired(cmd=args, timeout=60)
+
+    monkeypatch.setattr(pph, "_run_git", fake_run_git)
+    source = HarvestSource(
+        library="expat", api_patterns=("^XML_",), repo_dir=str(tmp_path),
+    )
+    result = harvest_git_repo(source)
+    assert result.commits_walked == 0
+    assert result.names == {}
+    assert any("timed out" in e for e in result.errors)
+
+
 def test_harvest_dispatch_requires_an_input():
     result = harvest(HarvestSource(library="x", api_patterns=("^x",)))
     assert result.errors
@@ -360,3 +417,34 @@ def test_main_writes_pack(tmp_path: Path):
 
 def test_main_bad_sources_config(tmp_path: Path):
     assert main(["--sources", str(tmp_path / "nope.json")]) == 2
+
+
+def test_shim_bootstraps_via_raptor_dir(tmp_path: Path):
+    """The CLI shim's sys.path bootstrap is the RAPTOR_DIR hard lookup
+    (launcher contract, same as its siblings) — provide it the way the
+    launcher would, pointing at THIS checkout."""
+    import os
+    import sys
+
+    repo_root = Path(__file__).resolve().parents[3]
+    shim = repo_root / "core" / "dataflow" / "scripts" / "parser-pack-harvest"
+    diffs = tmp_path / "diffs"
+    diffs.mkdir()
+    (diffs / "CVE-2099-55555.diff").write_text(_FIX_DIFF)
+    cfg = tmp_path / "sources.json"
+    cfg.write_text(json.dumps({"sources": [
+        {"library": "expat", "api_patterns": ["^XML_"],
+         "diff_dir": str(diffs)},
+    ]}))
+    env = dict(os.environ)
+    env["RAPTOR_DIR"] = str(repo_root)
+    env["_RAPTOR_TRUSTED"] = "1"
+    proc = subprocess.run(
+        [sys.executable, str(shim),
+         "--sources", str(cfg), "--pack", str(tmp_path / "pack.json"),
+         "--dry-run"],
+        capture_output=True, text=True, env=env,
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)
+    assert {e["name"] for e in out["entries"]} == {"XML_ParseBuffer"}

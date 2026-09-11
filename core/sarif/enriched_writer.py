@@ -47,7 +47,10 @@ def _reachability_from_analysis(finding: dict[str, Any]) -> str:
     return "not_evaluated"
 
 
-def _build_raptor_properties(finding: dict[str, Any]) -> dict[str, Any]:
+def _build_raptor_properties(
+    finding: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """Build the (verdict, raptor properties) pair for one finding."""
     verdict = _verdict_from_analysis(finding)
     props: dict[str, Any] = {
         "verdict": verdict,

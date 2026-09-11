@@ -121,7 +121,14 @@ def test_extract_via_patch_url_parses_unified_diff(monkeypatch) -> None:
     by_path = {f.path: f.hunks_count for f in bundle.files}
     assert by_path["lib/server.js"] == 2
     assert by_path["lib/socket.js"] == 1
-    assert bundle.bytes_size == len(SAMPLE_PATCH.encode("utf-8"))
+    # bytes_size covers ONLY the diff portion of the email body — the
+    # clone/API bundles carry bare diff bytes, and the agreement
+    # byte-delta comparison assumes comparable units (mail headers +
+    # commit message would otherwise systematically inflate this side).
+    diff_only = SAMPLE_PATCH[SAMPLE_PATCH.find("diff --git "):]
+    assert bundle.bytes_size == len(diff_only.encode("utf-8"))
+    assert bundle.diff_text == diff_only
+    assert "Subject: [PATCH]" not in bundle.diff_text
 
 
 def test_extract_via_patch_url_returns_none_on_404(monkeypatch) -> None:
@@ -216,3 +223,36 @@ def test_extract_bundle_has_commit_before_equal_to_commit_after(
     assert bundle is not None
     assert bundle.commit_before == bundle.commit_after == sha
     assert "^" not in bundle.commit_before
+
+
+def test_patch_url_for_kernel_repo_with_branch_query() -> None:
+    """A stable-branch repository_url carrying ?h=<branch> must yield a
+    well-formed cgit patch URL (query stripped, .git suffix handled) —
+    not a malformed double-`?` URL that silently loses the source."""
+    from cve_diff.diffing.extract_via_patch_url import _patch_url_for
+
+    ref = RepoRef(
+        repository_url=("https://git.kernel.org/pub/scm/linux/kernel/git/"
+                        "stable/linux.git/?h=linux-5.4.y"),
+        fix_commit="a" * 40,
+        introduced=None,
+        canonical_score=100,
+    )
+    url = _patch_url_for(ref)
+    assert url == ("https://git.kernel.org/pub/scm/linux/kernel/git/"
+                   "stable/linux/commit/?id=" + "a" * 40 + "&format=patch")
+    assert url.count("?") == 1
+
+
+def test_patch_url_for_kernel_repo_without_query_unchanged() -> None:
+    from cve_diff.diffing.extract_via_patch_url import _patch_url_for
+
+    ref = RepoRef(
+        repository_url="https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git",
+        fix_commit="b" * 40,
+        introduced=None,
+        canonical_score=100,
+    )
+    url = _patch_url_for(ref)
+    assert url == ("https://git.kernel.org/pub/scm/linux/kernel/git/"
+                   "stable/linux/commit/?id=" + "b" * 40 + "&format=patch")

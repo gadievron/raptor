@@ -78,6 +78,37 @@ class TestHarnessGenerator(unittest.TestCase):
         finally:
             header.unlink()
 
+    def test_fallback_gates_hostile_header_filename(self):
+        """The target header's FILENAME is repo-controlled and Linux
+        filenames may contain quotes and newlines — a hostile name must
+        never escape the include string into compiled source. Safe
+        names keep their include line (two-direction)."""
+        tmpdir = Path(tempfile.mkdtemp())
+        hostile = tmpdir / 'evil.h"\n#include "backdoor.h'
+        hostile.write_text("int parse_buf(const uint8_t *p, size_t n);\n")
+        safe = tmpdir / "parse.h"
+        safe.write_text("int parse_buf(const uint8_t *p, size_t n);\n")
+        try:
+            gen = HarnessGenerator(llm=None)
+
+            harness = gen.generate(HarnessSpec(
+                target_function="parse_buf", header_path=hostile,
+            ))
+            self.assertNotIn("backdoor", harness.source_code)
+            self.assertNotIn("evil", harness.source_code)
+            # The stub still compiles without the include; it must
+            # still be a complete harness.
+            self.assertIn("LLVMFuzzerTestOneInput", harness.source_code)
+
+            harness = gen.generate(HarnessSpec(
+                target_function="parse_buf", header_path=safe,
+            ))
+            self.assertIn('#include "parse.h"', harness.source_code)
+        finally:
+            hostile.unlink()
+            safe.unlink()
+            tmpdir.rmdir()
+
     def test_llm_success_path(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".h", delete=False) as f:
             f.write("int parse_buf(const uint8_t *p, size_t n);\n")

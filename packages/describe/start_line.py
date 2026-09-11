@@ -109,8 +109,14 @@ def _scorecard_estimate_clause(
 
 
 def _short_loc(n: int) -> str:
-    """52000 → '52k'; 1500000 → '1.5M'."""
-    if n >= 1_000_000:
+    """52000 → '52k'; 1500000 → '1.5M'.
+
+    Single shared implementation — ``report._short_int`` aliases this
+    so the two renderers can never drift. The k-branch checks its
+    ROUNDED value: 999,500-999,999 rounds to 1000k and must render
+    as 1.0M, not '1000k'.
+    """
+    if n >= 1_000_000 or (n >= 1_000 and round(n / 1_000) >= 1_000):
         return f"{n / 1_000_000:.1f}M"
     if n >= 1_000:
         return f"{round(n / 1_000)}k"

@@ -6,9 +6,10 @@ look at the moment a corpus run finishes:
 
   * Headline: processed / sound / not_sound / no_barrier / pipeline errors.
   * Suppression rate: sound / (sound + not_sound) — the trust-tier KPI.
-  * Backend split among SOUND verdicts: smt (Tier 0, free) vs codeql
-    (Tier 2, LLM + CodeQL adjudication).  Quantifies how much of the
-    suppression we're getting for zero LLM tokens.
+  * Backend split among SOUND verdicts: smt (Tier 0, free) vs library
+    (Tier 1B curated known-safe-call table — cheap-LLM extraction) vs
+    codeql (Tier 2, LLM + CodeQL adjudication).  Quantifies how much of
+    the suppression we're getting for zero LLM tokens.
   * Per-CWE and per-language breakdowns — grounds the per-CWE backend
     prior we eventually want (instead of asserting it).
   * ``not_sound`` failure-mode distribution: ``suppress_fp_failed`` vs
@@ -70,7 +71,8 @@ class CorpusReport:
     pipeline_errors: Counter = field(default_factory=Counter)
 
     # Backend split for SOUND verdicts only.
-    sound_by_backend: Counter = field(default_factory=Counter)   # "smt" / "codeql"
+    # "smt" / "codeql" / "library" (Tier 1B curated table).
+    sound_by_backend: Counter = field(default_factory=Counter)
 
     # Per-CWE and per-language breakdowns: status -> backend -> count.
     by_cwe: dict[str, dict[str, Counter]] = field(default_factory=dict)
@@ -96,7 +98,10 @@ class CorpusReport:
     @property
     def tier0_share_of_sound(self) -> float | None:
         """Fraction of sound verdicts that came from Tier 0 (free SMT).
-        Headline: how much of the suppression cost us zero LLM tokens."""
+        Headline: how much of the suppression cost us zero LLM tokens.
+        Tier 1B ``library`` rows are deliberately NOT in the numerator —
+        each one cost a cheap-LLM extraction call, so counting them as
+        zero-cost would overstate the free share."""
         if not self.sound:
             return None
         return self.sound_by_backend.get("smt", 0) / self.sound
@@ -104,7 +109,9 @@ class CorpusReport:
     def tier0_attempts_saved(self, max_attempts: int = _DEFAULT_TIER2_MAX_ATTEMPTS) -> int:
         """Conservative count of LLM proposer attempts not spent because
         Tier 0 short-circuited.  Each Tier 0 SOUND row saves up to
-        ``max_attempts`` LLM calls + the matching CodeQL adjudications."""
+        ``max_attempts`` LLM calls + the matching CodeQL adjudications.
+        Only ``smt`` rows count: Tier 1B ``library`` verdicts are not
+        zero-cost short-circuits (they spend an LLM extraction call)."""
         return self.sound_by_backend.get("smt", 0) * max_attempts
 
 
@@ -216,9 +223,11 @@ def render_text(rep: CorpusReport) -> str:
         out.append(f"  pipeline errors      : {dict(rep.pipeline_errors)}")
     out.append("")
 
-    out.append("Tier 0 vs Tier 2 (backend split among SOUND verdicts):")
+    out.append("Backend split among SOUND verdicts:")
     if rep.sound:
-        for backend in ("smt", "codeql", ""):
+        # "library" (Tier 1B curated table) must appear or the listed
+        # splits don't sum to the sound total.
+        for backend in ("smt", "library", "codeql", ""):
             n = rep.sound_by_backend.get(backend, 0)
             label = backend or "<unknown>"
             out.append(f"  {label:8s} : {_fmt_rate(n, rep.sound)}")
@@ -240,17 +249,22 @@ def render_text(rep: CorpusReport) -> str:
         out.append("  (no not_sound verdicts yet)")
     out.append("")
 
+    # Both breakdown tables carry the "library" column (Tier 1B curated
+    # table) alongside smt / codeql — without it a run containing
+    # curated-table verdicts prints rows that don't sum to the totals.
     out.append("By CWE:")
     if rep.by_cwe:
-        out.append(f"  {'CWE':10s} {'sound':>16s} {'not_sound':>10s} {'no_barrier':>11s}")
+        out.append(f"  {'CWE':10s} {'sound':>26s} {'not_sound':>10s} {'no_barrier':>11s}")
         for cwe in sorted(rep.by_cwe):
             statuses = rep.by_cwe[cwe]
             smt = statuses.get("sound", Counter()).get("smt", 0)
+            lib = statuses.get("sound", Counter()).get("library", 0)
             ql = statuses.get("sound", Counter()).get("codeql", 0)
             ns = sum(statuses.get("not_sound", Counter()).values())
             nb = sum(statuses.get("no_barrier", Counter()).values())
             out.append(
-                f"  {cwe:10s} {smt:>5d} smt {ql:>5d} ql {ns:>10d} {nb:>11d}"
+                f"  {cwe:10s} {smt:>5d} smt {lib:>5d} lib {ql:>5d} ql "
+                f"{ns:>10d} {nb:>11d}"
             )
     else:
         out.append("  (no rows yet)")
@@ -258,15 +272,17 @@ def render_text(rep: CorpusReport) -> str:
 
     out.append("By language:")
     if rep.by_language:
-        out.append(f"  {'lang':12s} {'sound':>16s} {'not_sound':>10s} {'no_barrier':>11s}")
+        out.append(f"  {'lang':12s} {'sound':>26s} {'not_sound':>10s} {'no_barrier':>11s}")
         for lang in sorted(rep.by_language):
             statuses = rep.by_language[lang]
             smt = statuses.get("sound", Counter()).get("smt", 0)
+            lib = statuses.get("sound", Counter()).get("library", 0)
             ql = statuses.get("sound", Counter()).get("codeql", 0)
             ns = sum(statuses.get("not_sound", Counter()).values())
             nb = sum(statuses.get("no_barrier", Counter()).values())
             out.append(
-                f"  {lang:12s} {smt:>5d} smt {ql:>5d} ql {ns:>10d} {nb:>11d}"
+                f"  {lang:12s} {smt:>5d} smt {lib:>5d} lib {ql:>5d} ql "
+                f"{ns:>10d} {nb:>11d}"
             )
     else:
         out.append("  (no rows yet)")

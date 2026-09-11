@@ -275,3 +275,83 @@ class TestBlockPriorities:
         # Sheddable before the never-shed core blocks.
         assert _ANALYSIS_BLOCK_PRIORITIES["flow-trace-context"] > 0
         assert _ANALYSIS_BLOCK_PRIORITIES["caller-call-sites"] > 0
+
+
+class TestFunctionLevelTraceMatching:
+    """File-level co-location alone must not claim a finding "sits on
+    the traced flow": canonical trace steps carry no "function" key, so
+    an unconditional same-file fallback attached flow bias to every
+    unrelated helper in a traced file."""
+
+    def test_same_file_unrelated_function_gets_no_trace_block(
+        self, tmp_path: Path,
+    ):
+        repo = _repo(tmp_path)
+        udir = _write_understand_dir(tmp_path)
+        prepare_flow_context(repo, understand_dir=udir)
+
+        blocks = context_blocks_for_finding({
+            "repo_path": str(repo),
+            "file_path": "src/svc.c",  # on the trace...
+            "metadata": {"name": "totally_unrelated_helper"},  # ...but not this fn
+        })
+        assert [b for b in blocks if b.kind == "flow-trace-context"] == []
+
+    def test_function_mentioned_in_step_still_matches(self, tmp_path: Path):
+        # Two-direction: the legitimate match (function named in the
+        # step description/definition) keeps its block.
+        repo = _repo(tmp_path)
+        udir = _write_understand_dir(tmp_path)
+        prepare_flow_context(repo, understand_dir=udir)
+
+        blocks = context_blocks_for_finding({
+            "repo_path": str(repo),
+            "file_path": "src/svc.c",
+            "metadata": {"name": "dispatch"},
+        })
+        assert any(b.kind == "flow-trace-context" for b in blocks)
+
+    def test_no_function_name_still_matches_on_file(self, tmp_path: Path):
+        repo = _repo(tmp_path)
+        udir = _write_understand_dir(tmp_path)
+        prepare_flow_context(repo, understand_dir=udir)
+
+        blocks = context_blocks_for_finding({
+            "repo_path": str(repo),
+            "file_path": "src/svc.c",
+            "metadata": {"name": ""},
+        })
+        assert any(b.kind == "flow-trace-context" for b in blocks)
+
+    def test_short_function_name_needs_identifier_boundary(
+        self, tmp_path: Path,
+    ):
+        # "on" appears inside "dispatch(buf) forwards..." words but not
+        # as an identifier — a substring check would false-match.
+        repo = _repo(tmp_path)
+        udir = _write_understand_dir(tmp_path)
+        prepare_flow_context(repo, understand_dir=udir)
+
+        blocks = context_blocks_for_finding({
+            "repo_path": str(repo),
+            "file_path": "src/svc.c",
+            "metadata": {"name": "on"},
+        })
+        assert [b for b in blocks if b.kind == "flow-trace-context"] == []
+
+    def test_joern_style_function_key_matches(self, tmp_path: Path):
+        # Steps that DO carry a "function" key (joern-derived) match on it.
+        repo = _repo(tmp_path)
+        steps = [{
+            "step": 1, "type": "call", "file": "src/svc.c",
+            "function": "dispatch", "description": "forwards data",
+        }]
+        udir = _write_understand_dir(tmp_path, traces=[_trace(steps=steps)])
+        prepare_flow_context(repo, understand_dir=udir)
+
+        blocks = context_blocks_for_finding({
+            "repo_path": str(repo),
+            "file_path": "src/svc.c",
+            "metadata": {"name": "dispatch"},
+        })
+        assert any(b.kind == "flow-trace-context" for b in blocks)

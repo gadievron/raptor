@@ -94,15 +94,20 @@ usage: raptor-sage-setup [install | --uninstall | --status | review] [--reauthor
                  as denied (the guard keeps them out of sessions with a calm
                  note, and review/status stop flagging them as pending).
                  Exit 0 = nothing pending review, 4 = undecided variant(s).
-  --approve      approve the reviewed variants non-interactively (review only).
-                 Approves every live variant, including previously rejected
-                 ones — this is also the un-reject path.
+  --approve      approve the reviewed variants without the interactive prompt
+                 (review only). Approves every live variant, including
+                 previously rejected ones — this is also the un-reject path.
+                 Requires an interactive terminal (stdin must be a TTY):
+                 approval cannot be scripted or agent-run.
   --reject       reject the unauthorized live variants non-interactively
                  (review only).
-  --reauthorize  accept a CHANGED boot payload non-interactively (install only).
-                 Without it, a changed payload needs interactive confirmation
-                 and is otherwise left unauthorized. Unlike review, install
-                 REPLACES the stamp with the fresh capture.
+  --reauthorize  accept a CHANGED boot payload without the y/N prompt
+                 (install only). Replacing an existing stamp requires an
+                 interactive terminal (stdin must be a TTY) — like review
+                 --approve, re-authorization cannot be scripted or agent-run;
+                 a first install (no stamp yet) stays non-interactive.
+                 Unlike review, install REPLACES the stamp with the fresh
+                 capture.
 
 Prereqs: jq, docker + docker compose, python3, pip-installed sage-agent-sdk.
 EOF
@@ -256,7 +261,12 @@ check_docker() {
             # since sg -c takes a single string.
             local quoted_args=""
             local a
-            for a in "${_ORIG_ARGS[@]}"; do
+            # ${arr[@]+...} guard: on bash < 4.4 (macOS's bundled 3.2,
+            # which this script otherwise supports) expanding an EMPTY
+            # array under set -u is a fatal unbound-variable error —
+            # hit exactly on a bare zero-arg install reaching this
+            # re-exec. The + form expands to nothing when empty.
+            for a in ${_ORIG_ARGS[@]+"${_ORIG_ARGS[@]}"}; do
                 quoted_args="$quoted_args \"$a\""
             done
             exec sg docker -c "\"$0\"$quoted_args"
@@ -702,11 +712,18 @@ discover_mcp_tools() {
     fi
     # Parse all JSON objects from the response stream, select the one
     # with id==2 (tools/list), and extract tool names.
+    #
+    # `|| true`: grep exits 1 when zero names survive the filter (and
+    # jq exits nonzero on malformed lines) — under pipefail that made
+    # this function return nonzero, and errexit then aborted the
+    # caller's `tools=$(discover_mcp_tools)` before its warn-and-
+    # continue branch for empty output could run. An empty tool list
+    # is a handled outcome, not an error: succeed with empty output.
     printf '%s\n' "$response" \
         | jq -r 'select(.id == 2) | .result.tools[]?.name // empty' 2>/dev/null \
         | sed 's/^/mcp__sage__/' \
         | grep '^mcp__sage__sage_[a-z_]*$' \
-        | sort
+        | sort || true
 }
 
 grant_mcp_permissions() {
@@ -743,14 +760,24 @@ grant_mcp_permissions() {
 
 revoke_mcp_permissions() {
     # Remove all mcp__sage__ entries from settings.local.json permissions.
+    # jq failures (hand-edited/corrupted JSON) warn and return 0: this
+    # runs mid-uninstall under errexit, and an abort here would skip
+    # the boot-payload tombstone step that teardown must always reach.
     [ -f "$SETTINGS_LOCAL" ] || return 0
     local before
-    before=$(jq '[.permissions.allow[]? | select(startswith("mcp__sage__"))] | length' "$SETTINGS_LOCAL")
+    if ! before=$(jq '[.permissions.allow[]? | select(startswith("mcp__sage__"))] | length' "$SETTINGS_LOCAL" 2>/dev/null); then
+        echo "Warning: could not parse $SETTINGS_LOCAL — permissions not revoked." >&2
+        return 0
+    fi
     [ "$before" = "0" ] && return 0
     local tmp
     tmp=$(mktemp "$(dirname "$SETTINGS_LOCAL")/.tmp.settings.XXXXXX"); _RAPTOR_TMP_FILES+=("$tmp")
-    jq '.permissions.allow = [.permissions.allow[]? | select(startswith("mcp__sage__") | not)]' \
-        "$SETTINGS_LOCAL" > "$tmp"
+    if ! jq '.permissions.allow = [.permissions.allow[]? | select(startswith("mcp__sage__") | not)]' \
+        "$SETTINGS_LOCAL" > "$tmp"; then
+        echo "Warning: failed to update $SETTINGS_LOCAL — permissions not revoked." >&2
+        rm -f "$tmp"
+        return 0
+    fi
     mv "$tmp" "$SETTINGS_LOCAL"
     echo "Revoked $before SAGE MCP tool permissions from $SETTINGS_LOCAL."
 }
@@ -783,24 +810,38 @@ smoke_test_mcp() {
 
 run_boot_probe() {
     # One capture probe against the live server; raw newline-delimited
-    # JSON on stdout. RAPTOR_SAGE_BOOT_CAPTURE=1 takes the wrapper's
+    # JSON on stdout. RAPTOR_SAGE_BOOT_CAPTURE takes the wrapper's
     # sanctioned guard bypass: the guard strips both instruction
     # surfaces when no stamp exists yet, so the very capture that
     # CREATES the stamp must not run through enforcement — it would
     # record the guard's own warning text and every real session would
-    # mismatch forever. Agent sessions can never set this variable
-    # (Claude Code spawns the wrapper with its own environment).
+    # mismatch forever.
+    #
+    # The variable does not arm the bypass by itself (ambient env —
+    # e.g. an .mcp.json env map — must never be able to kill the
+    # guard): it must carry a fresh random token matching the 0600
+    # nonce file written here immediately before the probe and removed
+    # right after. Only this pipeline can mint the file, so only this
+    # pipeline can take the wrapper's bypass branch.
     local timeout_cmd=""
     if command -v timeout >/dev/null 2>&1; then
         timeout_cmd="timeout 15"
     elif command -v gtimeout >/dev/null 2>&1; then
         timeout_cmd="gtimeout 15"
     fi
+    local nonce_file nonce rc=0
+    nonce_file="$RAPTOR_DIR/.sage/boot-capture.nonce"
+    mkdir -p "$RAPTOR_DIR/.sage"
+    nonce=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+    _RAPTOR_TMP_FILES+=("$nonce_file")
+    (umask 077; printf '%s' "$nonce" > "$nonce_file")
     printf '%s\n%s\n%s\n' \
         '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"raptor-sage-setup","version":"1.0.0"}}}' \
         '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
         '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sage_inception","arguments":{}}}' \
-        | CLAUDECODE=1 RAPTOR_SAGE_BOOT_CAPTURE=1 $timeout_cmd "$MCP_WRAPPER" 2>/dev/null
+        | CLAUDECODE=1 RAPTOR_SAGE_BOOT_CAPTURE="$nonce" $timeout_cmd "$MCP_WRAPPER" 2>/dev/null || rc=$?
+    rm -f "$nonce_file"
+    return "$rc"
 }
 
 capture_boot_payload() {
@@ -852,13 +893,51 @@ capture_boot_payload() {
         echo "raptor-sage-setup: boot probes answered but no sage_inception content could be extracted; refusing to record an empty boot-payload stamp" >&2
         return 1
     fi
-    printf '### initialize.instructions\n%s\n' "$init1"
+    # Section-injection neutralisation: the two v1 text sections embed
+    # SERVER-CONTROLLED text verbatim into the line-oriented stamp. A
+    # payload line matching the parsers' section-header trigger
+    # ('### ' at line start) could otherwise open a forged section the
+    # server chooses — quote-prefix such lines so injection is
+    # impossible by construction. Enforcement is unaffected: the guard
+    # compares live surfaces against the JSON-encoded variant sections
+    # (jq -c output is single-line, injection-proof); the v1 text
+    # sections exist for human readability and legacy-stamp compat,
+    # and a payload carrying its own '### ' line is exactly the case
+    # that must fail v1 comparison. Both parsers additionally
+    # hard-reject stamps with duplicate section headers.
+    #
+    # Separator flattening BEFORE the sed quoting: the parser boundary
+    # is line-scanning in the guard/reviewer (historically
+    # str.splitlines(), which also breaks on \r \v \f \x1c-\x1e U+0085
+    # U+2028 U+2029), while sed's idea of a line is \n-delimited — so
+    # a '### ' immediately after e.g. a raw U+2028 (which jq -r emits
+    # unescaped) sailed past the quoting yet opened a forged section
+    # at parse time. Flatten every such separator to a space in the
+    # embedded v1 text first. The JSON variant sections are NOT
+    # flattened: enforcement compares those against the raw live
+    # payload, and both parsers now scan raw \n lines only.
+    # Defined nested so test drivers that extract capture_boot_payload
+    # alone stay self-contained.
+    _flatten_splitlines_separators() {
+        python3 -c '
+import sys
+text = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+for sep in "\r\v\f\x1c\x1d\x1e\x85\u2028\u2029":
+    text = text.replace(sep, " ")
+sys.stdout.buffer.write(text.encode("utf-8"))
+'
+    }
+    printf '### initialize.instructions\n'
+    printf '%s\n' "$init1" | _flatten_splitlines_separators | sed 's/^### /> ### /'
     printf '### initialize.instructions.json\n'
-    jq -cn --arg t "$init1" '$t'
+    if [ -n "$init1" ]; then
+        jq -cn --arg t "$init1" '$t'
+    fi
     if [ -n "$init2" ] && [ "$init2" != "$init1" ]; then
         jq -cn --arg t "$init2" '$t'
     fi
-    printf '### sage_inception.message\n%s\n' "$msg1"
+    printf '### sage_inception.message\n'
+    printf '%s\n' "$msg1" | _flatten_splitlines_separators | sed 's/^### /> ### /'
     printf '### sage_inception.content\n'
     if [ -n "$content1" ]; then
         printf '%s\n' "$content1"
@@ -922,14 +1001,59 @@ authorize_boot_payload() {
     if [ -f "$AUTHORIZED_PAYLOAD" ]; then
         local old_sha
         old_sha=$(sed -n 's/^# SHA256: //p' "$AUTHORIZED_PAYLOAD" | head -1)
-        if [ -n "$old_sha" ] && [ "$old_sha" = "$sha" ]; then
+        if [ -z "$old_sha" ] && [ "$REAUTHORIZE" != "1" ]; then
+            # Unparseable/absent SHA256 header on an EXISTING stamp:
+            # silently replacing it would bypass the changed-payload
+            # confirmation gate below (the very comparison needs the
+            # old hash), turning a corrupted or tampered stamp into a
+            # free re-stamp of whatever the server serves now. Refuse
+            # and keep the file; the guard keeps enforcing against it
+            # (or stripping, if it too cannot parse it).
+            echo "Refusing to replace an existing boot-payload stamp whose SHA256 header" >&2
+            echo "cannot be parsed ($AUTHORIZED_PAYLOAD)." >&2
+            echo "Inspect the file, then re-authorize explicitly:" >&2
+            echo "  bin/raptor sage-setup install --reauthorize" >&2
+            return 0
+        fi
+        if [ -z "$old_sha" ]; then
+            # Stamp-REPLACING --reauthorize needs the operator's own
+            # terminal, exactly like review --approve: a non-TTY
+            # `install --reauthorize` (agents run this script with a
+            # pipe/devnull stdin) is the same laundering primitive the
+            # --approve TTY gate closed — a mid-session prompt
+            # injection could re-stamp whatever the server serves now.
+            # First install (no existing stamp) stays non-interactive.
+            if [ ! -t 0 ]; then
+                echo "install --reauthorize replaces the operator-authorized stamp and" >&2
+                echo "requires an interactive terminal (stdin is not a TTY). Re-authorization" >&2
+                echo "must come from the operator directly — an agent or script cannot" >&2
+                echo "self-authorize a boot-payload change. The previous record is kept;" >&2
+                echo "run at your own terminal:" >&2
+                echo "  bin/raptor sage-setup install --reauthorize" >&2
+                return 0
+            fi
+            echo "Existing stamp had no parseable SHA256 header — replaced (--reauthorize)."
+        elif [ "$old_sha" = "$sha" ]; then
             echo "SAGE boot payload unchanged since last authorization (sha256 ${sha:0:12})."
-        elif [ -n "$old_sha" ]; then
+        else
             echo "SAGE boot payload CHANGED since last authorization:"
             sed '1,/^# ---$/d' "$AUTHORIZED_PAYLOAD" \
                 | diff -u --label previous --label current - <(printf '%s\n' "$payload") \
                 || true
             if [ "$REAUTHORIZE" = "1" ]; then
+                # Same TTY gate as the unparseable-header branch above:
+                # a changed payload is exactly what the flag launders
+                # when an agent runs it non-interactively.
+                if [ ! -t 0 ]; then
+                    echo "install --reauthorize replaces the operator-authorized stamp and" >&2
+                    echo "requires an interactive terminal (stdin is not a TTY). Re-authorization" >&2
+                    echo "must come from the operator directly — an agent or script cannot" >&2
+                    echo "self-authorize a changed boot payload. The previous record is kept;" >&2
+                    echo "the MCP wrapper will strip the changed payload from agent sessions." >&2
+                    echo "Run at your own terminal:" >&2
+                    echo "  bin/raptor sage-setup install --reauthorize" >&2
+                    return 0
+                fi
                 echo "Re-authorized (--reauthorize)."
             elif [ -t 0 ]; then
                 local answer
@@ -948,12 +1072,41 @@ authorize_boot_payload() {
             else
                 echo "Refusing to silently re-authorize a changed boot payload (non-interactive)." >&2
                 echo "The previous record is kept; the MCP wrapper will strip the changed" >&2
-                echo "payload from agent sessions. After review, re-run:" >&2
+                echo "payload from agent sessions. After review, re-run at your own terminal" >&2
+                echo "(re-authorization is TTY-gated, like review --approve):" >&2
                 echo "  bin/raptor sage-setup install --reauthorize" >&2
                 return 0
             fi
         fi
     else
+        # First capture on this machine — but "no stamp" is only a
+        # genuine first install when there is no evidence of a PRIOR
+        # install. Deleting the stamp (or uninstall && install) and
+        # re-stamping non-interactively would launder a hostile
+        # payload past the TTY gates above, so stamp CREATION is
+        # TTY-gated whenever a prior install left a tombstone.
+        # Evidence: an uninstall tombstone, OR an existing .mcp.json
+        # sage entry (a live install whose stamp was deleted directly).
+        local prior_entry="${_SAGE_PRIOR_MCP_ENTRY:-}"
+        if [ -z "$prior_entry" ]; then
+            # Direct caller (not via install_sage): live probe is
+            # accurate because nothing wrote the entry this run.
+            if [ -n "${MCP:-}" ] && [ -f "${MCP:-}" ] && \
+                    grep -q '"sage"' "${MCP:-}" 2>/dev/null; then
+                prior_entry=1
+            else
+                prior_entry=0
+            fi
+        fi
+        if [ ! -t 0 ] && { [ -f "$AUTHORIZED_PAYLOAD.removed" ] || \
+                [ "$prior_entry" = 1 ]; }; then
+            echo "Refusing to record a new boot-payload stamp non-interactively:" >&2
+            echo "this machine shows a prior SAGE install (uninstall tombstone or" >&2
+            echo "live .mcp.json entry) whose stamp is gone. Re-stamping is an" >&2
+            echo "authorization decision — run at your own terminal:" >&2
+            echo "  bin/raptor sage-setup install" >&2
+            return 1
+        fi
         # First capture on this machine: show the operator exactly what
         # they are authorizing.
         echo "Recording the SAGE boot payload as operator-authorized."
@@ -1002,6 +1155,20 @@ review_boot_payload() {
     local reviewer="$RAPTOR_DIR/core/sage/boot_payload_review.py"
     if [ "$APPROVE" = "1" ] && [ "$REJECT" = "1" ]; then
         echo "review: --approve and --reject conflict" >&2
+        return 3
+    fi
+    # Approval is the operator's decision at THEIR terminal, mirroring
+    # the flagless path's [ -t 0 ] prompt gate. Without this, a
+    # mid-session prompt-injected `review --approve` (agents run this
+    # script with a pipe/devnull stdin) could launder a hostile server
+    # variant into the operator-authorized record — including
+    # reversing a prior rejection. --reject stays non-interactive: it
+    # only narrows what sessions receive and is fully reversible.
+    if [ "$APPROVE" = "1" ] && [ ! -t 0 ]; then
+        echo "review --approve requires an interactive terminal (stdin is not a TTY)." >&2
+        echo "Approval must come from the operator directly — an agent or script" >&2
+        echo "cannot self-authorize a boot-payload change. Run at your terminal:" >&2
+        echo "  bin/raptor sage-setup review --approve" >&2
         return 3
     fi
     if [ ! -f "$AUTHORIZED_PAYLOAD" ]; then
@@ -1139,7 +1306,15 @@ remove_mcp_entry() {
     local tmp
     tmp=$(mktemp "$(dirname "$MCP")/.tmp.mcp.XXXXXX"); _RAPTOR_TMP_FILES+=("$tmp")
     trap 'rm -f "$tmp"' RETURN
-    jq 'del(.mcpServers.sage)' "$MCP" > "$tmp"
+    # jq failure (hand-edited/corrupted JSON) warns and returns 0:
+    # this runs mid-uninstall under errexit, and an abort here would
+    # skip the boot-payload tombstone step teardown must always reach.
+    if ! jq 'del(.mcpServers.sage)' "$MCP" > "$tmp"; then
+        echo "Warning: could not parse $MCP — SAGE entry not removed." >&2
+        rm -f "$tmp"
+        trap - RETURN
+        return 0
+    fi
     mv "$tmp" "$MCP"
     trap - RETURN
     # If the file now contains only an empty mcpServers object (and nothing
@@ -1159,9 +1334,12 @@ remove_mcp_entry() {
     # Type-guard explicitly: only count keys when the root IS an
     # object; otherwise return 0 (so the cleanup branch doesn't
     # fire on non-object roots).
+    # `|| true` + empty default: a jq failure here must not abort the
+    # uninstall (errexit) — empty counts simply fail the "0"/"1"
+    # equality tests below and the file is left in place.
     local server_count top_count
-    server_count="$(jq -r '.mcpServers // {} | length' "$MCP")"
-    top_count="$(jq -r 'if type == "object" then keys|length else 0 end' "$MCP")"
+    server_count="$(jq -r '.mcpServers // {} | length' "$MCP" 2>/dev/null || true)"
+    top_count="$(jq -r 'if type == "object" then keys|length else 0 end' "$MCP" 2>/dev/null || true)"
     if [ "$server_count" = "0" ] && [ "$top_count" = "1" ]; then
         rm -f "$MCP"
         echo "Removed $MCP (no MCP servers remaining)."
@@ -1292,10 +1470,18 @@ disable_sage_env() {
     # object would become `{}` — bash then sees the marker and
     # deletes the file directly without ever writing the empty `{}`
     # state to disk.
-    jq 'if has("env") then (.env |= del(.SAGE_ENABLED)
+    # jq failure (hand-edited/corrupted JSON) warns and returns 0:
+    # this runs mid-uninstall under errexit, and an abort here would
+    # skip the boot-payload tombstone step teardown must always reach.
+    if ! jq 'if has("env") then (.env |= del(.SAGE_ENABLED)
            | if .env == {} then del(.env) else . end)
          else . end
-       | if . == {} then null else . end' "$SETTINGS_LOCAL" > "$tmp"
+       | if . == {} then null else . end' "$SETTINGS_LOCAL" > "$tmp"; then
+        echo "Warning: could not parse $SETTINGS_LOCAL — SAGE_ENABLED not removed." >&2
+        rm -f "$tmp"
+        trap - RETURN
+        return 0
+    fi
     if [ "$(cat "$tmp")" = "null" ]; then
         rm -f "$SETTINGS_LOCAL" "$tmp"
         trap - RETURN
@@ -1370,6 +1556,17 @@ detect_embedding_model() {
 install_sage() {
     need jq
     check_docker
+    # Snapshot PRIOR-install evidence before generate_mcp_entry writes
+    # the sage entry itself: the stamp-creation TTY gate keys on
+    # whether THIS machine had a SAGE install before this invocation,
+    # and a live grep after entry generation would always be true —
+    # refusing every genuine non-TTY first install.
+    if [ -n "${MCP:-}" ] && [ -f "${MCP:-}" ] && \
+            grep -q '"sage"' "${MCP:-}" 2>/dev/null; then
+        _SAGE_PRIOR_MCP_ENTRY=1
+    else
+        _SAGE_PRIOR_MCP_ENTRY=0
+    fi
     need python3
     need curl
     check_sdk
@@ -1415,6 +1612,17 @@ install_sage() {
 uninstall_sage() {
     need jq
     check_docker
+    # Snapshot PRIOR-install evidence before generate_mcp_entry writes
+    # the sage entry itself: the stamp-creation TTY gate keys on
+    # whether THIS machine had a SAGE install before this invocation,
+    # and a live grep after entry generation would always be true —
+    # refusing every genuine non-TTY first install.
+    if [ -n "${MCP:-}" ] && [ -f "${MCP:-}" ] && \
+            grep -q '"sage"' "${MCP:-}" 2>/dev/null; then
+        _SAGE_PRIOR_MCP_ENTRY=1
+    else
+        _SAGE_PRIOR_MCP_ENTRY=0
+    fi
     # `--remove-orphans` so containers from PREVIOUS compose
     # configs (e.g. operator updated core/sage/docker-compose.yml
     # between runs and the old config's containers are still
@@ -1431,8 +1639,15 @@ uninstall_sage() {
     disable_sage_env
     revoke_mcp_permissions
     if [ -f "$AUTHORIZED_PAYLOAD" ]; then
-        rm -f "$AUTHORIZED_PAYLOAD"
-        echo "Removed $AUTHORIZED_PAYLOAD."
+        # Tombstone, not plain delete: stamp CREATION is TTY-gated
+        # when this marker exists, so uninstall && install cannot
+        # launder a new payload past the re-authorization gates
+        # non-interactively. Content is a note, not the old stamp —
+        # the old payload text must not linger as an oracle.
+        mv "$AUTHORIZED_PAYLOAD" "$AUTHORIZED_PAYLOAD.removed"
+        printf '# prior SAGE install uninstalled; re-stamping is TTY-gated\n' \
+            > "$AUTHORIZED_PAYLOAD.removed"
+        echo "Removed $AUTHORIZED_PAYLOAD (tombstone kept)."
     fi
     echo "SAGE sidecar stopped. Data volumes preserved."
     echo "To wipe volumes: docker compose -f $COMPOSE_FILE down -v --remove-orphans"

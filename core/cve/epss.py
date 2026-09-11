@@ -27,6 +27,7 @@ on top of any CVE-tagged finding without depending on SCA-specific code.
 from __future__ import annotations
 
 import logging
+import re
 
 from core.http import HttpClient, HttpError
 from typing import TYPE_CHECKING
@@ -40,6 +41,15 @@ logger = logging.getLogger(__name__)
 EPSS_URL = "https://api.first.org/data/v1/epss"
 _DEFAULT_TTL = 24 * 3600
 _BATCH_SIZE = 100
+
+# Strict ASCII CVE-id shape (kept in sync with the sibling
+# ``core.cve.vulnrichment`` validator). Ids are interpolated into
+# cache keys ("epss/<id>") and the batch URL, so a degenerate id
+# ("..", "a//b") would otherwise raise out of the cache-key layer
+# and lose the whole batch — the docstring contract is that
+# unresolvable ids are simply absent from the returned dict.
+# ``re.ASCII`` pins ``\d`` to 0-9.
+_CVE_ID_RE = re.compile(r"\ACVE-\d{4}-\d{4,}\Z", re.ASCII)
 
 
 class EpssClient:
@@ -74,8 +84,13 @@ class EpssClient:
         Missing IDs (no EPSS coverage, network failure, etc.) are simply
         absent from the dict. Callers should not assume completeness.
         """
-        # Normalise + dedup.
-        clean = sorted({c.upper() for c in cves if isinstance(c, str) and c})
+        # Normalise + dedup + validate. Malformed ids are skipped (they
+        # end up absent from the result, per the contract above) so one
+        # bad id from a hostile / buggy feed can't sink its batchmates.
+        clean = sorted({
+            c.upper() for c in cves
+            if isinstance(c, str) and _CVE_ID_RE.fullmatch(c.upper())
+        })
         result: dict[str, float] = {}
         uncached: list[str] = []
         for cve in clean:

@@ -603,3 +603,35 @@ def test_resolver_cross_file_class_qualified():
     }
     r = function_called(inv, "com.example.Util.helper")
     assert r.verdict == Verdict.CALLED
+
+
+# ---------------------------------------------------------------------------
+# this-rooted field chains
+# ---------------------------------------------------------------------------
+
+
+def test_this_field_method_chain_recorded():
+    """``this.b.doIt()`` — the standard field-collaborator idiom —
+    must emit a CallSite; dropping it gave methods invoked only
+    through fields a false NOT_CALLED."""
+    g = extract_call_graph_java(
+        "class A { B b; void m() { this.b.doIt(); } }"
+    )
+    assert ["this", "b", "doIt"] in [c.chain for c in g.calls]
+
+
+def test_this_field_chain_not_tagged_with_enclosing_class():
+    g = extract_call_graph_java(
+        "class A { B b; void m() { this.b.doIt(); this.own(); } }"
+    )
+    per = {tuple(c.chain): c.receiver_class for c in g.calls}
+    # doIt belongs to b's class, not A.
+    assert per[("this", "b", "doIt")] is None
+    assert per[("this", "own")] == "A"
+
+
+def test_plain_field_access_chain_still_works():
+    g = extract_call_graph_java(
+        "class A { void m() { x.y.z.deep(); } }"
+    )
+    assert ["x", "y", "z", "deep"] in [c.chain for c in g.calls]

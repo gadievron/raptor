@@ -351,10 +351,18 @@ def _build_user_prompt(
 ) -> str:
     parts: list[str] = []
 
+    # Every repo-derived field in this prompt goes through the tag/
+    # heading neutraliser: prior specs are LLM output echoing target
+    # identifiers, candidates carry inventory-derived names/reasons,
+    # sources are the target's code.
+    from core.security.prompt_envelope import neutralize_tag_forgery
+
     if prior_specs:
         prior_lines = [
-            f"  {s.function} ({s.file}): {s.role} "
-            f"[{', '.join(s.taint_classes)}]"
+            neutralize_tag_forgery(
+                f"  {s.function} ({s.file}): {s.role} "
+                f"[{', '.join(s.taint_classes)}]"
+            )
             for s in prior_specs
         ]
         parts.append(
@@ -392,10 +400,6 @@ def _build_user_prompt(
             parts.append("Refinement feedback:\n" + "\n".join(fb_lines))
 
     parts.append("Classify these functions:\n")
-    # Function source (and inventory-derived names/reasons) come from
-    # the target repo — neutralise envelope/role forgery before
-    # interpolation.
-    from core.security.prompt_envelope import neutralize_tag_forgery
     for cand, source in zip(batch.candidates, batch.sources, strict=False):
         parts.append(
             f"### {neutralize_tag_forgery(cand.function)} "
@@ -590,15 +594,21 @@ def _build_assumption_prompt(
 ) -> str:
     parts: list[str] = []
 
+    # Same trust class throughout: bypass rows carry target-repo
+    # identifiers (caller/target names, files), candidates carry
+    # inventory-derived names/reasons, sources are the target's code —
+    # neutralise envelope/heading forgery before interpolation.
+    from core.security.prompt_envelope import neutralize_tag_forgery
+
     if bypass_findings:
         bp_lines = []
         for bf in bypass_findings[:20]:
             via = f" via {bf.via_intermediate}" if bf.via_intermediate else ""
             label = "ordering violation" if bf.ordering_violation else "missing enforcer"
-            bp_lines.append(
+            bp_lines.append(neutralize_tag_forgery(
                 f"  {bf.caller_function} ({bf.caller_file}): "
                 f"{label} for {bf.assumption.target}{via}"
-            )
+            ))
         parts.append(
             "Previous round found these bypass paths (refine or add "
             "assumptions to cover them):\n" + "\n".join(bp_lines)
@@ -607,7 +617,6 @@ def _build_assumption_prompt(
     parts.append(
         "Extract safety assumptions for these functions:\n"
     )
-    from core.security.prompt_envelope import neutralize_tag_forgery
     for cand, source in zip(batch.candidates, batch.sources, strict=False):
         parts.append(
             f"### {neutralize_tag_forgery(cand.function)} "
@@ -623,7 +632,12 @@ def _parse_assumption_response(response: str) -> list[SafetyAssumption]:
     """Parse LLM response into SafetyAssumption objects."""
     from core.json.tolerant import parse_llm_json
 
-    data, _diag = parse_llm_json(response)
+    # require_object=False: the prompt instructs "Output a JSON array"
+    # — the default object-only mode fell back to the brace-span
+    # extractor, which returned only the LAST object of the array, so
+    # all but one synthesised assumption was silently dropped on every
+    # call (the isinstance-list branch below was unreachable).
+    data, _diag = parse_llm_json(response, require_object=False)
     if data is None:
         logger.debug("iris.synthesise: assumption response not valid JSON")
         return []

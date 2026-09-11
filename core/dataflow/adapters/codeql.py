@@ -93,12 +93,18 @@ def from_sarif_result(
         artifact = physical_loc.get("artifactLocation") or {}
 
         message_text = (loc.get("message") or {}).get("text") or ""
+        # ``or`` fallbacks rather than ``.get`` defaults throughout:
+        # some SARIF emitters write explicit JSON nulls, and
+        # ``.get(key, default)`` returns None for those — a null
+        # snippet would then raise AttributeError instead of the
+        # documented ValueError, escaping consumers' skip-one-entry
+        # ``except ValueError`` handlers.
         steps.append(
             Step(
-                file_path=artifact.get("uri", ""),
-                line=region.get("startLine", 0),
-                column=region.get("startColumn", 0),
-                snippet=region.get("snippet", {}).get("text", ""),
+                file_path=artifact.get("uri") or "",
+                line=region.get("startLine") or 0,
+                column=region.get("startColumn") or 0,
+                snippet=(region.get("snippet") or {}).get("text") or "",
                 label=message_text or None,
             )
         )
@@ -108,7 +114,9 @@ def from_sarif_result(
     intermediate = tuple(steps[1:-1])
 
     rule_id = result.get("ruleId") or "unknown"
-    message_obj = result.get("message", {})
+    # ``or {}``: an explicit ``"message": null`` must not escape as
+    # AttributeError (same rule as the step fields above).
+    message_obj = result.get("message") or {}
     message = message_obj.get("text") or "(no message)"
 
     if finding_id is None:

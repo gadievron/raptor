@@ -299,6 +299,27 @@ def main() -> int:
         sys.stderr.write("raptor-seatbelt-shim: missing sandbox-exec argv\n")
         return 2
 
+    # --keep-trust-markers (from the spawn side ONLY): keep the trust
+    # markers in the target env, mirroring raptor-pid1-shim's contract
+    # on Linux. run_untrusted_networked(keep_trust_markers=True) — the
+    # sole sanctioned keep-trust minting site, used for RAPTOR's own
+    # claude -p skill dispatches — needs the dispatched child to keep
+    # _RAPTOR_TRUSTED/CLAUDECODE so it can drive libexec/ helpers past
+    # their inline trust gates. Out-of-band by design: an env-based
+    # keep flag could be smuggled in any caller-supplied env dict; an
+    # argv flag can only come from the code that builds this command
+    # line.
+    keep_trust_markers = False
+    if argv[0] == "--keep-trust-markers":
+        argv = argv[1:]
+        keep_trust_markers = True
+        if not argv:
+            sys.stderr.write(
+                "raptor-seatbelt-shim: missing sandbox-exec argv after "
+                "--keep-trust-markers\n"
+            )
+            return 2
+
     death_fd = _resolve_death_fd()
     status_fd = _resolve_status_fd()
 
@@ -353,11 +374,31 @@ def main() -> int:
         # Strip RAPTOR-internal markers so NOTHING crosses into the sandbox.
         # The trust marker authorizes THIS (unsandboxed) dispatch shim only —
         # it must not be visible to the sandboxed target. The fd markers are
-        # already consumed (death fd closed above; status fd dup'd onto fd 3).
-        # Popping here means sandbox-exec -> /bin/sh -> target inherit a clean
-        # env with no _RAPTOR_* names.
-        for _m in ("_RAPTOR_TRUSTED", "_RAPTOR_STATUS_FD", "_RAPTOR_DEATH_FD",
-                   "CLAUDECODE"):
+        # already consumed (death fd closed above; status fd dup'd onto fd 3)
+        # and are stripped unconditionally. Popping here means sandbox-exec
+        # -> /bin/sh -> target inherit a clean env with no _RAPTOR_* names.
+        #
+        # The legacy env-based keep flag is stripped unconditionally and
+        # never trusted — the keep decision arrives via the argv flag,
+        # which only the spawn side can set.
+        os.environ.pop("_RAPTOR_KEEP_TRUST_MARKERS", None)
+        # Keep this tuple in sync with core.config's TARGET_ENV_STRIP_SET
+        # (this shim runs `python -I` with no repo on sys.path and cannot
+        # import core), matching raptor-pid1-shim: trust markers, the
+        # session credential, and the framework-identity tells (checkout
+        # path, output layout, target-kind override — pure "inside
+        # RAPTOR" fingerprints no target legitimately consumes) never
+        # reach target code. The keep-trust dispatch arm keeps the
+        # markers and credential by design so RAPTOR's own dispatched
+        # children can drive libexec helpers.
+        _strip = (
+            ("_RAPTOR_STATUS_FD", "_RAPTOR_DEATH_FD") if keep_trust_markers
+            else ("_RAPTOR_STATUS_FD", "_RAPTOR_DEATH_FD",
+                  "_RAPTOR_TRUSTED", "CLAUDECODE",
+                  "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
+                  "RAPTOR_DIR", "RAPTOR_OUT_DIR", "RAPTOR_TARGET_KIND")
+        )
+        for _m in _strip:
             os.environ.pop(_m, None)
         # Re-apply quarantined loader variables (LD_*/DYLD_*) for the
         # sandboxed target only. The spawn side moved them out of this

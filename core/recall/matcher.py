@@ -57,7 +57,10 @@ def path_matches(expected_file: str, produced_file: str | None) -> bool:
 
     Suffix match in either direction on normalised posix parts —
     the produced URI may be absolute (``/work/repo/src/a.java``) or
-    shallower than the manifest's repo-relative path.
+    shallower than the manifest's repo-relative path. The suffix must
+    sit on a path-component boundary: ``foobar/x.java`` does not name
+    ``bar/x.java`` (a raw endswith would credit it and misattribute
+    both recall and suppression damage).
     """
     if not produced_file:
         return False
@@ -65,7 +68,9 @@ def path_matches(expected_file: str, produced_file: str | None) -> bool:
     got = _norm_rel(produced_file)
     if not exp or not got:
         return False
-    return got.endswith(exp) or exp.endswith(got)
+    return (got == exp
+            or got.endswith("/" + exp)
+            or exp.endswith("/" + got))
 
 
 def _line_matches(expected: ExpectedFinding, produced: dict[str, Any],
@@ -83,14 +88,23 @@ def _line_matches(expected: ExpectedFinding, produced: dict[str, Any],
     return start <= hi and end >= lo
 
 
-def _cwe_matches(expected_cwe: str, produced_cwe: Any,
-                 family: bool) -> bool:
-    if not produced_cwe:
-        return False
-    got = str(produced_cwe)
+def canonical_cwe(value: Any) -> str:
+    """Canonical ``CWE-N`` form (``'79'``/``'cwe-79'`` -> ``'CWE-79'``);
+    empty string for empty input. Every CWE comparison in the package
+    routes through this so differently-formatted producers agree."""
+    if not value:
+        return ""
+    got = str(value)
     if not got.upper().startswith("CWE-"):
         got = f"CWE-{got}"
-    got = got.upper()
+    return got.upper()
+
+
+def _cwe_matches(expected_cwe: str, produced_cwe: Any,
+                 family: bool) -> bool:
+    got = canonical_cwe(produced_cwe)
+    if not got:
+        return False
     if got == expected_cwe:
         return True
     return family and got in cwe_siblings(expected_cwe)
@@ -107,8 +121,14 @@ def finding_matches(expected: ExpectedFinding, produced: dict[str, Any],
     )
 
 
-def _basename(path: str | None) -> str:
-    """Final normalised path component ("" for empty paths)."""
+def path_basename(path: str | None) -> str:
+    """Final normalised path component ("" for empty paths).
+
+    The bucket key for the basename index: two paths can only satisfy
+    :func:`path_matches` when their final components are equal, so
+    indexing one side by basename prunes candidate pairs without
+    changing which pairs can match.
+    """
     if not path:
         return ""
     norm = _norm_rel(path)
@@ -137,11 +157,11 @@ def match_findings(
     """
     by_basename: dict[str, list[dict[str, Any]]] = {}
     for p in produced:
-        by_basename.setdefault(_basename(p.get("file")), []).append(p)
+        by_basename.setdefault(path_basename(p.get("file")), []).append(p)
 
     results: list[MatchResult] = []
     for exp in expected:
-        candidates = by_basename.get(_basename(exp.file), [])
+        candidates = by_basename.get(path_basename(exp.file), [])
         hits = [p for p in candidates if finding_matches(exp, p, tolerance)]
         tools = sorted({str(p.get("tool")) for p in hits if p.get("tool")})
         results.append(MatchResult(expected=exp, matched=bool(hits),

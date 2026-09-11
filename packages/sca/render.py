@@ -35,10 +35,17 @@ from .models import REACHABILITY_LABELS, REACHABILITY_ORDER
 from .sarif import write_sarif
 
 from core.json import load_json
+from core.security.prompt_output_sanitise import sanitise_string
 
 # findings.json artifacts are RAPTOR-written run output — the
 # findings-class budget.
 _MAX_FINDINGS_BYTES = 64 * 1024 * 1024
+
+# Row fields interpolated into the markdown tables carry advisory- and
+# manifest-sourced text (dep names, advisory ids/aliases, descriptions)
+# — the same untrusted classes the scan-path report sanitises. Cap
+# matches that renderer's detail budget.
+_DETAIL_MAX_CHARS = 2000
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -204,6 +211,12 @@ def _apply_reachability_filters(
 
     out: list[dict[str, Any]] = []
     for row in rows:
+        if not isinstance(row, dict):
+            # Hand-edited findings.json may contain stray non-dict
+            # elements; pass them through untouched (the renderers
+            # and the SARIF emitter each skip them defensively).
+            out.append(row)
+            continue
         if row.get("vuln_type") != "sca:vulnerable_dependency":
             out.append(row)
             continue
@@ -235,6 +248,16 @@ _SEV_LABEL = {
     "info": "Info",
     "none": "None",
 }
+
+
+def _cell(value: Any, *, max_chars: int = 200) -> str:
+    """Sanitise an untrusted row value for a markdown table cell.
+
+    ``sanitise_string`` defangs autofetch markup (``![](url)``),
+    ANSI / OSC / BIDI / control bytes and line-leading markdown; the
+    pipe escape stops the value from breaking out of its cell.
+    """
+    return sanitise_string(str(value), max_chars=max_chars).replace("|", "\\|")
 
 
 
@@ -327,7 +350,9 @@ def _render_reachability_breakdown(rows: list[dict[str, Any]]) -> str:
             label = REACHABILITY_LABELS.get(verdict, verdict)
             buf.write(f"| {label} | {counts[verdict]} |\n")
     for verdict in sorted(set(counts) - set(REACHABILITY_ORDER)):
-        buf.write(f"| {verdict} | {counts[verdict]} |\n")
+        # Unknown verdicts come straight from (possibly hand-edited)
+        # row data — same table-cell treatment as the other columns.
+        buf.write(f"| {_cell(verdict)} | {counts[verdict]} |\n")
     buf.write("\n")
     return buf.getvalue()
 
@@ -347,23 +372,26 @@ def _render_vuln_table(buf: StringIO, rows: list[dict[str, Any]]) -> None:
     for r in ordered:
         sca = r.get("sca") or {}
         adv = sca.get("advisory") or {}
-        sev = (r.get("severity") or "info").title()
+        sev = _cell((r.get("severity") or "info").title())
         if r.get("suppressed"):
             sev += " (suppressed)"
-        dep = f"{sca.get('ecosystem','')}:{sca.get('name','')}@{sca.get('version','')}"
+        dep = _cell(
+            f"{sca.get('ecosystem','')}:{sca.get('name','')}"
+            f"@{sca.get('version','')}"
+        )
         aliases = adv.get("aliases") or []
         adv_id = (adv.get("id") if isinstance(adv, dict) else "") or ""
-        adv_label = adv_id + (
+        adv_label = _cell(adv_id + (
             f" ({aliases[0]})" if aliases else ""
-        )
+        ))
         kev = "yes" if sca.get("in_kev") else ""
         epss_val = sca.get("epss")
         epss = f"{epss_val:.2f}" if isinstance(epss_val, (int, float)) else ""
-        fix = sca.get("fixed_version") or ""
-        reach = REACHABILITY_LABELS.get(
+        fix = _cell(sca.get("fixed_version") or "")
+        reach = _cell(REACHABILITY_LABELS.get(
             _row_reachability_verdict(r),
             _row_reachability_verdict(r),
-        )
+        ))
         buf.write(
             f"| {sev} | {dep} | {adv_label} | {reach} "
             f"| {kev} | {epss} | {fix} |\n"
@@ -404,13 +432,14 @@ def _render_kind_table(buf: StringIO, rows: list[dict[str, Any]]) -> None:
     for key in ordered_keys:
         members = groups[key]
         first = members[0]
-        sev = (first.get("severity") or "info").title()
+        sev = _cell((first.get("severity") or "info").title())
         if first.get("suppressed"):
             sev += " (suppressed)"
-        kind = (first.get("vuln_type") or "").rsplit(":", 1)[-1]
+        kind = _cell((first.get("vuln_type") or "").rsplit(":", 1)[-1])
         sca = first.get("sca") or {}
-        dep = f"{sca.get('ecosystem','')}:{sca.get('name','')}"
-        detail = (first.get("description") or "").replace("|", "\\|")
+        dep = _cell(f"{sca.get('ecosystem','')}:{sca.get('name','')}")
+        detail = _cell(first.get("description") or "",
+                       max_chars=_DETAIL_MAX_CHARS)
         if len(detail) > 90:
             detail = detail[:87] + "..."
         if len(members) > 1:

@@ -314,3 +314,39 @@ def test_phase67_refusal_pattern8_no_falsepos_on_benign_explanations(
         assert event is None, (
             f"Pattern 8 false-positive on benign apology+correction: {text!r}"
         )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Docker Hub refused to provide the image (toomanyrequests); "
+        "pivoting to quay.io.",
+        "The registry refused to provide a manifest for this tag.",
+        "The mirror was unable to provide the file, trying the next one.",
+        "Upstream is not able to provide arm64 layers for this image.",
+    ],
+)
+def test_third_party_refusal_narration_is_not_a_refusal(
+    scanner: RefusalScanner, text: str
+) -> None:
+    """Build narration about a REGISTRY/SERVER refusing something is a
+    transport finding, not an assistant refusal — logging it as one
+    rewrites genuine give_up reasons to refusal_no_recovery and inflates
+    the refusal telemetry."""
+    assert scanner.scan_text(turn=1, text=text) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I refuse to assist with something that could cause harm.",
+        "I'm refusing to provide that content.",
+        "I must refuse to help with this request.",
+        "I'm unable to comply with this.",
+        "I am unable to provide that.",
+    ],
+)
+def test_first_person_refusals_still_detected(
+    scanner: RefusalScanner, text: str
+) -> None:
+    assert scanner.scan_text(turn=1, text=text) is not None

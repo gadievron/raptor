@@ -102,3 +102,105 @@ def test_cache_handles_single_file_target(tmp_path):
     r = SourceIntelResult(target=str(f))
     c.put(f, None, r)
     assert c.get(f) is r
+
+
+# =====================================================================
+# Key-derivation memo (content-hash amortisation)
+# =====================================================================
+
+
+def test_key_derivation_content_hash_amortised_on_unchanged_tree(tmp_path):
+    """Consumers derive a key per finding against the same tree; the
+    content-hash walk must run once per tree STATE, not per lookup —
+    the stat-only signature validates the memo on each call."""
+    from unittest.mock import patch
+
+    import packages.source_intel.cache as cache_mod
+
+    (tmp_path / "x.c").write_text("int main(void){return 0;}\n")
+    cache_mod.clear_key_memo()
+    c = SourceIntelCache()
+
+    calls = {"n": 0}
+    real = cache_mod._hash_target_tree
+
+    def _counting(target):
+        calls["n"] += 1
+        return real(target)
+
+    with patch.object(cache_mod, "_hash_target_tree", _counting):
+        c.get(tmp_path)
+        c.get(tmp_path)
+        c.get(tmp_path)
+        assert calls["n"] == 1
+
+        # An edit flips the stat signature → the content hash is
+        # recomputed exactly once more.
+        (tmp_path / "x.c").write_text("int main(void){return 1;}\n")
+        c.get(tmp_path)
+        c.get(tmp_path)
+        assert calls["n"] == 2
+
+
+# =====================================================================
+# Key-carrying get/put (tree drift during analyze)
+# =====================================================================
+
+
+def test_key_carried_across_drift_does_not_launder_stale_result(tmp_path):
+    """A result computed over the pre-drift tree must be stored under
+    the PRE-drift key: a post-drift lookup (which sees the new tree)
+    must miss, and only the explicit old key still returns it."""
+    (tmp_path / "x.c").write_text("int main(void){return 0;}\n")
+    c = SourceIntelCache()
+    r = SourceIntelResult(target=str(tmp_path))
+
+    key = c.key_for(tmp_path)
+    assert c.get_by_key(key) is None
+
+    # Tree drifts while "analyze" runs…
+    (tmp_path / "x.c").write_text("int main(void){return 1;}\n")
+
+    # …and the store uses the carried key, not a re-derived one.
+    c.put_by_key(key, r)
+    assert c.get(tmp_path) is None          # post-drift tree: miss
+    assert c.get_by_key(key) is r           # pre-drift key: hit
+
+
+# =====================================================================
+# Default (shipped) rules dir participates in the key
+# =====================================================================
+
+
+def test_default_rules_key_observes_shipped_rule_edits(tmp_path):
+    """``rules_dir=None`` hashes the shipped rules directory, so a
+    rule-corpus edit invalidates default-keyed entries exactly like
+    an explicit-dir edit would."""
+    import os
+    from unittest.mock import patch
+
+    import packages.source_intel.cache as cache_mod
+
+    rules = tmp_path / "rules"
+    (rules / "axis").mkdir(parents=True)
+    rule = rules / "axis" / "r.cocci"
+    rule.write_text("@r@\n@@\n- foo()\n")
+
+    with patch.object(
+        cache_mod, "_shipped_rules_root", lambda: rules,
+    ):
+        h1 = cache_mod._hash_rules_dir(None)
+        assert h1 not in ("default-rules", "missing-rules")
+        # Same content as an explicit path → same hash.
+        assert h1 == cache_mod._hash_rules_dir(rules)
+
+        rule.write_text("@r@\n@@\n- bar()\n")
+        os.utime(rule, ns=(1, 1))
+        h2 = cache_mod._hash_rules_dir(None)
+        assert h2 != h1
+
+    # Minimal install (no shipped root) keeps the sentinel.
+    with patch.object(
+        cache_mod, "_shipped_rules_root", lambda: None,
+    ):
+        assert cache_mod._hash_rules_dir(None) == "default-rules"

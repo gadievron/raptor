@@ -103,6 +103,29 @@ class TestPackFile:
         # Canonical dep should NOT trigger a finding line of its own.
         assert "codeql/python-all" not in out.split("non-canonical dep")[1]
 
+    def test_namespace_traversal_dependency_blocks(self, tmp_path, capsys):
+        """``codeql/../evil-pack`` shares the canonical prefix but names
+        a different namespace — a bare startswith test accepted it."""
+        (tmp_path / "qlpack.yml").write_text(
+            "name: my/pack\n"
+            "dependencies:\n"
+            "  codeql/../evil-pack: '*'\n"
+        )
+        assert _check(str(tmp_path)) is True
+        out = capsys.readouterr().out
+        assert "non-canonical dep" in out
+
+    def test_versioned_canonical_dependency_list_silent(self, tmp_path, capsys):
+        # Two-direction guard: the list form carries ``name@version``
+        # specs — a well-formed canonical spec must stay silent.
+        (tmp_path / "qlpack.yml").write_text(
+            "name: my/pack\n"
+            "dependencies:\n"
+            "  - codeql/cpp-all@1.0.0\n"
+        )
+        assert _check(str(tmp_path)) is False
+        assert capsys.readouterr().out == ""
+
     def test_build_command_blocks(self, tmp_path, capsys):
         (tmp_path / "qlpack.yml").write_text(
             "name: my/pack\n"
@@ -245,6 +268,45 @@ class TestCodeqlConfig:
         out = capsys.readouterr().out
         assert "non-canonical pack" in out
         assert "evilcorp/all" in out
+
+    def test_namespace_traversal_pack_blocks(self, tmp_path, capsys):
+        self._write_config(tmp_path,
+            "name: x\n"
+            "packs:\n"
+            "  python:\n"
+            "    - codeql/../evil-pack\n"
+        )
+        assert _check(str(tmp_path)) is True
+        out = capsys.readouterr().out
+        assert "non-canonical pack" in out
+
+    def test_canonical_pack_with_version_and_suite_path_silent(
+        self, tmp_path, capsys,
+    ):
+        # Two-direction guard: the codeql-config pack syntax allows
+        # ``scope/name@version:path`` — a canonical pack with an
+        # in-pack suite path must stay silent.
+        self._write_config(tmp_path,
+            "name: ok\n"
+            "packs:\n"
+            "  python:\n"
+            "    - codeql/python-queries@~7.0.0:codeql-suites/python-security.qls\n"
+        )
+        assert _check(str(tmp_path)) is False
+        assert capsys.readouterr().out == ""
+
+    def test_canonical_pack_suite_path_traversal_blocks(
+        self, tmp_path, capsys,
+    ):
+        self._write_config(tmp_path,
+            "name: x\n"
+            "packs:\n"
+            "  python:\n"
+            "    - codeql/python-queries:../outside/suite.qls\n"
+        )
+        assert _check(str(tmp_path)) is True
+        out = capsys.readouterr().out
+        assert "non-canonical pack" in out
 
     def test_external_query_blocks(self, tmp_path, capsys):
         self._write_config(tmp_path,

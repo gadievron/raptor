@@ -124,8 +124,14 @@
     "artifacts:orphan_reader::requirements*.txt": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:orphan_reader::showmap-edges.txt": {
+      "note": "written by the external afl-showmap tool, not by repo code (run_showmap builds the -o path and hands it to the sandboxed afl-showmap invocation); _parse_showmap_output reads it back as the banner-format-drift fallback, so the indexer only ever sees the read"
+    },
     "artifacts:orphan_reader::study-discards.json": {
       "note": "writer exists (core/concepts/study.py writes it via save_json; core/audit/orchestrator.py reads) \u2014 the artifact indexer does not resolve the substrate writer call through the path variable, so the read looks orphaned"
+    },
+    "artifacts:orphan_reader::trajectory-*.json": {
+      "note": "salvage-file reader: the writer emits trajectory-<hex>.json via a computed name on run_id collision (_write_atomic fallback), so the literal glob has no textual writer; reader and writer are pinned together by the store round-trip tests"
     },
     "artifacts:write_only_artifact::-manifest.json": {
       "note": "seed-harvest corpus manifest (packages/frida/seeds.py writes <seeds>-manifest.json): operator-facing harvest accounting, deliberately written NEXT TO the corpus dir so AFL never ingests it as a seed; consumed by the operator reviewing a harvest, production code uses extract_seeds' return value"
@@ -276,6 +282,9 @@
     },
     "artifacts:write_only_artifact::discovery.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::empty-models-config.json": {
+      "note": "tier-0 self-test scratch stub: an empty {\"models\": []} config written per-run and handed to child processes via the RAPTOR_CONFIG env var so tier-0 cases provably cannot resolve a paid LLM route; the reader consumes it by path from the env var, no literal filename at the read site"
     },
     "artifacts:write_only_artifact::expanded_semgrep.sarif": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -580,23 +589,11 @@
     "dead:dead_function:core/audit/callsite_consistency.py:_find_deviations": {
       "note": "superseded by the consistency channel's census adjudicator (consistency_verify); deletion deferred to the next dead-code sweep"
     },
-    "dead:dead_function:core/audit/checker_library.py:checker_from_synthesis": {
-      "note": "zero-reference symbol at baseline cut \u2014 triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
-    },
-    "dead:dead_function:core/audit/checker_library.py:graduate_checkers": {
-      "note": "zero-reference symbol at baseline cut \u2014 triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
-    },
-    "dead:dead_function:core/audit/checker_library.py:load_library": {
-      "note": "zero-reference symbol at baseline cut \u2014 triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
-    },
     "dead:dead_function:core/audit/decompiler_sanitise.py:needs_sanitising": {
       "note": "binary-audit checker entry point landed ahead of its consumer wiring (roadmap phases land checker surface first); remove this entry when the orchestrator/sweep wiring lands or the symbol is excised"
     },
     "dead:dead_function:core/audit/frida_observe.py:collect_observed_functions": {
       "note": "zero-reference symbol at baseline cut \u2014 triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
-    },
-    "dead:dead_function:core/audit/heap_copy_checker.py:check_cross_function": {
-      "note": "binary-audit checker entry point landed ahead of its consumer wiring (roadmap phases land checker surface first); remove this entry when the orchestrator/sweep wiring lands or the symbol is excised"
     },
     "dead:dead_function:core/audit/heap_copy_checker.py:format_findings": {
       "note": "binary-audit checker entry point landed ahead of its consumer wiring (roadmap phases land checker surface first); remove this entry when the orchestrator/sweep wiring lands or the symbol is excised"
@@ -606,9 +603,6 @@
     },
     "dead:dead_function:core/audit/proto_length_checker.py:format_findings": {
       "note": "public checker API: renders findings for operator/CLI consumption; not called by orchestrator dispatch path"
-    },
-    "dead:dead_function:core/audit/struct_accessor_index.py:build_index_from_joern": {
-      "note": "zero-reference symbol at baseline cut \u2014 triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
     },
     "dead:dead_function:core/audit/struct_field_checker.py:format_findings": {
       "note": "public checker API: renders findings for operator/CLI consumption; not called by orchestrator dispatch path"
@@ -627,9 +621,6 @@
     },
     "dead:dead_function:packages/exploit_feasibility/schema.py:validate_context_file": {
       "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
-    },
-    "dead:dead_method:core/audit/checker_library.py:CheckerLibrary.active_checkers": {
-      "note": "zero-reference symbol at baseline cut \u2014 triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
     },
     "dead:dead_method:core/audit/tests/test_return_census.py:TestCpgUsage._fake_server_rows": {
       "note": "test scaffolding kept for the planned CPG-backed census cases; harmless"
@@ -659,9 +650,6 @@
       "note": "kept: feature seed \u2014 autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
     },
     "dead:dead_method:packages/autonomous/goal_planner.py:GoalPlanner.update_goal_progress": {
-      "note": "kept: feature seed \u2014 autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
-    },
-    "dead:dead_method:packages/autonomous/planner.py:FuzzingPlanner.should_continue_fuzzing": {
       "note": "kept: feature seed \u2014 autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
     },
     "dead:dead_method:packages/autonomous/planner.py:FuzzingState.is_finding_crashes": {

@@ -248,3 +248,43 @@ class TestOSVLive:
         result = OSVDiscoverer().fetch("CVE-2023-38545")
         assert result is not None
         assert any(t.repository_url == "https://github.com/curl/curl" for t in result.tuples)
+
+
+class TestNormalizeRepoRejectsAuthorityGames:
+    """Userinfo / port / fragment rejection must inspect the netloc —
+    ``parts.hostname`` never contains ``@`` or ``:`` (urlsplit strips
+    them first), so a hostname-based check was dead code and shapes
+    like ``github.com@evil.com`` sailed through to confuse downstream
+    substring host checks."""
+
+    def test_userinfo_via_double_at_rejected(self) -> None:
+        assert OSVDiscoverer._normalize_repo(
+            "ssh://git@github.com@evil.com/owner/repo") == ""
+
+    def test_userinfo_with_password_rejected(self) -> None:
+        assert OSVDiscoverer._normalize_repo(
+            "https://user:pass@evil.com/x") == ""
+
+    def test_explicit_port_rejected(self) -> None:
+        assert OSVDiscoverer._normalize_repo("git://evil.com:9418/x") == ""
+
+    def test_invalid_port_rejected(self) -> None:
+        assert OSVDiscoverer._normalize_repo("https://evil.com:99x99/x") == ""
+
+    def test_fragment_rejected(self) -> None:
+        assert OSVDiscoverer._normalize_repo(
+            "https://github.com/owner/repo#frag") == ""
+
+    def test_control_bytes_rejected(self) -> None:
+        assert OSVDiscoverer._normalize_repo(
+            "https://github.com/owner/repo\r\nX: y") == ""
+
+    def test_plain_https_still_accepted(self) -> None:
+        assert OSVDiscoverer._normalize_repo(
+            "https://github.com/owner/repo",
+        ) == "https://github.com/owner/repo"
+
+    def test_scp_style_still_accepted(self) -> None:
+        assert OSVDiscoverer._normalize_repo(
+            "git@github.com:owner/repo.git",
+        ) == "https://github.com/owner/repo"

@@ -64,14 +64,75 @@ def test_abort_in_different_function_filtered_out():
     assert m == []
 
 
-def test_capability_emits_axis_4_medium():
+def _cap_source_file(tmp_path, line_text: str):
+    """Write a source file whose line 5 carries the capability call
+    so the constant-on-line check has something real to read."""
+    f = tmp_path / "x.c"
+    f.write_text(
+        "int op(int a)\n"
+        "{\n"
+        "    int r;\n"
+        "\n"
+        f"    {line_text}\n"
+        "    return r;\n"
+        "}\n"
+    )
+    return str(f)
+
+
+def test_capability_emits_axis_4_medium(tmp_path):
+    path = _cap_source_file(
+        tmp_path, "if (!capable(CAP_SYS_ADMIN)) return -EPERM;",
+    )
     r = SourceIntelResult(capabilities=(CapabilityEvidence(
-        cap_function="capable", location=("/x.c", 5),
+        cap_function="capable", location=(path, 5),
         grade=GRADE_SAME_FUNCTION, enclosing_function="op",
     ),))
     m = derive_mitigations_found(r, finding_function="op")
     assert m[0].axis == "axis_4"
     assert m[0].name == "privilege_gate"
+    assert "CAP_SYS_ADMIN" in m[0].detail
+
+
+def test_ns_scoped_capability_is_not_a_privilege_gate(tmp_path):
+    """`ns_capable(ns, CAP_SYS_ADMIN)` is satisfiable by a userns
+    admin created via `unshare -U` from an unprivileged process —
+    reporting it as privilege_gate would steer consumers toward
+    discounting a reachable bug."""
+    path = _cap_source_file(
+        tmp_path, "if (!ns_capable(ns, CAP_SYS_ADMIN)) return -EPERM;",
+    )
+    r = SourceIntelResult(capabilities=(CapabilityEvidence(
+        cap_function="ns_capable", location=(path, 5),
+        grade=GRADE_SAME_FUNCTION, enclosing_function="op",
+    ),))
+    assert derive_mitigations_found(r, finding_function="op") == []
+
+
+def test_bounded_cap_constant_is_not_a_privilege_gate(tmp_path):
+    """CAP_NET_ADMIN is not root-equivalent: a memory-corruption
+    primitive reachable from it IS an escalation."""
+    path = _cap_source_file(
+        tmp_path, "if (!capable(CAP_NET_ADMIN)) return -EPERM;",
+    )
+    r = SourceIntelResult(capabilities=(CapabilityEvidence(
+        cap_function="capable", location=(path, 5),
+        grade=GRADE_SAME_FUNCTION, enclosing_function="op",
+    ),))
+    assert derive_mitigations_found(r, finding_function="op") == []
+
+
+def test_same_path_capability_is_not_a_privilege_gate(tmp_path):
+    """On same_path grade the check may guard a branch the sink
+    isn't on — no gate entry."""
+    path = _cap_source_file(
+        tmp_path, "if (!capable(CAP_SYS_ADMIN)) return -EPERM;",
+    )
+    r = SourceIntelResult(capabilities=(CapabilityEvidence(
+        cap_function="capable", location=(path, 5),
+        grade=GRADE_SAME_PATH, enclosing_function="op",
+    ),))
+    assert derive_mitigations_found(r, finding_function="op") == []
 
 
 def test_fortify_emits_high_at_level_2():
@@ -82,11 +143,21 @@ def test_fortify_emits_high_at_level_2():
     assert m[0].confidence == "high"
 
 
-def test_fortify_emits_medium_at_level_1():
-    bf = BuildFlagsContext(fortify_source_level=1, source="kconfig")
+def test_fortify_emits_medium_at_glibc_level_1():
+    bf = BuildFlagsContext(fortify_source_level=1)
     r = SourceIntelResult(build_flags=bf)
     m = derive_mitigations_found(r)
     assert m[0].confidence == "medium"
+
+
+def test_fortify_kconfig_level_1_grades_high():
+    """Kernel CONFIG_FORTIFY_SOURCE doesn't tier — kconfig level 1
+    intercepts the same write-class calls as glibc level 2, matching
+    the adapter's verdict threshold."""
+    bf = BuildFlagsContext(fortify_source_level=1, source="kconfig")
+    r = SourceIntelResult(build_flags=bf)
+    m = derive_mitigations_found(r)
+    assert m[0].confidence == "high"
 
 
 def test_paired_free_emits_axis_3():

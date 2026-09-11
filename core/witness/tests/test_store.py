@@ -526,3 +526,169 @@ def test_get_bytes_verified_roundtrip_still_works(tmp_path):
     w = _make_witness(data)
     store.put(w, data)
     assert store.get_bytes(w.bytes_hash) == data
+
+
+# ----------------------------------------------------------------------
+# NaN manifests, non-object manifests, superseded-provenance history
+# ----------------------------------------------------------------------
+
+
+def test_put_rejects_non_finite_outcome_detail(tmp_path):
+    """A NaN in outcome_detail must fail at PUT time — the default
+    ``json.dumps`` would happily write ``NaN``, which the strict
+    loader then rejects forever (evidence stored but unreadable)."""
+    store = WitnessStore(tmp_path)
+    data = b"payload"
+    w = _make_witness(data)
+    w.outcome_detail = {"score": float("nan")}
+    with pytest.raises(WitnessStoreError):
+        store.put(w, data)
+    # Nothing half-written: the manifest for this hash must not exist.
+    assert not store.has(w.bytes_hash)
+
+
+def test_get_witness_non_object_manifest_is_store_error(tmp_path):
+    """A manifest whose top level is a JSON array parses fine under
+    strict load — it must surface as WitnessStoreError, never an
+    AttributeError escaping the documented contract."""
+    store = WitnessStore(tmp_path)
+    data = b"payload"
+    w = _make_witness(data)
+    store.put(w, data)
+    manifest = tmp_path / "manifests" / f"{w.bytes_hash}.json"
+    manifest.write_text("[]\n")
+    with pytest.raises(WitnessStoreError, match="not a JSON object"):
+        store.get_witness(w.bytes_hash)
+
+
+def test_list_witnesses_skips_non_object_manifest(tmp_path):
+    """One non-object manifest must not abort enumeration — later
+    valid witnesses still stream out."""
+    store = WitnessStore(tmp_path)
+    d1, d2 = b"payload-a", b"payload-z"
+    w1, w2 = _make_witness(d1), _make_witness(d2)
+    store.put(w1, d1)
+    store.put(w2, d2)
+    # Corrupt whichever manifest sorts FIRST so the survivor proves
+    # iteration continued past the bad row.
+    first = sorted([w1, w2], key=lambda w: w.bytes_hash)[0]
+    survivor = w2 if first is w1 else w1
+    manifest = tmp_path / "manifests" / f"{first.bytes_hash}.json"
+    manifest.write_text('"just a string"\n')
+    listed = list(store.list_witnesses())
+    assert [w.bytes_hash for w in listed] == [survivor.bytes_hash]
+
+
+def test_replayed_bytes_preserve_prior_manifest_in_history(tmp_path):
+    """Replaying identical bytes with different provenance must not
+    ERASE the first record — it lands in <hash>.history.jsonl."""
+    from core.json import load_jsonl
+
+    store = WitnessStore(tmp_path)
+    data = b"same bytes"
+    w_fuzz = _make_witness(data, source=WitnessSource.FUZZ)
+    w_replay = _make_witness(data, source=WitnessSource.CRASH_REPLAY)
+
+    store.put(w_fuzz, data)
+    store.put(w_replay, data)
+
+    # Latest record wins the manifest...
+    assert store.get_witness(data and w_replay.bytes_hash).source == (
+        w_replay.source)
+    # ...and the superseded fuzz provenance survives in the history.
+    history = tmp_path / "manifests" / (
+        f"{w_fuzz.bytes_hash}.history.jsonl")
+    rows = load_jsonl(history)
+    assert len(rows) == 1
+    assert rows[0]["source"] == w_fuzz.source.value
+
+
+def test_identical_replay_writes_no_history(tmp_path):
+    """Same bytes + same record = idempotent refresh, no history row
+    (two-direction check for the preserve-on-supersede path)."""
+    store = WitnessStore(tmp_path)
+    data = b"same bytes twice"
+    w = _make_witness(data)
+    store.put(w, data)
+    store.put(_make_witness(data), data)
+    history = tmp_path / "manifests" / f"{w.bytes_hash}.history.jsonl"
+    assert not history.exists()
+
+
+# ----------------------------------------------------------------------
+# Manifest provenance MAC — reader-side annotation
+# ----------------------------------------------------------------------
+
+
+def test_put_then_read_carries_mechanical_provenance(tmp_path):
+    """A manifest this store wrote verifies on read — both the direct
+    get and the enumeration set the reader-side annotation."""
+    store = WitnessStore(tmp_path)
+    data = b"stamped payload"
+    store.put(_make_witness(data), data)
+
+    got = store.get_witness(compute_bytes_hash(data))
+    assert got.provenance_verified is True
+    listed = list(store.list_witnesses())
+    assert listed and all(w.provenance_verified for w in listed)
+
+
+def test_planted_manifest_reads_without_provenance(tmp_path):
+    """Two-direction guard: a hand-staged manifest (no token, or a
+    forged one) still enumerates — evidence weight is preserved — but
+    never carries mechanical provenance."""
+    store = WitnessStore(tmp_path)
+    data = b"planted payload"
+    w = _make_witness(data)
+    store.put(w, data)  # ensures dirs exist
+
+    planted = b"attacker bytes"
+    planted_hash = compute_bytes_hash(planted)
+    manifest = {
+        "bytes_hash": planted_hash,
+        "bytes_len": len(planted),
+        "source": "fuzz",
+        "observed_outcome": "exit_signal",
+        "outcome_detail": {"finding_id": "THR-target"},
+        "timestamp": "2026-01-01T00:00:00+00:00",
+    }
+    (tmp_path / "manifests" / f"{planted_hash}.json").write_text(
+        json.dumps(manifest),
+    )
+    got = store.get_witness(planted_hash)
+    assert got.provenance_verified is False
+
+    forged = dict(manifest, provenance="0" * 64)
+    (tmp_path / "manifests" / f"{planted_hash}.json").write_text(
+        json.dumps(forged),
+    )
+    assert store.get_witness(planted_hash).provenance_verified is False
+    by_hash = {w.bytes_hash: w for w in store.list_witnesses()}
+    assert by_hash[planted_hash].provenance_verified is False
+    # The store's own record still verifies alongside.
+    assert by_hash[compute_bytes_hash(data)].provenance_verified is True
+
+
+def test_provenance_annotation_never_serialized(tmp_path):
+    """to_dict excludes the reader-side annotation, so a re-put of a
+    loaded witness cannot launder the flag into the manifest schema."""
+    store = WitnessStore(tmp_path)
+    data = b"round trip"
+    store.put(_make_witness(data), data)
+    got = store.get_witness(compute_bytes_hash(data))
+    assert got.provenance_verified is True
+    assert "provenance_verified" not in got.to_dict()
+
+
+def test_refresh_put_does_not_write_history_row(tmp_path):
+    """The provenance token is content-derived and re-minted on every
+    put; a pure refresh (same record, new clock/token) must stay an
+    idempotent overwrite, not a supersession history row."""
+    store = WitnessStore(tmp_path)
+    data = b"refresh me"
+    store.put(_make_witness(data), data)
+    store.put(_make_witness(data), data)
+    history = tmp_path / "manifests" / (
+        f"{compute_bytes_hash(data)}.history.jsonl"
+    )
+    assert not history.exists()

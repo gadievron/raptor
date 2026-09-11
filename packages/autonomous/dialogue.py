@@ -7,6 +7,7 @@ for deeper analysis and iterative refinement, rather than single-shot prompts.
 
 import re
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -49,6 +50,21 @@ _VERDICT_CONFIDENCE = {"high": 0.8, "medium": 0.7, "low": 0.6, "none": 0.7}
 _FALLBACK_CONFIDENCE_PENALTY = 0.15
 
 
+def _render_context_mapping(value: Mapping[str, Any] | str) -> str:
+    """Render a crash-context mapping for an ``UntrustedBlock``.
+
+    ``UntrustedBlock.content`` must be a string — passing a dict
+    (e.g. ``CrashContext.registers``, ``dict[str, str]`` from the
+    debugger) makes ``build_prompt`` raise ``TypeError`` inside the
+    envelope renderer. Render one ``name value`` pair per line in the
+    mapping's own (deterministic) order; strings pass through
+    unchanged so legacy callers that pre-render keep working.
+    """
+    if isinstance(value, str):
+        return value
+    return "\n".join(f"{name} {val}" for name, val in value.items())
+
+
 def _extract_roles(bundle: PromptBundle) -> tuple:
     """Extract (user_prompt, system_prompt) from a PromptBundle."""
     system = next((m.content for m in bundle.messages if m.role == "system"), None)
@@ -87,8 +103,18 @@ class MultiTurnAnalyser:
         """
         self.llm = llm_client
         self.memory = memory
-        self.dialogue_history: list[list[Message]] = []
+        # Aggregate counters only. Retaining every dialogue's full
+        # Message list (complete rendered prompts + responses) grows
+        # without bound over a long campaign, and the sole consumer
+        # (get_dialogue_summary) needs nothing but these counts.
+        self._dialogue_count = 0
+        self._turn_count = 0
         logger.info("Multi-turn analyser initialised")
+
+    def _record_dialogue(self, messages: list[Message]) -> None:
+        """Fold a completed dialogue into the summary counters."""
+        self._dialogue_count += 1
+        self._turn_count += len(messages)
 
     def analyse_crash_deeply(
         self,
@@ -192,12 +218,20 @@ class MultiTurnAnalyser:
                     )
             turns_used += 1
 
-        # Turn 3: Validate with memory
+        # Turn 3: Validate with memory. The confidence boost is
+        # earned only when memory AGREES with the verdict — a
+        # contradiction warning must never make the verdict MORE
+        # confident (mirrors the agreement-conditional turn-2 boost).
         if self.memory and analysis_result["confidence"] < 0.9 and turns_used < max_turns:
             logger.info("Turn 3: Validating with memory")
-            validation = self._validate_with_memory(analysis_result, crash_context)
+            validation, agrees = self._validate_with_memory(
+                analysis_result, crash_context,
+            )
             if validation:
-                analysis_result["confidence"] = min(1.0, analysis_result["confidence"] + 0.1)
+                if agrees:
+                    analysis_result["confidence"] = min(
+                        1.0, analysis_result["confidence"] + 0.1,
+                    )
                 analysis_result["reasoning_steps"].append({
                     "turn": 3,
                     "question": "Memory validation",
@@ -209,7 +243,7 @@ class MultiTurnAnalyser:
         logger.info("Exploitability: %s", analysis_result['exploitability'])
 
         # Record dialogue
-        self.dialogue_history.append(messages)
+        self._record_dialogue(messages)
 
         return analysis_result
 
@@ -226,11 +260,11 @@ class MultiTurnAnalyser:
             max_iterations: Maximum refinement iterations
 
         Returns:
-            The refined exploit code when an iteration validates cleanly,
-            otherwise the last attempted code (the original input if no
-            iteration produced extractable code). Always a string — the
-            caller re-validates whatever comes back, so partial progress
-            is preserved rather than discarded.
+            The refined exploit code when an iteration validates
+            cleanly, otherwise ``None``. Callers must treat ``None``
+            as "refinement failed" — returning the last (known-broken)
+            attempt instead would let ``if refined_code`` checks treat
+            it as a successful refinement.
         """
         logger.info("=" * 70)
         logger.info("ITERATIVE EXPLOIT REFINEMENT")
@@ -271,14 +305,14 @@ class MultiTurnAnalyser:
             new_errors = self._quick_validate_code(refined_code)
             if not new_errors:
                 logger.info("Iteration %s: Refinement successful!", iteration)
-                self.dialogue_history.append(messages)
+                self._record_dialogue(messages)
                 return refined_code
 
             logger.info("Iteration %s: Still has %d errors", iteration, len(new_errors))
             validation_errors = new_errors
 
         logger.warning("Max iterations reached without successful refinement")
-        self.dialogue_history.append(messages)
+        self._record_dialogue(messages)
         # Contract: "Refined exploit code or None if refinement failed."
         # Pre-fix this returned the last attempt, so callers testing
         # `if refined_code` treated known-broken code as a successful
@@ -374,7 +408,7 @@ class MultiTurnAnalyser:
             ))
         if crash_context.registers:
             blocks.append(UntrustedBlock(
-                content=crash_context.registers,
+                content=_render_context_mapping(crash_context.registers),
                 kind="register-dump",
                 origin="crash-analysis",
             ))
@@ -425,8 +459,13 @@ class MultiTurnAnalyser:
         blocks = []
         binary_info = getattr(crash_context, 'binary_info', None)
         if binary_info:
+            content = (
+                _render_context_mapping(binary_info)
+                if isinstance(binary_info, (str, Mapping))
+                else str(binary_info)
+            )
             blocks.append(UntrustedBlock(
-                content=str(binary_info),
+                content=content,
                 kind="binary-protections",
                 origin="crash-analysis",
             ))
@@ -581,13 +620,20 @@ class MultiTurnAnalyser:
         if len(response) > _MAX_RESPONSE_FOR_CODE_EXTRACTION:
             response = response[:_MAX_RESPONSE_FOR_CODE_EXTRACTION]
 
-        # Look for code blocks
-        code_block_match = re.search(r'```c\n(.*?)```', response, re.DOTALL)
+        # Look for C-family code blocks. LLMs fence exploit code with
+        # ``c``, ``cpp``, ``c++`` or capitalised variants roughly
+        # interchangeably (the validator compiles everything as C++
+        # anyway) — accepting only ```c would discard a paid
+        # refinement turn whenever the model picked another spelling.
+        code_block_match = re.search(
+            r'```(?:c(?:\+\+|pp)?)[ \t]*\n(.*?)```',
+            response, re.DOTALL | re.IGNORECASE,
+        )
         if code_block_match:
             return code_block_match.group(1).strip()
 
-        # Look for any code block
-        code_block_match = re.search(r'```\n(.*?)```', response, re.DOTALL)
+        # Look for any unlabelled code block
+        code_block_match = re.search(r'```[ \t]*\n(.*?)```', response, re.DOTALL)
         if code_block_match:
             return code_block_match.group(1).strip()
 
@@ -623,25 +669,36 @@ class MultiTurnAnalyser:
         catches by ~10:1 in production. Drop the brace/paren
         counting entirely; keep only the unambiguous lexical
         checks that don't false-positive (quote-mangled
-        preprocessor directives, invalid escape sequences) where
-        the match is structurally distinctive.
+        preprocessor directives) where the match is structurally
+        distinctive.
         """
         errors = []
 
         # Check for common LLM hallucination patterns (these are
         # safe — the patterns don't appear in legitimate C).
+        # The former escape-sequence checks ('\T', '\0x') are gone:
+        # both substrings occur in valid code — "C:\Temp" contains
+        # backslash-T inside a string literal, and "\0x90" is
+        # well-defined C (octal \0 escape followed by 'x') — so the
+        # heuristic rejected compilable refinements. Real escape
+        # errors surface from the compiler instead.
         if '#ifdef "__' in code or '#ifndef "__' in code:
-            errors.append("Invalid preprocessor directive with Chinese characters")
-
-        if '\\T' in code or '\\0x' in code:
-            errors.append("Invalid escape sequence")
+            errors.append("Invalid preprocessor directive (likely contains non-ASCII)")
 
         return errors
 
-    def _validate_with_memory(self, analysis: dict, crash_context) -> str | None:
-        """Validate analysis against memory."""
+    def _validate_with_memory(
+        self, analysis: dict, crash_context,
+    ) -> tuple[str | None, bool]:
+        """Validate analysis against memory.
+
+        Returns ``(message, agrees)``. ``agrees`` is False for the
+        contradiction cases so the caller can withhold the confidence
+        boost — historical data that contradicts a verdict is a reason
+        to trust it LESS, not more.
+        """
         if not self.memory:
-            return None
+            return None, False
 
         signal = crash_context.signal
         function = crash_context.function_name or "unknown"
@@ -650,11 +707,17 @@ class MultiTurnAnalyser:
         probability = self.memory.is_crash_likely_exploitable(signal, function)
 
         if probability > 0.7 and analysis["exploitability"] == "low":
-            return f"Warning: Memory suggests this pattern is usually exploitable (p={probability:.2f})"
+            return (
+                f"Warning: Memory suggests this pattern is usually exploitable (p={probability:.2f})",
+                False,
+            )
         if probability < 0.3 and analysis["exploitability"] == "high":
-            return f"Warning: Memory suggests this pattern is rarely exploitable (p={probability:.2f})"
+            return (
+                f"Warning: Memory suggests this pattern is rarely exploitable (p={probability:.2f})",
+                False,
+            )
 
-        return f"Memory validation: consistent with history (p={probability:.2f})"
+        return f"Memory validation: consistent with history (p={probability:.2f})", True
 
     def _messages_to_context(self, messages: list[Message]) -> str:
         """Convert message history to context string for LLM.
@@ -685,6 +748,6 @@ class MultiTurnAnalyser:
     def get_dialogue_summary(self) -> dict:
         """Get summary of all dialogues."""
         return {
-            "total_dialogues": len(self.dialogue_history),
-            "total_turns": sum(len(d) for d in self.dialogue_history),
+            "total_dialogues": self._dialogue_count,
+            "total_turns": self._turn_count,
         }

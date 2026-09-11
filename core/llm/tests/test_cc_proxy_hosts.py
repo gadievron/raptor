@@ -292,14 +292,29 @@ class TestOverrideConfig:
         monkeypatch.setattr(mod, "_OVERRIDE_CONFIG_PATH", config_path)
         assert proxy_hosts_for_cc_dispatch() == ["a.example.com", "b.example.com"]
 
-    def test_override_empty_list_falls_back_to_default(
+    def test_override_empty_list_is_honoured_as_deny_all(
         self, isolated_env, monkeypatch, tmp_path, no_calibrate,
     ):
-        """``{"proxy_hosts": []}`` is a misconfig — fall back to default
-        rather than allowlisting nothing (which would deny the LLM
-        endpoint and break dispatch)."""
+        """``{"proxy_hosts": []}`` is an explicit operator deny-all —
+        it must NOT silently fall through to the default allow hosts.
+        Deny-all is encoded as the loopback-only allowlist (the
+        sandbox rejects an empty one; the CONNECT proxy refuses
+        loopback targets, so every remote host stays denied)."""
         config_path = tmp_path / "cc-dispatch-proxy-hosts.json"
         config_path.write_text(json.dumps({"proxy_hosts": []}))
+        monkeypatch.setattr(mod, "_OVERRIDE_CONFIG_PATH", config_path)
+        hosts = proxy_hosts_for_cc_dispatch()
+        assert not _hostname_in(hosts, "api.anthropic.com")
+        assert set(hosts) == set(mod._LOOPBACK_ONLY_HOSTS)
+
+    def test_missing_proxy_hosts_key_still_falls_back_to_default(
+        self, isolated_env, monkeypatch, tmp_path, no_calibrate,
+    ):
+        """Direction two: a config file WITHOUT the ``proxy_hosts``
+        key is unconfigured, not deny-all — the default resolution
+        chain still applies."""
+        config_path = tmp_path / "cc-dispatch-proxy-hosts.json"
+        config_path.write_text(json.dumps({"other_field": True}))
         monkeypatch.setattr(mod, "_OVERRIDE_CONFIG_PATH", config_path)
         assert _hostname_in(proxy_hosts_for_cc_dispatch(), "api.anthropic.com")
 

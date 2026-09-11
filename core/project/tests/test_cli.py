@@ -245,6 +245,40 @@ class TestCLI(unittest.TestCase):
             instance.list_projects.assert_called_once()
 
 
+class TestEditorGuard(unittest.TestCase):
+    """$EDITOR argv validation on `notes --edit`: the basename
+    allowlist alone still executed EDITOR='vim -c ":!cmd"' — vim runs
+    the -c argument as a command."""
+
+    def _run_notes_edit(self, editor):
+        buf = io.StringIO()
+        with patch("core.project.cli.ProjectManager") as MockMgr, \
+                patch.object(os, "isatty", lambda fd: True), \
+                patch.dict(os.environ, {"EDITOR": editor}), \
+                patch("subprocess.run") as run_mock, \
+                contextlib.redirect_stdout(buf), \
+                contextlib.redirect_stderr(buf):
+            instance = MockMgr.return_value
+            instance.load.return_value = type("P", (), {"notes": ""})()
+            with patch("sys.argv",
+                       ["raptor-project", "notes", "test", "--edit"]):
+                main()
+        return buf.getvalue(), run_mock
+
+    def test_editor_command_argument_refused(self):
+        out, run_mock = self._run_notes_edit('vim -c ":!touch pwned"')
+        self.assertIn("Refusing to launch editor", out)
+        run_mock.assert_not_called()
+
+    def test_bare_editor_and_wait_flag_still_launch(self):
+        # Two-direction guard: the bare name and the blocking-wait
+        # flag remain usable.
+        _out, run_mock = self._run_notes_edit("vim")
+        run_mock.assert_called_once()
+        _out, run_mock = self._run_notes_edit("code --wait")
+        run_mock.assert_called_once()
+
+
 class TestGetActiveProject(unittest.TestCase):
     """Tests for _get_active_project symlink resolution."""
 

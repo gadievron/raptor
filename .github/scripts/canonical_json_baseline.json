@@ -30,7 +30,7 @@
    "note": "validation cache key (sort_keys, compact separators, deliberately NO default=str) — frozen; drift invalidates the hypothesis-validation cache"
   },
   "raw_dumps_in_canonical_module:core/binary/fingerprint.py:CapabilityFingerprint.canonical_json": {
-   "note": "documented byte-equality contract; must stay byte-identical to packages/binary_analysis/fingerprint.py's copy; no default=str by design — frozen"
+   "note": "documented byte-equality contract; no default=str by design — frozen"
   },
   "raw_dumps_in_canonical_module:core/concepts/model.py:DomainModel.save": {
    "note": "domain-model.json at-rest bytes are sha256'd by journal staleness gates — indent=2 form frozen; not a save_json candidate until the gate re-keys"
@@ -70,9 +70,6 @@
   },
   "raw_dumps_in_canonical_module:core/witness/provenance.py:smt_conditions_hash": {
    "note": "same site as its dumps_flows_to_hash twin — frozen witness hash form"
-  },
-  "raw_dumps_in_canonical_module:packages/binary_analysis/fingerprint.py:CapabilityFingerprint.canonical_json": {
-   "note": "twin of core/binary/fingerprint.py canonical_json — the two copies must stay byte-identical to each other — frozen"
   },
   "raw_dumps_in_canonical_module:packages/hypothesis_validation/provenance.py:hash_hypothesis": {
    "note": "same site as its dumps_flows_to_hash twin — strict-types content address"

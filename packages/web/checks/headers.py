@@ -37,12 +37,32 @@ class CspCheck(Check):
                 severity="high", asvs_ref="ASVS 5.0 V14.4.1",
             )]
 
+        # Judge the SCRIPT-GOVERNING directive, not the whole policy:
+        # 'unsafe-inline' in style-src only (extremely common and far
+        # less severe) must not be reported as a script-src weakness,
+        # and a nonce in an unrelated directive must not exempt
+        # script-src. script-src falls back to default-src per spec.
+        directives: dict[str, str] = {}
+        for chunk in csp.split(";"):
+            name, _, value = chunk.strip().partition(" ")
+            if name and name.lower() not in directives:
+                directives[name.lower()] = value.strip().lower()
+        script_src = directives.get(
+            "script-src", directives.get("default-src", ""),
+        )
+
         issues = []
-        if "unsafe-inline" in csp and "nonce-" not in csp and "hash-" not in csp:
+        has_nonce_or_hash = (
+            "nonce-" in script_src
+            or "sha256-" in script_src
+            or "sha384-" in script_src
+            or "sha512-" in script_src
+        )
+        if "unsafe-inline" in script_src and not has_nonce_or_hash:
             issues.append("'unsafe-inline' in script-src without nonce/hash")
-        if "unsafe-eval" in csp:
+        if "unsafe-eval" in script_src:
             issues.append("'unsafe-eval' in script-src")
-        if re.search(r"script-src[^;]*\*", csp):
+        if re.search(r"(?:^|\s)\*(?:\s|$)", script_src):
             issues.append("wildcard (*) in script-src")
 
         if issues:

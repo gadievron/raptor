@@ -226,6 +226,55 @@ static void test_exec_target(void) {
         }
     }
 
+    /* The pin resolves in the launcher directory's PARENT (base/),
+     * not in the launcher directory itself — that parent needs the
+     * same trusted-path treatment, or anyone able to write it can
+     * swap the pinned script. */
+    chmod(base, 0777);
+    CHECK(validate_exec_target(3, argv_ok, launcher, io, sizeof io,
+                               so, sizeof so, NULL, err, sizeof err) != 0
+              && strstr(err, "coordinator script directory") != NULL,
+          "refuses an other-writable coordinator script directory");
+    chmod(base, 0755);
+
+    /* A symlink at the pinned path retargets realpath at any
+     * trusted-owned file the planter chooses (e.g. another checkout's
+     * coordinator) — the pin must refuse links outright, even when
+     * the link's TARGET would pass every ownership check. */
+    {
+        char base2[] = "/tmp/raptor-helpers-test2-XXXXXX";
+        if (mkdtemp(base2) == NULL) {
+            fprintf(stderr, "harness: mkdtemp: %s\n", strerror(errno));
+            exit(1);
+        }
+        char script2[PATH_MAX];
+        snprintf(script2, sizeof script2, "%s/netns_coordinator.py",
+                 base2);
+        write_file_mode(script2, "print('coord2')\n", 0644);
+        char moved[PATH_MAX];
+        snprintf(moved, sizeof moved, "%s/netns_coordinator.py.orig",
+                 base);
+        if (rename(script, moved) != 0 || symlink(script2, script) != 0) {
+            fprintf(stderr, "harness: symlink setup: %s\n",
+                    strerror(errno));
+            exit(1);
+        }
+        char *argv_link[] = { launcher, interp, script, NULL };
+        CHECK(validate_exec_target(3, argv_link, launcher, io, sizeof io,
+                                   so, sizeof so, NULL, err,
+                                   sizeof err) != 0
+                  && strstr(err, "symlink") != NULL,
+              "script pin refuses a symlinked pinned coordinator path");
+        unlink(script);
+        if (rename(moved, script) != 0) {
+            fprintf(stderr, "harness: symlink teardown: %s\n",
+                    strerror(errno));
+            exit(1);
+        }
+        unlink(script2);
+        rmdir(base2);
+    }
+
     /* Opportunistic real-system shared-group case (covers hosts where
      * the invoker has no distinct supplementary group to chgrp with):
      * Debian/Ubuntu ship root-owned directories that are group-writable

@@ -105,7 +105,6 @@ CANONICAL_MODULES = frozenset({
     "packages/llm_analysis/tasks.py",
     # fail-closed byte-stability contracts
     "core/binary/fingerprint.py",
-    "packages/binary_analysis/fingerprint.py",
     "core/concepts/model.py",
     "packages/sca/calibration/build.py",
     "core/json/jsonl.py",

@@ -22,6 +22,26 @@ from core.run import (
 )
 
 
+def _age_run_tree(d, seconds=7200.0):
+    """Back-date a run dir and everything inside it.
+
+    The same-session abandon sweep treats recent write activity in the
+    run dir as a live-run heartbeat; tests exercising the abandon path
+    must make the fixture run look write-quiet past the grace window.
+    """
+    import contextlib
+    import os
+    import time
+    old = time.time() - seconds
+    for root, dirs, files in os.walk(d, followlinks=False):
+        for name in dirs + files:
+            with contextlib.suppress(OSError):
+                os.utime(os.path.join(root, name), (old, old),
+                         follow_symlinks=False)
+    with contextlib.suppress(OSError):
+        os.utime(d, (old, old))
+
+
 class TestRunLifecycle(unittest.TestCase):
 
     def test_start_creates_metadata(self):
@@ -159,6 +179,9 @@ class TestRunLifecycle(unittest.TestCase):
             ).isoformat()
             meta1["tool_pid"] = _dead_pid()
             save_json(run1 / RUN_METADATA_FILE, meta1)
+            # Quiet the run dir past the activity grace — recent
+            # writes read as a live-run heartbeat.
+            _age_run_tree(run1)
             # Second run of same type — should mark first as failed
             run2 = project / "validate-20260402"
             start_run(run2, "validate")
@@ -858,6 +881,10 @@ class TestCleanupAbandonedLiveWorker(unittest.TestCase):
         if tool_pid is not None:
             meta["tool_pid"] = tool_pid
         save_json(d / RUN_METADATA_FILE, meta)
+        if aged:
+            # Aged fixtures must also be write-quiet: recent run-dir
+            # activity reads as a live-run heartbeat.
+            _age_run_tree(d)
         return d
 
     def _cleanup(self, project):
@@ -919,6 +946,98 @@ class TestCleanupAbandonedLiveWorker(unittest.TestCase):
                                    tool_pid=os.getpid(), aged=False)
             self._cleanup(project)
             self.assertEqual(self._status(fresh), "running")
+
+    def test_recent_activity_not_false_failed(self):
+        # Stub-driven run: the recorded tool_pid is the lifecycle
+        # stub's transient shell (dead seconds after start), but the
+        # run dir shows recent writes — the heartbeat that survives
+        # the shell. Must NOT be failed by a same-command sweep.
+        with TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            live = self._make_run(project, "scan-001", "scan",
+                                  tool_pid=_dead_pid())
+            (live / "journal.jsonl").write_text("{}\n")  # fresh write
+            self._cleanup(project)
+            self.assertEqual(self._status(live), "running")
+
+
+class TestAbandonSweepRecovery(unittest.TestCase):
+    """A sweep-stamped abandon is heuristic: a live run it misjudged
+    must still be able to record its real terminal state, while
+    genuinely-failed runs keep the terminal-status guard."""
+
+    def test_wrong_abandon_overridden_by_real_completion(self):
+        with TemporaryDirectory() as d:
+            out = Path(d) / "scan-001"
+            start_run(out, "scan")
+            fail_run(out, "abandoned — replaced by new run in same session",
+                     extra={"abandon_sweep": True}, record_timing=False)
+            self.assertEqual(
+                load_json(out / RUN_METADATA_FILE)["status"], "failed")
+            complete_run(out)
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertEqual(meta["status"], "completed")
+            # The sweep's markers are cleared on override.
+            self.assertNotIn("abandon_sweep", meta["extra"])
+            self.assertNotIn("error", meta["extra"])
+
+    def test_real_failure_after_sweep_consumes_marker(self):
+        # A GENUINE fail_run landing after a sweep-stamped abandon
+        # consumes the marker: without that, the extras merge kept
+        # abandon_sweep alongside the real error and a later
+        # complete_run laundered the genuinely failed run green,
+        # deleting the real error.
+        with TemporaryDirectory() as d:
+            out = Path(d) / "scan-001"
+            start_run(out, "scan")
+            fail_run(out, "abandoned — replaced by new run in same session",
+                     extra={"abandon_sweep": True}, record_timing=False)
+            fail_run(out, "tool crashed with OOM")  # REAL failure
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertNotIn("abandon_sweep", meta["extra"])
+            complete_run(out)
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertEqual(meta["status"], "failed")
+            self.assertEqual(meta["extra"]["error"], "tool crashed with OOM")
+
+    def test_resweep_keeps_marker_overridable(self):
+        # Two-direction guard: a second SWEEP write (extra carries the
+        # marker) must not consume it — the run stays recoverable by
+        # its real finaliser.
+        with TemporaryDirectory() as d:
+            out = Path(d) / "scan-001"
+            start_run(out, "scan")
+            for _ in range(2):
+                fail_run(out, "abandoned — owning session terminated",
+                         extra={"abandon_sweep": True},
+                         record_timing=False)
+            complete_run(out)
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertEqual(meta["status"], "completed")
+
+    def test_real_failure_still_refuses_completion(self):
+        # Two-direction guard: only sweep-stamped abandons may be
+        # overridden — a real failure stays terminal.
+        with TemporaryDirectory() as d:
+            out = Path(d) / "scan-001"
+            start_run(out, "scan")
+            fail_run(out, "tool crashed")
+            complete_run(out)
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertEqual(meta["status"], "failed")
+            self.assertEqual(meta["extra"]["error"], "tool crashed")
+
+    def test_fail_after_complete_refused_without_side_effects(self):
+        # fail_run re-validates BEFORE its finalisers: a sweep racing a
+        # completed run must not downgrade it or stamp an error.
+        with TemporaryDirectory() as d:
+            out = Path(d) / "scan-001"
+            start_run(out, "scan")
+            complete_run(out)
+            fail_run(out, "late sweep failure")
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertEqual(meta["status"], "completed")
+            self.assertNotIn("error", meta.get("extra") or {})
 
 
 class TestUpdateStatusConcurrency(unittest.TestCase):

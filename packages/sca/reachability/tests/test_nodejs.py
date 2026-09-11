@@ -100,3 +100,25 @@ def test_export_from_recognised(tmp_path: Path) -> None:
     _write(repo / "a.ts", "export { default } from 'lodash';\n")
     scan = scan_imports(repo)
     assert "lodash" in scan
+
+
+def test_test_classification_conventions_unchanged(tmp_path: Path) -> None:
+    """The test-path predicate is shared with ``_test_paths`` — the
+    JS conventions the module recognised with its private copy must
+    classify identically: ``.test.``/``.spec.`` filenames and test
+    directory ancestors mark test code; ordinary sources don't."""
+    repo = tmp_path / "repo"
+    _write(repo / "src" / "app.js", "require('lodash');\n")
+    _write(repo / "src" / "app.spec.tsx", "require('lodash');\n")
+    _write(repo / "src" / "app.test.mjs", "require('lodash');\n")
+    _write(repo / "__tests__" / "b.js", "require('lodash');\n")
+    _write(repo / "e2e" / "c.cjs", "require('lodash');\n")
+    scan = scan_imports(repo)
+    by_name = {f.name: is_test for f, _l, is_test in scan["lodash"]}
+    assert by_name == {
+        "app.js": False,
+        "app.spec.tsx": True,
+        "app.test.mjs": True,
+        "b.js": True,
+        "c.cjs": True,
+    }

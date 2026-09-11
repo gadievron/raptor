@@ -11,11 +11,16 @@ combined form via ``list_versions("group:artifact")``.
 from __future__ import annotations
 
 import logging
-import urllib.parse
 
 from core.json import MISSING, JsonCache
 
-from ._negative_cache import log_fetch_failure
+from ._negative_cache import log_fetch_failure, should_negative_cache
+from ._url import (
+    UnsafeUrlComponentError,
+    quote_path,
+    quote_segment,
+    registry_cache_key,
+)
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -43,14 +48,6 @@ except ImportError:                                  # pragma: no cover
 
 _CACHE_KEY_PREFIX = "maven-versions"
 _DEFAULT_TTL = 24 * 3600
-
-
-def _key_component(value: str) -> str:
-    """Percent-encode one cache-key component so the key identity is
-    injective — a raw coordinate containing ``/`` or ``..`` could
-    otherwise alias another artifact's cache file after JsonCache path
-    sanitisation. Old raw-name entries re-fetch once."""
-    return urllib.parse.quote(value, safe="")
 
 
 class MavenClient:
@@ -83,6 +80,19 @@ class MavenClient:
             over.base_url.rstrip("/") if over and over.base_url
             else "https://search.maven.org"
         )
+        # POM artifact base. Maven Central splits search
+        # (search.maven.org) from artifact hosting (repo1.maven.org);
+        # private mirrors serve BOTH from the configured base (the
+        # ``/maven2/`` path convention noted above). When the operator
+        # points RAPTOR_SCA_MAVEN_REGISTRY at a mirror, POM fetches
+        # must follow it too — otherwise internal-only artifacts 404
+        # against the public repo and the private base leaks nothing
+        # while the lookup silently degrades.
+        self._pom_base = (
+            f"{self._base_url}/maven2"
+            if over and over.base_url
+            else "https://repo1.maven.org/maven2"
+        )
         self._auth_header = over.auth_header if over else None
 
     def _request_headers(self) -> dict | None:
@@ -96,8 +106,18 @@ class MavenClient:
                           name)
             return []
         group, artifact = name.split(":", 1)
+        try:
+            # Fully-encoded query terms: a hostile coordinate must not
+            # splice query params (``&``) or path segments (``/``)
+            # into the (possibly authenticated) mirror request.
+            enc_group = quote_segment(group)
+            enc_artifact = quote_segment(artifact)
+        except UnsafeUrlComponentError:
+            return []
 
-        cache_key = f"{_CACHE_KEY_PREFIX}:{_key_component(name)}"
+        cache_key = registry_cache_key(
+            _CACHE_KEY_PREFIX, name, base_url=self._base_url,
+        )
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -109,8 +129,7 @@ class MavenClient:
         # ``core=gav`` returns one row per group:artifact:version (versus
         # ``core=ga`` which collapses to the latest). 200 rows is enough
         # for almost every artifact; very long histories will be capped.
-        q = (f"g:{urllib.parse.quote(group)}+AND+"
-             f"a:{urllib.parse.quote(artifact)}")
+        q = f"g:{enc_group}+AND+a:{enc_artifact}"
         url = (f"{self._base_url}/solrsearch/select?q={q}"
                f"&core=gav&rows=200&wt=json")
         try:
@@ -119,7 +138,7 @@ class MavenClient:
             )
         except Exception as e:                # noqa: BLE001
             log_fetch_failure(logger, "sca.registries.maven", name, e)
-            if self._cache is not None:
+            if self._cache is not None and should_negative_cache(e):
                 self._cache.put(cache_key, [], ttl_seconds=self._ttl)
             return []
 
@@ -210,27 +229,42 @@ def _add_pom_methods():
         if ":" not in coord:
             return None
         group, artifact = coord.split(":", 1)
-        cache_key = (f"maven-pom:{_key_component(coord)}:"
-                     f"{_key_component(version)}")
+        try:
+            # ``groupId`` maps to a path per Maven's URL layout: each
+            # dot-separated component becomes one path segment. A
+            # group carrying ``/`` or empty/dot components (``a..b``
+            # → ``a//b``) would splice segments, so validate + encode
+            # each one; artifact and version are single segments.
+            if "/" in group:
+                raise UnsafeUrlComponentError(group)
+            group_path = quote_path(group.replace(".", "/"))
+            enc_artifact = quote_segment(artifact)
+            enc_version = quote_segment(version)
+        except UnsafeUrlComponentError:
+            return None
+        cache_key = registry_cache_key(
+            "maven-pom", coord, version, base_url=self._pom_base,
+        )
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
                 return cached
         if self._offline:
             return None
-        group_path = group.replace(".", "/")
-        url = (f"https://repo1.maven.org/maven2/{group_path}/"
-                f"{artifact}/{version}/{artifact}-{version}.pom")
+        url = (f"{self._pom_base}/{group_path}/"
+                f"{enc_artifact}/{enc_version}/"
+                f"{enc_artifact}-{enc_version}.pom")
         try:
             resp = self._http.request(
                 "GET", url, raise_on_status=False,
+                headers=self._request_headers(),
             )
         except Exception as e:                              # noqa: BLE001
             logger.warning(
                 "sca.registries.maven: POM fetch failed for "
                 "%s@%s: %s", coord, version, e,
             )
-            if self._cache is not None:
+            if self._cache is not None and should_negative_cache(e):
                 self._cache.put(cache_key, None, ttl_seconds=self._ttl)
             return None
         if resp.status_code != 200:

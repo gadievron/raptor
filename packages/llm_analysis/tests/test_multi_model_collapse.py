@@ -82,20 +82,28 @@ class TestDetectMultiModelCollapse:
         collapsed = _detect_multi_model_collapse(results, n_analysis_models=3)
         assert collapsed == [("f1", ["flash", "pro"])]
 
-    def test_findings_without_multi_model_analyses_skipped(self):
-        # Single-model findings (no multi_model_analyses key) shouldn't
-        # be flagged as collapsed.
+    def test_single_surviving_result_flagged_as_collapse(self):
+        # ``multi_model_analyses`` is only attached when 2+ records
+        # survived — a finding with a single surviving result in a
+        # multi-model run is the WORST collapse (the other model's
+        # work was lost, e.g. cancelled by an abort) and must be
+        # flagged, not silently reported as clean multi-model.
+        # Errored findings are excluded: they surface via
+        # findings_failed, not as collapse.
         results = {
-            "f1": {"is_exploitable": True},  # no multi_model_analyses key
+            "f1": {"is_exploitable": True, "analysed_by": "pro"},
             "f2": {
                 "multi_model_analyses": [
                     {"model": "haiku"},
                     {"model": "haiku"},
                 ],
             },
+            "f3": {"error": "boom", "analysed_by": "pro"},
         }
         collapsed = _detect_multi_model_collapse(results, n_analysis_models=2)
-        assert collapsed == [("f2", ["haiku"])]
+        assert ("f1", ["pro"]) in collapsed
+        assert ("f2", ["haiku"]) in collapsed
+        assert all(fid != "f3" for fid, _ in collapsed)
 
     def test_unknown_model_labels_excluded_from_distinct_count(self):
         # ``?`` and None aren't real model identities — drop from counting
@@ -132,11 +140,16 @@ class TestDetectMultiModelCollapse:
     def test_empty_results_returns_empty(self):
         assert _detect_multi_model_collapse({}, n_analysis_models=2) == []
 
-    def test_non_list_multi_model_analyses_skipped(self):
-        # If multi_model_analyses got malformed (not a list), skip the
-        # finding rather than crash.
+    def test_non_list_multi_model_analyses_does_not_crash(self):
+        # If multi_model_analyses got malformed (not a list), the
+        # finding is treated like any single-surviving-result record:
+        # flagged as collapsed (its panel data is missing) — and the
+        # detector must not crash on the bad shape.
         results = {
-            "f1": {"multi_model_analyses": "wrong shape"},
+            "f1": {"multi_model_analyses": "wrong shape",
+                   "analysed_by": "pro"},
             "f2": {"multi_model_analyses": {"oops": "dict"}},
         }
-        assert _detect_multi_model_collapse(results, n_analysis_models=2) == []
+        collapsed = _detect_multi_model_collapse(results, n_analysis_models=2)
+        assert ("f1", ["pro"]) in collapsed
+        assert ("f2", []) in collapsed

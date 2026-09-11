@@ -219,3 +219,54 @@ class TestPinnedHelperResolution(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@requires_landlock
+@requires_userns
+class TestTimeoutZeroMeansImmediateDeadline(unittest.TestCase):
+    """timeout=0 is "zero budget remaining", not "no deadline": the
+    falsy check (`if timeout`) built NO deadline and the run became
+    unbounded exactly when the caller asked for none at all. Both
+    directions: 0 must raise TimeoutExpired promptly; None must stay
+    deadline-free and let the child finish."""
+
+    def setUp(self):
+        if not _mount_ns_usable():
+            self.skipTest("mount-ns unusable here")
+        from core.sandbox._spawn import mount_ns_available
+        if not mount_ns_available():
+            self.skipTest("mount-ns not available on this host")
+
+    def _kwargs(self, out, timeout):
+        return {
+            "target": out, "output": out,
+            "block_network": True,
+            "writable_paths": [out, "/tmp"],
+            "nproc_limit": 1024,
+            "limits": {"memory_mb": 0, "max_file_mb": 10240,
+                       "cpu_seconds": 300},
+            "readable_paths": None, "allowed_tcp_ports": None,
+            "seccomp_profile": "full", "seccomp_block_udp": False,
+            "env": None, "cwd": None, "timeout": timeout,
+            "capture_output": True, "text": True,
+        }
+
+    def test_timeout_zero_raises_immediately(self):
+        from core.sandbox._spawn import run_sandboxed
+        out = tempfile.mkdtemp(prefix="raptor-t0-")
+        self.addCleanup(shutil.rmtree, out, True)
+        start = time.monotonic()
+        # The sleeper bounds the regression cost: pre-fix (no deadline)
+        # the call returns normally after 5s and assertRaises fails.
+        with self.assertRaises(subprocess.TimeoutExpired):
+            run_sandboxed(["/bin/sleep", "5"],
+                          **self._kwargs(out, timeout=0))
+        self.assertLess(time.monotonic() - start, 5.0,
+                        "timeout=0 must not wait out the child")
+
+    def test_timeout_none_stays_unbounded(self):
+        from core.sandbox._spawn import run_sandboxed
+        out = tempfile.mkdtemp(prefix="raptor-tnone-")
+        self.addCleanup(shutil.rmtree, out, True)
+        r = run_sandboxed(["/bin/true"], **self._kwargs(out, timeout=None))
+        self.assertEqual(r.returncode, 0)

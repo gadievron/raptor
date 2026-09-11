@@ -374,6 +374,7 @@ def _extract_dispatch_tables_ts(
 def find_dispatch_gaps(
     call_graphs: dict[str, object],
     source_texts: dict[str, str] | None = None,
+    target_root: Path | str | None = None,
 ) -> list[DispatchGap]:
     """Find dispatch-table keys that are produced but never handled.
 
@@ -385,6 +386,10 @@ def find_dispatch_gaps(
             When provided, avoids re-reading files from disk.  When
             absent, falls back to reading each file from ``call_graphs``
             keys.
+        target_root: The run's source root.  Disk fallback reads are
+            confined to it (symlink-aware); without it the fallback
+            keeps only the lexical traversal guard and resolves
+            relative to the process CWD (legacy behaviour).
 
     Returns:
         List of ``DispatchGap`` instances describing produced-but-
@@ -399,7 +404,7 @@ def find_dispatch_gaps(
     all_producers: dict[str, list[tuple[str, int]]] = {}  # file -> [(val, line)]
 
     for fpath in sorted(files):
-        source = _get_source(fpath, source_texts)
+        source = _get_source(fpath, source_texts, target_root)
         if source is None:
             continue
 
@@ -555,6 +560,7 @@ def _key_shape(key: str) -> str:
 def _get_source(
     fpath: str,
     source_texts: dict[str, str] | None,
+    target_root: Path | str | None = None,
 ) -> str | None:
     """Get source for a file, preferring the in-memory dict."""
     # Path traversal guard: fpath originates from call_graphs.keys() which
@@ -564,8 +570,24 @@ def _get_source(
         return None
     if source_texts and fpath in source_texts:
         return source_texts[fpath]
+    if target_root is not None:
+        # Symlink-aware containment: the lexical guard above cannot
+        # catch an in-repo symlink pointing outside the tree, and a
+        # bare Path(fpath) resolves against the process CWD rather
+        # than the scanned target.
+        from core.paths import confine
+
+        full = confine(target_root, fpath)
+        if full is None:
+            logger.warning(
+                "_get_source: refusing path outside target root: %r",
+                fpath,
+            )
+            return None
+    else:
+        full = Path(fpath)
     try:
-        with Path(fpath).open(encoding="utf-8", errors="replace") as f:
+        with full.open(encoding="utf-8", errors="replace") as f:
             return f.read()
     except OSError:
         return None

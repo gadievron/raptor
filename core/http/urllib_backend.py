@@ -352,6 +352,38 @@ def _new_proxy_manager(proxy_url: str) -> urllib3.ProxyManager:
     )
 
 
+def _collapse_headers(resp) -> dict[str, str]:
+    """Lowercase-key, multi-value-aware header collapse.
+
+    ``{k.lower(): v for ...}`` silently dropped duplicate-name headers
+    (last value wins). The operationally-significant case is
+    ``Set-Cookie``: a response can legitimately carry multiple
+    Set-Cookie headers (one per cookie), and the dict comprehension
+    collapsed them to a single value. Other headers (Vary, Link,
+    X-Foo) can also legitimately repeat per RFC 9110 §5.3.
+
+    Aggregates via ``getlist()`` so multi-value headers become
+    newline-joined values; callers split on ``\\n`` for the
+    multi-value cases, single-value headers come back as the bare
+    string.
+    """
+    collapsed: dict[str, str] = {}
+    for key in resp.headers:
+        values = (
+            resp.headers.getlist(key)
+            if hasattr(resp.headers, "getlist") else [resp.headers[key]]
+        )
+        # Already lower-cased after collection — last lowercase wins
+        # if the server somehow sent the same header in multiple cases
+        # (very rare; if so the values are joined together too).
+        lk = key.lower()
+        if lk in collapsed and values:
+            collapsed[lk] = collapsed[lk] + "\n" + "\n".join(values)
+        else:
+            collapsed[lk] = "\n".join(values) if values else ""
+    return collapsed
+
+
 class _HostCircuitBreaker:
     """Per-(host, port) rate-limit circuit breaker.
 
@@ -889,21 +921,32 @@ class UrllibClient:
         # decompression so content-addressed downloads hash the
         # bytes the server stored.
         decode = not _wants_identity(headers)
-        resp = self._pool_for(url).request(
-            "GET", url,
-            headers=headers,
-            timeout=urllib3.Timeout(total=float(timeout)),
-            preload_content=False,
-            decode_content=decode,
-            # Never follow redirects — same deliberate pin as
-            # `_fetch_once` (see its comment): with retries=False
-            # urllib3 already zeroed the redirect budget, so the old
-            # ``redirect=True`` here was dead weight one retry-
-            # plumbing refactor away from silently chasing 3xx into
-            # endpoints no caller-level address policy ever saw.
-            redirect=False,
-            retries=False,
-        )
+        try:
+            resp = self._pool_for(url).request(
+                "GET", url,
+                headers=headers,
+                timeout=urllib3.Timeout(total=float(timeout)),
+                preload_content=False,
+                decode_content=decode,
+                # Never follow redirects — same deliberate pin as
+                # `_fetch_once` (see its comment): with retries=False
+                # urllib3 already zeroed the redirect budget, so the old
+                # ``redirect=True`` here was dead weight one retry-
+                # plumbing refactor away from silently chasing 3xx into
+                # endpoints no caller-level address policy ever saw.
+                redirect=False,
+                retries=False,
+            )
+        except (_U3HTTPError, OSError) as e:
+            # Translate raw urllib3 / socket failures (OSError covers
+            # TimeoutError + ConnectionError) to the HttpError
+            # contract every consumer of this backend handles —
+            # `_fetch` does the same for the buffered path; the
+            # stream path used to leak urllib3 types untranslated.
+            msg = (
+                f"stream request failed for {_safe_url_for_log(url)}: {e}"
+            )
+            raise HttpError(msg) from e
         try:
             # Re-validate the final URL BEFORE yielding any body
             # bytes — same scheme/userinfo/host gates as the initial
@@ -962,7 +1005,24 @@ class UrllibClient:
             import time as _time
             _start = _time.monotonic()
             total = 0
-            for chunk in resp.stream(64 * 1024, decode_content=decode):
+            # Mid-stream failures (server reset, read timeout, decode
+            # error) surface from ``resp.stream`` as raw urllib3
+            # types — translate to the HttpError contract like the
+            # buffered path. The generator's own control-flow
+            # exceptions (SizeLimitExceeded, the slowloris
+            # TimeoutError) pass through untouched.
+            chunk_iter = resp.stream(64 * 1024, decode_content=decode)
+            while True:
+                try:
+                    chunk = next(chunk_iter)
+                except StopIteration:
+                    break
+                except (_U3HTTPError, OSError) as e:
+                    msg = (
+                        f"stream aborted mid-body for "
+                        f"{_safe_url_for_log(url)}: {e}"
+                    )
+                    raise HttpError(msg) from e
                 total += len(chunk)
                 if total > max_bytes:
                     msg = (
@@ -1028,9 +1088,18 @@ class UrllibClient:
         # Hub anonymous-pull rate limit during a multi-image scan.
         parsed_for_cb = _urlparse.urlsplit(url)
         cb_host = (parsed_for_cb.hostname or "").lower()
-        cb_port = parsed_for_cb.port or (
-            443 if parsed_for_cb.scheme == "https" else 80
-        )
+        try:
+            cb_port = parsed_for_cb.port or (
+                443 if parsed_for_cb.scheme == "https" else 80
+            )
+        except ValueError as e:
+            # ``.port`` raises for out-of-range ports (``:99999``) —
+            # translate so callers keep the documented HttpError
+            # contract instead of a raw ValueError.
+            msg = (
+                f"invalid port in URL {_safe_url_for_log(url)}: {e}"
+            )
+            raise HttpError(msg) from e
         is_open, seconds_left = self._circuit_breaker.is_open(
             cb_host, cb_port,
         )
@@ -1247,7 +1316,16 @@ class UrllibClient:
                     raise HttpError(msg_0) from last_exc
                 time.sleep(min(delay, remaining))
                 continue
-        # Exhausted retries
+        # Exhausted retries. With ``raise_on_status=False`` the
+        # documented contract is that transient statuses retry with
+        # backoff but the FINAL attempt's Response (whatever its
+        # status) is handed back instead of raising — honour it when
+        # the last failure was a status (carries a response), not a
+        # network error.
+        if not raise_on_status:
+            final_resp = getattr(last_exc, "response", None)
+            if final_resp is not None:
+                return final_resp
         msg_0 = f"Exhausted retries fetching {_safe_url_for_log(url)}: {last_exc}"
         raise HttpError(msg_0) from last_exc
 
@@ -1311,27 +1389,45 @@ class UrllibClient:
             if resp.status == 304:
                 msg = f"304 Not Modified for {_safe_url_for_log(url)}"
                 raise NotModified(msg)
-            if resp.status in (429, 503):
+            if resp.status in (429, 503) or (
+                resp.status >= 500 and not raise_on_status
+            ):
+                # Transient statuses raise HttpError so the retry loop
+                # backs off. With ``raise_on_status=False`` the
+                # documented contract is that the FINAL Response is
+                # handed back for any status — attach a bounded-body
+                # Response so the loop can return it after the last
+                # attempt instead of raising "exhausted retries".
                 msg = f"HTTP {resp.status} from {_safe_url_for_log(url)}"
+                retry_after = (
+                    self._parse_retry_after(resp.headers.get("Retry-After"))
+                    if resp.status in (429, 503) else None
+                )
+                attached: Response | None = None
+                if not raise_on_status:
+                    # Error bodies are small; a fixed 64 KiB cap (never
+                    # above the caller's max_bytes) bounds the per-retry
+                    # drain a hostile server could force.
+                    body_cap = min(64 * 1024, max_bytes)
+                    err_body = resp.read(body_cap, decode_content=decode) or b""
+                    attached = Response(
+                        status=resp.status,
+                        headers=_collapse_headers(resp),
+                        body=err_body,
+                        url=url,
+                    )
                 raise HttpError(
                     msg,
                     status=resp.status,
-                    retry_after=self._parse_retry_after(
-                        resp.headers.get("Retry-After"),
-                    ),
+                    retry_after=retry_after,
+                    response=attached,
                 )
-            # Treat 4xx/5xx as HttpError unless caller opted out via
+            # Treat 4xx as HttpError unless caller opted out via
             # ``raise_on_status=False`` (e.g. OCI client's 401 →
             # token-exchange retry needs to inspect WWW-Authenticate
             # on the 401 response). When opting out we still bound
             # the body read by max_bytes — a 4xx response can carry
             # an arbitrary body.
-            if resp.status >= 500 and not raise_on_status:
-                msg = f"HTTP {resp.status} from {_safe_url_for_log(url)}"
-                raise HttpError(
-                    msg,
-                    status=resp.status,
-                )
             if resp.status >= 400 and raise_on_status:
                 # Drain enough body for the error message — bounded.
                 snippet = resp.read(512, decode_content=decode) or b""
@@ -1498,20 +1594,9 @@ class UrllibClient:
             # single-value headers still come back as the bare
             # string. urllib3's HTTPHeaderDict.getlist returns the
             # full list preserving order and casing-insensitive.
-            collapsed_headers: dict[str, str] = {}
-            for key in resp.headers:
-                values = resp.headers.getlist(key) if hasattr(resp.headers, "getlist") else [resp.headers[key]]
-                # Already lower-cased after collection — last lowercase wins
-                # if the server somehow sent the same header in multiple cases
-                # (very rare; if so the values are joined together too).
-                lk = key.lower()
-                if lk in collapsed_headers and values:
-                    collapsed_headers[lk] = collapsed_headers[lk] + "\n" + "\n".join(values)
-                else:
-                    collapsed_headers[lk] = "\n".join(values) if values else ""
             return Response(
                 status=resp.status,
-                headers=collapsed_headers,
+                headers=_collapse_headers(resp),
                 body=raw,
                 url=final_url,
             )

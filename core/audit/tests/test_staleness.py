@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from core.audit.gaps import PRIORITY_ENTRY_POINT, PRIORITY_STALE
 from core.audit.staleness import (
     StaleItem,
     find_stale_annotations,
@@ -128,15 +129,27 @@ class TestStaleAsGaps:
         assert len(result) == 2
         stale_gap = next(g for g in result if g["name"] == "g")
         assert stale_gap["is_stale"] is True
-        assert stale_gap["priority"] == 0
+        assert stale_gap["priority"] == PRIORITY_STALE
 
     def test_existing_gap_marked_stale(self):
+        # Both directions of the stale tier: a low-ranked gap is
+        # LIFTED to PRIORITY_STALE...
         gaps = [_gap("a.c", "f", priority=5)]
         stale = [StaleItem("a.c", "f", "old", "new", "modified")]
         result = stale_as_gaps(stale, gaps)
         assert len(result) == 1
         assert result[0]["is_stale"] is True
-        assert result[0]["priority"] == 0
+        assert result[0]["priority"] == PRIORITY_STALE
+
+    def test_stale_never_demotes_higher_priority_gap(self):
+        # ...and a gap already ranked ABOVE the stale tier (an entry
+        # point) keeps its priority — staleness never demotes.
+        gaps = [_gap("a.c", "f", priority=PRIORITY_ENTRY_POINT)]
+        stale = [StaleItem("a.c", "f", "old", "new", "modified")]
+        result = stale_as_gaps(stale, gaps)
+        assert len(result) == 1
+        assert result[0]["is_stale"] is True
+        assert result[0]["priority"] == PRIORITY_ENTRY_POINT
 
     def test_deleted_skipped(self):
         gaps = [_gap("a.c", "f")]

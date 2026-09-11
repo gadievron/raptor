@@ -71,11 +71,16 @@ def set_failure_mode(
         )
         raise ValueError(msg)
     blob["failure_mode"] = mode.value if mode is not None else None
-    # Construct first to validate; reject before any write.
+    # Construct first to validate; reject before any write. Validation
+    # ONLY — the write below persists the raw mutated dict, because a
+    # from_dict().to_dict() round-trip would silently drop any key the
+    # current schema doesn't know, destroying fields written by a newer
+    # version sharing the pool (the "other fields stay immutable"
+    # contract covers unknown fields too).
     updated = LabeledAttempt.from_dict(blob)
     # Atomic write: operator triage rewrites an existing labeled_attempt
     # record; a torn write would corrupt the JSON and hide the record
     # from downstream aggregation. Same-tier reasoning as
     # core/annotations/storage.py — save_json owns the temp + rename.
-    save_json(record_path, updated.to_dict())
+    save_json(record_path, blob)
     return updated

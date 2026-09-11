@@ -239,3 +239,46 @@ def test_h_routing_end_to_end(tmp_path):
     by_path = {f["path"]: f for f in inv["files"]}
     assert by_path["widget.h"]["language"] == "cpp"
     assert by_path["plain.h"]["language"] == "c"
+
+
+# ---------------------------------------------------------------------------
+# Extension-case and shebang-probe hardening
+# ---------------------------------------------------------------------------
+
+
+def test_uppercase_c_extension_is_cpp():
+    """GNU convention: ``.C`` (uppercase) is C++ source. The
+    lowercasing fold routed it to the C grammar, mis-parsing every
+    class method."""
+    assert detect_language("Signer.C") == "cpp"
+    assert detect_language("plain.c") == "c"
+
+
+def test_cjs_extension_is_javascript():
+    assert detect_language("mod.cjs") == "javascript"
+
+
+@pytest.mark.skipif(not hasattr(__import__("os"), "mkfifo"),
+                    reason="POSIX-only FIFO test")
+def test_shebang_probe_ignores_fifos(tmp_path):
+    """A plain open() of a reader-less FIFO blocks forever; the probe
+    runs on every extensionless entry in the main process, so one
+    stray pipe wedged the whole inventory build."""
+    import os
+
+    from core.inventory.languages import detect_language_from_shebang
+
+    fifo = tmp_path / "apipe"
+    os.mkfifo(fifo)
+    assert detect_language_from_shebang(str(fifo)) is None
+
+
+def test_shebang_probe_still_reads_regular_files(tmp_path):
+    from core.inventory.languages import detect_language_from_shebang
+
+    script = tmp_path / "deploy"
+    script.write_text("#!/usr/bin/env python3\nprint(1)\n")
+    assert detect_language_from_shebang(str(script)) == "python"
+    other = tmp_path / "run"
+    other.write_text("#!/bin/sh\necho hi\n")
+    assert detect_language_from_shebang(str(other)) == "shell"

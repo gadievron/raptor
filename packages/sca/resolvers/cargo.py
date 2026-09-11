@@ -23,12 +23,12 @@ crates.io hosts, FS confined to the temp dir, $HOME hidden.
 from __future__ import annotations
 
 import logging
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 from . import ResolverResult, _check_tool, _run
+from ._safe_io import copy_regular_file
 
 logger = logging.getLogger(__name__)
 
@@ -87,12 +87,15 @@ class CargoResolver:
         # — virtual workspaces (no [package]) will fail to resolve
         # since member manifests are absent; .cargo/config.toml
         # (private registries, source replacements) is also omitted.
+        # lstat-gated content copy: the sources sit in the scanned
+        # (hostile) directory — symlinks are not followed (a
+        # ``Cargo.lock -> ~/.ssh/id_ed25519`` link would otherwise
+        # pull operator files into the resolve) and FIFOs are never
+        # opened (a blocking open would hang the resolver worker).
         with tempfile.TemporaryDirectory(prefix="raptor-sca-cargo-") as tmp:
             tmp_path = Path(tmp)
             for fname in ("Cargo.toml", "Cargo.lock"):
-                src = project_dir / fname
-                if src.exists():
-                    shutil.copy2(src, tmp_path / fname)
+                copy_regular_file(project_dir / fname, tmp_path / fname)
 
             try:
                 proc = _run(

@@ -166,3 +166,32 @@ class TestNormalizeFindings:
         data = {"findings": [{"title": "foo", "cwe": "CWE-79"}]}
         normalize_findings(data)
         assert data["findings"][0] == {"title": "foo", "cwe": "CWE-79"}
+
+
+class TestStringShapedSubfields:
+    """Producers legitimately emit ``ruling`` / ``feasibility`` as bare
+    strings (prefilter's ``"ruling": "false_positive"``, free-form LLM
+    verdicts); ``.get()`` on those crashed the whole findings load."""
+
+    def test_string_ruling_and_feasibility_do_not_crash(self) -> None:
+        data = {"findings": [{
+            "ruling": "false_positive",
+            "feasibility": "high",
+            "status": "EXPLOITABLE",
+        }]}
+        normalize_findings(data)
+        f = data["findings"][0]
+        assert f["status"] == "exploitable"       # normalisation still ran
+        assert f["ruling"] == "false_positive"    # strings pass through
+        assert f["feasibility"] == "high"
+
+    def test_dict_shaped_subfields_still_normalised(self) -> None:
+        data = {"findings": [{
+            "ruling": {"status": "CONFIRMED"},
+            "feasibility": {"verdict": "Likely", "status": "Difficult"},
+        }]}
+        normalize_findings(data)
+        f = data["findings"][0]
+        assert f["ruling"]["status"] == "confirmed"
+        assert f["feasibility"]["verdict"] == "likely_exploitable"
+        assert f["feasibility"]["status"] == "difficult"

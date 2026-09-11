@@ -47,6 +47,14 @@ GIT_ENV_STRIP: tuple[str, ...] = (
     "GIT_COMMITTER_EMAIL",
     "GIT_COMMITTER_DATE",
     "GIT_CONFIG_PARAMETERS",
+    # Scope-less `git config <key> <value>` writes to $GIT_CONFIG when
+    # it is exported (verified on git 2.53: the write lands in that
+    # file and leaves .git/config untouched) — an operator shell
+    # exporting GIT_CONFIG=$HOME/.gitconfig would let a test's `git
+    # config user.name X` rewrite the real gitconfig without tripping
+    # either invariant, since the fingerprint only covers repo config
+    # paths.
+    "GIT_CONFIG",
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_INDEX_FILE",

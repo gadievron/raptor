@@ -219,6 +219,81 @@ class TestLiveRunExclusion(unittest.TestCase):
             self.assertEqual(plan["skipped_live"], [])
             self.assertIn("scan-20260401", plan["deleted"])
 
+    @staticmethod
+    def _mark_running_pidless(project, name):
+        import json
+        meta_path = project.output_path / name / ".raptor-run.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["status"] = "running"
+        for key in ("session_pid", "tool_pid", "session_start",
+                    "session_boot_id", "session_pidns"):
+            meta.pop(key, None)
+        meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+    @staticmethod
+    def _age_tree(d, seconds=7200.0):
+        import contextlib
+        import os
+        import time
+        old = time.time() - seconds
+        for root, dirs, files in os.walk(d, followlinks=False):
+            for name in dirs + files:
+                with contextlib.suppress(OSError):
+                    os.utime(os.path.join(root, name), (old, old),
+                             follow_symlinks=False)
+        with contextlib.suppress(OSError):
+            os.utime(d, (old, old))
+
+    def test_pidless_running_run_with_recent_activity_kept(self):
+        # No recorded pids at all (legacy metadata): unjudgeable by
+        # liveness — recent run-dir writes read as live (grace-age
+        # gate), never fail-open-deletable.
+        from core.project.clean import plan_clean
+        with TemporaryDirectory() as d:
+            p = _make_project_with_runs(d, [
+                ("scan", "scan-20260401"),
+                ("scan", "scan-20260402"),
+            ])
+            self._mark_running_pidless(p, "scan-20260401")
+            plan = plan_clean(p, keep=1)
+            self.assertIn("scan-20260401", plan["skipped_live"])
+            self.assertNotIn("scan-20260401", plan["deleted"])
+
+    def test_pidless_running_run_quiet_past_grace_reclaimable(self):
+        # Two-direction guard: once write-quiet past the grace window,
+        # a pid-less abandon is reclaimable again.
+        from core.project.clean import plan_clean
+        with TemporaryDirectory() as d:
+            p = _make_project_with_runs(d, [
+                ("scan", "scan-20260401"),
+                ("scan", "scan-20260402"),
+            ])
+            self._mark_running_pidless(p, "scan-20260401")
+            self._age_tree(p.output_path / "scan-20260401")
+            plan = plan_clean(p, keep=1)
+            self.assertEqual(plan["skipped_live"], [])
+            self.assertIn("scan-20260401", plan["deleted"])
+
+    def test_execute_clean_rechecks_liveness_before_rmtree(self):
+        # The plan can be arbitrarily stale by execute time (unbounded
+        # operator confirm; a resume in the gap): a run that went live
+        # AFTER planning must survive execution.
+        import os
+
+        from core.project.clean import execute_clean, plan_clean
+        with TemporaryDirectory() as d:
+            p = _make_project_with_runs(d, [
+                ("scan", "scan-20260401"),
+                ("scan", "scan-20260402"),
+            ])
+            plan = plan_clean(p, keep=1)
+            self.assertIn("scan-20260401", plan["deleted"])
+            # Resumed between plan and execute.
+            self._mark_running(p, "scan-20260401", os.getpid())
+            execute_clean(plan, output_path=p.output_path)
+            self.assertTrue((p.output_path / "scan-20260401").is_dir())
+            self.assertIn("scan-20260401", plan["skipped_live"])
+
     def test_plan_dedup_skips_live_run(self):
         import os
 

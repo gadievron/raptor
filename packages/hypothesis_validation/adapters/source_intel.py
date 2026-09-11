@@ -96,15 +96,16 @@ class SourceIntelAdapter(ToolAdapter):
             sentinel in the rules slot), so keying is effectively
             per-target. When ``None``, every call re-runs spatch (do
             not do this for production).
-        sandbox: Whether the underlying spatch invocation runs in a
-            network-blocked sandbox. Default ``True``. Passed through
-            via :func:`packages.source_intel.analyze.analyze` — that
-            function is itself the sandboxed entry point.
+
+    No sandbox knob: :func:`packages.source_intel.analyze.analyze`
+    exposes none, and its spatch invocations are sandboxed by
+    packages/coccinelle's own runner default. A constructor parameter
+    here would be a no-op in both directions — misleading operators
+    into thinking they toggled isolation.
     """
 
-    def __init__(self, *, cache: Any | None = None, sandbox: bool = True) -> None:
+    def __init__(self, *, cache: Any | None = None) -> None:
         self._cache = cache
-        self._sandbox = sandbox
 
     @property
     def name(self) -> str:
@@ -315,7 +316,16 @@ class SourceIntelAdapter(ToolAdapter):
         file_filter: str | None,
         target: Path,
     ) -> list[dict[str, Any]]:
-        """Materialise one axis's observations matching the query."""
+        """Materialise one axis's observations matching the query.
+
+        Function matching is exact on every axis: an observation whose
+        enclosing function the cocci rules could not resolve
+        (``enclosing_function is None``) matches NO query. Letting
+        unresolved observations match any queried function would let
+        unrelated file-scope evidence prop up a verdict for an
+        arbitrary function (the runner's ladder counts any non-empty
+        match list as confirming-compatible).
+        """
         out: list[dict[str, Any]] = []
 
         if axis == "attrs":
@@ -343,7 +353,7 @@ class SourceIntelAdapter(ToolAdapter):
 
         elif axis == "aborts":
             for ab in result.aborts:
-                if ab.enclosing_function not in (function_name, None):
+                if ab.enclosing_function != function_name:
                     continue
                 file_path = ab.location[0]
                 if file_filter and not file_path.endswith(file_filter):
@@ -364,7 +374,7 @@ class SourceIntelAdapter(ToolAdapter):
 
         elif axis == "allocations":
             for ae in result.allocations:
-                if ae.enclosing_function not in (function_name, None):
+                if ae.enclosing_function != function_name:
                     continue
                 file_path = ae.location[0]
                 if file_filter and not file_path.endswith(file_filter):
@@ -385,7 +395,7 @@ class SourceIntelAdapter(ToolAdapter):
                 })
             # double-frees and paired-frees attach to the same axis.
             for df in getattr(result, "double_frees", ()):
-                if df.enclosing_function not in (function_name, None):
+                if df.enclosing_function != function_name:
                     continue
                 file_path = df.location[0]
                 if file_filter and not file_path.endswith(file_filter):
@@ -403,27 +413,54 @@ class SourceIntelAdapter(ToolAdapter):
 
         elif axis == "privilege":
             for cap in getattr(result, "capabilities", ()):
-                if cap.enclosing_function not in (function_name, None):
+                if cap.enclosing_function != function_name:
                     continue
                 file_path = cap.location[0]
                 if file_filter and not file_path.endswith(file_filter):
                     continue
+                # CapabilityEvidence names the check function in
+                # `cap_function` (capable, ns_capable, ...). Keep the
+                # match key "capability" for output-shape stability,
+                # but populate it from the real field so the LLM can
+                # tell capable(CAP_SYS_ADMIN) sites from ns_capable
+                # ones instead of seeing "cap:?".
                 out.append({
                     "axis": axis,
                     "file": file_path,
                     "line": cap.location[1],
-                    "capability": getattr(cap, "capability", None),
+                    "capability": getattr(cap, "cap_function", None),
                     "grade": getattr(cap, "grade", None),
                     "function": cap.enclosing_function,
                     "message": (
-                        f"cap:{getattr(cap, 'capability', '?')} "
+                        f"cap:{getattr(cap, 'cap_function', None) or '?'} "
                         f"in {cap.enclosing_function or '?'}"
+                    ),
+                })
+            # The privilege axis covers LSM policy-enforcement points
+            # too (see describe() / _VALID_AXES) — surface them
+            # alongside capability checks.
+            for hook in getattr(result, "lsm_hooks", ()):
+                if hook.enclosing_function != function_name:
+                    continue
+                file_path = hook.location[0]
+                if file_filter and not file_path.endswith(file_filter):
+                    continue
+                out.append({
+                    "axis": axis,
+                    "kind": "lsm_hook",
+                    "file": file_path,
+                    "line": hook.location[1],
+                    "hook": getattr(hook, "hook_name", None),
+                    "function": hook.enclosing_function,
+                    "message": (
+                        f"lsm:{getattr(hook, 'hook_name', None) or '?'} "
+                        f"in {hook.enclosing_function or '?'}"
                     ),
                 })
 
         elif axis == "hazards":
             for hz in getattr(result, "hazards", ()):
-                if hz.enclosing_function not in (function_name, None):
+                if hz.enclosing_function != function_name:
                     continue
                 file_path = hz.location[0]
                 if file_filter and not file_path.endswith(file_filter):
@@ -442,28 +479,26 @@ class SourceIntelAdapter(ToolAdapter):
                 })
 
         elif axis == "variants":
-            # Variant signals attach to the result-level "variants"
-            # tuple when present; absence means axis 5 didn't fire.
-            for v in getattr(result, "variants", ()):
-                # variants currently key by file/line; function filter
-                # is best-effort against per-variant function field
-                # when present.
-                fn = getattr(v, "function", None)
-                if fn is not None and fn != function_name:
+            # Axis-5 variant signals live on `checked_allocations` —
+            # the CHECKED-allocator complement to axis 3's unchecked
+            # sites, used to locate structural siblings of a known bug
+            # shape.
+            for ca in getattr(result, "checked_allocations", ()):
+                if ca.enclosing_function != function_name:
                     continue
-                loc = getattr(v, "location", None)
-                file_path = loc[0] if loc else ""
+                file_path = ca.location[0]
                 if file_filter and not file_path.endswith(file_filter):
                     continue
                 out.append({
                     "axis": axis,
                     "file": file_path,
-                    "line": loc[1] if loc else 0,
-                    "variant_kind": getattr(v, "kind", None),
-                    "function": fn,
+                    "line": ca.location[1],
+                    "variant_kind": "checked_alloc",
+                    "allocator": ca.allocator,
+                    "function": ca.enclosing_function,
                     "message": (
-                        f"variant:{getattr(v, 'kind', '?')} "
-                        f"in {fn or '?'}"
+                        f"variant:checked-alloc {ca.allocator} "
+                        f"in {ca.enclosing_function or '?'}"
                     ),
                 })
 

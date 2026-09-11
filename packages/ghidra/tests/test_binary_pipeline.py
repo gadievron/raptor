@@ -5,6 +5,7 @@ bookmarks_bridge, SCA binary_imports.
 """
 
 import json
+from pathlib import Path
 
 from packages.ghidra.model import (
     REDatabase,
@@ -605,3 +606,53 @@ class TestSonameVersionNoCaptureGroup:
         by_name = {d.name: d for d in deps}
         assert "sqlite3" in by_name
         assert by_name["sqlite3"].version is None
+
+
+# ── Bookmarks bridge: checklist merge robustness ──────────────────────
+
+class TestChecklistMergeRobustness:
+    def _db(self):
+        return _make_db(
+            functions=[_make_func("merge_target", 0x3000, 100)],
+            bookmarks=[
+                {"address": 0x3000, "comment": "check bounds",
+                 "category": "Warning"},
+            ],
+        )
+
+    def test_existing_entry_without_items_merges(self, tmp_path):
+        """A hand-edited checklist file entry may lack "items" — the
+        merge must add to it, not raise KeyError out of the bridge."""
+        from core.inventory.binary_builder import binary_path_key
+        from packages.ghidra.bookmarks_bridge import (
+            write_checklist_from_bookmarks,
+        )
+
+        path_key = binary_path_key(Path("/usr/bin/target"))
+        (tmp_path / "checklist.json").write_text(json.dumps({
+            "files": [{"path": path_key}],
+        }))
+        n = write_checklist_from_bookmarks(self._db(), tmp_path)
+        assert n == 1
+        cl = json.loads((tmp_path / "checklist.json").read_text())
+        (fe,) = cl["files"]
+        assert [i["name"] for i in fe["items"]] == ["merge_target"]
+
+    def test_existing_entry_with_items_extends(self, tmp_path):
+        from core.inventory.binary_builder import binary_path_key
+        from packages.ghidra.bookmarks_bridge import (
+            write_checklist_from_bookmarks,
+        )
+
+        path_key = binary_path_key(Path("/usr/bin/target"))
+        (tmp_path / "checklist.json").write_text(json.dumps({
+            "files": [{"path": path_key, "items": [
+                {"name": "already_there", "kind": "function"},
+            ]}],
+        }))
+        n = write_checklist_from_bookmarks(self._db(), tmp_path)
+        assert n == 1
+        cl = json.loads((tmp_path / "checklist.json").read_text())
+        names = [i["name"] for i in cl["files"][0]["items"]]
+        assert names == ["already_there", "merge_target"]
+        assert cl["total_items"] == 2

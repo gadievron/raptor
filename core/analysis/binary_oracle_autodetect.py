@@ -336,10 +336,14 @@ def _has_dwarf(path: Path) -> bool:
     # unit tests that stub the sandbox (mirrors binary_oracle._run).
     from core.sandbox import run as _sandbox_run
     try:
+        # errors="replace": readelf over a hostile ELF can emit
+        # non-UTF-8 bytes (section names come from the binary); the
+        # default strict decode would raise instead of failing closed.
         proc = _sandbox_run(
             ["readelf", "-S", str(path)], block_network=True,
             target=str(path.resolve().parent),
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.debug("binary_oracle_autodetect: readelf -S failed on %s: %s",

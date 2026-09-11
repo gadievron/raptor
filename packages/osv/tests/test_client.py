@@ -210,6 +210,99 @@ def test_query_batch_skips_non_string_ids() -> None:
     assert client.query_batch(queries) == [["GHSA-aaa", "GHSA-bbb"]]
 
 
+class _QueueHttp(_FakeHttp):
+    """Stub whose querybatch answers come from a FIFO queue, so a
+    paginated conversation (same URL, different bodies) can be
+    scripted response-by-response."""
+
+    def __init__(self, post_queue: list[Any]) -> None:
+        super().__init__()
+        self._post_queue = list(post_queue)
+
+    def post_json(self, url: str, body: dict[str, Any], **_kw: Any) -> dict[str, Any]:
+        self.post_calls.append((url, body))
+        resp = self._post_queue.pop(0)
+        if isinstance(resp, BaseException):
+            raise resp
+        return resp
+
+
+def test_query_batch_null_slot_is_error_sentinel_not_empty() -> None:
+    """A non-dict result slot (proxy mangling, partial upstream failure)
+    means "the lookup did not happen" — returning [] would be cached
+    downstream as an authoritative "no advisories"."""
+    http = _FakeHttp()
+    http.post_responses[f"{OSV_BASE_URL}/querybatch"] = {
+        "results": [None, {"vulns": [{"id": "GHSA-x"}]}],
+    }
+    client = OsvClient(http=http)  # type: ignore[arg-type]
+    queries = [
+        {"package": {"name": "a", "ecosystem": "npm"}, "version": "1"},
+        {"package": {"name": "b", "ecosystem": "npm"}, "version": "1"},
+    ]
+    assert client.query_batch(queries) == [None, ["GHSA-x"]]
+
+
+def test_query_batch_follows_per_slot_pagination() -> None:
+    """Slots carrying next_page_token are re-queried until exhausted;
+    the returned ID list spans every page, not just page 1."""
+    http = _QueueHttp([
+        {"results": [
+            {"vulns": [{"id": "OSV-1"}], "next_page_token": "T1"},
+            {"vulns": [{"id": "OSV-A"}]},
+        ]},
+        {"results": [
+            {"vulns": [{"id": "OSV-2"}], "next_page_token": "T2"},
+        ]},
+        {"results": [
+            {"vulns": [{"id": "OSV-3"}]},
+        ]},
+    ])
+    client = OsvClient(http=http)  # type: ignore[arg-type]
+    q1 = {"package": {"name": "big", "ecosystem": "npm"}}
+    q2 = {"package": {"name": "small", "ecosystem": "npm"}}
+    assert client.query_batch([q1, q2]) == [["OSV-1", "OSV-2", "OSV-3"], ["OSV-A"]]
+    # Continuations carry the page token for ONLY the unfinished slot,
+    # without mutating the caller's query dicts.
+    assert http.post_calls[1][1] == {"queries": [{**q1, "page_token": "T1"}]}
+    assert http.post_calls[2][1] == {"queries": [{**q1, "page_token": "T2"}]}
+    assert "page_token" not in q1
+
+
+def test_query_batch_pagination_failure_demotes_slot_to_none() -> None:
+    """A failed continuation must not surface page 1 as the complete
+    answer — the slot flips to the None error sentinel; slots that
+    finished on page 1 keep their authoritative lists."""
+    http = _QueueHttp([
+        {"results": [
+            {"vulns": [{"id": "OSV-1"}], "next_page_token": "T1"},
+            {"vulns": [{"id": "OSV-A"}]},
+        ]},
+        HttpError("boom", status=500),
+    ])
+    client = OsvClient(http=http)  # type: ignore[arg-type]
+    queries = [
+        {"package": {"name": "big", "ecosystem": "npm"}},
+        {"package": {"name": "small", "ecosystem": "npm"}},
+    ]
+    assert client.query_batch(queries) == [None, ["OSV-A"]]
+
+
+def test_query_batch_pagination_page_cap_demotes_slot_to_none() -> None:
+    """A server that never stops handing out tokens cannot loop the
+    client forever; past the cap the slot is refused (None), never
+    silently truncated."""
+    from packages.osv import client as client_mod
+    first = {"results": [{"vulns": [{"id": "OSV-1"}], "next_page_token": "T"}]}
+    more = {"results": [{"vulns": [{"id": "OSV-n"}], "next_page_token": "T"}]}
+    http = _QueueHttp([first] + [more] * client_mod._MAX_QUERY_PAGES)
+    client = OsvClient(http=http)  # type: ignore[arg-type]
+    result = client.query_batch([{"package": {"name": "x", "ecosystem": "npm"}}])
+    assert result == [None]
+    # 1 initial + exactly _MAX_QUERY_PAGES continuations.
+    assert len(http.post_calls) == 1 + client_mod._MAX_QUERY_PAGES
+
+
 def test_query_batch_offline_returns_none_per_slot() -> None:
     """Offline mode skips the network entirely; every slot carries the
     "lookup did not happen" sentinel, not an authoritative empty."""

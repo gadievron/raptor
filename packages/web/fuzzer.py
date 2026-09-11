@@ -155,7 +155,8 @@ class WebFuzzer:
 
     def fuzz_parameter(self, url: str, param_name: str, param_type: str = "text",
                       vulnerability_types: list[str] | None = None,
-                      method: str = "GET") -> list[dict]:
+                      method: str = "GET",
+                      base_data: dict[str, str] | None = None) -> list[dict]:
         """
         Fuzz a specific parameter with LLM-generated payloads.
 
@@ -169,6 +170,12 @@ class WebFuzzer:
                 endpoints were silently un-fuzzable. Crawler now
                 provides per-form `method` (already discovered)
                 and the scanner threads it through.
+            base_data: sibling form fields sent alongside the fuzzed
+                one (required fields, CSRF tokens, captured defaults).
+                Without them, server-side validation rejects both the
+                baseline and the attack request before the fuzzed value
+                ever reaches a sink, making multi-field forms silently
+                unfuzzable.
 
         Returns:
             List of findings
@@ -191,7 +198,10 @@ class WebFuzzer:
             payloads = self._generate_payloads(param_name, param_type, vuln_type)
 
             for payload in payloads:
-                finding = self._test_payload(url, param_name, payload, vuln_type, method)
+                finding = self._test_payload(
+                    url, param_name, payload, vuln_type, method,
+                    base_data=base_data,
+                )
                 if finding:
                     findings.append(finding)
                     self.findings.append(finding)
@@ -287,7 +297,23 @@ class WebFuzzer:
                 task_type=TaskType.GENERATE_CODE,
             )
 
-            payloads = result.get('payloads', [])
+            raw_payloads = result.get('payloads')
+            # Structured output is untrusted: a JSON string here would
+            # iterate per-character (one live request per char), non-str
+            # entries would crash inside the oracle's containment
+            # checks, and an empty generation memoised for the run
+            # would silently fuzz nothing for this cell.
+            payloads = [
+                p for p in raw_payloads if isinstance(p, str) and p
+            ] if isinstance(raw_payloads, list) else []
+            if not payloads:
+                logger.warning(
+                    "LLM returned no usable payloads for %s; using static "
+                    "fallback", vuln_type,
+                )
+                return self._mark_static(
+                    self._get_basic_payloads(vuln_type, param_name=param_name),
+                )
             logger.info("Generated %d payloads for %s", len(payloads), vuln_type)
             self._payload_cache[cache_key] = list(payloads)
             return payloads
@@ -351,7 +377,8 @@ class WebFuzzer:
         return payloads
 
     def _test_payload(self, url: str, param_name: str, payload: str,
-                     vuln_type: str, method: str = "GET") -> dict | None:
+                     vuln_type: str, method: str = "GET",
+                     base_data: dict[str, str] | None = None) -> dict | None:
         """Test a payload against an endpoint through the three-gate oracle.
 
         A baseline request (benign value) precedes every attack request;
@@ -365,8 +392,12 @@ class WebFuzzer:
         """
         try:
             baseline_value = self._baseline_value(param_name)
-            baseline = self._send_payload(url, param_name, baseline_value, method)
-            response = self._send_payload(url, param_name, payload, method)
+            baseline = self._send_payload(
+                url, param_name, baseline_value, method, base_data=base_data,
+            )
+            response = self._send_payload(
+                url, param_name, payload, method, base_data=base_data,
+            )
 
             # Analyze response for oracle-grade exploitation evidence.
             confirmation = self._analyze_response(response, payload, vuln_type)
@@ -378,7 +409,12 @@ class WebFuzzer:
             ):
                 logger.warning("Potential %s found in %s", vuln_type, param_name)
                 return {
-                    'url': redact_secrets(url, reveal_secrets=self.client.reveal_secrets),
+                    # RAW url: this record is the data plane — Phase 6v
+                    # replay verification and the browser re-probe fetch
+                    # it live, so a display-redacted value would send
+                    # probes at a URL that never existed. Redaction
+                    # happens at the report/persist boundary.
+                    'url': url,
                     'parameter': param_name,
                     'payload': payload,
                     'payload_source': self._payload_source(payload),
@@ -519,7 +555,8 @@ class WebFuzzer:
                     vuln_type, ".".join(field_path),
                 )
                 return {
-                    'url': redact_secrets(url, reveal_secrets=self.client.reveal_secrets),
+                    # RAW url — same data-plane rule as _test_payload.
+                    'url': url,
                     'parameter': ".".join(field_path),
                     'payload': payload,
                     'payload_source': self._payload_source(payload),
@@ -544,15 +581,26 @@ class WebFuzzer:
             )
         return None
 
-    def _send_payload(self, url: str, param_name: str, value: str, method: str):
-        """Send one baseline or attack request using the selected verb."""
+    def _send_payload(self, url: str, param_name: str, value: str, method: str,
+                      base_data: dict[str, str] | None = None):
+        """Send one baseline or attack request using the selected verb.
+
+        ``base_data`` carries the sibling form fields; the fuzzed value
+        replaces (never duplicates) its own entry.
+        """
         method_upper = method.upper()
         if method_upper == "POST":
             # Body-encoded params for POST; matches the default form
             # encoding (application/x-www-form-urlencoded) that
             # requests.post applies when `data=` is a dict.
-            return self.client.post(url, data={param_name: value})
-        return self.client.get(self._url_with_param(url, param_name, value))
+            body = dict(base_data or {})
+            body[param_name] = value
+            return self.client.post(url, data=body)
+        target = url
+        for name, sibling_value in (base_data or {}).items():
+            if name != param_name:
+                target = self._url_with_param(target, name, sibling_value)
+        return self.client.get(self._url_with_param(target, param_name, value))
 
     def _url_with_param(self, url: str, param_name: str, value: str) -> str:
         """Return URL with ``param_name`` replaced, not duplicated."""
@@ -589,11 +637,17 @@ class WebFuzzer:
         baseline_text = baseline.text if isinstance(baseline.text, str) else ""
         attack_text = attack.text if isinstance(attack.text, str) else ""
 
-        if snippet and snippet in baseline_text:
+        # Gate 1 compares the UNESCAPED snippet: the display snippet has
+        # newlines escaped and would never match baseline text across a
+        # line break, silently disabling the veto for multi-line echoes.
+        raw_snippet = confirmation.get("snippet_raw") or snippet
+        if raw_snippet and raw_snippet in baseline_text:
             return False
-        # The signal carries its class prefix (e.g. "sqli_error:...");
-        # the baseline veto compares the raw matched marker text.
-        raw_signal = signal.partition(":")[2] or signal
+        # Gate 2 vetoes on the concrete matched marker (or, for
+        # reflection classes, the payload itself). Falling back to the
+        # constant class label would compare a string that can never
+        # appear in a page, disabling the veto for label-only signals.
+        raw_signal = confirmation.get("marker") or signal.partition(":")[2]
         if raw_signal and raw_signal in baseline_text:
             return False
         if baseline.status_code != attack.status_code:
@@ -617,21 +671,43 @@ class WebFuzzer:
             f"oracle={oracle_signal}"
         )
 
-    def _evidence_snippet(self, body: str, needle: str, limit: int = 240) -> str:
-        """Return a compact response excerpt around the matched oracle signal."""
+    def _evidence_snippet(self, body: str, needle: str, limit: int = 240,
+                          escape: bool = True) -> str:
+        """Return a compact response excerpt around the matched oracle signal.
+
+        ``escape=False`` keeps raw newlines — required when the snippet
+        feeds a substring comparison (the baseline veto) rather than a
+        display field.
+        """
         if not body:
             return ""
         lower_body = body.lower()
         lower_needle = needle.lower()
         idx = lower_body.find(lower_needle)
         if idx < 0:
-            return body[:limit]
-        start = max(0, idx - limit // 3)
-        end = min(len(body), idx + len(needle) + limit // 3)
-        return body[start:end].replace("\n", "\\n").replace("\r", "\\r")
+            excerpt = body[:limit]
+        else:
+            start = max(0, idx - limit // 3)
+            end = min(len(body), idx + len(needle) + limit // 3)
+            excerpt = body[start:end]
+        if escape:
+            return excerpt.replace("\n", "\\n").replace("\r", "\\r")
+        return excerpt
 
-    def _confirmation(self, signal: str, snippet: str) -> dict[str, str]:
-        return {"signal": signal, "snippet": snippet[:240]}
+    def _confirmation(self, signal: str, snippet: str, *,
+                      marker: str = "", snippet_raw: str = "") -> dict[str, str]:
+        """Bundle one oracle confirmation.
+
+        ``snippet`` is display-escaped for evidence fields; ``marker``
+        and ``snippet_raw`` carry the raw comparison subjects for the
+        baseline veto gates.
+        """
+        return {
+            "signal": signal,
+            "snippet": snippet[:240],
+            "marker": marker,
+            "snippet_raw": snippet_raw[:240],
+        }
 
     def _analyze_response(self, response, payload: str, vuln_type: str) -> dict[str, str] | None:
         """Class-specific execution evidence for one attack response.
@@ -647,15 +723,25 @@ class WebFuzzer:
         body = response.text if isinstance(response.text, str) else ""
 
         if vuln_type == 'xss':
-            # Payload must appear unescaped; if the HTML-encoded form is
-            # also present the output is likely just escaped echo.
-            if payload in body:
-                encoded = payload.replace("<", "&lt;").replace(">", "&gt;")
-                if encoded not in body:
-                    return self._confirmation(
-                        "xss_reflected_unescaped",
-                        self._evidence_snippet(body, payload),
-                    )
+            # A verbatim occurrence of the payload IS the unescaped
+            # reflection: HTML-escaping any of its special characters
+            # would alter the string, so an escaped-only echo can never
+            # contain the exact payload. (Checking that the escaped form
+            # is ABSENT was wrong in both directions: payloads without
+            # angle brackets escape to themselves and were always
+            # vetoed, and a page echoing the payload both raw and
+            # escaped — real XSS — was vetoed too.) Payloads without
+            # any markup-significant character carry no XSS signal and
+            # never confirm.
+            if payload in body and any(ch in payload for ch in "<>\"'"):
+                return self._confirmation(
+                    "xss_reflected_unescaped",
+                    self._evidence_snippet(body, payload),
+                    marker=payload,
+                    snippet_raw=self._evidence_snippet(
+                        body, payload, escape=False,
+                    ),
+                )
             return None
 
         matched = find_marker(vuln_type, body)
@@ -665,6 +751,8 @@ class WebFuzzer:
         return self._confirmation(
             f"{prefix}:{matched}",
             self._evidence_snippet(body, matched),
+            marker=matched,
+            snippet_raw=self._evidence_snippet(body, matched, escape=False),
         )
 
     def get_findings(self) -> list[dict]:

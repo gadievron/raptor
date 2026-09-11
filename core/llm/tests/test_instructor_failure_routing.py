@@ -27,19 +27,62 @@ from core.llm.providers import LLMProvider, StructuredResponse
 # ---------------------------------------------------------------------------
 
 
+def _transport_exc(msg: str) -> Exception:
+    """Exception whose class is stamped with an SDK module root, the
+    way real transport errors present. Quota/auth message sniffing
+    only applies to transport-typed exceptions — a validation/shape
+    exception's message embeds the model's raw output, where the same
+    vocabulary is content, not an API status."""
+    exc_type = type("FakeAPIStatusError", (Exception,), {})
+    exc_type.__module__ = "openai"
+    return exc_type(msg)
+
+
 @pytest.mark.parametrize("exc,expected", [
     (RuntimeError("model refused to respond"), "blocked"),
     (RuntimeError("content filter triggered"), "blocked"),
-    (RuntimeError("401 unauthorized"), "auth"),
-    (RuntimeError("invalid api key"), "auth"),
-    (RuntimeError("429 too many requests"), "quota"),
-    (RuntimeError("rate limit exceeded, retry in 20s"), "quota"),
-    (RuntimeError("quota exceeded for model"), "quota"),
+    (_transport_exc("401 unauthorized"), "auth"),
+    (_transport_exc("invalid api key"), "auth"),
+    (_transport_exc("429 too many requests"), "quota"),
+    (_transport_exc("rate limit exceeded, retry in 20s"), "quota"),
+    (_transport_exc("quota exceeded for model"), "quota"),
     (ValueError("1 validation error for Model"), "fallback"),
     (RuntimeError("connection reset"), "fallback"),
+    # Non-transport exception types never route on quota/auth
+    # vocabulary in their message — the recoverable fallback wins.
+    (RuntimeError("429 too many requests"), "fallback"),
+    (ValueError("model said: rate limit exceeded"), "fallback"),
 ])
 def test_instructor_exception_route(exc: Exception, expected: str) -> None:
     assert LLMProvider._instructor_exception_route(exc) == expected
+
+
+def test_validation_error_embedding_429_routes_fallback() -> None:
+    """A pydantic ValidationError's message embeds the offending input
+    — the model's raw output. A '429'/'rate limit' inside that is
+    content from a completed, recoverable generation: it must reach
+    the JSON fallback, not be re-raised as a quota boundary."""
+    pydantic = pytest.importorskip("pydantic")
+
+    class _Shape(pydantic.BaseModel):
+        count: int
+
+    with pytest.raises(pydantic.ValidationError) as excinfo:
+        _Shape.model_validate({"count": "HTTP 429 rate limit exceeded"})
+    exc = excinfo.value
+    assert "429" in str(exc)
+    assert LLMProvider._instructor_exception_route(exc) == "fallback"
+
+
+def test_real_transport_429_still_routes_quota() -> None:
+    """The other direction: genuine API rate-limit signals keep the
+    quota route — SDK-module exception classes by message, and any
+    exception carrying ``status_code == 429``."""
+    assert LLMProvider._instructor_exception_route(
+        _transport_exc("Error code: 429 - rate limit")) == "quota"
+    exc = RuntimeError("too many requests")
+    exc.status_code = 429  # type: ignore[attr-defined] — SDK errors carry this
+    assert LLMProvider._instructor_exception_route(exc) == "quota"
 
 
 def test_rate_limit_error_type_routes_quota() -> None:
@@ -97,9 +140,11 @@ def test_refusal_does_not_resend_via_fallback(monkeypatch) -> None:
 
 
 def test_auth_error_does_not_resend_via_fallback(monkeypatch) -> None:
+    # Transport-typed: auth message sniffing applies to SDK/transport
+    # exception classes only.
     provider, fallback_calls = _openai_provider(
-        monkeypatch, RuntimeError("401 unauthorized: invalid api key"))
-    with pytest.raises(RuntimeError, match="401"):
+        monkeypatch, _transport_exc("401 unauthorized: invalid api key"))
+    with pytest.raises(Exception, match="401"):
         provider.generate_structured("p", _SCHEMA)
     assert fallback_calls == []
     assert provider._instructor_consec_failures == 0
@@ -109,8 +154,8 @@ def test_429_reraises_for_client_backoff(monkeypatch) -> None:
     """A 429 must reach the client's retry loop (which sleeps between
     attempts), not trigger an instant same-payload fallback re-send."""
     provider, fallback_calls = _openai_provider(
-        monkeypatch, RuntimeError("429 rate limit exceeded"))
-    with pytest.raises(RuntimeError, match="429"):
+        monkeypatch, _transport_exc("429 rate limit exceeded"))
+    with pytest.raises(Exception, match="429"):
         provider.generate_structured("p", _SCHEMA)
     assert fallback_calls == []
     assert provider._instructor_consec_failures == 0

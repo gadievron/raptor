@@ -198,6 +198,91 @@ class TestCheckAttackerControl:
         result = _check_attacker_control("", "f.c", "fn", "", True, None)
         assert result.verdict == "inconclusive"
 
+    def test_malformed_precondition_records_degrade(self, tmp_path):
+        # LLM-written records: a non-dict entry or a string-shaped
+        # location must read as an inconclusive check, never abort
+        # the pass.
+        from core.audit.precondition_check import verify_preconditions
+        verdict = verify_preconditions(
+            [
+                "not-a-dict",
+                {"check_type": "caller_bounds_checks",
+                 "location": "src/a.c:fn",
+                 "assumption": "bounds checked"},
+            ],
+            tmp_path,
+        )
+        assert len(verdict.checks) == 2
+        assert all(c.verdict == "inconclusive" for c in verdict.checks)
+
+    def test_three_hop_reachable_is_supported(self):
+        # The old walk capped at 2 hops and returned "contradicted"
+        # for anything past the horizon — bounded negative evidence
+        # used as a refutation.  The full walk must find this path.
+        ctx = {
+            "entry_points": ["main"],
+            "call_edges": [
+                {"caller": "main", "callee": "dispatch"},
+                {"caller": "dispatch", "callee": "route"},
+                {"caller": "route", "callee": "helper"},
+            ],
+        }
+        result = _check_attacker_control(
+            "", "f.c", "helper", "", expect_absent=False,
+            context_map=ctx,
+        )
+        assert result.verdict == "supported"
+
+    def test_three_hop_reachable_contradicts_absence_claim(self):
+        ctx = {
+            "entry_points": ["main"],
+            "call_edges": [
+                {"caller": "main", "callee": "dispatch"},
+                {"caller": "dispatch", "callee": "route"},
+                {"caller": "route", "callee": "helper"},
+            ],
+        }
+        result = _check_attacker_control(
+            "", "f.c", "helper", "", expect_absent=True,
+            context_map=ctx,
+        )
+        assert result.verdict == "contradicted"
+
+    def test_cyclic_edges_terminate(self):
+        ctx = {
+            "entry_points": ["main"],
+            "call_edges": [
+                {"caller": "a", "callee": "helper"},
+                {"caller": "b", "callee": "a"},
+                {"caller": "a", "callee": "b"},
+            ],
+        }
+        result = _check_attacker_control(
+            "", "f.c", "helper", "", expect_absent=False,
+            context_map=ctx,
+        )
+        assert result.verdict == "contradicted"
+
+    def test_truncated_walk_is_inconclusive(self, monkeypatch):
+        # Hitting the node cap is a horizon, not evidence — both claim
+        # directions must degrade to inconclusive.
+        import core.audit.precondition_check as pc
+        monkeypatch.setattr(pc, "_REACHABILITY_NODE_CAP", 2)
+        ctx = {
+            "entry_points": ["main"],
+            "call_edges": [
+                {"caller": f"f{i}", "callee": f"f{i + 1}"}
+                for i in range(6)
+            ] + [{"caller": "main", "callee": "f0"}],
+        }
+        for expect_absent in (False, True):
+            result = _check_attacker_control(
+                "", "f.c", "f6", "", expect_absent=expect_absent,
+                context_map=ctx,
+            )
+            assert result.verdict == "inconclusive", expect_absent
+            assert "truncated" in result.evidence
+
     def test_no_entry_points_is_inconclusive(self):
         ctx = {"entry_points": [], "call_edges": [
             {"caller": "main", "callee": "helper"},
@@ -343,3 +428,44 @@ class TestPreconditionVerdict:
         ])
         assert v.any_contradicted
         assert "null_check" in v.contradiction_summary
+
+
+class TestReachesSinkAbsenceTransitivity:
+    """expect_absent=True returned a 'supported' absence receipt for
+    wrapper functions whose HELPERS call the sink — the transitivity
+    its own docstring and the mirror branch refuse to conclude on."""
+
+    def _check(self, source):
+        from core.audit.precondition_check import _check_reaches_sink
+
+        return _check_reaches_sink(
+            source, "a.c", "log_input", "", True,
+        )
+
+    def test_wrapper_function_is_inconclusive(self):
+        r = self._check(
+            "void log_input(char *s) {\n"
+            "    copy_string(buf, s);\n"
+            "}\n",
+        )
+        assert r.verdict == "inconclusive"
+        assert "transitive" in r.evidence
+
+    def test_leaf_function_still_supported(self):
+        # Two-direction guard: a function with no calls at all cannot
+        # reach a sink transitively — the absence receipt stands.
+        r = self._check(
+            "int log_input(int a) {\n"
+            "    if (a > 0) { return a + 1; }\n"
+            "    return 0;\n"
+            "}\n",
+        )
+        assert r.verdict == "supported"
+        assert r.grade == "absence"
+
+    def test_direct_sink_still_inconclusive(self):
+        r = self._check(
+            "void log_input(char *s) { strcpy(buf, s); }\n",
+        )
+        assert r.verdict == "inconclusive"
+        assert "DOES reach" in r.evidence

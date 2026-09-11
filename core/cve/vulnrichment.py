@@ -45,12 +45,22 @@ inject stubs without monkey-patching the network layer.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 from core.http import HttpClient, HttpError
 from core.json import JsonCache
 
 logger = logging.getLogger(__name__)
+
+# Strict ASCII CVE-id shape, checked BEFORE any use of the id.
+# ``str.isdigit()`` alone is not enough: Unicode digits (e.g. a
+# superscript "²") pass ``isdigit()`` but crash ``int()``, and
+# path-degenerate ids ("..", "a//b") reach the cache-key layer and
+# raise there — both violating the "malformed → None" contract.
+# ``re.ASCII`` pins ``\d`` to 0-9. CVE numbers are 4+ digits
+# (zero-padded below 1000), matching the official id format.
+_CVE_ID_RE = re.compile(r"\ACVE-\d{4}-\d{4,}\Z", re.ASCII)
 
 
 # ``HEAD`` resolves to the repo's default branch at request time
@@ -140,6 +150,10 @@ class VulnrichmentClient:
         if not cve_id:
             return None
         key = cve_id.upper()
+        # Validate before the memo/cache/URL layers see the id — a
+        # degenerate id must return None, never raise out of them.
+        if _CVE_ID_RE.fullmatch(key) is None:
+            return None
         if key in self._memo:
             return self._memo[key]
 

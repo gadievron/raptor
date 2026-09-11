@@ -23,7 +23,11 @@ class FakeCrashContext:
     signal: int = 11
     function_name: Optional[str] = "vuln_func"
     stack_trace: str = "STACK_TRACE_MARKER_abc123"
-    registers: str = "RAX=0xdeadbeef RBX=0x41414141"
+    # dict[str, str], matching the real CrashContext contract
+    # (registers parsed from the debugger, not a pre-rendered string).
+    registers: dict = field(default_factory=lambda: {
+        "rax": "0xdeadbeef", "rbx": "0x41414141",
+    })
     binary_info: dict = field(default_factory=lambda: {"aslr_enabled": True})
     size: int = 256
 
@@ -371,5 +375,54 @@ class TestExtractCodeFromResponse:
         response = "```\nint main(void) { return 1; }\n```"
         assert self._extract(response) == "int main(void) { return 1; }"
 
+    def test_extracts_cpp_family_fences(self):
+        # LLMs label C-family exploit code with several fence tags;
+        # all of them must extract (the validator compiles as C++
+        # anyway), else the paid refinement turn is discarded.
+        for tag in ("cpp", "c++", "C", "CPP"):
+            response = f"Fix:\n```{tag}\nint main() {{ return 0; }}\n```\n"
+            assert self._extract(response) == "int main() { return 0; }", tag
+
     def test_returns_none_without_code_block(self):
         assert self._extract("no code here, sorry") is None
+
+    def test_python_fence_not_extracted_as_c(self):
+        response = "```python\nprint('hi')\n```"
+        assert self._extract(response) is None
+
+
+class TestRegisterDictRendering:
+    """``CrashContext.registers`` is a dict[str, str]; the prompt
+    builder must render it (one ``name value`` per line), never hand
+    the dict itself to ``UntrustedBlock`` — that raised ``TypeError``
+    inside the envelope renderer and killed the analysis loop on the
+    first crash with parsed registers."""
+
+    def test_dict_registers_render_into_user_message(self):
+        from packages.autonomous.dialogue import MultiTurnAnalyser
+        analyser = MultiTurnAnalyser(llm_client=MagicMock())
+        ctx = FakeCrashContext(registers={"rax": "0x0", "rip": "0x41414141"})
+        bundle = analyser._build_initial_crash_prompt(ctx)
+        user = next(m.content for m in bundle.messages if m.role == "user")
+        assert "rax 0x0" in user
+        assert "rip 0x41414141" in user
+
+    def test_analyse_crash_deeply_survives_dict_registers(self):
+        from packages.autonomous.dialogue import MultiTurnAnalyser
+        mock_llm = MagicMock()
+        mock_response = MagicMock()
+        mock_response.content = "Buffer overflow. Exploitability: high."
+        mock_llm.generate.return_value = mock_response
+        analyser = MultiTurnAnalyser(llm_client=mock_llm)
+        result = analyser.analyse_crash_deeply(
+            FakeCrashContext(registers={"rax": "0x0"}), max_turns=1,
+        )
+        assert result["exploitability"] == "high"
+
+    def test_string_registers_still_accepted(self):
+        from packages.autonomous.dialogue import MultiTurnAnalyser
+        analyser = MultiTurnAnalyser(llm_client=MagicMock())
+        ctx = FakeCrashContext(registers="RAX=0xdead RBX=0xbeef")
+        bundle = analyser._build_initial_crash_prompt(ctx)
+        user = next(m.content for m in bundle.messages if m.role == "user")
+        assert "RAX=0xdead" in user

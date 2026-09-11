@@ -25,7 +25,6 @@ Output: JSON to stdout matching :func:`validate_path`'s shape.  Of interest:
   feasible=null   Z3 unavailable / unencodable
 """
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -61,6 +60,9 @@ def main() -> int:
                    help="Bitvector profile name (default: uint64)")
     p.add_argument("--guard", action="append", default=[],
                    help="Path condition / null-check (repeat)")
+    # Accept --source and --function for compatibility with sweep runner
+    p.add_argument("--source", default=None, help=argparse.SUPPRESS)
+    p.add_argument("--function", default=None, help=argparse.SUPPRESS)
     args = p.parse_args()
 
     try:

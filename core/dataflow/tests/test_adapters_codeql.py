@@ -265,6 +265,42 @@ def test_from_sarif_handles_missing_rule_id():
     assert finding.rule_id == "unknown"
 
 
+def test_from_sarif_handles_explicit_null_snippet_and_message():
+    """Some emitters write explicit JSON nulls; ``.get(k, default)``
+    returns None for those, so without the ``or`` fallbacks a null
+    snippet/message raised AttributeError — escaping consumers'
+    documented ``except ValueError`` skip-one-entry handling."""
+    sarif = _minimal_sarif()
+    sarif["message"] = None
+    for loc in sarif["codeFlows"][0]["threadFlows"][0]["locations"]:
+        loc["location"]["physicalLocation"]["region"]["snippet"] = None
+    finding = from_sarif_result(sarif)
+    assert finding is not None
+    assert finding.message == "(no message)"
+    assert finding.source.snippet == ""
+    assert finding.sink.snippet == ""
+
+
+def test_from_sarif_null_uri_raises_documented_valueerror():
+    """An explicit null URI must surface as the documented ValueError
+    (Step validation), never AttributeError/TypeError."""
+    sarif = _minimal_sarif()
+    loc = sarif["codeFlows"][0]["threadFlows"][0]["locations"][0]
+    loc["location"]["physicalLocation"]["artifactLocation"]["uri"] = None
+    with pytest.raises(ValueError, match="file_path"):
+        from_sarif_result(sarif)
+
+
+def test_from_sarif_null_start_line_raises_documented_valueerror():
+    """Explicit null startLine → line 0 → the documented Step
+    validation ValueError, not a TypeError from ``None < 1``."""
+    sarif = _minimal_sarif()
+    loc = sarif["codeFlows"][0]["threadFlows"][0]["locations"][0]
+    loc["location"]["physicalLocation"]["region"]["startLine"] = None
+    with pytest.raises(ValueError, match="line"):
+        from_sarif_result(sarif)
+
+
 def test_from_sarif_handles_empty_step_message_label():
     sarif = _sarif_result(
         _sarif_step("a.py", 1, 0, "src", ""),

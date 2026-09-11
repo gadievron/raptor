@@ -88,6 +88,68 @@ def test_fetch_or_negative_cache_circuit_break_is_debug(caplog):
     assert circuit_records[0].levelno == logging.DEBUG
 
 
+# ---------------------------------------------------------------------------
+# should_negative_cache — only authoritative not-founds are cacheable
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("exc,expected", [
+    (HttpError("404", status=404), True),     # authoritative not-found
+    (HttpError("410", status=410), True),     # gone (yanked)
+    (HttpError("500", status=500), False),    # server error — transient
+    (HttpError("503", status=503), False),    # outage — transient
+    (HttpError("429", status=429), False),    # rate-limited — transient
+    (HttpError("timeout", status=None), False),   # network — transient
+    (RuntimeError("boom"), False),                 # non-HTTP — transient
+    (HttpError("Circuit open", status=404, circuit_break=True), False),
+])
+def test_should_negative_cache_only_authoritative_not_found(exc, expected):
+    from packages.sca.registries._negative_cache import (
+        should_negative_cache,
+    )
+    assert should_negative_cache(exc) is expected
+
+
+def test_fetch_or_negative_cache_404_cached_transient_not(tmp_path):
+    """Both directions through the shared helper: a real 404 is
+    negative-cached (no re-fetch inside the TTL); a 5xx returns the
+    sentinel UNCACHED so the next call retries — one outage must not
+    read as 'package doesn't exist' for a whole dep list for 24h."""
+    from core.json import JsonCache
+    from packages.sca.registries._negative_cache import (
+        fetch_or_negative_cache,
+    )
+    cache = JsonCache(root=tmp_path)
+    calls = {"n": 0}
+
+    def _fetch_404():
+        calls["n"] += 1
+        raise HttpError("404", status=404)
+
+    assert fetch_or_negative_cache(
+        cache, "k404", 3600, _fetch_404, negative_value=[],
+    ) == []
+    assert fetch_or_negative_cache(
+        cache, "k404", 3600, _fetch_404, negative_value=[],
+    ) == []
+    assert calls["n"] == 1, "404 must be served from the negative entry"
+
+    outage = {"on": True}
+
+    def _fetch_5xx():
+        calls["n"] += 1
+        if outage["on"]:
+            raise HttpError("503", status=503)
+        return {"ok": True}
+
+    assert fetch_or_negative_cache(
+        cache, "k5xx", 3600, _fetch_5xx,
+    ) is None
+    outage["on"] = False
+    assert fetch_or_negative_cache(
+        cache, "k5xx", 3600, _fetch_5xx,
+    ) == {"ok": True}, "transient failure must not poison the entry"
+
+
 def test_configure_logging_debug_file(tmp_path):
     """_configure_logging with log_dir writes debug.log capturing DEBUG
     while the console handler stays at the requested level."""

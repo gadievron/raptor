@@ -43,6 +43,7 @@ system; trust must come from explicit operator intent).
 from __future__ import annotations
 
 import logging
+import re
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -125,6 +126,37 @@ _EXTRA_STRIP = frozenset({"\u2028", "\u2029"})
 # outside this namespace is third-party and may carry custom
 # extractors / queries.
 _CANONICAL_PACK_PREFIX = "codeql/"
+
+# Pack name after the canonical namespace: alnum start, then the
+# characters CodeQL pack names actually use. Deliberately excludes
+# ``/`` (a second path segment) and a leading ``.`` so shapes like
+# ``codeql/../evil-pack`` or ``codeql/.hidden`` can never pass as
+# canonical — a bare ``startswith`` prefix test accepted those.
+_CANONICAL_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _is_canonical_pack_ref(ref: str) -> bool:
+    """True iff ``ref`` is a well-formed ``codeql/<name>[@version][:path]``.
+
+    The version part (after ``@``) is not validated — it never names a
+    filesystem path — but the name must be a single sane path segment
+    with no traversal, and the optional suite path (after ``:``, the
+    codeql-config pack syntax) must stay inside the pack (relative, no
+    ``..`` segments).
+    """
+    if not ref.startswith(_CANONICAL_PACK_PREFIX):
+        return False
+    rest = ref[len(_CANONICAL_PACK_PREFIX):]
+    rest, _, suite_path = rest.partition(":")
+    name = rest.split("@", 1)[0]
+    if _CANONICAL_NAME_RE.fullmatch(name) is None or ".." in name:
+        return False
+    if suite_path and (
+        suite_path.startswith("/")
+        or ".." in suite_path.split("/")
+    ):
+        return False
+    return True
 
 
 def _safe(s: str) -> str:
@@ -234,7 +266,7 @@ def _scan_pack_file(path: Path) -> FileScan:
     else:
         dep_specs = []
     for n, v in dep_specs:
-        if not n.startswith(_CANONICAL_PACK_PREFIX):
+        if not _is_canonical_pack_ref(n):
             label = f"{n}: {v}" if v else n
             fs.findings.append(
                 Finding("non-canonical dep", _truncate(label, 120), True)
@@ -309,7 +341,7 @@ def _scan_codeql_config(path: Path) -> FileScan:
         elif isinstance(packs, list):
             flat = [str(r) for r in packs if isinstance(r, str)]
         for ref in flat:
-            if not ref.startswith(_CANONICAL_PACK_PREFIX):
+            if not _is_canonical_pack_ref(ref):
                 fs.findings.append(
                     Finding("non-canonical pack", _truncate(ref, 120), True)
                 )

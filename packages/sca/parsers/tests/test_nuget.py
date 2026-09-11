@@ -875,3 +875,38 @@ def test_cpm_disabled_returns_to_inline_only(tmp_path: Path):
     names = {d.name for d in deps}
     assert names == {"Y"}    # X dropped — CPM disabled, no inline
 
+
+
+def test_cpm_global_range_spec_classified(tmp_path: Path) -> None:
+    """A GlobalPackageReference carrying a bracket range must go through
+    the same spec classification as inline references — the default
+    EXACT pin recorded the raw range string as a pinned version."""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "Directory.Packages.props").write_text(
+        '<Project>\n'
+        '  <PropertyGroup>'
+        '<ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>'
+        '</PropertyGroup>\n'
+        '  <ItemGroup>'
+        '<GlobalPackageReference Include="RangePkg" Version="[1.0,2.0)"/>'
+        '<GlobalPackageReference Include="ExactPkg" Version="[13.0.1]"/>'
+        '</ItemGroup>\n'
+        '</Project>\n', encoding="utf-8")
+    proj = tmp_path / "src" / "App"
+    proj.mkdir(parents=True)
+    csproj = proj / "App.csproj"
+    csproj.write_text(
+        '<Project Sdk="Microsoft.NET.Sdk">\n'
+        '  <PropertyGroup>'
+        '<ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>'
+        '</PropertyGroup>\n'
+        '</Project>\n', encoding="utf-8")
+    deps = {d.name: d for d in parse_msbuild_project(csproj)}
+    rng = deps["RangePkg"]
+    assert rng.pin_style is PinStyle.RANGE
+    assert (rng.version_floor, rng.version_ceiling) == ("1.0", "2.0")
+    # Other direction: an exact single-value bracket stays EXACT with
+    # the bare version, exactly like the inline-reference path.
+    exact = deps["ExactPkg"]
+    assert exact.pin_style is PinStyle.EXACT
+    assert exact.version == "13.0.1"

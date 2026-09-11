@@ -1466,8 +1466,9 @@ class TestPrototypeDedup:
         assert "helper" in graph["worker"], \
             "prototype overwrote body version — call graph lost edges"
 
-    def test_without_dedup_calls_are_lost(self) -> None:
-        """Demonstrates the bug: without dedup, prototype's empty calls win."""
+    def test_without_dedup_calls_survive(self) -> None:
+        """Even without dedup, a later bodyless prototype must not wipe
+        the implementation's call edges — the definition wins."""
         funcs_body = [
             {"name": "leaf", "file": "a.c", "line": 1,
              "signature": "void leaf(void)", "body": "{ }",
@@ -1484,8 +1485,8 @@ class TestPrototypeDedup:
         ]
         combined_no_dedup = funcs_body + protos
         graph = prep._build_call_graph(combined_no_dedup)
-        assert graph["caller"] == [], \
-            "Expected empty calls (prototype wins via dict-last-wins)"
+        assert graph["caller"] == ["leaf"], \
+            "bodyless prototype wiped the implementation's call edges"
 
 
 # ------------------------------------------------------------------

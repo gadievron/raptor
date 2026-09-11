@@ -303,3 +303,66 @@ class TestMissingSnapshot:
             primary_verdicts_before_judge={},
         )
         assert n == 0
+
+
+class TestPanelTie:
+    """An exact tie among the recorded votes (primary + judges) means
+    the finalised verdict is a mechanical tie-break, not a panel
+    majority — scoring anyone against it would mint arbitrary
+    correct/incorrect events."""
+
+    def test_tie_records_nothing(self, scorecard):
+        """2-vs-2 panel: primary votes True, judges vote
+        False/False/True — no majority, so no events."""
+        results = {"f1": {
+            "rule_id": "py/sql-injection",
+            "judge": "disputed",
+            "is_exploitable": False,          # tie-broken final
+            "analysed_by": "claude-opus",
+            "reasoning": "primary reasoning",
+            "judge_analyses": [
+                {"model": "gpt-5", "is_exploitable": False},
+                {"model": "gemini", "is_exploitable": False},
+                {"model": "mistral", "is_exploitable": True},
+            ],
+        }}
+        n = record_judge_outcomes(
+            scorecard,
+            results_by_id=results,
+            primary_verdicts_before_judge={"f1": True},
+        )
+        assert n == 0
+        for model in ("claude-opus", "gpt-5", "gemini", "mistral"):
+            assert _stat(
+                scorecard, "agentic:py/sql-injection", model,
+                EventType.JUDGE_REVIEW,
+            ) == (0, 0)
+
+    def test_clear_majority_still_records(self, scorecard):
+        """3-vs-1 panel: every voter is scored against the majority."""
+        results = {"f1": {
+            "rule_id": "py/sql-injection",
+            "judge": "disputed",
+            "is_exploitable": False,          # majority verdict
+            "analysed_by": "claude-opus",
+            "reasoning": "primary reasoning",
+            "judge_analyses": [
+                {"model": "gpt-5", "is_exploitable": False},
+                {"model": "gemini", "is_exploitable": False},
+                {"model": "mistral", "is_exploitable": False},
+            ],
+        }}
+        n = record_judge_outcomes(
+            scorecard,
+            results_by_id=results,
+            primary_verdicts_before_judge={"f1": True},
+        )
+        assert n == 4
+        assert _stat(
+            scorecard, "agentic:py/sql-injection", "claude-opus",
+            EventType.JUDGE_REVIEW,
+        ) == (0, 1)
+        assert _stat(
+            scorecard, "agentic:py/sql-injection", "gpt-5",
+            EventType.JUDGE_REVIEW,
+        ) == (1, 0)

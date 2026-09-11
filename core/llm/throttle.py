@@ -262,17 +262,35 @@ class AdaptiveThrottle:
         ``_in_flight`` and wakes any waiters.  Because the check reads
         ``_effective`` fresh each time, a throttle-down mid-wait
         correctly delays new entrants.
+
+        The slot check runs BEFORE the event wait, and a failed check
+        clears the event under the lock.  ``Event.wait()`` on a set
+        event returns without suspending the coroutine, so the old
+        wait-then-check order busy-spun the event loop whenever a 429
+        halved ``_effective`` below ``_in_flight`` while the event was
+        set (nothing in that state ever cleared it).  Clearing here is
+        race-free: every ``set`` either runs under the same lock (the
+        async release below, ``_ensure_event``) or is marshalled onto
+        this loop via ``call_soon_threadsafe`` and therefore only runs
+        after this coroutine has parked in ``event.wait()`` — a wakeup
+        can be early (spurious re-check) but never lost.
         """
         self._maybe_restore()
         event = self._ensure_event()
         while True:
-            await event.wait()
             with self._lock:
                 if self._in_flight < self._effective:
                     self._in_flight += 1
                     if self._in_flight >= self._effective:
                         event.clear()
                     break
+                event.clear()
+            await event.wait()
+            # Re-run the ramp-up check on wake: with every consumer
+            # parked in ``event.wait()`` nobody else calls
+            # ``_maybe_restore``, so a post-cooldown doubling would
+            # otherwise wait for an unrelated release to be noticed.
+            self._maybe_restore()
         try:
             yield
         finally:
@@ -327,6 +345,13 @@ class AdaptiveThrottle:
             with self._condition:
                 self._in_flight -= 1
                 self._condition.notify()
+                # Mixed sync/async use is production (the audit
+                # orchestrator holds slots from worker threads while
+                # async callers wait on the event) — a sync release
+                # that only notifies the condition would leave parked
+                # ``acquire()`` coroutines asleep on a free slot.
+                if self._in_flight < self._effective:
+                    self._set_event_threadsafe()
 
     def to_dict(self) -> dict:
         self._maybe_restore()

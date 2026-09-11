@@ -16,15 +16,21 @@ class FakeFlow:
 class FakeServer:
     """Records taint queries; answers from a canned flow map."""
 
-    def __init__(self, flows=None, error=False):
+    def __init__(self, flows=None, error=False, degraded=False):
         self.flows = flows or {}
         self.error = error
+        self.degraded = degraded
         self.queries = []
 
-    def run_taint_query(self, source_method, sink_call, **kwargs):
+    def run_taint_query(self, source_method, sink_call, *,
+                        errors_out=None, **kwargs):
         self.queries.append((source_method, sink_call))
         if self.error:
             raise RuntimeError("joern down")
+        if self.degraded:
+            if errors_out is not None:
+                errors_out.append("server restarting")
+            return []
         return self.flows.get((source_method, sink_call), [])
 
 
@@ -105,6 +111,15 @@ class TestEnrichTraceWithJoern:
         assert trace["joern_verification"]["verified"] is False
         assert trace["joern_verification"]["joern_flow_count"] == 0
         assert trace["summary"]["confidence"] == "mechanical_refuted"
+
+    def test_degraded_query_not_booked_as_refutation(self):
+        # errors_out populated + no flows: ambiguous — the trace keeps
+        # its prior confidence and the verification records no verdict.
+        trace = _trace()
+        enrich_trace_with_joern(trace, FakeServer(degraded=True))
+        assert trace["joern_verification"]["verified"] is None
+        assert "degraded" in trace["joern_verification"]["skipped"]
+        assert trace["summary"]["confidence"] == "high"
 
     def test_explicit_names_override_extraction(self):
         trace = _trace()

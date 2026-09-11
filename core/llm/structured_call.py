@@ -93,6 +93,20 @@ TIMEOUT_KEYWORDS_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Rate-limit shapes AUTH_KEYWORDS_RE misses: the underscored provider
+# error type (``rate_limit_error`` — "rate limit" with a space never
+# matches it) and a 429 status. The 429 arm is boundary-anchored AND
+# context-anchored (status-context word, message-leading position, or
+# the canonical reason phrases) so unrelated numerics like stack-trace
+# "line 429, in foo" don't classify as a limit.
+RATE_LIMIT_KEYWORDS_RE = re.compile(
+    r"rate[_ ]limit(?:_error|ed)?\b"
+    r"|\b(?:http|status|code)\s*:?\s*429\b"
+    r"|^\s*429\b"
+    r"|\b429\s+(?:too many requests|resource_exhausted)\b",
+    re.IGNORECASE,
+)
+
 
 def is_auth_error_text(error_str: str) -> bool:
     """True when an error string indicates an auth/billing failure.
@@ -119,6 +133,42 @@ def is_content_filter_text(error_str: str) -> bool:
     return bool(BLOCKED_KEYWORDS_RE.search(error_str or ""))
 
 
+# Refusal-SPECIFIC vocabulary — deliberately narrower than
+# BLOCKED_KEYWORDS_RE: providers phrase model refusals with
+# "refusal"/"refused request", while transport blocks say
+# "blocked"/"denied" — and, critically, socket errors say "connection
+# refused": a bare "refus" match classified a transient endpoint
+# outage as a model refusal, which is non-retryable and excluded from
+# identical-retry re-queues. Phrase-anchored so only model-boundary
+# language matches.
+REFUSAL_TEXT_RE = re.compile(
+    r"\brefusal\b|refused request|model refused|stop_reason[=:]?\s*refusal",
+    re.IGNORECASE,
+)
+
+
+def is_content_filter_error(exc: BaseException) -> bool:
+    """Chain-walking form of :func:`is_content_filter_text`.
+
+    The client's all-models-failed wrapper re-raises ``from
+    last_error``; a wrapper whose own message does not quote its cause
+    hides the block from a plain ``str(exc)`` check. Every classifier
+    that labels blocked/refused failures must walk the chain — this is
+    the one shared implementation (bounded, cycle-safe).
+    """
+    from core.llm.client import _exception_chain
+    return any(is_content_filter_text(str(e)) for e in _exception_chain(exc))
+
+
+def is_refusal_error(exc: BaseException) -> bool:
+    """Chain-walking model-refusal check (see ``REFUSAL_TEXT_RE`` for
+    why this is narrower than the content-filter vocabulary)."""
+    from core.llm.client import _exception_chain
+    return any(
+        REFUSAL_TEXT_RE.search(str(e)) for e in _exception_chain(exc)
+    )
+
+
 def classify_error_text(error_str: str) -> str:
     """Classify an error string for structured reporting.
 
@@ -130,6 +180,11 @@ def classify_error_text(error_str: str) -> str:
     if BLOCKED_KEYWORDS_RE.search(text):
         return "blocked"
     if is_auth_error_text(text):
+        return "auth"
+    # Underscored/status rate-limit shapes join the same class as the
+    # spaced "rate limit" AUTH_KEYWORDS_RE already accepts — a limit
+    # is never evidence about response shape.
+    if RATE_LIMIT_KEYWORDS_RE.search(text):
         return "auth"
     if TIMEOUT_KEYWORDS_RE.search(text):
         return "timeout"
@@ -192,6 +247,7 @@ def unwrap_structured_response(
 __all__ = [
     "AUTH_KEYWORDS_RE",
     "BLOCKED_KEYWORDS_RE",
+    "RATE_LIMIT_KEYWORDS_RE",
     "TIMEOUT_KEYWORDS_RE",
     "StructuredCallResult",
     "classify_error_text",

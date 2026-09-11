@@ -249,3 +249,14 @@ class TestTargetShapeDataclass:
         # file_extensions has a default factory; constructible
         # without specifying it.
         assert shape.file_extensions == {}
+
+
+def test_scan_inventory_hoists_stat_import_out_of_loop():
+    # The per-file loop must not re-execute an import statement for
+    # every counted file on large trees.
+    import inspect
+
+    from packages.describe import target_shape as ts
+    src = inspect.getsource(ts._scan_inventory)
+    for_body = src.split("for f in files:", 1)[1]
+    assert "import stat" not in for_body

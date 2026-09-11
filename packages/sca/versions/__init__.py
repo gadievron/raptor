@@ -252,8 +252,22 @@ def _is_fork_tagged_at_fix(ecosystem: str, version: str, fixed: str) -> bool:
 def _canonical_ecosystem(eco: str) -> str:
     """Normalise ecosystem strings — OSV uses 'PyPI', 'npm', 'Maven', 'Go',
     'crates.io' / 'Cargo', 'RubyGems', 'NuGet', 'Packagist'.
+
+    Distro ecosystems carry release suffixes ('Debian:11',
+    'Alpine:v3.18', 'Ubuntu:22.04') — the release stream never changes
+    the version *semantics*, so the suffix is dropped for comparator
+    lookup when the full string has no alias of its own.
     """
-    return _ECOSYSTEM_ALIASES.get(eco.lower(), eco)
+    low = eco.lower()
+    hit = _ECOSYSTEM_ALIASES.get(low)
+    if hit is not None:
+        return hit
+    base = low.split(":", 1)[0]
+    if base != low:
+        hit = _ECOSYSTEM_ALIASES.get(base)
+        if hit is not None:
+            return hit
+    return eco
 
 
 _ECOSYSTEM_ALIASES = {
@@ -285,6 +299,15 @@ _ECOSYSTEM_ALIASES = {
     "debian": "Debian",
     "apt": "Debian",
     "deb": "Debian",
+    "alpine": "Alpine",
+    "apk": "Alpine",
+    "red hat": "Red Hat",
+    "redhat": "Red Hat",
+    "rpm": "Red Hat",
+    "github actions": "GitHub Actions",
+    "conancenter": "ConanCenter",
+    "conan": "ConanCenter",
+    "vcpkg": "vcpkg",
 }
 
 
@@ -297,13 +320,17 @@ def _register(ecosystem: str, fn) -> None:
 
 
 # Wire concrete comparators (avoids circular imports).
+from .alpine import compare as _alpine_compare
 from .composer import compare as _composer_compare
+from .conan import compare as _conan_compare
 from .debian import compare as _debian_compare
 from .gem import compare as _gem_compare
 from .maven import compare as _maven_compare
 from .nuget import compare as _nuget_compare
 from .pep440 import compare as _pep440_compare
+from .rpm import compare as _rpm_compare
 from .semver import compare as _semver_compare
+from .vcpkg import compare as _vcpkg_compare
 
 _register("npm", _semver_compare)
 _register("Cargo", _semver_compare)        # mostly semver
@@ -314,6 +341,13 @@ _register("RubyGems", _gem_compare)
 _register("NuGet", _nuget_compare)
 _register("Packagist", _composer_compare)
 _register("Debian", _debian_compare)
+_register("Alpine", _alpine_compare)
+_register("Red Hat", _rpm_compare)
+# GitHub Actions tags ("v1", "v1.2.3") follow semver with a leading
+# "v" — exactly what the semver comparator already tolerates.
+_register("GitHub Actions", _semver_compare)
+_register("ConanCenter", _conan_compare)
+_register("vcpkg", _vcpkg_compare)
 
 __all__ = [
     "VersionError", "affects_admissible_max", "compare", "in_range",

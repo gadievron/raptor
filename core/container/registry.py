@@ -90,6 +90,14 @@ _NOT_FOUND_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bmanifest unknown\b", re.IGNORECASE),
     re.compile(r"\bnot found\b", re.IGNORECASE),
     re.compile(r"repository .+ not found", re.IGNORECASE),
+    # Keep in step with failures.py's _MANIFEST_UNKNOWN_PATTERNS:
+    # this shape fell through to the transport default here while the
+    # sibling classifier called it permanent — one wasted retry per
+    # absent ref.
+    re.compile(
+        r"pull access denied for .+, repository does not exist",
+        re.IGNORECASE,
+    ),
 )
 
 _DOCKERHUB_ALIASES = frozenset(
@@ -332,7 +340,13 @@ def parse_inspect_payload(
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        plat = entry.get("Descriptor", {}).get("platform") or entry.get("platform")
+        # PRESENT-but-null (or non-dict) Descriptor must not raise —
+        # ``.get("Descriptor", {})`` only defaults on ABSENT keys, so
+        # {"Descriptor": null} crashed the never-raises probe.
+        descriptor = entry.get("Descriptor")
+        if not isinstance(descriptor, dict):
+            descriptor = {}
+        plat = descriptor.get("platform") or entry.get("platform")
         if not isinstance(plat, dict):
             continue
         os_name = plat.get("os")
@@ -345,11 +359,7 @@ def parse_inspect_payload(
         if platform_str == _UNKNOWN_PLATFORM:
             continue
         platforms.append(platform_str)
-        d_value = (
-            entry.get("Descriptor", {}).get("digest")
-            if isinstance(entry.get("Descriptor"), dict)
-            else None
-        )
+        d_value = descriptor.get("digest")
         if isinstance(d_value, str) and d_value.startswith("sha256:"):
             # First digest wins for a given platform — prefer earliest entry.
             per_arch_digests.setdefault(platform_str, d_value)
@@ -358,8 +368,16 @@ def parse_inspect_payload(
 
 
 def pin_digest_ref(image_ref: str, digest: str) -> str:
-    """``repo:tag`` + ``sha256:...`` → ``repo@sha256:...``."""
-    base = image_ref.rsplit(":", 1)[0] if ":" in image_ref else image_ref
+    """``repo:tag`` + ``sha256:...`` → ``repo@sha256:...``.
+
+    Only a colon AFTER the last slash is a tag separator — a bare
+    rsplit mangled tagless port-bearing refs
+    (``registry.example.com:5000/repo`` → ``registry.example.com@...``,
+    a different repository).
+    """
+    slash = image_ref.rfind("/")
+    colon = image_ref.rfind(":")
+    base = image_ref[:colon] if colon > slash else image_ref
     return f"{base}@{digest}"
 
 

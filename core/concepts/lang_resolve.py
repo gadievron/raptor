@@ -616,7 +616,20 @@ def resolve_identifiers(
             })
         return result
 
-    tails = {identifier_tail(n): n for n in identifiers}
+    # Candidates keyed by FULL identifier: two identifiers sharing a
+    # tail (json.loads / pickle.loads) must EACH end up resolved or in
+    # the unresolved report — a tail-keyed dict kept only one and the
+    # other silently vanished from the caller's accounting.
+    candidates: list[tuple[str, str]] = []
+    _seen_idents: set[str] = set()
+    for n in identifiers:
+        if n not in _seen_idents:
+            _seen_idents.add(n)
+            candidates.append((n, identifier_tail(n)))
+    tails_ordered: list[str] = list(dict.fromkeys(t for _, t in candidates))
+    idents_by_tail: dict[str, list[str]] = {}
+    for orig, tail in candidates:
+        idents_by_tail.setdefault(tail, []).append(orig)
 
     def _lang_for(path: Path) -> str | None:
         lang = language_for_path(path)
@@ -637,7 +650,7 @@ def resolve_identifiers(
             text = f.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        if any(tail in text for tail in tails):
+        if any(tail in text for tail in tails_ordered):
             contents[f] = (lang, text)
 
     matched: dict[str, list[StudyItem]] = {}
@@ -649,7 +662,7 @@ def resolve_identifiers(
             str(path.relative_to(root))
             if path.is_relative_to(root) else str(path)
         )
-        wanted_tails = [t for t in tails if t in content]
+        wanted_tails = [t for t in tails_ordered if t in content]
         if not wanted_tails:
             continue
         lines = content.splitlines()
@@ -670,23 +683,27 @@ def resolve_identifiers(
             )
             if tail_hit is None:
                 continue
-            orig = tails[tail_hit]
-            # Qualified questions (Foo.bar): require the match to live
-            # in a namespace whose tail chain is consistent when we can
-            # check it (class name from metadata).
-            qualifier = None
-            parts = re.split(r"\.|::", orig)
-            if len(parts) >= 2:
-                qualifier = parts[-2]
             meta = getattr(ci, "metadata", None)
             class_name = getattr(meta, "class_name", None) if meta else None
-            if qualifier and class_name and qualifier != class_name:
-                # e.g. question names json.loads; this is Foo.loads —
-                # a different contract.  Skip rather than guess.
-                continue
-            lang_seen.setdefault(orig, lang)
-            bucket = matched.setdefault(orig, [])
-            if len(bucket) >= _MAX_MATCHES_PER_IDENT:
+            # A tail may serve several full identifiers — resolve it
+            # for EVERY candidate that passes the qualifier check, so
+            # each identifier gets its own accounting.
+            matching_origs: list[str] = []
+            for orig in idents_by_tail[tail_hit]:
+                # Qualified questions (Foo.bar): require the match to
+                # live in a namespace whose tail chain is consistent
+                # when we can check it (class name from metadata).
+                qualifier = None
+                parts = re.split(r"\.|::", orig)
+                if len(parts) >= 2:
+                    qualifier = parts[-2]
+                if qualifier and class_name and qualifier != class_name:
+                    # e.g. question names json.loads; this is
+                    # Foo.loads — a different contract.  Skip rather
+                    # than guess.
+                    continue
+                matching_origs.append(orig)
+            if not matching_origs:
                 continue
 
             start = max(1, ci.line_start or 1)
@@ -703,21 +720,28 @@ def resolve_identifiers(
 
             kind = _KIND_MAP.get(ci.kind, "function")
             from .receipts import detect_stale_doc
-            item = StudyItem(
-                id=f"{lang}_{ci.kind}_{ci.name}_{rel}_{start}".replace("/", "_"),
-                kind=kind,
-                name=ci.name,
-                file=rel,
-                line=start,
-                definition=definition,
-                doc_comment=doc,
-                calls=_extract_calls(definition) if kind == "function" else [],
-                relevance_tier=0,
-                stale_doc=detect_stale_doc(doc, definition, ci.name, lang),
-            )
-            if class_name:
-                item.related_items = [class_name]
-            bucket.append(item)
+            calls = _extract_calls(definition) if kind == "function" else []
+            stale_doc = detect_stale_doc(doc, definition, ci.name, lang)
+            for orig in matching_origs:
+                lang_seen.setdefault(orig, lang)
+                bucket = matched.setdefault(orig, [])
+                if len(bucket) >= _MAX_MATCHES_PER_IDENT:
+                    continue
+                item = StudyItem(
+                    id=f"{lang}_{ci.kind}_{ci.name}_{rel}_{start}".replace("/", "_"),
+                    kind=kind,
+                    name=ci.name,
+                    file=rel,
+                    line=start,
+                    definition=definition,
+                    doc_comment=doc,
+                    calls=list(calls),
+                    relevance_tier=0,
+                    stale_doc=stale_doc,
+                )
+                if class_name:
+                    item.related_items = [class_name]
+                bucket.append(item)
 
     # Type + constant regex fallback for identifiers the extractors
     # missed (classes/structs are only method metadata in the
@@ -726,7 +750,7 @@ def resolve_identifiers(
         ("struct", _type_pattern),
         ("macro", _const_pattern),
     )
-    for orig, tail in ((v, k) for k, v in tails.items()):
+    for orig, tail in candidates:
         if orig in matched:
             continue
         for kind, pattern_fn in _FALLBACK_PASSES:
@@ -806,7 +830,7 @@ def resolve_identifiers(
         result.items.extend(bucket)
 
     # Unresolved: honest reasons, never guesses
-    for orig, tail in ((v, k) for k, v in tails.items()):
+    for orig, tail in candidates:
         if orig in matched:
             continue
         referenced = any(tail in c for _l, c in contents.values())

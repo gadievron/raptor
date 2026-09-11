@@ -62,3 +62,13 @@ def test_retry_eligibility_partition() -> None:
         assert is_retry_eligible(klass), klass
     for klass in permanent:
         assert not is_retry_eligible(klass), klass
+
+
+def test_timeout_class_is_retry_eligible() -> None:
+    """The build/run surfaces stamp reason_class='timeout' directly;
+    out of the vocabulary it silently classified permanent — the
+    opposite of what a wall-clock timeout means."""
+    assert is_retry_eligible("timeout") is True
+    # Permanent classes stay permanent.
+    assert is_retry_eligible("manifest_unknown") is False
+    assert is_retry_eligible("auth") is False

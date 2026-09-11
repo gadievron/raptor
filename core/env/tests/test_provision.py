@@ -365,3 +365,45 @@ def test_environment_teardown_releases_keepalive(tmp_path,
     env.teardown()
     assert str(owned) not in scratch_mod._keepalive_paths
     assert not owned.exists()
+
+
+def test_verify_plan_exception_tears_down_and_reraises(
+        tmp_path, monkeypatch) -> None:
+    """An exception ESCAPING verify_plan (not a failed verdict) must
+    still tear the instance down — pre-fix the launched container,
+    network, image and keepalive-pinned work dir all leaked, and the
+    replay caller swallowed the leak silently on every attempt."""
+    import pytest
+    from core.container.containers import LaunchResult
+
+    owned = tmp_path / "owned-work"
+    owned.mkdir()
+    monkeypatch.setattr(pv.tempfile, "mkdtemp",
+                        lambda prefix="": str(owned))
+
+    removed: list[str] = []
+    monkeypatch.setattr(pv, "remove_labeled_containers",
+                        lambda label, value: removed.append("containers"))
+    monkeypatch.setattr(pv, "remove_labeled_networks",
+                        lambda label, value: removed.append("networks"))
+    monkeypatch.setattr(pv, "remove_labeled_images",
+                        lambda label, value: removed.append("images"))
+    monkeypatch.setattr(
+        pv, "create_internal_network",
+        lambda name, labels=None, bridge_name=None: (True, ""))
+    monkeypatch.setattr(
+        pv, "launch_container",
+        lambda **kw: LaunchResult(
+            ok=True, container_id=_CID, container_port=80,
+            host_ip=_CONTAINER_IP, host_port=80))
+
+    def exploding_verify(*a: Any, **kw: Any):
+        raise TypeError("check_http() got an unexpected keyword argument")
+
+    monkeypatch.setattr(pv, "verify_plan", exploding_verify)
+
+    spec = _image_spec(verify_plan=[{"type": "http_check", "bogus": 1}])
+    with pytest.raises(TypeError):
+        pv.provision(spec)  # no workdir → provisioner-owned
+    assert set(removed) == {"containers", "networks", "images"}
+    assert not owned.exists()  # keepalive-pinned work dir released

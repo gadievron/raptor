@@ -47,7 +47,123 @@ def test_wedge_on_first_drain_recovers_via_retry(
     assert len(names) == 14           # every file rescued by the retry
     reasons = {e["reason"] for e in inv.get("excluded_files", [])}
     assert "worker_stalled" not in reasons
-    assert calls["n"] >= 2            # the retry pool drained for real
+    # Exactly one drain call: the main pool's (which wedged). The
+    # retry path waits per file — with its own window per file, not a
+    # shared _drain_futures window — so every rescued file above IS
+    # the proof the retry pool ran for real.
+    assert calls["n"] == 1
+
+
+def test_retry_gives_each_file_its_own_window(monkeypatch) -> None:
+    """One slow file in the retry batch must not starve the queued
+    siblings: the serial retry pool waits PER FILE, so only the file
+    that exhausts its own window fails and every sibling still runs."""
+    from concurrent.futures import Future
+
+    class _FakePool:
+        def __init__(self) -> None:
+            self.submitted: list[Path] = []
+
+        def submit(self, _fn, fp):
+            self.submitted.append(fp)
+            fut: Future = Future()
+            if "slow" not in fp.name:
+                fut.set_result({"path": fp.name, "items": []})
+            return fut  # slow file: never completes
+
+        def shutdown(self, wait=True, cancel_futures=False) -> None:
+            pass
+
+    pools: list[_FakePool] = []
+
+    def fake_make_pool(_initargs, *, max_workers=None, contexts=None):
+        pools.append(_FakePool())
+        return pools[-1]
+
+    monkeypatch.setattr(builder_mod, "_make_extractor_pool", fake_make_pool)
+    monkeypatch.setattr(builder_mod, "INVENTORY_STALL_TIMEOUT_S", 0.2)
+
+    files = [Path("a.py"), Path("slow.py"), Path("b.py"), Path("c.py")]
+    done: list[Path] = []
+    futures_map: dict = {}
+    failed = builder_mod._retry_stalled_files(
+        files, (), _on_retry_done=lambda f: done.append(futures_map[f]),
+        futures_map=futures_map,
+    )
+    # Only the slow file failed; every queued sibling was executed.
+    assert failed == [Path("slow.py")]
+    assert done == [Path("a.py"), Path("b.py"), Path("c.py")]
+    all_submitted = [fp for p in pools for fp in p.submitted]
+    assert all_submitted == files
+
+
+def test_retry_two_consecutive_stalls_declare_systemic_wedge(
+    monkeypatch,
+) -> None:
+    """Counter-direction to the per-file window: two INDEPENDENT fresh
+    pools stalling back-to-back means the wedge is environmental, and
+    the remainder must fail fast instead of burning one full window
+    per file."""
+    from concurrent.futures import Future
+
+    class _FakePool:
+        def __init__(self) -> None:
+            self.submitted: list[Path] = []
+
+        def submit(self, _fn, fp):
+            self.submitted.append(fp)
+            fut: Future = Future()
+            if "slow" not in fp.name:
+                fut.set_result({"path": fp.name, "items": []})
+            return fut
+
+        def shutdown(self, wait=True, cancel_futures=False) -> None:
+            pass
+
+    pools: list[_FakePool] = []
+
+    def fake_make_pool(_initargs, *, max_workers=None, contexts=None):
+        pools.append(_FakePool())
+        return pools[-1]
+
+    monkeypatch.setattr(builder_mod, "_make_extractor_pool", fake_make_pool)
+    monkeypatch.setattr(builder_mod, "INVENTORY_STALL_TIMEOUT_S", 0.2)
+
+    files = [Path("slow1.py"), Path("slow2.py"), Path("b.py"), Path("c.py")]
+    futures_map: dict = {}
+    failed = builder_mod._retry_stalled_files(
+        files, (), _on_retry_done=lambda f: None, futures_map=futures_map,
+    )
+    assert failed == files
+    # b/c were never submitted — no per-file window burned on them.
+    all_submitted = [fp for p in pools for fp in p.submitted]
+    assert all_submitted == [Path("slow1.py"), Path("slow2.py")]
+
+
+def test_retry_all_fast_files_recover(monkeypatch) -> None:
+    """Companion direction: with no slow file, nothing fails."""
+    from concurrent.futures import Future
+
+    class _FakePool:
+        def submit(self, _fn, fp):
+            fut: Future = Future()
+            fut.set_result({"path": fp.name, "items": []})
+            return fut
+
+        def shutdown(self, wait=True, cancel_futures=False) -> None:
+            pass
+
+    monkeypatch.setattr(
+        builder_mod, "_make_extractor_pool",
+        lambda _initargs, *, max_workers=None, contexts=None: _FakePool(),
+    )
+    monkeypatch.setattr(builder_mod, "INVENTORY_STALL_TIMEOUT_S", 0.2)
+    files = [Path("a.py"), Path("b.py")]
+    futures_map: dict = {}
+    failed = builder_mod._retry_stalled_files(
+        files, (), _on_retry_done=lambda f: None, futures_map=futures_map,
+    )
+    assert failed == []
 
 
 def test_double_wedge_excludes_with_honest_reason(
@@ -56,7 +172,13 @@ def test_double_wedge_excludes_with_honest_reason(
     def always_wedged(futures, timeout_s, on_done):
         return set(futures)
 
+    def never_done(futures, timeout=None, return_when=None):
+        # Simulate the retry's per-file window expiring with zero
+        # completions, without waiting out the real window.
+        return set(), set(futures)
+
     monkeypatch.setattr(builder_mod, "_drain_futures", always_wedged)
+    monkeypatch.setattr(builder_mod, "wait", never_done)
     src = _mk_tree(tmp_path)
     inv = build_inventory(str(src), output_dir=str(tmp_path / "out"))
     stalled = [e for e in inv.get("excluded_files", [])

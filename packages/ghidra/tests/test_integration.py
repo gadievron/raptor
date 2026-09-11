@@ -10,13 +10,10 @@ the headless subprocess and test the orchestration layer.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 
 # ---------------------------------------------------------------------------
@@ -108,8 +105,6 @@ def gpr_project(tmp_path):
 
 class TestGhidraMapRouting:
     def test_is_ghidra_project_detection(self, gpr_project):
-        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "libexec"))
-
         from packages.ghidra.detect import is_ghidra_project
         assert is_ghidra_project(gpr_project) is True
 
@@ -197,3 +192,53 @@ class TestBridgeOrchestration:
         re_db = json.loads((out_dir / "re-database.json").read_text())
         assert re_db["source_tool"] == "ghidra"
         assert len(re_db["functions"]) == 2
+
+
+class TestEnrichMetadataBinaryPath:
+    """The project-metadata binary path is a free string inside the
+    (attacker-controlled) project. A RELATIVE value is relative to the
+    project directory — resolving it against the process CWD both
+    breaks the bundled-sibling feature and probes the CWD for an
+    attacker-chosen name."""
+
+    def _enrich(self, gpr, metadata_path, monkeypatch, tmp_path):
+        from packages.ghidra.bridge import GhidraBridge
+        from packages.ghidra.model import REDatabase
+
+        bridge = GhidraBridge(gpr)
+        db = REDatabase(source_tool="ghidra", binary_path=metadata_path)
+        monkeypatch.setattr(
+            bridge, "import_project", lambda out: db, raising=True)
+        seen = []
+
+        def fake_r2(bin_path, out):
+            seen.append(Path(bin_path))
+            return None
+
+        monkeypatch.setattr(bridge, "_run_r2", fake_r2, raising=True)
+        bridge.import_and_enrich(tmp_path / "out")
+        return seen
+
+    def test_relative_path_anchors_at_project_dir(
+            self, gpr_project, monkeypatch, tmp_path):
+        bundled = gpr_project.parent / "firmware.bin"
+        bundled.write_bytes(b"\x7fELF")
+        seen = self._enrich(gpr_project, "firmware.bin",
+                            monkeypatch, tmp_path)
+        assert seen == [bundled]
+
+    def test_relative_escape_is_ignored(
+            self, gpr_project, monkeypatch, tmp_path):
+        outside = gpr_project.parent.parent / "escape.bin"
+        outside.write_bytes(b"\x7fELF")
+        seen = self._enrich(gpr_project, "../escape.bin",
+                            monkeypatch, tmp_path)
+        assert seen == []
+
+    def test_absolute_outside_path_is_ignored(
+            self, gpr_project, monkeypatch, tmp_path):
+        outside = gpr_project.parent.parent / "abs_elsewhere.bin"
+        outside.write_bytes(b"\x7fELF")
+        seen = self._enrich(gpr_project, str(outside),
+                            monkeypatch, tmp_path)
+        assert seen == []

@@ -56,7 +56,15 @@ _REFUSAL_PATTERNS: tuple[re.Pattern[str], ...] = (
         re.IGNORECASE,
     ),
     re.compile(r"\bI\s+(must|have\s+to)\s+decline\b", re.IGNORECASE),
-    re.compile(r"\b(unable|not\s+able)\s+to\s+(help|assist|provide|comply)\b", re.IGNORECASE),
+    # First-person subject required: build narration routinely says a
+    # REGISTRY or SERVER was "unable to provide" something — that's a
+    # transport finding, not an assistant refusal, and logging it as one
+    # rewrites genuine give_up reasons to refusal_no_recovery.
+    re.compile(
+        r"\bI(?:'m|\s+am|\s+was|\s+will\s+be)?\s+"
+        r"(?:unable|not\s+able)\s+to\s+(help|assist|provide|comply)\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\bI\s+(shouldn'?t|should\s+not)\s+(help|do|assist)\b", re.IGNORECASE),
     re.compile(
         r"\b(against|violates?)\s+(my|the|Anthropic[']?s?)\s+"
@@ -80,7 +88,13 @@ _REFUSAL_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"(?:cannot|can'?t|won'?t|unable|refuse|refus|decline|must\s+not|shouldn'?t)\b",
         re.IGNORECASE,
     ),
-    re.compile(r"\brefus(?:e|ing|ed)\s+to\s+(help|assist|do|provide)\b", re.IGNORECASE),
+    # Same first-person scoping: "Docker Hub refused to provide the
+    # image" is registry narration, not the assistant refusing.
+    re.compile(
+        r"\bI(?:'m|\s+am|\s+must|\s+have\s+to)?\s+"
+        r"refus(?:e|ing|ed)\s+to\s+(help|assist|do|provide)\b",
+        re.IGNORECASE,
+    ),
     # claude-agent-sdk's bundled `claude` CLI wraps AUP-class refusals in an
     # "API Error" prefix. The wrapper text uses "unable to respond" (not
     # "unable to help|assist") and "violate our Usage Policy" (not "violate

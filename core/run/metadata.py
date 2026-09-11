@@ -71,6 +71,18 @@ STATUS_INTERRUPTED = "interrupted"
 # in 'running' state until the session terminates, often hours).
 _ABANDON_FRESHNESS_S = 30.0
 
+# Run-dir activity grace for the same-session abandon sweep. A
+# stub-driven run's recorded ``tool_pid`` is the lifecycle stub's
+# transient shell — dead seconds after start even for a healthy run —
+# so a dead worker alone must not prove abandonment. Any write inside
+# the run dir within this window (journal appends, tool output, the
+# coverage hook's .reads-manifest) reads as a live run. One hour is
+# generous headroom over the longest quiet stretch a live analysis
+# shows between run-dir writes (a single long LLM call); the cost of
+# the width is only a DELAYED relabel of a real Esc-then-retry abandon
+# — a later sweep (or the dead-session branch) still catches it.
+_ABANDON_ACTIVITY_GRACE_S = 3600.0
+
 # Known command prefixes for inferring command type from directory names.
 # Includes both legacy prefixes (raptor_, autonomous, exploitability-validation)
 # and project-mode prefixes (agentic, validate, understand, fuzz, web).
@@ -288,6 +300,10 @@ def _pid_alive(pid: int) -> bool:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
+    except OverflowError:
+        # A pid beyond the platform's pid_t (plantable metadata int)
+        # cannot be a live process; OverflowError is not an OSError.
+        return False
     except PermissionError:
         return True  # alive but owned by another user
 
@@ -303,6 +319,32 @@ def _pid_alive(pid: int) -> bool:
     except OSError:
         return True
     return "claude" in comm
+
+
+def _run_recently_active(run_dir: Path) -> bool:
+    """Run-dir activity heartbeat for the same-session abandon sweep.
+
+    True when the run dir (or anything inside it, bounded scan) was
+    modified within :data:`_ABANDON_ACTIVITY_GRACE_S`. This is the
+    liveness signal that survives the lifecycle stub's transient shell:
+    ``tool_pid`` is dead seconds after a healthy stub-driven start, so
+    pre-fix a second same-command run in the same session false-failed
+    a live paid first run — and the terminal-status guard then refused
+    its real completion. Scan errors read as active (fail toward
+    keeping: a wrongly-kept abandon is relabelled by a later sweep; a
+    wrongly-failed live run misfiles paid results).
+    """
+    import time
+
+    from core.run.tmp_reaper import _recent_activity
+    now = time.time()
+    try:
+        # The top-level dir mtime alone catches file creation/removal.
+        if now - Path(run_dir).stat().st_mtime < _ABANDON_ACTIVITY_GRACE_S:
+            return True
+    except OSError:
+        return True
+    return _recent_activity(Path(run_dir), now, _ABANDON_ACTIVITY_GRACE_S)
 
 
 def _tool_pid_alive(pid: Any) -> bool:
@@ -326,6 +368,8 @@ def _tool_pid_alive(pid: Any) -> bool:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
+    except OverflowError:
+        return False  # beyond pid_t — see _pid_alive
     except PermissionError:
         return True  # alive but owned by another user
     return True
@@ -410,6 +454,8 @@ def _gate_session_alive(pid: int) -> bool:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
+    except OverflowError:
+        return False  # beyond pid_t — see _pid_alive
     except PermissionError:
         signallable = False
     proc_comm = Path(f"/proc/{pid}/comm")
@@ -609,6 +655,15 @@ def start_run(output_dir: Path, command: str,
                 project_dir, output_dir, command, session_pid,
                 wait=wait_for_project))
         safe_run_mkdir(output_dir)
+
+        # The whole prior-metadata read → pin resolution → save below
+        # is one read-modify-write on .raptor-run.json: take the same
+        # cross-process lock every other RMW on this file takes, so a
+        # re-entrant start racing a concurrent locked terminal
+        # transition (a finaliser's _update_status) can't clobber it
+        # wholesale. Lock ordering: project op lock (above) before the
+        # metadata lock — no path takes them in the other order.
+        _gate.enter_context(_metadata_lock(output_dir / RUN_METADATA_FILE))
 
         # Seal the provenance manifest NOW, before any analysis runs. The
         # source-control snapshot in particular must be taken here — the tree
@@ -888,6 +943,10 @@ def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> Non
             meta.get("command") == command
             and run_session == session_pid
             and not _tool_pid_alive(meta.get("tool_pid"))
+            # Stub-driven runs record a transient shell as tool_pid, so
+            # a dead worker alone is not abandonment evidence — the run
+            # dir must ALSO be write-quiet past the activity grace.
+            and not _run_recently_active(d)
         )
         session_dead = (
             isinstance(run_session, int)
@@ -917,7 +976,12 @@ def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> Non
                 if same_session_retry
                 else "abandoned — owning session terminated"
             )
-            fail_run(d, reason, record_timing=False)
+            # ``abandon_sweep`` marks this as a heuristic verdict: if
+            # the sweep was wrong (the run was in fact live), its real
+            # finaliser may override the failed status — see the
+            # recovery clause in ``_update_status``.
+            fail_run(d, reason, extra={"abandon_sweep": True},
+                     record_timing=False)
 
 
 def _setup_checklist_symlink(run_dir: Path) -> None:
@@ -1598,6 +1662,22 @@ def fail_run(output_dir: Path, error: str | None = None,
     hooks) simply make no claim.
     """
     ensure_run_command(output_dir, expected_command)
+    # Re-validate the current status BEFORE any side effect: a sweep's
+    # fail_run racing a real completion must not re-run the sandbox
+    # summary/triage finalisers against an already-terminal run (the
+    # locked ``_update_status`` would refuse the flip anyway, but by
+    # then the finalisers had already touched the run dir). Best-effort
+    # pre-check — _update_status re-validates under the metadata lock.
+    _meta_now = load_json(Path(output_dir) / RUN_METADATA_FILE)
+    if (isinstance(_meta_now, dict)
+            and _meta_now.get("status") in _TERMINAL_STATUSES
+            and _meta_now.get("status") != STATUS_FAILED):
+        logger.warning(
+            "fail_run: %s is already %r — refusing without side effects "
+            "(probable sweep racing the run's own finaliser)",
+            output_dir, _meta_now.get("status"),
+        )
+        return
     extra = extra or {}
     if error:
         extra["error"] = error
@@ -2136,13 +2216,53 @@ def _update_status(output_dir: Path, status: str,
             raise ValueError(msg)  # noqa: TRY004
         current = metadata.get("status")
         if current in _TERMINAL_STATUSES and current != status:
-            logger.warning(
-                "Refusing to overwrite terminal status %r → %r in %s "
-                "(probable double-finalisation; investigate caller)",
-                current, status, output_dir,
-            )
-            return
+            # Recovery clause: a ``failed`` stamped by an abandon sweep
+            # (``extra.abandon_sweep``) is a heuristic verdict, not a
+            # real terminal transition. If the sweep was wrong (the run
+            # was live), its real finaliser must not be refused — pre-
+            # fix a wrongly-abandoned paid run could never record its
+            # actual completion. The override clears the sweep's
+            # markers so the true outcome isn't contaminated.
+            swept_extra = metadata.get("extra")
+            if (current == STATUS_FAILED
+                    and isinstance(swept_extra, dict)
+                    and swept_extra.get("abandon_sweep")):
+                logger.warning(
+                    "Overriding sweep-stamped abandon %r → %r in %s "
+                    "(the abandon sweep misjudged a live run)",
+                    current, status, output_dir,
+                )
+                swept_extra.pop("abandon_sweep", None)
+                # The error field was set by the same sweep that set
+                # the flag — drop it so the true outcome isn't
+                # contaminated by the wrong abandon reason.
+                swept_extra.pop("error", None)
+                metadata["extra"] = swept_extra
+            else:
+                logger.warning(
+                    "Refusing to overwrite terminal status %r → %r in %s "
+                    "(probable double-finalisation; investigate caller)",
+                    current, status, output_dir,
+                )
+                return
         metadata["status"] = status
+
+        # A GENUINE failure supersedes a prior sweep-stamped abandon:
+        # consume the marker when a FAILED write arrives whose incoming
+        # extra does not itself carry it. Without this, the extras
+        # merge below preserved abandon_sweep alongside the real error,
+        # and a later complete_run took the recovery branch — flipping
+        # a genuinely failed run to completed and deleting the real
+        # error (the exact laundering the terminal guard exists to
+        # prevent).
+        if status == STATUS_FAILED and not (extra or {}).get("abandon_sweep"):
+            _prior_extra = metadata.get("extra")
+            if (isinstance(_prior_extra, dict)
+                    and _prior_extra.pop("abandon_sweep", None)):
+                logger.info(
+                    "abandon_sweep marker consumed by a real failure in "
+                    "%s — the failed status is now terminal", output_dir,
+                )
 
         if record_timing:
             now = datetime.now(timezone.utc)

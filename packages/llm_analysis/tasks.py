@@ -14,6 +14,13 @@ from core.security.prompt_defense_profiles import CONSERVATIVE
 from core.security.prompt_envelope import ModelDefenseProfile, system_with_priming
 
 from .dispatch import DispatchTask
+
+# Canonical SCA-dispatch predicates live in finding_kinds (shared with
+# the prompt builders so the copies can't drift). The local underscore
+# names remain this module's documented seam — tests and in-module
+# call sites import them from here.
+from .finding_kinds import is_sca_finding as _is_sca_finding
+from .finding_kinds import is_sca_vuln_finding as _is_sca_vuln_finding
 from .prompts import (
     ANALYSIS_SYSTEM_PROMPT,
     ANALYSIS_TASK_INSTRUCTIONS,
@@ -132,52 +139,6 @@ def _budget_for_task(task, model) -> int:
     return context_budget_for_model(name or "fallback", sys_tokens)
 
 
-def _is_sca_finding(f: dict) -> bool:
-    """Canonical "is this an SCA finding?" check.
-
-    Recognises three identification methods because the SCA pipeline
-    has tagged findings differently over time:
-      * ``source_type == "dependency"`` (the post-2026 canonical
-        marker — set by ``packages/sca/findings.py``)
-      * ``vuln_type`` starting with ``sca:`` (set on the
-        ``JoinedFinding`` wrapper at serialisation)
-      * ``rule_id`` starting with ``sca:`` (older code path, still
-        emitted by some consumers that bypass the joiner)
-
-    Broad-by-design: ANY SCA-shaped finding (vulnerable-dependency,
-    hygiene, license, supply-chain) matches. Dispatch sites that
-    only act on vuln-dep findings should use
-    ``_is_sca_vuln_finding`` instead — that's the narrower check.
-    """
-    return (
-        f.get("source_type") == "dependency"
-        or f.get("vuln_type", "").startswith("sca:")
-        or f.get("rule_id", "").startswith("sca:")
-    )
-
-
-def _is_sca_vuln_finding(f: dict) -> bool:
-    """Narrower companion to ``_is_sca_finding``: only ``sca:
-    vulnerable_dependency`` findings, NOT hygiene / license /
-    supply-chain.
-
-    ExploitTask + PatchTask both want this narrower predicate —
-    you don't generate an exploit-PoC or a manifest patch for
-    "lockfile_missing" or "low_bus_factor". Hygiene findings are
-    SCA-shaped but not actionable in those task families.
-
-    Recognises the vuln-specific subtype via:
-      * ``vuln_type`` starting with ``sca:vulnerable_dependency``
-      * ``rule_id`` starting with ``sca:vulnerable_dependency``
-
-    Does NOT key on ``source_type=="dependency"`` alone — that
-    field is set on every SCA finding (hygiene included) and
-    wouldn't discriminate.
-    """
-    return (
-        f.get("vuln_type", "").startswith("sca:vulnerable_dependency")
-        or f.get("rule_id", "").startswith("sca:vulnerable_dependency")
-    )
 
 
 def _sca_exploit_priority(f: dict) -> float:
@@ -1202,6 +1163,19 @@ class RetryTask(AnalysisTask):
                             merged[k] = v
                         elif k.startswith("_"):
                             merged[k] = v  # pipeline state — prior wins.
+                # Re-adjudicate self-contradiction against the FRESH
+                # response. The graft above copies the prior record's
+                # self_contradictory / contradictions for audit
+                # continuity, but the flag must describe the merged
+                # result: a retry that came back internally consistent
+                # and decisive would otherwise stay flagged forever
+                # (inflating the "Inconsistent (review needed)"
+                # bucket), while a retry that is STILL contradictory
+                # gets its contradiction list refreshed.
+                from packages.llm_analysis.validation import (
+                    check_self_contradiction,
+                )
+                check_self_contradiction({fid: merged})
                 prior_results[fid] = merged
             # setdefault before sub-key mutation. Pre-fix
             # `prior_results[fid]["retried"] = True` raised

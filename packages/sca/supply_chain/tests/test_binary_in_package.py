@@ -111,14 +111,33 @@ def test_test_fixture_binary_suppressed(tmp_path: Path) -> None:
     assert hits == []
 
 
-def test_vendored_dep_binary_suppressed(tmp_path: Path) -> None:
+def test_vendored_shared_library_suppressed(tmp_path: Path) -> None:
+    """A conventional shared library in a vendored tree
+    (``vendor/**/*.so`` with real ELF content) is the legitimate
+    inhabitant the allowlist entry exists for."""
+    m = _manifest(tmp_path)
+    (tmp_path / "vendor" / "foo").mkdir(parents=True)
+    (tmp_path / "vendor" / "foo" / "libnative.so").write_bytes(
+        b"\x7fELF" + b"\x00",
+    )
+    hits = scan_target(tmp_path, [m], [_dep(m)])
+    assert hits == []
+
+
+def test_vendored_bare_elf_executable_flagged(tmp_path: Path) -> None:
+    """A bare extensionless ELF executable planted in ``vendor/`` is
+    the drop-a-payload-in-the-vendored-tree shape.  The walk
+    deliberately recurses into ``vendor/`` for exactly this case, so
+    the allowlist must not hand it back a blanket exemption — only
+    extension-scoped shared-object slots ride."""
     m = _manifest(tmp_path)
     (tmp_path / "vendor" / "foo").mkdir(parents=True)
     (tmp_path / "vendor" / "foo" / "agent").write_bytes(
         b"\x7fELF" + b"\x00",
     )
     hits = scan_target(tmp_path, [m], [_dep(m)])
-    assert hits == []
+    assert len(hits) == 1
+    assert hits[0].relpath == "vendor/foo/agent"
 
 
 # ---------------------------------------------------------------------------
@@ -255,3 +274,40 @@ def test_excluded_dir_skipped(tmp_path: Path) -> None:
 def test_empty_target_dir_no_findings(tmp_path: Path) -> None:
     m = _manifest(tmp_path)
     assert scan_target(tmp_path, [m], [_dep(m)]) == []
+
+
+# ---------------------------------------------------------------------------
+# Per-platform package suppression keys on the manifest's OWN name
+# ---------------------------------------------------------------------------
+
+def test_per_platform_first_dependency_does_not_suppress(
+    tmp_path: Path,
+) -> None:
+    """A package whose FIRST DECLARED DEPENDENCY is a per-platform
+    binary package must not inherit that package's suppression —
+    dependency ordering is controlled by the scanned repo, so keying
+    on it would let ``\"@esbuild/linux-x64\"`` listed first silence
+    every binary under the manifest."""
+    m = _manifest(tmp_path, name="innocent-pkg")
+    deps = [
+        _dep(m, name="@esbuild/linux-x64", version="0.19.0"),
+        _dep(m, name="left-pad", version="1.3.0"),
+    ]
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "setup").write_bytes(b"\x7fELF" + b"\x00" * 16)
+    hits = scan_target(tmp_path, [m], deps)
+    assert len(hits) == 1
+    assert hits[0].relpath == "tools/setup"
+
+
+def test_manifest_own_per_platform_name_still_suppresses(
+    tmp_path: Path,
+) -> None:
+    """The genuine per-platform layout: the manifest's OWN
+    ``data.name`` is ``@esbuild/linux-x64`` and the package exists
+    entirely to ship the binary — suppression stands."""
+    m = _manifest(tmp_path, name="@esbuild/linux-x64")
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "esbuild").write_bytes(b"\x7fELF" + b"\x00" * 16)
+    hits = scan_target(tmp_path, [m], [_dep(m, name="@esbuild/linux-x64")])
+    assert hits == []

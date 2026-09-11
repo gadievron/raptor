@@ -251,31 +251,62 @@ def _parse_berry(text: str, path: Path) -> list[Dependency]:
 # ---------------------------------------------------------------------------
 
 def _name_from_descriptor(descriptor: str) -> str | None:
-    """Extract the package name from a yarn descriptor.
+    """Extract the INSTALLED package name from a yarn descriptor.
 
     Examples (input → output):
       ``lodash@^4.17.21``                 → ``lodash``
       ``"@types/node@^20.10.0"``          → ``@types/node``
       ``lodash@npm:^4.17.21``             → ``lodash``        (Berry)
       ``@scope/pkg@workspace:./pkgs/x``   → ``@scope/pkg``    (Berry)
+      ``myalias@npm:realpkg@^1.0``        → ``realpkg``       (alias)
+      ``myalias@npm:@scope/real@^1.0``    → ``@scope/real``   (alias)
+
+    Alias descriptors (``<alias>@npm:<real-pkg>@<range>``) resolve to
+    the REAL package: that's what yarn installs, so that's what OSV
+    must be queried for — recording the alias name hid the installed
+    package's advisories entirely.
     """
     s = descriptor.strip().strip('"')
     if not s:
         return None
+    name, spec = _split_name_spec(s)
+    if name is None:
+        return None
+    if spec is not None and spec.startswith("npm:"):
+        target = spec[len("npm:"):]
+        # ``npm:<range>`` (plain Berry protocol) vs ``npm:<pkg>[@range]``
+        # (alias) — a package name starts with a letter/digit/@/_,
+        # never a range operator or bare digit-version.
+        real, _real_spec = _split_name_spec(target)
+        if real and _NPM_NAMEISH_RE.match(real):
+            return real
+    return name
+
+
+# A plausible npm package name (plain or scoped). Range strings
+# (``^1.2``, ``>=2``, ``1.2.3``) fail this — that's the alias/protocol
+# discriminator above.
+_NPM_NAMEISH_RE = re.compile(
+    r"^(?:@[A-Za-z0-9][\w.\-]*/)?[A-Za-z_][\w.\-]*$"
+)
+
+
+def _split_name_spec(s: str) -> tuple[str | None, str | None]:
+    """Split ``name[@spec]`` where a scoped name keeps its leading
+    ``@``. Returns ``(name, spec_or_None)``; ``(None, None)`` for a
+    scope with no slash."""
     if s.startswith("@"):
-        # Scoped: skip the leading '@' so the first split occurs after
-        # the scope's '/'.
         slash = s.find("/")
         if slash == -1:
-            return None
+            return None, None
         sep = s.find("@", slash)
         if sep == -1:
-            return s   # no version qualifier (rare)
-        return s[:sep]
+            return s, None   # no version qualifier (rare)
+        return s[:sep], s[sep + 1:]
     sep = s.find("@")
     if sep == -1:
-        return s
-    return s[:sep]
+        return s, None
+    return s[:sep], s[sep + 1:]
 
 
 def _pin_from_resolved(resolved: str, version: str | None) -> PinStyle:

@@ -842,3 +842,66 @@ def test_dispatch_signature_matches_HuntDispatchFn_protocol():
         f"signature drift — first 3 positional must be "
         f"(model, pattern, repo_path), got {positional[:3]}"
     )
+
+
+def test_repo_looks_c_cpp_noise_files_do_not_exhaust_budget(tmp_path):
+    """Hundreds of non-C files ahead of the first C source (docs
+    trees, vendored JS) must not consume the file budget before the
+    walk reaches src/ — that refused valid C targets."""
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    for i in range(250):
+        (docs / f"page{i:03d}.md").write_text("prose\n")
+    (tmp_path / "src" / "core").mkdir(parents=True)
+    (tmp_path / "src" / "core" / "main.c").write_text("int main(){}\n")
+    assert mod.repo_looks_c_cpp(str(tmp_path), max_files_to_check=200) is False
+    # The C file at position >200 in a flat count IS found once noise
+    # dirs are prunable — hidden/vendor dirs never count at all.
+    hidden = tmp_path / ".git" / "objects"
+    hidden.mkdir(parents=True)
+    for i in range(500):
+        (hidden / f"obj{i:03d}").write_text("blob\n")
+    node = tmp_path / "node_modules" / "pkg"
+    node.mkdir(parents=True)
+    for i in range(500):
+        (node / f"m{i:03d}.js").write_text("js\n")
+    assert mod.repo_looks_c_cpp(str(tmp_path), max_files_to_check=1000) is True
+
+
+def test_repo_looks_c_cpp_git_objects_never_counted(tmp_path):
+    """A real C repo whose walk surfaces .git internals first must
+    still be recognised within the default budget."""
+    hidden = tmp_path / ".git" / "objects"
+    hidden.mkdir(parents=True)
+    for i in range(300):
+        (hidden / f"{i:03d}").write_text("blob\n")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.c").write_text("int main(){}\n")
+    assert mod.repo_looks_c_cpp(str(tmp_path), max_files_to_check=200) is True
+
+
+def test_translate_refuses_pattern_exceeding_budget_ceiling():
+    """The rule-gen budget knob gates input size pre-flight — an
+    oversized pattern is refused without any provider call."""
+    fake_provider = mock.Mock()
+    with mock.patch.object(mod, "create_provider",
+                           return_value=fake_provider):
+        rule = mod.translate_pattern_to_cocci_rule(
+            "x" * 4_000_000, model=_fake_model(), max_cost_usd=0.05,
+        )
+    assert rule is None
+    fake_provider.generate.assert_not_called()
+
+
+def test_translate_normal_pattern_within_budget_proceeds():
+    fake_provider = mock.Mock()
+    fake_provider.generate.return_value = _fake_response(
+        "```cocci\n@r@\nexpression e;\n@@\nstrcpy(e, ...)\n```\n"
+    )
+    with mock.patch.object(mod, "create_provider",
+                           return_value=fake_provider):
+        rule = mod.translate_pattern_to_cocci_rule(
+            "find all strcpy calls", model=_fake_model(), max_cost_usd=0.05,
+        )
+    assert rule is not None
+    fake_provider.generate.assert_called_once()

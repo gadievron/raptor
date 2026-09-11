@@ -153,14 +153,18 @@ class SourceIntelValidator:
         if target is None:
             return ValidatorVerdict.UNCERTAIN
 
-        result = self._cache.get(target)
+        # Derive the cache key once and reuse it for the store —
+        # analyze() can run for minutes, and re-deriving at put time
+        # would key the result under a drifted tree's hash.
+        cache_key = self._cache.key_for(target)
+        result = self._cache.get_by_key(cache_key)
         if result is None:
             try:
                 result = analyze(target)
             except Exception:
                 logger.exception("source_intel analyze failed for %s", target)
                 return ValidatorVerdict.UNCERTAIN
-            self._cache.put(target, None, result)
+            self._cache.put_by_key(cache_key, result)
 
         return self._verdict_from_result(finding, result)
 
@@ -246,36 +250,53 @@ class SourceIntelValidator:
         if result.is_skipped:
             return ValidatorVerdict.UNCERTAIN
 
-        if _finding_in_dead_code(finding, self._repo_root):
+        # Every path-resolving helper receives the constructor's
+        # repo_root so relative finding paths resolve against the
+        # operator's target tree, not this module's own checkout.
+        repo_root = self._repo_root
+
+        if _finding_in_dead_code(finding, repo_root):
             return ValidatorVerdict.NOT_EXPLOITABLE
 
-        if _abort_dominates_finding(finding, result):
+        if _abort_dominates_finding(finding, result, repo_root=repo_root):
             return ValidatorVerdict.NOT_EXPLOITABLE
 
-        if _privileged_capability_dominates(finding, result):
-            return ValidatorVerdict.NOT_EXPLOITABLE
-
-        if _privilege_back_walk_suppresses(
-            finding, result, self._repo_root,
+        if _privileged_capability_dominates(
+            finding, result, repo_root=repo_root,
         ):
             return ValidatorVerdict.NOT_EXPLOITABLE
 
-        if _fortify_source_blocks_finding(finding, result):
+        if _privilege_back_walk_suppresses(
+            finding, result, repo_root,
+        ):
             return ValidatorVerdict.NOT_EXPLOITABLE
 
-        if _stack_protector_suppresses_finding(finding, result):
+        if _fortify_source_blocks_finding(
+            finding, result, repo_root=repo_root,
+        ):
             return ValidatorVerdict.NOT_EXPLOITABLE
 
-        if _downstream_check_suppresses_finding(finding):
+        if _stack_protector_suppresses_finding(
+            finding, result, repo_root=repo_root,
+        ):
             return ValidatorVerdict.NOT_EXPLOITABLE
 
-        if _unchecked_alloc_supports_finding(finding, result):
+        if _downstream_check_suppresses_finding(
+            finding, repo_root=repo_root,
+        ):
+            return ValidatorVerdict.NOT_EXPLOITABLE
+
+        if _unchecked_alloc_supports_finding(
+            finding, result, repo_root=repo_root,
+        ):
             return ValidatorVerdict.EXPLOITABLE
 
-        if _hazard_supports_finding(finding, result):
+        if _hazard_supports_finding(finding, result, repo_root=repo_root):
             return ValidatorVerdict.EXPLOITABLE
 
-        if _double_free_supports_finding(finding, result):
+        if _double_free_supports_finding(
+            finding, result, repo_root=repo_root,
+        ):
             return ValidatorVerdict.EXPLOITABLE
 
         snippet = (
@@ -354,11 +375,6 @@ def _finding_in_dead_code(finding: Finding, repo_root: Path) -> bool:
 
     Skips silently when PR-4 isn't available (minimal install).
     """
-    try:
-        from packages.coccinelle.prereqs import gather_prereqs
-    except ImportError:
-        return False
-
     sink_path = finding.sink.file_path or ""
     sink_line = finding.sink.line or 0
     if not sink_path or not sink_line:
@@ -384,8 +400,8 @@ def _finding_in_dead_code(finding: Finding, repo_root: Path) -> bool:
     if not target.is_dir():
         return False
 
-    facts = gather_prereqs(target)
-    if facts.is_skipped:
+    facts = _gather_prereqs_cached(target)
+    if facts is None or facts.is_skipped:
         return False
     # Function must be defined AND have zero callers in the target.
     if not facts.function_exists(finding_fn):
@@ -452,6 +468,64 @@ def _looks_like_macro_registered_handler(fn_name: str) -> bool:
     return any(infix in fn_name for infix in ("_ioctl_", "_callback_", "_handler_"))
 
 
+# =====================================================================
+# Per-target memoisation
+# =====================================================================
+#
+# `gather_prereqs` is a full spatch run over a directory (minutes on
+# kernel-scale trees) and the pointer-reference scan reads every C/C++
+# file under the target — yet the verdict axes invoke both once or
+# twice PER FINDING, and finding sets routinely share one sink
+# directory. Memoise per (path, stat signature): the signature is a
+# stat-only walk (mtime_ns + size of every C/C++ file plus build
+# markers), so any edit to the tree invalidates the entry. Sentinel
+# signatures (missing target / stat error) are never memoised, so
+# lookups against nonexistent paths stay live — important for callers
+# that construct synthetic paths.
+
+_PREREQS_MEMO: dict[str, tuple[str, Any]] = {}
+_POINTER_REF_MEMO: dict[tuple[str, str], tuple[str, bool]] = {}
+# Bound memory on long-lived processes scanning many targets. Whole-
+# dict reset on overflow keeps the code trivial; the memo exists to
+# amortise per-finding recompute within one target, which a reset
+# between targets doesn't hurt.
+_ADAPTER_MEMO_CAP = 64
+
+_SIG_SENTINELS = ("missing", "stat-error")
+
+
+def _gather_prereqs_cached(target: Path) -> Any | None:
+    """Stat-signature-memoised ``gather_prereqs``. Returns ``None``
+    when PR-4 isn't importable (minimal install)."""
+    try:
+        from packages.coccinelle.prereqs import gather_prereqs
+    except ImportError:
+        return None
+    from packages.source_intel.cache import compute_target_signature
+    sig = compute_target_signature(target)
+    if sig in _SIG_SENTINELS:
+        return gather_prereqs(target)
+    key = str(target)
+    hit = _PREREQS_MEMO.get(key)
+    if hit is not None and hit[0] == sig:
+        return hit[1]
+    facts = gather_prereqs(target)
+    if len(_PREREQS_MEMO) >= _ADAPTER_MEMO_CAP:
+        _PREREQS_MEMO.clear()
+    _PREREQS_MEMO[key] = (sig, facts)
+    return facts
+
+
+def clear_adapter_memos() -> None:
+    """Drop the per-target memos (prereqs + pointer-reference scan).
+
+    Signature-based auto-invalidation already covers tree edits; this
+    is the explicit reset for orchestrators wanting a clean slate.
+    """
+    _PREREQS_MEMO.clear()
+    _POINTER_REF_MEMO.clear()
+
+
 def _function_referenced_as_pointer(
     target: Path, function_name: str
 ) -> bool:
@@ -468,8 +542,31 @@ def _function_referenced_as_pointer(
       * ``\bfuncname [,;]``              — array element / list
 
     Conservative file traversal: limited to ``.c`` / ``.h`` / ``.cc``
-    / ``.cpp`` / ``.hpp`` to bound cost on noisy targets.
+    / ``.cpp`` / ``.hpp`` to bound cost on noisy targets. The scan
+    reads every matching file under ``target``, so results are
+    memoised per (target, function, stat signature) — finding sets
+    sharing one sink directory would otherwise re-read the same
+    subtree once per finding.
     """
+    from packages.source_intel.cache import compute_target_signature
+    sig = compute_target_signature(target)
+    memo_key = (str(target), function_name)
+    if sig not in _SIG_SENTINELS:
+        hit = _POINTER_REF_MEMO.get(memo_key)
+        if hit is not None and hit[0] == sig:
+            return hit[1]
+    found = _function_referenced_as_pointer_scan(target, function_name)
+    if sig not in _SIG_SENTINELS:
+        if len(_POINTER_REF_MEMO) >= _ADAPTER_MEMO_CAP:
+            _POINTER_REF_MEMO.clear()
+        _POINTER_REF_MEMO[memo_key] = (sig, found)
+    return found
+
+
+def _function_referenced_as_pointer_scan(
+    target: Path, function_name: str
+) -> bool:
+    """Uncached scan behind :func:`_function_referenced_as_pointer`."""
     import re as _re
     fn = _re.escape(function_name)
     # Single regex covering the common pointer-use shapes. Each
@@ -529,6 +626,8 @@ def _function_is_static(file_path: str, function_name: str) -> bool:
 def _unchecked_alloc_supports_finding(
     finding: Finding,
     result: SourceIntelResult,
+    *,
+    repo_root: Path | None = None,
 ) -> bool:
     """Return True iff axis-3 evidence directly supports an EXPLOITABLE
     verdict on this finding:
@@ -555,7 +654,9 @@ def _unchecked_alloc_supports_finding(
 
     src_path_abs = src_path
     if not Path(src_path).is_absolute():
-        src_path_abs = str((_DEFAULT_REPO_ROOT / src_path).resolve())
+        src_path_abs = str(
+            ((repo_root or _DEFAULT_REPO_ROOT) / src_path).resolve()
+        )
 
     # Tight tolerance — the cocci match's line should be within a
     # handful of lines of the finding's source. The fixture path
@@ -698,6 +799,8 @@ _MEMORY_CORRUPTION_RULE_PREFIXES: tuple[str, ...] = (
 def _abort_dominates_finding(
     finding: Finding,
     result: SourceIntelResult,
+    *,
+    repo_root: Path | None = None,
 ) -> bool:
     """Return True iff axis-2 evidence supports NOT_EXPLOITABLE:
 
@@ -728,7 +831,9 @@ def _abort_dominates_finding(
     # are resolved against repo root.
     sink_path_abs = sink_path
     if not Path(sink_path).is_absolute():
-        sink_path_abs = str((_DEFAULT_REPO_ROOT / sink_path).resolve())
+        sink_path_abs = str(
+            ((repo_root or _DEFAULT_REPO_ROOT) / sink_path).resolve()
+        )
 
     # Determine the finding's enclosing function (best-effort).
     from packages.source_intel.analyze import _enclosing_function
@@ -834,6 +939,8 @@ _PRIVILEGED_CAP_CONSTANTS: frozenset[str] = frozenset({
 def _privileged_capability_dominates(
     finding: Finding,
     result: SourceIntelResult,
+    *,
+    repo_root: Path | None = None,
 ) -> bool:
     """Return True iff axis-4 evidence supports NOT_EXPLOITABLE:
 
@@ -859,7 +966,9 @@ def _privileged_capability_dominates(
 
     sink_path_abs = sink_path
     if not Path(sink_path).is_absolute():
-        sink_path_abs = str((_DEFAULT_REPO_ROOT / sink_path).resolve())
+        sink_path_abs = str(
+            ((repo_root or _DEFAULT_REPO_ROOT) / sink_path).resolve()
+        )
 
     from packages.source_intel.analyze import _enclosing_function
     finding_fn = (
@@ -964,6 +1073,8 @@ _FORTIFIED_WRITE_CALLS: frozenset[str] = frozenset({
 def _fortify_source_blocks_finding(
     finding: Finding,
     result: SourceIntelResult,
+    *,
+    repo_root: Path | None = None,
 ) -> bool:
     """Return True iff axis-6 evidence supports NOT_EXPLOITABLE:
 
@@ -1015,7 +1126,7 @@ def _fortify_source_blocks_finding(
     # unchecked. Without this guard the verdict policy over-suppresses
     # findings on malloc'd destinations, which is the common case in
     # most userspace.
-    return not _fortified_dest_is_variable_size(finding)
+    return not _fortified_dest_is_variable_size(finding, repo_root=repo_root)
 
 
 _DYNAMIC_ALLOCATORS_PATTERN = re.compile(
@@ -1029,7 +1140,11 @@ _DYNAMIC_ALLOCATORS_PATTERN = re.compile(
 )
 
 
-def _fortified_dest_is_variable_size(finding: Finding) -> bool:
+def _fortified_dest_is_variable_size(
+    finding: Finding,
+    *,
+    repo_root: Path | None = None,
+) -> bool:
     """Best-effort: extract the destination variable from the sink
     snippet (first identifier-argument of the fortified call) and
     scan the source file's enclosing function body for a line
@@ -1060,7 +1175,9 @@ def _fortified_dest_is_variable_size(finding: Finding) -> bool:
 
     sink_path_abs = sink_path
     if not Path(sink_path).is_absolute():
-        sink_path_abs = str((_DEFAULT_REPO_ROOT / sink_path).resolve())
+        sink_path_abs = str(
+            ((repo_root or _DEFAULT_REPO_ROOT) / sink_path).resolve()
+        )
 
     try:
         with open(sink_path_abs, encoding="utf-8", errors="replace") as f:
@@ -1098,7 +1215,11 @@ _DOWNSTREAM_CHECK_RULE_PREFIXES: tuple[str, ...] = (
 )
 
 
-def _downstream_check_suppresses_finding(finding: Finding) -> bool:
+def _downstream_check_suppresses_finding(
+    finding: Finding,
+    *,
+    repo_root: Path | None = None,
+) -> bool:
     """Return True iff axis-8 (validation-after-overflow) suppresses
     the finding.
 
@@ -1134,7 +1255,9 @@ def _downstream_check_suppresses_finding(finding: Finding) -> bool:
 
     sink_path_abs = sink_path
     if not Path(sink_path).is_absolute():
-        sink_path_abs = str((_DEFAULT_REPO_ROOT / sink_path).resolve())
+        sink_path_abs = str(
+            ((repo_root or _DEFAULT_REPO_ROOT) / sink_path).resolve()
+        )
 
     try:
         with open(sink_path_abs, encoding="utf-8", errors="replace") as f:
@@ -1162,55 +1285,172 @@ def _downstream_check_suppresses_finding(finding: Finding) -> bool:
         r"\bif\s*\(.*?" + var_rel_re.pattern,
     )
     has_relational = re.compile(r"(?<![<>])[<>](?![<>=])|[<>]=")
-    early_exit = re.compile(r"\b(?:return\b|continue\b|break\b|goto\b)")
 
     start = sink_line  # next line after sink (0-indexed; sink_line itself excluded)
     end = min(sink_line + 30, len(lines))
     for i in range(start, end):
-        if not var_in_if.search(lines[i]):
+        m = var_in_if.search(lines[i])
+        if m is None:
             continue
         # Require a relational comparison on this line. Pure-NULL
         # checks fall through to other axes.
         if not has_relational.search(lines[i]):
             continue
-        # Look for early-exit INSIDE the if-body. Track brace depth
-        # from the if-line. Stop scanning once the if-body closes —
-        # a `return 0;` at function end is NOT an early-exit out of
-        # the if. The xfs canonical case has 7 lines of warning
-        # calls between `if (...)` and `return`, so use a generous
-        # 20-line ceiling on the search.
-        depth = 0
-        seen_open_brace = False
-        max_scan = min(i + 20, len(lines))
-        for j in range(i, max_scan):
-            line = lines[j]
-            # Strip C-style comments before early-exit scanning —
-            # otherwise `/* no return */` falsely matches `return`.
-            stripped = _COMMENT_STRIP_RE.sub("", line)
-            stripped = _LINE_COMMENT_STRIP_RE.sub("", stripped)
-            # Single-line if shape: `if (cond) return -1;` — the
-            # early-exit is on the same line, no `{` ever appears.
-            # Match it before brace tracking advances.
-            if early_exit.search(stripped):
-                return True
-            # Track brace depth ignoring chars inside strings/chars is
-            # not done — depth may be slightly wrong on lines with
-            # string literals containing braces. Acceptable for the
-            # bug-class we're catching (kernel int-overflow guards
-            # don't contain string-literal braces in practice).
-            for ch in stripped:
-                if ch == "{":
-                    depth += 1
-                    seen_open_brace = True
-                elif ch == "}":
-                    depth -= 1
-            if seen_open_brace and depth <= 0:
-                break
+        # Look for an early-exit INSIDE the if statement's own scope
+        # only (braced block, single controlled statement, or a
+        # chained `else` arm). A `return 0;` at function end is NOT
+        # an early-exit out of the if — treating it as one would
+        # verdict-suppress real findings whose guard doesn't exit.
+        if _if_scope_has_early_exit(lines, i, m.start()):
+            return True
     return False
 
 
 _COMMENT_STRIP_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 _LINE_COMMENT_STRIP_RE = re.compile(r"//.*$", re.MULTILINE)
+
+_EARLY_EXIT_RE = re.compile(r"\b(?:return\b|continue\b|break\b|goto\b)")
+
+
+def _if_scope_has_early_exit(
+    lines: list[str],
+    if_idx: int,
+    if_col: int = 0,
+) -> bool:
+    """Return True iff the ``if`` statement opening at
+    ``lines[if_idx][if_col:]`` contains an early-exit statement
+    (return / goto / break / continue) inside its OWN scope:
+
+      * a braced body — scanned until the matching ``}``;
+      * a braceless body — exactly the single controlled statement,
+        i.e. up to its terminating ``;`` (a braceless ``if`` controls
+        one statement and nothing after it);
+      * a chained ``else`` arm — an exit on either arm guards the
+        fall-through path equally, so both arms are scanned.
+
+    Scope discipline is the point: an ordinary function-final
+    ``return 0;`` a few lines below a braceless non-exiting if-body
+    must NOT count as an early-exit guard — that would suppress the
+    finding on the strength of a guard that doesn't exit.
+
+    The early-exit regex runs over each line's IN-SCOPE text only,
+    so out-of-scope code on the statement's last line can't leak in.
+    Scan capped at 20 lines from the if-line (the canonical
+    validate-then-use guard shapes fit well inside that).
+
+    Known limits (shared with the surrounding axis): block comments
+    are stripped per line only, and brace/paren counting ignores
+    string literals — acceptable for the kernel guard shapes this
+    axis targets.
+    """
+    # Character-level scanner states.
+    _COND, _BODY_SEEK, _BRACED, _STMT, _ELSE_SEEK, _DONE = range(6)
+    state = _COND
+    paren_depth = 0
+    seen_cond_paren = False
+    brace_depth = 0
+    else_word = ""
+
+    max_scan = min(if_idx + 20, len(lines))
+    for j in range(if_idx, max_scan):
+        stripped = _COMMENT_STRIP_RE.sub("", lines[j])
+        stripped = _LINE_COMMENT_STRIP_RE.sub("", stripped)
+        if j == if_idx:
+            stripped = stripped[if_col:]
+
+        in_scope: list[str] = []
+        for ch in stripped:
+            if state == _COND:
+                in_scope.append(ch)
+                if ch == "(":
+                    paren_depth += 1
+                    seen_cond_paren = True
+                elif ch == ")":
+                    paren_depth -= 1
+                    if seen_cond_paren and paren_depth <= 0:
+                        state = _BODY_SEEK
+            elif state == _BODY_SEEK:
+                if ch.isspace():
+                    continue
+                if ch == "{":
+                    state = _BRACED
+                    brace_depth = 1
+                    in_scope.append(ch)
+                elif ch == ";":
+                    # Empty controlled statement — arm complete.
+                    in_scope.append(ch)
+                    state = _ELSE_SEEK
+                    else_word = ""
+                else:
+                    state = _STMT
+                    in_scope.append(ch)
+                    if ch == "(":
+                        paren_depth += 1
+            elif state == _BRACED:
+                in_scope.append(ch)
+                if ch == "{":
+                    brace_depth += 1
+                elif ch == "}":
+                    brace_depth -= 1
+                    if brace_depth <= 0:
+                        state = _ELSE_SEEK
+                        else_word = ""
+            elif state == _STMT:
+                in_scope.append(ch)
+                if ch == "(":
+                    paren_depth += 1
+                elif ch == ")":
+                    paren_depth -= 1
+                elif ch == "{":
+                    # Nested block opener inside the controlled
+                    # statement (e.g. `if (c) for (...) { ... }`) —
+                    # switch to brace tracking until it closes.
+                    state = _BRACED
+                    brace_depth = 1
+                elif ch == ";" and paren_depth <= 0:
+                    state = _ELSE_SEEK
+                    else_word = ""
+            elif state == _ELSE_SEEK:
+                # Probe whether the statement chains an `else` arm.
+                if ch.isalnum() or ch == "_":
+                    else_word += ch
+                    if not "else".startswith(else_word):
+                        state = _DONE
+                        break
+                    continue
+                if else_word == "else":
+                    # `else` arm extends the scope; scan its body.
+                    # Reprocess `ch` in body-seek mode.
+                    state = _BODY_SEEK
+                    else_word = ""
+                    if not ch.isspace():
+                        if ch == "{":
+                            state = _BRACED
+                            brace_depth = 1
+                            in_scope.append(ch)
+                        else:
+                            state = _STMT
+                            in_scope.append(ch)
+                            if ch == "(":
+                                paren_depth += 1
+                elif ch.isspace() and not else_word:
+                    continue
+                else:
+                    state = _DONE
+                    break
+
+        if in_scope and _EARLY_EXIT_RE.search("".join(in_scope)):
+            return True
+        if state == _DONE:
+            return False
+        if state == _ELSE_SEEK and else_word:
+            # Word terminated by end-of-line.
+            if else_word == "else":
+                state = _BODY_SEEK
+                else_word = ""
+            else:
+                return False
+    return False
 
 
 # =====================================================================
@@ -1238,6 +1478,8 @@ _HAZARD_KIND_RELEVANT_RULES: dict[str, tuple[str, ...]] = {
 def _hazard_supports_finding(
     finding: Finding,
     result: SourceIntelResult,
+    *,
+    repo_root: Path | None = None,
 ) -> bool:
     """Return True iff axis-7 hazard evidence directly supports an
     EXPLOITABLE verdict on this finding.
@@ -1260,7 +1502,9 @@ def _hazard_supports_finding(
 
     sink_path_abs = sink_path
     if not Path(sink_path).is_absolute():
-        sink_path_abs = str((_DEFAULT_REPO_ROOT / sink_path).resolve())
+        sink_path_abs = str(
+            ((repo_root or _DEFAULT_REPO_ROOT) / sink_path).resolve()
+        )
 
     rid = finding.rule_id or ""
 
@@ -1295,7 +1539,7 @@ _PRIV_BACK_WALK_MAX_DEPTH = 5
 def _privilege_back_walk_suppresses(
     finding: Finding,
     result: SourceIntelResult,
-    _repo_root: Path,
+    repo_root: Path | None,
     *,
     max_depth: int = _PRIV_BACK_WALK_DEFAULT_DEPTH,
 ) -> bool:
@@ -1337,14 +1581,15 @@ def _privilege_back_walk_suppresses(
       * Cap-set is the conservative root-equivalent set in
         :data:`_PRIVILEGED_CAP_CONSTANTS`; userspace namespace caps
         (CAP_NET_ADMIN, CAP_SYS_NICE, …) intentionally don't count.
+      * ``static`` linkage is required at every hop whose caller set
+        the walk relies on: prereqs are gathered from the sink file's
+        parent directory only, so a non-static function may have
+        callers in other translation units / directories the walk
+        never sees — "every path is gated" can't be proven from an
+        incomplete caller set. Same rationale as the dead-code axis.
     """
     rid = finding.rule_id or ""
     if not any(rid.startswith(p) for p in _MEMORY_CORRUPTION_RULE_PREFIXES):
-        return False
-
-    try:
-        from packages.coccinelle.prereqs import gather_prereqs
-    except ImportError:
         return False
 
     sink_path = finding.sink.file_path or ""
@@ -1354,19 +1599,30 @@ def _privilege_back_walk_suppresses(
 
     sink_path_abs = sink_path
     if not Path(sink_path).is_absolute():
-        sink_path_abs = str((_DEFAULT_REPO_ROOT / sink_path).resolve())
+        sink_path_abs = str(
+            ((repo_root or _DEFAULT_REPO_ROOT) / sink_path).resolve()
+        )
 
     from packages.source_intel.analyze import _enclosing_function
     finding_fn = _enclosing_function(sink_path_abs, sink_line)
     if not finding_fn:
         return False
 
+    # Caller-set completeness gate: prereqs are gathered from the
+    # sink file's parent directory only, so callers in other
+    # translation units / directories are invisible to the walk. A
+    # non-static function reachable from an unseen ungated caller
+    # would be wrongly suppressed. `static` bounds all callers to
+    # this file, which the directory scan does cover.
+    if not _function_is_static(sink_path_abs, finding_fn):
+        return False
+
     target = Path(sink_path_abs).parent
     if not target.is_dir():
         return False
 
-    facts = gather_prereqs(target)
-    if facts.is_skipped:
+    facts = _gather_prereqs_cached(target)
+    if facts is None or facts.is_skipped:
         return False
 
     callers = facts.callers_of(finding_fn)
@@ -1391,6 +1647,7 @@ def _privilege_back_walk_suppresses(
             caller_fn, facts, result,
             remaining_depth=effective_depth - 1,
             visited=visited,
+            fn_file=call_file,
         ):
             return False
     return True
@@ -1403,10 +1660,15 @@ def _path_is_gated(
     *,
     remaining_depth: int,
     visited: frozenset[str],
+    fn_file: str | None = None,
 ) -> bool:
     """Multi-hop helper: True iff every call path reaching ``fn_name``
     (within ``remaining_depth`` further hops) passes through a
     privileged capability check.
+
+    ``fn_file`` is the file containing ``fn_name``'s body (the call
+    site's file — the caller's body encloses the call). It is needed
+    for the caller-set completeness gate in case 5.
 
     Termination cases (visited in order):
       1. Cycle / already-visited (``fn_name in visited``) → False.
@@ -1415,9 +1677,13 @@ def _path_is_gated(
          True. Gate found, stop expanding this branch.
       3. Depth exhausted (``remaining_depth == 0``) → False.
          Could not prove gating within budget; conservative.
-      4. No callers (leaf) → False. ``fn_name`` is an entry point;
+      4. ``fn_name`` isn't ``static`` (or ``fn_file`` unknown) →
+         False. The prereq scan is directory-scoped, so a non-static
+         function may have unseen callers in other translation
+         units — its in-scope caller set can't prove all-paths-gated.
+      5. No callers (leaf) → False. ``fn_name`` is an entry point;
          path is ungated.
-      5. Otherwise: recurse on every direct caller; True iff all
+      6. Otherwise: recurse on every direct caller; True iff all
          caller paths are themselves gated.
     """
     if fn_name in visited:
@@ -1425,6 +1691,8 @@ def _path_is_gated(
     if _function_has_privileged_cap(fn_name, result):
         return True
     if remaining_depth <= 0:
+        return False
+    if fn_file is None or not _function_is_static(fn_file, fn_name):
         return False
     callers = facts.callers_of(fn_name)
     if not callers:
@@ -1439,6 +1707,7 @@ def _path_is_gated(
             caller_fn, facts, result,
             remaining_depth=remaining_depth - 1,
             visited=next_visited,
+            fn_file=call_file,
         ):
             return False
     return True
@@ -1749,6 +2018,8 @@ def _extract_return_values(body_lines: list) -> list:
 def _double_free_supports_finding(
     finding: Finding,
     result: SourceIntelResult,
+    *,
+    repo_root: Path | None = None,
 ) -> bool:
     """Return True iff axis-3 double-free evidence directly supports
     EXPLOITABLE on this finding.
@@ -1775,7 +2046,9 @@ def _double_free_supports_finding(
 
     sink_path_abs = sink_path
     if not Path(sink_path).is_absolute():
-        sink_path_abs = str((_DEFAULT_REPO_ROOT / sink_path).resolve())
+        sink_path_abs = str(
+            ((repo_root or _DEFAULT_REPO_ROOT) / sink_path).resolve()
+        )
 
     for df in result.double_frees:
         df_path, df_line = df.location
@@ -1797,6 +2070,8 @@ def _double_free_supports_finding(
 def _stack_protector_suppresses_finding(
     finding: Finding,
     result: SourceIntelResult,
+    *,
+    repo_root: Path | None = None,
 ) -> bool:
     """Return True iff `-fstack-protector-{strong,all,explicit}` is
     active AND the finding is a stack-buffer-write class. Stack
@@ -1842,7 +2117,9 @@ def _stack_protector_suppresses_finding(
         return False
     sink_path_abs = sink_path
     if not Path(sink_path).is_absolute():
-        sink_path_abs = str((_DEFAULT_REPO_ROOT / sink_path).resolve())
+        sink_path_abs = str(
+            ((repo_root or _DEFAULT_REPO_ROOT) / sink_path).resolve()
+        )
     try:
         with open(sink_path_abs, encoding="utf-8", errors="replace") as f:
             lines = f.readlines()

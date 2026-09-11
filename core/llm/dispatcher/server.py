@@ -60,7 +60,9 @@ from __future__ import annotations
 import http.server
 import json
 import logging
+import math
 import os
+import re
 import secrets
 import socket
 import socketserver
@@ -74,6 +76,7 @@ from pathlib import Path
 
 import httpx
 
+from core.json.jsonl import append_jsonl
 from core.run.tmp_ownership import remove_owner_marker, write_owner_marker
 from core.security.log_sanitisation import escape_nonprintable
 
@@ -480,11 +483,16 @@ def _peer_uid(conn: socket.socket) -> int | None:
     where the lookup isn't supported. Caller should reject the
     connection if None on a platform we expect to support it."""
     if sys.platform == "linux":
+        # ``struct ucred`` is pid_t/uid_t/gid_t — pid signed, uid/gid
+        # UNSIGNED 32-bit. A signed unpack turned uids >= 2^31 (e.g.
+        # nobody=4294967294 on some distros, container idmap offsets)
+        # negative, so ``uid != os.getuid()`` rejected every peer on
+        # such hosts — a total fail-closed dispatcher outage.
         try:
             data = conn.getsockopt(
-                socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"),
+                socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("iII"),
             )
-            _pid, uid, _gid = struct.unpack("3i", data)
+            _pid, uid, _gid = struct.unpack("iII", data)
             return uid
         except (OSError, AttributeError):
             return None
@@ -539,8 +547,22 @@ class _UsageScanner:
     ``message_start`` (model + input/cache tokens) up front and the
     final ``message_delta`` usage frame at the end; JSON bodies carry
     ``model`` early and ``usage`` last. Never throws from ``feed``.
+
+    SSE-vs-JSON classification comes from the response's Content-Type
+    header (``set_content_type``, threaded in by the relay) — the
+    scanned bytes include model-authored text, so a content substring
+    must never pick the parser. Only when the upstream sent no
+    Content-Type does a line-anchored structural check run instead.
     """
 
+    # Head/tail window sizes. Larger → non-SSE bodies up to
+    # head+tail parse whole (no tail-recovery needed) and more of a
+    # giant SSE stream is scannable; smaller → less memory pinned
+    # per in-flight relay (ThreadingMixIn is one unbounded thread
+    # per connection, so the caps multiply by concurrency). The
+    # trailing-``usage`` tail recovery below removes the booking
+    # cliff for oversize non-SSE bodies, so the caps stay sized for
+    # memory, not for correctness.
     _HEAD_CAP = 256 * 1024
     _TAIL_CAP = 256 * 1024
 
@@ -548,6 +570,14 @@ class _UsageScanner:
         self._head = bytearray()
         self._tail = bytearray()
         self.truncated = False
+        self._content_type: str | None = None
+
+    def set_content_type(self, value: str | None) -> None:
+        """Record the upstream response's Content-Type so ``extract``
+        classifies SSE-vs-JSON from the header the relay already
+        trusts for its own SSE handling, not from body content."""
+        if value is not None:
+            self._content_type = value
 
     def feed(self, chunk: bytes) -> None:
         if not chunk:
@@ -562,6 +592,23 @@ class _UsageScanner:
                 del self._tail[:len(self._tail) - self._TAIL_CAP]
                 self.truncated = True
 
+    def _is_sse(self, head: str, tail: str) -> bool:
+        """SSE classification. Header wins; the body fallback is
+        LINE-anchored (an SSE field name starts a line) — a ``data:``
+        substring inside a JSON string value cannot start a line
+        because JSON string encoding escapes newlines."""
+        if self._content_type is not None:
+            return "text/event-stream" in self._content_type.lower()
+        # Tail bytes start mid-line whenever the tail buffer is in
+        # use (it only fills after the head cap, and front-trimming
+        # also cuts mid-line) — skip that fragment line so a cut
+        # landing inside a JSON string can't fabricate a line start.
+        for lines in (head.splitlines(), tail.splitlines()[1:]):
+            for line in lines:
+                if line.startswith(("data:", "event:")):
+                    return True
+        return False
+
     def extract(self) -> dict:
         """Return ``{model, input_tokens, output_tokens,
         cache_read_tokens, cache_creation_tokens}`` (zeros / None when
@@ -575,7 +622,7 @@ class _UsageScanner:
         }
         head = self._head.decode("utf-8", "replace")
         tail = self._tail.decode("utf-8", "replace")
-        if "data:" in head or "data:" in tail:
+        if self._is_sse(head, tail):
             for text in (head, tail):
                 for line in text.splitlines():
                     line = line.strip()
@@ -590,14 +637,26 @@ class _UsageScanner:
                     self._merge_event(obj, out)
             return out
         # Non-streamed JSON body.
-        try:
-            obj = json.loads(head + tail) if not self.truncated else None
-        except (json.JSONDecodeError, ValueError):
-            obj = None
-        if isinstance(obj, dict):
-            if isinstance(obj.get("model"), str):
-                out["model"] = obj["model"]
-            self._merge_usage(obj.get("usage"), out)
+        if not self.truncated:
+            try:
+                obj = json.loads(head + tail)
+            except (json.JSONDecodeError, ValueError):
+                obj = None
+            if isinstance(obj, dict):
+                if isinstance(obj.get("model"), str):
+                    out["model"] = obj["model"]
+                self._merge_usage(obj.get("usage"), out)
+            return out
+        # Truncated non-SSE body: the middle is gone, so a full parse
+        # is impossible — but Anthropic Messages JSON carries its
+        # ``usage`` block at the END, inside the retained tail.
+        # Recover it there so an oversize response still books its
+        # real cost instead of $0 (the caller warns loudly when even
+        # this fails — see ``_book_child_usage``).
+        self._merge_usage(_usage_object_from_text(tail), out)
+        model = _model_id_from_text(head) or _model_id_from_text(tail)
+        if model:
+            out["model"] = model
         return out
 
     @staticmethod
@@ -628,6 +687,62 @@ class _UsageScanner:
                 # so a final message_delta overrides, while partial
                 # streams (abort) keep whatever the upstream reported.
                 out[dst] = max(out[dst], v)
+
+
+# Injection note for both recovery helpers below: model-authored
+# response text rides inside JSON string values, whose ``"`` and
+# newline characters arrive escaped (``\"``, ``\n``) — so a raw
+# ``"usage"`` / ``"model"`` key token (unescaped quotes) can only come
+# from the response document's own structure, never from content a
+# prompt-injected child steered the model into emitting.
+_MODEL_KEY_RE = re.compile(r'"model"\s*:\s*"([^"\\]+)"')
+
+
+def _model_id_from_text(text: str) -> str | None:
+    """Best-effort model id from a partial JSON document (the model
+    key rides early in Anthropic Messages JSON, so it survives in the
+    head window of a truncated body)."""
+    m = _MODEL_KEY_RE.search(text)
+    return m.group(1) if m else None
+
+
+def _usage_object_from_text(text: str) -> dict | None:
+    """Recover the trailing ``usage`` object from a truncated non-SSE
+    body's retained tail. Bounded: one reverse find plus a single
+    brace scan over the (already capped) tail. Returns ``None`` when
+    no parseable usage object is present."""
+    idx = text.rfind('"usage"')
+    if idx < 0:
+        return None
+    brace = text.find("{", idx)
+    if brace < 0:
+        return None
+    depth = 0
+    in_str = False
+    escaped = False
+    for i in range(brace, len(text)):
+        c = text[i]
+        if in_str:
+            if escaped:
+                escaped = False
+            elif c == "\\":
+                escaped = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    obj = json.loads(text[brace:i + 1])
+                except (json.JSONDecodeError, ValueError):
+                    return None
+                return obj if isinstance(obj, dict) else None
+    return None
 
 
 def _usage_cost_usd(usage: dict) -> tuple[float, bool]:
@@ -970,20 +1085,58 @@ class LLMDispatcher:
         (public correlation id, safe to log), ``expires_at`` and the
         effective limits.
         """
-        if not isinstance(budget_usd, (int, float)) or budget_usd <= 0:
-            msg = f"budget_usd must be > 0, got {budget_usd!r}"
+        # Finiteness is part of the type check: JSON round-trips NaN /
+        # Infinity (Python's parser accepts them), every budget
+        # comparison against NaN is False, and an infinite budget is
+        # uncapped — either way the token would PRESENT as capped
+        # while enforcing nothing.
+        if (
+            not isinstance(budget_usd, (int, float))
+            or isinstance(budget_usd, bool)
+            or not math.isfinite(budget_usd)
+            or budget_usd <= 0
+        ):
+            msg = f"budget_usd must be a finite number > 0, got {budget_usd!r}"
             raise ValueError(msg)
-        ttl = int(ttl_s) if ttl_s else _CHILD_DEFAULT_TTL_S
+        # ``is None`` (not falsy) checks on ttl_s / request_budget: an
+        # explicit 0 is a caller error and must be rejected, never
+        # silently replaced with a default GRANTING more capability
+        # than the 0 requested.
+        ttl = int(ttl_s) if ttl_s is not None else _CHILD_DEFAULT_TTL_S
         if ttl <= 0:
             msg = f"ttl_s must be > 0, got {ttl_s!r}"
             raise ValueError(msg)
+        req_budget = (
+            int(request_budget) if request_budget is not None
+            else _CHILD_DEFAULT_REQUEST_BUDGET
+        )
+        if req_budget <= 0:
+            msg = f"request_budget must be > 0, got {request_budget!r}"
+            raise ValueError(msg)
+        # Model allowlist: ``None`` (key absent) means unrestricted by
+        # contract; anything ELSE must produce a real allowlist. An
+        # empty list or invalid entries used to silently collapse to
+        # None — a caller passing a garbage pin list believed the
+        # token was model-pinned and got an any-model token.
         allowlist: frozenset | None = None
-        if models:
+        if models is not None:
+            invalid = [m for m in models if not (isinstance(m, str) and m)]
+            if invalid:
+                msg = (
+                    f"models contains invalid entries {invalid!r} "
+                    f"(each must be a non-empty string)"
+                )
+                raise ValueError(msg)
+            if not models:
+                msg = (
+                    "models=[] would allow any model; pass None for "
+                    "unrestricted or name the permitted models"
+                )
+                raise ValueError(msg)
             forms: set = set()
             for m in models:
-                if isinstance(m, str) and m:
-                    forms |= _model_id_forms(m)
-            allowlist = frozenset(forms) or None
+                forms |= _model_id_forms(m)
+            allowlist = frozenset(forms)
         token = secrets.token_urlsafe(32)
         token_id = secrets.token_hex(8)
         now = time.time()
@@ -992,10 +1145,7 @@ class LLMDispatcher:
             worker_label=label,
             issued_at=now,
             expires_at=now + ttl,
-            request_budget=(
-                int(request_budget) if request_budget
-                else _CHILD_DEFAULT_REQUEST_BUDGET
-            ),
+            request_budget=req_budget,
             kind="child",
             token_id=token_id,
             budget_usd=float(budget_usd),
@@ -1289,6 +1439,11 @@ class LLMDispatcher:
                 "cache_read_tokens", "cache_creation_tokens",
             )
         )
+        # Truncated body AND nothing recovered (not even the tail
+        # ``usage`` fallback): the $0 booking is a scan failure, not
+        # a free call — it must be loud, or an oversize response is a
+        # silent spend-cap bypass.
+        unscanned = scanner.truncated and not saw_usage
         with self._tokens_lock:
             if cost:
                 rec.spent_usd += cost
@@ -1302,6 +1457,14 @@ class LLMDispatcher:
                 "— scoped-token spend for this call booked as $0 (USD "
                 "budget not enforced for it)", usage.get("model"),
             )
+        if unscanned:
+            _logger.warning(
+                "llm-dispatcher: response for scoped token %s exceeded "
+                "the usage-scan window and no usage block could be "
+                "recovered from the retained tail — this call books $0 "
+                "against the USD budget (unscanned_response)",
+                rec.token_id,
+            )
         self._audit(AuditEvent(
             ts=time.time(), event="child_token.spend",
             peer_pid=None, peer_uid=None,
@@ -1314,6 +1477,7 @@ class LLMDispatcher:
                 "input_tokens": usage["input_tokens"],
                 "output_tokens": usage["output_tokens"],
                 "priced": priced,
+                "unscanned_response": unscanned,
             },
         ))
 
@@ -1571,17 +1735,17 @@ class LLMDispatcher:
             return
         with self._audit_lock:
             try:
-                # Open with mode 0o600 — audit log records worker labels,
-                # peer UIDs/PIDs, token-id prefixes, and request paths.
-                # The socket dir is already 0o700 / sockets 0o600; this
+                # The one hardened trail appender: O_NOFOLLOW refuses a
+                # symlink planted at the predictable audit path inside
+                # a writable run dir, and the single os.write keeps
+                # records line-atomic for cross-process readers. Mode
+                # 0o600 — the log records worker labels, peer
+                # UIDs/PIDs, token-id prefixes, and request paths; the
+                # socket dir is already 0o700 / sockets 0o600, this
                 # closes the symmetric gap.
-                fd = os.open(
+                append_jsonl(
                     self._audit_path,
-                    os.O_WRONLY | os.O_APPEND | os.O_CREAT,
-                    0o600,
-                )
-                with os.fdopen(fd, "a", encoding="utf-8") as fh:
-                    fh.write(json.dumps({
+                    {
                         "ts": ev.ts,
                         "event": ev.event,
                         "peer_pid": ev.peer_pid,
@@ -1591,11 +1755,16 @@ class LLMDispatcher:
                         "status": ev.status,
                         "reason": safe_reason,
                         **ev.extra,
-                    }) + "\n")
-            except OSError as e:
+                    },
+                    mode=0o600,
+                )
+            except (OSError, ValueError, TypeError) as e:
                 # Audit failures must NEVER break the dispatcher (an
                 # out-of-disk shouldn't crash an in-flight LLM
-                # session). But silent swallow hid an entire
+                # session; ValueError/TypeError cover a record
+                # append_jsonl refuses — non-finite float or
+                # unserialisable extra — which must not crash the
+                # handler either). But silent swallow hid an entire
                 # production incident: the audit log path was
                 # unwritable for the whole run, every event was
                 # dropped, and the operator only found out when
@@ -1710,6 +1879,28 @@ def _make_request_handler(
 
     class _Handler(http.server.BaseHTTPRequestHandler):
 
+        def setup(self) -> None:
+            # Client-leg socket timeout (StreamRequestHandler applies
+            # ``self.timeout`` via ``connection.settimeout``, bounding
+            # BOTH directions): without it rfile/wfile are fully
+            # blocking, so a client that declares Content-Length N and
+            # sends N-1 bytes — or stops reading its response — pins
+            # the handler thread, its upstream pool connection, and
+            # any child-token reservation forever. Bound = the relay's
+            # total-deadline knob (``_relay_deadline_s``, read per
+            # connection so the env override applies without a
+            # dispatcher rebuild): as a PER-IO cap it is generous — no
+            # legitimate client-leg stall approaches the whole-relay
+            # deadline — while a smaller bespoke value would need its
+            # own knob and could cut streams whose consumer lawfully
+            # pauses between reads. A timeout raises
+            # ``TimeoutError``/``socket.timeout`` (an OSError), which
+            # the relay's abort path handles exactly like
+            # RelayLimitExceeded: aborted usage is booked and the
+            # caller's ``finally`` releases the reservation.
+            self.timeout = float(_relay_deadline_s())
+            super().setup()
+
         # Disable BaseHTTPRequestHandler's reverse DNS log spam — peer
         # is always the local socket on UDS anyway.
         def log_message(self, format, *args) -> None:
@@ -1717,7 +1908,13 @@ def _make_request_handler(
 
         def _send_simple(self, status: int, reason: str) -> None:
             body = json.dumps({"error": reason}).encode("utf-8")
-            self.send_response(status, reason)
+            # Status line carries the STANDARD reason phrase only —
+            # ``reason`` is caller-composed and can embed peer input
+            # (e.g. the request body's model id): latin-1-unencodable
+            # text raised out of send_response_only and CR/LF split
+            # the status line. The detail rides exclusively in the
+            # JSON body, where encoding escapes it.
+            self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Connection", "close")
@@ -2058,6 +2255,16 @@ def _make_request_handler(
             scanner: _UsageScanner | None = None
             if rec.kind == "child":
                 scanner = _UsageScanner()
+                # REPLACE the client's accept-encoding, all case
+                # variants — dict-assigning only the canonical
+                # spelling left e.g. undici's lowercase
+                # ``accept-encoding: gzip`` alongside it, httpx sent
+                # both, and the upstream honoured gzip: compressed
+                # bytes the scanner cannot parse booked as $0.
+                for key in [
+                    k for k in forwarded if k.lower() == "accept-encoding"
+                ]:
+                    del forwarded[key]
                 forwarded["Accept-Encoding"] = "identity"
 
             # ---- forward to upstream + stream response back ----
@@ -2085,6 +2292,15 @@ def _make_request_handler(
                     response_is_sse = "text/event-stream" in (
                         up.headers.get("content-type") or ""
                     )
+                    if scanner is not None:
+                        # SSE-vs-JSON classification for the usage
+                        # scan comes from the same header the relay
+                        # itself trusts — body content (which embeds
+                        # model-authored text) must never pick the
+                        # parser.
+                        scanner.set_content_type(
+                            up.headers.get("content-type"),
+                        )
                     response_started = True
                     self.send_response(up.status_code)
                     for k, v in up.headers.items():
@@ -2227,8 +2443,17 @@ def _make_request_handler(
                         if isinstance(exc, RelayLimitExceeded)
                         else type(exc).__name__
                     )
+                    # Leading blank line closes whatever partial event
+                    # (or partial ``data:`` line — iter_raw chunk
+                    # boundaries are arbitrary) was already relayed,
+                    # so the error frame always starts a fresh event
+                    # block. Without it, an abort landing mid-line
+                    # glued ``event: error`` onto the partial data and
+                    # SSE parsers never surfaced a typed failure. At a
+                    # clean boundary the extra blank line is an empty
+                    # block, which parsers dispatch nothing for.
                     frame = (
-                        b"event: error\ndata: " + json.dumps({
+                        b"\n\nevent: error\ndata: " + json.dumps({
                             "type": "error",
                             "error": {
                                 "type": "relay_aborted",

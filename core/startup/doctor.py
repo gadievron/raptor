@@ -161,9 +161,23 @@ def _module_dep_warnings() -> list[str]:
             with tempfile.TemporaryDirectory(
                 prefix="raptor-doctor-probe-",
             ) as neutral_cwd:
+                # -I isolates the probe from cwd/PYTHONPATH shadowing,
+                # but it ALSO disables user site-packages — a healthy
+                # `pip install --user` dep then probes as "installed
+                # but failed to import" and doctor --strict exits 1.
+                # Re-append the user site dir inside the probe: the
+                # parent's find_spec (user site enabled) is what
+                # gated us here, so the child must see the same
+                # search path minus the shadowing hazards.
+                probe_code = (
+                    "import importlib, site, sys\n"
+                    "usp = site.getusersitepackages()\n"
+                    "if usp and usp not in sys.path:\n"
+                    "    sys.path.append(usp)\n"
+                    f"importlib.import_module({module!r})"
+                )
                 proc = subprocess.run(
-                    [sys.executable, "-I", "-c",
-                     f"import importlib; importlib.import_module({module!r})"],
+                    [sys.executable, "-I", "-c", probe_code],
                     capture_output=True, text=True, check=False, timeout=60,
                     cwd=neutral_cwd, env=safe_env,
                 )

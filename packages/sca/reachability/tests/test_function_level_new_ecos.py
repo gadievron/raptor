@@ -173,6 +173,65 @@ def test_rubygems_refine_likely_called(tmp_path: Path):
     assert out[deps[0].key()].verdict == "likely_called"
 
 
+_ACTIONPACK_ADV = _Adv(ecosystem_specific={
+    "imports": [{"path": "ActionDispatch::Routing",
+                 "symbols": ["Mapper#draw"]}],
+})
+
+
+def test_rubygems_ruby_style_symbol_called_not_downgraded(tmp_path: Path):
+    """Ruby advisories qualify symbols with '::' and '#'. The
+    resolver splits on '.' only, so without normalisation a real
+    call of the affected method would read NOT_CALLED and the dep
+    would be wrongly downgraded at high confidence."""
+    from packages.sca.reachability.rubygems_function_level import (
+        build_rubygems_symbol_map,
+        refine_rubygems_verdicts,
+    )
+    smap = build_rubygems_symbol_map([
+        _OsvResult(dep_key="RubyGems:actionpack@7.0.0",
+                   advisories=[_ACTIONPACK_ADV]),
+    ])
+    assert smap == {
+        "RubyGems:actionpack@7.0.0": ["ActionDispatch.Routing.Mapper.draw"],
+    }
+    (tmp_path / "routes.rb").write_text(
+        "class C\n  def m\n"
+        "    ActionDispatch::Routing::Mapper.draw(x)\n"
+        "  end\nend\n"
+    )
+    deps = [_dep("actionpack", "7.0.0", "RubyGems")]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_rubygems_verdicts(
+        deps, out, target=tmp_path, rubygems_symbol_map=smap,
+    )
+    assert out[deps[0].key()].verdict == "likely_called"
+
+
+def test_rubygems_ruby_style_symbol_uncalled_still_downgraded(tmp_path: Path):
+    """Same '::'/'#' symbol but the project never calls it — the
+    downgrade must still fire."""
+    from packages.sca.reachability.rubygems_function_level import (
+        build_rubygems_symbol_map,
+        refine_rubygems_verdicts,
+    )
+    smap = build_rubygems_symbol_map([
+        _OsvResult(dep_key="RubyGems:actionpack@7.0.0",
+                   advisories=[_ACTIONPACK_ADV]),
+    ])
+    (tmp_path / "routes.rb").write_text(
+        "class C\n  def m\n"
+        "    ActionDispatch::Routing::Mapper.match(x)\n"
+        "  end\nend\n"
+    )
+    deps = [_dep("actionpack", "7.0.0", "RubyGems")]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_rubygems_verdicts(
+        deps, out, target=tmp_path, rubygems_symbol_map=smap,
+    )
+    assert out[deps[0].key()].verdict == "not_function_reachable"
+
+
 # ---------------------------------------------------------------------------
 # NuGet
 # ---------------------------------------------------------------------------

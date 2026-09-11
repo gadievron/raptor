@@ -87,6 +87,27 @@ class TestSelectByContext:
                 hint=require("nonexistent-model-xyz"),
             )
 
+    def test_prefer_outside_candidates_is_not_returned(self):
+        """A prefer hint only steers WITHIN the caller's candidate
+        list — a hinted model the caller filtered out (budget, offline)
+        must not bypass that filtering just because it fits."""
+        model = select_by_context(
+            1_000,
+            ["claude-haiku-4-5"],
+            hint=prefer("claude-opus-4-6"),
+        )
+        assert model == "claude-haiku-4-5"
+
+    def test_prefer_inside_candidates_is_returned(self):
+        """Counter-direction: a hinted model that IS a candidate still
+        wins the prefer branch."""
+        model = select_by_context(
+            1_000,
+            self.CANDIDATES,
+            hint=prefer("claude-opus-4-6"),
+        )
+        assert model == "claude-opus-4-6"
+
     def test_prefer_respects_exclude_on_preferred_model(self):
         model = select_by_context(
             1_000,

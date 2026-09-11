@@ -42,6 +42,7 @@ import logging
 from typing import Any
 
 from . import _MAX_REASONING_CHARS
+from ._batch import record_event_batch
 from .scorecard import EventType, ModelScorecard
 
 logger = logging.getLogger(__name__)
@@ -82,10 +83,11 @@ def record_consensus_outcomes(
     prefilter producer's ``agentic:<rule_id>`` cell shape so consensus
     and prefilter signals share the same cell.
 
-    Failure path: any per-event ``record_event`` exception is logged
-    at WARNING level and swallowed; one bad event must not abort the
-    whole batch and must never block the calling orchestrator's
-    flow. The per-event log line keeps a regressed producer visible.
+    Failure path: events are written as ONE batched
+    ``record_events`` cycle; if the batch is rejected, the producer
+    degrades to per-event writes with per-event WARNING + swallow —
+    one bad event must not abort the rest and must never block the
+    calling orchestrator's flow.
     """
     if scorecard is None or not correlation:
         return 0
@@ -94,7 +96,7 @@ def record_consensus_outcomes(
     if not matrix:
         return 0
 
-    n_recorded = 0
+    pending: list[dict[str, Any]] = []
     for fid, per_model in matrix.items():
         if confidence.get(fid) != "disputed":
             continue
@@ -172,32 +174,18 @@ def record_consensus_outcomes(
                     "this_reasoning": reasoning[:_MAX_REASONING_CHARS],
                     "other_reasoning": truth_label,
                 }
-            try:
-                scorecard.record_event(
-                    decision_class=decision_class,
-                    model=model,
-                    event_type=EventType.MULTI_MODEL_CONSENSUS,
-                    outcome=outcome,
-                    model_version=model_version,
-                    sample=sample,
-                )
-                n_recorded += 1
-            except Exception as e:                       # noqa: BLE001
-                # WARNING (not DEBUG): operators rarely run with
-                # DEBUG enabled in production, so a regressed
-                # producer would have been invisible. Per-event
-                # failures here are real signal — the scorecard
-                # write path failed for an attributable
-                # (model, decision_class, finding) cell. If this
-                # logs frequently in practice, the underlying issue
-                # (lock contention, disk full, schema corruption)
-                # warrants attention regardless of log volume.
-                logger.warning(
-                    "record_consensus_outcomes: failed to record %s/%s "
-                    "on %s: %s",
-                    model, decision_class, fid, e,
-                )
-    return n_recorded
+            pending.append({
+                "decision_class": decision_class,
+                "model": model,
+                "event_type": EventType.MULTI_MODEL_CONSENSUS,
+                "outcome": outcome,
+                "model_version": model_version,
+                "sample": sample,
+            })
+    return record_event_batch(
+        scorecard, pending, log=logger,
+        producer="record_consensus_outcomes",
+    )
 
 
 __all__ = ["record_consensus_outcomes"]

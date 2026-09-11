@@ -390,6 +390,64 @@ class TestErrorPaths:
         ids = {v["trace_id"] for v in result}
         assert ids == {"EP-001", "EP-002"}
 
+    def test_phantom_trace_ids_filtered(self, repo, fake_model_config):
+        """A verdict for a trace_id not in the input batch is a
+        hallucination — it must not flow through as a phantom merged
+        item; verdicts for real input ids still pass."""
+        from packages.code_understanding.dispatch.trace_dispatch import (
+            default_trace_dispatch,
+        )
+
+        turns = [
+            FakeTurn(tool_calls=[("submit_verdicts", {
+                "verdicts": [
+                    {"trace_id": "EP-001", "verdict": "reachable"},
+                    {"trace_id": "EP-999", "verdict": "reachable"},  # phantom
+                    {"trace_id": "EP-002", "verdict": "uncertain"},
+                ],
+            })]),
+        ]
+
+        with _patch_provider(turns):
+            result = default_trace_dispatch(
+                fake_model_config, _sample_traces(), str(repo),
+            )
+        ids = {v["trace_id"] for v in result}
+        assert ids == {"EP-001", "EP-002"}
+
+    def test_omitted_trace_logged_as_unassessed(
+        self, repo, fake_model_config, caplog,
+    ):
+        """A trace the model skipped must leave a visible record —
+        silence would be indistinguishable from 'assessed clean'."""
+        import logging as _logging
+
+        from packages.code_understanding.dispatch.trace_dispatch import (
+            default_trace_dispatch,
+        )
+
+        turns = [
+            FakeTurn(tool_calls=[("submit_verdicts", {
+                "verdicts": [
+                    {"trace_id": "EP-001", "verdict": "reachable"},
+                    # EP-002 omitted
+                ],
+            })]),
+        ]
+
+        with _patch_provider(turns), caplog.at_level(
+            _logging.WARNING,
+            logger="packages.code_understanding.dispatch.trace_dispatch",
+        ):
+            result = default_trace_dispatch(
+                fake_model_config, _sample_traces(), str(repo),
+            )
+        assert {v["trace_id"] for v in result} == {"EP-001"}
+        assert any(
+            "EP-002" in r.getMessage() and "no verdict" in r.getMessage()
+            for r in caplog.records
+        )
+
     def test_provider_exception_caught(self, repo, fake_model_config):
         from packages.code_understanding.dispatch.trace_dispatch import (
             default_trace_dispatch,

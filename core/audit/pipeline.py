@@ -266,11 +266,13 @@ def _make_llm_client(opts: AuditPipelineOpts):
     else:
         llm_cfg = LLMConfig(max_cost_per_scan=max_cost)
         client = LLMClient(config=llm_cfg)
-    _ensure_dispatcher_route(client, models)
+    _ensure_dispatcher_route(client, models, run_dir=opts.out_dir)
     return client, models, primary_model
 
 
-def _ensure_dispatcher_route(client, models: list[str]) -> None:
+def _ensure_dispatcher_route(
+    client, models: list[str], run_dir: Path | None = None,
+) -> None:
     """Self-serve an in-process dispatcher for dispatcher-only models.
 
     Bedrock is dispatcher-only (this process holds the AWS
@@ -304,7 +306,12 @@ def _ensure_dispatcher_route(client, models: list[str]) -> None:
         from core.llm.dispatcher.lifecycle import (
             ensure_route_for_model_configs,
         )
-        ensure_route_for_model_configs(candidates, label="raptor-audit")
+        # run_dir places the dispatcher's L5 audit JSONL inside the
+        # audit run's own output directory (in-memory only when the
+        # dir doesn't exist yet).
+        ensure_route_for_model_configs(
+            candidates, label="raptor-audit", run_dir=run_dir,
+        )
     except Exception:  # provider errors surface downstream
         logger.warning(
             "could not start in-process LLM dispatcher for "
@@ -437,8 +444,20 @@ def run_audit_pipeline(opts: AuditPipelineOpts, *, prep_cache=None):
     )
 
 
-STATUS_RANK = {"clean": 1, "dormant": 2, "suspicious": 3, "finding": 4, "error": 0}
+# Max-alarm merge order. "dark" (claims present, no tool channel could
+# verify) sits between dormant and suspicious: it must survive a merge
+# against clean/dormant — leaving it unranked gave it the error rank
+# (0), so a clean sibling silently flattened the unresolved signal —
+# but it never outranks an actual LLM-guess (suspicious) or a
+# tool-gated finding.
+STATUS_RANK = {
+    "error": 0, "clean": 1, "dormant": 2, "dark": 3,
+    "suspicious": 4, "finding": 5,
+}
 _STATUS_RANK = STATUS_RANK
+# Rank floor for the evidence gate in _merge_outcomes ("both sides
+# already at suspicious-or-worse" short-circuit).
+_SUSPICIOUS_RANK = STATUS_RANK["suspicious"]
 NON_MECHANICAL = ("prefilter:", "llm-claimed:")
 _NON_MECHANICAL = NON_MECHANICAL
 
@@ -568,7 +587,9 @@ def _merge_outcomes(sec_outcomes, bf_outcomes):
             higher = sec.status if sr >= br else bf.status
 
             use_max = True
-            if higher in ("suspicious", "finding") and not (sr >= 3 and br >= 3):
+            if higher in ("suspicious", "finding") and not (
+                sr >= _SUSPICIOUS_RANK and br >= _SUSPICIOUS_RANK
+            ):
                 sec_ev = sec.evidence_tool or ""
                 bf_ev = bf.evidence_tool or ""
                 has_evidence = (
@@ -579,21 +600,32 @@ def _merge_outcomes(sec_outcomes, bf_outcomes):
                     use_max = False
 
             if use_max:
-                winner = copy(bf if br > sr else sec)
+                winner_src = bf if br > sr else sec
             else:
                 # Conservative merge: the lower-ranked outcome wins.
                 # It can never be a finding here — use_max is only
                 # False when exactly one side is >= suspicious, so the
                 # lower side is at most dormant.
-                winner = copy(sec if sr <= br else bf)
+                winner_src = sec if sr <= br else bf
+            loser_src = bf if winner_src is sec else sec
+            winner = copy(winner_src)
 
-            if br > sr and winner.evidence_tool and sec.evidence_tool:
+            # Evidence-combine: the SURVIVING outcome's provenance must
+            # lead — startswith-based classification (NON_MECHANICAL,
+            # _is_verification_evidence) reads the first stamp, and the
+            # old rank-keyed branches prefixed the DISCARDED side on
+            # the conservative path (winner = lower rank), so a clean
+            # outcome's mechanical receipt could be read as llm-claimed
+            # (or gain a malformed leading "+" when the loser had no
+            # evidence at all).
+            if (
+                sr != br
+                and winner_src.evidence_tool
+                and loser_src.evidence_tool
+            ):
                 winner.evidence_tool = (
-                    bf.evidence_tool + "+" + sec.evidence_tool
-                )
-            elif sr > br and winner.evidence_tool and bf.evidence_tool:
-                winner.evidence_tool = (
-                    sec.evidence_tool + "+" + bf.evidence_tool
+                    winner_src.evidence_tool
+                    + "+" + loser_src.evidence_tool
                 )
 
             winner.cost_usd = sec.cost_usd + bf.cost_usd
@@ -626,41 +658,57 @@ def run_ensemble_pipeline(opts: AuditPipelineOpts):
 
     client, models, primary_model = _make_llm_client(opts)
 
-    sec_review = make_review_fn(
-        client, task_type="audit", model_name=primary_model,
-        mode=ReviewMode.SECURITY, out_dir=opts.out_dir,
-    )
-    bf_review = make_review_fn(
-        client, task_type="audit", model_name=primary_model,
-        mode=ReviewMode.BUG_FIRST, out_dir=opts.out_dir,
-    )
-
     _counters = {"pass2_skipped": 0, "pass2_run": 0}
     _lock = threading.Lock()
 
-    def ensemble_review_fn(ctx, config):
-        outcome1 = sec_review(ctx, config)
+    def _make_ensemble_fn(model_name):
+        sec_review = make_review_fn(
+            client, task_type="audit", model_name=model_name,
+            mode=ReviewMode.SECURITY, out_dir=opts.out_dir,
+        )
+        bf_review = make_review_fn(
+            client, task_type="audit", model_name=model_name,
+            mode=ReviewMode.BUG_FIRST, out_dir=opts.out_dir,
+        )
 
-        if not _needs_second_pass(outcome1):
+        def ensemble_review_fn(ctx, config):
+            outcome1 = sec_review(ctx, config)
+
+            if not _needs_second_pass(outcome1):
+                with _lock:
+                    _counters["pass2_skipped"] += 1
+                return outcome1
+
             with _lock:
-                _counters["pass2_skipped"] += 1
-            return outcome1
+                _counters["pass2_run"] += 1
 
-        with _lock:
-            _counters["pass2_run"] += 1
+            outcome2 = bf_review(ctx, config)
+            merged = _merge_outcomes([outcome1], [outcome2])
+            if not merged:
+                return outcome1
+            result = merged[0]
+            result.cost_usd = outcome1.cost_usd + outcome2.cost_usd
+            result.duration_s = outcome1.duration_s + outcome2.duration_s
+            return result
 
-        outcome2 = bf_review(ctx, config)
-        merged = _merge_outcomes([outcome1], [outcome2])
-        if not merged:
-            return outcome1
-        result = merged[0]
-        result.cost_usd = outcome1.cost_usd + outcome2.cost_usd
-        result.duration_s = outcome1.duration_s + outcome2.duration_s
-        return result
+        return ensemble_review_fn
+
+    ensemble_review_fn = _make_ensemble_fn(primary_model)
 
     config = _build_orchestrator_config(
         opts, client, models, ReviewMode.SECURITY,
     )
+    if len(models) > 1:
+        # Cross-model panel: one ensemble chain per configured model so
+        # the multi-model dispatch invokes each model's own sec+bf
+        # pipeline. Without this map every panel member fell back to
+        # the primary-pinned chain — the other configured models were
+        # never called (same latent pin run_audit_pipeline fixed for
+        # the plain review fn).
+        config.review_fns_by_model = {
+            m: _make_ensemble_fn(m if m != "default" else None)
+            for m in models
+        }
     # File-level pile-up dampening runs as a pre-export hook INSIDE the
     # orchestrator so the journal correction pass, findings-graded.json
     # and the summary counters all see the same (dampened) statuses.
@@ -905,7 +953,7 @@ def dampen_pileup_pre_export(result, config) -> None:
     counters all agree on the dampened statuses. One JSONL row per
     affected finding lands in ``<out_dir>/dampening-log.jsonl``.
     """
-    import json
+    from core.json import append_jsonl
 
     records: list[dict] = []
     dampened = dampen_file_pileup(result.outcomes, records=records)
@@ -913,10 +961,13 @@ def dampen_pileup_pre_export(result, config) -> None:
     out_dir = getattr(config, "out_dir", None)
     if records and out_dir:
         try:
+            # Hardened append (same trail contract as
+            # suppressions.jsonl): O_NOFOLLOW refuses a symlink planted
+            # at the trail path — the bare open("a") this replaced
+            # followed it, redirecting the append to an arbitrary file.
             path = Path(out_dir) / DAMPENING_LOG
-            with path.open("a", encoding="utf-8") as fh:
-                for rec in records:
-                    fh.write(json.dumps(rec, sort_keys=True) + "\n")
+            for rec in records:
+                append_jsonl(path, rec, sort_keys=True)
         except Exception:
             logger.debug("dampening audit log write failed", exc_info=True)
 

@@ -517,3 +517,42 @@ def test_js_argument_identifiers_omitted_from_dict_when_empty():
     d = g.to_dict()
     init_entry = next(c for c in d["calls"] if c["chain"] == ["init"])
     assert "argument_identifiers" not in init_entry
+
+
+# ---------------------------------------------------------------------------
+# new Function — assigned-then-called
+# ---------------------------------------------------------------------------
+
+
+def test_new_function_assigned_then_called_flags_eval():
+    """``new Function`` compiles code at runtime whether invoked
+    immediately or stored first — the stored form (the common style)
+    previously lost the eval masking flag."""
+    g = extract_call_graph_javascript(
+        'const f = new Function("return 1");\nf();\n'
+    )
+    assert INDIRECTION_EVAL in g.indirection
+
+
+def test_new_of_ordinary_class_not_flagged():
+    g = extract_call_graph_javascript("const w = new Widget();\nw.run();\n")
+    assert INDIRECTION_EVAL not in g.indirection
+
+
+# ---------------------------------------------------------------------------
+# receiver_class narrowing — exactly this.<method>()
+# ---------------------------------------------------------------------------
+
+
+def test_this_field_chain_not_tagged_with_enclosing_class():
+    """In ``this.helper.render()`` the method belongs to the FIELD's
+    class; tagging the enclosing class made the resolver drop the real
+    caller edge."""
+    g = extract_call_graph_javascript(
+        "class Widget {\n"
+        "  render() { this.helper.render(); this.draw(); }\n"
+        "}\n"
+    )
+    per = {tuple(c.chain): c.receiver_class for c in g.calls}
+    assert per[("this", "helper", "render")] is None
+    assert per[("this", "draw")] == "Widget"

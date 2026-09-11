@@ -4,8 +4,12 @@
 // Pattern 1: malloc(n * sizeof(T) * sizeof(T)) — accidental double sizeof.
 // Pattern 2: ptr + n * sizeof(*ptr) — C already scales pointer arithmetic
 //   by the pointee size, so this doubles the offset.
-// Pattern 3: malloc(n * sizeof(T)) where n is already in bytes (e.g. from
-//   strlen or read), causing a 4x/8x over-allocation that masks real bugs.
+//
+// Out of scope: malloc(n * sizeof(T)) where n is already a byte count
+// (e.g. from strlen or read). Whether n counts bytes or elements is a
+// semantic property of the value, invisible to structural matching —
+// the shape is identical to the correct element-count allocation, so
+// no rule implements it.
 //
 // CWE-468: Incorrect Pointer Scaling
 // Zero-FP confidence: very high — these patterns are structurally wrong.

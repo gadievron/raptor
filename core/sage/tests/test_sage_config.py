@@ -34,6 +34,19 @@ class TestSageConfig(unittest.TestCase):
         config = SageConfig()
         self.assertTrue(config.enabled)
 
+    def test_enabled_canonical_spellings(self):
+        """env_flag semantics: `on`/`ON` and whitespace-padded values
+        enable; the hand-rolled parse silently disabled SAGE on all of
+        them. Falsy spellings and junk still disable."""
+        from core.sage.config import SageConfig
+
+        for val in ("on", "ON", " true ", "Yes", "\t1\t"):
+            with patch.dict(os.environ, {"SAGE_ENABLED": val}):
+                self.assertTrue(SageConfig().enabled, repr(val))
+        for val in ("off", "0", "no", "false", "", "definitely"):
+            with patch.dict(os.environ, {"SAGE_ENABLED": val}):
+                self.assertFalse(SageConfig().enabled, repr(val))
+
     @patch.dict(os.environ, {"SAGE_URL": "http://sage.example.com:9090"})
     def test_url_from_env(self):
         from core.sage.config import SageConfig

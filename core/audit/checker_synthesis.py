@@ -14,6 +14,7 @@ and ``OrchestratorConfig`` types to the substrate's ``SeedBug`` /
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -310,6 +311,21 @@ def _sage_replay_rule(
         rule_path = Path(str(meta.get("rule_path") or ""))
         stored_hash = str(meta.get("rule_body_hash") or "")
         if not rule_id or len(stored_hash) < 16 or not rule_path.is_file():
+            continue
+        # Ingestion-time shape check (defense in depth on top of the
+        # RuleLibrary boundary validation): SAGE is an agent-writable
+        # persistent store, and a recalled rule_id flows into library
+        # filenames. Legitimate ids are slugified at mint time
+        # (packages.checker_synthesis.synthesise._slugify), so
+        # anything outside that alphabet — separators, traversal
+        # segments — is a planted record, not a real rule.
+        if len(rule_id) > 200 or ".." in rule_id or not re.fullmatch(
+            r"[A-Za-z0-9_.-]+", rule_id,
+        ):
+            logger.warning(
+                "SAGE rule recall: rejecting malformed rule_id %r",
+                rule_id[:80],
+            )
             continue
         try:
             body = rule_path.read_text(encoding="utf-8")

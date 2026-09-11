@@ -37,6 +37,20 @@ logger = logging.getLogger(__name__)
 _INSTALLED_PACK_DIRS: set[Path] = set()
 
 
+def _codeql_user_state_paths() -> list[str]:
+    """Read-allowlist entries for codeql's per-user state.
+
+    The default sandbox runner restricts reads to system dirs + target +
+    output + /tmp, which would hide codeql's pack cache and compile
+    cache (``~/.codeql``) and its user config (``~/.config/codeql``) —
+    every stdlib-importing query would then fail to compile. These are
+    read-only grants; writes stay confined to the database dir + /tmp.
+    """
+    home = Path.home()
+    candidates = (home / ".codeql", home / ".config" / "codeql")
+    return [str(p) for p in candidates if p.exists()]
+
+
 def _find_pack_dir(query_path: Path) -> Path | None:
     """Walk up from a .ql file looking for the containing pack's qlpack.yml.
 
@@ -61,11 +75,13 @@ def _ensure_pack_installed(
     Skipped when:
       - The query lives outside any qlpack.yml-owning directory
       - The pack already has a `codeql-pack.lock.yml` (already installed)
-      - We've already attempted install for this pack in this process
+      - We've already SUCCESSFULLY installed this pack in this process
 
     Failures are logged but do not raise — the subsequent
     `codeql database analyze` call surfaces a clearer error if the
-    install was actually required.
+    install was actually required. Failed attempts are NOT cached:
+    a transient failure (e.g. network blocked for this run) must not
+    suppress the retry once the environment is fixed.
     """
     pack_dir = _find_pack_dir(Path(query_path))
     if pack_dir is None:
@@ -79,17 +95,25 @@ def _ensure_pack_installed(
         return
 
     try:
-        runner(
+        proc = runner(
             [codeql_bin, "pack", "install", str(pack_dir)],
             capture_output=True, text=True,
             timeout=180, env=env,
         )
-        _INSTALLED_PACK_DIRS.add(pack_dir)
     except (subprocess.TimeoutExpired, OSError) as e:
         logger.warning(
             "codeql pack install on %s failed: %s — analyze may fail with a clearer error",
             pack_dir, e,
         )
+        return
+    if getattr(proc, "returncode", 1) != 0:
+        logger.warning(
+            "codeql pack install on %s exited %s — leaving it uncached so"
+            " a later call can retry; analyze may fail with a clearer error",
+            pack_dir, getattr(proc, "returncode", None),
+        )
+        return
+    _INSTALLED_PACK_DIRS.add(pack_dir)
 
 
 _SYNTAX_EXAMPLE = """\
@@ -228,9 +252,11 @@ class CodeQLAdapter(ToolAdapter):
 
         if env is None:
             from core.config import RaptorConfig
-            # preserve_proxy: the lazy `codeql pack install` on this
-            # path fetches dep packs from the registry; CodeQL's Java
-            # stack honours the lowercase https_proxy env var.
+            # preserve_proxy: the lazy `codeql pack install` (which
+            # runs unsandboxed — see below) fetches dep packs from the
+            # registry; CodeQL's Java stack honours the lowercase
+            # https_proxy env var. The sandboxed analyze itself never
+            # needs the network.
             env = RaptorConfig.get_safe_env(preserve_proxy=True)
 
         # `output=` grants write access to the database directory.
@@ -245,10 +271,17 @@ class CodeQLAdapter(ToolAdapter):
         # …/cache/.lock (eventual cause: FileNotFoundException
         # …/cache/.lock)" on a database that demonstrably exists
         # on disk with a writable cache subdir.
+        # fake_home=False: codeql resolves its pack + compile caches
+        # under the real $HOME; an empty fake HOME would make every
+        # stdlib-importing query fail to compile. restrict_reads keeps
+        # the rest of the home directory unreadable, with the codeql
+        # state dirs explicitly re-granted read-only.
         runner = (
             make_sandbox_runner(
                 target=self._database_path,
                 output=self._database_path,
+                fake_home=False,
+                readable_paths=_codeql_user_state_paths(),
             )
             if self._sandbox else subprocess.run
         )
@@ -260,10 +293,24 @@ class CodeQLAdapter(ToolAdapter):
         # absolute query path. Standard installed packs (under
         # ~/.codeql/packages/codeql/) always have lockfiles already,
         # so this is a no-op for them.
-        _ensure_pack_installed(query_path, self._codeql_bin, runner, env)
+        # The install step runs UNSANDBOXED (plain subprocess): it only
+        # processes the RAPTOR-shipped pack manifest — never the target
+        # code or an LLM-generated rule — and it must reach the pack
+        # registry (via the preserved proxy env) to build the lockfile,
+        # which the sandbox's network block would deny. The analyze
+        # call below stays sandboxed.
+        _ensure_pack_installed(query_path, self._codeql_bin, subprocess.run, env)
 
         try:
-            with TemporaryDirectory(prefix="codeql_prebuilt_") as tmp:
+            # Scratch (SARIF output, temp pack) lives INSIDE the
+            # database dir: the sandbox's only host-visible writable
+            # surface is `output` (the db) — the mount-ns backend
+            # gives the child a PRIVATE /tmp, so a workspace under
+            # the host /tmp would leave the SARIF invisible to the
+            # parent (and the temp pack's lockfile unwritable).
+            with TemporaryDirectory(
+                prefix="codeql_prebuilt_", dir=str(self._database_path),
+            ) as tmp:
                 sarif_path = Path(tmp) / "result.sarif"
                 cmd = [
                     self._codeql_bin,
@@ -303,6 +350,15 @@ class CodeQLAdapter(ToolAdapter):
             return ToolEvidence(
                 tool=self.name, rule=rule_label, success=False,
                 error=f"workspace setup failed: {e}",
+            )
+
+        if matches is None:
+            # Parse failure is a tool failure, never a default-refuted
+            # "no matches" — the runner grades success=False as
+            # inconclusive.
+            return ToolEvidence(
+                tool=self.name, rule=rule_label, success=False,
+                error="SARIF output unreadable (parse failure)",
             )
 
         n = len(matches)
@@ -355,24 +411,42 @@ class CodeQLAdapter(ToolAdapter):
 
         if env is None:
             from core.config import RaptorConfig
-            # preserve_proxy: the lazy `codeql pack install` on this
-            # path fetches dep packs from the registry; CodeQL's Java
-            # stack honours the lowercase https_proxy env var.
+            # preserve_proxy: the lazy `codeql pack install` (which
+            # runs unsandboxed — see below) fetches dep packs from the
+            # registry; CodeQL's Java stack honours the lowercase
+            # https_proxy env var. The sandboxed analyze itself never
+            # needs the network.
             env = RaptorConfig.get_safe_env(preserve_proxy=True)
 
+        # Same sandbox shape as run_prebuilt_query — see the comment
+        # there for the output= (IMB cache write) and fake_home=False
+        # (real-HOME pack cache) rationale.
         runner = (
             make_sandbox_runner(
                 target=self._database_path,
                 output=self._database_path,
+                fake_home=False,
+                readable_paths=_codeql_user_state_paths(),
             )
             if self._sandbox else subprocess.run
         )
 
+        # Unsandboxed install for the same reason as run_prebuilt_query:
+        # RAPTOR-shipped manifests only, and the lockfile fetch needs
+        # the network the sandbox denies. Analyze stays sandboxed.
         for qp in unique_paths:
-            _ensure_pack_installed(Path(qp), self._codeql_bin, runner, env)
+            _ensure_pack_installed(Path(qp), self._codeql_bin, subprocess.run, env)
 
         try:
-            with TemporaryDirectory(prefix="codeql_batch_") as tmp:
+            # Scratch (SARIF output, temp pack) lives INSIDE the
+            # database dir: the sandbox's only host-visible writable
+            # surface is `output` (the db) — the mount-ns backend
+            # gives the child a PRIVATE /tmp, so a workspace under
+            # the host /tmp would leave the SARIF invisible to the
+            # parent (and the temp pack's lockfile unwritable).
+            with TemporaryDirectory(
+                prefix="codeql_batch_", dir=str(self._database_path),
+            ) as tmp:
                 sarif_path = Path(tmp) / "result.sarif"
                 cmd = [
                     self._codeql_bin,
@@ -426,17 +500,40 @@ class CodeQLAdapter(ToolAdapter):
                 for qp in unique_paths
             }
 
+        if all_matches is None:
+            # Parse failure is a tool failure for every query in the
+            # batch, never a default-refuted "no matches".
+            return {
+                qp: ToolEvidence(
+                    tool=self.name, rule=qp, success=False,
+                    error="SARIF output unreadable (parse failure)",
+                )
+                for qp in unique_paths
+            }
+
         # Build a lookup from SARIF ruleId back to the originating
         # query path.  CodeQL sets ruleId to the query's @id metadata.
         # Register by both the full @id (extracted from the .ql source)
-        # and the bare stem as a fallback.  Using setdefault for stems
-        # avoids misattribution when query-pack subdirs contain queries
-        # with colliding filenames.
+        # and the bare stem as a fallback.  A stem shared by two queries
+        # cannot attribute anything — crediting all its matches to
+        # whichever query registered first would misattribute the other
+        # query's results — so colliding stems are dropped from the
+        # lookup and their results flow into the unattributed handling
+        # below.
         rule_to_qp: dict[str, str] = {}
+        ambiguous_stems: set[str] = set()
         for qp in unique_paths:
-            rule_to_qp.setdefault(Path(qp).stem, qp)
+            stem = Path(qp).stem
+            if stem in rule_to_qp and rule_to_qp[stem] != qp:
+                ambiguous_stems.add(stem)
+            else:
+                rule_to_qp.setdefault(stem, qp)
             try:
-                ql_header = Path(qp).read_text(encoding="utf-8", errors="replace")[:4096]
+                # Bounded header scan for @id — the metadata comment
+                # normally sits in the first few hundred bytes; 64 KiB
+                # tolerates long licence/doc headers while still
+                # capping the read on a pathological file.
+                ql_header = Path(qp).read_text(encoding="utf-8", errors="replace")[:65536]
                 for line in ql_header.split("\n"):
                     stripped = line.strip().lstrip("*").strip()
                     if stripped.startswith("@id "):
@@ -446,8 +543,11 @@ class CodeQLAdapter(ToolAdapter):
                         break
             except OSError:
                 pass
+        for stem in ambiguous_stems:
+            rule_to_qp.pop(stem, None)
 
         matches_by_qp: dict[str, list[dict]] = {qp: [] for qp in unique_paths}
+        unattributed: list[dict] = []
         for m in all_matches:
             rid = m.get("rule", "")
             target = rule_to_qp.get(rid)
@@ -456,10 +556,34 @@ class CodeQLAdapter(ToolAdapter):
                 target = rule_to_qp.get(rid.rsplit("/", 1)[-1])
             if target is not None:
                 matches_by_qp[target].append(m)
+            else:
+                unattributed.append(m)
+
+        unattributed_error = ""
+        if unattributed:
+            unknown_rids = sorted({str(m.get("rule", "")) for m in unattributed})
+            unattributed_error = (
+                f"{len(unattributed)} batch result(s) could not be "
+                f"attributed to a query (ruleIds: {unknown_rids[:5]})"
+            )
 
         results: dict[str, ToolEvidence] = {}
         for qp in unique_paths:
             qp_matches = matches_by_qp[qp]
+            if not qp_matches and unattributed:
+                # Any unattributed result could belong to this query, so
+                # a clean "no matches" (which downstream may grade as a
+                # refutation) is not supportable — report a tool failure
+                # instead. Queries with positively attributed matches
+                # keep their evidence.
+                results[qp] = ToolEvidence(
+                    tool=self.name, rule=qp, success=False,
+                    error=(
+                        f"{unattributed_error}; cannot distinguish "
+                        "'no matches' from misattribution for this query"
+                    ),
+                )
+                continue
             n = len(qp_matches)
             files = sorted({m["file"] for m in qp_matches if m.get("file")})
             if n:
@@ -518,9 +642,11 @@ class CodeQLAdapter(ToolAdapter):
 
         if env is None:
             from core.config import RaptorConfig
-            # preserve_proxy: the lazy `codeql pack install` on this
-            # path fetches dep packs from the registry; CodeQL's Java
-            # stack honours the lowercase https_proxy env var.
+            # preserve_proxy: the `codeql pack install` step (which
+            # runs unsandboxed — see below) fetches dep packs from the
+            # registry; CodeQL's Java stack honours the lowercase
+            # https_proxy env var. The sandboxed analyze itself never
+            # needs the network.
             env = RaptorConfig.get_safe_env(preserve_proxy=True)
 
         # codeql wants the .ql in a query pack alongside a qlpack.yml.
@@ -531,7 +657,15 @@ class CodeQLAdapter(ToolAdapter):
         # use anything beyond the bare `import python` core fail to
         # compile.
         try:
-            with TemporaryDirectory(prefix="codeql_hv_") as tmp:
+            # Scratch (SARIF output, temp pack) lives INSIDE the
+            # database dir: the sandbox's only host-visible writable
+            # surface is `output` (the db) — the mount-ns backend
+            # gives the child a PRIVATE /tmp, so a workspace under
+            # the host /tmp would leave the SARIF invisible to the
+            # parent (and the temp pack's lockfile unwritable).
+            with TemporaryDirectory(
+                prefix="codeql_hv_", dir=str(self._database_path),
+            ) as tmp:
                 pack_dir = Path(tmp) / "hv-pack"
                 pack_dir.mkdir(parents=True, exist_ok=True)
                 query_file = pack_dir / "query.ql"
@@ -542,11 +676,16 @@ class CodeQLAdapter(ToolAdapter):
 
                 # See note in run_prebuilt_query — `output=` is
                 # required so codeql can write to its IMB cache
-                # under `<db>/<lang>/default/cache/`.
+                # under `<db>/<lang>/default/cache/`, and
+                # fake_home=False keeps the real-HOME pack cache
+                # resolvable (restrict_reads still hides the rest
+                # of the home directory).
                 runner = (
                     make_sandbox_runner(
                         target=self._database_path,
                         output=self._database_path,
+                        fake_home=False,
+                        readable_paths=_codeql_user_state_paths(),
                     )
                     if self._sandbox else subprocess.run
                 )
@@ -557,12 +696,17 @@ class CodeQLAdapter(ToolAdapter):
                 # fast. Failure here doesn't abort — the query may not
                 # need any external imports: exec/timeout failures are
                 # tolerated but logged, matching _ensure_pack_installed
-                # (the analyze step below fails loudly with the same
-                # runner if the environment is truly broken).
-                # SandboxSetupError is a BaseException and passes
-                # through regardless.
+                # (the analyze step below fails loudly if the
+                # environment is truly broken).
+                # UNSANDBOXED (plain subprocess): the install reads the
+                # RAPTOR-generated qlpack.yml only — never the target
+                # code, and the LLM query is not evaluated — and it
+                # needs the registry (proxy env preserved above) to
+                # build the lockfile, which the sandbox's network block
+                # would deny. Only the analyze below, which executes
+                # the LLM query, runs sandboxed.
                 try:
-                    runner(
+                    subprocess.run(
                         [self._codeql_bin, "pack", "install", str(pack_dir)],
                         capture_output=True, text=True,
                         timeout=120, env=env,

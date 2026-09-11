@@ -421,3 +421,15 @@ class TestPromoteSpecTierByGrade:
         assert result == EvidenceTier.XREF_BACKED
         reloaded = load_specs(run_dir)
         assert reloaded[0].source == "operator_confirmed"
+
+
+def test_emit_extension_pack_shim_uses_env_repo_root() -> None:
+    # The shim must take the repo root from the launcher-set env slot
+    # (hard lookup), never from a __file__-relative walk — the
+    # __file__ form is reserved for libexec/ dispatch scripts.
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "scripts"
+           / "emit-extension-pack").read_text(encoding="utf-8")
+    assert 'sys.path.insert(0, os.environ["RAPTOR_DIR"])' in src
+    assert "parents[3]" not in src

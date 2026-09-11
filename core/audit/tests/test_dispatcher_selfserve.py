@@ -108,7 +108,7 @@ def stub_selfserve(monkeypatch):
 
     calls: list[str] = []
 
-    def _fake_ensure(label: str = "inprocess"):
+    def _fake_ensure(label: str = "inprocess", run_dir=None):
         calls.append(label)
         monkeypatch.setenv("RAPTOR_LLM_SOCKET", "/tmp/stub-route.sock")
         monkeypatch.setenv("RAPTOR_LLM_TOKEN_FD", "42")

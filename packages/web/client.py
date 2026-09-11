@@ -12,6 +12,7 @@ Handles HTTP requests with safety features:
 import contextlib
 import ipaddress
 import socket
+import threading
 import time
 from types import TracebackType
 from typing import TYPE_CHECKING, Any
@@ -53,6 +54,36 @@ _MAX_REQUEST_HISTORY = 1024
 
 logger = get_logger()
 
+# Thread-safe DNS pinning. A per-request save/patch/restore of the
+# process-global socket.getaddrinfo races under concurrent callers
+# (thread B can save thread A's patch as its "original" and restore it
+# permanently). Instead one wrapper is installed exactly once and
+# consults a THREAD-LOCAL pin stack: requests/urllib3 resolve on the
+# calling thread, so the pin is visible exactly where it is needed and
+# invisible everywhere else. With no pins on the current thread the
+# wrapper is a pure passthrough.
+_pin_install_lock = threading.Lock()
+_pin_local = threading.local()
+_original_getaddrinfo = None
+
+
+def _pinning_getaddrinfo(host, port, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+    pins = getattr(_pin_local, "stack", None)
+    if pins:
+        for mapping in reversed(pins):
+            addrs = mapping.get(host)
+            if addrs is not None:
+                return addrs
+    return _original_getaddrinfo(host, port, *args, **kwargs)
+
+
+def _ensure_pin_wrapper_installed() -> None:
+    global _original_getaddrinfo
+    with _pin_install_lock:
+        if _original_getaddrinfo is None:
+            _original_getaddrinfo = socket.getaddrinfo
+            socket.getaddrinfo = _pinning_getaddrinfo
+
 
 class WebClient:
     """Secure HTTP client for web application testing."""
@@ -65,6 +96,22 @@ class WebClient:
         self.timeout = timeout
         self.rate_limit = rate_limit  # Seconds between requests
         self.last_request_time = 0.0
+        # Serialises the rate limiter's check-then-set: concurrent
+        # callers (e.g. the common-paths thread pool) otherwise all
+        # read a stale last_request_time and burst past the limit.
+        self._rate_lock = threading.Lock()
+        # Monotonic count of transport-level request failures (timeouts,
+        # connection errors — NOT scope refusals). Checks swallow their
+        # own probe exceptions by design, which makes "target died
+        # mid-scan" indistinguishable from "ran clean"; the scanner
+        # diffs this counter around each check so a dead/rate-limited/
+        # WAF-banned target surfaces as degraded coverage instead of a
+        # clean compliant report. Per-check delta attribution assumes
+        # checks run sequentially over this client (they do: both check
+        # phases iterate one check at a time); concurrent client use
+        # elsewhere (the discovery thread pool) happens outside any
+        # check window.
+        self.transport_errors = 0
         self.verify_ssl = verify_ssl
         self.reveal_secrets = reveal_secrets
         self.block_private_ips = block_private_ips
@@ -111,7 +158,15 @@ class WebClient:
         """Return normalized (scheme, host, port) tuple for URL scope checks."""
         parsed = urlparse(url)
         default_port = 443 if parsed.scheme == 'https' else 80
-        return (parsed.scheme.lower(), (parsed.hostname or '').lower(), parsed.port or default_port)
+        try:
+            port = parsed.port
+        except ValueError:
+            # Out-of-range or non-numeric port (a hostile crawled anchor
+            # like http://h:99999/x). Such a URL can never match a real
+            # origin — classify it out of scope instead of letting the
+            # ValueError abort the caller's whole page/phase.
+            port = -1
+        return (parsed.scheme.lower(), (parsed.hostname or '').lower(), port or default_port)
 
     def _is_in_scope(self, url: str) -> bool:
         """Check whether URL stays within the configured base origin."""
@@ -169,29 +224,33 @@ class WebClient:
     @staticmethod
     @contextlib.contextmanager
     def _pinned_dns(pinned):
-        """Pin socket.getaddrinfo to pre-validated results for one request.
+        """Pin DNS resolution to pre-validated results for one request.
 
         Eliminates the DNS-rebinding TOCTOU: requests/urllib3 internally
         calls getaddrinfo, which would re-resolve the hostname. By
         returning our already-validated addresses, the connection goes
         to the IP we checked — not a rebinded one.
+
+        The pin rides a THREAD-LOCAL stack consulted by a single
+        process-wide wrapper (installed once, never removed). The old
+        per-request save/patch/restore of socket.getaddrinfo raced
+        under concurrent callers and could permanently leave a stale
+        pinning closure installed process-wide.
         """
         if pinned is None:
             yield
             return
         hostname, _port, addrs = pinned
-        _original = socket.getaddrinfo
-
-        def _patched(host, p, *args, **kwargs):
-            if host == hostname:
-                return addrs
-            return _original(host, p, *args, **kwargs)
-
-        socket.getaddrinfo = _patched
+        _ensure_pin_wrapper_installed()
+        stack = getattr(_pin_local, "stack", None)
+        if stack is None:
+            stack = []
+            _pin_local.stack = stack
+        stack.append({hostname: addrs})
         try:
             yield
         finally:
-            socket.getaddrinfo = _original
+            stack.pop()
 
     def _build_url(self, path: str) -> str:
         """Build a request URL and reject paths that leave the target origin."""
@@ -229,11 +288,19 @@ class WebClient:
         return next_url
 
     def _rate_limit_wait(self) -> None:
-        """Enforce rate limiting between requests."""
-        elapsed = time.time() - self.last_request_time
-        if elapsed < self.rate_limit:
-            time.sleep(self.rate_limit - elapsed)
-        self.last_request_time = time.time()
+        """Enforce rate limiting between requests.
+
+        Reservation-based and lock-guarded: each caller atomically
+        claims the next send slot, then sleeps until it. Concurrent
+        threads therefore space out at the configured rate instead of
+        all reading a stale ``last_request_time`` and bursting.
+        """
+        now = time.time()
+        with self._rate_lock:
+            scheduled = max(now, self.last_request_time + self.rate_limit)
+            self.last_request_time = scheduled
+        if scheduled > now:
+            time.sleep(scheduled - now)
 
     def _redact_for_logging(self, value: object) -> str:
         """Apply this client's secret-redaction policy to log/display text."""
@@ -254,14 +321,32 @@ class WebClient:
 
         logger.debug("%s %s -> %s (%.2fs)", method, log_url, response.status_code, duration)
 
-    def _send_scoped_request(self, method: str, url: str, **kwargs) -> requests.Response:
-        """Send a request while enforcing target scope across redirects."""
+    def _send_scoped_request(self, method: str, url: str,
+                             follow_redirects: bool = True,
+                             **kwargs) -> requests.Response:
+        """Send a request while enforcing target scope across redirects.
+
+        ``follow_redirects=False`` returns the FIRST response verbatim,
+        including 3xx responses whose Location points off-origin — the
+        redirect is observed, never fetched, so no scope check applies
+        to the Location value. Checks that grade redirect targets
+        (host-header poisoning, OAuth redirect_uri) need this: with
+        internal following, an out-of-scope Location raises before the
+        check ever sees the 3xx, structurally killing their positive
+        path.
+        """
         history: list[requests.Response] = []
         current_url = url
         current_method = method.upper()
         request_kwargs = dict(kwargs)
 
-        for _ in range(_MAX_REDIRECTS + 1):
+        for hop in range(_MAX_REDIRECTS + 1):
+            if hop:
+                # Redirect hops are real requests against the target:
+                # without a per-hop wait a redirecting endpoint
+                # multiplies the effective rate past the configured
+                # limit exactly where targets are most fragile.
+                self._rate_limit_wait()
             pinned = self._resolve_and_validate(current_url)
             with self._pinned_dns(pinned):
                 response = self.session.request(
@@ -280,7 +365,7 @@ class WebClient:
             # responses (or chunked-encoding slowloris) and OOM the
             # scanner. Forcibly stream the body up to the cap; close
             # the connection if the upstream tries to exceed.
-            if response.status_code not in _REDIRECT_STATUSES:
+            if response.status_code not in _REDIRECT_STATUSES or not follow_redirects:
                 self._enforce_response_cap(response)
                 return response
 
@@ -289,20 +374,19 @@ class WebClient:
                 self._enforce_response_cap(response)
                 return response
 
-            # Eagerly close the intermediate response's underlying
-            # urllib3 connection back to the pool. Pre-fix
-            # `history.append(response)` kept the Response object
-            # in memory; the connection stayed checked out of the
-            # pool until garbage collection. On long redirect
-            # chains (or many requests with redirects in flight),
-            # the pool exhausted and subsequent requests blocked
-            # waiting for connections to free up.
-            #
-            # `.close()` only releases the underlying connection;
-            # the Response's status_code, headers, and (already-
-            # consumed) `.content` / `.text` remain accessible
-            # via the object — caller can still inspect
-            # `response.history[i].headers` etc. without issue.
+            # Buffer the hop body (size-capped) BEFORE closing: the
+            # hop was opened with stream=True, so without a read its
+            # `.content` would silently be empty for every consumer of
+            # redirect-chain evidence (history[i].content). Redirect
+            # bodies are typically tiny; the cap bounds the hostile
+            # case. Then eagerly close the intermediate response's
+            # underlying urllib3 connection back to the pool — on long
+            # redirect chains an unclosed hop kept its connection
+            # checked out until garbage collection and exhausted the
+            # pool. After the buffered read, status_code, headers, and
+            # `.content` / `.text` remain accessible on the history
+            # entry.
+            self._enforce_response_cap(response)
             with contextlib.suppress(*_CLOSE_ERRORS):
                 response.close()
 
@@ -364,8 +448,14 @@ class WebClient:
             response._content = b"".join(chunks) if chunks else b""
 
     def get(self, path: str, params: dict | None = None,
-            headers: dict | None = None) -> requests.Response:
-        """Send GET request."""
+            headers: dict | None = None,
+            allow_redirects: bool = True) -> requests.Response:
+        """Send GET request.
+
+        ``allow_redirects=False`` returns the first response even when
+        it is a 3xx with an off-origin Location (observed, not
+        followed) — see ``_send_scoped_request``.
+        """
         self._rate_limit_wait()
 
         url = self._build_url(path)
@@ -375,6 +465,7 @@ class WebClient:
             response = self._send_scoped_request(
                 'GET',
                 url,
+                follow_redirects=allow_redirects,
                 params=params,
                 headers=headers or {},
             )
@@ -385,15 +476,18 @@ class WebClient:
             return response
 
         except requests.exceptions.Timeout:
+            self.transport_errors += 1
             logger.warning("Timeout on GET %s", self._redact_for_logging(url))
             raise
         except requests.exceptions.RequestException as e:
+            self.transport_errors += 1
             logger.error("Request failed: %s", self._redact_for_logging(e))
             raise
 
     def post(self, path: str, data: dict | None = None,
              json_data: dict | None = None,
-             headers: dict | None = None) -> requests.Response:
+             headers: dict | None = None,
+             allow_redirects: bool = True) -> requests.Response:
         """Send POST request."""
         self._rate_limit_wait()
 
@@ -404,6 +498,7 @@ class WebClient:
             response = self._send_scoped_request(
                 'POST',
                 url,
+                follow_redirects=allow_redirects,
                 data=data,
                 json=json_data,
                 headers=headers or {},
@@ -415,6 +510,7 @@ class WebClient:
             return response
 
         except requests.exceptions.RequestException as e:
+            self.transport_errors += 1
             logger.error("POST request failed: %s", self._redact_for_logging(e))
             raise
 

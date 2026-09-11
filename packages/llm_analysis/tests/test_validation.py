@@ -57,3 +57,44 @@ class TestCheckSelfConsistency:
         assert results["F1"]["self_contradictory"] is True
         assert "self_contradictory" not in results["F2"]
         assert "self_contradictory" not in results["F3"]  # FP verdict matches FP reasoning
+
+
+class TestNonStringShapes:
+    """generate_structured's descriptive schema is not enforced —
+    ruling can come back as a dict ({'status': ...}) and reasoning as
+    a list; the check must adjudicate them, not crash the retry
+    stage."""
+
+    def test_dict_ruling_status_still_flags(self):
+        results = {
+            "f1": {
+                "is_true_positive": True,
+                "is_exploitable": True,
+                "ruling": {"status": "false_positive"},
+                "reasoning": "solid reasoning",
+            },
+        }
+        assert check_self_contradiction(results) == 1
+        assert results["f1"]["self_contradictory"] is True
+
+    def test_dict_ruling_consistent_not_flagged(self):
+        results = {
+            "f1": {
+                "is_true_positive": True,
+                "is_exploitable": True,
+                "ruling": {"status": "exploitable"},
+                "reasoning": "solid reasoning",
+            },
+        }
+        assert check_self_contradiction(results) == 0
+
+    def test_non_string_reasoning_does_not_crash(self):
+        results = {
+            "f1": {
+                "is_true_positive": True,
+                "is_exploitable": True,
+                "ruling": "exploitable",
+                "reasoning": ["bullet one", "bullet two"],
+            },
+        }
+        assert check_self_contradiction(results) == 0

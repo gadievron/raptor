@@ -44,7 +44,9 @@ What this detector must defend against:
     ships ``@esbuild/linux-x64/bin/esbuild`` and 14 sibling packages
     that exist ENTIRELY to ship the per-platform binary.  Defence:
     name-suffix allowlist via regex in
-    ``data/binary_opt_in_locations.json``.
+    ``data/binary_opt_in_locations.json``, keyed on the owning
+    manifest's OWN ``data.name`` — never on a dep it declares, whose
+    ordering the scanned repo controls.
 
   * **Manifest opt-out abuse** — attacker adds an innocuous allowlisted
     field (``"os": ["linux"]``) to the scanned repo's own package.json
@@ -244,14 +246,14 @@ def _is_executable_extension(path: Path) -> bool:
     return path.suffix.lower() in {".so", ".dylib", ".dll", ".node", ".exe"}
 
 
-def _name_is_per_platform_pkg(dep: Dependency) -> bool:
-    """True if the dep's NAME matches a per-platform binary package
+def _is_per_platform_name(name: str) -> bool:
+    """True if ``name`` matches a per-platform binary package
     convention (esbuild, swc, bun, etc.)."""
     allowlist = _load_allowlist()
     patterns = allowlist.get("name_suffix_opt_in", {}).get("patterns", [])
     for pat in patterns:
         try:
-            if re.match(pat, dep.name):
+            if re.match(pat, name):
                 return True
         except re.error:
             logger.warning(
@@ -260,6 +262,36 @@ def _name_is_per_platform_pkg(dep: Dependency) -> bool:
                 pat,
             )
     return False
+
+
+def _manifest_own_name(manifest: Manifest) -> str | None:
+    """The package's OWN declared name (npm ``data.name``); None when
+    unreadable / not an npm manifest.
+
+    The per-platform suppression must key on the name the manifest
+    declares for ITSELF — the same resolution
+    ``install_hooks._resolve_host`` performs.  Keying on any dep the
+    manifest DECLARES would hand suppression to attacker-controlled
+    ordering: listing ``@esbuild/linux-x64`` as the first dependency
+    of an ordinary package would then suppress every binary under
+    that manifest.
+    """
+    if manifest.path.name != "package.json":
+        # The per-platform naming convention (esbuild / swc / bun
+        # style) is an npm phenomenon; other ecosystems don't get
+        # name-based suppression.
+        return None
+    text = _safe_read.read_bounded(manifest.path, follow_symlinks=False)
+    if text is None:
+        return None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    name = data.get("name")
+    return name if isinstance(name, str) and name else None
 
 
 def _manifest_declares_native(manifest: Manifest) -> bool:
@@ -335,7 +367,10 @@ def _path_matches_allowlist(
     allowlist pattern.  ``magic_required`` entries additionally
     require the file's first bytes to match the named family — so a
     ``foo.wasm`` that ships an ELF wearing the wasm extension does
-    NOT ride the wasm allowlist."""
+    NOT ride the wasm allowlist.  ``magic_required`` is either one
+    family name or a list of family names (any listed family
+    satisfies it — e.g. a ``.node`` NAPI slot is ELF on Linux,
+    Mach-O on macOS, PE on Windows)."""
     allowlist = _load_allowlist()
     rel_str = rel.as_posix()
     for entry in allowlist.get("patterns", []):
@@ -350,7 +385,13 @@ def _path_matches_allowlist(
             continue
         magic_required = entry.get("magic_required")
         if magic_required:
-            required_magics = _MAGIC.get(magic_required, ())
+            families = (
+                magic_required if isinstance(magic_required, list)
+                else [magic_required]
+            )
+            required_magics = tuple(
+                m for fam in families for m in _MAGIC.get(fam, ())
+            )
             if not any(head.startswith(m) for m in required_magics):
                 # Pattern matched on the PATH but content doesn't
                 # match the required family — refuse the
@@ -445,9 +486,10 @@ def scan_target(
     # top-level manifest; monorepos have several.
     manifests_list = list(manifests)
     deps_list = list(deps)
-    # Per-manifest declaration answers, computed lazily so each
-    # manifest body is parsed at most once regardless of hit count.
-    declares_cache: dict = {}
+    # Per-manifest declaration / own-name answers, computed lazily so
+    # each manifest body is parsed at most once regardless of hit count.
+    declares_cache: dict[Path, bool] = {}
+    own_name_cache: dict[Path, str | None] = {}
     out: list[BinaryHit] = []
     for path in _walk_for_binaries(target):
         result = _classify_or_none(path)
@@ -460,14 +502,21 @@ def scan_target(
             continue
         if _path_matches_allowlist(rel, head):
             continue
-        # Find the closest manifest above this path; default to the
-        # placeholder dep if none.
+        owner = _closest_manifest(path, manifests_list)
+        # Per-platform package suppression keys on the owning
+        # manifest's OWN name (``data.name``) — never on any dep it
+        # declares, whose ordering the scanned repo controls.
+        if owner is not None:
+            if owner.path not in own_name_cache:
+                own_name_cache[owner.path] = _manifest_own_name(owner)
+            own_name = own_name_cache[owner.path]
+            if own_name is not None and _is_per_platform_name(own_name):
+                continue
+        # Find the closest manifest's dep for finding attribution;
+        # default to the placeholder dep if none.
         host = _closest_dep(path, manifests_list, deps_list)
-        if host is not None and _name_is_per_platform_pkg(host):
-            continue
         if host is None:
             host = _placeholder_dep(target)
-        owner = _closest_manifest(path, manifests_list)
         declared = False
         if owner is not None:
             if owner.path not in declares_cache:

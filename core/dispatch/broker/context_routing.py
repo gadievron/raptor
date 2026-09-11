@@ -69,7 +69,16 @@ def select_by_context(
         return hint.model
 
     if hint and hint.tier == "prefer":
-        if hint.model not in (hint.exclude_models or frozenset()):
+        # A prefer hint only steers WITHIN the caller's candidate list.
+        # A hinted model the caller filtered out (budget, offline,
+        # health) must fall through to best-fit selection, not bypass
+        # that filtering just because it exists in MODEL_LIMITS.
+        # (``require`` is different by contract: a hard override the
+        # caller opted into.)
+        if (
+            hint.model in candidates
+            and hint.model not in (hint.exclude_models or frozenset())
+        ):
             try:
                 limit = _effective_limit(hint.model, headroom)
                 if prompt_tokens <= limit:

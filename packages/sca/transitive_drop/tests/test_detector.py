@@ -780,3 +780,92 @@ class TestAdapterMavenPurl:
         result = _make_finding(f)
         assert "org.apache.commons/commons-text" in result.dependency.purl
         assert ":" not in result.dependency.purl.split("pkg:maven/", 1)[-1].split("@")[0]
+
+
+# ---------------------------------------------------------------------------
+# Severity max — full label set, no positional lookup
+# ---------------------------------------------------------------------------
+
+
+def test_max_severity_none_never_demotes_recorded_severity() -> None:
+    """A legitimate severity-'none' finding must not demote an
+    already-recorded high — the label maps to rank 0, not to a
+    lookup failure that returns the newcomer."""
+    from packages.sca.transitive_drop.detector import _max_severity
+    assert _max_severity("high", "none") == "high"
+
+
+def test_max_severity_still_escalates() -> None:
+    from packages.sca.transitive_drop.detector import _max_severity
+    assert _max_severity("low", "critical") == "critical"
+    assert _max_severity(None, "medium") == "medium"
+    # Case-insensitive: capitalised labels rank correctly.
+    assert _max_severity("low", "CRITICAL") == "CRITICAL"
+
+
+# ---------------------------------------------------------------------------
+# Ecosystem-aware latest-stable selection
+# ---------------------------------------------------------------------------
+
+
+class _StubReleases:
+    """Minimal registry client exposing the ``releases`` shape."""
+
+    def __init__(self, versions):
+        self._versions = list(versions)
+
+    def get_metadata(self, name):
+        return {"releases": {v: [] for v in self._versions}}
+
+
+def test_latest_stable_maven_release_qualifier_selected() -> None:
+    """Maven's ``-RELEASE`` qualifier is a release, not a prerelease —
+    the ecosystem comparator must both admit and order it."""
+    from packages.sca.transitive_drop.detector import _latest_stable_version
+    latest = _latest_stable_version(
+        "Maven",
+        _StubReleases(["1.2.2", "1.2.3-RELEASE", "1.3.0-alpha"]),
+        "com.example:lib",
+    )
+    assert latest == "1.2.3-RELEASE"
+
+
+def test_latest_stable_debian_epoch_ordered() -> None:
+    """Debian epochs (``1:1.2``) outrank higher-looking epochless
+    versions under dpkg semantics."""
+    from packages.sca.transitive_drop.detector import _latest_stable_version
+    latest = _latest_stable_version(
+        "Debian", _StubReleases(["1.9", "1:1.2"]), "libfoo",
+    )
+    assert latest == "1:1.2"
+
+
+def test_latest_stable_excludes_prereleases() -> None:
+    """Prerelease exclusion survives the comparator swap: a newer
+    alpha never wins over the newest stable."""
+    from packages.sca.transitive_drop.detector import _latest_stable_version
+    latest = _latest_stable_version(
+        "PyPI", _StubReleases(["1.9.0", "2.0.0a1"]), "pkg",
+    )
+    assert latest == "1.9.0"
+
+
+def test_latest_stable_all_prerelease_returns_none() -> None:
+    from packages.sca.transitive_drop.detector import _latest_stable_version
+    latest = _latest_stable_version(
+        "npm", _StubReleases(["2.0.0-alpha", "2.0.0-rc.1"]), "pkg",
+    )
+    assert latest is None
+
+
+def test_is_stable_two_directions() -> None:
+    from packages.sca.transitive_drop.detector import _is_stable
+    # Stable: plain, post-release, release-qualified, epoch-carrying.
+    assert _is_stable("npm", "2.0.0") is True
+    assert _is_stable("PyPI", "1.2.3.post1") is True
+    assert _is_stable("Maven", "1.2.3-RELEASE") is True
+    assert _is_stable("Debian", "1:1.2") is True
+    # Prerelease / garbage: excluded.
+    assert _is_stable("npm", "2.0.0-alpha") is False
+    assert _is_stable("Debian", "1.0~rc1") is False
+    assert _is_stable("npm", "not-a-version") is False

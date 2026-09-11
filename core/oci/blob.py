@@ -23,12 +23,13 @@ from __future__ import annotations
 
 import logging
 import re
+import zlib
 
-from core.tar import extract_files_from_tar
+from core.tar import TarOpenError, extract_files_from_tar
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,103 @@ class UnsupportedLayerMediaType(ValueError):
     undecodable layer yields a partial package inventory that is
     indistinguishable from a clean one — an image author could pick
     zstd layers specifically to evade scanning."""
+
+
+class WantedEntryRefused(ValueError):
+    """Raised when a WANTED path exists in the layer but the safety
+    filter refused it (oversize, unsafe member shape). Loud for the
+    same reason as :class:`UnsupportedLayerMediaType`: an image whose
+    dpkg status file is inflated past ``max_entry_bytes`` would
+    otherwise produce a falsely-clean, complete-looking inventory —
+    exactly the silent-partial evasion this module refuses for media
+    types. Non-wanted refused entries stay debug-level skips."""
+
+
+class DecompressionBudgetExceeded(ValueError):
+    """Raised when a gzip layer's decompressed output outruns the
+    ratio budget computed from the bytes ACTUALLY fetched. See the
+    rationale block on the budget constants above."""
+
+
+def _gunzip_ratio_guarded(
+    chunks: Iterable[bytes],
+    *,
+    ratio: int | None = None,
+    floor: int | None = None,
+    ceiling: int | None = None,
+) -> Iterator[bytes]:
+    """Incrementally gunzip ``chunks`` with an output budget that
+    scales with the compressed bytes ACTUALLY fetched so far.
+
+    The declared-size budget (``layer_decompression_budget``) trusts
+    the manifest descriptor: a manifest that DECLARES a large layer
+    but serves a kilobytes-sized bomb buys ``RATIO * declared`` of
+    decompression CPU (up to the ceiling) for almost no transfer.
+    Enforcing the ratio against fetched bytes as they stream removes
+    that amplification — a lying descriptor cannot raise the budget
+    beyond what the served bytes themselves justify. Trade-off,
+    documented both ways: this is stricter than the declared-size
+    budget for layers whose highly-compressible content FRONT-loads
+    the stream (a >3 GiB run of zeros before ~256 MiB of compressed
+    input now refuses mid-stream); a bomb is a ratio, and that shape
+    is the bomb shape. Raising the floor admits bigger such runs but
+    hands every hostile blob that much free CPU.
+
+    Raises :class:`DecompressionBudgetExceeded` on budget breach and
+    :class:`core.tar.TarOpenError` on corrupt gzip framing (matching
+    what ``tarfile.open(mode="r|gz")`` surfaced before this wrapper
+    took over decompression).
+    """
+    # Module-attribute lookup at CALL time (not def-time defaults) so
+    # the budget constants stay one knob, monkeypatchable in tests.
+    ratio = DECOMPRESSION_RATIO_BOUND if ratio is None else ratio
+    floor = DECOMPRESSION_BUDGET_FLOOR if floor is None else floor
+    ceiling = DECOMPRESSION_BUDGET_CEILING if ceiling is None else ceiling
+    decomp = zlib.decompressobj(31)  # 31 = gzip container framing
+    fetched = 0
+    produced = 0
+    step = 1 << 20  # bound each decompress call's output allocation
+
+    def _check_budget() -> None:
+        budget = min(ceiling, max(floor, ratio * fetched))
+        if produced > budget:
+            raise DecompressionBudgetExceeded(
+                f"layer decompression exceeds the fetched-bytes budget "
+                f"({produced} produced from {fetched} fetched; "
+                f"ratio bound {ratio}, floor {floor}) — bomb-shape; "
+                f"refusing"
+            )
+
+    for chunk in chunks:
+        fetched += len(chunk)
+        data = bytes(chunk)
+        while data:
+            try:
+                out = decomp.decompress(data, step)
+            except zlib.error as exc:
+                raise TarOpenError(
+                    f"corrupt gzip layer stream: {exc}") from exc
+            if out:
+                produced += len(out)
+                _check_budget()
+                yield out
+            if decomp.eof:
+                # Concatenated gzip members (pigz-style multi-stream
+                # layers). Trailing NUL padding is not a new member.
+                data = decomp.unused_data
+                if not data.strip(b"\x00"):
+                    return
+                decomp = zlib.decompressobj(31)
+                continue
+            data = decomp.unconsumed_tail
+    try:
+        out = decomp.flush()
+    except zlib.error as exc:
+        raise TarOpenError(f"corrupt gzip layer stream: {exc}") from exc
+    if out:
+        produced += len(out)
+        _check_budget()
+        yield out
 
 
 def _tar_mode_for_media_type(media_type: str) -> str:
@@ -209,11 +307,35 @@ def extract_files_from_layer(
         name = _normalise_tar_path(member.name)
         return name if name in normalised_wanted else None
 
+    def _refuse_wanted_skip(member, reason: str) -> None:
+        # Failures channel for the safety filter: a WANTED path that
+        # exists but is refused (e.g. oversize dpkg status) must be
+        # loud — a silent skip yields the falsely-clean inventory
+        # documented on WantedEntryRefused. Unwanted refused entries
+        # keep the extractor's debug-level skip.
+        name = _normalise_tar_path(member.name)
+        if name in normalised_wanted:
+            raise WantedEntryRefused(
+                f"layer entry {member.name!r} matches wanted path "
+                f"{name!r} but was refused by the safety filter "
+                f"({reason}, declared size {member.size})"
+            )
+
     chunk_iter = iter(layer_chunks)
+    if mode == "r|gz":
+        # Decompression runs OUTSIDE tarfile so its output budget can
+        # scale with the compressed bytes actually fetched — the
+        # declared-size budget below stays as the allocation bound
+        # for header/metadata accounting inside the extractor.
+        tar_source: Iterable[bytes] = _gunzip_ratio_guarded(chunk_iter)
+        tar_mode = "r|"
+    else:
+        tar_source = chunk_iter
+        tar_mode = mode
     found = extract_files_from_tar(
-        chunk_iter,
+        tar_source,
         selector=_select,
-        mode=mode,
+        mode=tar_mode,
         max_member_bytes=max_entry_bytes,
         # Layer member names are legitimately absolute; we read
         # into memory rather than extract to disk, so escape doesn't
@@ -228,9 +350,11 @@ def extract_files_from_layer(
         # Explicit caps for untrusted registry layers. The
         # decompression budget scales with the layer's compressed
         # size (ratio-shaped bomb test — see the rationale block on
-        # the constants above).
+        # the constants above); the fetched-bytes guard above is the
+        # tighter live bound for gzip layers.
         max_entry_count=DEFAULT_MAX_ENTRY_COUNT,
         max_total_bytes=layer_decompression_budget(compressed_size),
+        on_skipped=_refuse_wanted_skip,
     )
     # Drain the source to EOF before returning anything. stream_blob
     # only performs its sha256 check on exhaustion; returning after
@@ -261,6 +385,8 @@ def _normalise_tar_path(p: str) -> str:
 
 __all__ = [
     "DEFAULT_MAX_ENTRY_BYTES",
+    "DecompressionBudgetExceeded",
     "UnsupportedLayerMediaType",
+    "WantedEntryRefused",
     "extract_files_from_layer",
 ]

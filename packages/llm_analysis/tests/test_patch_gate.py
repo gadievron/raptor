@@ -861,3 +861,155 @@ class TestPatchTaskPathE2E:
         gate = prior["FIND-0001"]["patch_gate"]
         assert gate["detector"] in ("silenced", "still-firing")
         assert calls and all("test-strcpy-fixed-buf.yml" in c for c in calls)
+
+
+# ---------------------------------------------------------------------------
+# Multi-fence responses — every diff block is gated, not just the first
+# ---------------------------------------------------------------------------
+
+
+PAYLOAD_DIFF = (
+    "--- a/auth.c\n"
+    "+++ b/auth.c\n"
+    "@@ -1,1 +1,1 @@\n"
+    "-int check_password(const char *p);\n"
+    "+int check_password_disabled(const char *p);\n"
+)
+
+
+class TestMultiFenceGating:
+
+    def test_extract_unified_diffs_returns_every_block(self):
+        response = (
+            "First:\n\n```diff\n" + _make_diff(VULN_C, FIXED_C) + "```\n\n"
+            "Second:\n\n```diff\n" + PAYLOAD_DIFF + "```\n"
+        )
+        diffs = patch_gate.extract_unified_diffs(response)
+        assert len(diffs) == 2
+        assert diffs[0].files[0].new_path.endswith("vuln.c")
+        assert diffs[1].files[0].new_path.endswith("auth.c")
+
+    def test_extract_unified_diffs_dedupes_identical_blocks(self):
+        # LLMs frequently restate the same diff while explaining it —
+        # byte-identical repeats must not read as two patches.
+        block = "```diff\n" + _make_diff(VULN_C, FIXED_C) + "```\n"
+        diffs = patch_gate.extract_unified_diffs(
+            "fix:\n\n" + block + "\nagain:\n\n" + block,
+        )
+        assert len(diffs) == 1
+
+    def test_decoy_first_fence_does_not_shield_second(self, fixture_repo, monkeypatch):
+        """An in-scope decoy diff followed by a second fenced diff
+        touching other code must NOT earn `scope: in-bounds` — the
+        saved artifact carries the whole response."""
+        monkeypatch.setattr(patch_gate, "_import_sandbox_run", lambda: None)
+        response = (
+            "Fix:\n\n```diff\n" + _make_diff(VULN_C, FIXED_C) + "```\n\n"
+            "And apply this too:\n\n```diff\n" + PAYLOAD_DIFF + "```\n"
+        )
+        result = run_patch_gate(
+            response,
+            repo_path=fixture_repo, file_path="vuln.c",
+            start_line=FINDING_LINE, end_line=FINDING_LINE,
+        )
+        assert result.format == "unified-diff"
+        assert result.scope == "OUT-OF-SCOPE HUNKS"
+        assert any("auth.c" in hunk for hunk in result.out_of_scope_hunks)
+        assert any("diff blocks" in n for n in result.notes)
+
+    def test_single_benign_diff_still_in_bounds(self, fixture_repo, monkeypatch):
+        # Two-direction: the legitimate single-diff case is unchanged.
+        monkeypatch.setattr(patch_gate, "_import_sandbox_run", lambda: None)
+        result = run_patch_gate(
+            _fenced_response(_make_diff(VULN_C, FIXED_C)),
+            repo_path=fixture_repo, file_path="vuln.c",
+            start_line=FINDING_LINE, end_line=FINDING_LINE,
+        )
+        assert result.scope == "in-bounds"
+        assert not any("diff blocks" in n for n in result.notes)
+
+    def test_repeated_identical_diff_still_in_bounds(self, fixture_repo, monkeypatch):
+        monkeypatch.setattr(patch_gate, "_import_sandbox_run", lambda: None)
+        block = "```diff\n" + _make_diff(VULN_C, FIXED_C) + "```\n"
+        result = run_patch_gate(
+            "fix:\n\n" + block + "\nrestated:\n\n" + block,
+            repo_path=fixture_repo, file_path="vuln.c",
+            start_line=FINDING_LINE, end_line=FINDING_LINE,
+        )
+        assert result.scope == "in-bounds"
+        assert not any("diff blocks" in n for n in result.notes)
+
+
+# ---------------------------------------------------------------------------
+# Absolute finding paths — gate runs instead of crash-as-skip
+# ---------------------------------------------------------------------------
+
+
+def _fake_sandbox_ok():
+    """Sandbox stand-in: every command 'succeeds' without executing.
+
+    Lets the gate walk its full path (copy, apply, detector resolution,
+    compile) hermetically — the assertions target path handling, not
+    tool behaviour."""
+    def _run(cmd, **kwargs):
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    return _run
+
+
+class TestAbsoluteFindingPaths:
+
+    def test_absolute_in_repo_path_gates_without_crashing(
+        self, fixture_repo, monkeypatch,
+    ):
+        """Absolute in-repo file_path (SARIF absolute URIs): pathlib's
+        absolute-join semantics made the scratch copies alias the REAL
+        repo file (SameFileError → callers' broad except → silent gate
+        skip for the whole class)."""
+        monkeypatch.setattr(
+            patch_gate, "_import_sandbox_run", lambda: _fake_sandbox_ok(),
+        )
+        result = run_patch_gate(
+            _fenced_response(_make_diff(VULN_C, FIXED_C)),
+            repo_path=fixture_repo,
+            file_path=str(fixture_repo / "vuln.c"),
+            start_line=FINDING_LINE, end_line=FINDING_LINE,
+        )
+        assert result.gate == "ran"
+        assert result.format == "unified-diff"
+        assert result.apply == "ok"
+        # The real tree is never the copy target.
+        assert (fixture_repo / "vuln.c").read_text(
+            encoding="utf-8") == VULN_C
+
+    def test_file_uri_absolute_path_gates_without_crashing(
+        self, fixture_repo, monkeypatch,
+    ):
+        monkeypatch.setattr(
+            patch_gate, "_import_sandbox_run", lambda: _fake_sandbox_ok(),
+        )
+        result = run_patch_gate(
+            _fenced_response(_make_diff(VULN_C, FIXED_C)),
+            repo_path=fixture_repo,
+            file_path=f"file://{fixture_repo}/vuln.c",
+            start_line=FINDING_LINE, end_line=FINDING_LINE,
+        )
+        assert result.gate == "ran"
+        assert result.apply == "ok"
+
+    def test_absolute_path_outside_repo_still_skips(
+        self, fixture_repo, tmp_path, monkeypatch,
+    ):
+        # Two-direction: containment still rejects escapes.
+        monkeypatch.setattr(
+            patch_gate, "_import_sandbox_run", lambda: _fake_sandbox_ok(),
+        )
+        outside = tmp_path / "elsewhere.c"
+        outside.write_text(VULN_C, encoding="utf-8")
+        result = run_patch_gate(
+            _fenced_response(_make_diff(VULN_C, FIXED_C)),
+            repo_path=fixture_repo,
+            file_path=str(outside),
+            start_line=FINDING_LINE, end_line=FINDING_LINE,
+        )
+        assert result.gate == "skipped"
+        assert any("escapes the repo" in n for n in result.notes)

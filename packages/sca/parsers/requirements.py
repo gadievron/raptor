@@ -21,10 +21,10 @@ Recursion safety:
   with a warning. Same threat shape (hostile manifest steering reads at
   arbitrary files) and same idiom as ``pom_inheritance.py`` / ``sln.py``.
   When no ``scan_root`` is supplied (registry dispatch passes only the
-  path), the bound falls back to the manifest's grandparent directory —
-  weaker, but covers the common ``requirements/dev.txt → -r ../base.txt``
-  layout without opening arbitrary traversal. Nested includes inherit
-  the same bound.
+  path), the bound comes from the active ``scan_root_context`` (the
+  pipeline declares it around the parse loop); with neither, it falls
+  back to the manifest's own directory. Nested includes inherit the
+  same bound.
 """
 
 from __future__ import annotations
@@ -125,10 +125,13 @@ def parse(
 
     ``scan_root`` is the scan-target root. When provided, every
     ``-r``/``-c`` include must resolve under it. When omitted (the
-    registry dispatch passes only the path), the bound falls back
-    to the manifest's grandparent directory — mirroring the
-    ``sln.py`` legacy-caller fallback: strictly weaker, but still
-    refuses ``-r ../../../etc/passwd``-style traversal.
+    registry dispatch passes only the path), the bound comes from
+    the pipeline's active ``scan_root_context``; with neither, it
+    falls back to the manifest's OWN directory. A manifest at the
+    repo root must never bound includes at the repo's parent — that
+    hands a hostile ``-r ../<operator-file>`` line everything beside
+    the checkout. Deep ``-r ../base.txt`` layouts stay supported
+    whenever a scan root is known (production always declares one).
     """
     if not _AVAILABLE:
         logger.warning(
@@ -143,13 +146,16 @@ def parse(
             "sca.parsers.requirements: cannot resolve %s: %s", path, e
         )
         return []
+    include_bound: Path | None = None
     if scan_root is not None:
         try:
             include_bound = scan_root.resolve()
         except OSError:
-            include_bound = top.parent.parent
-    else:
-        include_bound = top.parent.parent
+            include_bound = None
+    if include_bound is None:
+        include_bound = _safe_read.active_scan_root()
+    if include_bound is None:
+        include_bound = top.parent
     visited: set[Path] = set()
     return _parse_file(
         path, depth=0, visited=visited, include_bound=include_bound,
@@ -296,16 +302,22 @@ def _strip_comment(line: str) -> str:
 
 
 def _strip_inline_directives(line: str) -> str:
-    """Drop trailing ``--hash=...`` (and similar pip directives) from a line.
+    """Drop trailing per-requirement options from a line.
 
-    pip allows ``django==4.2.7 --hash=sha256:abcd``; PEP 508 doesn't.
-    Anything from the first ``--hash`` onward is dropped.
+    pip allows per-requirement options after the spec —
+    ``django==4.2.7 --hash=sha256:abcd``, ``--global-option``,
+    ``--config-settings`` — none of which PEP 508 accepts, so
+    ``Requirement()`` raises and the dep would be silently dropped.
+    Anything from the first ``--``-prefixed token onward is removed
+    (nothing in the PEP 508 grammar — names, extras, specifiers,
+    URLs after ``@``, ``;`` markers — starts a whitespace-delimited
+    token with ``--``).
     """
-    # Tokenise on whitespace; truncate at the first directive token.
+    # Tokenise on whitespace; truncate at the first option token.
     tokens = line.split()
     out: list[str] = []
     for tok in tokens:
-        if tok.startswith("--hash"):
+        if tok.startswith("--"):
             break
         out.append(tok)
     return " ".join(out)

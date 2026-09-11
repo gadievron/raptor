@@ -424,7 +424,10 @@ class TestMaterialisePinChanges:
         assert len(changes) == 1
         assert changes[0].skipped_reason is None
 
-        result = (proposed / manifest.name).read_text()
+        # Out-of-cwd manifests stage under the shared disambiguated
+        # anchor (same scheme as the CVE-fix phase).
+        from packages.sca.update import _proposed_rel_path
+        result = (proposed / _proposed_rel_path(manifest)).read_text()
         assert "flask==2.3.0" in result
         assert "requests==2.28.0" in result
 
@@ -445,7 +448,10 @@ class TestMaterialisePinChanges:
         assert len(changes) == 1
         assert changes[0].skipped_reason is None
 
-        result = (proposed / manifest.name).read_text()
+        # Out-of-cwd manifests stage under the shared disambiguated
+        # anchor (same scheme as the CVE-fix phase).
+        from packages.sca.update import _proposed_rel_path
+        result = (proposed / _proposed_rel_path(manifest)).read_text()
         assert "flask==2.3.0" in result
 
     def test_package_json_caret(self, tmp_path):
@@ -1194,3 +1200,84 @@ class TestExcludeGlobs:
         # No patterns → no filtering, nothing reported.
         kept2, excluded2 = _filter_excluded_plans(plans, None, root=tmp_path)
         assert kept2 == plans and excluded2 == []
+
+
+class TestPinStagingAnchors:
+    """Staged-copy anchoring for manifests outside the relative base."""
+
+    def test_same_named_manifests_outside_base_stay_distinct(
+        self, tmp_path: Path,
+    ) -> None:
+        """Two same-named manifests that live outside the staging base
+        must not collapse onto one staged file (last writer wins) —
+        each gets its own disambiguated anchor with its own content."""
+        dir_a = tmp_path / "proj_a"
+        dir_b = tmp_path / "proj_b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+        (dir_a / "requirements.txt").write_text("flask==2.3.0\n")
+        (dir_b / "requirements.txt").write_text("django==3.2.0\n")
+        target = tmp_path / "elsewhere"
+        target.mkdir()
+        proposed = tmp_path / "proposed"
+        plans = {
+            ("PyPI", "flask", str(dir_a / "requirements.txt")): _PlanEntry(
+                ecosystem="PyPI", name="flask",
+                installed="2.3.0", target="2.3.1",
+                manifest=dir_a / "requirements.txt",
+                advisory_ids=[],
+            ),
+            ("PyPI", "django", str(dir_b / "requirements.txt")): _PlanEntry(
+                ecosystem="PyPI", name="django",
+                installed="3.2.0", target="3.2.1",
+                manifest=dir_b / "requirements.txt",
+                advisory_ids=[],
+            ),
+        }
+        changes = optimise._materialise_pin_changes(
+            plans, proposed, target=target,
+        )
+        assert all(c.skipped_reason is None for c in changes)
+        staged = sorted(p for p in proposed.rglob("*") if p.is_file())
+        assert len(staged) == 2, (
+            f"expected two distinct staged files, got {staged}"
+        )
+        texts = [p.read_text() for p in staged]
+        assert any("flask==2.3.1" in t and "django" not in t for t in texts)
+        assert any("django==3.2.1" in t and "flask" not in t for t in texts)
+
+    def test_composes_with_cve_phase_copy_at_shared_anchor(
+        self, tmp_path: Path,
+    ) -> None:
+        """When the CVE phase already staged a rewritten copy (at the
+        shared out-of-cwd anchor), pin tightening must read THAT copy so
+        both change sets compose."""
+        from packages.sca.update import _proposed_rel_path
+
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        manifest = proj / "requirements.txt"
+        manifest.write_text("flask==2.3.0\nrequests==2.0.0\n")
+        target = tmp_path / "elsewhere"
+        target.mkdir()
+        proposed = tmp_path / "proposed"
+        cve_copy = proposed / _proposed_rel_path(manifest)
+        cve_copy.parent.mkdir(parents=True)
+        cve_copy.write_text("flask==2.3.0\nrequests==2.31.0\n")
+        plans = {
+            ("PyPI", "flask", str(manifest)): _PlanEntry(
+                ecosystem="PyPI", name="flask",
+                installed="2.3.0", target="2.3.1",
+                manifest=manifest,
+                advisory_ids=[],
+            ),
+        }
+        changes = optimise._materialise_pin_changes(
+            plans, proposed, target=target,
+        )
+        assert all(c.skipped_reason is None for c in changes)
+        final = cve_copy.read_text()
+        assert "flask==2.3.1" in final
+        assert "requests==2.31.0" in final, (
+            "CVE-phase rewrite lost — pin staging did not compose"
+        )

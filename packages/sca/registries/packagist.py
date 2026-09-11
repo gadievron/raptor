@@ -14,11 +14,15 @@ from __future__ import annotations
 
 import logging
 import re
-import urllib.parse
 
 from core.json import MISSING, JsonCache
 
-from ._negative_cache import log_fetch_failure
+from ._negative_cache import log_fetch_failure, should_negative_cache
+from ._url import (
+    UnsafeUrlComponentError,
+    quote_path,
+    registry_cache_key,
+)
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -29,15 +33,6 @@ logger = logging.getLogger(__name__)
 
 _CACHE_KEY_PREFIX = "packagist-versions"
 _DEFAULT_TTL = 24 * 3600
-
-
-def _key_component(value: str) -> str:
-    """Percent-encode one cache-key component so the key identity is
-    injective — Composer names legitimately contain ``/``, and a raw
-    name with ``..`` segments could otherwise alias another package's
-    cache file after JsonCache path sanitisation. Old raw-name entries
-    re-fetch once."""
-    return urllib.parse.quote(value, safe="")
 
 # Composer pre-release tags (hyphen-prefixed or dev- prefix forms).
 _PRERELEASE_RE = re.compile(
@@ -70,7 +65,7 @@ class PackagistClient:
                           name)
             return []
 
-        cache_key = f"{_CACHE_KEY_PREFIX}:{_key_component(name)}"
+        cache_key = registry_cache_key(_CACHE_KEY_PREFIX, name)
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -96,7 +91,17 @@ class PackagistClient:
         needing the dep blocks don't double-fetch."""
         if "/" not in name:
             return None
-        cache_key = f"packagist-meta:{_key_component(name)}"
+        try:
+            # Composer names are exactly ``vendor/package`` — two
+            # path segments, each independently validated + encoded
+            # so ``vendor/../pkg`` can't traverse and metachars
+            # can't splice the (static-content-host) request.
+            encoded = quote_path(name, expected_segments=2)
+        except UnsafeUrlComponentError:
+            # Not a name Packagist could ever serve — not-found path
+            # without touching the cache.
+            return None
+        cache_key = registry_cache_key("packagist-meta", name)
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -105,11 +110,11 @@ class PackagistClient:
             return None
         try:
             data = self._http.get_json(
-                f"https://repo.packagist.org/p2/{name}.json",
+                f"https://repo.packagist.org/p2/{encoded}.json",
             )
         except Exception as e:                # noqa: BLE001
             log_fetch_failure(logger, "sca.registries.packagist", name, e)
-            if self._cache is not None:
+            if self._cache is not None and should_negative_cache(e):
                 self._cache.put(cache_key, None, ttl_seconds=self._ttl)
             return None
         if self._cache is not None:

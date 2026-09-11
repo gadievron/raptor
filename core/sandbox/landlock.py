@@ -29,6 +29,7 @@ import platform
 import stat
 
 from . import state
+from ._pathpin import open_pinned
 from .exit_codes import SANDBOX_EXIT_LANDLOCK_DOWNGRADE
 
 logger = logging.getLogger(__name__)
@@ -350,6 +351,73 @@ def _warn_truncate_unavailable_once(abi: int) -> None:
     )
 
 
+# (requested, resolved) grant redirects already announced — once per
+# pair, matching the throttled-warning convention above (a benignly
+# symlinked output tree would otherwise warn on every spawn).
+_grant_redirects_warned: set = set()
+
+
+def _resolve_grant_paths(paths: list, kind: str) -> list:
+    """Resolve rule paths to canonical form at VALIDATION time.
+
+    Runs in the PARENT, when the preexec closure is built — never in
+    the forked child at grant time. The child walks each pre-resolved
+    canonical string with the symlink-refusing pinned walk
+    (core/sandbox/_pathpin.open_pinned), so a symlink planted anywhere
+    in the validate/fork/grant window surfaces as ELOOP and the rule
+    falls under the global deny instead of silently landing the WRITE
+    grant beneath the symlink's target. Resolving in the child (the
+    previous shape) left that whole window open, and the planter need
+    not be an unconfined same-UID process: a Landlock-confined sibling
+    with write access to a shared output tree can create symlinks
+    there (MAKE_SYM is in the granted write mask) pointing at trees it
+    canNOT write — a steered grant would hand the next sandbox access
+    the planter never had.
+
+    A symlink already resolving at validation time is indistinguishable
+    from operator intent (usrmerge ``/bin``, symlinked home trees) and
+    resolves normally, but the redirect is announced once per
+    (requested, resolved) pair so a pre-planted steer is at least
+    visible in the run log.
+    """
+    resolved_paths: list = []
+    for path in paths:
+        resolved = os.path.realpath(path)
+        requested = os.path.normpath(os.path.abspath(path))
+        if resolved != requested:
+            key = (requested, resolved)
+            if key not in _grant_redirects_warned:
+                _grant_redirects_warned.add(key)
+                logger.warning(
+                    "Landlock %s grant path %s resolves through a "
+                    "symlink to %s — the rule applies to the resolved "
+                    "tree. If that symlink is not operator-intended, "
+                    "inspect the path for a planted redirect.",
+                    kind, requested, resolved,
+                )
+        resolved_paths.append(resolved)
+    return resolved_paths
+
+
+def _open_grant_pinned(canonical: str) -> tuple:
+    """(fd, is_dir) for a pre-resolved rule path, symlink-refusing.
+
+    Runs POST-fork in the child. ``canonical`` must come from
+    :func:`_resolve_grant_paths` in the parent; any symlink met during
+    the component walk appeared after that validation and refuses
+    (OSError ELOOP). Fork-safe: os/stat syscall wrappers and
+    ``open_pinned``, all bound at module import long before any fork —
+    no imports, no locks.
+    """
+    fd = open_pinned(canonical)
+    try:
+        is_dir = stat.S_ISDIR(os.fstat(fd).st_mode)
+    except OSError:
+        os.close(fd)
+        raise
+    return fd, is_dir
+
+
 class LandlockInstallError(RuntimeError):
     """A requested Landlock policy could not be installed in the child.
 
@@ -566,32 +634,24 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list | None 
     _os_open = os.open
     _os_close = os.close
     _os_write = os.write
-    _os_fstat = os.fstat
     _O_PATH = os.O_PATH
-    _O_DIRECTORY = os.O_DIRECTORY
     _ENOTDIR = errno.ENOTDIR
     # Grant-open pinning: writable/readable rule paths are the same
     # attacker-adjacent names as the mount-ns bind sources (a shared
-    # output tree, readable paths inside the scanned repo). A pathname
-    # open here could be symlink-swapped by a concurrent sibling
-    # between the caller's validation and the add_rule — granting
-    # WRITE beneath an arbitrary host directory. realpath-then-pinned-
-    # walk (core/sandbox/_pathpin.open_pinned) refuses mid-walk
-    # symlinks; the fd names exactly the walked inode. References
-    # captured in the parent for fork-safety.
-    from ._pathpin import open_pinned as _open_pinned
-    _realpath = os.path.realpath
-    _s_isdir = stat.S_ISDIR
-
-    def _open_grant(path: str) -> tuple:
-        """(fd, is_dir) for a rule path, symlink-swap refusing."""
-        fd = _open_pinned(_realpath(path))
-        try:
-            is_dir = _s_isdir(_os_fstat(fd).st_mode)
-        except OSError:
-            _os_close(fd)
-            raise
-        return fd, is_dir
+    # output tree, readable paths inside the scanned repo). Resolve
+    # them to canonical form NOW — in the parent, at validation time —
+    # and let the child walk the pre-resolved string with the
+    # symlink-refusing pinned walk (core/sandbox/_pathpin.open_pinned).
+    # A symlink planted anywhere between this resolution and the
+    # add_rule (the whole fork/spawn window included) surfaces as
+    # ELOOP and the rule falls under the global deny, instead of
+    # silently landing a WRITE grant beneath the symlink's target.
+    # See _resolve_grant_paths for why child-side realpath was not
+    # enough (a Landlock-confined sibling planter gains access it
+    # never had). References captured in the parent for fork-safety.
+    _open_grant = _open_grant_pinned
+    _resolved_writable = _resolve_grant_paths(paths, "writable")
+    _resolved_readable = _resolve_grant_paths(read_paths, "readable")
 
     # Same rationale for libc: `ctypes.util.find_library("c")` on Linux
     # can shell out to `/sbin/ldconfig`, spawning a subprocess from the
@@ -636,12 +696,13 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list | None 
                 # paths. If restrict_reads is off, _read_access is 0 and
                 # the rule is identical to the old write-only rule.
                 writable_access = _write_access | _read_access
-                for path in paths:
+                for path in _resolved_writable:
                     try:
-                        # Pinned open (symlink-swap refusing) — see
-                        # _open_grant above. Non-directories keep the
-                        # historical ENOTDIR refusal: a writable rule
-                        # is a subtree grant.
+                        # Pinned open of the parent-resolved canonical
+                        # path (symlink-swap refusing) — see
+                        # _resolve_grant_paths. Non-directories keep
+                        # the historical ENOTDIR refusal: a writable
+                        # rule is a subtree grant.
                         dir_fd, _is_dir = _open_grant(path)
                         try:
                             if not _is_dir:
@@ -760,11 +821,12 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list | None 
                 # exfil in Landlock-only mode.
                 if restrict_reads and _read_access:
                     _read_file_access = _read_access & READ_FILE
-                    for path in read_paths:
+                    for path in _resolved_readable:
                         try:
-                            # Pinned open (symlink-swap refusing) — see
-                            # _open_grant above. Directory rules keep
-                            # the full read mask; files get the
+                            # Pinned open of the parent-resolved
+                            # canonical path (symlink-swap refusing) —
+                            # see _resolve_grant_paths. Directory rules
+                            # keep the full read mask; files get the
                             # file-only mask (READ_FILE, no READ_DIR),
                             # matching the historical two-step open.
                             path_fd, _is_dir = _open_grant(path)

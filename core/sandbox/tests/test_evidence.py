@@ -393,18 +393,34 @@ class TestTracerFdConfigConsumption:
         cfg_fd = ev.anonymous_fd(
             json.dumps({"verbose": True, "observe_mode": False}).encode(),
         )
-        rc = tracer_mod._cli_main(
-            ["1", str(tmp_path), "3", ev.fd_path(cfg_fd)],
-        )
-        assert rc == 0
-        assert captured["filter"] == {
-            "verbose": True, "observe_mode": False,
-        }
-        # The inherited config fd must be closed right after parsing
-        # (before the target would be unblocked) so its
-        # /proc/<pid>/fd reflection disappears.
-        with pytest.raises(OSError):
-            os.fstat(cfg_fd)
+        # Keeper dup: pins the config's open file description (and its
+        # st_dev/st_ino identity) so the closure probe below cannot be
+        # confused by fd-number reuse — another open in this process
+        # (worker IO threads, capture machinery) may grab the freed
+        # number, but it can never alias the pinned config object.
+        keeper = os.dup(cfg_fd)
+        try:
+            rc = tracer_mod._cli_main(
+                ["1", str(tmp_path), "3", ev.fd_path(cfg_fd)],
+            )
+            assert rc == 0
+            assert captured["filter"] == {
+                "verbose": True, "observe_mode": False,
+            }
+            # The inherited config fd must be closed right after parsing
+            # (before the target would be unblocked) so its
+            # /proc/<pid>/fd reflection disappears. Probing the raw fd
+            # number for EBADF races with reuse; instead assert the
+            # number no longer refers to the config's file description.
+            try:
+                still_config = os.path.sameopenfile(cfg_fd, keeper)
+            except OSError:
+                still_config = False  # closed and not reused
+            assert not still_config, (
+                "config fd still open in the CLI after parsing"
+            )
+        finally:
+            os.close(keeper)
 
     @linux_only
     def test_trace_falls_back_when_evidence_fd_invalid(

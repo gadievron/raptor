@@ -17,13 +17,21 @@ copy_from_user@p1(dst1, uptr, ...)
 
 @second_fetch@
 expression first_fetch.uptr;
-expression dst2;
+expression dst2, ADV;
 position p2;
 position first_fetch.p1;
 @@
 
 copy_from_user@p1(...)
-...
+// A rebound or advanced pointer between the fetches means the second
+// copy reads a DIFFERENT user region (chunked-read loops advance the
+// cursor) — that is sequential consumption, not a re-fetch of already
+// validated data, so any write to the pointer kills the match.
+... when != uptr = ADV
+    when != uptr += ADV
+    when != uptr -= ADV
+    when != uptr++
+    when != ++uptr
 copy_from_user@p2(dst2, uptr, ...)
 
 @script:python@

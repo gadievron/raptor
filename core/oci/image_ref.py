@@ -46,6 +46,28 @@ _DIGEST_RE = re.compile(
 # error the operator can act on.
 _SHA256_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
+# Distribution-spec repository grammar: lowercase path components
+# joined by ``/``, separators inside a component limited to ``.``,
+# one or two ``_``, or runs of ``-``. Enforced at parse time because
+# repository and tag interpolate into AUTHED ``/v2/...`` URL paths —
+# without the grammar, hostile FROM lines carrying ``..`` segments,
+# ``?query`` or ``#fragment`` syntax steer registry requests at
+# attacker-chosen paths (exactly what the strict digest grammar was
+# added to prevent on the digest field).
+_REPO_COMPONENT = r"[a-z0-9]+(?:(?:\.|_{1,2}|-+)[a-z0-9]+)*"
+_REPOSITORY_RE = re.compile(
+    rf"^{_REPO_COMPONENT}(?:/{_REPO_COMPONENT})*$"
+)
+
+# Distribution-spec tag grammar: 128 chars max, alnum/underscore
+# start, then word chars plus ``.`` / ``-``.
+_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$")
+
+# Docker Hub authority aliases collapsed to the canonical name so
+# every downstream table (registry families, realm allowlist, the
+# ``library/`` namespace rule) matches on one spelling.
+_DOCKER_HUB_ALIASES = frozenset({"index.docker.io", "registry-1.docker.io"})
+
 
 @dataclass(frozen=True)
 class ImageRef:
@@ -163,6 +185,26 @@ def parse_image_ref(s: str) -> ImageRef:
     if not repository:
         msg = f"image reference missing repository: {s!r}"
         raise ValueError(msg)
+
+    # Canonicalise the registry: hostnames are case-insensitive (a
+    # mixed-case ``Docker.IO`` previously missed every downstream
+    # exact-match table), and Docker Hub's authority aliases collapse
+    # to the canonical name.
+    registry = registry.lower()
+    if registry in _DOCKER_HUB_ALIASES:
+        registry = "docker.io"
+
+    if not _REPOSITORY_RE.match(repository):
+        raise ValueError(
+            f"malformed repository {repository!r}: must be lowercase "
+            f"path components (alnum with . _ - separators) joined "
+            f"by '/'"
+        )
+    if tag is not None and not _TAG_RE.match(tag):
+        raise ValueError(
+            f"malformed tag {tag!r}: must match "
+            f"[A-Za-z0-9_][A-Za-z0-9._-]{{0,127}}"
+        )
 
     # Docker Hub's "library" prefix for single-segment refs (the
     # ``python`` → ``library/python`` convention).

@@ -23,10 +23,30 @@ def _adv(es=None, ds=None):
 
 class TestExtractQualifiedSymbols:
     def test_imports_symbols_qualified_with_path(self):
+        # Rust-style '::' in the import path is normalised to '.' —
+        # the resolver splits qualified names on '.' only, so a
+        # verbatim '::' segment could never match any call chain.
         adv = _adv(es={"imports": [{"path": "foo::bar", "symbols": ["baz", "qux"]}]})
         assert extract_qualified_symbols(adv, "dep") == [
-            "foo::bar.baz", "foo::bar.qux",
+            "foo.bar.baz", "foo.bar.qux",
         ]
+
+    def test_rust_and_ruby_separators_normalised(self):
+        adv = _adv(
+            es={"imports": [{"path": "smallvec",
+                             "symbols": ["SmallVec::insert_many"]}]},
+            ds={"affected_symbols": ["ActionDispatch::Routing::Mapper#draw"]},
+        )
+        assert extract_qualified_symbols(adv, "actionpack") == [
+            "smallvec.SmallVec.insert_many",
+            "actionpack.ActionDispatch.Routing.Mapper.draw",
+        ]
+
+    def test_empty_symbol_in_flat_lists_skipped(self):
+        # An empty affected_symbols entry must not emit a dangling
+        # "dep." qualified name.
+        adv = _adv(es={"affected_symbols": ["", "real"]})
+        assert extract_qualified_symbols(adv, "dep") == ["dep.real"]
 
     def test_import_path_falls_back_to_dep_name(self):
         adv = _adv(es={"imports": [{"symbols": ["run"]}]})

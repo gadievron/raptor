@@ -213,12 +213,31 @@ def _read_env(var: str) -> str | None:
     return val
 
 
+# ``_read_env_keep`` below marks env-keyed providers with a
+# dispatcher RULE but NO worker-side dispatcher client factory:
+# workers reach those providers env-direct
+# (``OpenAICompatibleProvider`` dispatcher-routes only ``openai``
+# proper; nothing routes the aggregator tail), and worker-side model
+# DETECTION is itself gated on the env key being visible. Erasing
+# these keys at store construction therefore killed both detection
+# and auth for exactly these providers in every spawned worker — the
+# launcher builds worker envs from the live environ AFTER the store
+# is constructed. Their keys are read WITHOUT erasure (one warning
+# names the residual exposure) until a worker-side dispatcher route
+# exists; keys whose provider IS worker-routable (anthropic / openai /
+# gemini / bedrock) keep the read-and-erase isolation via
+# ``_read_env``.
+
+
 class CredentialStore:
     """In-memory store of provider API keys.
 
-    Loaded once from the parent's environ at dispatcher startup,
-    keys then erased from environ. The store is the single point
-    that holds plaintext credentials for the lifetime of the run.
+    Loaded once from the parent's environ at dispatcher startup.
+    Keys whose provider has a worker-side dispatcher route are then
+    erased from environ (the store is the single point that holds
+    those plaintext credentials for the lifetime of the run); keys
+    for env-direct providers stay in environ so worker detection and
+    auth keep working (see the comment above the class).
 
     The launcher may also call :func:`seed_from_config` after
     constructing the store to fill any provider slots that env
@@ -232,30 +251,46 @@ class CredentialStore:
         # Pre-read GOOGLE_API_KEY so it's always erased even when
         # GEMINI_API_KEY is set (short-circuit would skip erasure).
         _google_api_key = _read_env("GOOGLE_API_KEY")
+
+        # Read-WITHOUT-erase for env-direct providers (see the module
+        # comment above ``CredentialStore``): each read records the
+        # var so the post-init warning can name what stayed in env.
+        self._env_direct_vars: list[str] = []
+
+        def _read_env_keep(var: str) -> str | None:
+            val = os.environ.get(var)
+            if val is not None:
+                self._env_direct_vars.append(var)
+            return val
+
         self._keys: dict[str, str | None] = {
             "anthropic":  _read_env("ANTHROPIC_API_KEY"),
             "openai":     _read_env("OPENAI_API_KEY"),
             "gemini":     _read_env("GEMINI_API_KEY") or _google_api_key,
             # OpenAI-compatible aggregators + ecosystem providers.
-            # Same Bearer-auth shape; different upstream URLs.
-            "mistral":    _read_env("MISTRAL_API_KEY"),
-            "groq":       _read_env("GROQ_API_KEY"),
-            "together":   _read_env("TOGETHER_API_KEY"),
-            "openrouter": _read_env("OPENROUTER_API_KEY"),
-            "orcarouter": _read_env("ORCAROUTER_API_KEY"),
-            "fireworks":  _read_env("FIREWORKS_API_KEY"),
-            "deepinfra":  _read_env("DEEPINFRA_API_KEY"),
-            "perplexity": _read_env("PERPLEXITY_API_KEY"),
-            "cohere":     _read_env("COHERE_API_KEY"),
+            # Same Bearer-auth shape; different upstream URLs. Read
+            # WITHOUT erasure — workers reach these env-direct (no
+            # worker-side dispatcher factory routes them), see the
+            # comment above the class.
+            "mistral":    _read_env_keep("MISTRAL_API_KEY"),
+            "groq":       _read_env_keep("GROQ_API_KEY"),
+            "together":   _read_env_keep("TOGETHER_API_KEY"),
+            "openrouter": _read_env_keep("OPENROUTER_API_KEY"),
+            "orcarouter": _read_env_keep("ORCAROUTER_API_KEY"),
+            "fireworks":  _read_env_keep("FIREWORKS_API_KEY"),
+            "deepinfra":  _read_env_keep("DEEPINFRA_API_KEY"),
+            "perplexity": _read_env_keep("PERPLEXITY_API_KEY"),
+            "cohere":     _read_env_keep("COHERE_API_KEY"),
             # Replicate — uses ``Token <key>`` prefix, not ``Bearer``.
-            "replicate":  _read_env("REPLICATE_API_TOKEN"),
+            "replicate":  _read_env_keep("REPLICATE_API_TOKEN"),
             # Azure OpenAI — operator-configured endpoint URL +
-            # api-key header. Endpoint read once at startup; if
+            # api-key header, both env-direct like the aggregators
+            # (workers need endpoint AND key). If the endpoint is
             # absent the rule's upstream is a sentinel that produces
             # 503 at request time (consistent with other unconfigured
             # providers).
-            "azure_openai":           _read_env("AZURE_OPENAI_API_KEY"),
-            "azure_openai_endpoint":  _read_env("AZURE_OPENAI_ENDPOINT"),
+            "azure_openai":           _read_env_keep("AZURE_OPENAI_API_KEY"),
+            "azure_openai_endpoint":  _read_env_keep("AZURE_OPENAI_ENDPOINT"),
             # AWS Bedrock — the *secret* parts are read-and-erased like
             # every other provider key so they never reach a spawned
             # worker's env. Static creds set this way; SSO/IMDS/profile
@@ -311,6 +346,20 @@ class CredentialStore:
         self._aws_bearer_exp: int | None = _decode_bedrock_bearer_exp(
             self._keys.get("aws_bearer_token") or ""
         )
+        # Loud, once per store: these keys stay in the live environ
+        # (workers need them for env-direct auth AND detection), so
+        # they do NOT get the read-and-erase isolation the routable
+        # provider keys get. Names only — never values.
+        kept = sorted(self._env_direct_vars)
+        if kept:
+            _log.warning(
+                "llm-dispatcher: %s stay in the process environment — "
+                "their providers have no worker-side dispatcher route, "
+                "so workers authenticate env-direct (these keys are "
+                "visible to RAPTOR's own LLM children; untrusted "
+                "subprocesses still never receive them)",
+                ", ".join(kept),
+            )
 
     def get(self, provider: str) -> str | None:
         return self._keys.get(provider)

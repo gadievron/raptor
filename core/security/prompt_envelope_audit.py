@@ -362,13 +362,10 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
         ),
     ),
     # ----- packages/llm_analysis/agent.py -----
-    AllowlistEntry(
-        file='packages/llm_analysis/agent.py',
-        func_name='AutonomousSecurityAgentV2.generate_patch',
-        attr='file_path',
-        expr_text='{vuln.file_path}',
-        audit_note='markdown for disk (operator review file), not LLM prompt',
-    ),
+    # file_path / level / analysis / patch body now route through
+    # output sanitisation into local names before interpolation, so
+    # only the numeric line span remains a direct attribute
+    # interpolation.
     AllowlistEntry(
         file='packages/llm_analysis/agent.py',
         func_name='AutonomousSecurityAgentV2.generate_patch',
@@ -381,13 +378,6 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
         func_name='AutonomousSecurityAgentV2.generate_patch',
         attr='end_line',
         expr_text='{vuln.end_line}',
-        audit_note='markdown for disk, not LLM prompt',
-    ),
-    AllowlistEntry(
-        file='packages/llm_analysis/agent.py',
-        func_name='AutonomousSecurityAgentV2.generate_patch',
-        attr='level',
-        expr_text='{vuln.level}',
         audit_note='markdown for disk, not LLM prompt',
     ),
     # ----- packages/checker_synthesis/synthesise.py -----
@@ -447,6 +437,15 @@ def audit_file(path: Path) -> list[Violation]:
         registers as an interpolation of ``message`` — pre-walrus,
         the audit returned None for the NamedExpr and missed the
         attribute access entirely.
+
+        Method calls are unwrapped to their receiver so
+        ``f"{finding.message.strip()}"`` registers as ``message`` —
+        pre-fix ANY call wrapper (``.strip()``, ``.upper()``, ...)
+        returned None and fully exempted the attribute, which made the
+        sanitiser allowlist in ``_is_sanitised`` dead code (nothing
+        call-shaped ever reached the attr check). A call to a KNOWN
+        sanitiser terminates the walk with None — that is exactly the
+        exemption the allowlist grants.
         """
         cur = node
         while True:
@@ -461,6 +460,15 @@ def audit_file(path: Path) -> list[Violation]:
                 # result), so unwrap and look at the assigned value.
                 cur = cur.value
                 continue
+            if isinstance(cur, ast.Call):
+                if _is_sanitised(cur):
+                    return None
+                if isinstance(cur.func, ast.Attribute):
+                    # Method call: the receiver carries the taint
+                    # (``x.message.strip()`` → ``x.message``).
+                    cur = cur.func.value
+                    continue
+                return None
             return None
 
     def _tainted_trust_is_untrusted(call: ast.Call) -> bool:

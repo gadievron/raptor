@@ -27,10 +27,38 @@ from __future__ import annotations
 
 import functools
 import os
+import re
 import sys
 import threading
 from collections.abc import Callable
 from typing import Any
+
+# Shape validation for the two values every URL in this module embeds.
+# slug/sha reach this chokepoint from advisory-derived data and from
+# free-form LLM tool arguments, and each request carries the operator's
+# GITHUB_TOKEN — without a shape gate, path traversal
+# ("owner/repo/../../../user") and query injection ("abc1234?per_page=1")
+# steer token-authenticated GETs to arbitrary api.github.com endpoints
+# and feed the response back into LLM context / run artifacts.
+#
+# Slug: owner (alnum + hyphen, GitHub's rule) "/" repo (alnum . _ -).
+# A repo segment of only dots ("." / "..") is additionally rejected in
+# ``valid_slug`` — "owner/.." would normalise into a different path.
+_SLUG_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}\Z")
+# Commit ids here are hex object names (short form tolerated; length
+# policy is the callers' concern, injection is ours).
+_SHA_RE = re.compile(r"\A[0-9a-fA-F]{4,64}\Z")
+
+
+def valid_slug(slug: str) -> bool:
+    if not slug or _SLUG_RE.match(slug) is None:
+        return False
+    repo = slug.partition("/")[2]
+    return repo.strip(".") != ""
+
+
+def valid_sha(sha: str) -> bool:
+    return bool(sha) and _SHA_RE.match(sha) is not None
 
 
 class _CacheInfo:
@@ -212,7 +240,7 @@ def _get(url: str) -> dict[str, Any] | None:
 @_cache_unless_none
 def get_repo(slug: str) -> dict[str, Any] | None:
     """``GET /repos/{slug}`` — fork/archived/stars/created_at/language/size."""
-    if not slug or "/" not in slug:
+    if not valid_slug(slug):
         return None
     return _get(f"https://api.github.com/repos/{slug}")
 
@@ -220,7 +248,7 @@ def get_repo(slug: str) -> dict[str, Any] | None:
 @_cache_unless_none
 def get_languages(slug: str) -> dict[str, Any] | None:
     """``GET /repos/{slug}/languages`` — used by shape_dynamic."""
-    if not slug or "/" not in slug:
+    if not valid_slug(slug):
         return None
     return _get(f"https://api.github.com/repos/{slug}/languages")
 
@@ -237,7 +265,7 @@ def commit_exists(slug: str, sha: str) -> bool | None:
     ``None`` is returned for auth failures / rate limits / network errors —
     the caller treats this as "can't tell" and applies no penalty.
     """
-    if not slug or "/" not in slug or not sha:
+    if not valid_slug(slug) or not valid_sha(sha):
         return None
     if not _bucket().try_acquire():
         return None
@@ -262,7 +290,7 @@ def _get_commit_cached(slug: str, sha: str) -> dict[str, Any] | None:
     """Inner cached implementation of ``get_commit``. Wrapped by the
     public ``get_commit`` so we can record hit/miss counters via
     ``api_status`` without losing lru_cache semantics."""
-    if not slug or "/" not in slug or not sha:
+    if not valid_slug(slug) or not valid_sha(sha):
         return None
     return _get(f"https://api.github.com/repos/{slug}/commits/{sha}")
 

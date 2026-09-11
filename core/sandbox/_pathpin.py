@@ -46,13 +46,22 @@ caller runs it:
   this layer: a symlink already resolving when the caller validates
   the path is indistinguishable from operator intent (usrmerge
   ``/bin``, symlinked home trees).
-* REMAINS window-narrowed (mount-time walk only) for the other
-  consumers — Landlock grant opens and etc_overlay sources: a symlink
-  pre-planted before THAT walk's ``realpath`` resolves like a benign
-  operator symlink and pins the attacker's chosen destination.
-  Deliberate scoping, not an oversight: a steered Landlock GRANT
-  confers no access the same-UID planter did not already have (DAC
-  still applies to the sandboxed child), and etc_overlay sources are
+* CLOSED for Landlock grant opens: the same validation-time treatment
+  as the mount-ns bind sources. ``landlock._resolve_grant_paths``
+  realpaths every writable/readable rule path in the PARENT when the
+  preexec closure is built, and the forked child walks the
+  pre-resolved canonical string — a symlink planted anywhere in the
+  fork/grant window refuses (ELOOP) and the rule falls under the
+  global deny. The confined-sibling escalation motivated closing this
+  (a Landlock-confined planter with MAKE_SYM on a shared output tree
+  could otherwise steer the NEXT sandbox's WRITE grant onto a tree the
+  planter itself could not write — the same-UID-DAC argument does not
+  cover that case). What remains is the irreducible pre-validation
+  class below, announced once per redirect in the run log.
+* REMAINS window-narrowed (walk-time only) for etc_overlay sources: a
+  symlink pre-planted before THAT walk's ``realpath`` resolves like a
+  benign operator symlink and pins the attacker's chosen destination.
+  Deliberate scoping, not an oversight: etc_overlay sources are
   caller-work-dir-internal files, not attacker-adjacent trees.
 * Also remains: a rename-swap to a REAL directory the attacker
   already controls — that grants access only to content they could

@@ -49,8 +49,19 @@ class TestImportPatterns:
     def test_pypi_hyphenated_name(self):
         dep = _make_dep("my-package", "PyPI")
         patterns = _import_patterns(dep)
-        assert patterns[0].search("import my_package")
-        assert patterns[0].search("from my_package import foo")
+        assert any(p.search("import my_package") for p in patterns)
+        assert any(p.search("from my_package import foo") for p in patterns)
+
+    def test_pypi_distribution_name_maps_to_import_module(self):
+        # PyPI distribution names can diverge from the import-module
+        # name; the grep must look for what source code writes.
+        dep = _make_dep("pyyaml", "PyPI")
+        patterns = _import_patterns(dep)
+        assert any(p.search("import yaml") for p in patterns)
+        assert any(p.search("from yaml import safe_load") for p in patterns)
+        # ...and must not look for the distribution name, which never
+        # appears in imports.
+        assert not any(p.search("import pyyaml") for p in patterns)
 
     def test_npm_require(self):
         dep = _make_dep("express", "npm")
@@ -82,7 +93,55 @@ class TestImportPatterns:
     def test_maven_import(self):
         dep = _make_dep("org.apache.commons:commons-lang3", "Maven")
         patterns = _import_patterns(dep)
-        assert patterns[0].search("import org.apache.commons.StringUtils;")
+        assert any(
+            p.search("import org.apache.commons.lang3.StringUtils;")
+            for p in patterns
+        )
+
+    def test_maven_group_id_is_not_the_package_prefix(self):
+        # Guava's groupId (com.google.guava) is not its Java package
+        # (com.google.common) — the curated override map must win.
+        dep = _make_dep("com.google.guava:guava", "Maven")
+        patterns = _import_patterns(dep)
+        assert any(
+            p.search("import com.google.common.collect.Lists;")
+            for p in patterns
+        )
+        assert not any(
+            p.search("import com.google.guava.collect.Lists;")
+            for p in patterns
+        )
+
+    def test_maven_static_import_matches(self):
+        dep = _make_dep("org.apache.commons:commons-lang3", "Maven")
+        patterns = _import_patterns(dep)
+        assert any(
+            p.search("import static org.apache.commons.lang3.Validate.notNull;")
+            for p in patterns
+        )
+
+    def test_packagist_pascal_case_namespace(self):
+        # Composer names are lowercase; PHP use statements are
+        # PascalCase and case-sensitive, and the PSR-4 second segment
+        # often differs from the package name.
+        dep = _make_dep("symfony/console", "Packagist")
+        patterns = _import_patterns(dep)
+        assert any(
+            p.search("use Symfony\\Component\\Console\\Command\\Command;")
+            for p in patterns
+        )
+        # A different vendor must not match.
+        assert not any(
+            p.search("use Monolog\\Logger;") for p in patterns
+        )
+
+    def test_packagist_hyphenated_vendor(self):
+        dep = _make_dep("league/oauth2-client", "Packagist")
+        patterns = _import_patterns(dep)
+        assert any(
+            p.search("use League\\OAuth2\\Client\\Provider\\GenericProvider;")
+            for p in patterns
+        )
 
     def test_unknown_ecosystem_empty(self):
         dep = _make_dep("foo", "UnknownEco")
@@ -141,11 +200,37 @@ class TestAssessUpgradeImpact:
         result = assess_upgrade_impact(MagicMock(), dep, "3.0.0", Path("/fake"))
         assert result is None
 
-    def test_no_call_sites_returns_safe(self, tmp_path):
+    def test_no_call_sites_returns_safe_at_low_confidence(self, tmp_path):
+        # Zero grep hits is heuristic evidence, not proof of non-use —
+        # the verdict stays "safe" but must not claim confidence.
         dep = _make_dep("requests", "PyPI", "2.28.0")
         result = assess_upgrade_impact(MagicMock(), dep, "2.31.0", tmp_path)
         assert result is not None
         assert result.verdict == "safe"
+        assert result.confidence == "low"
+        assert "no call sites" in result.summary.lower()
+
+    def test_call_sites_present_skips_low_confidence_shortcut(self, tmp_path):
+        # Direction two: when the grep DOES find usage, the low-
+        # confidence no-call-sites shortcut must not fire — the full
+        # LLM review path runs instead.
+        (tmp_path / "app.py").write_text("import requests\n")
+        verdict = UpgradeImpactVerdict(
+            verdict="minor_migration", confidence="high", summary="x",
+        )
+        with patch(
+            "packages.sca.llm.upgrade_impact_review.run_stage",
+            return_value=MagicMock(
+                error=None, model=verdict, preflight_hit=False,
+            ),
+        ):
+            dep = _make_dep("requests", "PyPI", "2.28.0")
+            result = assess_upgrade_impact(
+                MagicMock(), dep, "2.31.0", tmp_path,
+            )
+        assert result is not None
+        assert result.verdict == "minor_migration"
+        assert result.confidence == "high"
 
     @patch("packages.sca.llm.upgrade_impact_review.run_stage")
     def test_llm_returns_verdict(self, mock_run_stage, tmp_path):

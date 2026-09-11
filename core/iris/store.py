@@ -515,11 +515,17 @@ def evict_stale(
     Specs with ``evidence_tier >= keep_above`` are retained even if
     their file is gone — they may have been confirmed by a tool and
     the file rename might be a refactor, not a deletion.
+
+    Specs with an EMPTY file field (accepted at parse time when the
+    LLM omits ``file``) carry nothing to be stale against — evicting
+    them here silently churned away accumulated taint vocabulary on
+    every persist with a resolvable target, so they are exempt.
     """
     kept = []
     evicted = 0
     for spec in specs:
-        if (spec.file and spec.file in current_files) or TIER_RANK.get(spec.evidence_tier, 0) >= TIER_RANK.get(keep_above, 0):
+        if (not spec.file or spec.file in current_files
+                or TIER_RANK.get(spec.evidence_tier, 0) >= TIER_RANK.get(keep_above, 0)):
             kept.append(spec)
         else:
             evicted += 1

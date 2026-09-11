@@ -138,20 +138,25 @@ def _build_file_index(source_root: Path) -> dict[str, list[Path]]:
     """
     index: dict[str, list[Path]] = {}
 
-    def _walk(directory: Path) -> None:
+    # Iterative walk (explicit stack). The tree being indexed is the
+    # UNTRUSTED scanned repo — a recursive walk hits Python's
+    # recursion limit around ~1000 directory levels and a hostile
+    # deep tree would abort the whole import with RecursionError.
+    stack: list[Path] = [source_root]
+    while stack:
+        directory = stack.pop()
         try:
             entries = sorted(directory.iterdir())
         except (OSError, PermissionError):
-            return
+            continue
         for entry in entries:
             if entry.is_dir() and not entry.is_symlink():
                 if entry.name not in _SKIP_DIRS:
-                    _walk(entry)
+                    stack.append(entry)
             elif entry.is_file():
                 rel = entry.relative_to(source_root)
                 index.setdefault(entry.name, []).append(rel)
 
-    _walk(source_root)
     return index
 
 
@@ -223,6 +228,14 @@ def _resolve_uri(
 
 _SNIPPET_CONTEXT_LINES = 3
 
+# Per-finding source reads are bounded: the referenced file lives in
+# the UNTRUSTED scanned tree and the SARIF (also untrusted) picks
+# which file gets read — an unbounded read_text on a multi-GB blob
+# would be repeated once per snippet-less finding. 10 MiB comfortably
+# covers real source files (the sibling SARIF-document cap in
+# parser.load_sarif is 100 MiB for whole result files).
+_SNIPPET_SOURCE_MAX_BYTES = 10 * 1024 * 1024
+
 
 def _synthesize_snippet(
     source_root: Path, rel_path: str,
@@ -232,9 +245,18 @@ def _synthesize_snippet(
 
     The snippet starts at ``start_line`` (no leading context) and
     extends ``_SNIPPET_CONTEXT_LINES`` lines past the finding's end.
+    Files larger than ``_SNIPPET_SOURCE_MAX_BYTES`` are skipped (the
+    finding keeps flowing, just without a synthesized snippet).
     """
     try:
         full = source_root / rel_path
+        if full.stat().st_size > _SNIPPET_SOURCE_MAX_BYTES:
+            logger.warning(
+                "SARIF import: skipping snippet synthesis for oversized "
+                "file (>%d MiB): %s",
+                _SNIPPET_SOURCE_MAX_BYTES // (1024 * 1024), rel_path,
+            )
+            return ""
         lines = full.read_text(encoding="utf-8", errors="replace").splitlines()
         s = max(0, start_line - 1)
         e = min(len(lines), (end_line or start_line) + _SNIPPET_CONTEXT_LINES)
@@ -428,6 +450,77 @@ def format_import_summary(result: ImportResult, sarif_files: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _step_to_threadflow_location(step: dict[str, Any]) -> dict[str, Any]:
+    """Convert one internal dataflow step ({file, line, column, label,
+    snippet}) back to a SARIF threadFlow location object."""
+    region: dict[str, Any] = {}
+    line = step.get("line")
+    if isinstance(line, int) and line > 0:
+        region["startLine"] = line
+    column = step.get("column")
+    if isinstance(column, int) and column > 0:
+        region["startColumn"] = column
+    snippet = step.get("snippet")
+    if isinstance(snippet, str) and snippet:
+        region["snippet"] = {"text": snippet}
+    location: dict[str, Any] = {
+        "physicalLocation": {
+            "artifactLocation": {"uri": step.get("file") or ""},
+            "region": region,
+        }
+    }
+    label = step.get("label")
+    if isinstance(label, str) and label:
+        location["message"] = {"text": label}
+    return {"location": location}
+
+
+def _path_to_codeflow(path: dict[str, Any]) -> dict[str, Any] | None:
+    """Convert one internal {source, sink, steps, ...} path dict to a
+    SARIF codeFlow object, or None when the path has fewer than the
+    two locations the parser requires to round-trip."""
+    ordered = [path.get("source"), *(path.get("steps") or []), path.get("sink")]
+    steps = [s for s in ordered if isinstance(s, dict)]
+    if len(steps) < 2:
+        return None
+    return {
+        "threadFlows": [
+            {"locations": [_step_to_threadflow_location(s) for s in steps]}
+        ]
+    }
+
+
+def _dataflow_to_codeflows(dataflow_path: Any) -> list[dict[str, Any]]:
+    """Convert a finding's ``dataflow_path`` to a SARIF ``codeFlows`` array.
+
+    ``parse_sarif_findings`` stores dataflow as an INTERNAL dict
+    ({source, sink, steps, total_steps, alternative_paths}) — emitting
+    that dict verbatim as ``result.codeFlows`` produced schema-invalid
+    SARIF, and ``extract_dataflow_path`` on re-parse iterated its
+    string keys and returned None, silently losing every imported
+    finding's dataflow after the disk hop. Convert the dict back to
+    the spec's array-of-codeFlow shape (one codeFlow for the primary
+    path plus one per alternative path).
+
+    A list value is already SARIF-shaped (hand-built findings that
+    never went through the parser) and passes through unchanged.
+    """
+    if isinstance(dataflow_path, list):
+        return [cf for cf in dataflow_path if isinstance(cf, dict)]
+    if not isinstance(dataflow_path, dict):
+        return []
+    flows: list[dict[str, Any]] = []
+    primary = _path_to_codeflow(dataflow_path)
+    if primary is not None:
+        flows.append(primary)
+    for alt in dataflow_path.get("alternative_paths") or []:
+        if isinstance(alt, dict):
+            cf = _path_to_codeflow(alt)
+            if cf is not None:
+                flows.append(cf)
+    return flows
+
+
 def findings_to_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
     """Convert normalized finding dicts back to a valid SARIF 2.1.0 structure.
 
@@ -467,7 +560,9 @@ def findings_to_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
         }
 
         if f.get("has_dataflow") and f.get("dataflow_path"):
-            result["codeFlows"] = f["dataflow_path"]
+            code_flows = _dataflow_to_codeflows(f["dataflow_path"])
+            if code_flows:
+                result["codeFlows"] = code_flows
 
         # Same guard as enriched_writer._build_result: a legacy
         # finding whose finding_id is the bare rule_id (the pre-fix

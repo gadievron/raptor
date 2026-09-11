@@ -65,6 +65,18 @@ def scan_root_context(root: Path) -> Iterator[None]:
     finally:
         _SCAN_ROOT.reset(token)
 
+
+def active_scan_root() -> Path | None:
+    """The scan root declared by :func:`scan_root_context`, or ``None``.
+
+    Parsers that confine cross-file reads (``-r`` includes, parent
+    POMs) use this as their containment bound when the caller didn't
+    pass one explicitly — the pipeline wraps its parse loop in
+    ``scan_root_context(target)``, so registry-dispatched parsers get
+    the real target root instead of guessing from the manifest path.
+    """
+    return _SCAN_ROOT.get()
+
 # 50 MB. See module docstring for the bound rationale.
 _MAX_PARSER_BYTES = 50 * 1024 * 1024
 

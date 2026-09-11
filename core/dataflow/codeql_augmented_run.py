@@ -251,7 +251,11 @@ def run_baseline_and_augmented(
 
     The baseline analysis omits ``--additional-packs`` entirely so
     its result matches what the operator's normal CodeQL run would
-    produce. Pack-augmented analysis follows.
+    produce. Pack-augmented analysis follows. BOTH legs force
+    ``--rerun``: the evaluation cache does not key on data-extension
+    rows, so a baseline reusing cached results from a prior pack-
+    influenced run on the same DB would silently converge on the
+    augmented result and zero out the measured suppression delta.
     """
     baseline = analyze(
         db_path,
@@ -260,6 +264,10 @@ def run_baseline_and_augmented(
         codeql_bin=codeql_bin,
         timeout_seconds=timeout_seconds,
         runner=runner,
+        # Match the augmented leg's forced re-evaluation (see the
+        # cache-keying comment in ``analyze``) — a cache-served
+        # baseline poisons the diff.
+        extra_args=("--rerun",),
     )
     augmented = analyze(
         db_path,

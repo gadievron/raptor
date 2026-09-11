@@ -277,3 +277,92 @@ def test_sha_pinned_no_change_when_already_at_target(tmp_path: Path) -> None:
     results = rewrite_gha_uses(wf, edits)
     assert not results[0].applied
     assert results[0].reason == "no_change"
+
+
+# ---------------------------------------------------------------------------
+# Verdicts are computed across ALL matching uses: lines
+# ---------------------------------------------------------------------------
+
+def test_branch_ref_earlier_in_file_does_not_shadow_tag_bump(
+    tmp_path: Path,
+) -> None:
+    """A ``@main`` reference to the same action appearing BEFORE the
+    tag-pinned one must not shadow the legitimate bump into
+    value_mismatch: the ``@v4`` occurrence is bumped, ``@main`` is left
+    untouched."""
+    wf = _workflow_path(tmp_path)
+    wf.write_text(
+        "jobs:\n"
+        "  a:\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@main\n"
+        "  b:\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+    )
+    edits = [RewriteEdit(
+        locator="actions/checkout",
+        old_value="v4", new_value="v5",
+    )]
+    results = rewrite_gha_uses(wf, edits)
+    assert results[0].applied, results[0].reason
+    text = wf.read_text()
+    assert "uses: actions/checkout@v5" in text
+    assert "uses: actions/checkout@main" in text
+    assert "@v4" not in text
+
+
+def test_no_change_only_when_every_occurrence_at_target(
+    tmp_path: Path,
+) -> None:
+    """One occurrence already at the target plus one at some OTHER ref
+    is not ``no_change`` — the plan's old value is absent, so the
+    verdict is value_mismatch naming the stray ref."""
+    wf = _workflow_path(tmp_path)
+    wf.write_text(
+        "      - uses: actions/checkout@v5\n"
+        "      - uses: actions/checkout@main\n"
+    )
+    edits = [RewriteEdit(
+        locator="actions/checkout",
+        old_value="v4", new_value="v5",
+    )]
+    results = rewrite_gha_uses(wf, edits)
+    assert not results[0].applied
+    assert "value_mismatch" in results[0].reason
+    assert "'main'" in results[0].reason
+
+
+def test_no_change_when_all_occurrences_at_target(tmp_path: Path) -> None:
+    wf = _workflow_path(tmp_path)
+    wf.write_text(
+        "      - uses: actions/checkout@v5\n"
+        "      - uses: actions/checkout@v5\n"
+    )
+    edits = [RewriteEdit(
+        locator="actions/checkout",
+        old_value="v4", new_value="v5",
+    )]
+    results = rewrite_gha_uses(wf, edits)
+    assert not results[0].applied
+    assert results[0].reason == "no_change"
+
+
+def test_sha_refusal_when_all_occurrences_sha_pinned(
+    tmp_path: Path,
+) -> None:
+    """Every occurrence SHA-pinned → the SHA-specific refusal survives
+    the all-matches verdict logic."""
+    wf = _workflow_path(tmp_path)
+    sha = "a" * 40
+    wf.write_text(
+        f"      - uses: actions/checkout@{sha}\n"
+        f"      - uses: actions/checkout@{sha}\n"
+    )
+    edits = [RewriteEdit(
+        locator="actions/checkout",
+        old_value="v4", new_value="v5",
+    )]
+    results = rewrite_gha_uses(wf, edits)
+    assert not results[0].applied
+    assert "SHA-pinned" in results[0].reason

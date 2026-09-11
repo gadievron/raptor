@@ -13,8 +13,6 @@ Public API:
   * :func:`make_cwe_dispatched_collector` — composes source_intel
     with the PR1 V2 sanitizer-extraction collector via rule_id-prefix
     dispatch
-
-source_intel") for the design + axis roadmap.
 """
 
 from packages.source_intel.analyze import (
@@ -92,8 +90,11 @@ def clear_all_source_intel_caches() -> None:
 
     Single entry point for orchestrators that want a clean slate
     between consecutive runs in the same Python process. Clears
-    both the inventory cache (``packages.source_intel.analyze``)
-    and the result cache (``packages.llm_analysis.source_intel_inject``).
+    the inventory cache (``packages.source_intel.analyze``), the
+    cache-key derivation memos (``packages.source_intel.cache``),
+    the adapter's per-target memos (prereqs + pointer-reference
+    scan), and the result cache
+    (``packages.llm_analysis.source_intel_inject``).
 
     Signature-based auto-invalidation already covers correctness
     when the target tree changes; this is the explicit reset for
@@ -103,6 +104,10 @@ def clear_all_source_intel_caches() -> None:
     that exercise source_intel in isolation may not import it).
     """
     clear_inventory_cache()
+    from packages.source_intel.adapter import clear_adapter_memos
+    from packages.source_intel.cache import clear_key_memo
+    clear_adapter_memos()
+    clear_key_memo()
     try:
         from packages.llm_analysis.source_intel_inject import clear_si_result_cache
     except ImportError:

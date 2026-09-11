@@ -6,7 +6,7 @@ When the trace batch carries CWE ids (in ``cwe`` / ``cwe_id`` /
 recognisable bug-class vocabulary (function / entry / sink names
 matching strategy keywords), the operator-curated cwe_strategies
 bug-class lenses are appended to the user message after the
-``</traces>`` close.
+trace envelope close.
 
 Mirrors test_hunt_strategy_wiring.py for the trace-dispatch sibling.
 """
@@ -139,8 +139,8 @@ class TestRobustness:
 
         with patch.object(builtins, "__import__", fake_import):
             out = _format_user_message([{"trace_id": "T1", "cwe": "CWE-22"}])
-            assert "<traces>" in out
-            assert "</traces>" in out
+            assert 'kind="flow-traces"' in out
+            assert "</untrusted-" in out
             assert "Bug-class lenses" not in out
 
     def test_picker_exception_returns_base_message(self):
@@ -149,7 +149,7 @@ class TestRobustness:
 
         with patch("core.llm.cwe_strategies.pick_strategies", boom):
             out = _format_user_message([{"trace_id": "T1", "cwe": "CWE-22"}])
-            assert "<traces>" in out
+            assert 'kind="flow-traces"' in out
             assert "Bug-class lenses" not in out
 
     def test_render_exception_returns_base_message(self):
@@ -177,7 +177,7 @@ class TestRobustness:
 
 
 # ---------------------------------------------------------------------------
-# Strategy block placement (after </traces>)
+# Strategy block placement (after the envelope close)
 # ---------------------------------------------------------------------------
 
 
@@ -185,7 +185,7 @@ class TestStrategyBlockPlacement:
     def test_strategy_block_after_traces_close(self):
         traces = [{"trace_id": "T1", "cwe": "CWE-22"}]
         out = _format_user_message(traces)
-        traces_close = out.index("</traces>")
+        traces_close = out.index("</untrusted-")
         bug_pos = out.index("Bug-class lenses for these traces")
         assert bug_pos > traces_close
 
@@ -352,5 +352,5 @@ class TestExemplarSlotWiring:
             "core.labeled_attempts.view.exemplar_slot_for_finding", boom,
         )
         out = _format_user_message(self._TRACES)
-        assert "<traces>" in out
+        assert 'kind="flow-traces"' in out
         assert "<untrusted_verified_outcomes>" not in out

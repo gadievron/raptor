@@ -130,9 +130,16 @@ def remove_labeled_images(
         if tag_result.returncode == 0:
             for t in (tag_result.stdout or "").splitlines():
                 t = t.strip()
-                if not t or "<none>" in t or ":" not in t:
+                if not t or "<none>" in t:
                     continue
-                tagpart = t.split(":", 1)[1]
+                # Tag separator is the colon AFTER the last slash — a
+                # first-colon split read a port-bearing Repository
+                # ("localhost:5000/repo:tag") as tag "5000/repo:tag".
+                slash = t.rfind("/")
+                colon = t.rfind(":")
+                if colon <= slash:
+                    continue
+                tagpart = t[colon + 1:]
                 if tagpart == tag_value or tagpart.startswith(tag_value + "-"):
                     tags.append(t)
     tags = list(dict.fromkeys(tags))  # dedupe, preserve order

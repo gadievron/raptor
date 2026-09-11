@@ -104,8 +104,14 @@ class TestLearnedModelsPass:
         return a
 
     @pytest.fixture
-    def dbs(self):
-        return {"cpp": SimpleNamespace(database_path="/tmp/db-cpp")}
+    def dbs(self, tmp_path):
+        # The TRUE production shape: run_autonomous_analysis builds
+        # successful_dbs as {lang: result.database_path} — plain Path
+        # values, the same dict analyze_all_databases consumes. The
+        # previous fixtures wrapped the path in an object with a
+        # .database_path attribute, encoding the exact contract
+        # mismatch that dead-coded the pass in production.
+        return {"cpp": tmp_path / "db-cpp"}
 
     def test_kill_switch_returns_none(self, agent, dbs, monkeypatch):
         monkeypatch.setattr(
@@ -121,7 +127,7 @@ class TestLearnedModelsPass:
     def test_unsupported_language_skipped(self, agent, monkeypatch):
         monkeypatch.setattr("core.iris.api.load_project_specs",
                             lambda **kw: [object()])
-        dbs = {"go": SimpleNamespace(database_path="/tmp/db-go")}
+        dbs = {"go": Path("/tmp/db-go")}
         assert agent._run_learned_models_pass(dbs) is None
 
     def test_happy_path_records_cell_and_candidates(

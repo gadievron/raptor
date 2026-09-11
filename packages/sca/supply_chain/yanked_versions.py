@@ -58,8 +58,8 @@ def scan_pinned_versions(
       * Ecosystems with no yanked concept (Maven, Composer)
       * Clients not provided
     """
-    out: list[HygieneFinding] = []
-    seen: set = set()
+    unique: list[Dependency] = []
+    seen: set[tuple[str, str, str | None]] = set()
     for dep in deps:
         if not dep.version:
             continue
@@ -69,15 +69,17 @@ def scan_pinned_versions(
         if key in seen:
             continue
         seen.add(key)
+        unique.append(dep)
 
+    def _scan_one(dep: Dependency) -> HygieneFinding | None:
         reason = _check_yanked(
             dep, pypi_client=pypi_client, npm_client=npm_client,
             cargo_client=cargo_client, rubygems_client=rubygems_client,
             nuget_client=nuget_client,
         )
         if reason is None:
-            continue
-        out.append(HygieneFinding(
+            return None
+        return HygieneFinding(
             finding_id=(
                 f"sca:hygiene:yanked_version:{dep.ecosystem}:"
                 f"{dep.name}:{dep.version}"
@@ -94,8 +96,22 @@ def scan_pinned_versions(
                 "high",
                 reason="registry yanked flag",
             ),
-        ))
-    return out
+        )
+
+    # Each dep costs up to one registry round-trip; the per-dep
+    # checks are independent, so run them on a small thread pool —
+    # same worker count and client call shape as
+    # ``registry_metadata.scan_deps``, whose clients these are.
+    # Below the worker-count threshold the executor's spin-up
+    # overhead exceeds the sequential cost.
+    if len(unique) <= 4:
+        results = [_scan_one(dep) for dep in unique]
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=8,
+                                thread_name_prefix="sca-yanked") as pool:
+            results = list(pool.map(_scan_one, unique))
+    return [f for f in results if f is not None]
 
 
 def _check_yanked(
@@ -120,22 +136,30 @@ def _check_yanked(
     return None
 
 
-def _yanked_pypi(client, name, version) -> str | None:
+def _yanked_pypi(client, name: str, version: str) -> str | None:
     if hasattr(client, "get_version_metadata"):
         meta = client.get_version_metadata(name, version)
         if isinstance(meta, dict):
-            info = meta.get("info") or {}
-            if info.get("yanked"):
-                return (info.get("yanked_reason") or
-                         "no reason given by maintainer.")
-    # Fallback: aggregate metadata's releases entry may carry yanked
+            info = meta.get("info")
+            if isinstance(info, dict):
+                if info.get("yanked"):
+                    return (info.get("yanked_reason") or
+                            "no reason given by maintainer.")
+                # Well-formed versioned response, not yanked — done.
+                # Falling through to the aggregate packument here
+                # would spend a second round-trip per CLEAN dep for
+                # nothing: the versioned ``info.yanked`` is
+                # authoritative for this version.
+                return None
+    # Fallback: versioned endpoint unavailable or malformed — the
+    # aggregate metadata's releases entry may carry yanked.
     meta = client.get_metadata(name) if hasattr(client, "get_metadata") else None
     if isinstance(meta, dict):
         files = (meta.get("releases") or {}).get(version) or []
         for f in files:
             if isinstance(f, dict) and f.get("yanked"):
                 return (f.get("yanked_reason") or
-                         "no reason given by maintainer.")
+                        "no reason given by maintainer.")
     return None
 
 

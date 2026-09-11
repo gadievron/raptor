@@ -109,6 +109,12 @@ def get_display_status(finding: dict[str, Any]) -> str:
         "confirmed": "Confirmed",
         "confirmed_constrained": "Confirmed (Constrained)",
         "confirmed_blocked": "Confirmed (Blocked)",
+        # Explicit entry: the title-case fallback rendered this as
+        # "Confirmed Unverified", which the counting code's
+        # startswith("Confirmed") bucketed as confirmed_unrestricted
+        # ("real, reachable, no notable mitigation") — the opposite
+        # meaning.
+        "confirmed_unverified": "Confirmed (Unverified)",
         "ruled_out": "Ruled Out",
         "false_positive": "False Positive",
         "poc_success": "Exploitable",

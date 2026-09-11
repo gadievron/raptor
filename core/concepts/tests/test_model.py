@@ -221,6 +221,25 @@ class TestDomainModelPersistence:
         sample_model.save(p)
         assert not p.with_suffix(".tmp").exists()
 
+    def test_save_does_not_use_fixed_tmp_name(
+        self, sample_model: DomainModel, tmp_path: Path,
+    ) -> None:
+        # A fixed '<path>.tmp' temp name let two concurrent writers
+        # clobber each other's in-flight temp file. save must use a
+        # unique temp name, leaving a same-named foreign file alone
+        # and no temp litter behind.
+        p = tmp_path / "domain-model.json"
+        foreign = p.with_suffix(".tmp")
+        foreign.write_text("another writer's in-flight bytes", encoding="utf-8")
+        sample_model.save(p)
+        assert foreign.read_text(encoding="utf-8") == (
+            "another writer's in-flight bytes"
+        )
+        loaded = DomainModel.load(p)
+        assert loaded.concepts[0].id == sample_model.concepts[0].id
+        leftover = {f.name for f in tmp_path.iterdir()} - {p.name, foreign.name}
+        assert leftover == set()
+
     def test_load_empty_model(self, tmp_path: Path) -> None:
         p = tmp_path / "domain-model.json"
         p.write_text('{"version": "1"}', encoding="utf-8")

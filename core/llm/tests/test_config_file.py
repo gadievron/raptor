@@ -853,6 +853,168 @@ class TestFallbackModelsFromConfig:
         assert "gemini-2.5-pro" not in names
 
 
+class TestDatedAliasThinkingSelection:
+    """Thinking-model selection must match dated configured ids against
+    the undated pattern table — a snapshot-pinned Sonnet falling
+    through to another (pricier or weaker) entry silently changes what
+    the run pays and gets."""
+
+    def _select(self, entries, tmp_path):
+        config = tmp_path / "models.json"
+        config.write_text(json.dumps(entries))
+        with patch.dict(os.environ, {"RAPTOR_CONFIG": str(config)}):
+            import core.llm.config as cfg
+            cfg._thinking_model_checked = False
+            cfg._cached_thinking_model = None
+            return _get_best_thinking_model()
+
+    def test_dated_id_matches_own_tier(self, tmp_path):
+        result = self._select([
+            {"provider": "anthropic", "model": "claude-sonnet-4-6-20260115",
+             "api_key": "sk-a"},
+            {"provider": "gemini", "model": "gemini-2.5-flash",
+             "api_key": "sk-g"},
+        ], tmp_path)
+        assert result is not None
+        # Sonnet tier (70) outranks Flash (55); the wire name keeps the
+        # operator's dated pin.
+        assert result.provider == "anthropic"
+        assert result.model_name == "claude-sonnet-4-6-20260115"
+
+    def test_unknown_stripped_id_still_falls_through(self, tmp_path):
+        # Two-direction guard: stripping must not invent matches — an
+        # id whose undated form is not in the pattern table keeps
+        # falling through to the next configured entry.
+        result = self._select([
+            {"provider": "anthropic", "model": "claude-sonnet-9-9-20990101",
+             "api_key": "sk-a"},
+            {"provider": "gemini", "model": "gemini-2.5-flash",
+             "api_key": "sk-g"},
+        ], tmp_path)
+        assert result is not None
+        assert result.model_name == "gemini-2.5-flash"
+
+    def test_dated_id_resolves_catalog_cost_and_limits(self, tmp_path):
+        result = self._select([
+            {"provider": "anthropic", "model": "claude-sonnet-4-6-20260115",
+             "api_key": "sk-a"},
+        ], tmp_path)
+        assert result is not None
+        limits = MODEL_LIMITS["claude-sonnet-4-6"]
+        costs = MODEL_COSTS["claude-sonnet-4-6"]
+        assert result.max_tokens == limits["max_output"]
+        assert result.max_context == limits["max_context"]
+        expected_cost = (costs["input"] + costs["output"]) / 2
+        assert result.cost_per_1k_tokens == pytest.approx(expected_cost)
+
+    def test_entry_api_base_wins_cold_start(self, tmp_path):
+        # The selection path's own docs promise an explicit api_base in
+        # the entry beats the provider endpoint table.
+        result = self._select([
+            {"provider": "openai", "model": "gpt-5.4", "api_key": "sk-o",
+             "api_base": "https://gw.example.test/v1"},
+        ], tmp_path)
+        assert result is not None
+        assert result.api_base == "https://gw.example.test/v1"
+
+
+class TestClaudecodeEntryCalibration:
+    """models.json claudecode entries must get the CLI transport's
+    calibrated defaults (600s / flagship-class limits), not the cloud-API
+    120s/8192 — the subprocess + --json-schema overhead killed heavy
+    structured calls after they had already billed."""
+
+    def test_bare_claudecode_entry_gets_cli_calibration(self, monkeypatch):
+        # Sentinel path — pin-model probe disabled so the resolver never
+        # reads a host cc-probe cache.
+        monkeypatch.setenv("RAPTOR_CC_PIN_MODEL", "0")
+        monkeypatch.delenv("RAPTOR_CC_MODEL", raising=False)
+        mc = _model_config_from_entry({"provider": "claudecode"})
+        assert mc.timeout == 600
+        flagship = MODEL_LIMITS.get(PROVIDER_DEFAULT_MODELS["anthropic"], {})
+        assert mc.max_tokens == flagship.get("max_output", 32000)
+        assert mc.max_context == flagship.get("max_context", 1000000)
+
+    def test_explicit_claudecode_fields_still_win(self, monkeypatch):
+        monkeypatch.setenv("RAPTOR_CC_PIN_MODEL", "0")
+        monkeypatch.delenv("RAPTOR_CC_MODEL", raising=False)
+        mc = _model_config_from_entry({
+            "provider": "claudecode", "timeout": 90,
+            "max_output": 4096, "max_context": 200000,
+        })
+        assert mc.timeout == 90
+        assert mc.max_tokens == 4096
+        assert mc.max_context == 200000
+
+    def test_cloud_entries_keep_generic_defaults(self):
+        # Two-direction guard: the CLI calibration must not leak onto
+        # cloud-API providers.
+        mc = _model_config_from_entry({
+            "provider": "gemini", "model": "some-unknown-model",
+            "api_key": "k",
+        })
+        assert mc.timeout == 120
+        assert mc.max_tokens == 8192
+
+
+class TestEntryApiBaseHonoured:
+    """An explicit api_base in a models.json entry must reach the
+    ModelConfig — otherwise the operator's key is sent to the public
+    endpoint instead of their gateway."""
+
+    def test_entry_api_base_wins(self):
+        mc = _model_config_from_entry({
+            "provider": "openai", "model": "gpt-5.2", "api_key": "k",
+            "api_base": "https://gw.example.test/v1",
+        })
+        assert mc.api_base == "https://gw.example.test/v1"
+
+    def test_default_endpoint_without_entry_api_base(self):
+        # Two-direction guard: no entry field -> provider endpoint table.
+        from core.llm.model_data import PROVIDER_ENDPOINTS
+        mc = _model_config_from_entry({
+            "provider": "openai", "model": "gpt-5.2", "api_key": "k",
+        })
+        assert mc.api_base == PROVIDER_ENDPOINTS["openai"]
+
+
+class TestFallbackPrimarySkipNormalized:
+    """The primary-skip in _get_default_fallback_models must compare the
+    NORMALIZED entry identity — the raw entry tuple misses provider
+    derivation / model backfill / Bedrock id normalization and re-adds
+    the primary as its own fallback."""
+
+    def test_derived_bedrock_primary_not_its_own_fallback(self, monkeypatch):
+        import core.llm.config as cfg
+        entries = [
+            # Provider-less Bedrock-shaped id: normalizes to
+            # ("bedrock", "anthropic.claude-opus-4-7") on the mantle
+            # surface — the raw tuple ("", "us.anthropic...") never
+            # matched the normalized primary key.
+            {"model": "us.anthropic.claude-opus-4-7"},
+            {"provider": "gemini", "model": "gemini-2.5-flash",
+             "api_key": "k", "role": "fallback"},
+        ]
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "tok")
+        monkeypatch.setattr(cfg, "_get_configured_models", lambda: entries)
+        monkeypatch.setattr(
+            cfg, "_get_default_primary_model",
+            lambda: _model_config_from_entry(entries[0]),
+        )
+        monkeypatch.setattr(cfg, "_get_available_ollama_models", lambda: [])
+        monkeypatch.setattr(
+            cfg, "detect_llm_availability",
+            lambda: type("A", (), {"external_llm": True})(),
+        )
+        fallbacks = cfg._get_default_fallback_models()
+        names = [f.model_name for f in fallbacks]
+        assert "anthropic.claude-opus-4-7" not in names
+        assert "us.anthropic.claude-opus-4-7" not in names
+        # Two-direction guard: the normalized skip must not swallow
+        # genuinely distinct entries.
+        assert "gemini-2.5-flash" in names
+
+
 class TestModelDataConsistency:
     """Verify model data tables are internally consistent."""
 
@@ -990,3 +1152,37 @@ class TestOperatorPrimaryOverride:
             picked = _get_default_primary_model()
             assert picked is not None
             assert picked.provider == "gemini"
+
+
+class TestCacheDirAnchoredToRaptorDir:
+    """``LLMConfig.cache_dir`` must resolve against the RAPTOR install,
+    not the process cwd — a bare-shell invocation from a scanned repo
+    otherwise dropped ``out/llm_cache/`` into the target tree and
+    missed the real cache on every call."""
+
+    def test_anchored_under_raptor_dir_not_cwd(self, monkeypatch, tmp_path):
+        from core.llm.config import _default_cache_dir
+        raptor_dir = tmp_path / "raptor-install"
+        scanned_repo = tmp_path / "scanned-repo"
+        raptor_dir.mkdir()
+        scanned_repo.mkdir()
+        monkeypatch.setenv("RAPTOR_DIR", str(raptor_dir))
+        monkeypatch.chdir(scanned_repo)
+        resolved = _default_cache_dir().resolve()
+        assert resolved == (raptor_dir / "out" / "llm_cache").resolve()
+        assert not str(resolved).startswith(str(scanned_repo.resolve()))
+
+    def test_fallback_relative_when_raptor_dir_unset(self, monkeypatch):
+        """Other direction: hermetic environments without RAPTOR_DIR
+        keep the historical relative default rather than raising."""
+        from core.llm.config import _default_cache_dir
+        monkeypatch.delenv("RAPTOR_DIR", raising=False)
+        assert _default_cache_dir() == Path("out/llm_cache")
+
+    def test_llmconfig_default_uses_factory(self, monkeypatch, tmp_path):
+        from core.llm.config import LLMConfig
+        raptor_dir = tmp_path / "raptor-install"
+        raptor_dir.mkdir()
+        monkeypatch.setenv("RAPTOR_DIR", str(raptor_dir))
+        cfg = LLMConfig(primary_model=None)
+        assert cfg.cache_dir == raptor_dir / "out" / "llm_cache"

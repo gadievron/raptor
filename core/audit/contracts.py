@@ -44,6 +44,25 @@ class ContractViolation:
     callee_file: str = ""
 
 
+def _summaries_mapping(summaries: Any) -> dict[str, Any]:
+    """Coerce either callee-summaries shape to the keyed mapping.
+
+    Callers hold summaries as a ``{"file:function": summary}`` dict OR
+    as the raw LIST of FunctionSummary objects — the enforcement
+    entry point receives the list in production, and ``.items()`` on
+    it raised AttributeError, killing the contract-violation leg.
+    Unknown shapes read as empty, never as an abort.
+    """
+    if isinstance(summaries, dict):
+        return summaries
+    if isinstance(summaries, (list, tuple)):
+        return {
+            f"{getattr(s, 'file', '')}:{getattr(s, 'function', '')}": s
+            for s in summaries
+        }
+    return {}
+
+
 def extract_callee_contracts(
     gap: dict[str, Any],
     summaries: dict[str, Any],
@@ -51,8 +70,10 @@ def extract_callee_contracts(
     """Extract precondition contracts from callee summaries.
 
     For each callee in the gap's callee list, look up its FunctionSummary
-    and extract preconditions.
+    and extract preconditions.  ``summaries`` accepts the keyed dict or
+    the raw summary list (see :func:`_summaries_mapping`).
     """
+    summaries = _summaries_mapping(summaries)
     callees = gap.get("callees", [])
     if not callees:
         return []

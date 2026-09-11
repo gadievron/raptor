@@ -164,8 +164,7 @@ _FALLBACK_HARNESS_C = """/* Auto-generated libFuzzer harness fallback.
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
-#include "{header_basename}"
-{extra_includes}
+{header_include}{extra_includes}
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {{
     if (size == 0) return 0;
     /* TODO: replace this stub with a call to {target_function} */
@@ -180,6 +179,31 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {{
 # plain relative header path (quotes, newlines, `..`) is dropped rather
 # than interpolated into source text.
 _SAFE_INCLUDE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./-]*\.(h|hh|hpp)$")
+
+
+def _fallback_source(spec: "HarnessSpec") -> str:
+    """Render the fallback harness with every repo-controlled slot gated.
+
+    The header FILENAME comes from the scanned repo and Linux filenames
+    may contain quotes and newlines, so it goes through the same
+    conservative allowlist as ``extra_includes`` — an unsafe name drops
+    the include line (the byte-passing stub compiles without it) rather
+    than being interpolated into compiled-and-executed source.
+    """
+    header_basename = spec.header_path.name
+    if not _SAFE_INCLUDE_RE.match(header_basename) or ".." in header_basename:
+        logger.warning(
+            "harness_generator: dropping unsafe target header name %r "
+            "from the fallback harness include", header_basename,
+        )
+        header_include = ""
+    else:
+        header_include = f'#include "{header_basename}"\n'
+    return _FALLBACK_HARNESS_C.format(
+        header_include=header_include,
+        target_function=spec.target_function,
+        extra_includes=_render_extra_includes(spec.extra_includes),
+    )
 
 
 def _render_extra_includes(extra_includes: list[str]) -> str:
@@ -237,11 +261,7 @@ class HarnessGenerator:
 
         if self.llm is None:
             logger.warning("No LLM configured, returning fallback harness")
-            source = _FALLBACK_HARNESS_C.format(
-                header_basename=spec.header_path.name,
-                target_function=spec.target_function,
-                extra_includes=_render_extra_includes(spec.extra_includes),
-            )
+            source = _fallback_source(spec)
             filename = f"fuzz_{_c_identifier(spec.target_function)}.c"
             return GeneratedHarness(
                 source_code=source,
@@ -297,11 +317,7 @@ class HarnessGenerator:
         )
 
     def _fallback(self, spec: HarnessSpec, _header_text: str) -> GeneratedHarness:
-        source = _FALLBACK_HARNESS_C.format(
-            header_basename=spec.header_path.name,
-            target_function=spec.target_function,
-            extra_includes=_render_extra_includes(spec.extra_includes),
-        )
+        source = _fallback_source(spec)
         filename = f"fuzz_{_c_identifier(spec.target_function)}.c"
         return GeneratedHarness(
             source_code=source,

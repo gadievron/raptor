@@ -1111,8 +1111,13 @@ def test_extract_verdicts_excludes_symbol_only_absent():
     assert "dead_fn" not in verdicts
     # also_dead: full tier -> included
     assert verdicts["also_dead"] == "absent"
-    # mixed_tier: has at least one full -> included
-    assert verdicts["mixed_tier"] == "absent"
+    # mixed_tier: EVERY contributing binary must be full-tier — the
+    # symbol-only binary can't distinguish inlined from absent, so
+    # its absence contributes no suppression evidence (mirrors the
+    # chokepoint rule in reachability.binary_oracle_absent; the old
+    # ANY-full behaviour leaked symbol-only evidence into G7
+    # suppression on hybrid full+stripped runs).
+    assert "mixed_tier" not in verdicts
     # no_binaries_key: no binaries at all -> excluded (no full evidence)
     assert "no_binaries_key" not in verdicts
     # alive: non-absent classification -> always included
@@ -1127,3 +1132,209 @@ def test_raptor_audit_wires_binary_args():
         "raptor-audit should wire binary oracle CLI flags via add_binary_args")
     assert "binary_verdicts" in audit_src, (
         "raptor-audit should pass binary_verdicts to OrchestratorConfig")
+
+
+def test_raptor_audit_forwards_no_suppression_paths():
+    """The /audit enrichment call must forward the guessed-env-build
+    downgrade list (mirrors core/inventory/builder.py) — without it,
+    guessed builds earned suppression on the /audit surface."""
+    repo_root = Path(__file__).resolve().parents[3]
+    audit_src = (repo_root / "libexec" / "raptor-audit").read_text()
+    assert (
+        "no_suppression_paths=RaptorConfig.BINARY_ORACLE_NO_SUPPRESS"
+        in audit_src
+    )
+
+
+def test_raptor_audit_uses_shared_absent_predicate():
+    """The G7 record gate must consult the shared
+    absent_earns_suppression predicate, not a hand-copied tier loop."""
+    repo_root = Path(__file__).resolve().parents[3]
+    audit_src = (repo_root / "libexec" / "raptor-audit").read_text()
+    assert "absent_earns_suppression" in audit_src
+
+
+# ---------------------------------------------------------------------------
+# absent_earns_suppression — the shared predicate
+# ---------------------------------------------------------------------------
+
+
+def test_absent_earns_suppression_two_directions():
+    from core.analysis.binary_oracle import absent_earns_suppression
+
+    # Earns: every contributing binary full-tier, no downgrade.
+    assert absent_earns_suppression([{"tier": "full"}]) is True
+    assert absent_earns_suppression(
+        [{"tier": "full"}, {"tier": "full", "suppression_grade": True}],
+    ) is True
+    # Refuses: no evidence at all.
+    assert absent_earns_suppression([]) is False
+    assert absent_earns_suppression(None) is False
+    # Refuses: any symbol-only contributor.
+    assert absent_earns_suppression(
+        [{"tier": "full"}, {"tier": "symbol_only"}],
+    ) is False
+    # Refuses: any guessed-build contributor.
+    assert absent_earns_suppression(
+        [{"tier": "full", "suppression_grade": False}],
+    ) is False
+    # Refuses: entries without tier evidence (malformed / non-dict).
+    assert absent_earns_suppression([{}]) is False
+    assert absent_earns_suppression(["junk"]) is False
+
+
+# ---------------------------------------------------------------------------
+# extract_verdicts — bare-name keying soundness (G7 consumer applies
+# verdicts by bare name to gaps of ANY language)
+# ---------------------------------------------------------------------------
+
+
+def _absent_item(name, binaries=None):
+    return {
+        "name": name,
+        "kind": "function",
+        "metadata": {
+            "binary_oracle": {
+                "classification": "absent",
+                "binaries": binaries or [{"tier": "full"}],
+            },
+        },
+    }
+
+
+def test_extract_verdicts_drops_non_native_namesakes():
+    """A live Python function sharing a dead C function's bare name
+    must not inherit its ``absent`` verdict through the bare-name-
+    keyed consumer."""
+    from core.analysis.binary_oracle import extract_verdicts
+
+    inventory = {
+        "files": [
+            {
+                "path": "src/lib.c",
+                "language": "c",
+                "items": [_absent_item("helper"), _absent_item("c_only")],
+            },
+            {
+                "path": "src/util.py",
+                "language": "python",
+                "items": [
+                    {"name": "helper", "kind": "function", "metadata": {}},
+                ],
+            },
+        ],
+    }
+    verdicts = extract_verdicts(inventory)
+    assert "helper" not in verdicts
+    # Two-direction: a name with no cross-language namesake survives.
+    assert verdicts["c_only"] == "absent"
+
+
+def test_extract_verdicts_native_namesakes_collapse_alive_in_any():
+    """Two same-name native items with differing classifications
+    collapse to the strongest — a live namesake can never be
+    suppressed by a dead one sharing its bare name."""
+    from core.analysis.binary_oracle import extract_verdicts
+
+    inventory = {
+        "files": [
+            {
+                "path": "src/a.c",
+                "language": "c",
+                "items": [_absent_item("dup")],
+            },
+            {
+                "path": "src/b.c",
+                "language": "c",
+                "items": [
+                    {
+                        "name": "dup",
+                        "kind": "function",
+                        "metadata": {
+                            "binary_oracle": {
+                                "classification": "symbol_present",
+                                "binaries": [{"tier": "full"}],
+                            },
+                        },
+                    },
+                ],
+            },
+        ],
+    }
+    assert extract_verdicts(inventory)["dup"] == "symbol_present"
+
+
+def test_extract_verdicts_blocks_absent_when_any_namesake_lacks_grade():
+    """A suppression-grade absent item does not leak its verdict onto
+    a bare name that ALSO has a non-grade absent namesake — the bare
+    key can't say which item the consumer means."""
+    from core.analysis.binary_oracle import extract_verdicts
+
+    inventory = {
+        "files": [
+            {
+                "path": "src/a.c",
+                "language": "c",
+                "items": [
+                    _absent_item("shared", [{"tier": "full"}]),
+                    _absent_item("shared", [{"tier": "symbol_only"}]),
+                ],
+            },
+        ],
+    }
+    assert "shared" not in extract_verdicts(inventory)
+
+
+# ---------------------------------------------------------------------------
+# Fully-inlined namespaced functions under BARE inventory names
+# ---------------------------------------------------------------------------
+
+
+def test_fully_inlined_namespaced_function_classifies_inlined_under_bare_name(
+    monkeypatch, tmp_path,
+):
+    """A fully-inlined C++/Rust method (no nm symbol, no concrete
+    low_pc) queried under its BARE name — the form source inventories
+    commonly carry — must classify ``inlined``, not ``absent``. The
+    old inlined-name index held only qualified spellings, so the bare
+    lookup fell through to a suppression-grade ``absent`` on live
+    inlined code."""
+    import core.analysis.binary_oracle as bo_mod
+
+    die = bo_mod._SubprogramDIE(name="Log2Floor", namespace_path="snappy::Bits")
+    subs = {0x10: die}
+    monkeypatch.setattr(bo_mod.shutil, "which", lambda t: f"/usr/bin/{t}")
+    monkeypatch.setattr(bo_mod, "read_build_id", lambda p: "cafebabe")
+    monkeypatch.setattr(bo_mod, "_nm_symbols_status", lambda p: ({}, True))
+    monkeypatch.setattr(bo_mod, "_parse_dwarf", lambda p: (subs, [0x10]))
+
+    fake_bin = tmp_path / "fixture-binary"
+    fake_bin.write_bytes(b"\x7fELF-stub")
+    verdicts = bo_mod.classify_binary_evidence(
+        ["Log2Floor", "snappy::Bits::Log2Floor", "gone_helper"],
+        fake_bin,
+    )
+    assert verdicts["Log2Floor"].classification == "inlined"
+    assert verdicts["snappy::Bits::Log2Floor"].classification == "inlined"
+    # Two-direction: a name with no DWARF evidence at all stays absent.
+    assert verdicts["gone_helper"].classification == "absent"
+
+
+def test_inline_marker_subprogram_also_indexes_bare_name(monkeypatch, tmp_path):
+    """Same bare-name rescue for the DW_AT_inline=inlined marker path
+    (always-inline function with no concrete instance)."""
+    import core.analysis.binary_oracle as bo_mod
+
+    die = bo_mod._SubprogramDIE(
+        name="tr_static_init", namespace_path="zng",
+        has_inline_marker=True,
+    )
+    monkeypatch.setattr(bo_mod.shutil, "which", lambda t: f"/usr/bin/{t}")
+    monkeypatch.setattr(bo_mod, "read_build_id", lambda p: "")
+    monkeypatch.setattr(bo_mod, "_nm_symbols_status", lambda p: ({}, True))
+    monkeypatch.setattr(bo_mod, "_parse_dwarf", lambda p: ({0x20: die}, []))
+
+    fake_bin = tmp_path / "fixture-binary"
+    fake_bin.write_bytes(b"\x7fELF-stub")
+    verdicts = bo_mod.classify_binary_evidence(["tr_static_init"], fake_bin)
+    assert verdicts["tr_static_init"].classification == "inlined"

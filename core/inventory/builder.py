@@ -8,7 +8,6 @@ needs a cached call-graph view of the project.
 
 import ast
 import fnmatch
-import hashlib
 import logging
 import os
 from concurrent.futures import (
@@ -24,7 +23,7 @@ from typing import Any
 from core.build.macro_config import extract_build_tus, extract_macro_config
 from core.build.rust_modules import extract_rust_crate_modules
 from core.config import RaptorConfig
-from core.hash import sha256_bytes
+from core.hash import sha256_bytes, sha256_string
 from core.json import load_json, save_json
 
 from .build_membership import (
@@ -84,33 +83,81 @@ def _extract_python_dunder_all(content: str) -> list[str] | None:
     so a public-named function that's been omitted from ``__all__`` still
     qualifies as a dead-island candidate.
 
-    Module-level only. Conditional / runtime-mutated ``__all__`` (e.g.
-    ``__all__.append(...)`` after the initial assignment) is captured
-    only via the initial Assign / AugAssign — runtime extensions aren't
-    seen, which is the conservative direction (more uncertainty, not
-    less confidence in "internal" claims).
+    Module-level only. COMPUTED ``__all__`` (comprehensions,
+    ``list(REGISTRY)``, function results) returns ``None`` — the export
+    set is unknowable statically, and returning ``[]`` would read as an
+    authoritative "nothing exported", turning every public function in
+    the module into a confident dead-island candidate. ``__all__ +=
+    [...]`` / ``__all__.append(...)`` / ``.extend(...)`` with literal
+    values are harvested; non-literal extensions also degrade to
+    ``None`` (more uncertainty, never less confidence).
     """
     try:
         tree = ast.parse(content)
     except (SyntaxError, ValueError):
         return None
+
+    def _literal_names(value: ast.expr) -> list[str] | None:
+        """Names from a literal list/tuple/set, or None when computed."""
+        if isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+            return [
+                el.value for el in value.elts
+                if isinstance(el, ast.Constant) and isinstance(el.value, str)
+            ]
+        return None
+
     names: list[str] = []
     saw_declaration = False
     for node in tree.body:
-        targets: list[ast.Name] = []
-        value = None
+        value: ast.expr | None = None
+        is_extension = False
         if isinstance(node, ast.Assign):
-            targets.extend(t for t in node.targets if isinstance(t, ast.Name) and t.id == "__all__")
+            if not any(isinstance(t, ast.Name) and t.id == "__all__"
+                       for t in node.targets):
+                continue
             value = node.value
         elif isinstance(node, ast.AnnAssign):
-            if isinstance(node.target, ast.Name) and node.target.id == "__all__":
-                targets.append(node.target)
+            if not (isinstance(node.target, ast.Name)
+                    and node.target.id == "__all__"):
+                continue
             value = node.value
-        if not targets or value is None:
+        elif isinstance(node, ast.AugAssign):
+            if not (isinstance(node.target, ast.Name)
+                    and node.target.id == "__all__"):
+                continue
+            value = node.value
+            is_extension = True
+        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            call = node.value
+            if not (isinstance(call.func, ast.Attribute)
+                    and isinstance(call.func.value, ast.Name)
+                    and call.func.value.id == "__all__"
+                    and call.func.attr in ("append", "extend")):
+                continue
+            saw_declaration = True
+            if call.func.attr == "append":
+                if (len(call.args) == 1
+                        and isinstance(call.args[0], ast.Constant)
+                        and isinstance(call.args[0].value, str)):
+                    names.append(call.args[0].value)
+                    continue
+                return None  # non-literal append — set unknowable
+            if len(call.args) == 1:
+                harvested = _literal_names(call.args[0])
+                if harvested is not None:
+                    names.extend(harvested)
+                    continue
+            return None  # non-literal extend — set unknowable
+        if value is None:
             continue
         saw_declaration = True
-        if isinstance(value, (ast.List, ast.Tuple, ast.Set)):
-            names.extend(el.value for el in value.elts if isinstance(el, ast.Constant) and isinstance(el.value, str))
+        harvested = _literal_names(value)
+        if harvested is None:
+            return None  # computed value — export set unknowable
+        if is_extension:
+            names.extend(harvested)
+        else:
+            names = list(harvested)  # re-assignment replaces
     if not saw_declaration:
         return None
     return names
@@ -199,6 +246,154 @@ def _pool_probe() -> bool:
     return True
 
 
+def _shutdown_pool_nowait(
+    pool: "ProcessPoolExecutor | ThreadPoolExecutor",
+    *,
+    kill_grace_s: float = 5.0,
+) -> None:
+    """Tear down an extractor pool without blocking on its workers,
+    and make sure process-pool workers actually die.
+
+    Order matters: ``ProcessPoolExecutor.shutdown()`` drops the
+    executor's reference to its worker map (``self._processes =
+    None``) before returning, so the worker snapshot MUST be taken
+    first — a post-shutdown read sees ``None`` and terminates
+    nothing. A leaked wedged worker is not just leaked RAM: the
+    executor's manager thread joins its workers, interpreter exit
+    joins the manager thread, and the worker still holds the
+    process's inherited stdout/stderr — one surviving worker turns a
+    finished-and-summarised run into a process that never exits and
+    an output pipe that never closes (a CI runner waits on that pipe
+    even after the step's shell would have finished).
+
+    ``terminate()`` alone is not enough either: a worker forked from
+    a threaded parent inherits the parent's Python signal handlers,
+    and a handler that touches a fork-frozen lock never returns — the
+    worker survives SIGTERM indefinitely. Wait on the process
+    sentinels (death is visible there no matter which thread reaps)
+    and escalate to SIGKILL after ``kill_grace_s``. Grace trade-off
+    both ways: longer lets a slow-but-responsive worker exit on
+    SIGTERM cleanly; shorter recovers the build faster when the
+    worker is truly wedged. 5s is orders of magnitude above a healthy
+    worker's SIGTERM latency and well below the stall window that
+    triggers this teardown.
+
+    ThreadPoolExecutor has no ``_processes``: the snapshot is empty
+    and this degrades to the plain non-blocking shutdown — hung
+    threads cannot be killed, only abandoned.
+    """
+    procs = list((getattr(pool, "_processes", None) or {}).values())
+    pool.shutdown(wait=False, cancel_futures=True)
+    for proc in procs:
+        try:
+            proc.terminate()
+        except Exception:  # noqa: BLE001 — teardown must never raise
+            pass
+    for proc in _await_worker_exit(procs, kill_grace_s):
+        # kill() no-ops on an already-reaped process (returncode set),
+        # so racing the manager thread's own join here is safe.
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001 — teardown must never raise
+            pass
+
+
+def _await_worker_exit(procs: list, grace_s: float) -> list:
+    """Wait up to ``grace_s`` for the given worker processes to exit;
+    return the survivors (empty on a full clean exit).
+
+    Waits on the process SENTINELS, not ``join()``: death is visible
+    on the sentinel no matter which thread reaps the process, so this
+    never races the executor manager thread's own join. Event-driven
+    — returns as soon as the last worker exits, so a prompt exit
+    costs milliseconds regardless of the grace value.
+    """
+    import time as _time
+    from multiprocessing import connection as _mp_connection
+
+    if not procs:
+        return []
+    deadline = _time.monotonic() + grace_s
+    pending = {proc.sentinel: proc for proc in procs}
+    while pending:
+        remaining = deadline - _time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            ready = _mp_connection.wait(list(pending), timeout=remaining)
+        except OSError:
+            break
+        for sentinel in ready:
+            pending.pop(sentinel, None)
+    return list(pending.values())
+
+
+def _shutdown_pool_clean(
+    pool: "ProcessPoolExecutor | ThreadPoolExecutor",
+    *,
+    grace_s: float = 10.0,
+) -> None:
+    """Shut down a pool whose futures have ALL resolved, without an
+    unbounded join on its workers.
+
+    The clean-completion counterpart of :func:`_shutdown_pool_nowait`.
+    ``shutdown(wait=True)`` here joins workers that have already
+    delivered every result — but a fork-context worker can wedge on a
+    fork-frozen lock ON ITS EXIT PATH, after its last result, and the
+    blocking join then hangs the whole build before any summary
+    prints. Results integrity is unaffected by construction: callers
+    invoke this only after the drain loop consumed every future, so
+    no result can be lost to an escalated kill — the workers hold
+    nothing the build still needs.
+
+    Same snapshot-before-shutdown order as the wedged-path helper
+    (``shutdown()`` nulls ``_processes`` before returning). Workers
+    get ``grace_s`` to exit NORMALLY off the shutdown sentinel first
+    — the wait is sentinel-event-driven, so the healthy path costs
+    milliseconds, not the grace value. Grace trade-off both ways:
+    longer tolerates a slow-but-healthy worker teardown on a loaded
+    host (exit is normally instant — the worker loop just returns);
+    shorter bounds how long a wedged exit path can delay the build's
+    completion. 10s is generous for "instant" and small next to the
+    60s stall window the in-flight path uses. Escalation past the
+    grace is terminate → ``kill_grace_s`` → SIGKILL, identical to the
+    wedged path, with a WARNING naming the wedged pids — a clean
+    drain that needed signals is a real anomaly worth a log line,
+    but it never fails the build.
+
+    Thread pools (the extractor fallback) take the plain blocking
+    shutdown: threads share the parent's locks normally — the
+    fork-frozen-lock wedge class cannot occur — and cannot be killed
+    anyway.
+    """
+    procs = list((getattr(pool, "_processes", None) or {}).values())
+    if not procs:
+        pool.shutdown(wait=True)
+        return
+    pool.shutdown(wait=False)
+    survivors = _await_worker_exit(procs, grace_s)
+    if not survivors:
+        return
+    logger.warning(
+        "inventory: %d extractor worker(s) still alive %.1fs after a "
+        "clean drain (pids: %s) — escalating terminate→kill; all "
+        "results were already collected, the build is unaffected",
+        len(survivors), grace_s,
+        ", ".join(str(p.pid) for p in survivors),
+    )
+    for proc in survivors:
+        try:
+            proc.terminate()
+        except Exception:  # noqa: BLE001 — teardown must never raise
+            pass
+    for proc in _await_worker_exit(survivors, 5.0):
+        # Same reap-race safety note as _shutdown_pool_nowait.
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001 — teardown must never raise
+            pass
+
+
 def _make_extractor_pool(initargs, *, max_workers=None, contexts=None):
     """Create the extractor process pool, PROBING each candidate
     context with a real worker round-trip before committing to it.
@@ -239,13 +434,7 @@ def _make_extractor_pool(initargs, *, max_workers=None, contexts=None):
                 "inventory: %s pool context failed its worker probe; "
                 "trying the next candidate", method,
             )
-        pool.shutdown(wait=False, cancel_futures=True)
-        procs = getattr(pool, "_processes", None) or {}
-        for proc in list(procs.values()):
-            try:
-                proc.terminate()
-            except Exception:  # noqa: BLE001
-                pass
+        _shutdown_pool_nowait(pool)
     return None
 
 # Stall watchdog for the extractor pool. The previous loop used
@@ -275,39 +464,62 @@ def _retry_stalled_files(files, initargs, *, _on_retry_done, futures_map):
     recovered — the common case, since a zero-completion stall means
     the WORKERS wedged, not that the files are pathological).
 
-    The retry pool gets the same stall window; a second stall (or a
-    pool-creation failure) hands the remainder back for
-    excluded-file recording. No ``with`` block: the context manager
-    exit would block on wedged workers, which is exactly what the
-    teardown here must never do.
+    PER-FILE stall windows, submitted one at a time: the retry pool is
+    serial (one worker), so a single shared zero-completion window let
+    one genuinely-slow file mark every queued sibling as failed
+    without ever executing it. Each file now gets its own full window;
+    a file that exhausts it is recorded failed, its wedged pool torn
+    down, and the remaining files continue in a fresh pool. No
+    ``with`` block: the context manager exit would block on wedged
+    workers, which is exactly what the teardown here must never do.
     """
-    pool = _make_extractor_pool(initargs, max_workers=1)
-    if pool is None:
-        return list(files)
-    retry_futures = {}
-    for fp in files:
-        fut = pool.submit(_process_file_in_worker, fp)
-        retry_futures[fut] = fp
-        # The caller's completion callback resolves file paths
-        # through its own futures map — register the retry futures
-        # there so results land through the same accounting.
-        futures_map[fut] = fp
-    stalled = _drain_futures(
-        retry_futures, INVENTORY_STALL_TIMEOUT_S, _on_retry_done,
-    )
-    if stalled:
-        for fut in stalled:
+    def _kill(p: ProcessPoolExecutor) -> None:
+        _shutdown_pool_nowait(p)
+
+    still_failed = []
+    pool = None
+    files = list(files)
+    consecutive_stalls = 0
+    try:
+        for idx, fp in enumerate(files):
+            if pool is None:
+                pool = _make_extractor_pool(initargs, max_workers=1)
+                if pool is None:
+                    # No working pool context at all — don't re-probe
+                    # (with its own timeout) once per remaining file.
+                    still_failed.extend(files[idx:])
+                    break
+            fut = pool.submit(_process_file_in_worker, fp)
+            # The caller's completion callback resolves file paths
+            # through its own futures map — register the retry futures
+            # there so results land through the same accounting.
+            futures_map[fut] = fp
+            done, _pending = wait({fut}, timeout=INVENTORY_STALL_TIMEOUT_S)
+            if done:
+                _on_retry_done(fut)
+                consecutive_stalls = 0
+                continue
             fut.cancel()
-        pool.shutdown(wait=False, cancel_futures=True)
-        procs = getattr(pool, "_processes", None) or {}
-        for proc in list(procs.values()):
-            try:
-                proc.terminate()
-            except Exception:  # noqa: BLE001
-                pass
-    else:
-        pool.shutdown(wait=True)
-    return [retry_futures[f] for f in stalled]
+            _kill(pool)
+            pool = None
+            still_failed.append(fp)
+            consecutive_stalls += 1
+            # Two INDEPENDENT fresh pools stalling in a row points at
+            # a systemic wedge (the known class is environmental —
+            # fork-frozen locks — not per-file), so stop burning a
+            # full window per remaining file; one stall alone could
+            # still be a single pathological file, and its siblings
+            # deserve their own attempt.
+            if consecutive_stalls >= 2:
+                still_failed.extend(files[idx + 1:])
+                break
+    finally:
+        if pool is not None:
+            # Bounded, not shutdown(wait=True): the last retry future
+            # has resolved by here, but the retry worker can still
+            # wedge on its EXIT path — see _shutdown_pool_clean.
+            _shutdown_pool_clean(pool)
+    return still_failed
 
 
 def _drain_futures(futures, timeout_s, on_done):
@@ -377,7 +589,10 @@ def default_cache_dir(
     # fingerprint (no config / non-C target) leaves the key unchanged.
     if config_fingerprint:
         key += "\0cfg=" + config_fingerprint
-    target_hash = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+    # core.hash.sha256_string, not a hand-rolled utf-8 encode: target
+    # paths come from the filesystem and can carry surrogate escapes
+    # (non-UTF-8 filenames), which a strict encode crashes on.
+    target_hash = sha256_string(key)[:16]
     return _DEFAULT_INVENTORY_CACHE_ROOT / target_hash
 
 
@@ -456,12 +671,13 @@ def build_inventory(
     # Fold the membership sets into the cache key: a compile_commands / mod-tree
     # change (a file added to / removed from the build) must invalidate cached
     # build_excluded marks even when file contents are unchanged.
+    # sha256_string (surrogateescape) — TU/module entries are
+    # filesystem paths and may not be valid UTF-8.
     if build_tus:
-        cfg_fp += "|tu=" + hashlib.sha256(
-            "\0".join(sorted(build_tus)).encode("utf-8")).hexdigest()[:16]
+        cfg_fp += "|tu=" + sha256_string("\0".join(sorted(build_tus)))[:16]
     if crate_modules:
-        cfg_fp += "|rs=" + hashlib.sha256(
-            "\0".join(sorted(crate_modules)).encode("utf-8")).hexdigest()[:16]
+        cfg_fp += "|rs=" + sha256_string(
+            "\0".join(sorted(crate_modules)))[:16]
 
     if output_dir is None:
         output_dir = str(default_cache_dir(
@@ -480,16 +696,42 @@ def build_inventory(
         msg = f"Target path does not exist: {target_path}"
         raise FileNotFoundError(msg)
 
-    if target.is_file() and detect_language(str(target)) is None:
+    if (target.is_file() and detect_language(str(target)) is None
+            and (target.suffix
+                 or detect_language_from_shebang(str(target)) is None)):
+        # Directory mode admits extensionless shebang scripts; the
+        # single-file gate must accept the same files (the shebang
+        # probe only runs when there is no extension, mirroring the
+        # walk).
         msg = f"Target file has no recognized source extension: {target_path}"
         raise ValueError(msg)
 
     # Collect files in single pass
-    file_list, pruned_dirs = _collect_source_files(target, extensions)
+    file_list, pruned_dirs = _collect_source_files(
+        target, extensions, exclude_patterns,
+    )
     if scope:
-        scope_prefixes = tuple(
-            str((target / s).resolve()) for s in scope
-        )
+        target_resolved = target.resolve()
+        resolved_prefixes: list[str] = []
+        for s in scope:
+            entry = Path(s)
+            cand = (entry if entry.is_absolute()
+                    else target_resolved / entry).resolve()
+            # A scope entry must stay under the target. pathlib joins
+            # DISCARD the left side for absolute entries and ``..``
+            # segments escape it — either silently empties the
+            # inventory (a run over zero functions reads as clean
+            # downstream) or scopes to unrelated trees, so both are
+            # hard errors. Absolute paths under the target are
+            # accepted (relativized by resolution).
+            if cand != target_resolved and target_resolved not in cand.parents:
+                msg = (
+                    f"scope entry escapes the target tree: {s!r} "
+                    f"(resolved to {cand}; target is {target_resolved})"
+                )
+                raise ValueError(msg)
+            resolved_prefixes.append(str(cand))
+        scope_prefixes = tuple(resolved_prefixes)
         before = len(file_list)
         # separator-aware: scope "src/a" must not match "src/abc".
         def _in_scope(f: Path):
@@ -510,11 +752,36 @@ def build_inventory(
     checklist_file = output_path / 'checklist.json'
     old_inventory = load_json(checklist_file)
 
+    # Parse-affecting configuration fingerprint. The default cache dir
+    # folds this into its KEY, but an explicit ``output_dir`` (project
+    # mode) reuses one directory across runs — without an in-artifact
+    # stamp, the per-file stat/sha fast path would keep returning
+    # entries parsed under a STALE macro config / TU set (stale
+    # ``build_excluded`` marks, stale #ifdef blanking) after
+    # compile_commands.json changes.
+    parse_fingerprint = cfg_fp + ("|unreachable" if allow_unreachable else "")
+    old_parse_fp = (
+        old_inventory.get('parse_fingerprint', '')
+        if isinstance(old_inventory, dict) else ''
+    )
+
     old_files_by_path = {}
-    if isinstance(old_inventory, dict):
+    if isinstance(old_inventory, dict) and old_parse_fp == parse_fingerprint:
         for f in old_inventory.get('files', []):
             if f.get('path') and f.get('sha256'):
+                # Legacy checklists keyed per-file units under
+                # 'functions'; normalize so every downstream 'items'
+                # access works when the entry is reused verbatim.
+                if 'items' not in f and 'functions' in f:
+                    f = dict(f)
+                    f['items'] = f.get('functions') or []
                 old_files_by_path[f['path']] = f
+    elif isinstance(old_inventory, dict):
+        logger.info(
+            "inventory: build configuration changed since the cached "
+            "checklist was written — re-parsing all files (coverage "
+            "marks are still carried forward)",
+        )
 
     files_info = []
     # Seed `excluded_files` with the directories pruned at walk time so
@@ -561,6 +828,14 @@ def build_inventory(
         # drivers — the sweep's own shape) is lazy: the constructor
         # succeeds and the first submit dies.
         pool = _make_extractor_pool(initargs)
+        # Process-pool workers run with stdio detached (see
+        # _init_inventory_worker), so their own per-file WARNING (with
+        # traceback) never reaches the console and the future SUCCEEDS
+        # with an _excluded record — the parent must re-voice the
+        # failure or it is visible only in the artifact. Thread-pool
+        # fallback workers log in-process; re-voicing there would
+        # print every failure twice.
+        worker_stdio_detached = pool is not None
         if pool is None:
             pool = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 
@@ -586,7 +861,15 @@ def build_inventory(
             nonlocal skipped
             fp = futures[future]
             try:
-                _collect_result(future.result())
+                result = future.result()
+                if (worker_stdio_detached and isinstance(result, dict)
+                        and result.get("_reason") == "processing_error"):
+                    logger.warning(
+                        "inventory: per-file extractor failed on %s "
+                        "(%s) — recorded as processing_error",
+                        fp, result.get("_pattern"),
+                    )
+                _collect_result(result)
             except Exception as exc:  # noqa: BLE001 — one bad file must not sink the pool
                 logger.warning(
                     "inventory: per-file extractor raised on "
@@ -647,17 +930,16 @@ def build_inventory(
                 # nor interpreter exit waits on them. (Thread-pool
                 # fallback threads can't be killed — the build still
                 # proceeds; the hung thread is abandoned.)
-                pool.shutdown(wait=False, cancel_futures=True)
-                # ProcessPoolExecutor has no public kill API; _processes
-                # is the documented-in-source worker map.
-                procs = getattr(pool, "_processes", None) or {}
-                for proc in list(procs.values()):
-                    try:
-                        proc.terminate()
-                    except Exception:  # noqa: BLE001
-                        pass
+                _shutdown_pool_nowait(pool)
             else:
-                pool.shutdown(wait=True)
+                # Clean drain: every future resolved (the loop above
+                # exhausted them), so the workers hold nothing the
+                # build still needs — but their EXIT paths can wedge
+                # on fork-frozen locks just like their task paths,
+                # and shutdown(wait=True) would then hang the build
+                # before any summary prints. Bounded shutdown with
+                # escalation instead; see _shutdown_pool_clean.
+                _shutdown_pool_clean(pool)
     else:
         for filepath in file_list:
             _collect_result(
@@ -687,6 +969,7 @@ def build_inventory(
     inventory = {
         'generated_at': datetime.now(timezone.utc).isoformat(),
         'target_path': str(target_path),
+        'parse_fingerprint': parse_fingerprint,
         'total_files': len(files_info),
         'total_items': total_items,
         'total_functions': total_functions,
@@ -868,6 +1151,16 @@ def _carry_forward_coverage(
 ) -> None:
     """Carry forward checked_by from old inventory to new for unchanged files.
 
+    Marks are MERGED (union, existing order preserved), never
+    overwritten: the multi-run project promotion calls this repeatedly
+    with older checklists against the newest one, and an overwrite
+    would regress fresh coverage marks to the stalest run's list.
+
+    Keys carry an occurrence ordinal alongside (path, name, kind):
+    same-named items in one file (overloads, methods of different
+    classes) are distinct review units, and a name-only key smeared one
+    twin's checked_by onto the other — silently overstating coverage.
+
     Args:
         old: Previous inventory dict.
         new: Current inventory dict (mutated in place).
@@ -879,25 +1172,37 @@ def _carry_forward_coverage(
     def _get_items(fi):
         return fi.get("items", fi.get("functions", [])) or []
 
-    # Build lookup: (path, name, kind) -> checked_by from old inventory
+    def _keyed_items(file_info):
+        """(path, name, kind, occurrence-ordinal) per item, ordinal
+        counted in file order among same-(name, kind) items — stable
+        across runs for unchanged files, unlike line numbers under
+        unrelated edits."""
+        path = file_info.get('path')
+        counts: dict[tuple, int] = {}
+        for item in _get_items(file_info):
+            base = (item.get('name'), item.get('kind', 'function'))
+            ordinal = counts.get(base, 0)
+            counts[base] = ordinal + 1
+            yield (path, *base, ordinal), item
+
+    # Build lookup: keyed item -> checked_by from old inventory
     old_coverage = {}
     for file_info in old.get('files', []):
-        path = file_info.get('path')
-        if path in modified:
+        if file_info.get('path') in modified:
             continue  # Don't carry forward stale coverage
-        for item in _get_items(file_info):
-            key = (path, item.get('name'), item.get('kind', 'function'))
+        for key, item in _keyed_items(file_info):
             checked_by = item.get('checked_by', [])
             if checked_by:
                 old_coverage[key] = checked_by
 
     # Apply to new inventory
     for file_info in new.get('files', []):
-        path = file_info.get('path')
-        for item in _get_items(file_info):
-            key = (path, item.get('name'), item.get('kind', 'function'))
+        for key, item in _keyed_items(file_info):
             if key in old_coverage:
-                item['checked_by'] = list(old_coverage[key])
+                existing = item.get('checked_by') or []
+                item['checked_by'] = existing + [
+                    run for run in old_coverage[key] if run not in existing
+                ]
 
 
 def _count_source_files(dirpath: Path, extensions: set[str], cap: int = 1000) -> int:
@@ -919,6 +1224,7 @@ def _count_source_files(dirpath: Path, extensions: set[str], cap: int = 1000) ->
 
 def _collect_source_files(
     target: Path, extensions: set[str],
+    exclude_patterns: list[str] | None = None,
 ) -> tuple[list[Path], list[dict[str, Any]]]:
     """Collect all source files in a single pass.
 
@@ -927,8 +1233,12 @@ def _collect_source_files(
     can record them in ``excluded_files`` for operator visibility.
 
     Prunes the descent at walk time on directory-shaped patterns from
-    `DEFAULT_EXCLUDES` (`node_modules/`, `vendor/`, `__pycache__/`,
-    `.git/` etc.). Pre-fix `os.walk` descended into them all, then
+    ``exclude_patterns`` (the caller's list — defaults to
+    `DEFAULT_EXCLUDES`; a hardcoded module constant here meant a
+    caller-supplied replacement list could never RE-include a default
+    directory, while the artifact's ``excluded_patterns`` field claimed
+    it applied). E.g. `node_modules/`, `vendor/`, `__pycache__/`,
+    `.git/`. Pre-fix `os.walk` descended into them all, then
     `_process_single_file` later marked each enumerated file as
     excluded — but `node_modules` on a real project is hundreds of
     thousands of files. The walk-time stat() of every one of those
@@ -944,9 +1254,11 @@ def _collect_source_files(
     # Patterns with `/` suffix and no glob meta-chars are pure directory
     # names that prune cleanly. Patterns with `*` (e.g.
     # `cmake-build-*/`) need fnmatch — handle separately.
+    if exclude_patterns is None:
+        exclude_patterns = DEFAULT_EXCLUDES
     exact_dir_names = set()
     glob_dir_patterns = []
-    for pat in DEFAULT_EXCLUDES:
+    for pat in exclude_patterns:
         if not pat.endswith('/'):
             continue
         bare = pat.rstrip('/')
@@ -1063,26 +1375,20 @@ def _is_github_workflow(rel_path: str, content: str) -> bool:
     """True when a YAML file is a CI workflow with reviewable units.
 
     Path-based primary signal (anything under ``.github/workflows/``),
-    plus a content check for workflow-shaped YAML found elsewhere
-    (both a trigger block and a ``jobs:`` block at top level — the
-    combination is unique to GitHub workflows among common YAML
-    dialects).
+    plus a content check for jobs-shaped CI YAML found elsewhere. The
+    content check must match the yaml extractor's own predicate — a
+    top-level ``jobs:`` block (see ``GitHubWorkflowExtractor``) —
+    exactly: requiring an additional trigger key here excluded files
+    the extractor would have yielded job items for (Azure Pipelines
+    style ``trigger:`` + ``jobs:``, or a YAML-roundtripped workflow
+    whose unquoted ``on:`` was rewritten to ``true:``).
     """
     norm = rel_path.replace(os.sep, "/")
     if ".github/workflows/" in norm or norm.startswith(".github/workflows/"):
         return True
-    has_jobs = False
-    has_on = False
-    for line in content.split("\n"):
-        if line.startswith("jobs:"):
-            has_jobs = True
-        elif line.startswith(("on:", '"on":', "'on':")):
-            # Quoted spellings included — authors quote the key to
-            # dodge YAML 1.1's on→true boolean coercion.
-            has_on = True
-        if has_jobs and has_on:
-            return True
-    return False
+    from .extractors import GitHubWorkflowExtractor
+    return any(GitHubWorkflowExtractor._JOBS_RE.match(line)
+               for line in content.split("\n"))
 
 
 _worker_ctx: dict[str, Any] = {}
@@ -1098,6 +1404,52 @@ def _init_inventory_worker(
     build_tus,
     crate_modules,
 ) -> None:
+    # Signal hygiene first: fork-context workers inherit the parent's
+    # Python-level signal handlers, and embedding drivers install
+    # SIGTERM handlers whose post-mortem paths take locks that can be
+    # fork-frozen in this child — SIGTERM then never kills the worker
+    # (the handler blocks forever) and the pool teardown has to
+    # escalate to SIGKILL. Reset to the default disposition so
+    # terminate() means terminate and no parent post-mortem ever runs
+    # (and prints) inside an extractor worker. Never raise: a raising
+    # initializer breaks the whole pool.
+    import signal as _signal
+    try:
+        _signal.signal(_signal.SIGTERM, _signal.SIG_DFL)
+    except (ValueError, OSError):
+        # ValueError: not the main thread (thread-pool fallback path
+        # reuses none of this, but be safe); OSError: exotic platform.
+        pass
+    # The MASK is inherited separately from the disposition: a parent
+    # thread that had SIGTERM blocked at fork leaves it blocked here,
+    # where a pending SIGTERM then sits undelivered forever — the
+    # disposition reset above looks correct but terminate() still
+    # does nothing and teardown must SIGKILL. Unblock it explicitly.
+    try:
+        _signal.pthread_sigmask(_signal.SIG_UNBLOCK, {_signal.SIGTERM})
+    except (AttributeError, ValueError, OSError):
+        # pthread_sigmask absent (non-POSIX) or refused — the
+        # disposition reset above still holds; never break the pool.
+        pass
+    # Detach the worker from the parent's stdout/stderr. Workers
+    # inherit those descriptors, and when the parent's stdout is a
+    # pipe (CI step streams), any worker that outlives the parent —
+    # however it got there — keeps the pipe open and the pipe's
+    # reader waiting; the teardown escalation makes that window
+    # small, this makes the worker unable to hold it at all. Nothing
+    # owned is lost: per-file failures come back as processing_error
+    # records that the parent re-voices (see _on_done), and direct
+    # worker writes were unowned noise interleaving into the
+    # parent's stream. Never raise.
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(devnull, 1)
+            os.dup2(devnull, 2)
+        finally:
+            os.close(devnull)
+    except OSError:
+        pass
     _worker_ctx["target"] = target
     _worker_ctx["exclude_patterns"] = exclude_patterns
     _worker_ctx["skip_generated"] = skip_generated

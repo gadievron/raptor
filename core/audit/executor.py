@@ -61,36 +61,27 @@ def _is_budget_stop(exc: Exception) -> bool:
     return isinstance(exc, RuntimeError) and is_budget_exceeded_error(exc)
 
 
-def _record_task_failure(
+def _commit_error_outcome(
     task: Any,
     exc: Exception,
     config: Any,
     result: Any,
     collector: Any,
-    graph: Any,
-    stats: ExecutorStats,
 ) -> None:
-    """Record an unexpected review exception as an ``error`` outcome.
+    """Commit + tally an ``error`` outcome for a review that raised.
 
-    Pre-fix a raised exception stranded the task's dependents (the
-    task was never marked complete) and — on the async path — the run
-    then reported success with the pending work silently dropped.
-    The failure is journalled as an ``error`` verdict instead
-    (``reviewed_set`` excludes error verdicts, so the function is
-    retried next run), the graph node completes so dependents
-    proceed, and the failure counts into the stats. This aligns the
-    serial and async paths on one per-task failure semantic.
+    The ``error`` verdict is a still-a-gap status: ``reviewed_set``
+    and the journal fold both exclude it, so the function is retried
+    next run rather than silently counted reviewed. Shared by
+    ``_record_task_failure`` and the glance escalation/fallback
+    failure paths (whose callers mark the task complete regardless,
+    so without a committed outcome the failure left no trace in the
+    journal, tallies, or error stats).
     """
     from .orchestrator import ReviewOutcome, _commit_outcome, _tally_outcome
 
     file = task.gap.get("file", "")
     function = task.gap.get("name", "")
-    logger.warning(
-        "review task failed for %s:%s (%s: %s) — recording error "
-        "outcome and unblocking dependents",
-        file or "?", function or "?", type(exc).__name__, exc,
-        exc_info=exc,
-    )
     outcome = ReviewOutcome(
         file=file,
         function=function,
@@ -117,6 +108,37 @@ def _record_task_failure(
         _tally_outcome(result, outcome)
     except Exception:
         logger.debug("error-outcome tally failed", exc_info=True)
+
+
+def _record_task_failure(
+    task: Any,
+    exc: Exception,
+    config: Any,
+    result: Any,
+    collector: Any,
+    graph: Any,
+    stats: ExecutorStats,
+) -> None:
+    """Record an unexpected review exception as an ``error`` outcome.
+
+    Pre-fix a raised exception stranded the task's dependents (the
+    task was never marked complete) and — on the async path — the run
+    then reported success with the pending work silently dropped.
+    The failure is journalled as an ``error`` verdict instead
+    (``reviewed_set`` excludes error verdicts, so the function is
+    retried next run), the graph node completes so dependents
+    proceed, and the failure counts into the stats. This aligns the
+    serial and async paths on one per-task failure semantic.
+    """
+    logger.warning(
+        "review task failed for %s:%s (%s: %s) — recording error "
+        "outcome and unblocking dependents",
+        task.gap.get("file", "") or "?",
+        task.gap.get("name", "") or "?",
+        type(exc).__name__, exc,
+        exc_info=exc,
+    )
+    _commit_error_outcome(task, exc, config, result, collector)
     graph.mark_complete(task.key)
     stats.failed += 1
     stats.completed += 1
@@ -278,7 +300,17 @@ def run_executor_sync(
 
         tasks = graph.pop_ready(1)
         if not tasks:
-            _flush_glance_batch()
+            flushed_any = bool(glance_batch)
+            if _flush_glance_batch():
+                break  # budget stop mid-flush (stats already set)
+            if flushed_any and graph.pending > 0:
+                # The flush just completed queued glance tasks, which
+                # can unlock their dependents — re-poll instead of
+                # breaking, which stranded the whole dependent subtree
+                # unreviewed.  A genuine dependency cycle still exits:
+                # its retry iteration flushes nothing and falls
+                # through to the break below.
+                continue
             if graph.pending > 0:
                 logger.warning(
                     "executor: no ready tasks but %d pending — cycle?",
@@ -634,6 +666,7 @@ async def _run_async_body(
                 idx = review_idx_box[0]
                 review_idx_box[0] += len(batch_tasks)
             loop = asyncio.get_event_loop()
+            committed: set = set()
             try:
                 await loop.run_in_executor(
                     None,
@@ -652,6 +685,7 @@ async def _run_async_body(
                         collector=collector,
                         graph=graph,
                         reviewed_outcomes=reviewed_outcomes,
+                        committed_keys=committed,
                     ),
                 )
             except Exception as exc:  # noqa: BLE001 — budget stop or per-task error record
@@ -660,10 +694,19 @@ async def _run_async_body(
                     result.terminated_by = "llm_budget_exceeded"
                     return
                 # Unexpected batch failure (per-item fallbacks are
-                # handled inside _process_glance_batch): record every
-                # batch member as an error so dependents unblock
-                # instead of stranding.
+                # handled inside _process_glance_batch): record the
+                # remaining members as errors so dependents unblock
+                # instead of stranding. Members committed before a
+                # MID-batch raise already have their outcome in the
+                # journal/tallies — error-recording them again
+                # double-committed and double-tallied the function;
+                # they only need completion bookkeeping.
                 for t in batch_tasks:
+                    if t.key in committed:
+                        graph.mark_complete(t.key)
+                        async with review_idx_lock:
+                            stats.completed += 1
+                        continue
                     _record_task_failure(
                         t, exc, config, result, collector, graph, stats,
                     )
@@ -740,18 +783,26 @@ async def _run_async_body(
             held_tasks.clear()
             if not inflight:
                 break
-        elif glance_pending:
-            batch = list(glance_pending)
-            glance_pending.clear()
-            child = asyncio.create_task(_run_batch(batch))
-            inflight.add(child)
+        else:
+            # Hold-release BEFORE the glance flush: a released
+            # glance-tier task lands in glance_pending, so releasing
+            # after the flush left the batch queued while the loop
+            # fell through to ``asyncio.wait()`` on an EMPTY inflight
+            # set — ValueError, run aborted — whenever only released
+            # glance work remained.  Flushing last keeps this
+            # iteration's wait set non-empty by construction.
+            released = _release_held()
+            if released:
+                _dispatch_ready(released)
+            if glance_pending:
+                batch = list(glance_pending)
+                glance_pending.clear()
+                child = asyncio.create_task(_run_batch(batch))
+                inflight.add(child)
 
-        # Release held tasks whose blocking concepts are now studied
-        released = _release_held()
-        if released:
-            _dispatch_ready(released)
-
-        if not inflight and not glance_pending:
+        if not inflight:
+            # glance_pending is empty here on both branches (flushed
+            # above, or cleared by the stop path).
             if not hold_set:
                 break
             # All work is held — wait for study to complete
@@ -960,13 +1011,24 @@ def _process_glance_batch(
     collector: Any = None,
     graph: Any = None,
     reviewed_outcomes: dict[str, Any] | None = None,
+    committed_keys: set | None = None,
 ) -> None:
     """Process a batch of GLANCE tasks in a single LLM call.
 
     On batch failure or per-function parse errors, falls back to
     individual ``review_one_fn`` calls for those functions.
+
+    ``committed_keys`` (when a set is passed) accumulates the
+    ``task.key`` of every member whose outcome — real or error — has
+    been committed, INCLUDING members handled before a mid-batch
+    raise. The async caller's except path consults it so already-
+    committed members are not error-recorded a second time
+    (double-commit + double-tally).
     """
     from .orchestrator import _build_context, _commit_outcome, _tally_outcome
+
+    if committed_keys is None:
+        committed_keys = set()
 
     contexts = []
     for task in tasks:
@@ -1031,6 +1093,14 @@ def _process_glance_batch(
                         task.gap.get("name", "?"),
                         exc_info=True,
                     )
+                    # The caller marks this task complete regardless —
+                    # commit an error outcome (a still-a-gap status)
+                    # so the failed escalation is not silently counted
+                    # as reviewed with no journal row anywhere.
+                    _commit_error_outcome(
+                        task, exc, config, result, collector,
+                    )
+                committed_keys.add(task.key)
                 continue
 
             # ── Refutation gates (glance batch) ───────────────────
@@ -1082,6 +1152,7 @@ def _process_glance_batch(
                         "commit failed for batch item %s:%s",
                         task.gap["file"], task.gap["name"], exc_info=True,
                     )
+            committed_keys.add(task.key)
             _tally_outcome(result, outcome)
             if on_progress:
                 on_progress(review_idx + i, total, outcome)
@@ -1111,4 +1182,11 @@ def _process_glance_batch(
                     task.gap.get("name", "?"),
                     exc_info=True,
                 )
+                # Same discipline as the escalation path: the caller
+                # marks the task complete, so a swallowed fallback
+                # failure needs an error outcome to stay a gap.
+                _commit_error_outcome(
+                    task, exc, config, result, collector,
+                )
+            committed_keys.add(task.key)
 

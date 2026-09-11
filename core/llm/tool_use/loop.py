@@ -183,6 +183,11 @@ logger = logging.getLogger(__name__)
 # handful of recent timeouts; old ones are dropped to bound memory.
 _MAX_STRANDED_TOOL_THREADS = 32
 
+# Extra attempts when a streaming turn fails before ANY content chunk
+# arrived (nothing consumed → re-issuing the turn is side-effect
+# free). Bounded so a hard-down endpoint still fails promptly.
+_STREAM_PRE_CONTENT_RETRIES = 2
+
 
 class ToolUseLoop:
     """Run an agentic conversation until termination.
@@ -611,21 +616,26 @@ class ToolUseLoop:
             )
 
             # ---- termination by stop_reason -----------------------------
-            if response.stop_reason is StopReason.COMPLETE:
+            # A COMPLETE that arrives WITH tool calls (OpenAI-compat
+            # endpoints can report finish_reason "stop" while the
+            # message still carries tool_calls) is treated as tool-use:
+            # returning here would leave the just-appended assistant
+            # message holding dangling tool_use blocks (the next
+            # provider call rejects a tool_use without a matching
+            # tool_result) and silently drop the calls the model
+            # requested — fall through to the dispatch path instead.
+            has_tool_calls = any(
+                isinstance(b, ToolCall) for b in response.content
+            )
+            if response.stop_reason is StopReason.COMPLETE and not has_tool_calls:
                 # ``nudge_on_no_tool_call``: when the consumer set the
                 # opt-in nudge AND the assistant turn returned no tool
-                # calls (true for every COMPLETE — COMPLETE means the
-                # model finalised via text), inject the nudge as a
-                # user message and continue iterating instead of
+                # calls (COMPLETE without tool calls means the model
+                # finalised via text), inject the nudge as a user
+                # message and continue iterating instead of
                 # terminating. The consumer's contract: the model's
                 # "I'm done" is premature; prod it back to the tools.
-                has_tool_calls = any(
-                    isinstance(b, ToolCall) for b in response.content
-                )
-                if (
-                    self._nudge_on_no_tool_call is not None
-                    and not has_tool_calls
-                ):
+                if self._nudge_on_no_tool_call is not None:
                     messages.append(Message(
                         role="user",
                         content=[TextBlock(text=self._nudge_on_no_tool_call)],
@@ -1027,8 +1037,48 @@ class ToolUseLoop:
         messages: list[Message],
     ) -> TurnResponse:
         """Call ``turn_stream()`` and accumulate chunks into a
-        :class:`TurnResponse`, emitting :class:`StreamDelta` events
-        as they arrive."""
+        :class:`TurnResponse`, with bounded pre-content retry.
+
+        A stream that fails before ANY content/tool-use chunk arrived
+        left no partial state — re-issuing the turn is safe, so it is
+        retried up to ``_STREAM_PRE_CONTENT_RETRIES`` times (no sleep:
+        the provider layer owns transient-error backoff; this only
+        covers the reconnect). Once partial content was consumed, a
+        retry could double-execute the turn, so the failure propagates
+        as the provider's converted typed error instead."""
+        for attempt in range(_STREAM_PRE_CONTENT_RETRIES + 1):
+            content_seen = [False]
+            try:
+                return self._consume_stream_once(
+                    iteration, messages, content_seen,
+                )
+            except Exception as exc:
+                from core.llm.providers import is_credit_exhausted
+                if (
+                    content_seen[0]
+                    or is_credit_exhausted(exc)
+                    or attempt >= _STREAM_PRE_CONTENT_RETRIES
+                ):
+                    raise
+                logger.warning(
+                    "stream failed before any content (attempt %d/%d, "
+                    "iteration=%d) — retrying the turn: %s",
+                    attempt + 1, _STREAM_PRE_CONTENT_RETRIES + 1,
+                    iteration, exc,
+                )
+        msg = "unreachable: stream retry loop exited without returning"
+        raise AssertionError(msg)
+
+    def _consume_stream_once(
+        self,
+        iteration: int,
+        messages: list[Message],
+        content_seen: list[bool],
+    ) -> TurnResponse:
+        """One ``turn_stream()`` pass. ``content_seen[0]`` flips to
+        True as soon as a content-bearing chunk arrives, so the caller
+        can tell a pre-content failure (retryable) from a mid-content
+        one (not) even when this raises."""
         content_blocks: list[TextBlock | ToolCall] = []
         text_parts: list[str] = []
         tool_calls: dict[str, dict] = {}
@@ -1045,6 +1095,11 @@ class ToolUseLoop:
             cache_control=self._cache_control,
             **self._provider_specific,
         ):
+            if chunk.type in (
+                "text_delta", "tool_call_start",
+                "tool_call_delta", "tool_call_end",
+            ):
+                content_seen[0] = True
             self._emit(StreamDelta(iteration=iteration, chunk=chunk))
 
             if chunk.type == "text_delta":
@@ -1076,6 +1131,16 @@ class ToolUseLoop:
                     raw = "".join(tc["input_parts"])
                     try:
                         args = json.loads(raw) if raw else {}
+                        if not isinstance(args, dict):
+                            # 'null', '[1,2]', '"str"' parse cleanly
+                            # but ToolCall.input is a dict — a non-dict
+                            # would crash handler dispatch. Same
+                            # treatment as a parse failure.
+                            msg = (
+                                f"parsed JSON is {type(args).__name__},"
+                                " expected object"
+                            )
+                            raise ValueError(msg)
                     except (ValueError, TypeError):
                         logger.warning(
                             "stream: unparseable tool-call JSON for "
@@ -1327,6 +1392,21 @@ class ToolUseLoop:
             ):
                 messages.pop(0)
                 total -= per_msg.pop(0)
+
+        # The pair-drop above only covers tool_call/tool_result links.
+        # In a plain text-turn history, dropping the oldest USER
+        # message leaves an assistant message at the head — providers
+        # reject a conversation that opens mid-exchange (assistant
+        # first, or a tool_result whose tool_use was dropped), turning
+        # the first truncation into a hard 400. Keep dropping until a
+        # plain user message leads; the extra drops only reduce the
+        # estimate further.
+        while len(messages) > 1 and (
+            messages[0].role == "assistant"
+            or any(isinstance(b, ToolResult) for b in messages[0].content)
+        ):
+            messages.pop(0)
+            total -= per_msg.pop(0)
 
         if total >= window:
             msg = (

@@ -1856,3 +1856,435 @@ class TestRunSmtSweepVacuityPolicy:
             smt_args={"ptr": "p"},
         )
         assert result.outcome == "confirmed"
+
+
+class TestSemgrepPatternChainEntry:
+    """Chain entries from mechanical_check_to_semgrep carry
+    {"pattern": ...} with no rule file — the consumer must wrap the
+    pattern into a temp rule (and clean it up), not KeyError."""
+
+    def test_pattern_rule_file_shape(self, tmp_path):
+        from core.audit.orchestrator import _pattern_rule_file
+
+        pattern = mechanical_check_to_semgrep("unchecked return value")
+        path = _pattern_rule_file(pattern, "src/a.c")
+        try:
+            assert path is not None
+            import os
+            assert os.path.basename(path).startswith("audit_sweep_")
+            text = Path(path).read_text()
+            assert "pattern: |" in text
+            assert "$X = $FUNC(...)" in text
+            assert "languages: [c]" in text
+        finally:
+            if path:
+                Path(path).unlink(missing_ok=True)
+
+    def test_pattern_entry_dispatches_and_cleans_up(
+        self, tmp_path, monkeypatch,
+    ):
+        from core.audit.orchestrator import (
+            OrchestratorConfig,
+            _run_tool_chain,
+        )
+
+        seen = {}
+
+        def fake_sweep(**kw):
+            seen["rule_config"] = kw["rule_config"]
+            seen["existed_at_dispatch"] = Path(kw["rule_config"]).is_file()
+            return SweepResult(
+                tool="semgrep", file_path=kw["file_path"],
+                function_name=kw["function_name"], outcome="refuted",
+            )
+
+        monkeypatch.setattr(
+            "core.audit.orchestrator.run_semgrep_sweep", fake_sweep,
+        )
+        config = OrchestratorConfig(target_path=tmp_path, out_dir=None)
+        pattern = mechanical_check_to_semgrep("missing null check on ptr")
+        confirmed = _run_tool_chain(
+            [{"type": "semgrep", "config": {"pattern": pattern}}],
+            config=config,
+            file_path="a.c",
+            function_name="f",
+            source="int f(void) { return 0; }",
+            hypothesis="missing null check",
+        )
+        assert confirmed == []
+        assert seen.get("existed_at_dispatch") is True, (
+            "the wrapped rule file must exist when the sweep runs"
+        )
+        assert not Path(seen["rule_config"]).exists(), (
+            "the temp audit_sweep_ rule must be unlinked after dispatch"
+        )
+
+    def test_configless_entry_counts_as_channel_error(
+        self, tmp_path, monkeypatch,
+    ):
+        from core.audit.orchestrator import (
+            OrchestratorConfig,
+            _run_tool_chain,
+        )
+
+        def boom(**kw):
+            raise AssertionError("sweep must not run without a rule")
+
+        monkeypatch.setattr(
+            "core.audit.orchestrator.run_semgrep_sweep", boom,
+        )
+        errored: set = set()
+        confirmed = _run_tool_chain(
+            [{"type": "semgrep", "config": {}}],
+            config=OrchestratorConfig(target_path=tmp_path, out_dir=None),
+            file_path="a.c",
+            function_name="f",
+            source="",
+            hypothesis="h",
+            errored_types=errored,
+        )
+        assert confirmed == []
+        assert "semgrep" in errored
+
+
+class TestSmtShimInterface:
+    """run_smt_sweep must speak the shims' actual CLI/output contract:
+    conditions travel as POSITIONAL args (or a --stdin JSON array for
+    negated entries), and the verdict is the ``feasible`` key the
+    shims emit — parsed both directions against a stub shim."""
+
+    _STUB = r'''#!/usr/bin/env python3
+import json
+import sys
+
+args = sys.argv[1:]
+if any(a == "--conditions" for a in args):
+    # Real shims have no such flag; argparse would exit 2.
+    sys.stderr.write("unrecognized arguments: --conditions\n")
+    sys.exit(2)
+conds = []
+it = iter(range(len(args)))
+i = 0
+while i < len(args):
+    a = args[i]
+    if a == "--stdin":
+        conds.extend(
+            c["text"] if isinstance(c, dict) else c
+            for c in json.load(sys.stdin)
+        )
+        i += 1
+    elif a == "--profile":
+        i += 2
+    elif a == "--":
+        conds.extend(args[i + 1:])
+        break
+    elif a.startswith("--"):
+        i += 2
+    else:
+        conds.append(a)
+        i += 1
+if not conds:
+    print(json.dumps({"feasible": None, "reasoning": "no conditions"}))
+elif any("want-unsat" in c for c in conds):
+    print(json.dumps({"feasible": False, "unsatisfied": conds[:1]}))
+else:
+    print(json.dumps({"feasible": True, "model": {"x": 1}}))
+'''
+
+    def _install_stub(self, monkeypatch, tmp_path: Path):
+        from core.audit import sweep
+        shim = tmp_path / "raptor-smt-validate-path"
+        shim.write_text(self._STUB)
+        monkeypatch.setattr(sweep, "_SMT_SHIM_DIR", tmp_path)
+
+    def test_sat_confirms(self, monkeypatch, tmp_path: Path):
+        from core.audit.sweep import run_smt_sweep
+        self._install_stub(monkeypatch, tmp_path)
+        result = run_smt_sweep(
+            file_path="a.c", function_name="f", verb="validate-path",
+            smt_args={"conditions": ["size > 0", "want-sat"]},
+        )
+        assert result.outcome == "confirmed"
+        assert result.matches and result.matches[0]["feasible"] is True
+
+    def test_unsat_refutes(self, monkeypatch, tmp_path: Path):
+        from core.audit.sweep import run_smt_sweep
+        self._install_stub(monkeypatch, tmp_path)
+        result = run_smt_sweep(
+            file_path="a.c", function_name="f", verb="validate-path",
+            smt_args={"conditions": ["size > 0", "want-unsat"]},
+        )
+        assert result.outcome == "refuted"
+
+    def test_null_feasible_inconclusive(self, monkeypatch, tmp_path: Path):
+        from core.audit.sweep import run_smt_sweep
+        self._install_stub(monkeypatch, tmp_path)
+        result = run_smt_sweep(
+            file_path="a.c", function_name="f", verb="validate-path",
+            smt_args={"conditions": []},
+        )
+        assert result.outcome == "inconclusive"
+
+    def test_negated_dict_conditions_go_via_stdin(
+        self, monkeypatch, tmp_path: Path,
+    ):
+        from core.audit.sweep import run_smt_sweep
+        self._install_stub(monkeypatch, tmp_path)
+        result = run_smt_sweep(
+            file_path="a.c", function_name="f", verb="validate-path",
+            smt_args={"conditions": [
+                {"text": "ptr == NULL", "negated": True},
+                "want-unsat",
+            ]},
+        )
+        assert result.outcome == "refuted"
+
+    def test_check_path_feasibility_both_directions(
+        self, monkeypatch, tmp_path: Path,
+    ):
+        # The production caller (path_feasibility.check_path_feasibility)
+        # builds {"conditions": [...]} — end-to-end through the stub.
+        from core.audit.path_feasibility import (
+            PathCondition,
+            check_path_feasibility,
+        )
+        self._install_stub(monkeypatch, tmp_path)
+        sat = check_path_feasibility([PathCondition(text="want-sat")])
+        assert sat.feasible is True
+        unsat = check_path_feasibility([PathCondition(text="want-unsat")])
+        assert unsat.feasible is False
+
+
+class TestCoccinelleRangeFilter:
+    """A match in ANOTHER function of the same file must not confirm a
+    per-function hypothesis — the filter applies whenever line_start
+    is given, with a +50 window when line_end is unknown."""
+
+    @staticmethod
+    def _install_runner(monkeypatch, match_line: int):
+        import sys
+        import types
+
+        from packages.coccinelle.models import SpatchMatch, SpatchResult
+
+        result = SpatchResult(
+            rule="r",
+            matches=[SpatchMatch(file="a.c", line=match_line)],
+        )
+        fake_mod = types.ModuleType("packages.coccinelle.runner")
+        fake_mod.run_rule = lambda *a, **k: result
+        fake_mod.is_available = lambda: True
+        monkeypatch.setitem(
+            sys.modules, "packages.coccinelle.runner", fake_mod,
+        )
+
+    def _sweep(self, tmp_path: Path, **kwargs):
+        from core.audit.sweep import run_coccinelle_sweep
+
+        (tmp_path / "a.c").write_text("int f(void) { return 0; }\n")
+        return run_coccinelle_sweep(
+            target_path=tmp_path,
+            file_path="a.c",
+            function_name="f",
+            cocci_rule="check.cocci",
+            **kwargs,
+        )
+
+    def test_match_in_other_function_refuted_start_only(
+        self, monkeypatch, tmp_path: Path,
+    ):
+        self._install_runner(monkeypatch, match_line=400)
+        result = self._sweep(tmp_path, line_start=10, line_end=None)
+        assert result.outcome == "refuted"
+
+    def test_match_in_window_confirmed_start_only(
+        self, monkeypatch, tmp_path: Path,
+    ):
+        self._install_runner(monkeypatch, match_line=30)
+        result = self._sweep(tmp_path, line_start=10, line_end=None)
+        assert result.outcome == "confirmed"
+
+    def test_real_bound_beats_window(self, monkeypatch, tmp_path: Path):
+        # line 30 is inside the +50 fallback window but OUTSIDE the
+        # real function span — the caller-provided bound wins.
+        self._install_runner(monkeypatch, match_line=30)
+        result = self._sweep(tmp_path, line_start=10, line_end=20)
+        assert result.outcome == "refuted"
+
+    def test_no_line_start_keeps_whole_file(
+        self, monkeypatch, tmp_path: Path,
+    ):
+        self._install_runner(monkeypatch, match_line=400)
+        result = self._sweep(tmp_path, line_start=None, line_end=None)
+        assert result.outcome == "confirmed"
+
+
+class TestNegativeControlCache:
+    """Cache key carries the rule language; a failed control run is
+    never cached as matched=False (that permanently disarmed the
+    presence-detector cap for the keyword)."""
+
+    @staticmethod
+    def _install_runner(monkeypatch, results: list):
+        """Queue of results returned by successive run_rule calls."""
+        import sys
+        import types
+
+        calls = {"n": 0}
+
+        def fake_run_rule(*a, **k):
+            r = results[min(calls["n"], len(results) - 1)]
+            calls["n"] += 1
+            return r
+
+        fake_mod = types.ModuleType("packages.semgrep.runner")
+        fake_mod.run_rule = fake_run_rule
+        fake_mod.is_available = lambda: True
+        monkeypatch.setitem(
+            sys.modules, "packages.semgrep.runner", fake_mod,
+        )
+        return calls
+
+    @staticmethod
+    def _result(findings=(), errors=(), returncode=0):
+        import types
+
+        return types.SimpleNamespace(
+            findings=list(findings),
+            errors=list(errors),
+            returncode=returncode,
+        )
+
+    def _clear_cache(self):
+        from core.audit import sweep
+        sweep._negative_control_cache.clear()
+
+    def test_failed_control_run_not_cached(self, monkeypatch):
+        from core.audit.sweep import _rule_matches_negative_control
+        self._clear_cache()
+        calls = self._install_runner(monkeypatch, [
+            self._result(errors=["invalid rule yaml"]),
+            self._result(findings=[{"line": 3}]),
+        ])
+        # Failure → False, but NOT cached...
+        assert not _rule_matches_negative_control(
+            "rule.yaml", "format string", "a.c",
+        )
+        # ...so the next (healthy) run re-checks and arms the cap.
+        assert _rule_matches_negative_control(
+            "rule.yaml", "format string", "a.c",
+        )
+        assert calls["n"] == 2
+        self._clear_cache()
+
+    def test_bad_returncode_not_cached(self, monkeypatch):
+        from core.audit.sweep import _rule_matches_negative_control
+        self._clear_cache()
+        self._install_runner(monkeypatch, [
+            self._result(returncode=2),
+            self._result(findings=[{"line": 3}]),
+        ])
+        assert not _rule_matches_negative_control(
+            "rule.yaml", "format string", "a.c",
+        )
+        assert _rule_matches_negative_control(
+            "rule.yaml", "format string", "a.c",
+        )
+        self._clear_cache()
+
+    @staticmethod
+    def _rule_file(tmp_path, lang):
+        rule = tmp_path / f"rule-{lang}.yaml"
+        rule.write_text(
+            "rules:\n  - id: hypothesis-check\n"
+            "    pattern-regex: printf\\(\n"
+            f"    languages: [{lang}]\n    severity: WARNING\n"
+            "    message: check\n",
+        )
+        return str(rule)
+
+    def test_language_in_cache_key(self, monkeypatch, tmp_path):
+        # A cpp-language rule's verdict against the .c fixture must not
+        # be served to a c-language rule (different languages: key
+        # separates them, so the second language re-runs the control).
+        # Real generated-shape rule files: the cpp leg re-languages a
+        # copy for the control run instead of scanning vacuously.
+        from core.audit.sweep import _rule_matches_negative_control
+        self._clear_cache()
+        calls = self._install_runner(monkeypatch, [
+            self._result(findings=[]),          # cpp rule: no match
+            self._result(findings=[{"line": 3}]),  # c rule: matches
+        ])
+        cpp_rule = self._rule_file(tmp_path, "cpp")
+        c_rule = self._rule_file(tmp_path, "c")
+        assert not _rule_matches_negative_control(
+            cpp_rule, "format string", "a.cpp",
+        )
+        assert _rule_matches_negative_control(
+            c_rule, "format string", "a.c",
+        )
+        assert calls["n"] == 2
+        # Both verdicts now cached per-language: no further runs.
+        assert not _rule_matches_negative_control(
+            cpp_rule, "format string", "a.cpp",
+        )
+        assert _rule_matches_negative_control(
+            c_rule, "format string", "a.c",
+        )
+        assert calls["n"] == 2
+        self._clear_cache()
+
+    def test_unrewritable_cpp_rule_skips_without_caching(
+        self, monkeypatch,
+    ):
+        # A cpp rule whose config cannot be re-languaged (missing
+        # file / stock pack) must SKIP the control — a vacuous scan
+        # must never cache matched=False for the keyword.
+        from core.audit import sweep
+        from core.audit.sweep import _rule_matches_negative_control
+        self._clear_cache()
+        calls = self._install_runner(monkeypatch, [
+            self._result(findings=[]),
+        ])
+        assert not _rule_matches_negative_control(
+            "rule.yaml", "format string", "a.cpp",
+        )
+        assert calls["n"] == 0  # never scanned vacuously
+        assert sweep._negative_control_cache == {}
+        self._clear_cache()
+
+
+class TestMechanicalPatternsAreRealSemgrep:
+    """The mechanical-check pattern table must contain no //-comment
+    lines (semgrep strips comments from patterns, silently degenerating
+    them into presence matchers) and must travel with its keyword so
+    the consumer arms the identifier-consistency / negative-control
+    caps."""
+
+    def test_no_comment_lines_in_patterns(self):
+        from core.audit.sweep import _MECHANICAL_CHECK_PATTERNS
+        for keyword, pattern in _MECHANICAL_CHECK_PATTERNS.items():
+            assert "//" not in pattern, keyword
+
+    def test_keyed_variant_returns_keyword(self):
+        from core.audit.sweep import mechanical_check_to_semgrep_keyed
+        keyed = mechanical_check_to_semgrep_keyed("missing null check on p")
+        assert keyed is not None
+        pattern, keyword = keyed
+        assert keyword == "missing null check"
+        assert "$FUNC" in pattern
+
+    def test_chain_entry_carries_keyword(self):
+        # The consumer passes hypothesis/negative-control caps only
+        # for keyword-bearing entries (orchestrator semgrep leg).
+        from core.audit.orchestrator import _hypothesis_to_tool_chain
+        chain = _hypothesis_to_tool_chain(
+            "missing bounds check lets idx run past the array",
+            "src/a.c",
+        )
+        semgrep_entries = [e for e in chain if e["type"] == "semgrep"]
+        assert semgrep_entries
+        cfg = semgrep_entries[0]["config"]
+        assert cfg.get("pattern") or cfg.get("rule")
+        if cfg.get("pattern"):
+            assert cfg.get("keyword") == "missing bounds check"

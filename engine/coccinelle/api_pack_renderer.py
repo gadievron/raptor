@@ -49,11 +49,26 @@ logger = logging.getLogger(__name__)
 
 _MARKER_RE = re.compile(r"^//\s*@api-packs:\s*(\S+)\s+([a-z][a-z0-9_]*)\s*$")
 
-# Spliced into generated rule names and COCCIRESULT messages — keep tight.
-_API_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
-_KIND_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+# Spliced into generated rule names and COCCIRESULT messages — keep
+# tight. Matched with fullmatch(): re.match + '$' accepts a trailing
+# newline, which a JSON pack can carry ('openssl\n') and which splices
+# a literal line break into the rendered cocci, losing the whole slot.
+_API_RE = re.compile(r"[a-z][a-z0-9_]{0,31}")
+_KIND_RE = re.compile(r"[a-z][a-z0-9_]{0,31}")
 # C identifier (prefixes are identifier *prefixes*, same alphabet).
-_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
+
+
+def has_api_pack_marker(text: str) -> bool:
+    """True when any line of ``text`` is an ``@api-packs`` marker.
+
+    The single authoritative spelling test. Every caller that gates on
+    "does this rule carry a pack slot" must use this predicate rather
+    than a substring check — divergent spellings previously made
+    regex-valid markers (e.g. two spaces after ``//``) silently never
+    render anywhere, with zero diagnostics.
+    """
+    return any(_MARKER_RE.match(line.rstrip()) for line in text.splitlines())
 
 
 @dataclass(frozen=True)
@@ -97,7 +112,7 @@ def _load_pack(path: Path) -> ApiPack | None:
         logger.warning("api pack %s is not a JSON object; skipping", path)
         return None
     api = raw.get("api")
-    if not isinstance(api, str) or not _API_RE.match(api):
+    if not isinstance(api, str) or not _API_RE.fullmatch(api):
         logger.warning("api pack %s has invalid 'api' tag; skipping", path)
         return None
     kinds_raw = raw.get("kinds")
@@ -106,9 +121,21 @@ def _load_pack(path: Path) -> ApiPack | None:
         return None
 
     def _idents(spec: dict, key: str) -> tuple[str, ...]:
+        entries = spec.get(key, [])
+        # Guard the container type before iterating: a string value
+        # ('prefixes': 'EVP') would iterate per character and compile an
+        # every-identifier-matching regex; a non-iterable would raise
+        # out of load_packs. Degrade-and-warn, matching the module's
+        # documented failure posture.
+        if not isinstance(entries, list):
+            logger.warning(
+                "api pack %s: %r is not a list (%r); dropped",
+                path, key, entries,
+            )
+            return ()
         out = []
-        for entry in spec.get(key, []):
-            if isinstance(entry, str) and _IDENT_RE.match(entry):
+        for entry in entries:
+            if isinstance(entry, str) and _IDENT_RE.fullmatch(entry):
                 out.append(entry)
             else:
                 logger.warning(
@@ -119,7 +146,7 @@ def _load_pack(path: Path) -> ApiPack | None:
 
     kinds: dict[str, KindSpec] = {}
     for kind, spec in kinds_raw.items():
-        if not isinstance(kind, str) or not _KIND_RE.match(kind):
+        if not isinstance(kind, str) or not _KIND_RE.fullmatch(kind):
             logger.warning("api pack %s: invalid kind %r dropped", path, kind)
             continue
         if not isinstance(spec, dict):
@@ -208,7 +235,7 @@ def render_text(rule_path: Path) -> str | None:
     except OSError as e:
         logger.warning("cannot read rule %s (%s)", rule_path, e)
         return None
-    if "// @api-packs:" not in text and "//@api-packs:" not in text:
+    if not has_api_pack_marker(text):
         return None
 
     out: list[str] = []
@@ -221,8 +248,10 @@ def render_text(rule_path: Path) -> str | None:
         subdir, domain = marker.group(1), marker.group(2)
         packs_dir = (rule_path.parent / subdir).resolve()
         # Packs must live beside the rule — a marker cannot escape the
-        # rule tree and load JSON from elsewhere.
-        if not str(packs_dir).startswith(str(rule_path.parent.resolve())):
+        # rule tree and load JSON from elsewhere. Path.is_relative_to,
+        # not a string prefix test: '.../rules-evil' shares '.../rules'
+        # as a string prefix but is not inside it.
+        if not packs_dir.is_relative_to(rule_path.parent.resolve()):
             logger.warning(
                 "rule %s: pack dir %r escapes the rule directory; ignored",
                 rule_path, subdir,

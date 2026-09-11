@@ -614,13 +614,20 @@ def _persist_proxy_events(
         # MAC-bound tamper flag in the count sidecar (whose atomic
         # rename is not affected by the planted object) so triage
         # fails toward suspicious instead of clean.
-        _state["flags"].add("persist_open_failure")
-        _count = _state["next_seq"]
-        if _count is None:
-            _count = _read_proxy_count_sidecar(output, _run_binding)[0] or 0
-        _write_proxy_count_sidecar(
-            output, _count, _state["flags"], _run_binding)
-        _persist_lock.release()
+        # try/finally like the main-path branch below: an exception
+        # from the sidecar read/write here used to leak the persist
+        # lock, deadlocking ALL future proxy-event persistence in
+        # this process.
+        try:
+            _state["flags"].add("persist_open_failure")
+            _count = _state["next_seq"]
+            if _count is None:
+                _count = _read_proxy_count_sidecar(
+                    output, _run_binding)[0] or 0
+            _write_proxy_count_sidecar(
+                output, _count, _state["flags"], _run_binding)
+        finally:
+            _persist_lock.release()
         return
     _fd_owned = True
     try:
@@ -1630,6 +1637,13 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # kernel that CAN pin (ABI >= 4) but only by port.
             if _proxy_abi >= 4 and state.warn_once(
                     "_proxy_tier2_port_pin_warned"):
+                # The UDP-exfil closure on this tier IS the seccomp
+                # block — on a libseccomp-less host the filter never
+                # engages, and a message claiming the channel is
+                # closed would be actively misleading about an open
+                # DNS-exfil path. Word the message by what actually
+                # engages.
+                _udp_closed = _seccomp.check_seccomp_available()
                 logger.warning(
                     "Sandbox: egress enforcement degraded to the "
                     "Landlock TCP port pin (tier 2 — no netns bridge "
@@ -1637,10 +1651,14 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     "PORT only, so the child can reach ANY address "
                     "on port %d, not just the proxy — the hostname "
                     "allowlist applies only to connections that ride "
-                    "the proxy. DNS/UDP exfil stays closed by the "
-                    "seccomp UDP block. Enabling unprivileged user "
+                    "the proxy. %s Enabling unprivileged user "
                     "namespaces restores the stronger netns tier.",
                     allowed_tcp_ports[0],
+                    ("DNS/UDP exfil stays closed by the seccomp UDP "
+                     "block." if _udp_closed else
+                     "DNS/UDP exfil is OPEN on this host: the seccomp "
+                     "UDP block cannot engage (libseccomp unavailable "
+                     "or non-functional)."),
                 )
 
         _will_engage_audit = bool(audit_mode)
@@ -2204,6 +2222,34 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 "Sandbox: block_network=True makes allowed_tcp_ports=%s unreachable — the namespace has no network interface for Landlock's TCP allow-rule to apply to. For a network allowlist, pass block_network=False.", allowed_tcp_ports
             )
 
+    # Landlock's NET rules are the ONLY enforcement for
+    # allowed_tcp_ports on Linux: mount-ns isolates the filesystem,
+    # not TCP connect, and the netns backend is not engaged on
+    # allowlist runs (allowed_tcp_ports implies reachable network).
+    # The availability block below is rightly skipped when mount-ns
+    # engages — but that skip also swallowed the ABI-v4 warning, so a
+    # supplied port allowlist on an ABI < 4 kernel (5.13–6.6,
+    # including LTS) ran silently unenforced exactly when everything
+    # else looked healthy. Warn here for the mount-ns shape; the
+    # non-mount shape warns inside the block below as before.
+    # (block_network=True is excluded: that shape already gets the
+    # more accurate dead-combo warning above — the namespace leaves no
+    # interface for ANY allow-rule regardless of ABI.)
+    if (not effectively_disabled and not use_seatbelt and use_mount
+            and allowed_tcp_ports and not block_network
+            and (not check_landlock_available()
+                 or _get_landlock_abi() < 4)
+            and state.warn_once("_landlock_warned_abi_v4")):
+        logger.warning(
+            "Sandbox: allowed_tcp_ports=%s requires Landlock ABI v4 "
+            "(kernel 6.7+); current ABI is %s — the TCP allowlist is "
+            "NOT enforced (mount-ns isolates the filesystem, not TCP "
+            "connect). Pass block_network=True for a full network "
+            "block, or upgrade the kernel.",
+            allowed_tcp_ports,
+            _get_landlock_abi() if check_landlock_available() else 0,
+        )
+
     # Skip the entire Landlock-availability warning block on macOS:
     # seatbelt provides the equivalent enforcement (writable_paths,
     # readable_paths, allowed_tcp_ports all flow into the SBPL profile).
@@ -2359,15 +2405,23 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
     # composed preexec forks a PR_SET_CHILD_SUBREAPER sweeper that
     # SIGKILLs every surviving descendant (setsid daemons, SIGSTOP-
     # parked children, delayed writers) when the payload exits or the
-    # per-run death pipe (cell["death_fd"], populated by run()) hits
-    # EOF. Namespace paths don't need it — the pid-ns cascade kill is
-    # stronger. See preexec._reaper_split.
+    # per-run death pipe hits EOF. Namespace paths don't need it — the
+    # pid-ns cascade kill is stronger. See preexec._reaper_split.
+    #
+    # The death-pipe slot is a threading.local, NOT a plain cell key:
+    # the cell itself is shared by every run() inside this sandbox()
+    # context, and a plain key let CONCURRENT run() calls overwrite
+    # each other's fd between assignment and fork — run A's sweeper
+    # then watched run B's pipe (spurious cross-run SIGKILL on B's
+    # teardown, lost death watch for A). The fork inherits the calling
+    # thread's slot, so _reaper_split's post-fork read is per-run by
+    # construction (one run() per thread at a time).
     _reaper_cell: dict | None = None
     if (sys.platform == "linux" and not use_seatbelt
             and not effectively_disabled
             and not (use_sandbox
                      and (block_network or use_mount or restrict_reads))):
-        _reaper_cell = {"death_fd": None}
+        _reaper_cell = {"death_local": threading.local()}
         _nproc_budget = int(effective_limits.get("nproc", 0) or 0)
         if _nproc_budget > 0:
             try:
@@ -2437,11 +2491,30 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 "bind-mount + UTS-namespace primitives — run RAPTOR "
                 "in a Linux VM for untrusted-binary analysis)"
             )
+        elif not check_mount_available():
+            # Same gate run() uses to decide mount-ns engagement.
+            # Pre-fix this branch probed only mount_ns_available()
+            # (uidmap binaries), so a host whose kernel/LSM refuses
+            # unprivileged userns but has uidmap installed passed the
+            # gate, built the persona, and then mount-ns never engaged
+            # — sanitisation silently never applied. And the
+            # diagnostic hardcoded uidmap+AppArmor: route through
+            # mount_unavailable_reason() (the helper the strict and
+            # Landlock-only siblings already use) so SELinux / nested
+            # userns / missing-package hosts each get their own cause.
+            from .probes import mount_unavailable_reason
+            _fp_condition, _fp_fix = mount_unavailable_reason()
+            _fp_unsupported_reason = f"{_fp_condition}. {_fp_fix}"
         elif not mount_ns_available():
+            # check_mount_available() passed but the newuidmap/
+            # newgidmap execution probe failed (missing or broken
+            # install) — the spawn backend cannot run its uid-mapping
+            # step, so mount-ns (and with it the persona overlay)
+            # will not engage.
             _fp_unsupported_reason = (
-                "mount-ns unavailable (needs `uidmap` package + "
-                "kernel.apparmor_restrict_unprivileged_userns=0); "
-                "see startup banner for the exact sysctl"
+                "uidmap helpers unusable (newuidmap/newgidmap missing "
+                "or not executable) — install/repair the uidmap "
+                "package"
             )
         elif not (target or output):
             # mount-ns engagement requires at least one of target/output
@@ -3293,10 +3366,16 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                             f"this grant explicitly."
                         )
 
-        # Strip caller-supplied check= — both subprocess.run call sites
-        # below pass check=False explicitly (PLW1510), so a duplicate from
-        # **kwargs would raise TypeError.
-        kwargs.pop("check", None)
+        # Honor caller-supplied check= with subprocess.run semantics
+        # (raise CalledProcessError on nonzero exit). Popped here — the
+        # subprocess.run call sites below pass check=False explicitly
+        # (PLW1510), so a duplicate from **kwargs would raise TypeError
+        # — and applied at the single `return result` at the end.
+        # Silently dropping it left callers' CalledProcessError
+        # handlers dead while the docstring promised subprocess.run
+        # parity (the binary-oracle corpus drivers pass check=True and
+        # expect the raise to gate their build steps).
+        _check_requested = bool(kwargs.pop("check", False))
 
         # Always set resource limits via preexec_fn
         existing_preexec = kwargs.pop("preexec_fn", None)
@@ -3357,7 +3436,9 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 check_unshare_engages,
             )
             _engage_flags = ["--user", "--pid", "--fork", "--ipc"]
-            if block_network:
+            # Same inherit_netns gate as the real unshare command below:
+            # the probe must test the EXACT flag-set the run will use.
+            if block_network and not _inherit_netns:
                 _engage_flags.append("--net")
             # --cgroup joins the real command below when the CLI
             # supports it — the engagement probe must test the same
@@ -3453,7 +3534,15 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                            "--user", "--fork", "--ipc"]
             if not _skip_pid_ns:
                 unshare_cmd.append("--pid")
-            if block_network:
+            # inherit_netns (netns_coordinator paired-isolation runs):
+            # the caller already sits in the shared coordinator netns
+            # and the child must stay there to reach its peer's
+            # loopback listener. Appending --net here anyway gave the
+            # child a fresh EMPTY netns — the coordinator's listener
+            # became invisible and paired isolation silently reported
+            # listen_observed=false. Same gate as the fork lane
+            # (_spawn: `block_network and not inherit_netns`).
+            if block_network and not _inherit_netns:
                 unshare_cmd.append("--net")
             # Fresh cgroup ns: /proc/self/cgroup reads "0::/" instead
             # of the orchestrator's host cgroup path (a systemd session
@@ -3523,7 +3612,11 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # nobody asked for and break inherit_netns coordinator
             # runs).
             _shim_argv = [shim_path]
-            if block_network:
+            # Matches the --net gate above: on inherit_netns runs there
+            # is no fresh netns in the chain, lo is already up in the
+            # coordinator's namespace, and the comment above documents
+            # the flag as valid only when --net was added.
+            if block_network and not _inherit_netns:
                 _shim_argv.append("--netns-lo")
             # Keep-trust decision travels OUT-OF-BAND (shim argv), not
             # through the environment: the shim used to honour a
@@ -5111,7 +5204,10 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                             _penv["_SBX_RUN_ID"] = _reap_token
                         if _reaper_cell is not None:
                             _death_r, _death_w = os.pipe()
-                            _reaper_cell["death_fd"] = _death_r
+                            # Thread-local slot — see the cell's
+                            # construction comment for why this must
+                            # not be a plain shared key.
+                            _reaper_cell["death_local"].fd = _death_r
                         _death_w_holder = [_death_w]
                         try:
                             # full_cmd IS the target, so it gets the
@@ -5152,7 +5248,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                             )
                         finally:
                             if _reaper_cell is not None:
-                                _reaper_cell["death_fd"] = None
+                                _reaper_cell["death_local"].fd = None
                             for _dfd in (_death_w_holder[0], _death_r):
                                 if _dfd is not None:
                                     try:
@@ -5465,6 +5561,14 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                   and (block_network
                                        or use_egress_proxy))))
 
+        # subprocess.run parity for check= — after interpretation and
+        # event accounting so a raising run still leaves run.events
+        # and the blocked-operation diagnostics populated.
+        if _check_requested and result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                result.returncode, getattr(result, "args", list(cmd)),
+                output=result.stdout, stderr=result.stderr,
+            )
         return result
 
     # Expose the cumulative per-sandbox event view as an attribute on the
@@ -6314,12 +6418,22 @@ def run_untrusted(cmd: list[str], *, target: str | None = None, output: str | No
                     _wfd = os.open(os.ttyname(_fd),
                                    os.O_WRONLY | os.O_NOCTTY)
             except OSError as _tty_exc:
+                # Fail CLOSED like the socket / no-reopen branches
+                # above: inheriting the descriptor here would hand the
+                # untrusted child the readable handle (an O_RDWR pty
+                # slave taps the operator's keystrokes) that this whole
+                # block exists to revoke. Discarding output is strictly
+                # safer than granting the read channel.
                 logger.warning(
                     "run_untrusted: could not reopen the %s "
-                    "descriptor write-only for the child (%s) — the "
-                    "inherited descriptor may be readable.",
-                    _name, _tty_exc,
+                    "descriptor write-only for the child (%s) — "
+                    "plugging with /dev/null (the inherited "
+                    "descriptor may be readable). Pass "
+                    "capture_output=True or an explicit %s= pipe to "
+                    "keep the output.",
+                    _name, _tty_exc, _name,
                 )
+                kwargs[_name] = subprocess.DEVNULL
                 continue
             kwargs[_name] = _wfd
             _wo_fds.append(_wfd)

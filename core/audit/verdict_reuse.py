@@ -131,6 +131,7 @@ def import_reused_verdicts(
     imported = 0
     resweep_confirmed = 0
     resweep_demoted = 0
+    resweep_unconfirmed = 0
     by_status: dict[str, int] = {}
 
     for key in sorted(candidates):
@@ -170,7 +171,18 @@ def import_reused_verdicts(
             with result._lock:
                 if outcome.status == "finding":
                     result.sweep_validated += 1
-                    resweep_confirmed += 1
+                    # "Confirmed" only when a tool actually stamped a
+                    # live receipt — a sweep that raised or found
+                    # nothing leaves the finding reused-but-
+                    # unconfirmed (kept at the LLM_ONLY tier cap per
+                    # the module doctrine above), and reporting that
+                    # as a mechanical re-confirmation forged the run
+                    # summary's receipt claim.
+                    from .evidence_grade import is_tool_evidence
+                    if is_tool_evidence(outcome.evidence_tool or ""):
+                        resweep_confirmed += 1
+                    else:
+                        resweep_unconfirmed += 1
                 else:
                     result.sweep_demoted += 1
                     resweep_demoted += 1
@@ -230,11 +242,16 @@ def import_reused_verdicts(
             f"verdict reuse: {imported} imported from "
             f"{origin_label} ({breakdown})"
         )
-        if resweep_confirmed or resweep_demoted:
+        if resweep_confirmed or resweep_demoted or resweep_unconfirmed:
             line += (
                 f"; findings mechanically re-validated: "
                 f"{resweep_confirmed} confirmed, {resweep_demoted} demoted"
             )
+            if resweep_unconfirmed:
+                line += (
+                    f", {resweep_unconfirmed} reused without live"
+                    f" re-confirmation (LLM-only tier cap)"
+                )
         logger.info(line)
 
     return imported

@@ -135,15 +135,21 @@ class CostTracker:
         return self._budget_ratio() >= CUTOFF_SINGLE_MODEL
 
     def should_skip_phase(self, n_calls: int, model_name: str,
-                          cutoff_ratio: float, phase_name: str) -> bool:
+                          cutoff_ratio: float, phase_name: str,
+                          is_cc: bool = False) -> bool:
         """Pre-check: would running this phase likely exceed the budget?
 
         Prevents starting a parallel dispatch that would be mostly cancelled
         by per-call cutoffs. Analysis dispatch never uses this (always runs).
+
+        ``is_cc``: the phase dispatches via CC subprocess — estimate at
+        the observed CC per-finding rate instead of an external-LLM
+        token rate.
         """
         if self._max_cost <= 0:
             return False
-        estimate = self.estimate_cost(n_calls, model_name=model_name)
+        estimate = self.estimate_cost(n_calls, model_name=model_name,
+                                      is_cc=is_cc)
         with self._lock:
             projected = self._total_cost + estimate
         if projected > self._max_cost * cutoff_ratio:
@@ -164,9 +170,13 @@ class CostTracker:
         if is_cc:
             avg_cost = 0.20  # CC agents: observed ~$0.15-0.25/finding
         else:
-            from core.llm.model_data import MODEL_COSTS
+            # Resolve through the canonical chain — a direct
+            # MODEL_COSTS.get() misses dated-snapshot and Bedrock-form
+            # ids and silently falls to the flat default, mis-driving
+            # the budget phase gate in both directions.
+            from core.llm.model_data import resolve_model_costs
             # Estimate ~2K input tokens + ~500 output tokens per analysis call
-            rates = MODEL_COSTS.get(model_name, {})
+            rates = resolve_model_costs(model_name) if model_name else None
             if rates:
                 avg_cost = (2.0 * rates.get("input", 0.003)) + (0.5 * rates.get("output", 0.015))
             else:
@@ -188,6 +198,60 @@ class CostTracker:
             if self._thinking_tokens > 0:
                 summary["thinking_tokens"] = self._thinking_tokens
             return summary
+
+
+def _cc_fallback_role_resolution(role_resolution: dict) -> dict:
+    """Role resolution for the CC fallback dispatch.
+
+    The CC dispatch_fn ignores the model parameter entirely, so the
+    fallback must collapse the analysis-model list to the CC
+    single-model shape — reusing the original resolution would fan out
+    N duplicate ``claude -p`` subprocesses per finding (one per failed
+    external model), each paying its own budget and timeout, and then
+    spuriously trip the multi-model collapse warning.
+    """
+    return {
+        **role_resolution,
+        "analysis_models": [],
+        "analysis_model": None,
+    }
+
+
+def _classify_absent_consensus(
+    dispatch_records: list, spent_delta: float,
+) -> tuple[bool, bool]:
+    """Classify a consensus stage that produced no verdicts.
+
+    Returns ``(budget_skipped, all_errored)``. The budget gate skips
+    PRE-dispatch and returns ``[]`` with zero spend; any dispatch
+    record at all (success, error, abort backfill) means calls were
+    attempted, so the absence of consensus is all-errored. The spend
+    delta alone under-detects: raised errors (bad key, provider
+    outage) never book cost, so an all-raised stage leaves spend flat
+    and would be mislabelled budget-skipped — telling the operator to
+    raise the budget when the action is "fix the API failure".
+    """
+    if dispatch_records or spent_delta > 0:
+        return False, True
+    return True, False
+
+
+def _cap_findings(findings: list, max_findings: int) -> list:
+    """Apply the max_findings cap, stamping the dropped tail with
+    ``skipped_over_budget`` at skip time. The dicts are the prep
+    report's own ``results`` entries, so the stamp survives into the
+    merged report and readers see the specific reason instead of a
+    generic post-hoc "skipped"."""
+    if max_findings <= 0 or len(findings) <= max_findings:
+        return findings
+    from core.run.finding_status import SKIPPED_OVER_BUDGET, set_status
+    for dropped in findings[max_findings:]:
+        if isinstance(dropped, dict):
+            set_status(
+                dropped, SKIPPED_OVER_BUDGET,
+                skip_reason="max_findings cap",
+            )
+    return findings[:max_findings]
 
 
 def _finalize_results_for_emit(results: list) -> None:
@@ -628,6 +692,20 @@ def orchestrate(
         return None
 
     findings = report.get("results", [])
+    # Chokepoint-suppressed prep records are RETAINED in the report
+    # (explicit disqualifier with a stamped skip status, never a
+    # silent drop) — but they are pre-refuted: dispatching them would
+    # pay the LLM cost the chokepoint saved. Keep them out of the
+    # dispatch set; they still reach the merged report via
+    # _merge_results. Only an EXPLICIT stamped status counts here —
+    # the derive fallback would misread every prep record as skipped.
+    from core.run.finding_status import ALL_STATUSES, is_skipped
+    findings = [
+        f for f in findings
+        if not (isinstance(f, dict)
+                and f.get("status") in ALL_STATUSES
+                and is_skipped(f))
+    ]
     if not findings:
         print("\n  No findings to analyse")
         return None
@@ -700,7 +778,7 @@ def orchestrate(
 
     if max_findings > 0 and len(findings) > max_findings:
         logger.info("Capping at %d findings (of %d)", max_findings, len(findings))
-        findings = findings[:max_findings]
+        findings = _cap_findings(findings, max_findings)
 
     # Resolve model roles
     from core.llm.config import resolve_model_roles
@@ -843,6 +921,13 @@ def orchestrate(
                     tokens=response.tokens_used, model=response.model,
                     duration=response.duration, quality=quality,
                     resolved_model=response.resolved_model,
+                    # getattr: StructuredResponse doesn't carry the
+                    # field yet — wired here so the tracker's
+                    # thinking-token telemetry fires as soon as the
+                    # provider layer surfaces it.
+                    thinking_tokens=getattr(
+                        response, "thinking_tokens", 0,
+                    ) or 0,
                 )
             response = client.generate(
                 prompt=prompt, system_prompt=system_prompt,
@@ -854,6 +939,9 @@ def orchestrate(
                 tokens=response.tokens_used, model=response.model,
                 duration=response.duration,
                 resolved_model=response.resolved_model,
+                thinking_tokens=getattr(
+                    response, "thinking_tokens", 0,
+                ) or 0,
             )
 
         dispatch_mode = "external_llm"
@@ -1017,12 +1105,13 @@ def orchestrate(
     prefilter_fn = None
     pending_fp_claims: dict[str, dict] = {}
     if dispatch_mode == "external_llm":
-        from packages.llm_analysis.prefilter import prefilter_for_finding
-
-        def prefilter_fn(item):
-            return prefilter_for_finding(
-                client, item, pending_claims=pending_fp_claims,
-            )
+        # Memoized per finding: dispatch fans out (model x finding)
+        # work items, but the cheap FP check is model-independent —
+        # see make_prefilter_fn for the dedupe contract.
+        from packages.llm_analysis.prefilter import make_prefilter_fn
+        prefilter_fn = make_prefilter_fn(
+            client, pending_claims=pending_fp_claims,
+        )
 
     analysis_results = dispatch_task(
         AnalysisTask(profile=profile, allow_unreachable=allow_unreachable),
@@ -1072,11 +1161,20 @@ def orchestrate(
             # path was running with weaker defences than the
             # primary path even though the same Claude model was
             # behind it.
+            # Collapse the role resolution to the CC single-model
+            # shape — see _cc_fallback_role_resolution.
+            cc_role_resolution = _cc_fallback_role_resolution(
+                role_resolution,
+            )
             analysis_results = dispatch_task(
                 AnalysisTask(profile=profile, allow_unreachable=allow_unreachable),
-        findings, dispatch_fn, role_resolution,
+                findings, dispatch_fn, cc_role_resolution,
                 results_by_id, cost_tracker, max_parallel,
             )
+            # Downstream stages (multi-model correlation, collapse
+            # detection) must see the single-contributor reality of
+            # the fallback, not the external panel that never ran.
+            role_resolution = cc_role_resolution
 
     # Index results for downstream tasks
     # Multi-model: multiple results per finding — pick best as primary,
@@ -1278,7 +1376,7 @@ def orchestrate(
         # tell budget-skipped (no spend) from all-errored (spend
         # incurred but every call failed) afterwards.
         _ct_before = cost_tracker.total_cost if cost_tracker else 0.0
-        dispatch_task(
+        consensus_dispatch_records = dispatch_task(
             consensus_task, findings, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
         )
@@ -1302,18 +1400,18 @@ def orchestrate(
         # failures". Pre-fix both got reported as "budget skipped"
         # in the orchestration summary, masking errors.
         #
-        # Distinguish via spend delta: if the cost tracker
-        # advanced, calls were made; the absence of consensus is
-        # all-errored. If spend stayed flat, it's budget-skipped.
+        # Distinguish via the dispatch records first, spend delta
+        # second — see _classify_absent_consensus.
         if eligible and not any(
             isinstance(r, dict) and r.get("consensus")
             for r in results_by_id.values()
         ):
             _ct_after = cost_tracker.total_cost if cost_tracker else 0.0
-            if _ct_after > _ct_before:
-                consensus_all_errored = True
-            else:
-                consensus_budget_skipped = True
+            consensus_budget_skipped, consensus_all_errored = (
+                _classify_absent_consensus(
+                    consensus_dispatch_records, _ct_after - _ct_before,
+                )
+            )
 
     # Judge review (if configured) — sees primary reasoning, critiques it
     judge_models = role_resolution.get("judge_models", [])
@@ -2075,6 +2173,17 @@ def _detect_multi_model_collapse(
     for fid, item in results_by_id.items():
         analyses = item.get("multi_model_analyses")
         if not isinstance(analyses, list) or not analyses:
+            # ``multi_model_analyses`` is only attached when 2+ model
+            # records survived. A finding with a single surviving
+            # result in an N-model run is the WORST collapse (one
+            # model succeeded, the others' work was lost, e.g.
+            # cancelled by an abort) — skipping it would report the
+            # run as clean multi-model. Errored findings are excluded:
+            # they surface via findings_failed, not as collapse.
+            if isinstance(item, dict) and "error" not in item:
+                contributors = {item.get("analysed_by")} - {None, "?"}
+                if len(contributors) < n_analysis_models:
+                    collapsed.append((fid, sorted(contributors)))
             continue
         distinct = {
             a.get("model") for a in analyses if isinstance(a, dict)
@@ -2212,11 +2321,33 @@ def _merge_results(
     exploits_generated = 0
     patches_generated = 0
 
+    from core.run.finding_status import SKIPPED, set_status
     for finding in results:
         fid = finding.get("finding_id")
         cc = cc_by_id.get(fid)
         if cc is None or "error" in cc:
-            finding["cc_error"] = cc.get("error") if cc is not None else "not dispatched"
+            if cc is None:
+                # Never dispatched (cap / dedup / chokepoint
+                # suppression / dispatch loss) — an explicit skip,
+                # not a crash. A producer-stamped specific status
+                # (skipped_over_budget from the cap, skipped_dead_code
+                # from the reachability chokepoint) is preserved; only
+                # stamp the generic form when nothing more specific
+                # exists.
+                if finding.get("status") is None:
+                    finding["cc_error"] = "not dispatched"
+                    set_status(
+                        finding, SKIPPED, skip_reason="not_dispatched",
+                    )
+            else:
+                # Real per-finding analysis failure. The canonical
+                # field is ``error`` (derive_status keys on it — the
+                # status enum's "see the error field" promise);
+                # ``cc_error`` is kept for existing report readers.
+                finding["error"] = cc.get("error")
+                finding["cc_error"] = cc.get("error")
+                if cc.get("error_type"):
+                    finding["error_type"] = cc["error_type"]
             if cc is not None and cc.get("cc_debug_file"):
                 finding["cc_debug_file"] = cc["cc_debug_file"]
             continue

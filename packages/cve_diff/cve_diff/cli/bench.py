@@ -73,7 +73,7 @@ class _CveResult:
     # Structured failure class — set at construction so the report
     # writer doesn't have to regex an unstructured error string.
     # "PASS" for ok=True; one of {"UnsupportedSource", "no_evidence",
-    # "budget_cost_usd", "budget_iterations", "budget_tokens",
+    # "budget_cost_usd", "budget_iterations", "budget_s",
     # "llm_error", "model_stopped_without_submit", "client_init_failed",
     # "PerCveTimeout", "AnalysisError", "DiscoveryError", "Other"} for
     # ok=False.
@@ -90,11 +90,10 @@ class _CveResult:
     # Action A's claims and analyzing walker patterns.
     agent_tool_calls_with_args: tuple[tuple[str, str], ...] = ()
     agent_model: str = ""
-    # Recovery telemetry: how many in-loop LLM retries fired (3-attempt
-    # backoff inside AgentLoop), whether the pipeline's meta-retry on
+    # Recovery telemetry: whether the pipeline's meta-retry on
     # budget+candidates ran, and whether the bench-layer retry pass
-    # re-ran this CVE after a transient failure.
-    llm_retries: int = 0
+    # re-ran this CVE after a transient failure. (There is no in-loop
+    # LLM retry layer in the tool-use engine — no counter for one.)
     meta_retry_attempted: bool = False
     # True when the pipeline's post-submit retry fired (stages 2-5
     # failed on the agent's first pick; agent re-run picked a new
@@ -255,7 +254,6 @@ def _agent_attrs(pipeline: Pipeline, model_id: str) -> dict:
             tuple(t) for t in tel.get("tool_calls_with_args", [])
         ),
         "agent_model": model_id,
-        "llm_retries": int(tel.get("llm_retries", 0)),
         "meta_retry_attempted": bool(getattr(pipeline, "_last_meta_retry_attempted", False)),
         "post_submit_retry_attempted": bool(getattr(pipeline, "_last_post_submit_retry_attempted", False)),
         "unverified_submits": int(tel.get("unverified_submits", 0)),
@@ -266,8 +264,12 @@ def _agent_attrs(pipeline: Pipeline, model_id: str) -> dict:
 # Maps exception type or AgentSurrender reason → structured error_class
 # string. Order matters: the surrender-reason patterns are checked
 # before exception-type fallback.
+# ``budget_s`` is the loop's wall-clock cap reason; the loop emits no
+# ``budget_tokens`` reason, so listing it here would be dead — while
+# omitting budget_s made wall-clock surrenders fall through to the
+# generic DiscoveryError bucket and vanish from the budget rows.
 _SURRENDER_REASONS = (
-    "budget_cost_usd", "budget_iterations", "budget_tokens",
+    "budget_cost_usd", "budget_iterations", "budget_s",
     "llm_error", "no_evidence", "UnsupportedSource",
     "model_stopped_without_submit", "client_init_failed",
     "repeated_tool_call", "sha_not_found_in_repo",
@@ -418,8 +420,6 @@ def _render_bench_markdown(summary: _BenchSummary) -> str:
         outcome_lines.append(f"| {cls} | {c} | {100.0 * c / total:.1f}% |")
 
     # Recovery layers.
-    in_loop_retry_triggered = sum(1 for r in summary.results if r.llm_retries > 0)
-    in_loop_retry_recovered = sum(1 for r in summary.results if r.ok and r.llm_retries > 0)
     meta_retry_triggered = sum(1 for r in summary.results if r.meta_retry_attempted)
     meta_retry_recovered = sum(1 for r in summary.results if r.ok and r.meta_retry_attempted)
     bench_retry_triggered = sum(1 for r in summary.results if r.bench_retry_attempted)
@@ -512,7 +512,6 @@ def _render_bench_markdown(summary: _BenchSummary) -> str:
         + f"## Recovery layers — what saved CVEs\n\n"
         f"| Layer | Triggered | Recovered (PASS) |\n"
         f"|---|---:|---:|\n"
-        f"| In-loop LLM retry (3 attempts, 0/5/15s) | {in_loop_retry_triggered} | {in_loop_retry_recovered} |\n"
         f"| Meta-retry on budget+candidates | {meta_retry_triggered} | {meta_retry_recovered} |\n"
         f"| Bench-layer retry on transient errors | {bench_retry_triggered} | {bench_retry_recovered} |\n\n"
         f"## Tool usage (across {total} CVEs)\n\n"

@@ -38,9 +38,7 @@ def parse_record(record: dict[str, Any]) -> OsvRecord:
         msg = "OSV record missing id"
         raise ValueError(msg)
 
-    aliases = tuple(
-        x for x in (record.get("aliases") or ()) if isinstance(x, str)
-    )
+    aliases = _string_tuple(record.get("aliases"))
     return OsvRecord(
         id=osv_id,
         aliases=aliases,
@@ -53,6 +51,22 @@ def parse_record(record: dict[str, Any]) -> OsvRecord:
         modified=_parse_iso(record.get("modified")),
         raw=record,
     )
+
+
+def _string_tuple(value: Any) -> tuple[str, ...]:
+    """Coerce a list-of-strings field (``aliases``, ``versions``) to a tuple.
+
+    A bare string (malformed mirrors ship ``"aliases": "CVE-2021-1234"``)
+    is ONE item, not an iterable: iterating it per-character passes the
+    per-item ``isinstance(x, str)`` guard for every character, silently
+    polluting alias matching — and for ``versions``, minting
+    single-character "versions" that parse as real versions downstream.
+    """
+    if isinstance(value, str):
+        return (value,) if value else ()
+    if isinstance(value, (list, tuple)):
+        return tuple(x for x in value if isinstance(x, str))
+    return ()
 
 
 def _parse_references(refs_raw: list[Any]) -> tuple[OsvReference, ...]:
@@ -78,9 +92,7 @@ def _parse_affected(affected_raw: list[Any]) -> tuple[OsvAffected, ...]:
             if isinstance(pkg, dict) else None
         )
         ranges = _parse_ranges(entry.get("ranges") or [])
-        versions = tuple(
-            v for v in (entry.get("versions") or ()) if isinstance(v, str)
-        )
+        versions = _string_tuple(entry.get("versions"))
         eco = entry.get("ecosystem_specific")
         db = entry.get("database_specific")
         out.append(OsvAffected(
@@ -98,9 +110,14 @@ def _parse_ranges(ranges_raw: list[Any]) -> tuple[OsvRange, ...]:
     for r in ranges_raw:
         if not isinstance(r, dict):
             continue
-        type_str = r.get("type")
-        # Match SCA's existing behaviour: unknown type is normalised to
-        # ECOSYSTEM so the matcher gets a chance rather than dropping it.
+        raw_type = r.get("type")
+        # Case drift ("git" from mirrors/converters) normalises to the
+        # canonical uppercase form rather than being rewritten away —
+        # the verify layer's GIT handling is case-tolerant on purpose
+        # and must still see these ranges as GIT. Truly unknown types
+        # match SCA's existing behaviour: ECOSYSTEM so the matcher gets
+        # a chance rather than dropping the range.
+        type_str = raw_type.upper() if isinstance(raw_type, str) else ""
         if type_str not in ("GIT", "SEMVER", "ECOSYSTEM"):
             type_str = "ECOSYSTEM"
         repo = r.get("repo") if isinstance(r.get("repo"), str) else None
@@ -108,9 +125,17 @@ def _parse_ranges(ranges_raw: list[Any]) -> tuple[OsvRange, ...]:
         for ev in (r.get("events") or []):
             if not isinstance(ev, dict):
                 continue
-            events.append(
-                {k: str(v) for k, v in ev.items() if isinstance(v, str)}
-            )
+            # JSON numbers are valid event values in the wild —
+            # ``{"introduced": 0}`` is the common "vulnerable since the
+            # beginning" shape. A str-only filter stripped it to ``{}``,
+            # silently deleting the range's lower bound. Booleans stay
+            # excluded ("True" is not a version).
+            events.append({
+                k: str(v)
+                for k, v in ev.items()
+                if isinstance(v, str)
+                or (isinstance(v, (int, float)) and not isinstance(v, bool))
+            })
         # Normalise event ordering: introduced before fixed/limit.
         # OSV spec requires events to be sorted by version, but
         # real feeds occasionally ship them in the order they

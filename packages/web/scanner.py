@@ -37,7 +37,7 @@ if __name__ == "__main__":
     sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.context_guard import build_web_context_guard_report
-from core.json import save_json
+from core.json import append_jsonl, save_json
 from core.logging import get_logger
 from core.run.safe_io import safe_run_mkdir
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
@@ -68,6 +68,27 @@ if TYPE_CHECKING:
     from packages.web.checks.base import CheckResult
 
 logger = get_logger()
+
+
+def _redact_json_artifact(value: Any) -> Any:
+    """Recursively redact secret material from a JSON-shaped artifact.
+
+    The scan's data plane carries RAW values end-to-end (probes must
+    hit the URLs that actually exist); this is the single render/persist
+    boundary where secrets leave the process — every string value in a
+    persisted artifact goes through the shared free-form redactor.
+    Callers honouring the reveal_secrets contract skip the walk.
+    """
+    from core.security.redaction import redact_secrets
+
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, dict):
+        return {key: _redact_json_artifact(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_json_artifact(item) for item in value]
+    return value
+
 
 HIGH_RISK_WEB_PARAMS = {
     "cmd", "command", "exec", "execute", "code", "input", "template",
@@ -236,6 +257,13 @@ class WebScanner:
         self._external_validation_results: list[dict] = []
         self._raw_injection_hits: list[dict] = []
         self._external_sensitive_candidates: list[tuple[str, str]] = []
+        # phase -> names of check classes that crashed (surfaced at
+        # WARNING and in the scan report; never silently swallowed).
+        self._check_failures: dict[str, list[str]] = {}
+        # phase -> {check name: transport-error count} for checks whose
+        # probes failed at transport level (target down / rate-limited /
+        # WAF ban) — degraded coverage, distinguishable from clean.
+        self._check_degraded: dict[str, dict[str, int]] = {}
 
         logger.info(
             "Web scanner initialized for %s (verify_ssl=%s, max_depth=%s, max_pages=%s)",
@@ -331,7 +359,7 @@ class WebScanner:
         report = self._phase_report(all_findings, discovery, crawl_data)
         if verification_summary is not None:
             report["verification"] = verification_summary
-            save_json(self.out_dir / "web_scan_report.json", report)
+            self._save_artifact(self.out_dir / "web_scan_report.json", report)
         return report
 
     def _phase_preflight(self) -> bool:
@@ -379,7 +407,7 @@ class WebScanner:
 
     def _write_discovery_artifact(self, result: DiscoveryResult) -> None:
         """Persist the current discovery view, including external seeds."""
-        save_json(self.out_dir / "discovery.json", {
+        self._save_artifact(self.out_dir / "discovery.json", {
             "stats": result.stats(),
             "urls": result.urls[:200],
             "fingerprint": result.fingerprint,
@@ -510,7 +538,10 @@ class WebScanner:
             self._ffuf_hit_count = int(result.get("result_count") or 0)
             hit_urls = []
             for entry in result.get("results", []):
-                url = entry.get("url")
+                # Prefer the verbatim value: discovered URLs are live
+                # crawl seeds, and the display-sanitized form may have
+                # been mutated by redaction/truncation.
+                url = entry.get("url_raw") or entry.get("url")
                 if not url:
                     continue
                 hit_urls.append(url)
@@ -551,10 +582,21 @@ class WebScanner:
             "assessment? Prefer admin/API/dynamic endpoints with parameters "
             "over static assets and boilerplate.",
         )
-        for url in seed_urls[:50]:
-            self.crawler.discovered_urls.add(url)
-        crawl_results = self.crawler.crawl(self.base_url)
-        save_json(self.out_dir / "crawl_results.json", crawl_results)
+        # Seeds are real crawl WORK (enqueued and fetched), not just
+        # recorded URLs — recording alone never extracted their forms,
+        # links, or parameters.
+        crawl_results = self.crawler.crawl(
+            self.base_url, seeds=seed_urls[:50],
+        )
+        # Persist the crawler's own artifact projection (it additionally
+        # hides sensitive form-input values); fall back to the live
+        # results for crawler doubles that lack it.
+        artifact_getter = getattr(self.crawler, "artifact_results", None)
+        artifact = artifact_getter() if callable(artifact_getter) else None
+        self._save_artifact(
+            self.out_dir / "crawl_results.json",
+            artifact if isinstance(artifact, dict) else crawl_results,
+        )
         logger.info("Crawl stats: %s", crawl_results.get('stats', {}))
         self._phases_completed.append("crawl")
         return crawl_results
@@ -630,6 +672,7 @@ class WebScanner:
         discovery_ctx = self._merged_discovery_ctx(discovery, crawl_data)
 
         for cls in check_classes:
+            errors_before = getattr(self.client, "transport_errors", 0)
             try:
                 results = self._instantiate_check(cls).run(
                     self.client, self.base_url, session=None, discovery=discovery_ctx,
@@ -638,10 +681,67 @@ class WebScanner:
                     if not r.passed:
                         findings.append(self._to_finding(r, "unauthenticated"))
             except Exception as e:
-                logger.debug("Check %s failed: %s", cls.__name__, self._redact(str(e)))
+                self._record_check_failure("passive_checks", cls.__name__, e)
+            self._record_check_degradation(
+                "passive_checks", cls.__name__, errors_before,
+            )
+        self._log_check_failures("Phase 4", "passive_checks")
         logger.info("Phase 4 complete: %d findings", len(findings))
         self._phases_completed.append("passive_checks")
         return findings
+
+    def _record_check_failure(
+        self, phase: str, check_name: str, error: Exception,
+    ) -> None:
+        """A crashed check is a coverage loss, not a debug detail —
+        surface it at WARNING and count it into the scan summary so a
+        systemic breakage never reads as a clean scan."""
+        self._check_failures.setdefault(phase, []).append(check_name)
+        logger.warning(
+            "Check %s failed: %s: %s",
+            check_name, type(error).__name__, self._redact(str(error)),
+        )
+
+    def _record_check_degradation(
+        self, phase: str, check_name: str, errors_before: int,
+    ) -> None:
+        """Individual checks swallow their own probe exceptions by
+        design, so a check that returns [] because the target died,
+        rate-limited, or WAF-banned mid-scan is indistinguishable from
+        one that ran clean. The client counts transport failures; a
+        per-check delta means the check's coverage is degraded — the
+        report must say so instead of presenting a clean pass."""
+        errors_now = getattr(self.client, "transport_errors", 0)
+        if not isinstance(errors_now, int) or not isinstance(errors_before, int):
+            return  # client double without the counter
+        errors = errors_now - errors_before
+        if errors <= 0:
+            return
+        self._check_degraded.setdefault(phase, {})[check_name] = errors
+        logger.warning(
+            "Check %s: %d probe(s) failed at transport level — its "
+            "result is degraded coverage, not a clean pass",
+            check_name, errors,
+        )
+
+    def _log_check_failures(self, phase_label: str, phase: str) -> None:
+        failed = self._check_failures.get(phase) or []
+        if failed:
+            logger.warning(
+                "%s: %d check(s) crashed and produced no results: %s",
+                phase_label, len(failed), ", ".join(sorted(failed)),
+            )
+        degraded = self._check_degraded.get(phase) or {}
+        if degraded:
+            logger.warning(
+                "%s: %d check(s) hit transport errors (degraded "
+                "coverage): %s",
+                phase_label, len(degraded),
+                ", ".join(
+                    f"{name} ({count})"
+                    for name, count in sorted(degraded.items())
+                ),
+            )
 
     def _instantiate_check(self, cls):
         """Build a check, handing it the OOB hooks when live.
@@ -734,6 +834,7 @@ class WebScanner:
         discovery_ctx = self._merged_discovery_ctx(discovery, crawl_data)
 
         for cls in check_classes:
+            errors_before = getattr(self.client, "transport_errors", 0)
             try:
                 results = self._instantiate_check(cls).run(
                     self.client, self.base_url,
@@ -743,9 +844,11 @@ class WebScanner:
                     if not r.passed:
                         findings.append(self._to_finding(r, "authenticated"))
             except Exception as e:
-                logger.debug(
-                    "Auth check %s failed: %s", cls.__name__, self._redact(str(e)),
-                )
+                self._record_check_failure("auth_checks", cls.__name__, e)
+            self._record_check_degradation(
+                "auth_checks", cls.__name__, errors_before,
+            )
+        self._log_check_failures("Phase 5", "auth_checks")
         logger.info("Phase 5 complete: %d findings", len(findings))
         self._phases_completed.append("auth_checks")
         return findings
@@ -794,13 +897,20 @@ class WebScanner:
             logger.info("Phase 5b: skipped — no authenticated session to differ against")
             return []
 
+        # Phase-scoped clients: each carries its own requests.Session
+        # pool, so they must be closed when the differential finishes —
+        # the scanner's close() only covers self.client.
+        extra_clients: list[WebClient] = []
+        anonymous_client = self._make_principal_client()
+        extra_clients.append(anonymous_client)
         principals = [
             Principal("session_a", self.client, authenticated=True),
-            Principal("anonymous", self._make_principal_client(), authenticated=False),
+            Principal("anonymous", anonymous_client, authenticated=False),
         ]
         if self.second_auth_manager is not None:
             try:
                 second_client = self._make_principal_client()
+                extra_clients.append(second_client)
                 self.second_auth_manager.authenticate(second_client)
                 principals.append(
                     Principal("session_b", second_client, authenticated=True)
@@ -811,14 +921,18 @@ class WebScanner:
                     self._redact(str(e)),
                 )
 
-        merged = self._merged_discovery_ctx(discovery, crawl_data)
-        result = run_access_differential(
-            principals=principals,
-            urls=list(merged.get("urls") or []),
-            parameters=list(merged.get("parameters") or []),
-            policy=self.execution_policy,
-        )
-        save_json(self.out_dir / "access-control-differential.json", {
+        try:
+            merged = self._merged_discovery_ctx(discovery, crawl_data)
+            result = run_access_differential(
+                principals=principals,
+                urls=list(merged.get("urls") or []),
+                parameters=list(merged.get("parameters") or []),
+                policy=self.execution_policy,
+            )
+        finally:
+            for extra_client in extra_clients:
+                extra_client.close()
+        self._save_artifact(self.out_dir / "access-control-differential.json", {
             "targets_tested": result.targets_tested,
             "requests_used": result.requests_used,
             "findings": result.findings,
@@ -1010,13 +1124,28 @@ class WebScanner:
             attack_vector = (
                 "request_body" if str(method).upper() == "POST" else "query_param"
             )
-            for field_name, field_info in form.get("inputs", {}).items():
+            form_inputs = form.get("inputs", {})
+            # Sibling fields ride every baseline/attack request: without
+            # required fields and captured CSRF/hidden values, server-side
+            # validation rejects the request before the fuzzed value can
+            # reach a sink, making multi-field forms unfuzzable.
+            base_data: dict[str, str] = {}
+            for name, info in form_inputs.items():
+                info = info if isinstance(info, dict) else {}
+                value = str(info.get("value") or "")
+                if not value and info.get("type") not in (
+                    "hidden", "submit", "button",
+                ):
+                    value = self.fuzzer._baseline_value(name)
+                base_data[name] = value
+            for field_name, field_info in form_inputs.items():
                 if field_info.get("type") in ("hidden", "submit", "button"):
                     continue
                 for raw in self.fuzzer.fuzz_parameter(
                     endpoint, field_name,
                     param_type=field_info.get("type", "text"),
                     vulnerability_types=["sqli", "xss"], method=method,
+                    base_data=base_data,
                 ):
                     _record(endpoint, field_name, raw, attack_vector)
 
@@ -1201,12 +1330,20 @@ class WebScanner:
                     "API sweep %s: %d additional match(es) beyond the "
                     "report cap were dropped", op.url, omitted,
                 )
-            payloads = [
-                entry["input"]["FUZZ"]
-                for entry in result.get("results", [])
-                if isinstance(entry.get("input"), dict)
-                and entry["input"].get("FUZZ")
-            ]
+            # Replay the payload ffuf actually SENT, not the display-
+            # sanitized summary: redaction/newline-strip/truncation on
+            # the summary would make the three-gate re-verification
+            # replay a payload that never existed, silently discarding
+            # genuine hits.
+            payloads = []
+            for entry in result.get("results", []):
+                if not isinstance(entry.get("input"), dict):
+                    continue
+                raw_inputs = entry.get("input_raw")
+                raw_inputs = raw_inputs if isinstance(raw_inputs, dict) else {}
+                payload = raw_inputs.get("FUZZ") or entry["input"].get("FUZZ")
+                if payload:
+                    payloads.append(payload)
             if not payloads:
                 continue
             logger.info(
@@ -1849,13 +1986,17 @@ class WebScanner:
                 for hit in self._raw_injection_hits
                 if (hit.get("verification") or {}).get("status") == "refuted"
             ]
+            # SAGE rows persist across runs — this is a render/persist
+            # boundary, so live raw values go through redaction here.
             store_web_scan_observations(
                 self.base_url,
                 fingerprint=dict(
                     getattr(discovery, "fingerprint", None) or {},
                 ),
-                findings=[f.to_dict() for f in findings],
-                refuted_probes=refuted_probes,
+                findings=[
+                    self._artifact_view(f.to_dict()) for f in findings
+                ],
+                refuted_probes=self._artifact_view(refuted_probes),
                 wordlist_stats=self._wordlist_stats(),
             )
         except Exception:
@@ -2073,8 +2214,16 @@ class WebScanner:
                 continue
             if "verified" in statuses:
                 finding.confidence = "high"
+                finding.verification_status = "verified"
             elif statuses == {"refuted"}:
                 finding.confidence = "low"
+                # Every replay leg was refuted by control: the finding
+                # stays in the report, but the verdict rides with it so
+                # the verified-outcomes projection never mints it as
+                # oracle-verified.
+                finding.verification_status = "refuted"
+            elif statuses - {"skipped"}:
+                finding.verification_status = "inconclusive"
 
     # ------------------------------------------------------------------
     # Optional phases
@@ -2086,8 +2235,8 @@ class WebScanner:
         """Build a URL-native context map for the discovered attack surface."""
         logger.info("Phase 6a: Building web context map")
         context_map = self._build_web_context_map(crawl_data, discovery)
-        save_json(self.out_dir / "context-map.json", context_map)
-        save_json(self.out_dir / "web-context-map.json", context_map)
+        self._save_artifact(self.out_dir / "context-map.json", context_map)
+        self._save_artifact(self.out_dir / "web-context-map.json", context_map)
         self._phases_completed.append("understand")
         return context_map
 
@@ -2124,7 +2273,7 @@ class WebScanner:
                 self._web_finding_to_agentic_result(f) for f in needs_review
             ]
             findings_input = self.out_dir / "web_findings_for_validation.json"
-            save_json(findings_input, {"results": findings_for_validate})
+            self._save_artifact(findings_input, {"results": findings_for_validate})
 
             claude_bin = shutil.which("claude")
             if not claude_bin:
@@ -2164,7 +2313,7 @@ class WebScanner:
         self._external_validation_results = runner.run(
             findings, self.external_validators,
         )
-        save_json(self.out_dir / "external-validator-results.json", {
+        self._save_artifact(self.out_dir / "external-validator-results.json", {
             "results": self._external_validation_results,
             "note": "External validator no-match results are not refutations.",
         })
@@ -2463,13 +2612,13 @@ class WebScanner:
         except Exception:
             logger.debug("surface coverage write failed", exc_info=True)
         findings_dicts = [f.to_dict() for f in findings]
-        save_json(self.out_dir / "web_findings.json", {"findings": findings_dicts})
+        self._save_artifact(self.out_dir / "web_findings.json", {"findings": findings_dicts})
         # Core-schema findings.json: this is what /project findings, diff,
         # correlate, and the merged report read (dedup key: file, function,
         # line, vuln_type). WebFinding.to_dict already aliases file=url;
         # the function analog for web is the check id (posture findings)
         # or the primary affected parameter (injection findings).
-        save_json(self.out_dir / "findings.json", {"findings": [
+        self._save_artifact(self.out_dir / "findings.json", {"findings": [
             {
                 **d,
                 "function": (
@@ -2485,7 +2634,7 @@ class WebScanner:
             crawl_data=crawl_data,
             registered_check_ids=(check.check_id for check in registry.all()),
         )
-        save_json(self.out_dir / "research_landscape.json", research_landscape)
+        self._save_artifact(self.out_dir / "research_landscape.json", research_landscape)
 
         session_context = build_web_session_context(
             base_url=self.base_url,
@@ -2495,13 +2644,33 @@ class WebScanner:
             session=self.session,
             findings=findings,
         )
-        save_json(self.out_dir / "web-session-context.json", session_context)
+        self._save_artifact(self.out_dir / "web-session-context.json", session_context)
 
         verified_outcomes = verified_outcomes_for_findings(findings)
+        outcome_dicts = [
+            self._artifact_view(outcome.to_dict())
+            for outcome in verified_outcomes
+        ]
         save_json(self.out_dir / "verified-outcomes.json", {
-            "count": len(verified_outcomes),
-            "outcomes": [outcome.to_dict() for outcome in verified_outcomes],
+            "count": len(outcome_dicts),
+            "outcomes": outcome_dicts,
         })
+        # The shared cross-run reader (libexec/raptor-verified-outcomes
+        # via core.labeled_attempts.view.collect_outcomes) consumes ONE
+        # VerifiedOutcome.to_dict() JSON object PER LINE from the
+        # run-local verified-outcomes.jsonl sidecar — the single-object
+        # .json above is the human/report artifact only. Without the
+        # .jsonl, this run's oracle-proven confirmations are invisible
+        # to the unified confirmed view.
+        jsonl_path = self.out_dir / "verified-outcomes.jsonl"
+        for outcome_dict in outcome_dicts:
+            try:
+                append_jsonl(jsonl_path, outcome_dict)
+            except OSError:
+                logger.warning(
+                    "could not append verified outcome to %s", jsonl_path,
+                )
+                break
         # Confirmed oracle-proven findings also enter the labeled-attempts
         # pool when the replay pass did not already write attempt records
         # for the run (verify_findings off).
@@ -2525,7 +2694,7 @@ class WebScanner:
         selected_adapters.extend(self.external_validators)
         adapter_report = web_tool_adapter_report(selected_adapters)
         save_json(self.out_dir / "web-tool-adapters.json", {"adapters": adapter_report})
-        save_json(self.out_dir / "external-tool-results.json", {
+        self._save_artifact(self.out_dir / "external-tool-results.json", {
             "discovery": self._external_tool_results,
             "validators": self._external_validation_results,
         })
@@ -2536,7 +2705,7 @@ class WebScanner:
             external_validation=self._external_validation_results,
             execution_policy=execution_policy,
         )
-        save_json(self.out_dir / "web-evidence-ledger.json", evidence_ledger)
+        self._save_artifact(self.out_dir / "web-evidence-ledger.json", evidence_ledger)
 
         context_guard = build_web_context_guard_report(
             target=self.base_url,
@@ -2594,6 +2763,14 @@ class WebScanner:
             "discovery": discovery_summary,
             "crawl": crawl_data.get("stats", {}),
             "findings_by_severity": by_sev,
+            "check_failures": {
+                phase: sorted(names)
+                for phase, names in sorted(self._check_failures.items())
+            },
+            "checks_degraded": {
+                phase: dict(sorted(counts.items()))
+                for phase, counts in sorted(self._check_degraded.items())
+            },
             "phases_completed": self._phases_completed,
             "research_landscape": {
                 "source_archive": research_landscape["source_archive"],
@@ -2653,7 +2830,7 @@ class WebScanner:
             if tool_result.get("tool") == "ffuf":
                 result["ffuf"] = tool_result
                 break
-        save_json(self.out_dir / "web_scan_report.json", result)
+        self._save_artifact(self.out_dir / "web_scan_report.json", result)
         logger.info(
             "Scan complete. %d findings. Report: %s", len(findings), self.out_dir,
         )
@@ -2710,6 +2887,17 @@ class WebScanner:
     def _redact(self, value: str) -> str:
         from core.security.redaction import redact_secrets
         return redact_secrets(value, reveal_secrets=self.reveal_secrets)
+
+    def _artifact_view(self, obj: Any) -> Any:
+        """The redacted (unless reveal_secrets) projection of *obj*."""
+        if self.reveal_secrets:
+            return obj
+        return _redact_json_artifact(obj)
+
+    def _save_artifact(self, path: Path, obj: Any) -> None:
+        """Persist a live-data-derived artifact through the redaction
+        boundary. The in-memory object stays RAW for the data plane."""
+        save_json(path, self._artifact_view(obj))
 
     def close(self) -> None:
         """Release the HTTP client and any live OOB listener."""

@@ -278,3 +278,77 @@ class TestEvidenceBlocks:
         ):
             blocks = evidence_blocks_for_finding(f)
         assert blocks == ()
+
+
+class TestFlagsMemoisation:
+    """``extract_flags`` re-reads + re-parses compile_commands.json in
+    full on every call; the per-finding lookup must pay that once per
+    (repo, tree-state), not once per memory-corruption finding."""
+
+    def _prepare(self, tmp_path):
+        result = _result_with_evidence()
+        with patch(
+            "packages.llm_analysis.source_intel_inject._analyze",
+            return_value=result,
+        ):
+            prepare_source_intel(tmp_path)
+
+    def test_extract_flags_called_once_across_findings(self, tmp_path):
+        self._prepare(tmp_path)
+        calls = []
+
+        def _spy(path):
+            calls.append(path)
+            return None
+
+        f = _finding(repo_path=str(tmp_path), function="panic")
+        with patch(
+            "packages.llm_analysis.source_intel_inject._extract_flags",
+            side_effect=_spy,
+        ):
+            b1 = evidence_blocks_for_finding(f)
+            b2 = evidence_blocks_for_finding(dict(f))
+        assert len(b1) == 1 and len(b2) == 1
+        assert len(calls) == 1
+
+    def test_flags_memo_invalidated_on_signature_change(self, tmp_path):
+        # Two-direction: a tree-state change re-extracts rather than
+        # serving stale flags.
+        from packages.llm_analysis.source_intel_inject import _flags_for_repo
+        calls = []
+
+        def _spy(path):
+            calls.append(path)
+            return None
+
+        with patch(
+            "packages.llm_analysis.source_intel_inject._extract_flags",
+            side_effect=_spy,
+        ):
+            _flags_for_repo(str(tmp_path), "sig-A")   # extract
+            _flags_for_repo(str(tmp_path), "sig-A")   # memo hit
+            _flags_for_repo(str(tmp_path), "sig-B")   # tree changed → extract
+        assert len(calls) == 2
+
+    def test_clear_cache_drops_flags_memo(self, tmp_path):
+        self._prepare(tmp_path)
+        calls = []
+
+        def _spy(path):
+            calls.append(path)
+            return None
+
+        f = _finding(repo_path=str(tmp_path), function="panic")
+        with patch(
+            "packages.llm_analysis.source_intel_inject._extract_flags",
+            side_effect=_spy,
+        ):
+            evidence_blocks_for_finding(f)
+        clear_cache_for_tests()
+        self._prepare(tmp_path)
+        with patch(
+            "packages.llm_analysis.source_intel_inject._extract_flags",
+            side_effect=_spy,
+        ):
+            evidence_blocks_for_finding(f)
+        assert len(calls) == 2

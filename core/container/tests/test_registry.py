@@ -297,3 +297,41 @@ def test_probe_allowlist_operator_extension(monkeypatch) -> None:
         _result, klass, _stderr = rg.probe_manifest_once(
             "registry.example/x:1", timeout_seconds=5)
         assert klass == "denied"
+
+
+def test_pin_digest_ref_port_bearing_tagless_ref() -> None:
+    # Only a colon AFTER the last slash separates a tag — a bare
+    # rsplit pinned the wrong repository for port-bearing tagless refs.
+    assert rg.pin_digest_ref("registry.example.com:5000/repo",
+                             "sha256:x") == \
+        "registry.example.com:5000/repo@sha256:x"
+    assert rg.pin_digest_ref("registry.example.com:5000/repo:1.0",
+                             "sha256:x") == \
+        "registry.example.com:5000/repo@sha256:x"
+
+
+def test_parse_inspect_payload_null_descriptor_is_data_not_crash() -> None:
+    # {"Descriptor": null} — present-but-null must not raise from the
+    # never-raises probe path; the entry is simply unusable.
+    platforms, digests = rg.parse_inspect_payload(
+        [{"Descriptor": None},
+         {"Descriptor": "not-a-dict"},
+         {"Descriptor": {"platform": {"os": "linux",
+                                      "architecture": "amd64"},
+                         "digest": "sha256:aaa"}}],
+    )
+    assert platforms == ["linux/amd64"]
+    assert digests == {"linux/amd64": "sha256:aaa"}
+
+
+def test_classify_inspect_pull_access_denied_is_not_found() -> None:
+    # Direction parity with failures.py's classifier — pre-fix this
+    # shape fell through to the retry-eligible transport default.
+    out = rg.classify_inspect_failure(
+        "pull access denied for acme/gone, repository does not exist "
+        "or may require 'docker login'",
+    )
+    assert out == "not_found"
+    # Genuine transport shapes stay retry-eligible.
+    assert rg.classify_inspect_failure("i/o timeout talking to hub") == \
+        "transport"

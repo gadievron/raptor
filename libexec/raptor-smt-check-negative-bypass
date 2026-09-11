@@ -27,7 +27,6 @@ Output: JSON to stdout matching validate_path's shape.
   feasible=null   Z3 unavailable / unencodable
 """
 import argparse
-import json
 import sys
 from pathlib import Path
 

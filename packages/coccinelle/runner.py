@@ -251,6 +251,7 @@ def run_rule(
     defines: dict[str, str] | None = None,
     subprocess_runner=None,
     allow_scripting: bool = False,
+    tree_files: set[str] | None = None,
 ) -> SpatchResult:
     """Run a single Coccinelle rule against a target.
 
@@ -277,6 +278,10 @@ def run_rule(
             rules (engine/coccinelle shipped rules, cocci_flow templates).
             RAPTOR's own injected reporting harness is added after this
             gate and is exempt by construction.
+        tree_files: Pre-enumerated C/H file walk of a directory target
+            (see ``_collect_files_examined``). Multi-rule callers pass
+            the same set for every rule so the loop-invariant tree walk
+            happens once per run instead of once per rule.
 
     Returns:
         SpatchResult with matches parsed from COCCIRESULT lines.
@@ -486,7 +491,9 @@ def run_rule(
             )
             errors = _parse_errors(proc.stderr)
 
-            files_examined = _collect_files_examined(target, {m.file for m in matches})
+            files_examined = _collect_files_examined(
+                target, {m.file for m in matches}, tree_files=tree_files,
+            )
 
             return SpatchResult(
                 rule=rule_name,
@@ -558,6 +565,12 @@ def run_rules(
             )
         ]
 
+    # The C/H tree walk is loop-invariant (the target doesn't change
+    # between rules) — enumerate once here instead of once per rule:
+    # N rules previously meant 2N full recursive globs of the target.
+    target = Path(target)
+    tree_files = _walk_c_h(target) if target.is_dir() else None
+
     results = []
     for idx, rule_path in enumerate(rule_paths):
         if on_rule is not None:
@@ -576,6 +589,7 @@ def run_rules(
             defines=defines,
             subprocess_runner=subprocess_runner,
             allow_scripting=allow_scripting,
+            tree_files=tree_files,
         )
         results.append(result)
 
@@ -777,11 +791,21 @@ def run_rules_batched(
 
             by_rule = _demux_batch_matches(all_matches, rule_stems, alias_of)
 
+            # Match run_rule's result contract: files_examined is
+            # populated (one shared tree walk for the whole batch —
+            # coverage consumers previously read zero files from the
+            # batch path), and every SpatchResult gets its OWN errors
+            # list — passing one shared list object meant a consumer
+            # mutating one result's errors silently edited all of them.
+            batch_examined = _collect_files_examined(
+                target, {m.file for m in all_matches},
+            )
             out = {
                 s: SpatchResult(
                     rule=s, rule_path=str(r),
                     matches=by_rule.get(s, []),
-                    errors=errors,
+                    files_examined=list(batch_examined),
+                    errors=list(errors),
                     elapsed_ms=elapsed,
                     returncode=proc.returncode,
                     forged_markers=forged,
@@ -864,7 +888,25 @@ def _dedup_matches(matches: list[SpatchMatch]) -> list[SpatchMatch]:
     return result
 
 
-def _collect_files_examined(target: Path, match_files: set) -> list[str]:
+def _walk_c_h(target: Path) -> set[str]:
+    """One recursive enumeration of the target's C/C++ source surface.
+
+    Both .c and .h — spatch examines preprocessed translation units
+    which include headers via #include expansion. Operators tracking
+    "did the rule examine this header?" need .h in the list.
+    """
+    return (
+        {str(f) for f in target.rglob("*.c")}
+        | {str(f) for f in target.rglob("*.h")}
+    )
+
+
+def _collect_files_examined(
+    target: Path,
+    match_files: set,
+    *,
+    tree_files: set[str] | None = None,
+) -> list[str]:
     """Build files_examined from the target path plus any match files.
 
     spatch has no machine-readable log of which files it processed, so we
@@ -874,19 +916,17 @@ def _collect_files_examined(target: Path, match_files: set) -> list[str]:
     counted by ~50% on typical C projects, and any rule that
     matched in a header silently failed to surface in
     files_examined even though it WAS examined).
+
+    ``tree_files``: pre-enumerated directory walk to reuse. The walk is
+    loop-invariant across the rules of one run, so multi-rule callers
+    (run_rules) enumerate once and pass it in — per-rule re-walks cost
+    minutes of stat traffic on kernel-scale targets.
     """
     if target.is_file():
         examined = {str(target)} | match_files
     elif target.is_dir():
-        # Both .c and .h — spatch examines preprocessed
-        # translation units which include headers via #include
-        # expansion. Operators tracking "did the rule examine
-        # this header?" need .h in the list.
-        examined = (
-            {str(f) for f in target.rglob("*.c")}
-            | {str(f) for f in target.rglob("*.h")}
-            | match_files
-        )
+        walked = tree_files if tree_files is not None else _walk_c_h(target)
+        examined = walked | match_files
     else:
         examined = set(match_files)
     return sorted(examined)

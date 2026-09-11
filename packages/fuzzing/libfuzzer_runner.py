@@ -26,6 +26,7 @@ from pathlib import Path
 from core.config import RaptorConfig
 from core.logging import get_logger
 from core.sandbox import run as _sandbox_run
+from packages.fuzzing.output_hygiene import strip_terminal_controls
 
 logger = get_logger()
 
@@ -42,6 +43,7 @@ class LibFuzzerStats:
     crashes: int = 0
     timeouts: int = 0
     oom_events: int = 0
+    leaks: int = 0
     elapsed_seconds: float = 0.0
 
 
@@ -53,12 +55,20 @@ class LibFuzzerResult:
     crashes: list[Path] = field(default_factory=list)
     timeouts: list[Path] = field(default_factory=list)
     oom_inputs: list[Path] = field(default_factory=list)
+    leak_inputs: list[Path] = field(default_factory=list)
     stats: LibFuzzerStats = field(default_factory=LibFuzzerStats)
     output_dir: Path | None = None
     corpus_dir: Path | None = None
+    returncode: int | None = None
+    # True when the harness died without producing any finding — a
+    # startup failure (missing shared lib, wrong binary) must not
+    # surface as a clean zero-findings campaign. Mirrors the AFL
+    # runner's campaign_failed verdict.
+    campaign_failed: bool = False
 
     def total_findings(self) -> int:
-        return len(self.crashes) + len(self.timeouts) + len(self.oom_inputs)
+        return (len(self.crashes) + len(self.timeouts)
+                + len(self.oom_inputs) + len(self.leak_inputs))
 
 
 class LibFuzzerRunner:
@@ -134,14 +144,43 @@ class LibFuzzerRunner:
 
     @staticmethod
     def _seed_working_corpus(source: Path, destination: Path) -> None:
-        """Copy caller-provided seeds into the sandbox-writable corpus dir."""
-        for item in source.rglob("*"):
-            if not item.is_file():
+        """Copy caller-provided seeds into the sandbox-writable corpus dir.
+
+        Symlinks are rejected at every level, same as the AFL corpus
+        stager: a hostile in-repo corpus can plant file symlinks
+        (``seed -> ~/.ssh/id_rsa`` would copy host secrets into the run
+        dir as fuzz inputs handed to the untrusted harness — and into
+        persisted run artifacts) or directory-symlink loops that wedge
+        the traversal. Only regular files reached through regular
+        directories are copied.
+        """
+        skipped = 0
+        pending: list[Path] = [source]
+        while pending:
+            current = pending.pop()
+            try:
+                entries = sorted(current.iterdir())
+            except OSError:
+                skipped += 1
                 continue
-            relative = item.relative_to(source)
-            target = destination / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(item, target)
+            for item in entries:
+                if item.is_symlink():
+                    skipped += 1
+                    continue
+                if item.is_dir():
+                    pending.append(item)
+                    continue
+                if not item.is_file():
+                    skipped += 1
+                    continue
+                relative = item.relative_to(source)
+                target = destination / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(item, target)
+        if skipped:
+            logger.warning(
+                "corpus seeding: skipped %d non-regular entries "
+                "(symlinks / special files / unreadable dirs)", skipped)
 
     def run(self, telemetry=None) -> LibFuzzerResult:
         """Run the campaign and return the result.
@@ -163,47 +202,85 @@ class LibFuzzerRunner:
         env.setdefault("UBSAN_OPTIONS", "abort_on_error=1:symbolize=1:print_stacktrace=1")
 
         start = time.time()
+        # The harness's streams go straight to disk (same shape as the
+        # AFL sibling's per-instance logs): capture_output would buffer
+        # an untrusted, possibly hostile harness's output unbounded in
+        # THIS process's memory. Parsing reads back a bounded tail —
+        # final stats and artifact lines are emitted at the end of the
+        # stream, so the tail is the informative part.
+        stdout_path = self.output_dir / "stdout.log"
+        stderr_path = self.output_dir / "stderr.log"
+        wedge_timeout = False
         try:
-            completed = _sandbox_run(
-                cmd,
-                block_network=True,
-                target=str(self.harness.parent),
-                output=str(self.output_dir),
-                restrict_reads=True,
-                readable_paths=self._readable_paths(),
-                capture_output=True,
-                text=True,
-                timeout=self.max_total_time + max(30, self.timeout_seconds + 5),
-                cwd=str(self.output_dir),
-                env=env,
-            )
+            with open(stdout_path, "wb") as stdout_fp, \
+                    open(stderr_path, "wb") as stderr_fp:
+                completed = _sandbox_run(
+                    cmd,
+                    block_network=True,
+                    target=str(self.harness.parent),
+                    output=str(self.output_dir),
+                    restrict_reads=True,
+                    readable_paths=self._readable_paths(),
+                    stdout=stdout_fp,
+                    stderr=stderr_fp,
+                    timeout=self.max_total_time + max(30, self.timeout_seconds + 5),
+                    cwd=str(self.output_dir),
+                    env=env,
+                )
             returncode = completed.returncode
-            stdout = completed.stdout or ""
-            stderr = completed.stderr or ""
-        except subprocess.TimeoutExpired as e:
+        except subprocess.TimeoutExpired:
             logger.warning("libFuzzer exceeded campaign timeout; parsing partial output")
             returncode = -1
-            stdout = self._coerce_output(e.stdout)
-            stderr = self._coerce_output(e.stderr)
+            wedge_timeout = True
         except KeyboardInterrupt:
             logger.warning("Campaign interrupted by user")
             raise
 
         elapsed = time.time() - start
+        stdout = self._read_log_tail(stdout_path)
+        stderr = self._read_log_tail(stderr_path)
 
         if telemetry is not None:
             for line in stderr.splitlines():
                 self._parse_progress_line(line, telemetry)
 
-        # Persist raw output for debugging
-        (self.output_dir / "stderr.log").write_text(stderr, encoding="utf-8")
-        (self.output_dir / "stdout.log").write_text(stdout, encoding="utf-8")
-
         result = self._parse_result(stderr, stdout, elapsed)
+        result.returncode = returncode
+        # Failure verdict: a dirty exit with zero findings means the
+        # harness never really ran (startup death, missing lib). A
+        # dirty exit WITH findings is normal — libFuzzer exits non-zero
+        # on the crash it found. The sandbox wedge timeout is excluded:
+        # the campaign ran its full duration, zero findings there is a
+        # legitimate outcome.
+        result.campaign_failed = (
+            not wedge_timeout
+            and returncode != 0
+            and result.total_findings() == 0
+        )
+        if result.campaign_failed:
+            logger.error(
+                "libFuzzer campaign FAILED (rc=%s, no findings) — see %s",
+                returncode, stderr_path,
+            )
         logger.info(
             "libFuzzer done (rc=%s): %s execs, %s/s, cov=%s features, crashes=%s", returncode, result.stats.total_executions, result.stats.executions_per_second, result.stats.coverage_features, len(result.crashes)
         )
         return result
+
+    # Bound on how much harness output is read back for parsing —
+    # mirrors the coverage bridge's capture cap.
+    _MAX_PARSE_BYTES = 4 * 1024 * 1024
+
+    @classmethod
+    def _read_log_tail(cls, path: Path) -> str:
+        try:
+            size = path.stat().st_size
+            with open(path, "rb") as fh:
+                if size > cls._MAX_PARSE_BYTES:
+                    fh.seek(size - cls._MAX_PARSE_BYTES)
+                return fh.read(cls._MAX_PARSE_BYTES).decode(errors="replace")
+        except OSError:
+            return ""
 
     def _readable_paths(self) -> list[str]:
         paths = [str(self.harness.parent), str(self.corpus_dir), str(self.output_dir)]
@@ -212,14 +289,6 @@ class LibFuzzerRunner:
         if self.dict_path:
             paths.append(str(self.dict_path.parent))
         return paths
-
-    @staticmethod
-    def _coerce_output(value) -> str:
-        if value is None:
-            return ""
-        if isinstance(value, bytes):
-            return value.decode(errors="replace")
-        return str(value)
 
     def _parse_progress_line(self, line: str, telemetry) -> None:
         """Parse a single libFuzzer stderr line and forward to telemetry."""
@@ -244,19 +313,25 @@ class LibFuzzerRunner:
             except (ValueError, TypeError):
                 pass
 
-        # Crash markers
+        # Crash markers. Lines come from the untrusted harness's
+        # stderr and get relayed to the operator's terminal — strip
+        # escape-injection vectors first.
         if "ERROR:" in line and ("Sanitizer" in line or "ERROR: libFuzzer" in line):
-            telemetry.record_error(line[:200])
+            telemetry.record_error(strip_terminal_controls(line)[:200])
         if "Test unit written to" in line:
             # Format: "Test unit written to ./crash-deadbeef..."
             parts = line.split("Test unit written to", 1)
             if len(parts) == 2:
-                path = parts[1].strip()
+                path = strip_terminal_controls(parts[1].strip())
                 basename = path.rsplit("/", 1)[-1].lower()
                 if "timeout" in basename:
                     telemetry.record_timeout(path)
                 elif "oom" in basename:
                     telemetry.record_oom(path)
+                elif "leak" in basename:
+                    # LSAN leak artifact (detect_leaks=1) — ends the
+                    # campaign like a crash does.
+                    telemetry.record_crash(path, signal="lsan-leak")
                 elif "crash" in basename:
                     telemetry.record_crash(path, signal="libfuzzer")
 
@@ -301,11 +376,15 @@ class LibFuzzerRunner:
             result.stats.corpus_size = max(result.stats.corpus_size, int(corp))
             result.stats.executions_per_second = int(eps)
 
-        # Crash detection
+        # Crash detection. leak- artifacts are produced by LSAN
+        # (detect_leaks=1 is set on the campaign env) and end the
+        # campaign — dropping them reported a leak-terminated run as
+        # zero findings.
         for prefix, target_list in (
             ("crash-", result.crashes),
             ("timeout-", result.timeouts),
             ("oom-", result.oom_inputs),
+            ("leak-", result.leak_inputs),
         ):
             for path in self.crashes_dir.glob(f"{prefix}*"):
                 if path.is_file():
@@ -314,5 +393,6 @@ class LibFuzzerRunner:
         result.stats.crashes = len(result.crashes)
         result.stats.timeouts = len(result.timeouts)
         result.stats.oom_events = len(result.oom_inputs)
+        result.stats.leaks = len(result.leak_inputs)
 
         return result

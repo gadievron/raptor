@@ -78,6 +78,56 @@ class TestExtractConstantValue:
             "MAX_FRAME", "const MAX_FRAME: usize = 0x1000;",
         ) == "0x1000"
 
+    def test_underscore_grouped_literal_extracted_whole(self) -> None:
+        # A grammar that stopped at the first non-digit read '1' out
+        # of '1_000_000' — and trusted it as the mechanical answer.
+        assert extract_constant_value(
+            "MAX", "MAX = 1_000_000",
+        ) == "1_000_000"
+
+    def test_scientific_notation_extracted_whole(self) -> None:
+        assert extract_constant_value("E", "E = 1e6") == "1e6"
+        assert extract_constant_value("F", "F = 1.5e-3") == "1.5e-3"
+
+    def test_base_prefixed_literals_extracted_whole(self) -> None:
+        assert extract_constant_value(
+            "FLAGS", "#define FLAGS 0b1010",
+        ) == "0b1010"
+        assert extract_constant_value(
+            "MODE", "MODE = 0o755",
+        ) == "0o755"
+
+    def test_c_octal_extracted(self) -> None:
+        assert extract_constant_value(
+            "MODE", "#define MODE 0755",
+        ) == "0755"
+
+
+class TestNormaliseLiteral:
+    def test_underscores_canonicalised(self) -> None:
+        from core.concepts.spot_check import _normalise_literal
+        assert _normalise_literal("1_000_000") == "1000000"
+
+    def test_c_octal_is_octal_not_decimal(self) -> None:
+        # '0755' asserted as decimal 755 is the classic mis-read: the
+        # C literal means 493.
+        from core.concepts.spot_check import _normalise_literal
+        assert _normalise_literal("0755") == "493"
+        assert _normalise_literal("0o755") == "493"
+
+    def test_base_prefixes(self) -> None:
+        from core.concepts.spot_check import _normalise_literal
+        assert _normalise_literal("0b1010") == "10"
+        assert _normalise_literal("0x100") == "256"
+
+    def test_integral_exponent_matches_plain_int(self) -> None:
+        from core.concepts.spot_check import _normalise_literal
+        assert _normalise_literal("1e6") == _normalise_literal("1000000")
+
+    def test_fractional_float_kept(self) -> None:
+        from core.concepts.spot_check import _normalise_literal
+        assert _normalise_literal("1.5") == repr(1.5)
+
 
 class TestSpotCheckQuestion:
     def test_value_question_matches(self) -> None:
@@ -114,6 +164,49 @@ class TestSpotCheckQuestion:
 
     def test_unknown_identifier_returns_none(self) -> None:
         assert spot_check_question("Is GHOST_LIMIT 5?", _ITEMS) is None
+
+    def test_prose_word_does_not_match_corpus_global(self) -> None:
+        # 'version' here is prose, not an identifier — a corpus global
+        # of the same name must not yield a trusted mechanical answer
+        # about the wrong thing.
+        items = [{
+            "name": "version", "kind": "macro", "file": "pkg.py",
+            "line": 1, "definition": 'version = "1.2"',
+        }]
+        assert spot_check_question(
+            "What version constraint governs replay?", items,
+        ) is None
+
+    def test_identifier_cased_token_still_resolves(self) -> None:
+        # Identifier conventions (underscore / caps) bypass the prose
+        # filter — genuine open questions keep resolving.
+        r = spot_check_question(
+            "What limit does MAX_FRAME impose?", _ITEMS,
+        )
+        assert r is not None
+        assert r.identifier == "MAX_FRAME"
+        assert r.value == "4096"
+
+    def test_underscore_literal_question_matches(self) -> None:
+        items = [{
+            "name": "MAX_EVENTS", "kind": "macro", "file": "cfg.py",
+            "line": 1, "definition": "MAX_EVENTS = 1_000_000",
+        }]
+        r = spot_check_question("Is MAX_EVENTS 1000000?", items)
+        assert r is not None
+        assert r.matches is True
+
+    def test_c_octal_question_compared_as_octal(self) -> None:
+        items = [{
+            "name": "DIR_MODE", "kind": "macro", "file": "m.h",
+            "line": 1, "definition": "#define DIR_MODE 0755",
+        }]
+        r = spot_check_question("Is DIR_MODE 755?", items)
+        assert r is not None
+        assert r.matches is False
+        r = spot_check_question("Is DIR_MODE 493?", items)
+        assert r is not None
+        assert r.matches is True
 
 
 # ------------------------------------------------------------------
@@ -305,6 +398,63 @@ class TestAgreementGate:
             "Does `parse_config` validate its input?",
             _snippets(), _first_receipt(), client, root,
             tier=TIER_MECHANICAL, contradicts_llm=True,
+        )
+        assert out["agreed"]
+
+    def test_refuting_second_answer_same_quote_disagrees(
+        self, tmp_path: Path,
+    ) -> None:
+        """Quote overlap alone is not agreement: a second resolution
+        that REFUTES the first answer while citing the same code must
+        be treated as a disagreement."""
+        root = _tree(tmp_path)
+        client = _client({
+            "answerable": True,
+            "answer": "no, it does not validate its input",
+            "file": "m.py", "line": 2,
+            "quote": "return validate_schema(open(path).read())",
+        })
+        out = verify_flip_answer(
+            "Does `parse_config` validate its input?",
+            _snippets(), _first_receipt(), client, root,
+            tier=TIER_VERBATIM,
+            first_answer="yes, it validates via validate_schema",
+        )
+        assert not out["agreed"]
+        assert "opposite stance" in out["reason"]
+
+    def test_same_stance_second_answer_still_agrees(
+        self, tmp_path: Path,
+    ) -> None:
+        root = _tree(tmp_path)
+        client = _client({
+            "answerable": True,
+            "answer": "yes, it delegates to validate_schema",
+            "file": "m.py", "line": 2,
+            "quote": "return validate_schema(open(path).read())",
+        })
+        out = verify_flip_answer(
+            "Does `parse_config` validate its input?",
+            _snippets(), _first_receipt(), client, root,
+            tier=TIER_VERBATIM,
+            first_answer="yes, it validates via validate_schema",
+        )
+        assert out["agreed"]
+
+    def test_both_negative_answers_agree(self, tmp_path: Path) -> None:
+        # Symmetric negation is the SAME stance, not a conflict.
+        root = _tree(tmp_path)
+        client = _client({
+            "answerable": True,
+            "answer": "no, there is no validation here",
+            "file": "m.py", "line": 2,
+            "quote": "return validate_schema(open(path).read())",
+        })
+        out = verify_flip_answer(
+            "Does `parse_config` sanitise its input?",
+            _snippets(), _first_receipt(), client, root,
+            tier=TIER_VERBATIM,
+            first_answer="it does not sanitise the input",
         )
         assert out["agreed"]
 

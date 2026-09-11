@@ -107,8 +107,9 @@ def _extract_and_strip_max_cost_usd(args: list) -> tuple[float | None, list]:
     from ``args``. Returns ``(cap_usd, args_without_flag)``.
 
     Stripped so the dispatcher can use the value for the pre-flight
-    gate, then re-injected into downstream args for runtime
-    enforcement via ``LLMConfig.max_cost_per_scan``.
+    gate, then re-injected as argv — but only for the modes whose
+    child script defines the flag (see ``_forward_max_cost_args``)
+    — for runtime enforcement via ``LLMConfig.max_cost_per_scan``.
     """
     flag = "--max-cost-usd"
     prefix = f"{flag}="
@@ -215,12 +216,53 @@ def _extract_and_strip_project(args: list) -> tuple[str | None, list]:
     return (value, out)
 
 
+def _resolve_estimate_model(child_args: list | None) -> str:
+    """The model whose scorecard history prices the pre-flight estimate.
+
+    Precedence: the run's own ``--model`` selection (first occurrence
+    — the primary analysing model), then the install's configured
+    primary model (offline resolution — the gate must never do a
+    network probe), then the anthropic catalogue default. Estimating
+    with a fixed provider default priced non-anthropic installs with
+    the wrong model's cost history, skewing the --max-cost-usd abort
+    decision in both directions.
+    """
+    explicit: str | None = None
+    for i, a in enumerate(child_args or []):
+        if a == "--model" and i + 1 < len(child_args):
+            explicit = child_args[i + 1]
+            break
+        if a.startswith("--model="):
+            explicit = a.split("=", 1)[1]
+            break
+    if explicit:
+        try:
+            from core.llm.model_data import resolve_model_name
+            return resolve_model_name(explicit)
+        except Exception:  # noqa: BLE001
+            # Ambiguous shorthand etc. — estimate with the raw name;
+            # an unknown name simply yields no scorecard estimate.
+            return explicit
+    try:
+        from core.llm.config import _get_default_primary_model
+        mc = _get_default_primary_model(offline=True)
+        if mc is not None and mc.model_name:
+            return mc.model_name
+    except Exception:  # noqa: BLE001
+        # Primary resolution is best-effort here; fall through to the
+        # catalogue default rather than blocking the run.
+        pass
+    from core.llm.model_data import PROVIDER_DEFAULT_MODELS
+    return PROVIDER_DEFAULT_MODELS.get("anthropic", "")
+
+
 def _preflight_cost_gate(
     target: str | None,
     max_cost_usd: float,
     out_dir: Path,
     *,
     estimate_stream=None,
+    child_args: list | None = None,
 ) -> bool:
     """Pre-flight cost gate: refuse to start when the scorecard-
     derived estimate exceeds the operator's declared budget.
@@ -236,9 +278,12 @@ def _preflight_cost_gate(
     (default stdout). libexec/raptor-run-lifecycle passes stderr so
     its stdout stays single-line ``OUTPUT_DIR=`` for parsers; the
     shared implementation keeps the two entry points from drifting.
+
+    ``child_args`` (the run's downstream argv, when the caller has
+    it) lets the gate honour an explicit ``--model`` selection — see
+    ``_resolve_estimate_model``.
     """
     try:
-        from core.llm.model_data import PROVIDER_DEFAULT_MODELS
         from core.run.estimator import estimate_from_scorecard, format_estimate
         from core.run.target_types import load
     except ImportError:
@@ -250,7 +295,7 @@ def _preflight_cost_gate(
     n_findings = entry.typical_findings_count if entry else 0
     if n_findings <= 0:
         return False
-    model = PROVIDER_DEFAULT_MODELS.get("anthropic", "")
+    model = _resolve_estimate_model(child_args)
     est = estimate_from_scorecard(model, n_findings)
     if est is None:
         return False
@@ -403,6 +448,36 @@ _REQUIRED_TARGET_FLAG = {"fuzz": "--binary", "web": "--url"}
 # fuzz utility modes that legitimately run without --binary.
 _FUZZ_STANDALONE_FLAGS = ("--export-seed-corpus", "--prepare-corpus")
 
+# Modes whose child script defines --max-cost-usd in its own argparse.
+# The wrapper strips the flag for the pre-flight gate and re-injects it
+# ONLY for these children: every other child uses a strict parse_args,
+# so an unconditional re-inject made it exit 2 on the unknown flag
+# AFTER the run dir was sealed and the OUTPUT_DIR sentinel printed —
+# the operator's budget cap guaranteed a failed run on those modes.
+_MAX_COST_FORWARD_COMMANDS = frozenset({"agentic"})
+
+
+def _forward_max_cost_args(command: str, args: list,
+                           max_cost_usd: float | None) -> list:
+    """Re-inject --max-cost-usd for runtime enforcement, but only when
+    the ``command``'s child parser actually defines the flag (see
+    ``_MAX_COST_FORWARD_COMMANDS``). For the other modes the cap has
+    already done its work in the pre-flight gate."""
+    if max_cost_usd is None or command not in _MAX_COST_FORWARD_COMMANDS:
+        return args
+    return args + ["--max-cost-usd", str(max_cost_usd)]
+
+
+def _is_fuzz_standalone(args: list) -> bool:
+    """True when a fuzz argv selects a standalone corpus utility
+    (--export-seed-corpus / --prepare-corpus), in either the space or
+    ``=`` form. These are utilities, not runs — see mode_fuzz."""
+    return any(
+        a in _FUZZ_STANDALONE_FLAGS
+        or a.startswith(tuple(f + "=" for f in _FUZZ_STANDALONE_FLAGS))
+        for a in args
+    )
+
 
 def _resolve_target_for_command(command: str, args: list,
                                 target: str | None):
@@ -428,10 +503,7 @@ def _resolve_target_for_command(command: str, args: list,
     required = _REQUIRED_TARGET_FLAG.get(command)
     if required is None:
         return None, args, None
-    if command == "fuzz" and any(
-            a in _FUZZ_STANDALONE_FLAGS
-            or a.startswith(tuple(f + "=" for f in _FUZZ_STANDALONE_FLAGS))
-            for a in args):
+    if command == "fuzz" and _is_fuzz_standalone(args):
         # --export-seed-corpus / --prepare-corpus run without a binary.
         return None, args, None
     return None, args, (
@@ -469,9 +541,10 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
 
     target = _extract_target(args)
 
-    # Operator-declared per-run budget cap (QoL #21). Stripped
-    # from args before forwarding — propagated via env var so
-    # downstream commands can pick it up for runtime enforcement.
+    # Operator-declared per-run budget cap (QoL #21). Stripped from
+    # args for the pre-flight gate below; re-injected as argv only
+    # for the modes whose child defines the flag (see
+    # _forward_max_cost_args).
     max_cost_usd, args = _extract_and_strip_max_cost_usd(args)
 
     # Operator-supplied --out is adopted by the lifecycle as the run
@@ -619,7 +692,8 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     # budget. When no scorecard data exists the gate does not fire
     # — the runtime cap still enforces during execution.
     if max_cost_usd is not None:  # noqa: SIM102
-        if _preflight_cost_gate(target, max_cost_usd, out_dir):
+        if _preflight_cost_gate(target, max_cost_usd, out_dir,
+                                child_args=args):
             return 1
 
     # Mirror libexec/raptor-run-lifecycle's sentinel so direct
@@ -633,11 +707,11 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
 
 
     # Re-inject --max-cost-usd for downstream runtime enforcement.
-    # The pre-flight gate consumed the value above; downstream
-    # scripts (raptor_agentic.py) read it into LLMConfig.max_cost_per_scan
-    # so CostTracker enforces the cap during LLM calls.
-    if max_cost_usd is not None:
-        args = args + ["--max-cost-usd", str(max_cost_usd)]
+    # The pre-flight gate consumed the value above; raptor_agentic.py
+    # reads it into LLMConfig.max_cost_per_scan so CostTracker
+    # enforces the cap during LLM calls. Modes whose child doesn't
+    # define the flag never receive it (see _forward_max_cost_args).
+    args = _forward_max_cost_args(command, args, max_cost_usd)
 
     # Inject --out so the downstream script uses the lifecycle directory.
     # An operator --out was stripped above and adopted as out_dir, so the
@@ -662,7 +736,7 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     # final summary — a confusing ordering artefact operators
     # actually noticed.
     print(f"\n[*] {label}\n", flush=True)
-    rc = _run_script(script_path, args)
+    rc = _run_script(script_path, args, out_dir=out_dir)
 
     # Write coverage records from tool outputs (before lifecycle complete)
     try:
@@ -727,13 +801,18 @@ _NO_TRUST_REPO_SEEN = False
 _active_dispatcher = None
 
 
-def _get_or_start_dispatcher():
+def _get_or_start_dispatcher(audit_path=None):
     """Lazy single dispatcher per ``raptor.py`` invocation.
 
     Credential-isolation: the spawned analysis script gets
     ``RAPTOR_LLM_SOCKET`` + a per-spawn token via ``spawn_worker``,
     and ``core/llm/providers.py`` routes its SDK calls through the
     dispatcher. API keys remain in env as fallback.
+
+    ``audit_path`` (a :class:`Path`, or ``None``) is where the
+    dispatcher's L5 audit JSONL lands; ``None`` keeps events
+    in-memory/logger-only. First construction wins — the singleton's
+    audit destination cannot move mid-invocation.
     """
     global _active_dispatcher
     if _active_dispatcher is not None:
@@ -784,6 +863,7 @@ def _get_or_start_dispatcher():
         _active_dispatcher = LLMDispatcher(
             run_id=f"raptor-{uuid.uuid4().hex[:8]}",
             creds=creds,
+            audit_path=audit_path,
         )
         atexit.register(_active_dispatcher.shutdown)
         return _active_dispatcher
@@ -844,13 +924,17 @@ def _cleanup_refused_run_dir(out_dir: Path) -> None:
         out_dir.rmdir()
 
 
-def _run_script(script_path: Path, args: list) -> int:
+def _run_script(script_path: Path, args: list, out_dir: Path | None = None) -> int:
     """
     Run a RAPTOR script with given arguments.
 
     Args:
         script_path: Path to the Python script to run
         args: Command-line arguments to pass to the script
+        out_dir: The run's output directory when the caller has one
+            (the lifecycle wrapper does) — the dispatcher's L5 audit
+            JSONL then lands inside it. ``None`` (direct, run-less
+            invocations) keeps audit events in-memory only.
 
     Returns:
         Exit code from the script
@@ -875,7 +959,11 @@ def _run_script(script_path: Path, args: list) -> int:
 
     try:
         from core.config import RaptorConfig
-        dispatcher = _get_or_start_dispatcher()
+        audit_path = None
+        if out_dir is not None:
+            from core.llm.dispatcher.lifecycle import audit_path_for_run_dir
+            audit_path = audit_path_for_run_dir(out_dir)
+        dispatcher = _get_or_start_dispatcher(audit_path=audit_path)
         if dispatcher is not None:
             from core.llm.dispatcher.spawn import spawn_worker
             # Worker credential posture. Default: provider keys still
@@ -1060,6 +1148,16 @@ def mode_fuzz(args: list) -> int:
     if not fuzzing_script.exists():
         print(f"✗ Fuzzing script not found: {fuzzing_script}", file=sys.stderr)
         return 1
+
+    # Standalone corpus utilities (--export-seed-corpus /
+    # --prepare-corpus) write to their own destination (the export
+    # dir, or --seed-out) and exit before --out is ever consumed.
+    # Running the full lifecycle for them sealed an empty 'completed'
+    # run directory per export with an OUTPUT_DIR sentinel pointing
+    # at nothing — phantom runs in /project status. They are
+    # utilities, not runs: spawn the script directly.
+    if _is_fuzz_standalone(args):
+        return _run_script(fuzzing_script, args)
 
     return _run_with_lifecycle("fuzz", fuzzing_script, args,
                               "Starting binary fuzzing workflow...")

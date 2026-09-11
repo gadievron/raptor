@@ -310,7 +310,7 @@ class TestPlaintextPayloadDefences:
         from core.audit.llm_summaries import build_summary_prompt
         user, _system = build_summary_prompt(
             "a.c", "copy_data", self._SRC,
-            model_id="anthropic.claude-mythos-5",
+            model_id="claude-opus-4-7",
         )
         assert "memcpy(dst, src, n)" in user       # in the clear
         assert "ˮ" not in user                      # no datamark sentinel
@@ -325,7 +325,7 @@ class TestPlaintextPayloadDefences:
             "analyse",
             (UntrustedBlock(content=self._SRC, kind="source-code",
                             origin="a.c:copy_data"),),
-            model_id="anthropic.claude-mythos-5",
+            model_id="claude-opus-4-7",
         )
         assert "memcpy(dst, src, n)" not in user   # encoded
 
@@ -396,6 +396,48 @@ class TestPlaintextPayloadDefences:
         }]
         with caplog.at_level("WARNING"):
             out = run_llm_summary_pass(candidates, tmp_path, config)
+        # Escape ladder: the flagged source gets ONE hardened
+        # (datamarked) attempt instead of a flat skip; the mock's
+        # unparseable response then degrades to mechanical fallback.
         assert out == {}
-        client.generate.assert_not_called()
+        client.generate.assert_called_once()
+        prompt = client.generate.call_args.args[0]
+        assert "ˮ" in prompt  # datamarked, not plaintext
         assert any("injection indicators" in r.message for r in caplog.records)
+        assert any("hardened" in r.message for r in caplog.records)
+
+
+class TestHardenedSummaryRendering:
+    """Preflight-flagged sources climb the escape ladder (datamarked
+    rendering) instead of losing their LLM summary to a flat skip."""
+
+    def test_hardened_prompt_is_datamarked_never_base64(self):
+        from core.audit.llm_summaries import build_summary_prompt
+        src = "def f(x):\n    return run(x)\n"
+        user, _ = build_summary_prompt(
+            "a.py", "f", src, model_id="claude-opus-4-7", hardened=True,
+        )
+        assert "ˮ" in user          # datamark sentinels present
+        assert "IMuu" not in user   # no base64 run
+
+    def test_hardened_datamarks_even_on_conservative_profile(self):
+        # Empty/unknown model id resolves the CONSERVATIVE profile
+        # (datamarking OFF by default) — the ladder's admission
+        # argument is the sentinel interleaving, so hardened must
+        # force it on rather than inherit plaintext.
+        from core.audit.llm_summaries import build_summary_prompt
+        src = "def f(x):\n    return run(x)\n"
+        user, _ = build_summary_prompt(
+            "a.py", "f", src, model_id="", hardened=True,
+        )
+        assert "ˮ" in user
+        assert "IMuu" not in user
+
+    def test_default_prompt_stays_plaintext(self):
+        from core.audit.llm_summaries import build_summary_prompt
+        src = "def f(x):\n    return run(x)\n"
+        user, _ = build_summary_prompt(
+            "a.py", "f", src, model_id="claude-opus-4-7",
+        )
+        assert "ˮ" not in user
+        assert "def f(x):" in user

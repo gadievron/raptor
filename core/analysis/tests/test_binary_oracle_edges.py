@@ -522,3 +522,127 @@ def test_load_cached_edge_index_is_cache_only(tmp_path, monkeypatch) -> None:
     assert loaded is not None
     assert [(e.caller, e.callee) for e in loaded.edges] == [("main", "foo")]
     assert loaded.callees == {"foo"}
+
+
+def test_split_at_vtable_sentinel_separates_parts():
+    from core.analysis.binary_oracle_edges import (
+        _VTABLE_SENTINEL,
+        _split_at_vtable_sentinel,
+    )
+    out = (
+        "BATCH 4096\n"
+        '[{"type":"CALL","ref":8192}]\n'
+        f"{_VTABLE_SENTINEL}\n"
+        "Vtable Found at 0x1000\n"
+        "0x1000 : sym.Widget::draw\n"
+    )
+    axffj_part, vtable_part = _split_at_vtable_sentinel(out)
+    assert "BATCH 4096" in axffj_part
+    assert _VTABLE_SENTINEL not in axffj_part
+    assert "Vtable Found" not in axffj_part
+    assert "Vtable Found at 0x1000" in vtable_part
+    assert "BATCH" not in vtable_part
+
+
+def test_split_without_sentinel_degrades_to_empty_vtable_part():
+    # r2 killed before reaching the av step: everything is axffj, the
+    # vtable pass degrades to a no-op instead of corrupting batches.
+    from core.analysis.binary_oracle_edges import _split_at_vtable_sentinel
+    axffj_part, vtable_part = _split_at_vtable_sentinel("BATCH 1\n[]\n")
+    assert "BATCH 1" in axffj_part
+    assert vtable_part == ""
+
+
+def test_split_sentinel_survives_ansi_wrapping():
+    from core.analysis.binary_oracle_edges import (
+        _VTABLE_SENTINEL,
+        _split_at_vtable_sentinel,
+    )
+    out = f"BATCH 1\n\x1b[33m{_VTABLE_SENTINEL}\x1b[0m\nVtable Found at 0x2\n"
+    axffj_part, vtable_part = _split_at_vtable_sentinel(out)
+    assert "Vtable Found" in vtable_part
+    assert "Vtable Found" not in axffj_part
+
+
+def test_parse_vtable_output_emits_slot_edges():
+    from core.analysis.binary_oracle_edges import _parse_vtable_output
+    out = (
+        "Vtable Found at 0x4Ea0\n"
+        "0x4ea8 : sym.Widget::draw\n"
+        "0x4eb0 : 0x00000000\n"          # pure-virtual junk filtered
+        "0x4eb8 : loc.12345\n"           # r2-internal junk filtered
+    )
+    edges = _parse_vtable_output(out, "/x/bin")
+    assert len(edges) == 1
+    assert edges[0].caller == "<vtable@0x4ea0>"
+    assert edges[0].callee == "Widget::draw"
+    assert edges[0].binary_path == "/x/bin"
+
+
+def test_parse_vtable_output_empty_for_c_binary():
+    from core.analysis.binary_oracle_edges import _parse_vtable_output
+    assert _parse_vtable_output("", "/x/bin") == []
+    assert _parse_vtable_output("no vtables here\n", "/x/bin") == []
+
+
+def test_extract_script_appends_av_to_single_session(monkeypatch, tmp_path):
+    """extract_direct_call_edges must run ``av`` in the SAME r2
+    session as the axffj batches (one ``aaa``), not a second
+    invocation — and still merge the vtable edges."""
+    import core.analysis.binary_oracle_edges as edges_mod
+    from core.analysis.binary_oracle_edges import (
+        _VTABLE_SENTINEL,
+        extract_direct_call_edges,
+    )
+
+    binary = tmp_path / "demo"
+    binary.write_bytes(b"\x7fELF-stub")
+    monkeypatch.setattr(edges_mod.shutil, "which",
+                        lambda t: f"/usr/bin/{t}")
+    monkeypatch.setattr(edges_mod, "_try_graph_store", lambda p: None)
+    monkeypatch.setattr(edges_mod, "read_build_id", lambda p: None)
+    monkeypatch.setattr(edges_mod, "_content_hash", lambda p: None)
+
+    calls: list[list[str]] = []
+
+    class _Proc:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    def fake_sandbox_run(argv, **kwargs):
+        calls.append(list(argv))
+        if "-c" in argv:  # the aflj listing invocation
+            return _Proc(
+                '[{"name":"main","addr":4096,"size":10},'
+                '{"name":"sym.callee","addr":8192,"size":10}]'
+            )
+        # the single script-file session: axffj batches + sentinel + av
+        script_path = argv[argv.index("-i") + 1]
+        script = open(script_path).read()
+        assert script.splitlines().count("aaa") == 1, (
+            "av must reuse the single aaa session"
+        )
+        assert f"echo {_VTABLE_SENTINEL}" in script
+        assert script.rstrip().endswith("av")
+        return _Proc(
+            "BATCH 4096\n"
+            '[{"type":"CALL","ref":8192}]\n'
+            "BATCH 8192\n"
+            "[]\n"
+            f"{_VTABLE_SENTINEL}\n"
+            "Vtable Found at 0x1000\n"
+            "0x1008 : sym.Widget::draw\n"
+        )
+
+    import core.sandbox
+    monkeypatch.setattr(core.sandbox, "run", fake_sandbox_run)
+
+    idx = extract_direct_call_edges(binary, use_cache=False)
+    # Exactly two r2 invocations total (aflj listing + script session)
+    # — no separate "aaa; av" run.
+    assert len(calls) == 2
+    assert not any("av" in " ".join(argv) and "-c" in argv
+                   and "aaa; av" in " ".join(argv) for argv in calls)
+    callees = idx.callees
+    assert "callee" in callees          # direct edge parsed
+    assert "Widget::draw" in callees    # vtable edge merged

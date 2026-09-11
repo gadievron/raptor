@@ -200,3 +200,19 @@ def test_tool_loop_result_construction() -> None:
     )
     assert out.terminal_tool_input == {"verdict": "match"}
     assert out.terminated_by == "terminal_tool"
+
+
+# --- Facade completeness ----------------------------------------------
+
+def test_facade_exports_full_loop_event_union() -> None:
+    """Every LoopEvent union member must be importable from the
+    package facade — subscribers isinstance-dispatch on the union
+    and cannot handle members the public surface hides."""
+    import typing
+
+    import core.llm.tool_use as facade
+    from core.llm.tool_use import LoopEvent
+
+    for member in typing.get_args(LoopEvent):
+        assert member.__name__ in facade.__all__, member.__name__
+        assert getattr(facade, member.__name__) is member

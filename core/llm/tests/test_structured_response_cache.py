@@ -52,6 +52,34 @@ def test_repeat_call_is_served_from_cache(tmp_path: Path) -> None:
     assert r1.raw == r2.raw == '{"verdict":"safe"}'
 
 
+def test_cache_key_no_delimiter_injection(tmp_path: Path) -> None:
+    """Component boundaries must survive content containing the old
+    ``:`` join delimiter: (system='A', prompt='B:C') and
+    (system='A:B', prompt='C') hashed identically pre-fix, replaying
+    the wrong cached response across callers."""
+    client = _client(tmp_path)
+    k1 = client._get_cache_key("B:C", "A", "m")
+    k2 = client._get_cache_key("C", "A:B", "m")
+    assert k1 != k2
+    # Model/system boundary too.
+    k3 = client._get_cache_key("p", "s", "m:x")
+    k4 = client._get_cache_key("p", "x:s", "m")
+    assert k3 != k4
+    # Determinism: same inputs, same key.
+    assert k1 == client._get_cache_key("B:C", "A", "m")
+
+
+def test_structured_cache_key_no_delimiter_injection(
+        tmp_path: Path) -> None:
+    """Structured twin of the delimiter-injection guard above."""
+    client = _client(tmp_path)
+    schema = {"verdict": "string"}
+    k1 = client._get_structured_cache_key("B:C", "A", "m", schema)
+    k2 = client._get_structured_cache_key("C", "A:B", "m", schema)
+    assert k1 != k2
+    assert k1 == client._get_structured_cache_key("B:C", "A", "m", schema)
+
+
 def test_different_schema_does_not_collide(tmp_path: Path) -> None:
     """Same prompt with two different schemas → provider invoked twice.
     A naïve implementation that hashes only the prompt would serve the

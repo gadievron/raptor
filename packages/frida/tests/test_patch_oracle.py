@@ -284,3 +284,46 @@ class TestCli:
                    "--sink", "system", "--out", str(tmp_path / "out")])
         assert rc == 2
         assert "RAPTOR_DIR" in capsys.readouterr().err
+
+
+class TestRunSideEnvHygiene:
+    """The spawned target inherits _run_side's subprocess env and runs
+    unsandboxed — operator credentials must never be readable via
+    getenv from target code, 'built yourself' notwithstanding."""
+
+    def _capture_env(self, tmp_path: Path, monkeypatch) -> dict:
+        import subprocess as sp
+
+        monkeypatch.setenv("RAPTOR_DIR", str(Path(__file__).resolve().parents[3]))
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-real")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws-test-not-real")
+        monkeypatch.setenv("GH_TOKEN", "gh-test-not-real")
+        seen: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            seen["cmd"] = cmd
+            seen.update(kwargs)
+            return sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(patch_oracle.subprocess, "run", fake_run)
+        binary = tmp_path / "vuln"
+        binary.write_bytes(b"\x7fELF")
+        script = tmp_path / "watch.js"
+        script.write_text("// noop")
+        patch_oracle._run_side(binary, script, tmp_path / "side",
+                               poc=None, duration=1.0)
+        return seen
+
+    def test_credentials_stripped_from_session_env(self, tmp_path,
+                                                   monkeypatch):
+        seen = self._capture_env(tmp_path, monkeypatch)
+        env = seen["env"]
+        for credential in ("ANTHROPIC_API_KEY", "AWS_SECRET_ACCESS_KEY",
+                           "GH_TOKEN"):
+            assert credential not in env
+
+    def test_cli_still_gets_import_path(self, tmp_path, monkeypatch):
+        seen = self._capture_env(tmp_path, monkeypatch)
+        env = seen["env"]
+        assert env["RAPTOR_DIR"]
+        assert env["PYTHONPATH"] == env["RAPTOR_DIR"]

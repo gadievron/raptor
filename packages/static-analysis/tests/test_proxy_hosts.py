@@ -118,14 +118,14 @@ def test_override_dedupes_and_strips_garbage(override_config):
                      "mirror.corp.example.com"]
 
 
-def test_empty_override_falls_back_to_default(override_config):
-    """``{"hosts": []}`` falls through to default rather than
-    producing a deny-all allowlist."""
+def test_empty_override_is_deny_all(override_config):
+    """``{"hosts": []}`` is an explicit operator statement — the
+    override REPLACES the default so operators can ban public
+    endpoints; falling back would silently defeat that."""
     override_config({"hosts": []})
     with mock.patch.object(mod, "_resolve_semgrep_bin",
                            return_value=None):
-        hosts = mod.proxy_hosts_for_semgrep()
-    assert _has_host(hosts, "semgrep.dev")
+        assert mod.proxy_hosts_for_semgrep() == []
 
 
 def test_override_missing_hosts_key_falls_back(override_config):

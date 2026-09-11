@@ -46,6 +46,19 @@ class TestToRepoRelativeStrict:
     def test_absolute_outside_root_returns_none(self, tmp_path):
         assert to_repo_relative("/etc/passwd", tmp_path) is None
 
+    def test_absolute_traversal_through_root_returns_none(self, tmp_path):
+        # ``<root>/../etc/passwd`` escapes even though the string
+        # starts with the root prefix — lexical relative_to without
+        # normalisation used to return "../etc/passwd" (non-None).
+        escaping = str(tmp_path / ".." / "etc" / "passwd")
+        assert to_repo_relative(escaping, tmp_path) is None
+
+    def test_absolute_inner_dot_segments_still_match(self, tmp_path):
+        # The equality direction: traversal that stays INSIDE the root
+        # normalises onto the inventory key instead of failing.
+        p = str(tmp_path / "src" / ".." / "src" / "a.c")
+        assert to_repo_relative(p, tmp_path) == os.path.join("src", "a.c")
+
     def test_file_uri_under_root(self, tmp_path):
         uri = f"file://{tmp_path}/src/a.c"
         assert to_repo_relative(uri, tmp_path) == os.path.join("src", "a.c")

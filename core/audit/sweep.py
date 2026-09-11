@@ -935,8 +935,11 @@ _KEYWORD_FIXTURE_STEMS: dict[str, str] = {
     "escape-sequence": "escape_injection",
 }
 
-# Keyed by (keyword, fixture suffix): the pattern for a keyword is a
-# module constant, so the control verdict is stable per language.
+# Keyed by (keyword, rule language, fixture suffix): the pattern for
+# a keyword is a module constant, but the emitted rule's ``languages:``
+# key follows the audited file — a cpp-language rule run against the
+# .c fixture scans nothing and must not cache a False verdict that a
+# later c-language rule (which WOULD match the fixture) then inherits.
 _negative_control_cache: dict[tuple, bool] = {}
 
 
@@ -972,6 +975,39 @@ def negative_control_fixture(keyword: str, file_path: str) -> Path | None:
     return None
 
 
+def _relanguage_rule_config(
+    rule_config: str, rule_lang: str, fixture_lang: str,
+) -> str | None:
+    """Copy a generated dynamic rule with its ``languages:`` key
+    rewritten to *fixture_lang*, for the control run only.
+
+    Returns the temp-file path of the rewritten copy, or None when
+    *rule_config* is not a readable generated rule of the expected
+    shape (stock rule pack, unexpected YAML) — the caller then skips
+    the control check rather than scanning vacuously.
+    """
+    import tempfile
+
+    try:
+        path = Path(rule_config)
+        if not path.is_file():
+            return None
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    needle = f"languages: [{rule_lang}]"
+    if needle not in text:
+        return None
+    rewritten = text.replace(
+        needle, f"languages: [{fixture_lang}]", 1,
+    )
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".yaml", delete=False, encoding="utf-8",
+    ) as fh:
+        fh.write(rewritten)
+        return fh.name
+
+
 def _rule_matches_negative_control(
     rule_config: str, keyword: str, file_path: str,
 ) -> bool:
@@ -984,16 +1020,59 @@ def _rule_matches_negative_control(
     fixture = negative_control_fixture(keyword, file_path)
     if fixture is None:
         return False
-    cache_key = (keyword, fixture.suffix)
+    from .hypothesis_mapping import semgrep_language_for
+
+    rule_lang = semgrep_language_for(file_path)
+    cache_key = (keyword, rule_lang, fixture.suffix)
     if cache_key in _negative_control_cache:
         return _negative_control_cache[cache_key]
+
+    control_config = rule_config
+    relanged: str | None = None
+    fixture_lang = semgrep_language_for(str(fixture))
+    # ``generic``-language rules scan any file handed to them — only a
+    # real language mismatch (cpp rule vs .c fixture) is vacuous.
+    if rule_lang != "generic" and fixture_lang != rule_lang:
+        # A cpp-language rule handed the .c fixture scans NOTHING
+        # (semgrep's cpp key does not select .c files): the control
+        # run reported zero findings on zero scanned files and the
+        # presence-detector cap was vacuous on every C++ target.
+        # Re-language a copy of the generated rule to the fixture's
+        # language for the control run only — the dynamic patterns
+        # are plain pattern-regex, valid under both C-family keys.
+        relanged = _relanguage_rule_config(
+            rule_config, rule_lang, fixture_lang,
+        )
+        if relanged is None:
+            # Cannot rewrite (stock rule pack / unexpected shape): a
+            # vacuous scan must not cache False — skip the control
+            # check loudly instead of silently disarming the cap.
+            logger.warning(
+                "negative control for %r skipped: %s-language rule "
+                "cannot scan the %s fixture and re-languaging failed",
+                keyword, rule_lang, fixture.suffix,
+            )
+            return False
+        control_config = relanged
     try:
         from packages.semgrep.runner import run_rule
 
-        result = run_rule(fixture, rule_config, timeout=60)
-        matched = bool(result.findings)
+        result = run_rule(fixture, control_config, timeout=60)
     except Exception:  # noqa: BLE001
         return False
+    finally:
+        if relanged is not None:
+            with contextlib.suppress(OSError):
+                Path(relanged).unlink()
+    if getattr(result, "errors", None) or getattr(
+        result, "returncode", 0,
+    ) not in (0, 1):
+        # The control run itself failed (semgrep missing, rule YAML
+        # rejected, timeout): its empty findings say nothing about
+        # the rule. Do NOT cache matched=False — that permanently
+        # disarmed the presence-detector cap for this keyword.
+        return False
+    matched = bool(result.findings)
     _negative_control_cache[cache_key] = matched
     return matched
 
@@ -1085,9 +1164,11 @@ def run_coccinelle_sweep(
         function_name: Function being audited.
         cocci_rule: Path to the .cocci rule file.
         defines: Optional spatch -D defines (e.g. {"func": "parse_input"}).
-        line_start: With ``line_end``, restricts matches to that line
-            range (the audited function's span); matches outside it are
-            dropped. Only applied when both bounds are given.
+        line_start: Restricts matches to the audited function's span;
+            matches outside it are dropped. When ``line_end`` is
+            missing, a ``line_start + 50`` window applies (same
+            fallback as the semgrep leg). Falsy ``line_start``
+            disables the filter (whole-file rules).
         line_end: Upper bound of the match-filter range; see
             ``line_start``.
         domain_vocab: DomainVocabulary used to render vocabulary
@@ -1173,10 +1254,18 @@ def run_coccinelle_sweep(
             else:
                 matches.append({"raw": str(f)})
 
-        if line_start is not None and line_end is not None:
+        if line_start:
+            # Apply the range filter whenever the caller placed the
+            # function at all — requiring BOTH bounds let a match
+            # anywhere in the file confirm a per-function hypothesis
+            # when production passed line_end=None (the exact
+            # wrong-function bug the semgrep leg fixed). Without a
+            # real end bound, fall back to the same +50 window the
+            # semgrep call sites use.
+            effective_end = line_end if line_end else line_start + 50
             matches = [
                 m for m in matches
-                if _match_in_range(m, line_start, line_end)
+                if _match_in_range(m, line_start, effective_end)
             ]
 
         outcome = "confirmed" if matches else "refuted"
@@ -1212,6 +1301,11 @@ _SMT_VERBS = {
     "check-negative-bypass": "raptor-smt-check-negative-bypass",
     "validate-path": "raptor-smt-validate-path",
 }
+
+# Where the SMT verb shims live. Module-level so hermetic tests can
+# point run_smt_sweep at a stub shim; production value is always the
+# repo's libexec/.
+_SMT_SHIM_DIR = Path(__file__).resolve().parents[2] / "libexec"
 
 # Verbs served only by run_smt_verb_direct() (no libexec shim).
 _SMT_DIRECT_ONLY_VERBS = frozenset({
@@ -1376,8 +1470,7 @@ def run_smt_sweep(
             errors=[f"unknown SMT verb {verb!r}; valid: {sorted(_SMT_VERBS)}"],
         )
 
-    raptor_dir = Path(__file__).resolve().parents[2]
-    shim_path = raptor_dir / "libexec" / shim_name
+    shim_path = _SMT_SHIM_DIR / shim_name
     if not shim_path.exists():
         return SweepResult(
             tool="smt",
@@ -1391,9 +1484,27 @@ def run_smt_sweep(
     # under THIS interpreter (same venv, same installed z3), matching
     # the SMT verb child spawn below.
     cmd = [sys.executable, str(shim_path)]
+    stdin_payload: str | None = None
+    positional: list[str] = []
     import re as _re
     _safe_key_re = _re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
     for key, value in smt_args.items():
+        if key == "conditions":
+            # validate-path takes its predicates as POSITIONAL args
+            # (there is no --conditions flag; emitting one made the
+            # shim reject every dispatch, so SAT never confirmed and
+            # UNSAT never refuted). Entries carrying negation flags
+            # ({"text": ..., "negated": true}) go through the shim's
+            # documented --stdin JSON-array form instead.
+            if isinstance(value, (list, tuple)):
+                if all(isinstance(c, str) for c in value):
+                    positional.extend(str(c) for c in value)
+                else:
+                    cmd.append("--stdin")
+                    stdin_payload = _json.dumps(list(value))
+            else:
+                positional.append(str(value))
+            continue
         if not _safe_key_re.match(key):
             return SweepResult(
                 tool="smt",
@@ -1416,6 +1527,11 @@ def run_smt_sweep(
             cmd.extend([flag, _json.dumps(value)])
         else:
             cmd.extend([flag, str(value)])
+    if positional:
+        # "--" so a predicate that begins with a dash ("-x < 0")
+        # cannot be parsed as a flag.
+        cmd.append("--")
+        cmd.extend(positional)
 
     try:
         try:
@@ -1433,6 +1549,7 @@ def run_smt_sweep(
             timeout=60,
             check=False,
             env=safe_env,
+            input=stdin_payload,
         )
         raw = proc.stdout.strip()
 
@@ -1452,13 +1569,26 @@ def run_smt_sweep(
         except _json.JSONDecodeError:
             result_data = {"raw": raw}
 
-        smt_result = result_data.get("result", raw.lower())
-        if smt_result in ("sat", "satisfiable", "feasible"):
-            outcome = "confirmed"
-        elif smt_result in ("unsat", "unsatisfiable", "infeasible"):
-            outcome = "refuted"
+        if "feasible" in result_data:
+            # The shims' documented output contract is a ``feasible``
+            # key (true | false | null) — parsing a ``result`` key no
+            # shim emits classified every real shim run inconclusive.
+            feasible = result_data.get("feasible")
+            if feasible is True:
+                outcome = "confirmed"
+            elif feasible is False:
+                outcome = "refuted"
+            else:
+                outcome = "inconclusive"
         else:
-            outcome = "inconclusive"
+            # Legacy / non-shim producers: "result" verdict string.
+            smt_result = result_data.get("result", raw.lower())
+            if smt_result in ("sat", "satisfiable", "feasible"):
+                outcome = "confirmed"
+            elif smt_result in ("unsat", "unsatisfiable", "infeasible"):
+                outcome = "refuted"
+            else:
+                outcome = "inconclusive"
 
         # Centralised vacuity policy (see VACUOUS_SMT_VERBS): for the
         # unconstrained-arithmetic verbs, SAT is near-certain when no
@@ -2964,26 +3094,38 @@ def run_joern_pre_sweep(
         cleanup_cpg(cpg)
 
 
+# Patterns must contain NO ``//``-comment lines: semgrep strips
+# comments from patterns before matching, so a comment-bearing
+# pattern silently degenerates to just its code lines (the old
+# ``// ERROR: …`` annotation lines turned every entry into a bare
+# presence matcher while READING like a constraint). These shapes are
+# presence-level BY CONSTRUCTION — they only ever run with the
+# keyword threaded through the chain config so the consumer arms the
+# identifier-consistency and negative-control caps
+# (run_semgrep_sweep); an uncapped presence match must never stamp
+# promotion-grade evidence.
 _MECHANICAL_CHECK_PATTERNS: dict[str, str] = {
-    "unchecked return": (
-        "$X = $FUNC(...);\n"
-        "...\n"
-        "// ERROR: missing NULL check on $X"
-    ),
-    "missing null check": (
-        "$X = $FUNC(...);\n"
-        "...\n"
-        "// ERROR: no null check on $X before use"
-    ),
-    "missing bounds check": (
-        "$BUF[$IDX]\n"
-        "// ERROR: index $IDX not bounds-checked"
-    ),
-    "format string": (
-        "printf($FMT, ...);\n"
-        "// ERROR: format string from user input"
-    ),
+    "unchecked return": "$X = $FUNC(...);",
+    "missing null check": "$X = $FUNC(...);",
+    "missing bounds check": "$BUF[$IDX]",
+    "format string": "printf($FMT, ...);",
 }
+
+
+def mechanical_check_to_semgrep_keyed(check: str) -> tuple[str, str] | None:
+    """Map a mechanical_check string to ``(pattern, keyword)``.
+
+    The keyword travels with the pattern into the tool-chain config so
+    the semgrep consumer treats the entry as a dynamic per-hypothesis
+    rule: identifier-consistency filtering against the hypothesis and
+    the negative-control fixture check both stay armed (a chain entry
+    without a keyword disables both caps).
+    """
+    check_lower = check.lower().strip()
+    for keyword, pattern in _MECHANICAL_CHECK_PATTERNS.items():
+        if keyword in check_lower:
+            return pattern, keyword
+    return None
 
 
 def mechanical_check_to_semgrep(check: str) -> str | None:
@@ -2992,11 +3134,8 @@ def mechanical_check_to_semgrep(check: str) -> str | None:
     Returns the pattern string if the check maps to a known shape,
     None otherwise.
     """
-    check_lower = check.lower().strip()
-    for keyword, pattern in _MECHANICAL_CHECK_PATTERNS.items():
-        if keyword in check_lower:
-            return pattern
-    return None
+    keyed = mechanical_check_to_semgrep_keyed(check)
+    return keyed[0] if keyed else None
 
 
 # ── symbolic (angr) channel ─────────────────────────────────────────

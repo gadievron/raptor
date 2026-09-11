@@ -25,8 +25,10 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-_MARKER_RE = re.compile(r"^//\s*@vocab:\s*(\w+)\s*$")
-_TMPL_RE = re.compile(r"^//\s*@vocab-tmpl:\s*(.+)$")
+# Markers may sit inside an indented construct (e.g. a when-clause
+# block nested in an if body), so allow leading whitespace.
+_MARKER_RE = re.compile(r"^\s*//\s*@vocab:\s*(\w+)\s*$")
+_TMPL_RE = re.compile(r"^\s*//\s*@vocab-tmpl:\s*(.+)$")
 
 _BUCKET_MAP = {
     "deallocators": "deallocators",
@@ -114,17 +116,35 @@ def _extend_python_set(line: str, names: frozenset[str]) -> str:
 
 def _extend_when_block(
     lines: list[str], start: int, names: frozenset[str],
-) -> list[str]:
-    """Insert extra ``when != name(...)`` lines after the last when clause."""
-    if not names:
-        return lines
+) -> tuple[list[str], int]:
+    """Extend a ``when !=`` clause block with extra ``when != name(...)`` lines.
+
+    Returns ``(replacement lines for the block, source lines consumed)``
+    so the caller can keep scanning for further ``@vocab`` markers after
+    the block instead of swallowing the rest of the file.
+    """
+    # The start line is the block opener by contract (the caller only
+    # dispatches here when it contains ``when !=`` — possibly prefixed
+    # by ``...``), so it always belongs to the block; scanning it with
+    # the ``startswith`` test below would end the block at zero lines.
     last_when = start
-    for i in range(start, len(lines)):
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
         stripped = lines[i].lstrip()
+        if _MARKER_RE.match(lines[i]) or _TMPL_RE.match(lines[i]):
+            # A following @vocab marker belongs to the NEXT construct,
+            # not to this block — swallowing it as a plain comment
+            # would leave that construct unspliced.
+            end = i
+            break
         if stripped.startswith("when !="):
             last_when = i
         elif stripped and not stripped.startswith("//"):
+            end = i
             break
+    consumed = end - start
+    if not names:
+        return list(lines[start:end]), consumed
 
     indent = "      "
     m = re.match(r"^(\s*)when", lines[last_when].lstrip() and lines[last_when])
@@ -132,22 +152,32 @@ def _extend_when_block(
         indent = " " * (len(lines[last_when]) - len(lines[last_when].lstrip()))
 
     extra = [f"{indent}when != {n}(...)\n" for n in sorted(names)]
-    return lines[: last_when + 1] + extra + lines[last_when + 1 :]
+    return (
+        lines[start : last_when + 1] + extra + lines[last_when + 1 : end],
+        consumed,
+    )
 
 
 def _extend_disjunction(
     lines: list[str], start: int, tmpl: str, names: frozenset[str],
-) -> list[str]:
-    """Insert new ``|`` entries into a ``( ... | ... )`` disjunction block."""
-    if not names:
-        return lines
+) -> tuple[list[str], int]:
+    """Extend a ``( ... | ... )`` disjunction block with new ``|`` entries.
+
+    Returns ``(replacement lines for the block, source lines consumed)``
+    — the block ends at its closing ``)`` line, and the caller resumes
+    marker scanning right after it.
+    """
     close_idx = None
     for i in range(start, len(lines)):
         if lines[i].strip() == ")":
             close_idx = i
             break
     if close_idx is None:
-        return lines
+        # Unterminated block: pass the tail through untouched.
+        return list(lines[start:]), len(lines) - start
+    consumed = close_idx - start + 1
+    if not names:
+        return list(lines[start : start + consumed]), consumed
 
     extra = []
     for n in sorted(names):
@@ -155,7 +185,10 @@ def _extend_disjunction(
         extra.append("|\n")
         extra.append(f"  {rendered}\n")
 
-    return lines[:close_idx] + extra + lines[close_idx:]
+    return (
+        lines[start:close_idx] + extra + [lines[close_idx]],
+        consumed,
+    )
 
 
 def render(rule_path: Path, vocab: Any) -> Path | None:
@@ -194,12 +227,19 @@ def render(rule_path: Path, vocab: Any) -> Path | None:
             out.append(lines[i])
             i += 1
             if i < len(lines) and lines[i].strip() == "(":
-                remaining = lines[i:]
-                extended = _extend_disjunction(remaining, 0, tmpl, names)
-                if len(extended) != len(remaining):
+                # Splice only the disjunction block itself and keep
+                # scanning: a rule file routinely carries further
+                # @vocab markers after the first construct (e.g. an
+                # allocator trigger followed by a deallocator
+                # suppression), and consuming the whole tail here left
+                # those later markers silently unprocessed — an
+                # asymmetric splice that minted findings on
+                # project-vocabulary code.
+                block, consumed = _extend_disjunction(lines, i, tmpl, names)
+                if len(block) != consumed:
                     modified = True
-                out.extend(extended)
-                i = len(lines)
+                out.extend(block)
+                i += consumed
                 continue
 
         if i >= len(lines):
@@ -221,12 +261,14 @@ def render(rule_path: Path, vocab: Any) -> Path | None:
             modified = modified or bool(names)
             i += 1
         elif "when !=" in stripped:
-            remaining = lines[i:]
-            extended = _extend_when_block(remaining, 0, names)
-            if len(extended) != len(remaining):
+            # Same scanning rule as the disjunction branch: extend only
+            # the when-clause block and resume after it, so later
+            # markers in the file still get processed.
+            block, consumed = _extend_when_block(lines, i, names)
+            if len(block) != consumed:
                 modified = True
-            out.extend(extended)
-            i = len(lines)
+            out.extend(block)
+            i += consumed
         else:
             out.append(line)
             i += 1

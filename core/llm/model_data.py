@@ -413,7 +413,11 @@ def _bedrock_cost_multiplier(model: str) -> float:
     for prefix in _BEDROCK_REGIONAL_COST_PREFIXES:
         if not lowered.startswith(prefix):
             continue
-        bare = _strip_bedrock_prefixes(model)
+        # Dated suffix stripped before the membership test — the
+        # allowlist holds bare names, so a dated regional id
+        # (``us.anthropic.claude-opus-4-7-20260115``) would otherwise
+        # miss and book at 1.0× while its undated form books 1.10×.
+        bare = _strip_dated_alias(_strip_bedrock_prefixes(model))
         if bare in _BEDROCK_GLOBAL_CRIS_MODELS:
             return _BEDROCK_REGIONAL_SURCHARGE
         return 1.0

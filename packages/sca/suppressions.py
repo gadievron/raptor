@@ -86,22 +86,41 @@ class SuppressionEntry:
         return self.expires is not None and today > self.expires
 
     def matches(self, row: dict[str, Any]) -> bool:
-        """True if ``row`` (a findings.json row) matches this entry."""
-        if self.finding_id and row.get("finding_id") != self.finding_id and \
-                row.get("id") != self.finding_id:
-            return False
+        """True if ``row`` (a findings.json row) matches this entry.
+
+        ``advisory_id`` must identify EVERY advisory merged into the
+        row, not just one member: alias-merged findings carry all
+        member records in ``all_advisories``, and a record whose own
+        id/alias set does not include the suppressed id keeps the
+        finding visible. Matching the union instead would let a
+        crafted advisory that aliases both a long-suppressed id and a
+        genuine new advisory drag the genuine one under the existing
+        suppression — a suppression must never reach records the
+        operator has not reviewed.
+
+        ``finding_id`` gets the same discipline on advisory-carrying
+        rows: the id embeds the representative advisory's OSV id, so
+        the entry additionally requires every merged member to carry
+        that representative id. A merged row can keep the previously
+        suppressed finding_id (the suppressed record stays the
+        representative whenever the newcomer's severity does not
+        exceed it), so an id-equality match alone would hide the
+        newcomer inside the old suppression. Rows without advisories
+        (hygiene / supply-chain / license) match on the id alone as
+        before.
+        """
         sca = row.get("sca") or {}
-        if self.advisory_id:
-            advisory = sca.get("advisory") or {}
-            ids = {advisory.get("id"), *(advisory.get("aliases") or [])}
-            for adv in sca.get("all_advisories") or []:
-                if isinstance(adv, dict):
-                    if adv.get("id"):
-                        ids.add(adv["id"])
-                    for alias in adv.get("aliases") or []:
-                        ids.add(alias)
-            if self.advisory_id not in ids:
+        if self.finding_id:
+            if row.get("finding_id") != self.finding_id and \
+                    row.get("id") != self.finding_id:
                 return False
+            primary = (sca.get("advisory") or {}).get("id")
+            if primary and not _advisory_id_covers_row(primary, sca):
+                return False
+        if self.advisory_id and not _advisory_id_covers_row(
+            self.advisory_id, sca,
+        ):
+            return False
         if self.ecosystem and sca.get("ecosystem") != self.ecosystem:
             return False
         if self.name and sca.get("name") != self.name:
@@ -185,6 +204,37 @@ def apply_to_findings(
     return n
 
 
+def _advisory_id_covers_row(advisory_id: str, sca: dict[str, Any]) -> bool:
+    """True when *advisory_id* identifies every advisory on the row.
+
+    Members come from ``all_advisories`` (the full alias-merged group);
+    rows without it degrade to the primary ``advisory``. A row with no
+    advisory at all never matches an ``advisory_id`` entry.
+    Comparison is case-insensitive, matching the alias-merge pass —
+    otherwise a case-drifted alias on one member makes the merged
+    finding unsuppressible by any id.
+    """
+    members = [
+        adv for adv in (sca.get("all_advisories") or [])
+        if isinstance(adv, dict)
+    ]
+    if not members:
+        primary = sca.get("advisory")
+        members = [primary] if isinstance(primary, dict) else []
+    if not members:
+        return False
+    wanted = advisory_id.upper()
+    for adv in members:
+        ids = {
+            x.upper()
+            for x in (adv.get("id"), *(adv.get("aliases") or []))
+            if isinstance(x, str)
+        }
+        if wanted not in ids:
+            return False
+    return True
+
+
 def _finding_view(finding: Any) -> dict[str, Any] | None:
     """Project a finding object onto the dict shape ``SuppressionEntry``
     matches against. ``None`` for objects that aren't recognisable."""
@@ -192,24 +242,56 @@ def _finding_view(finding: Any) -> dict[str, Any] | None:
     dep = getattr(finding, "dependency", None)
     if fid is None or dep is None:
         return None
-    advisory_ids: list[str] = []
+    # One UPPERCASED id set PER advisory: an ``advisory_id`` or
+    # ``finding_id`` entry must identify every member of an
+    # alias-merged group (see ``SuppressionEntry.matches`` for the
+    # hostile-feed rationale). Case-insensitive like the merge pass.
+    advisory_id_sets: list[set[str]] = []
+    primary_advisory_id: str | None = None
     for adv in getattr(finding, "advisories", []) or []:
-        if getattr(adv, "osv_id", None):
-            advisory_ids.append(adv.osv_id)
-        advisory_ids.extend(alias for alias in getattr(adv, "aliases", []) or [] if isinstance(alias, str))
+        ids: set[str] = set()
+        osv_id = getattr(adv, "osv_id", None)
+        if isinstance(osv_id, str) and osv_id:
+            ids.add(osv_id.upper())
+            if primary_advisory_id is None:
+                primary_advisory_id = osv_id.upper()
+        ids.update(
+            alias.upper() for alias in getattr(adv, "aliases", []) or []
+            if isinstance(alias, str)
+        )
+        advisory_id_sets.append(ids)
     return {
         "finding_id": fid,
         "ecosystem": getattr(dep, "ecosystem", None),
         "name": getattr(dep, "name", None),
         "version": getattr(dep, "version", None),
-        "advisory_ids": advisory_ids,
+        "advisory_id_sets": advisory_id_sets,
+        "primary_advisory_id": primary_advisory_id,
     }
 
 
-def _matches_view(entry: SuppressionEntry, view: dict[str, Any]) -> bool:
-    if entry.finding_id and view["finding_id"] != entry.finding_id:
+def _covers_every_member(advisory_id: str, view: dict[str, Any]) -> bool:
+    id_sets = view["advisory_id_sets"]
+    if not id_sets:
         return False
-    if entry.advisory_id and entry.advisory_id not in view["advisory_ids"]:
+    wanted = advisory_id.upper()
+    return all(wanted in ids for ids in id_sets)
+
+
+def _matches_view(entry: SuppressionEntry, view: dict[str, Any]) -> bool:
+    if entry.finding_id:
+        if view["finding_id"] != entry.finding_id:
+            return False
+        # Same every-member discipline as the row path: on
+        # advisory-carrying findings the representative's id must
+        # identify every merged member, or a crafted bridge could hide
+        # a newcomer inside the previously suppressed finding_id.
+        primary = view["primary_advisory_id"]
+        if primary and not _covers_every_member(primary, view):
+            return False
+    if entry.advisory_id and not _covers_every_member(
+        entry.advisory_id, view,
+    ):
         return False
     if entry.ecosystem and view["ecosystem"] != entry.ecosystem:
         return False

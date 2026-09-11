@@ -41,7 +41,6 @@ import core.startup.process_init  # noqa: E402,F401
 from core.json import dumps_display  # noqa: E402
 
 import argparse  # noqa: E402
-import json  # noqa: E402
 import logging  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
 from typing import Any, Dict  # noqa: E402
@@ -51,6 +50,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 from core.sage.config import SageConfig  # noqa: E402
 from core.security.log_sanitisation import escape_nonprintable  # noqa: E402
+from core.security.redaction import redact_secrets  # noqa: E402
 
 
 def _safe(text, *, preserve_newlines: bool = False) -> str:
@@ -298,10 +298,13 @@ def _resolve_memory_id(client, id_or_prefix):
     if len(candidate) >= 36:
         return candidate
     memories, _ = _fetch_all_memories(client)
+    # memory_id can be None on rows the fetch walk tolerates — a
+    # .startswith on it would AttributeError every prefix command.
     matches = sorted({
-        getattr(m, "memory_id", "")
+        mid
         for m in memories
-        if getattr(m, "memory_id", "").startswith(candidate)
+        for mid in (getattr(m, "memory_id", None),)
+        if isinstance(mid, str) and mid.startswith(candidate)
     })
     if len(matches) == 1:
         return matches[0]
@@ -319,7 +322,12 @@ def cmd_status(client, args):
     try:
         memories, total = _fetch_all_memories(client)
     except Exception as e:
-        print(f"SAGE unreachable: {_safe(str(e))}")
+        # stderr, like every sibling command's failure line — a script
+        # consuming status stdout must never ingest the error as data.
+        # Neutral wording: _fetch_all_memories also raises for
+        # protocol violations from a server that IS reachable, so
+        # "unreachable" would mislabel exactly the loud-abort cases.
+        print(f"Status failed: {_safe(str(e))}", file=sys.stderr)
         return 1
 
     domains = Counter()
@@ -357,9 +365,6 @@ def cmd_recall(client, args):
               file=sys.stderr)
         return 1
 
-    kwargs: Dict[str, Any] = {}
-    if args.domain:
-        kwargs["domain_tag"] = args.domain
     top_k = args.top if args.top is not None else 5
 
     try:
@@ -370,7 +375,9 @@ def cmd_recall(client, args):
         )
         if args.domain:
             query_kwargs["domain_tag"] = args.domain
-        if args.min_confidence:
+        # `is not None`, not truthiness: --min-confidence 0 is an
+        # explicit "no floor" and must reach the server.
+        if args.min_confidence is not None:
             query_kwargs["min_confidence"] = args.min_confidence
         response = client.query(**query_kwargs)
     except Exception as e:
@@ -442,7 +449,10 @@ def cmd_list(client, args):
     full_ids = getattr(args, "full", False)
     rows = []
     for m in memories:
-        mid = getattr(m, "memory_id", "")
+        # memory_id can be None on rows the fetch walk tolerates
+        # (see _resolve_memory_id) — slicing None would TypeError and
+        # hide every other row from the listing.
+        mid = str(getattr(m, "memory_id", "") or "")
         if not full_ids:
             mid = mid[:12]
         domain = _strip_domain_prefix(getattr(m, "domain_tag", ""))
@@ -460,7 +470,12 @@ def cmd_list(client, args):
 
 
 def cmd_remember(client, args):
-    content = " ".join(args.content)
+    # Redact before store, like every core/sage/hooks.py writer
+    # (_propose_redacted): a pasted token would otherwise be committed
+    # durably to the consensus store with PUBLIC classification. The
+    # embedding is computed over the redacted text so what is recalled
+    # is what was stored.
+    content = redact_secrets(" ".join(args.content))
     if not content:
         print("Usage: raptor-sage remember <text> [--domain D] [--type T]",
               file=sys.stderr)
@@ -472,20 +487,23 @@ def cmd_remember(client, args):
                   else 0.8)
     tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
 
+    valid_types = ("fact", "observation", "inference", "task")
+    if memory_type not in valid_types:
+        print(f"Unknown type: {memory_type}. "
+              f"Valid: {', '.join(valid_types)}", file=sys.stderr)
+        return 1
+
+    # sage_sdk is an optional dependency: an injected client (tests,
+    # shims) accepts the plain type string, so its absence must not
+    # abort the command before the client is even consulted (same
+    # guard as cmd_task).
     try:
         from sage_sdk.models import MemoryType
-        type_map = {
-            "fact": MemoryType.fact,
-            "observation": MemoryType.observation,
-            "inference": MemoryType.inference,
-            "task": MemoryType.task,
-        }
-        mt = type_map.get(memory_type)
-        if mt is None:
-            print(f"Unknown type: {memory_type}. "
-                  f"Valid: {', '.join(type_map)}", file=sys.stderr)
-            return 1
+        mt = getattr(MemoryType, memory_type)
+    except ImportError:
+        mt = memory_type
 
+    try:
         embedding = client.embed(content)
         propose_kwargs: Dict[str, Any] = dict(
             content=content,
@@ -601,7 +619,8 @@ def cmd_backlog(client, args):
 
 
 def cmd_task(client, args):
-    content = " ".join(args.content)
+    # Same pre-store redaction as cmd_remember.
+    content = redact_secrets(" ".join(args.content))
 
     if args.id:
         if not args.task_status:
@@ -638,13 +657,20 @@ def cmd_task(client, args):
         # default committed tasks into a domain this identity often
         # cannot read back: the CLI printed success while the row was
         # unreachable from every read surface (backlog/list/get 403).
-        resp = client.propose(
+        propose_kwargs: Dict[str, Any] = dict(
             content=content,
             memory_type=task_type,
             domain_tag=args.domain,
             confidence=0.8,
             embedding=embedding,
         )
+        # --status on creation names the task's initial state — it
+        # must reach the server, not silently fall back to the
+        # server-default status. Passed only when given so injected
+        # clients without the parameter keep working for plain creates.
+        if args.task_status:
+            propose_kwargs["task_status"] = args.task_status
+        resp = client.propose(**propose_kwargs)
     except Exception as e:
         print(f"Task creation failed: {_safe(str(e))}", file=sys.stderr)
         return 1

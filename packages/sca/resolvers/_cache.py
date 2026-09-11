@@ -71,41 +71,60 @@ def _manifest_files(resolver: Resolver) -> Sequence[str]:
 def manifest_hash(
     resolver: Resolver, project_dir: Path,
 ) -> str | None:
-    r"""Compute a deterministic hash over the resolver's manifest files.
+    """Compute a deterministic hash over the resolver's manifest files.
 
     Returns ``None`` if the resolver doesn't opt in (no
-    ``MANIFEST_FILES``) OR if no declared file is present in
+    ``MANIFEST_FILES``) OR if no declared file could be read in
     ``project_dir`` (can't key on a non-existent input).
 
-    Hash shape: SHA-256 of ``\0``-separated ``<rel_path>\0<bytes>``
-    pairs, sorted by rel_path for deterministic order. Missing files
-    are skipped silently — they don't contribute to the hash. A
-    project that has only ``package.json`` (no lock) hashes the same
-    way regardless of declaration order.
+    Hash shape: SHA-256 over one unambiguously framed record per
+    declared file, sorted by rel_path for deterministic order:
+
+      * readable file → ``F <len(rel)> <rel> <size> <sha256(content)>``
+      * present-but-unreadable file → ``U <len(rel)> <rel>``
+
+    Length-prefixing the path and hashing the content (instead of
+    splicing raw bytes with ``\\0`` separators) makes the framing
+    injective: manifest CONTENT can contain ``\\0`` freely, so the
+    old separator scheme let one project's single file collide with
+    another project's two files — and the resolver cache is shared
+    machine-wide, so a collision serves one project's cached
+    ``ResolverResult`` (lockfile included) to a different project.
+    Unreadable files get an explicit marker for the same reason: a
+    project whose lockfile exists but can't be read must not hash
+    identically to a project with no lockfile at all. Absent files
+    still contribute nothing — a project that has only
+    ``package.json`` (no lock) hashes the same way regardless of
+    declaration order.
     """
     files = _manifest_files(resolver)
     if not files:
         return None
-    parts: list[bytes] = []
+    h = hashlib.sha256()
+    readable = 0
     for rel in sorted(files):
         path = project_dir / rel
         if not path.is_file():
             continue
+        rel_bytes = rel.encode("utf-8")
         try:
             payload = path.read_bytes()
         except OSError:
-            # Read error → treat as absent. Subsequent uncached call
-            # will surface the underlying error to the operator.
+            # Present but unreadable: distinct marker record. The
+            # subsequent uncached call surfaces the underlying error
+            # to the operator.
+            h.update(b"U")
+            h.update(len(rel_bytes).to_bytes(4, "big"))
+            h.update(rel_bytes)
             continue
-        parts.append(rel.encode("utf-8"))
-        parts.append(b"\0")
-        parts.append(payload)
-        parts.append(b"\0")
-    if not parts:
+        h.update(b"F")
+        h.update(len(rel_bytes).to_bytes(4, "big"))
+        h.update(rel_bytes)
+        h.update(len(payload).to_bytes(8, "big"))
+        h.update(hashlib.sha256(payload).digest())
+        readable += 1
+    if readable == 0:
         return None
-    h = hashlib.sha256()
-    for p in parts:
-        h.update(p)
     return h.hexdigest()
 
 

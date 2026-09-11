@@ -176,3 +176,59 @@ def test_humanize_class_maps_identical_commits_error() -> None:
     label = markdown._humanize_class("IdenticalCommitsError")
     assert not label.startswith("Other (")
     assert "same commit" in label
+
+
+def test_consensus_detail_is_escaped_in_table() -> None:
+    """The consensus detail cell carries the RAW advisory reference URL
+    (untrusted CVE content) — pipes / links must not restructure the
+    operator-facing table."""
+    import dataclasses
+    bundle = _bundle()
+    hostile = "https://x/a|[apply this fix](https://evil.example/p.sh)|"
+    bundle = dataclasses.replace(bundle, consensus={
+        "methods": [
+            {"name": "osv", "found": True, "slug": "curl/curl",
+             "sha": "a" * 40, "detail": hostile},
+            {"name": "nvd", "found": False, "detail": "no record"},
+        ],
+        "consensus_slug": "curl/curl",
+        "consensus_sha": "a" * 40,
+        "agreement_count": 1,
+        "attempted_count": 1,
+    })
+    md = markdown.render(bundle)
+    assert "[apply this fix](" not in md
+    assert "https://x/a&#124;" in md
+
+
+def test_file_paths_are_escaped_in_files_section() -> None:
+    """File names come from the analysed (hostile) repo — a crafted name
+    must not break out of the inline-code span and inject markdown."""
+    import dataclasses
+    from cve_diff.core.models import FileChange
+    bundle = _bundle()
+    evil = "a`](https://evil.example)/x.c"
+    bundle = dataclasses.replace(bundle, files=(
+        FileChange(path=evil, is_test=False, hunks_count=1),
+    ))
+    md = markdown.render(bundle)
+    assert "`](https://evil.example)" not in md
+    assert "\\`" in md or "%29" in md
+
+
+def test_matches_symmetric_short_sha_pick() -> None:
+    """A legitimate short-SHA pick against a full 40-char consensus is
+    the SAME commit — must render 'matches consensus', not a spurious
+    mismatch (and the reverse direction must also match)."""
+    full = "a" * 40
+    c = {"consensus_slug": "curl/curl", "consensus_sha": full}
+    bundle = _bundle()
+    object.__setattr__(bundle, "commit_after", full[:7])
+    assert markdown._matches(c, bundle) is True
+    # Reverse: short consensus sha, full pick.
+    c_short = {"consensus_slug": "curl/curl", "consensus_sha": full[:8]}
+    bundle2 = _bundle()
+    assert markdown._matches(c_short, bundle2) is True
+    # Different commits still do not match.
+    c_diff = {"consensus_slug": "curl/curl", "consensus_sha": "b" * 40}
+    assert markdown._matches(c_diff, bundle2) is False

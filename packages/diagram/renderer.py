@@ -143,14 +143,25 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
     findings_path = out_dir / "findings.json"
     orch_path_early = out_dir / "orchestrated_report.json"
     summary_findings = None
+    # Shape-guard every element: these artifacts may be partially
+    # written or drifted, and a non-dict entry would raise out of
+    # render_directory() before the per-section try/except degradation
+    # every other block gets.
     if findings_path.exists():
         fdata = _load_json(findings_path)
         if fdata and isinstance(fdata, dict):
-            summary_findings = fdata.get("findings", [])
+            f_list = fdata.get("findings")
+            if isinstance(f_list, list):
+                summary_findings = [r for r in f_list if isinstance(r, dict)]
     elif orch_path_early.exists():
         odata = _load_json(orch_path_early)
         if odata and isinstance(odata, dict):
-            summary_findings = [r for r in odata.get("results", []) if "is_true_positive" in r]
+            results = odata.get("results")
+            if isinstance(results, list):
+                summary_findings = [
+                    r for r in results
+                    if isinstance(r, dict) and "is_true_positive" in r
+                ]
 
     if summary_findings and len(summary_findings) >= 2:
         try:
@@ -330,8 +341,13 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
 def _load_optional_list(path: Path) -> list | None:
     """Load a JSON file that contains a list, either bare or in a dict envelope.
 
-    Handles both bare lists ([...]) and single-key dict envelopes ({"paths": [...]}).
-    Returns None if the file is missing, unreadable, or no list can be found.
+    Handles bare lists ([...]) and dict envelopes. Envelopes are
+    unwrapped by KNOWN payload key first; a positional
+    first-list-value fallback is accepted only when the dict carries
+    exactly ONE list — with several, "whichever list comes first" can
+    silently return a metadata array instead of the payload.
+    Returns None if the file is missing, unreadable, or no list can
+    be found.
     """
     data = _load_json(path)
     if data is None:
@@ -339,9 +355,13 @@ def _load_optional_list(path: Path) -> list | None:
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        for v in data.values():
+        for key in ("paths", "attack_paths", "hypotheses"):
+            v = data.get(key)
             if isinstance(v, list):
                 return v
+        lists = [v for v in data.values() if isinstance(v, list)]
+        if len(lists) == 1:
+            return lists[0]
     return None
 
 

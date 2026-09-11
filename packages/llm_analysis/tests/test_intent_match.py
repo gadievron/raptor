@@ -375,11 +375,16 @@ class TestIntentMatchVerdictAggregation:
             finding_function_name=None,
             finding_cwe=None,
         )
-        # 1 of 1 evaluated fired — function/cwe abstain (None), file
-        # overlap fires, compile-anchor is False (no errors).
-        # That's 1/2 evaluated → tiebreak case → uncertain w/o LLM
-        # Actually depends on aggregation; verify it's not crashing
-        assert v.verdict in {VERDICT_MATCHES, VERDICT_UNCERTAIN}
+        # function/cwe/compile-anchor all abstain (None — no data),
+        # file overlap fires: 1/1 evaluated. A single evaluated
+        # heuristic is too thin for a confident no-LLM verdict either
+        # way → ambiguous → uncertain without an LLM client.
+        assert v.verdict == VERDICT_UNCERTAIN
+        assert v.used_llm is False
+        assert v.signals["function_overlap"] is None
+        assert v.signals["cwe_shape"] is None
+        assert v.signals["compile_error_anchor"] is None
+        assert v.signals["file_overlap"] is True
 
     def test_no_exploit_code_returns_uncertain(self):
         v = intent_match(
@@ -645,3 +650,106 @@ class TestLLMContentTypeTolerance:
         v = intent_match(**self._AMBIGUOUS_KWARGS, llm_client=llm)
         assert v.used_llm is True
         # No specific verdict expected — what matters is no crash.
+
+
+class TestAbstentionSemantics:
+    """Heuristics abstain (None) on missing input — "no data" must
+    never score as "evaluated and missed", and confident off_target
+    needs at least two evaluated misses."""
+
+    def test_no_metadata_is_uncertain_not_off_target(self):
+        v = intent_match(exploit_code="raw payload bytes fwrite memset")
+        assert v.verdict == VERDICT_UNCERTAIN
+        assert v.confidence == 0.0
+        assert v.signals == {
+            "file_overlap": None,
+            "function_overlap": None,
+            "cwe_shape": None,
+            "compile_error_anchor": None,
+        }
+
+    def test_single_evaluated_miss_is_ambiguous_not_off_target(self):
+        v = intent_match(
+            exploit_code="raw payload bytes",
+            finding_file_path="src/parser.c",
+        )
+        assert v.verdict == VERDICT_UNCERTAIN
+        assert v.signals["file_overlap"] is False
+
+    def test_two_evaluated_misses_still_off_target(self):
+        # Two-direction: genuine multi-heuristic misses keep the
+        # confident off_target verdict.
+        v = intent_match(
+            exploit_code="import requests; requests.get(url)",
+            finding_file_path="src/parser.c",
+            finding_function_name="parse_header",
+        )
+        assert v.verdict == VERDICT_OFF_TARGET
+        assert v.signals["file_overlap"] is False
+        assert v.signals["function_overlap"] is False
+
+    def test_clean_compile_abstains(self):
+        v = intent_match(
+            exploit_code="parse_header in parser.c gets attacked",
+            finding_file_path="src/parser.c",
+            finding_function_name="parse_header",
+            exploit_compile_errors=[],
+        )
+        assert v.signals["compile_error_anchor"] is None
+        assert v.verdict == VERDICT_MATCHES  # 2/2 evaluated fired
+
+    def test_compile_errors_still_evaluated(self):
+        # Two-direction: real compile errors are still adjudicated.
+        v = intent_match(
+            exploit_code="x",
+            finding_file_path="src/parser.c",
+            finding_function_name="parse_header",
+            exploit_compile_errors=["parser.c:42: error: boom"],
+        )
+        assert v.signals["compile_error_anchor"] is True
+
+
+class TestNeverRaisesContract:
+
+    def test_describe_prompt_build_failure_degrades(self, monkeypatch):
+        import packages.llm_analysis.intent_match as im
+
+        def boom(_code):
+            raise ImportError("envelope substrate missing")
+
+        monkeypatch.setattr(im, "_build_describe_prompt", boom)
+
+        # Force the ambiguous branch (1 fired of 2 evaluated) so the
+        # tiebreak actually runs.
+        v = intent_match(
+            exploit_code="src/parser.c mentioned but not the function",
+            finding_file_path="src/parser.c",
+            finding_function_name="parse_header",
+            llm_client=object(),
+        )
+        assert v.verdict == VERDICT_UNCERTAIN
+        assert v.used_llm is True
+        assert v.llm_error is not None
+        assert v.llm_error.startswith("describe-prompt:")
+
+    def test_judge_prompt_build_failure_degrades(self, monkeypatch):
+        import packages.llm_analysis.intent_match as im
+
+        class _Client:
+            def generate(self, *a, **kw):
+                return type("R", (), {"content": "sends a payload",
+                                      "cost_usd": 0.0})()
+
+        def boom(**_kw):
+            raise RuntimeError("message shape drift")
+
+        monkeypatch.setattr(im, "_build_judge_prompt", boom)
+        v = intent_match(
+            exploit_code="src/parser.c mentioned but not the function",
+            finding_file_path="src/parser.c",
+            finding_function_name="parse_header",
+            llm_client=_Client(),
+        )
+        assert v.verdict == VERDICT_UNCERTAIN
+        assert v.llm_error is not None
+        assert v.llm_error.startswith("judge-prompt:")

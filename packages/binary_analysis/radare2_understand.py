@@ -400,6 +400,12 @@ class BinaryUnderstand:
             "x86_64": ("x86", "64"),
             "amd64": ("x86", "64"),
             "i386": ("x86", "32"),
+            # 32-bit names as emitted by the Mach-O slice selector
+            # (cpu_type 7 -> 'x86', cpu_type 12 -> 'arm'); without
+            # them a requested 32-bit slice silently got no -a/-b
+            # flags and r2 analysed the default slice instead.
+            "x86": ("x86", "32"),
+            "arm": ("arm", "32"),
         }
         selected = mapping.get(self.slice_arch)
         if selected:
@@ -714,6 +720,13 @@ class BinaryUnderstand:
             logger.warning("function list extraction failed: %s", e)
             return
 
+        # r2 output is hostile: shape-check before iterating so one
+        # malformed payload degrades this section instead of aborting
+        # the whole analysis.
+        if not isinstance(fns, list):
+            logger.warning("function list extraction failed: not a list")
+            return
+
         if len(fns) > self._MAX_FUNCTIONS:
             logger.warning(
                 "function list capped: %d -> %d",
@@ -721,7 +734,13 @@ class BinaryUnderstand:
             )
             fns = fns[:self._MAX_FUNCTIONS]
 
+        # Exports are a list for consumers that keep order; membership
+        # checks below use a set so the per-function test is O(1)
+        # rather than a linear scan of a possibly-huge export table.
+        exported_names = set(ctx.exports)
         for raw in fns:
+            if not isinstance(raw, dict):
+                continue
             name = str(raw.get("name", ""))
             if not name:
                 continue
@@ -750,7 +769,7 @@ class BinaryUnderstand:
                 size=size,
                 type=str(raw.get("type", "fcn")),
                 is_imported=is_imported,
-                is_exported=name in ctx.exports,
+                is_exported=name in exported_names,
             )
             # Route imports to their own bucket; real code goes to
             # interesting_functions only after passing a size filter
@@ -900,6 +919,8 @@ class BinaryUnderstand:
             strings_raw = []
         strings = []
         for s in strings_raw[:limit * 2]:
+            if not isinstance(s, dict):
+                continue  # r2 output is hostile; skip malformed elements
             text = str(s.get("string", "")).strip()
             if not text:
                 continue
@@ -949,9 +970,13 @@ class BinaryUnderstand:
                 )
             except Exception:  # noqa: BLE001 — r2 output is hostile; degrade
                 refs = []
+            if not isinstance(refs, list):
+                refs = []
             called = set()
             direct_callees = set(fn.direct_callees)
             for ref in refs:
+                if not isinstance(ref, dict):
+                    continue  # r2 output is hostile; skip malformed elements
                 if str(ref.get("type") or "").upper() == "CALL":
                     target_name = str(ref.get("name") or ref.get("refname") or "")
                     if target_name:
@@ -1047,6 +1072,8 @@ class BinaryUnderstand:
         #    matches named sinks and transitive reachability is zero.
         addr_to_name: dict[str, str] = {}
         for entry in callgraph:
+            if not isinstance(entry, dict):
+                continue  # r2 output is hostile; skip malformed elements
             ename = str(entry.get("name", ""))
             eaddr = entry.get("addr")
             if eaddr is None:
@@ -1060,12 +1087,16 @@ class BinaryUnderstand:
 
         callees: dict[str, set] = {}
         for entry in callgraph:
+            if not isinstance(entry, dict):
+                continue  # r2 output is hostile; skip malformed elements
             name = str(entry.get("name", ""))
             if not name:
                 continue
             this_callees = set()
             for ref_field in ("callrefs", "imports", "calls"):
                 refs = entry.get(ref_field) or []
+                if not isinstance(refs, list):
+                    continue
                 for ref in refs:
                     if isinstance(ref, dict):
                         target = ref.get("name")
@@ -1140,13 +1171,19 @@ class BinaryUnderstand:
                     prev_dist, prev_sinks = reached.get(
                         caller, (depth + 1, set()),
                     )
+                    # A (caller, sink) pair already recorded was reached
+                    # at <= this depth (BFS walks levels in order), so
+                    # its back-edges are already queued — re-appending
+                    # it only multiplies the frontier, which blows up
+                    # exponentially on dense/cyclic call graphs.
+                    already_queued = origin_sink in prev_sinks
                     new_sinks = prev_sinks | {origin_sink}
                     new_dist = min(prev_dist, depth)
                     reached[caller] = (new_dist, new_sinks)
                     # Add to next frontier so we walk further back
                     # — but only if we haven't already expanded past
                     # max depth.
-                    if depth < self._TRANSITIVE_MAX_DEPTH:
+                    if depth < self._TRANSITIVE_MAX_DEPTH and not already_queued:
                         next_frontier.append((caller, origin_sink, depth))
             frontier = next_frontier
 

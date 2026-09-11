@@ -255,13 +255,14 @@ def test_prove_unknown_sink_class_declines():
 # ---------------------------------------------------------------------------
 
 def test_extract_charset_sub_rebind():
-    diff = "+    x = re.sub('[/\\\\]+', '', x)\n"
+    diff = "+    x = re.sub(r'[/\\\\]+', '', x)\n"
     spec = sb.extract_validator(diff)
     assert spec is not None
     assert spec.kind == "charset_sub"
     assert spec.var_name == "x"
-    # The RAW class body is stored; _expand_charset_body interprets
-    # the `\\` escape exactly once, at proof time.
+    # The class body is stored as the regex engine receives it (raw
+    # string: no string-escape layer); _expand_charset_body interprets
+    # the `\\` REGEX escape exactly once, at proof time.
     assert spec.forbidden == "/\\\\"
     assert sb._expand_charset_body(spec.forbidden) == {"/", "\\"}
 
@@ -407,6 +408,36 @@ def test_substitution_dominance_false_when_var_reassigned():
     assert sb.substitution_dominates_sink(src, 3, 5, "x") is False
 
 
+def test_substitution_dominance_rebind_after_sink_inside_loop_invalidates():
+    """Loop back-edge: a rebind textually AFTER the sink but inside the
+    sink's loop reaches the sink on iteration 2 — the flat
+    (validator, sink) interval cannot see it and certified a flow that
+    sends unsanitized data into the sink from the second iteration on."""
+    src = (
+        "def f(items):\n"
+        "    x = req()\n"
+        "    x = re.sub(r'[/\\\\.]+', '', x)\n"  # line 3 — sub
+        "    for item in items:\n"               # line 4 — loop
+        "        open(x)\n"                      # line 5 — sink
+        "        x = item.raw_name\n"            # line 6 — rebind (back-edge)
+    )
+    assert sb.substitution_dominates_sink(src, 3, 5, "x") is False
+
+
+def test_substitution_dominance_rebind_after_sink_outside_loop_still_sound():
+    """Two-direction: straight-line code where the rebind follows the
+    sink with no loop — the rebound value can never reach the sink, so
+    dominance must hold."""
+    src = (
+        "def f():\n"
+        "    x = req()\n"
+        "    x = re.sub(r'[/\\\\.]+', '', x)\n"  # line 3 — sub
+        "    open(x)\n"                          # line 4 — sink
+        "    x = req()\n"                        # line 5 — rebind after sink
+    )
+    assert sb.substitution_dominates_sink(src, 3, 4, "x") is True
+
+
 def test_substitution_dominance_subscript_assignment_doesnt_invalidate():
     """``x[0] = ...`` is a MUTATION of contents, not a rebinding of
     ``x`` — must not invalidate dominance (still sound for the value
@@ -454,8 +485,9 @@ def test_try_tier0_sound_on_charset_sub_archetype(tmp_path: Path):
         sink_uri="app.py", sink_line=4, sink_class="pathtrav",
     )
     assert r.status is sb.Tier0Status.SOUND
-    # Artifact carries the RAW class body as spelled in the source.
-    assert r.artifact == "smt:charset_sub:[/\\\\\\\\.]@app.py:3"
+    # Artifact carries the class body as the regex ENGINE receives it
+    # (string-escape layer decoded; regex escapes intact).
+    assert r.artifact == "smt:charset_sub:[/\\\\.]@app.py:3"
     assert "set inclusion" in r.reasoning
 
 
@@ -523,6 +555,47 @@ def test_extract_java_with_throw():
     diff = '+if (!slug.matches("^[a-z0-9]+$")) throw new IllegalArgumentException();\n'
     spec = sb.extract_validator(diff, language="java")
     assert spec is not None and spec.charset == "a-z0-9"
+
+
+def test_extract_java_decodes_string_escape_layer():
+    r"""Java source ``"[A-Za-z0-9\\-_]+"`` reaches the regex engine as
+    ``[A-Za-z0-9\-_]+`` — a literal ``-``, not a ``\``..``_`` range.
+    Modeling the source spelling dropped ``-`` from the charset, so the
+    Z3 intersection with the sqli danger set ('-' builds ``--``
+    comments) proved empty — a false SOUND for a validator the real
+    input ``a--b`` passes."""
+    diff = '+if (!id.matches("[A-Za-z0-9\\\\-_]+")) return error();\n'
+    spec = sb.extract_validator(diff, language="java")
+    assert spec is not None
+    assert spec.charset == r"A-Za-z0-9\-_"
+    expanded = sb._expand_charset_body(spec.charset)
+    assert "-" in expanded
+    assert "\\" not in expanded
+    v = sb.prove_neutralizes(spec, "sqli")
+    assert v.sound is False
+    assert v.counterexample == "-"
+
+
+def test_extract_python_nonraw_sub_decodes_string_escape_layer():
+    r"""Non-raw Python ``re.sub('[/.\\-_]+', '', x)`` strips
+    ``{/ . - _}`` — NOT a backslash.  Modeling the source spelling put
+    ``\`` in the forbidden set (never stripped by the real regex) and
+    dropped ``-`` — a false SOUND for pathtrav's ``\`` danger char."""
+    diff = "+x = re.sub('[/.\\\\-_]+', '', x)\n"
+    spec = sb.extract_validator(diff)
+    assert spec is not None and spec.kind == "charset_sub"
+    expanded = sb._expand_charset_body(spec.forbidden)
+    assert expanded == {"/", ".", "-", "_"}
+
+
+def test_extract_python_raw_string_layer_untouched():
+    r"""Raw strings have no string-escape layer: ``r'[\\-]'`` keeps its
+    doubled backslash for the regex layer (escaped ``\`` + literal
+    ``-``) — the decode must not collapse it."""
+    diff = "+x = re.sub(r'[\\\\-]+', '', x)\n"
+    spec = sb.extract_validator(diff)
+    assert spec is not None and spec.kind == "charset_sub"
+    assert sb._expand_charset_body(spec.forbidden) == {"\\", "-"}
 
 
 @pytest.mark.parametrize("line,expected_charset,expected_var", [
@@ -863,6 +936,47 @@ def test_chain_does_not_grow_through_unrelated_assignment():
     )
     assert sb._python_chain_reaches_sink(
         tree, "x", 2, 4, "    return open(y)",
+    ) is False
+
+
+def test_chain_does_not_grow_through_nested_function_assignment():
+    """Scope soundness: an assignment inside a NESTED def between
+    validator and sink binds the nested scope's name — a line-window
+    walk treated it as straight-line code and extended the validated
+    chain across scopes, certifying the enclosing (unvalidated)
+    variable at the sink."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def f(request):\n"
+        "    name = request.args.get('name')\n"
+        "    if not re.match(r'^[a-z]+$', name):\n"
+        "        return 'bad'\n"
+        "    def helper():\n"
+        "        cfg = name\n"          # nested-scope binding of cfg
+        "        return cfg\n"
+        "    return open(cfg)\n"        # enclosing cfg is NOT the nested one
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "name", 3, 8, "    return open(cfg)",
+    ) is False
+
+
+def test_chain_kill_survives_when_rebind_shares_loop_with_sink():
+    """Loop back-edge kill: a same-name assignment after the sink but
+    inside the sink's loop reaches the sink on iteration 2 — the chain
+    member must be killed, not certified."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def f(items, request):\n"
+        "    name = request.args.get('name')\n"
+        "    if not re.match(r'^[a-z]+$', name):\n"
+        "        return 'bad'\n"
+        "    for item in items:\n"
+        "        open(name)\n"           # line 6 — sink
+        "        name = item.raw_name\n"  # line 7 — back-edge rebind
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "name", 3, 6, "        open(name)",
     ) is False
 
 
@@ -1271,7 +1385,7 @@ def test_try_tier0_not_applicable_when_substitution_var_reassigned(tmp_path: Pat
     (tmp_path / "app.py").write_text(
         "def f():\n"
         "    x = req()\n"
-        "    x = re.sub('[/\\\\]+', '', x)\n"   # line 3 — sub
+        "    x = re.sub(r'[/\\\\]+', '', x)\n"  # line 3 — sub
         "    x = req()\n"                       # line 4 — REASSIGNED
         "    return open(x)\n"                  # line 5 — sink
     )
@@ -1279,7 +1393,7 @@ def test_try_tier0_not_applicable_when_substitution_var_reassigned(tmp_path: Pat
         "@@ -1,4 +1,5 @@\n"
         " def f():\n"
         "     x = req()\n"
-        "+    x = re.sub('[/\\\\]+', '', x)\n"
+        "+    x = re.sub(r'[/\\\\]+', '', x)\n"
         "     x = req()\n"
         "     return open(x)\n"
     )
@@ -1635,10 +1749,19 @@ def test_extract_refuses_re_sub_with_flags_argument():
 
 
 def test_extract_plain_re_sub_rebind_still_lifts():
-    diff = "+    x = re.sub('[/\\\\]+', '', x)\n"
+    diff = "+    x = re.sub(r'[/\\\\]+', '', x)\n"
     spec = sb.extract_validator(diff)
     assert spec is not None
     assert spec.kind == "charset_sub"
+
+
+def test_extract_refuses_nonraw_pattern_invalid_after_decode():
+    r"""Non-raw ``'[/\\]+'`` reaches the regex engine as ``[/\]+`` —
+    an unterminated character set (compile error at the sub call).  The
+    extractor must refuse the lift rather than model the source
+    spelling as ``{/, \}``."""
+    diff = "+    x = re.sub('[/\\\\]+', '', x)\n"
+    assert sb.extract_validator(diff) is None
 
 
 def test_extract_refuses_ruby_guard_with_regex_flags():

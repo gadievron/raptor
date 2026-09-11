@@ -14,12 +14,12 @@ metadata is left to ``PipResolver`` since it's not a Poetry project.
 from __future__ import annotations
 
 import logging
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 from . import ResolverResult, _check_tool, _run
+from ._safe_io import copy_regular_file, read_regular_text
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +43,12 @@ class PoetryResolver:
         return _check_tool(["poetry", "--version"])
 
     def matches(self, project_dir: Path) -> bool:
-        pyproject = project_dir / "pyproject.toml"
-        if not pyproject.exists():
-            return False
-        try:
-            text = pyproject.read_text(encoding="utf-8")
-        except OSError:
+        # The path lives in the scanned (hostile) directory — an
+        # lstat-gated, bounded read so a symlinked pyproject.toml
+        # can't steer the probe at operator files and a FIFO can't
+        # hang it.
+        text = read_regular_text(project_dir / "pyproject.toml")
+        if text is None:
             return False
         # Cheap text check — no need to TOML-parse just to detect a
         # Poetry project. ``[tool.poetry]`` is unambiguous and
@@ -73,12 +73,14 @@ class PoetryResolver:
 
         # Copy manifest files into a writable tempdir — the sandbox
         # only allows writes to the output dir and /tmp, not cwd.
+        # lstat-gated content copy: the sources sit in the scanned
+        # (hostile) directory, so symlinks are not followed and
+        # FIFOs are never opened (a follow-happy copy would leak
+        # operator files into the resolve, or hang on a FIFO).
         with tempfile.TemporaryDirectory(prefix="raptor-sca-poetry-") as tmp:
             tmp_path = Path(tmp)
             for fname in ("pyproject.toml", "poetry.lock"):
-                src = project_dir / fname
-                if src.exists():
-                    shutil.copy2(src, tmp_path / fname)
+                copy_regular_file(project_dir / fname, tmp_path / fname)
 
             try:
                 proc = _run(

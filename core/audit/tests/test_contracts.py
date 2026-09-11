@@ -63,6 +63,66 @@ class TestExtractCalleeContracts:
         assert contracts[0].callee_function == "ssl_read"
         assert "ctx" in contracts[0].preconditions[0]
 
+    def test_summary_list_shape_accepted(self):
+        # The enforcement entry point receives the RAW LIST of
+        # summaries in production; `.items()` on it raised
+        # AttributeError and killed the contract-violation leg.
+        summaries = [
+            FakeSummary(
+                function="ssl_read",
+                file="lib.c",
+                preconditions=[
+                    FakePrecondition(
+                        param="ctx",
+                        param_index=0,
+                        conditions=["ctx != NULL"],
+                    ),
+                ],
+            ),
+        ]
+        gap = {
+            "file": "app.c",
+            "name": "handle_request",
+            "callees": [{"name": "ssl_read", "file": "lib.c"}],
+        }
+        contracts = extract_callee_contracts(gap, summaries)
+        assert len(contracts) == 1
+        assert contracts[0].callee_function == "ssl_read"
+
+    def test_enforce_with_summary_list_finds_violation(self):
+        from core.audit.contracts import enforce_callee_contracts
+        summaries = [
+            FakeSummary(
+                function="ssl_read",
+                file="lib.c",
+                preconditions=[
+                    FakePrecondition(
+                        param="ctx",
+                        param_index=0,
+                        conditions=["ctx != NULL"],
+                    ),
+                ],
+            ),
+        ]
+        gap = {
+            "file": "app.c",
+            "name": "handle_request",
+            "callees": [{"name": "ssl_read", "file": "lib.c"}],
+        }
+        source = "int handle_request(ctx_t *ctx) { return ssl_read(ctx); }"
+        violations = enforce_callee_contracts(gap, summaries, source)
+        assert len(violations) == 1
+        assert violations[0].callee_function == "ssl_read"
+
+    def test_unknown_summaries_shape_reads_empty(self):
+        gap = {
+            "file": "app.c",
+            "name": "f",
+            "callees": [{"name": "g", "file": "lib.c"}],
+        }
+        assert extract_callee_contracts(gap, "not-a-mapping") == []
+        assert extract_callee_contracts(gap, None) == []
+
     def test_with_taint_rules(self):
         summaries = {
             "lib.c:memcpy_wrapper": FakeSummary(

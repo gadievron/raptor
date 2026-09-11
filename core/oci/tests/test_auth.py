@@ -383,3 +383,47 @@ def test_first_contact_401_does_not_evict_unrelated_entries():
 
     client.resolve_digest(ref)
     assert client._tokens[other_key] == "other-token"
+
+
+# ── multi-challenge WWW-Authenticate ───────────────────────────────────
+
+
+class TestMultiChallengeParsing:
+    """Nexus / Artifactory offer Bearer AND Basic; core.http folds the
+    duplicate headers with newlines (or the registry comma-joins one
+    header). Merging both challenges' params corrupted the realm
+    triple in either order."""
+
+    BEARER = 'Bearer realm="https://reg.example/token",service="reg"'
+    BASIC = 'Basic realm="Sonatype Nexus Repository Manager"'
+
+    def _assert_bearer(self, header: str) -> None:
+        scheme, params = parse_www_authenticate(header)
+        assert scheme == "Bearer"
+        assert params["realm"] == "https://reg.example/token"
+        assert params["service"] == "reg"
+
+    def test_newline_folded_either_order(self) -> None:
+        self._assert_bearer(f"{self.BASIC}\n{self.BEARER}")
+        self._assert_bearer(f"{self.BEARER}\n{self.BASIC}")
+
+    def test_comma_joined_either_order(self) -> None:
+        self._assert_bearer(f"{self.BASIC}, {self.BEARER}")
+        self._assert_bearer(f"{self.BEARER}, {self.BASIC}")
+
+    def test_basic_only_still_parses(self) -> None:
+        scheme, params = parse_www_authenticate(self.BASIC)
+        assert scheme == "Basic"
+        assert params["realm"] == "Sonatype Nexus Repository Manager"
+
+    def test_single_bearer_unchanged(self) -> None:
+        self._assert_bearer(self.BEARER)
+
+
+def test_basic_credentials_repr_masks_password() -> None:
+    from core.oci.auth import BasicCredentials
+    creds = BasicCredentials("user", "s3cret-value")
+    assert "s3cret-value" not in repr(creds)
+    assert "s3cret-value" not in str(creds)
+    # The header rendering still carries it, by contract.
+    assert creds.to_basic_header()

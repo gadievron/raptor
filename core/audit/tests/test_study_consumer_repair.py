@@ -333,3 +333,129 @@ class TestStudyRunUsesLowPriorityThrottle:
             "study batches must acquire the throttle slot at low "
             f"priority; got {throttle.priorities}"
         )
+
+
+class TestSkipPathsReleaseGate:
+    """Every consumer skip path must release the suppression gate for
+    the concepts it drops — a concept left pending with no future
+    batch holds the executor's suppression wait forever."""
+
+    def _config(self, tmp_path, out_dir="same"):
+        return OrchestratorConfig(
+            target_path=tmp_path,
+            out_dir=tmp_path if out_dir == "same" else None,
+        )
+
+    def _loop(self, config, queue, domain_model=None):
+        shared = types.SimpleNamespace(domain_model=domain_model)
+        _study_consumer_loop(
+            queue, config, shared, lambda ctx, cfg: None,
+            _LockedOutcomes(), OrchestratorResult(),
+            checklist={"files": []},
+            context_map=None,
+            evidence_index={},
+            sarif_cache=None,
+            entry_points=set(),
+            start_time=time.monotonic(),
+            on_progress=None,
+        )
+
+    @staticmethod
+    def _queue(*questions):
+        q = StudyQueue()
+        for question in questions:
+            q.enqueue(StudyRequest(
+                question=question,
+                source_file="a.c",
+                source_function="fn",
+                resolution="concept",
+            ))
+        q.signal_producer_done()
+        return q
+
+    def test_dedup_dropped_batch_releases_gate(self, tmp_path):
+        # Concept already in the domain model: dedup drops the whole
+        # batch — its pending entry must drain, not park forever.
+        q = self._queue("what is sk_buff?")
+        assert "sk_buff" in q.pending_concepts()
+        self._loop(
+            self._config(tmp_path), q,
+            domain_model={"concepts": [{"name": "sk_buff"}]},
+        )
+        assert q.pending_concepts() == frozenset()
+
+    def test_no_out_dir_releases_gate(self, tmp_path):
+        q = self._queue("what is foo_ctx?")
+        self._loop(self._config(tmp_path, out_dir=None), q)
+        assert q.pending_concepts() == frozenset()
+
+    def test_flush_failure_releases_gate(self, monkeypatch, tmp_path):
+        import core.concepts.audit_bridge as _bridge
+
+        def boom(*a, **kw):
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(_bridge, "queue_reading_list_item", boom)
+        warnings = _capture_warnings(monkeypatch)
+        q = self._queue("what is foo_ctx?")
+        self._loop(self._config(tmp_path), q)
+        assert q.pending_concepts() == frozenset()
+        assert any("flush to reading-list failed" in m for m in warnings)
+
+    def test_study_run_failure_releases_gate(self, monkeypatch, tmp_path):
+        import core.audit.orchestrator as _orch
+
+        def fake_prep(cmd, **kwargs):
+            (tmp_path / "study-list.json").write_text("{}")
+            return types.SimpleNamespace(returncode=0, stderr="")
+
+        def boom(config):
+            raise RuntimeError("transport down")
+
+        monkeypatch.setattr(_orch, "_run_study_prep", fake_prep)
+        monkeypatch.setattr(_orch, "_run_llm_client", boom)
+        warnings = _capture_warnings(monkeypatch)
+        q = self._queue("what is foo_ctx?")
+        self._loop(self._config(tmp_path), q)
+        assert q.pending_concepts() == frozenset()
+        assert any("study-run failed" in m for m in warnings)
+
+
+class TestWithinBatchDuplicateKeepsHold:
+    """A dropped within-batch duplicate shares its concept with a
+    fresh sibling that is STILL being studied — marking it studied at
+    batch start would release the executor's suppression hold minutes
+    before the study result exists."""
+
+    @staticmethod
+    def _req(question):
+        return StudyRequest(
+            question=question, source_file="a.c",
+            source_function="fn", resolution="concept",
+        )
+
+    def test_duplicate_concept_stays_held_while_fresh_sibling_studies(self):
+        from core.audit.orchestrator import _mark_concepts_studied
+        q = StudyQueue()
+        q.enqueue(self._req("what is sk_buff layout?"))
+        q.enqueue(self._req("what is sk_buff lifetime?"))
+        assert "sk_buff" in q.pending_concepts()
+        fresh = [self._req("what is sk_buff layout?")]
+        dropped = [self._req("what is sk_buff lifetime?")]
+        _mark_concepts_studied(q, dropped, exclude=fresh)
+        # The fresh sibling still owns the concept: hold NOT released.
+        assert "sk_buff" in q.pending_concepts()
+        # When the fresh item's own path completes, the gate releases.
+        _mark_concepts_studied(q, fresh)
+        assert "sk_buff" not in q.pending_concepts()
+
+    def test_dropped_concept_without_fresh_sibling_still_releases(self):
+        from core.audit.orchestrator import _mark_concepts_studied
+        q = StudyQueue()
+        q.enqueue(self._req("what is netlink_sock?"))
+        assert "netlink_sock" in q.pending_concepts()
+        _mark_concepts_studied(
+            q, [self._req("what is netlink_sock?")],
+            exclude=[self._req("what is sk_buff layout?")],
+        )
+        assert "netlink_sock" not in q.pending_concepts()

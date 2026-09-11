@@ -96,8 +96,12 @@ _STRUCT_DEF_RE = re.compile(
     re.DOTALL,
 )
 
+# Field declaration: base type word, optional pointer stars (attached
+# to either side — ``char *name;`` used to be skipped because the
+# star was only accepted as part of the TYPE token, leaving every
+# later offset 8 bytes short), field name, optional array dims.
 _STRUCT_FIELD_RE = re.compile(
-    r'(\w+(?:\s*\*)?)\s+(\w+)'
+    r'(\w+)\s*(\*+\s*)?(\w+)'
     r'(?:\[(\d+)\])?\s*;',
 )
 
@@ -116,6 +120,23 @@ _COPY_INTO_OFFSET_RE = re.compile(
     r'([^,]+),'
     r'([^)]+)\)',
 )
+
+
+def _struct_var_binding_re(struct_name: str) -> re.Pattern[str]:
+    """Regex binding local variables to *struct_name*.
+
+    Two real decompiled shapes: a cast assignment
+    (``p = (mystruct *)malloc(0x20)`` — the struct name is INSIDE the
+    cast; the old regex expected it AFTER an optional parenthesised
+    group, so struct-layout and REType knowledge never bound to any
+    variable) and a typed pointer declaration (``mystruct *p``).
+    The variable is ``group(1) or group(2)``.
+    """
+    esc = re.escape(struct_name)
+    return re.compile(
+        r'\b(\w+)\s*=\s*\(\s*(?:struct\s+)?' + esc + r'\s*\*+\s*\)'
+        r'|\b(?:struct\s+)?' + esc + r'\s*\*+\s*(\w+)\b',
+    )
 
 
 def _parse_int(s: str) -> Optional[int]:
@@ -145,12 +166,12 @@ def _extract_struct_layouts(
         fields: List[Dict[str, Any]] = []
 
         for fm in _STRUCT_FIELD_RE.finditer(body):
-            field_type = fm.group(1).strip()
-            field_name = fm.group(2)
-            array_size = _parse_int(fm.group(3)) if fm.group(3) else None
+            base_type = fm.group(1).strip()
+            is_pointer = fm.group(2) is not None
+            field_name = fm.group(3)
+            array_size = _parse_int(fm.group(4)) if fm.group(4) else None
 
-            base_type = field_type.rstrip(' *')
-            is_pointer = '*' in field_type
+            field_type = f"{base_type} *" if is_pointer else base_type
             if is_pointer:
                 elem_size = 8
             else:
@@ -243,6 +264,12 @@ def _load_re_type_fields(
         struct_name = t.get("name", "")
         if not struct_name:
             continue
+        local_re = _struct_var_binding_re(struct_name)
+        struct_vars = [
+            m.group(1) or m.group(2) for m in local_re.finditer(source)
+        ]
+        if not struct_vars:
+            continue
         for fld in t["fields"]:
             offset = fld.get("offset")
             fsize = fld.get("size")
@@ -250,12 +277,7 @@ def _load_re_type_fields(
                 continue
             if fsize <= 0:
                 continue
-            local_re = re.compile(
-                r'\b(\w+)\s*=\s*(?:\([^)]*\)\s*)?'
-                + re.escape(struct_name) + r'\b',
-            )
-            for m in local_re.finditer(source):
-                var = m.group(1)
+            for var in struct_vars:
                 if var not in known:
                     known[var] = {}
                 known[var][offset] = {
@@ -288,7 +310,13 @@ def check_struct_field_copy(
 
     search_source = source
     if xref_source:
-        search_source = source + xref_source
+        # Newline separator: both inputs are decompiler output with no
+        # guaranteed trailing newline, and a bare concatenation let a
+        # regex match SPAN the seam — a token assembled from the
+        # primary's tail plus the xref's head minted a fabricated
+        # finding attributed to the primary function
+        # (seam-match start < primary_len => is_xref=False).
+        search_source = source + "\n" + xref_source
 
     layouts = _extract_struct_layouts(search_source)
     offset_accesses = _extract_offset_accesses(search_source)
@@ -299,13 +327,13 @@ def check_struct_field_copy(
         known_fields = _load_re_type_fields(re_types, search_source)
 
     for struct_name, fields in layouts.items():
+        local_re = _struct_var_binding_re(struct_name)
+        struct_vars = [
+            m.group(1) or m.group(2)
+            for m in local_re.finditer(search_source)
+        ]
         for f in fields:
-            local_re = re.compile(
-                r'\b(\w+)\s*=\s*(?:\([^)]*\)\s*)?'
-                + re.escape(struct_name) + r'\b',
-            )
-            for m in local_re.finditer(search_source):
-                var = m.group(1)
+            for var in struct_vars:
                 if var not in known_fields:
                     known_fields[var] = {}
                 if f["offset"] not in known_fields[var]:

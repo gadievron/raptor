@@ -139,6 +139,22 @@ class TestCheckCoccinelle:
         assert result.status == "ok"
         assert "applicable" in result.detail
 
+    def test_no_detected_language_warns_not_ok(self):
+        # primary_language=None means ZERO recognised source files —
+        # a positive "applicable" claim there is unearned; an honest
+        # applicability-unknown warning beats silent uselessness.
+        with patch("shutil.which", return_value="/usr/bin/spatch"):
+            with patch(
+                "packages.describe.tool_readiness._bin_version",
+                return_value="1.3.0",
+            ):
+                result = _check_coccinelle(
+                    _shape(primary_language=None,
+                           languages={}, language_breakdown={}),
+                )
+        assert result.status == "warn"
+        assert "no recognised source language" in result.detail
+
     def test_python_target_warns_about_zero_fire(self):
         # Cocci's shipped rule pack is C-only — honest "will
         # 0-fire" warning instead of pretending it works.

@@ -91,6 +91,32 @@ class TestFuzzingTelemetry(unittest.TestCase):
             self.assertEqual(summary["fuzzer"], "afl++")
             self.assertEqual(summary["crashes"], 1)
 
+    def test_exec_stat_progression_persisted_but_throttled(self):
+        # The JSONL trail contract covers the executions progression;
+        # per-stderr-line callers (libFuzzer) must not flood it — one
+        # exec_stat per disk interval.
+        with tempfile.TemporaryDirectory() as tmp:
+            tel = FuzzingTelemetry(out_dir=Path(tmp))
+            tel.start()
+            for n in range(1, 6):
+                tel.update_stats(total_executions=n * 100)
+            # Simulate the interval elapsing.
+            tel._last_exec_stat_disk = 0.0
+            tel.update_stats(total_executions=999)
+            tel.stop()
+
+            events = [
+                json.loads(line)
+                for line in (Path(tmp) / "fuzz-events.jsonl").read_text().splitlines()
+                if line.strip()
+            ]
+            exec_stats = [e for e in events if e["kind"] == "exec_stat"]
+            # First call persisted, next four throttled, post-interval
+            # call persisted again.
+            self.assertEqual(len(exec_stats), 2)
+            self.assertEqual(exec_stats[0]["total_executions"], 100)
+            self.assertEqual(exec_stats[1]["total_executions"], 999)
+
     def test_first_path_event_emitted_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             tel = FuzzingTelemetry(out_dir=Path(tmp))

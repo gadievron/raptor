@@ -405,6 +405,51 @@ function route(method) {
         assert "GET" in result[0].keys
         assert "POST" in result[0].keys
 
+    @requires_ts("c")
+    def test_integer_switch_body_strings_are_not_keys(self):
+        # Only the case LABEL may contribute a key: an integer switch
+        # whose bodies log strings used to harvest those strings as a
+        # dispatch table, minting bogus dead-branch reports.
+        src = """\
+void handle(int code) {
+    switch (code) {
+    case 1:
+        log_msg("connection lost");
+        break;
+    case 2:
+        log_msg("timeout expired");
+        break;
+    case 3:
+        log_msg("bad checksum");
+        break;
+    }
+}
+"""
+        result = extract_dispatch_tables("handle.c", src)
+        assert result is not None
+        assert result == []
+
+    @requires_ts("javascript")
+    def test_string_label_kept_when_body_also_has_strings(self):
+        # Control: label strings still land even with body strings
+        # present.
+        src = """\
+function route(method) {
+    switch (method) {
+    case "GET":
+        log("got GET request");
+        break;
+    case "POST":
+        log("got POST request");
+        break;
+    }
+}
+"""
+        result = extract_dispatch_tables("route.js", src)
+        assert result is not None
+        assert len(result) == 1
+        assert result[0].keys == ["GET", "POST"]
+
     @requires_ts("go")
     def test_single_case_not_dispatch(self):
         src = """\

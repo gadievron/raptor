@@ -86,6 +86,53 @@ def test_canonical_dedups_repeated_lockfile_versions() -> None:
     assert len(select_canonical_for_osv(deps)) == 1
 
 
+def test_canonical_keeps_distinct_manifest_versions() -> None:
+    """Two manifests declaring DIFFERENT versions of the same dep are
+    independent claims — both must reach OSV, or the vulnerable one
+    could be silently skipped."""
+    deps = [
+        _dep("requests", "2.31.0", path="/a/requirements.txt"),
+        _dep("requests", "2.19.1", path="/b/requirements.txt"),
+    ]
+    canonical = select_canonical_for_osv(deps)
+    versions = sorted(d.version for d in canonical)
+    assert versions == ["2.19.1", "2.31.0"]
+
+
+def test_canonical_dedups_repeated_manifest_versions() -> None:
+    """Identical (ecosystem, name, version) manifest duplicates still
+    collapse to a single canonical row."""
+    deps = [
+        _dep("requests", "2.31.0", path="/a/requirements.txt"),
+        _dep("requests", "2.31.0", path="/b/requirements.txt"),
+    ]
+    assert len(select_canonical_for_osv(deps)) == 1
+
+
+def test_canonical_resolved_manifest_version_beats_placeholder() -> None:
+    """A literal ``${VAR}`` "version" (Dockerfile RUN scanned before
+    ARG expansion) is the same declaration as the resolved ARG pin —
+    only the concrete version survives."""
+    deps = [
+        _dep("black", "20.8b1", path="/a/Dockerfile"),
+        _dep("black", "${BLACK_VERSION}", path="/a/Dockerfile"),
+    ]
+    canonical = select_canonical_for_osv(deps)
+    assert [d.version for d in canonical] == ["20.8b1"]
+
+
+def test_canonical_placeholder_only_manifest_row_survives() -> None:
+    """When every manifest row is a placeholder, one still surfaces so
+    the dep isn't silently dropped from the run."""
+    deps = [
+        _dep("black", "${BLACK_VERSION}", path="/a/Dockerfile"),
+        _dep("black", "${OTHER_VERSION}", path="/b/Dockerfile"),
+    ]
+    canonical = select_canonical_for_osv(deps)
+    assert len(canonical) == 1
+    assert canonical[0].version == "${BLACK_VERSION}"
+
+
 def test_canonical_keeps_corridor_row_when_nothing_better() -> None:
     """A range pin (``pkg<2.0``) resolves to version=None but carries a
     corridor bound — it must reach OSV via the corridor path rather
@@ -212,6 +259,46 @@ def test_run_sca_end_to_end_against_log4shell_fixture(tmp_path: Path) -> None:
     assert "SCA Report" in md
     assert "log4j-core" in md
     assert "**KEV**" in md
+
+
+def test_run_sca_result_carries_in_process_eco_breakdown(
+    tmp_path: Path,
+) -> None:
+    """``RunResult.eco_breakdown`` partitions the vuln findings by
+    finding ecosystem, computed from the in-memory list — consumers
+    (e.g. the calibration stress sweep) must never have to re-read
+    findings.json for it, because a size-capped re-read of a large
+    artifact degrades to an empty breakdown that is indistinguishable
+    from a genuinely clean scan."""
+    target = tmp_path / "repo"
+    out = tmp_path / "out"
+    target.mkdir()
+    # Two ecosystems in the dep set; only the Maven dep matches an
+    # advisory in the stub. The breakdown counts FINDINGS, not deps.
+    (target / "pom.xml").write_text(
+        '<project xmlns="http://maven.apache.org/POM/4.0.0">'
+        '<dependencies><dependency>'
+        '<groupId>org.apache.logging.log4j</groupId>'
+        '<artifactId>log4j-core</artifactId>'
+        '<version>2.14.1</version>'
+        '</dependency></dependencies></project>',
+        encoding="utf-8",
+    )
+    (target / "package.json").write_text(
+        '{"dependencies": {"lodash": "4.17.21"}}', encoding="utf-8",
+    )
+
+    http = StubHttp()
+    cache = JsonCache(root=tmp_path / "cache")
+    result = run_sca(
+        target=target, output_dir=out,
+        options=RunOptions(enable_llm_review=False, enable_triage=False),
+        http=http, cache=cache,
+    )
+
+    assert result.eco_breakdown == {"Maven": 1}
+    # Invariant: the breakdown always sums to the vuln-finding count.
+    assert sum(result.eco_breakdown.values()) == result.vuln_findings
 
 
 def test_run_sca_offline_mode_does_not_call_network(tmp_path: Path) -> None:

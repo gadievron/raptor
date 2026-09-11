@@ -20,7 +20,7 @@ from cve_diff.cli.bench import (
 @pytest.mark.parametrize("err,expected", [
     ("DiscoveryError: CVE-X: agent surrendered (budget_cost_usd): iters=15 ...", "budget_cost_usd"),
     ("DiscoveryError: CVE-X: agent surrendered (budget_iterations): ...", "budget_iterations"),
-    ("DiscoveryError: CVE-X: agent surrendered (budget_tokens): ...", "budget_tokens"),
+    ("DiscoveryError: CVE-X: agent surrendered (budget_s): elapsed=720.4s", "budget_s"),
     ("DiscoveryError: CVE-X: agent surrendered (llm_error): Anthropic 529", "llm_error"),
     ("DiscoveryError: CVE-X: agent surrendered (no_evidence): ...", "no_evidence"),
     ("UnsupportedSource: CVE-X: closed-source", "UnsupportedSource"),
@@ -40,7 +40,7 @@ def test_transient_classes_set() -> None:
     })
     # These must NOT be in the retry set:
     for settled in ("UnsupportedSource", "no_evidence", "budget_cost_usd",
-                    "budget_iterations", "budget_tokens", "PASS"):
+                    "budget_iterations", "budget_s", "PASS"):
         assert settled not in _TRANSIENT_CLASSES
 
 
@@ -89,11 +89,11 @@ def _make_summary() -> _BenchSummary:
         _CveResult(cve_id="CVE-X-001", ok=True, elapsed_s=12.5, files_changed=2, diff_bytes=1500,
                    shape="source", error_class="PASS",
                    agent_tool_calls=("osv_raw", "gh_commit_detail", "submit_result"),
-                   agent_cost_usd=0.32, llm_retries=0),
+                   agent_cost_usd=0.32),
         _CveResult(cve_id="CVE-X-002", ok=True, elapsed_s=18.0, files_changed=1, diff_bytes=800,
                    shape="source", error_class="PASS",
                    agent_tool_calls=("deterministic_hints", "gh_commit_detail", "submit_result"),
-                   agent_cost_usd=0.18, llm_retries=1, meta_retry_attempted=True),
+                   agent_cost_usd=0.18, meta_retry_attempted=True),
         _CveResult(cve_id="CVE-X-003", ok=False, elapsed_s=4.2,
                    error="UnsupportedSource: CVE-X-003: Adobe Flash closed-source",
                    error_class="UnsupportedSource",
@@ -137,8 +137,9 @@ def test_markdown_outcome_distribution_includes_only_present_classes() -> None:
 
 def test_markdown_recovery_layers() -> None:
     md = _render_bench_markdown(_make_summary())
-    # llm_retries: only CVE-X-002 had retries; it passed -> 1 triggered, 1 recovered
-    assert "| In-loop LLM retry (3 attempts, 0/5/15s) | 1 | 1 |" in md
+    # No in-loop LLM retry layer exists in the tool-use engine — the
+    # report must not fabricate a row for it.
+    assert "In-loop LLM retry" not in md
     # meta_retry_attempted: only CVE-X-002; passed -> 1, 1
     assert "| Meta-retry on budget+candidates | 1 | 1 |" in md
     # bench-retry: not exercised in this synthetic summary

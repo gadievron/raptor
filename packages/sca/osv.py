@@ -164,7 +164,6 @@ def _matches_corridor(rec: OsvRecord, dep: Dependency) -> bool:
             and _canonical_name(eco, blk_name) != want
         ):
             continue
-        evaluated_ranges = False
         for rng in blk.ranges:
             if rng.type == "GIT":
                 continue
@@ -174,14 +173,15 @@ def _matches_corridor(rec: OsvRecord, dep: Dependency) -> bool:
                     dep.version_floor, dep.version_ceiling,
                 ):
                     return True
-                evaluated_ranges = True
             except VersionError:
                 continue
-        if evaluated_ranges:
-            # Ranges are authoritative; the explicit ``versions``
-            # array is a redundant enumeration when both ship. Only
-            # fall back to it when no range could be evaluated.
-            continue
+        # OSV affected-block semantics are a UNION: a version matches
+        # when it is inside any range OR listed in the explicit
+        # ``versions`` array. The array is not just a redundant
+        # enumeration of the ranges — advisories legitimately list
+        # affected versions the ranges don't cover (e.g. backport
+        # streams enumerated only by version), so it is always
+        # evaluated, not only when no range could be.
         for v in blk.versions:
             try:
                 if (

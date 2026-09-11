@@ -219,16 +219,20 @@ def extract_imports(path: Path, repo: Path) -> list[str] | None:
         if isinstance(node, ast.Import):
             modules.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
-            if node.module is None:
-                base = own_package
-            elif node.level > 0:
+            if node.level > 0 or node.module is None:
                 # Relative import — resolve against the file's package.
+                # level=1 means current package, level=2 means parent,
+                # etc. The level walk applies whether or not a module
+                # is named: `from .. import client` arrives with
+                # module=None and level=2, and resolving it against
+                # the CURRENT package (instead of the parent) minted
+                # wrong edges — under-scoped CodeQL PR scans and test
+                # dispatch missed genuinely-affected files.
                 pkg_parts = own_package.split(".") if own_package else []
-                # level=1 means current package, level=2 means parent, etc.
                 up = node.level - 1
                 if up > 0 and len(pkg_parts) >= up:
                     pkg_parts = pkg_parts[:-up]
-                base = ".".join(pkg_parts + [node.module]) if node.module else ".".join(pkg_parts)
+                base = ".".join([*pkg_parts, node.module]) if node.module else ".".join(pkg_parts)
             else:
                 base = node.module
 

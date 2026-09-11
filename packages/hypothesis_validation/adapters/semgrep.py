@@ -13,16 +13,21 @@ from packages import semgrep as semgrep_pkg
 
 from .base import ToolAdapter, ToolCapability, ToolEvidence, make_sandbox_runner
 
+# The one worked example the LLM mirrors — it must be schema-valid
+# Semgrep YAML. Metavariable constraints go inside a `patterns:` block
+# as a `metavariable-regex` sibling of the match clause; there is no
+# `pattern-where` key in the rule schema (semgrep silently ignores
+# unknown keys, which would drop the constraint and over-match).
 _SYNTAX_EXAMPLE = """\
 rules:
   - id: hardcoded-secret
     message: Hardcoded credential assigned to $VAR
     severity: WARNING
     languages: [python, javascript]
-    pattern-either:
-      - pattern: $VAR = "..."
-      - pattern: $VAR = '...'
-    pattern-where:
+    patterns:
+      - pattern-either:
+          - pattern: $VAR = "..."
+          - pattern: $VAR = '...'
       - metavariable-regex:
           metavariable: $VAR
           regex: (?i)(password|secret|token|api[_-]?key)
@@ -99,8 +104,11 @@ class SemgrepAdapter(ToolAdapter):
                 prefix="semgrep_hv_", suffix=".yaml",
                 mode="w", delete=False,
             ) as tmp:
+                # Record the path before writing so the finally-unlink
+                # below also covers a failed write — delete=False files
+                # otherwise leak on ENOSPC/EIO.
+                rule_file = Path(tmp.name)
                 tmp.write(rule)
-            rule_file = Path(tmp.name)
 
             subprocess_runner = (
                 make_sandbox_runner(target=target) if self._sandbox else None

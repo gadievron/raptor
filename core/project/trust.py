@@ -29,10 +29,13 @@ SECURITY:
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
 from core.project.project import VALID_TRUST_MARKERS
+
+logger = logging.getLogger(__name__)
 
 
 def _context_project_name(run_dir: str | Path | None = None) -> str | None:
@@ -90,7 +93,18 @@ def active_project_trust(
             if m in VALID_TRUST_MARKERS and isinstance(ts, str) and ts
         }
         return markers, active
-    except Exception:  # noqa: BLE001 — trust loading must never break a run
+    except Exception as exc:  # noqa: BLE001 — trust loading must never break a run
+        # ...except for the argv hard-error contract: a bogus/deleted
+        # --project must never silently degrade to "no trust" — the
+        # blanket swallow contradicted _context_project_name's own
+        # promise. Everything else degrades, but VISIBLY: a silent
+        # `{}, None` hid real registry corruption from operators.
+        from core.run.pin import ProjectArgvError
+        if isinstance(exc, ProjectArgvError):
+            raise
+        logger.warning(
+            "trust: marker resolution failed (%s) — proceeding with no "
+            "trust markers", exc)
         return {}, None
 
 

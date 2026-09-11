@@ -83,7 +83,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--raw", action="store_true",
-        help="Print response text only (no JSON formatting for structured output)",
+        help="With --json-schema: print the structured result as compact "
+             "(unindented) JSON instead of pretty-printed. Without "
+             "--json-schema: no effect (free-form text prints as-is)",
     )
     parser.add_argument(
         "--system-file", type=Path, default=None,

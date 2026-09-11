@@ -90,6 +90,38 @@ def _load_json(path: Path) -> dict[str, Any] | None:
     )
 
 
+def _normalised_findings(data: Any) -> dict[str, Any] | None:
+    """Coerce either findings.json shape to the canonical dict form.
+
+    Canonical is ``{"findings": [...]}``; resumed /validate dirs write
+    the BARE LIST.  ``.get`` on that list raised AttributeError, the
+    caller's guard swallowed it at debug level, and every /validate
+    verdict silently vanished from the audit.  Non-dict finding
+    entries are dropped; an unrecognised payload reads as absent —
+    never as evidence, never as an abort.
+    """
+    if isinstance(data, dict):
+        items = data.get("findings")
+        out = dict(data)
+        out["findings"] = (
+            [f for f in items if isinstance(f, dict)]
+            if isinstance(items, list) else []
+        )
+        return out
+    if isinstance(data, list):
+        return {"findings": [f for f in data if isinstance(f, dict)]}
+    return None
+
+
+def _evidence_chain(finding: dict[str, Any]) -> list[dict[str, Any]]:
+    """Dict entries of a finding's ``evidence_chain`` — an LLM-written
+    field, so any other shape reads as empty, never as an abort."""
+    chain = finding.get("evidence_chain")
+    if not isinstance(chain, list):
+        return []
+    return [ev for ev in chain if isinstance(ev, dict)]
+
+
 def _sanitised_findings(
     data: dict[str, Any] | None,
     candidate_dir: Path,
@@ -125,10 +157,14 @@ def _extract_feasibility_verdicts(
         return []
 
     findings = findings_data.get("findings", [])
+    if not isinstance(findings, list):
+        return []
     verdicts = []
     for f in findings:
+        if not isinstance(f, dict):
+            continue
         feasibility = f.get("feasibility")
-        if feasibility:
+        if isinstance(feasibility, dict) and feasibility:
             verdicts.append({
                 "finding_id": f.get("id", ""),
                 "function": f.get("function", ""),
@@ -148,8 +184,12 @@ def _extract_runtime_evidence(
         return []
 
     findings = findings_data.get("findings", [])
+    if not isinstance(findings, list):
+        return []
     evidence: list[dict[str, Any]] = []
     for f in findings:
+        if not isinstance(f, dict):
+            continue
         evidence.extend({
                     "finding_id": f.get("id", ""),
                     "function": f.get("function", ""),
@@ -157,7 +197,7 @@ def _extract_runtime_evidence(
                     "source": ev.get("source", ""),
                     "tier": ev.get("tier", ""),
                     "detail": ev.get("detail", ""),
-                } for ev in f.get("evidence_chain", []) if ev.get("tier") in ("OBSERVED_RUNTIME", "REPLAYED_CRASH"))
+                } for ev in _evidence_chain(f) if ev.get("tier") in ("OBSERVED_RUNTIME", "REPLAYED_CRASH"))
     return evidence
 
 
@@ -291,8 +331,13 @@ def _extract_verdict_history(
     if not findings_data:
         return []
 
+    findings = findings_data.get("findings", [])
+    if not isinstance(findings, list):
+        return []
     records: list[dict[str, Any]] = []
-    for f in findings_data.get("findings", []):
+    for f in findings:
+        if not isinstance(f, dict):
+            continue
         file_path = f.get("file", "")
         function = f.get("function", "")
         if not file_path or not function:
@@ -304,8 +349,8 @@ def _extract_verdict_history(
         feasibility = f.get("feasibility") or {}
         runtime_tiers = sorted({
             ev.get("tier", "")
-            for ev in f.get("evidence_chain", [])
-            if isinstance(ev, dict) and ev.get("tier") in _RUNTIME_TIERS
+            for ev in _evidence_chain(f)
+            if ev.get("tier") in _RUNTIME_TIERS
         })
         raw_status = ""
         if isinstance(ruling, dict):
@@ -497,12 +542,20 @@ def _extract_mitigation_profile(
     if not findings_data:
         return None
     findings = findings_data.get("findings", [])
+    if not isinstance(findings, list):
+        findings = []
     for f in findings:
-        feasibility = f.get("feasibility", {})
+        if not isinstance(f, dict):
+            continue
+        feasibility = f.get("feasibility")
+        if not isinstance(feasibility, dict):
+            continue
         mitigations = feasibility.get("mitigations") or feasibility.get("security_posture")
         if mitigations and isinstance(mitigations, dict):
             return mitigations
     metadata = findings_data.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return None
     posture = metadata.get("security_posture") or metadata.get("mitigations")
     if posture and isinstance(posture, dict):
         return posture
@@ -616,7 +669,7 @@ def import_validate_evidence(
     #    ruling), so the bridge never re-imports audit output.
     findings_path = audit_output_dir / "findings.json"
     if findings_path.is_file():
-        data = _load_json(findings_path)
+        data = _normalised_findings(_load_json(findings_path))
         if data and data.get("findings"):
             first = data["findings"][0]
             if first.get("feasibility") or first.get("ruling"):
@@ -679,7 +732,8 @@ def import_validate_evidence(
                 continue
 
             sibling_findings = _sanitised_findings(
-                _load_json(sibling / "findings.json"), sibling,
+                _normalised_findings(_load_json(sibling / "findings.json")),
+                sibling,
             )
             if sibling_findings:
                 result.source_dir = str(sibling)
@@ -719,7 +773,10 @@ def import_validate_evidence(
                 continue
 
             candidate_findings = _sanitised_findings(
-                _load_json(candidate / "findings.json"), candidate,
+                _normalised_findings(
+                    _load_json(candidate / "findings.json"),
+                ),
+                candidate,
             )
             if candidate_findings:
                 result.source_dir = str(candidate)
@@ -775,14 +832,18 @@ def import_audit_evidence(
         if not _check_target_match(candidate, target_path):
             continue
 
-        layer0 = _load_json(candidate / "layer0-findings.json")
+        layer0 = _normalised_findings(
+            _load_json(candidate / "layer0-findings.json"),
+        )
         if layer0:
             result.layer0_findings = layer0.get("findings", [])
 
-        findings = _load_json(candidate / "findings.json")
+        findings = _normalised_findings(
+            _load_json(candidate / "findings.json"),
+        )
         if findings:
             for f in findings.get("findings", []):
-                for ev in f.get("evidence_chain", []):
+                for ev in _evidence_chain(f):
                     if ev.get("source") in ("joern_taint", "joern"):
                         result.taint_flows.append({
                             "finding_id": f.get("id", ""),

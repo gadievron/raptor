@@ -115,21 +115,29 @@ def main() -> int:
         )
         return 1
 
-    # Build the inventory once and share across all trace files —
-    # the per-call default would rebuild for every file, painful
-    # when /understand --trace runs N times and emits N files.
-    try:
-        import tempfile
+    # One inventory shared across all trace files — the per-call
+    # default would rebuild for every file, painful when /understand
+    # --trace runs N times and emits N files. Reuse the checklist as
+    # the inventory when it qualifies — no re-parse of the target
+    # tree (invariants in core.orchestration.checklist_inventory);
+    # build from the tree only as a fallback.
+    from core.orchestration.checklist_inventory import (
+        inventory_from_checklist,
+    )
+    inventory = inventory_from_checklist(checklist)
+    if inventory is None:
+        try:
+            import tempfile
 
-        from core.inventory.builder import build_inventory
-        with tempfile.TemporaryDirectory() as td:
-            inventory = build_inventory(target_path, td)
-    except Exception as e:                                  # noqa: BLE001
-        print(
-            f"raptor-enrich-flow-trace-ast-view: inventory build "
-            f"failed ({e}); skipping enrichment", file=sys.stderr,
-        )
-        return 0
+            from core.inventory.builder import build_inventory
+            with tempfile.TemporaryDirectory() as td:
+                inventory = build_inventory(target_path, td)
+        except Exception as e:                              # noqa: BLE001
+            print(
+                f"raptor-enrich-flow-trace-ast-view: inventory build "
+                f"failed ({e}); skipping enrichment", file=sys.stderr,
+            )
+            return 0
 
     trace_files = sorted(understand_dir.glob("flow-trace-*.json"))
     if not trace_files:

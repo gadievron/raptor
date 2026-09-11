@@ -72,7 +72,11 @@ def generate(hypotheses: list[dict[str, Any]]) -> str:
 
     lines = ["flowchart TD"]
 
-    hyp_node_ids: dict[str, str] = {}  # hyp id → mermaid node id
+    # Keyed by the hypothesis OBJECT (via id()), not by its "id"
+    # field: an id-less hypothesis or two entries sharing one id would
+    # otherwise miss (or clobber) the styling lookup, rendering a
+    # confirmed hypothesis without its status colouring.
+    hyp_node_ids: dict[int, str] = {}  # id(hyp dict) → mermaid node id
     pred_node_ids: list[tuple[str, str, str]] = []  # (hyp_node_id, pred_node_id, pred_status)
 
     node_counter = [0]
@@ -82,9 +86,8 @@ def generate(hypotheses: list[dict[str, Any]]) -> str:
         return f"{prefix}{node_counter[0]}"
 
     def emit_hypothesis(hyp: dict, indent: str = "    ") -> str:
-        hid = hyp.get("id", f"H{node_counter[0]}")
         nid = next_id("HN")
-        hyp_node_ids[hid] = nid
+        hyp_node_ids[id(hyp)] = nid
         label = _hyp_label(hyp)
         status = _sanitize(hyp.get("status", "testing"))
         if status in {"confirmed", "disproven"}:
@@ -133,8 +136,7 @@ def generate(hypotheses: list[dict[str, Any]]) -> str:
     testing_nodes: list[str] = []
 
     for hyp in hypotheses:
-        hid = hyp.get("id", "")
-        nid = hyp_node_ids.get(hid)
+        nid = hyp_node_ids.get(id(hyp))
         if not nid:
             continue
         status = _sanitize(hyp.get("status", "testing"))

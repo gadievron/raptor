@@ -591,8 +591,12 @@ def _refute_by_contract(
 # atoi is excluded: it returns the full int range including negative
 # values, so wraparound in unsigned contexts is possible.
 # getchar/fgetc/tolower/toupper carry min = -1: they return EOF, and a
-# negative value is exactly what a CWE-191 underflow claim needs, so
-# they refute overflow (CWE-190) claims only.
+# negative value is exactly what a CWE-191 underflow claim needs.
+# No entry refutes underflow (CWE-191) claims — even a min-0 value
+# wraps when subtracted from something smaller — and none refutes a
+# claim naming a wrap-capable operation (subtraction, addition,
+# multiplication, shift, truncating store); see the bail-outs in
+# _refute_by_known_return_type.
 _KNOWN_RETURN_BOUNDS: dict[str, tuple[str, int, int]] = {
     "ntohs":    ("uint16_t", 0, 0xFFFF),
     "htons":    ("uint16_t", 0, 0xFFFF),
@@ -630,6 +634,76 @@ _BUFFER_OVERFLOW_KW = re.compile(
     re.IGNORECASE,
 )
 
+# Known token families whose hyphen-digit shape is NOT arithmetic:
+# vulnerability/hash/encoding identifiers ("CWE-190", "CVE-2024-12345",
+# "sha-256" — multi-part numeric tails consumed whole).  `len-1` and
+# `CWE-190` share the letter-hyphen-digit SHAPE, so no lookaround can
+# separate them — the ambiguity is resolved by token KNOWLEDGE
+# instead: these get pre-stripped from the probe string before the
+# wrap-op search, and the operator alternates below then stay
+# shape-generic.  An unknown letter-digit hyphen token ("P-521")
+# reads as possible subtraction and stands the gate down — the safe
+# polarity.
+_ID_TOKEN_STRIP_RE = re.compile(
+    r"\b(?:cwe|cve|sha|md|utf|crc|rfc|iso|x86)(?:-\d+)+\b",
+    re.IGNORECASE,
+)
+
+# Width prose ("16-bit", "2 bytes") is stripped DIGIT-PRESERVINGLY:
+# the unit word goes, the number stays.  Deleting the whole phrase
+# ate the subtrahend of real arithmetic — "writes n-1 bytes … wraps"
+# became "writes n- " and the leak refuted proof-grade.  Keeping the
+# digit, "n-1 bytes" → "n- 1" still matches the unspaced-operator
+# alternate; a stranded bare digit is harmless because every code
+# shape requires an adjacent operator.
+_WIDTH_PROSE_RE = re.compile(
+    r"\b(\d+)[- ](?:bit|byte)s?\b",
+    re.IGNORECASE,
+)
+
+# Operations under which a BOUNDED value still wraps: subtraction
+# (an unsigned result below zero wraps to a huge value regardless of
+# the operands' upper bound), addition (two in-range values exceed a
+# narrower accumulator/store), multiplication and left shift (the
+# product of two in-range uint16_t values exceeds signed int), and
+# truncating/narrowing stores (the docstring's own out-of-scope
+# class).  The return-range table refutes none of these claims, so
+# the gate must stand down — inconclusive, never refuted.  Matches
+# prose ("subtracted", "plus", "times", "scaled by", "shifted to the
+# left", "truncated", "cast to uint8_t") and code shapes, spaced or
+# unspaced ("a - b", "ntohs(a)-1", "len-2", "seq+1", "nmemb*12",
+# "len -= 2").  Searched against the two-pass-stripped probe
+# (_ID_TOKEN_STRIP_RE, then digit-preserving _WIDTH_PROSE_RE), never
+# the raw hypothesis.  Over-matching is safe (the gate
+# only stands down), so the net is deliberately generous.  Known
+# residual: identifier-minus-IDENTIFIER unspaced ("size-len") is
+# indistinguishable from hyphenated prose ("fail-open",
+# "attacker-controlled") and stays unmatched — spaced spellings and
+# all prose forms are covered.
+_WRAP_CAPABLE_OP_KW = re.compile(
+    # subtraction / addition prose
+    r"subtract|\bminus\b|difference|decrement|increment"
+    r"|\badd(?:s|ed|ing)?\b|\baddition\b|\bsum\w*\b|\bplus\b"
+    # multiplication / scaling prose
+    r"|multipl|\bproduct\b|\btimes\b|\bscal(?:e|ed|es|ing)\b"
+    r"|\bdoubl|\bsquar"
+    # shift: "left shift", "left-shifted", "shifted (to the) left", <<
+    r"|left[- ]shift|shift\w*\s+(?:\S+\s+){0,2}left|<<"
+    # truncation / cast narrowing
+    r"|truncat|narrow(?:ed|ing)?|\bcast(?:s|ed|ing)?\b|\bdowncast"
+    r"|\bmodulo\b"
+    # code shapes: compound assignment, inc/dec, spaced binary op,
+    # and UNSPACED operator beside a digit / paren (identifier-
+    # adjacent forms like "len-2" / "seq+1" included — known
+    # identifier-hyphen tokens were already stripped from the probe)
+    r"|[-*+]=|--|\+\+"
+    r"|[\w)\]]\s+[-*+]\s+[\w(]"
+    r"|[)\]\d]\s*[-*+]"
+    r"|[-+]\s*[(\d]"
+    r"|\*\s*[(\d]",
+    re.IGNORECASE,
+)
+
 
 def _refute_by_known_return_type(
     outcome,
@@ -661,24 +735,37 @@ def _refute_by_known_return_type(
     if _BUFFER_OVERFLOW_KW.search(hyp_lower):
         return None
 
-    # An underflow claim needs the value to go NEGATIVE (or wrap below
-    # zero) — a return type bounded above refutes nothing when the
-    # function can already return a negative sentinel (EOF).
-    claims_underflow = cwe == "CWE-191" or "underflow" in hyp_lower
+    # A bounded value still wraps under subtraction, addition,
+    # multiplication, left shift, or a truncating/narrowing store —
+    # the range table precludes none of those, so the gate stands
+    # down (inconclusive) instead of proof-refuting.  The search runs
+    # on a two-pass-stripped probe: known identifier tokens (CWE-190,
+    # sha-256) and width prose (16-bit) share the operator shapes but
+    # are not arithmetic, and removing them by KNOWLEDGE lets the
+    # operator alternates stay shape-generic ("len-2" bails).  The
+    # width pass keeps its digit so real arithmetic whose operand
+    # carries a unit ("writes n-1 bytes") keeps its subtrahend.
+    wrap_probe = _ID_TOKEN_STRIP_RE.sub(" ", hyp_lower)
+    wrap_probe = _WIDTH_PROSE_RE.sub(r" \1 ", wrap_probe)
+    if _WRAP_CAPABLE_OP_KW.search(wrap_probe):
+        return None
+
+    # An underflow claim needs the result to go NEGATIVE (or wrap
+    # below zero).  The table only bounds values ABOVE: it precludes
+    # neither the EOF-returners' negative sentinel (getchar → -1) nor
+    # an unsigned wrap when a min-0 value (ntohs) is subtracted from
+    # something smaller.  No entry can refute underflow — stand down.
+    if cwe == "CWE-191" or "underflow" in hyp_lower:
+        return None
 
     # Check if any known-bounded function appears in the hypothesis.
     # When multiple match, pick the one closest to an overflow keyword
     # for audit trail clarity.
     best: tuple[str, str, int, int] | None = None  # (name, type, max, dist)
-    for func_name, (ret_type, min_val, max_val) in \
+    for func_name, (ret_type, _min_val, max_val) in \
             _KNOWN_RETURN_BOUNDS.items():
         func_pos = hyp_lower.find(func_name)
         if func_pos < 0:
-            continue
-        if claims_underflow and min_val < 0:
-            # getchar()/fgetc()/tolower() return EOF (-1): the table
-            # only bounds the value above, which cannot refute a
-            # CWE-191 (underflow) hypothesis.
             continue
 
         # When CWE is explicit (CWE-190/191), the function name alone
@@ -705,8 +792,9 @@ def _refute_by_known_return_type(
         # return range — an ISO C / POSIX guarantee that is
         # mechanically true regardless of how the hypothesis text is
         # interpreted; the table admits only ranges that fit signed
-        # int, and the underflow/buffer-overflow bail-outs above keep
-        # the range argument applicable. Known residual: a target
+        # int, and the underflow / buffer-overflow / wrap-capable-op
+        # bail-outs above keep the range argument applicable to what
+        # remains (the raw value in int-width use). Known residual: a target
         # that shadows the libc name (macro or local redefinition)
         # breaks the premise — the gate matches the NAME in the
         # hypothesis text, not the resolved symbol.

@@ -138,6 +138,35 @@ class TestUpdateChecklist(unittest.TestCase):
             loaded = load_json(Path(d) / "checklist.json")
             self.assertTrue(loaded["created"])
 
+    def test_refuses_rmw_when_existing_file_corrupt(self):
+        # An existing-but-unloadable checklist must abort the
+        # read-modify-write, never be overwritten with a fresh
+        # near-empty checklist built from {}.
+        with TemporaryDirectory() as d:
+            corrupt = '{"files": [broken'
+            (Path(d) / "checklist.json").write_text(corrupt)
+            with self.assertRaises(ValueError):
+                update_checklist(d, lambda data: data)
+            # The corrupt bytes survive for diagnosis.
+            self.assertEqual(
+                (Path(d) / "checklist.json").read_text(), corrupt)
+
+    def test_refuses_rmw_when_existing_file_oversize(self):
+        import core.inventory as inv
+
+        with TemporaryDirectory() as d:
+            path = Path(d) / "checklist.json"
+            path.write_text('{"pad": "' + "x" * 100 + '"}')
+            original = path.read_text()
+            real_max = inv._MAX_CHECKLIST_BYTES
+            inv._MAX_CHECKLIST_BYTES = 10
+            try:
+                with self.assertRaises(ValueError):
+                    update_checklist(d, lambda data: data)
+            finally:
+                inv._MAX_CHECKLIST_BYTES = real_max
+            self.assertEqual(path.read_text(), original)
+
     def test_passes_empty_dict_when_file_absent(self):
         with TemporaryDirectory() as d:
             received = []

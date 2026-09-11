@@ -297,3 +297,101 @@ class TestCTaintApprox:
     def test_has_any_dangerous_empty(self):
         approx = CTaintApprox(function="f", params=["x"])
         assert not approx.has_any_dangerous()
+
+
+class TestParamIndexFidelity:
+    """Every parameter slot must be preserved — a dropped slot shifts
+    all later indices and mis-binds flows to the wrong parameter."""
+
+    @pytest.fixture(autouse=True)
+    def _require_c_grammar(self):
+        pytest.importorskip("tree_sitter_c")
+
+    def test_array_parameter_extracted(self):
+        code = """
+void f(char buf[64], int n) {
+    memcpy(dst, buf, n);
+}
+"""
+        approx = extract_taint_approx_c(code)["f"]
+        assert approx.params == ["buf", "n"]
+        assert approx.dangerous_flows[0] == [("memcpy", 1)]
+        assert approx.dangerous_flows[1] == [("memcpy", 2)]
+
+    def test_function_pointer_parameter_extracted(self):
+        code = """
+void f(void (*cb)(int), char *s) {
+    strcpy(dst, s);
+}
+"""
+        approx = extract_taint_approx_c(code)["f"]
+        assert approx.params == ["cb", "s"]
+        # s is index 1, not 0 — the fn-ptr slot must not vanish.
+        assert approx.dangerous_flows == {1: [("strcpy", 1)]}
+
+    def test_unnamed_parameter_holds_its_slot(self):
+        code = """
+void f(int, char *s) {
+    strcpy(dst, s);
+}
+"""
+        results = extract_taint_approx_c(code)
+        approx = results["f"]
+        assert len(approx.params) == 2
+        assert approx.params[1] == "s"
+        assert approx.dangerous_flows == {1: [("strcpy", 1)]}
+
+    def test_void_parameter_list_stays_empty(self):
+        code = """
+int g(void) { return 0; }
+"""
+        assert extract_taint_approx_c(code)["g"].params == []
+
+    def test_comment_between_arguments_does_not_shift_positions(self):
+        code = """
+void f(char *buf, int n) {
+    memcpy(dst, /* the source */ buf, n);
+}
+"""
+        approx = extract_taint_approx_c(code)["f"]
+        assert approx.dangerous_flows[0] == [("memcpy", 1)]
+        assert approx.dangerous_flows[1] == [("memcpy", 2)]
+
+
+class TestCppMethodExtraction:
+    """C++ class methods (field_identifier in-class, qualified_identifier
+    out-of-line) must produce summaries — accepting only plain
+    identifiers silently skipped every method."""
+
+    @pytest.fixture(autouse=True)
+    def _require_cpp_grammar(self):
+        pytest.importorskip("tree_sitter_cpp")
+
+    def test_out_of_line_method_definition(self):
+        from core.analysis.taint_approx import extract_taint_approx_cpp
+        code = """
+void Foo::bar(char *s, int n) { memcpy(dst, s, n); }
+"""
+        results = extract_taint_approx_cpp(code)
+        assert "bar" in results  # bare name, matching inventory keying
+        assert results["bar"].params == ["s", "n"]
+        assert results["bar"].dangerous_flows[0] == [("memcpy", 1)]
+
+    def test_in_class_method_definition(self):
+        from core.analysis.taint_approx import extract_taint_approx_cpp
+        code = """
+class C {
+public:
+    void m(char *s) { strcpy(dst, s); }
+};
+"""
+        results = extract_taint_approx_cpp(code)
+        assert "m" in results
+        assert results["m"].dangerous_flows == {0: [("strcpy", 1)]}
+
+    def test_free_function_still_extracted(self):
+        from core.analysis.taint_approx import extract_taint_approx_cpp
+        code = """
+void plain(char *s) { strcpy(dst, s); }
+"""
+        assert "plain" in extract_taint_approx_cpp(code)

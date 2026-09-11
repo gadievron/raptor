@@ -42,6 +42,7 @@ from .update import (
     _materialise_changes,
     _plan_targets,
     _PlanEntry,
+    _proposed_rel_path as _cve_proposed_rel,
     _rewrite_one,
 )
 from .versions import VersionError
@@ -562,10 +563,25 @@ def _materialise_pin_changes(
         try:
             rel = manifest.resolve().relative_to(base)
         except ValueError:
-            rel = Path(manifest.name)
+            # A bare-filename anchor would collapse every same-named
+            # out-of-base manifest onto ONE staged file (last writer
+            # wins) and _apply_in_place would then write that mixed
+            # content over ``target/<name>``. Use the shared unique
+            # anchor instead — it also matches where the CVE phase
+            # writes ITS copies, so composition keeps working.
+            rel = _cve_proposed_rel(manifest)
 
-        proposed_copy = proposed_root / rel
-        read_from = proposed_copy if proposed_copy.exists() else manifest
+        # The CVE phase anchors its proposed tree with the shared
+        # helper (cwd-relative, hash-disambiguated outside cwd) which
+        # only equals our target-relative ``rel`` when cwd == target.
+        # Probe both locations so pin-tightening composes with CVE
+        # rewrites regardless of the launcher's cwd.
+        read_from = manifest
+        for candidate in (rel, _cve_proposed_rel(manifest)):
+            proposed_copy = proposed_root / candidate
+            if proposed_copy.exists():
+                read_from = proposed_copy
+                break
         try:
             original = read_from.read_text(encoding="utf-8")
         except OSError as e:

@@ -251,8 +251,10 @@ def _make_preexec_fn(limits: dict, writable_paths: list | None = None,
     applies Landlock+seccomp and execs the payload. Every orphaned
     descendant of the payload — setsid daemons included — reparents
     to the sweeper, which SIGKILL-sweeps them when the payload exits
-    or when the per-run death pipe (``reaper_cell["death_fd"]``,
-    populated by context.run() before each spawn) reaches EOF. The
+    or when the per-run death pipe (``reaper_cell["death_local"].fd``,
+    a threading.local slot populated by context.run() before each
+    spawn — per-run by construction, so concurrent run() calls on one
+    context cannot watch each other's pipes) reaches EOF. The
     sweeper mirrors the payload's exit status (128+N for signals) and
     stays OUTSIDE the Landlock domain, so on scoping-capable kernels
     (ABI >= 6) the payload cannot signal it. The payload re-arms
@@ -473,7 +475,16 @@ def _reaper_split(reaper_cell: dict) -> None:
     libc = _get_libc()
     if libc is None:
         return  # no prctl — keep the historic single-process shape
-    death_fd = reaper_cell.get("death_fd")
+    # Per-run death pipe: read from the calling thread's local slot.
+    # The cell dict is shared across every run() on the context; a
+    # plain cell key here meant a concurrent run() could overwrite the
+    # fd between the parent's assignment and this fork, wiring this
+    # run's sweeper to the WRONG run's pipe. The fork preserves the
+    # calling thread, so the thread-local read resolves to exactly the
+    # fd context.run() set for this spawn. getattr on a fresh local
+    # (or a legacy cell without the slot) yields None — sweep-on-exit
+    # only, same as the historic no-death-fd shape.
+    death_fd = getattr(reaper_cell.get("death_local"), "fd", None)
     # Subreaper BEFORE the fork so no orphan can slip through the
     # window; the payload clears its inherited copy so mid-run
     # orphans reparent to the sweeper, not to the payload.
@@ -498,7 +509,13 @@ def _reaper_split(reaper_cell: dict) -> None:
 def _sweeper_main(payload_pid: int, death_fd) -> None:
     # Detach from the parent's stdio pipes so communicate() EOF is
     # governed by the payload tree alone; keep fd 2 for warnings.
+    # death_fd is exempt here exactly like in the sweep below: under a
+    # daemonised invocation (fds 0/1 already closed when the pipe was
+    # created) the death pipe's read end can BE fd 0 or 1, and closing
+    # it here silently lost the teardown watch.
     for _fd in (0, 1):
+        if death_fd is not None and _fd == death_fd:
+            continue
         try:
             os.close(_fd)
         except OSError:

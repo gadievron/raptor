@@ -324,4 +324,6 @@ class TestPid1ShimRaptorDirStrip(unittest.TestCase):
             capture_output=True, text=True, timeout=10,
             env=dict(os.environ, _RAPTOR_TRUSTED="1"),
         )
-        self.assertEqual(r.returncode, 125)
+        # Usage error exits 2 like the --netns-lo / --keep-trust-markers
+        # branches; 125 is reserved for exec-errno failures.
+        self.assertEqual(r.returncode, 2)

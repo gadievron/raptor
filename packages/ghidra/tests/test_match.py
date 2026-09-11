@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import packages.ghidra.match as match_mod
 from packages.ghidra.diff import diff_databases

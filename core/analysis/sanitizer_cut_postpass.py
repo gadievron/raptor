@@ -650,7 +650,10 @@ def run_postpass(
                 "tool": finding.get("tool") or "",
             }
             try:
-                resolved = resolve_finding(native)
+                # repo_root confines the resolver's own read too —
+                # belt-and-braces behind the pre-check above (which a
+                # later refactor could bypass).
+                resolved = resolve_finding(native, target_root=repo_root)
                 if not isinstance(resolved, ResolvedFinding):
                     verdicts = ["resolver-refused"]
                     break

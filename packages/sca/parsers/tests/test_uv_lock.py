@@ -207,3 +207,43 @@ source = { registry = "..." }
     assert len(found) == 1
     assert found[0].ecosystem == "PyPI"
     assert found[0].is_lockfile is True
+
+
+# ---------------------------------------------------------------------------
+# url-source packages
+# ---------------------------------------------------------------------------
+
+def test_url_source_package_emitted(tmp_path: Path) -> None:
+    # A direct sdist/wheel URL source is a real third-party package
+    # with a concrete name + version; skipping it hid its advisories.
+    p = tmp_path / "uv.lock"
+    p.write_text(
+        'version = 1\n'
+        '[[package]]\n'
+        'name = "foo"\n'
+        'version = "1.2.3"\n'
+        'source = { url = "https://example.invalid/foo-1.2.3.tar.gz" }\n',
+        encoding="utf-8",
+    )
+    [d] = parse(p)
+    assert (d.name, d.version) == ("foo", "1.2.3")
+    assert d.pin_style is PinStyle.EXACT
+
+
+def test_virtual_and_local_sources_still_skipped(tmp_path: Path) -> None:
+    # Other direction: the project's own row and local-path overrides
+    # stay out of the dep list.
+    p = tmp_path / "uv.lock"
+    p.write_text(
+        'version = 1\n'
+        '[[package]]\n'
+        'name = "self"\n'
+        'version = "0.1.0"\n'
+        'source = { virtual = "." }\n'
+        '[[package]]\n'
+        'name = "localdep"\n'
+        'version = "0.2.0"\n'
+        'source = { path = "../localdep" }\n',
+        encoding="utf-8",
+    )
+    assert parse(p) == []

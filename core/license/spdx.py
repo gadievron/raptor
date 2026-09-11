@@ -39,6 +39,12 @@ import re
 _SPDX_EXPR_RE = re.compile(
     r"^[A-Za-z0-9.+\-]+(?:\s+(?:AND|OR|WITH)\s+[A-Za-z0-9.+\-]+)+$"
 )
+# Case-insensitive twin for callers whose MATCHER is already
+# case-insensitive (the detector's IGNORECASE header regex). A
+# case-sensitive split behind a case-insensitive matcher classified
+# ``Proprietary and Confidential`` as a zero-operand "compound" that
+# then read as all-operands-OSS.
+_SPDX_EXPR_RE_CI = re.compile(_SPDX_EXPR_RE.pattern, re.IGNORECASE)
 
 # Operands are split on whitespace-surrounded AND/OR/WITH so we can
 # walk each license id individually. WITH attaches an *exception*
@@ -47,9 +53,12 @@ _SPDX_EXPR_RE = re.compile(
 # typically want the principal license id, which is the FIRST
 # operand of a ``X WITH Y`` form.
 _OPERATOR_SPLIT_RE = re.compile(r"\s+(?:AND|OR|WITH)\s+")
+_OPERATOR_SPLIT_RE_CI = re.compile(_OPERATOR_SPLIT_RE.pattern, re.IGNORECASE)
 
 
-def looks_like_spdx_expression(text: str) -> bool:
+def looks_like_spdx_expression(
+    text: str, *, case_insensitive_operators: bool = False,
+) -> bool:
     """True when ``text`` matches the SPDX-2.0 compound expression
     grammar: ``<id> (AND|OR|WITH) <id> ...``.
 
@@ -57,11 +66,16 @@ def looks_like_spdx_expression(text: str) -> bool:
     identifiers, just that the *shape* is right. Aim is to accept
     forms like ``"Apache-2.0 AND MIT"`` while still rejecting
     free-text descriptions like ``"see LICENSE file"``.
+    ``case_insensitive_operators`` accepts lowercase ``and``/``or``/
+    ``with`` too — for callers whose header matcher is IGNORECASE.
     """
-    return bool(_SPDX_EXPR_RE.match(text.strip()))
+    pattern = _SPDX_EXPR_RE_CI if case_insensitive_operators else _SPDX_EXPR_RE
+    return bool(pattern.match(text.strip()))
 
 
-def split_compound_expression(text: str) -> list[str]:
+def split_compound_expression(
+    text: str, *, case_insensitive_operators: bool = False,
+) -> list[str]:
     """Split a compound SPDX expression into operand identifiers.
 
     Returns an empty list when ``text`` isn't a recognised compound
@@ -79,9 +93,15 @@ def split_compound_expression(text: str) -> list[str]:
         []
     """
     text = text.strip()
-    if not looks_like_spdx_expression(text):
+    if not looks_like_spdx_expression(
+        text, case_insensitive_operators=case_insensitive_operators,
+    ):
         return []
-    return [tok.strip() for tok in _OPERATOR_SPLIT_RE.split(text) if tok.strip()]
+    splitter = (
+        _OPERATOR_SPLIT_RE_CI if case_insensitive_operators
+        else _OPERATOR_SPLIT_RE
+    )
+    return [tok.strip() for tok in splitter.split(text) if tok.strip()]
 
 
 __all__ = [

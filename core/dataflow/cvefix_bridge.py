@@ -459,6 +459,12 @@ def synthesize_one(
     lang = cvefix_walk._codeql_lang(pair.repo_language)
     if lang in cvefix_walk._BUILDLESS_COMPILED:
         mode = "autobuild" if status == "ok_built" else "none"
+    elif lang in cvefix_walk._AUTOBUILD_ONLY:
+        # No buildless extractor exists for these languages — the DB
+        # create EXECUTES the untrusted repo's build, so it must be
+        # declared autobuild here to take _build_db's fail-closed
+        # sandboxed route (mirrors the walker's mode selection).
+        mode = "autobuild"
     else:
         mode = None
     repo, after_db, before_db = work_dir / "repo", work_dir / "after", work_dir / "before"

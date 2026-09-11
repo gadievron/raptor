@@ -47,24 +47,26 @@ def load_methodology(name: str) -> str:
 
 
 def _strip_frontmatter(text: str) -> str:
-    """Remove YAML frontmatter (``---`` delimited) and the first H1 line."""
+    """Remove YAML frontmatter (a ``---`` fence opening on the first
+    line, closed by a later ``---`` line) and the first H1 line."""
     lines = text.splitlines()
-    result: list[str] = []
-    in_frontmatter = False
-    past_header = False
-    for line in lines:
-        if not past_header and not in_frontmatter and line.startswith("---"):
-            in_frontmatter = True
-            continue
-        if in_frontmatter:
-            if line.startswith("---"):
-                in_frontmatter = False
-            continue
-        if not past_header and line.startswith("# "):
-            continue
-        past_header = True
-        result.append(line)
-    return "\n".join(result).strip()
+    idx = 0
+    if lines and lines[0].startswith("---"):
+        # Only a CLOSED fence opening the file is frontmatter. A later
+        # '---' is a thematic break in the body, and an unmatched
+        # opener is body content — neither may swallow what follows.
+        for close in range(1, len(lines)):
+            if lines[close].startswith("---"):
+                idx = close + 1
+                break
+    # Strip the first H1 only (plus blank lines before it); further
+    # leading H1s and everything after them are body content.
+    j = idx
+    while j < len(lines) and not lines[j].strip():
+        j += 1
+    if j < len(lines) and lines[j].startswith("# "):
+        idx = j + 1
+    return "\n".join(lines[idx:]).strip()
 
 
 def clear_cache() -> None:

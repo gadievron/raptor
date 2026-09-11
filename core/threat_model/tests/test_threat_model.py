@@ -66,7 +66,24 @@ def test_context_map_seeds_focus_areas_and_bug_shapes(tmp_path):
     assert model.known_bug_shapes[0].endswith("No auth before shell execution (critical)")
     assert any("Hardcoded secret" in item for item in model.known_bug_shapes)
     assert model.version == 2
-    assert model.data_flows[0]["id"] == "DF-001"
+    # Content-derived id (stable across regenerated maps), never
+    # positional: the same flow must hash to the same id.
+    flow_id = model.data_flows[0]["id"]
+    assert flow_id.startswith("DF-")
+    remodel = from_context_map(_project(tmp_path), {
+        "entry_points": [{"name": "POST /login", "file": "routes.py"}],
+        "sinks": [{"name": "subprocess.run", "file": "worker.py"}],
+        "unchecked_flows": [
+            # A NEW flow in front must not steal the old flow's id.
+            {"entry_point": "EP-999", "sink": "SINK-999",
+             "missing_boundary": "other", "severity": "low"},
+            {"entry_point": "EP-001", "sink": "SINK-001",
+             "missing_boundary": "No auth before shell execution",
+             "severity": "critical"},
+        ],
+    })
+    assert remodel.data_flows[1]["id"] == flow_id
+    assert remodel.data_flows[0]["id"] != flow_id
     assert model.threats[0]["status"] == "needs_evidence"
     assert model.threats[0]["risk_score"] >= 90
     assert any(c["id"] == "CTRL-004" for c in model.controls)
@@ -131,7 +148,10 @@ def test_verified_outcomes_update_matching_threat_status(tmp_path):
         oracle=Oracle.SANDBOX,
         status=OutcomeStatus.VERIFIED,
         reproducible=True,
-        evidence={"signal": "SIGABRT"},
+        # provenance_verified: what collect_outcomes sets after the
+        # record's witness-provenance MAC verified — status flips
+        # require it on top of the id match.
+        evidence={"signal": "SIGABRT", "provenance_verified": True},
         cwe_id="CWE-78",
         file="hello.py",
     )
@@ -928,3 +948,191 @@ def test_cli_remove_matches_sanitised_value(tmp_path):
     _handle_threat_model(mgr, args)
     updated = load_model(json_path)
     assert "test value" not in updated.focus_areas
+
+
+def test_legacy_schema_map_flows_carry_locations(tmp_path):
+    """Old-schema maps use ``sources``/``sinks`` — every consumer must
+    apply the same fallback chain, or flow summaries degrade to bare
+    IDs with lost locations (the drifted-copy regression)."""
+    project = _project(tmp_path)
+    model = from_context_map(project, {
+        "sources": [{"id": "EP-1", "name": "POST /login",
+                     "file": "routes.py", "line": 4}],
+        "sinks": [{"id": "S-1", "name": "subprocess.run",
+                   "file": "worker.py", "line": 9}],
+        "unchecked_flows": [{
+            "entry_point": "EP-1", "sink": "S-1",
+            "missing_boundary": "no auth", "severity": "high",
+        }],
+    })
+    flow = model.data_flows[0]
+    assert flow["source"] == "POST /login"
+    assert flow["source_location"] == "routes.py:4"
+    assert flow["sink_location"] == "worker.py:9"
+
+
+def test_expired_accepted_risk_with_z_suffix_is_an_error(tmp_path):
+    """A ``Z``-suffixed expiry must parse (CPython <3.11 rejects the
+    suffix) — an EXPIRED accepted risk downgraded to an 'unparseable
+    date' warning is a silent policy hole."""
+    project = _project(tmp_path)
+    model = blank_for_project(project)
+    model.threats = [{"id": "T-1", "title": "t", "status": "accepted"}]
+    model.accepted_risks = [{
+        "id": "AR-1", "threat_id": "T-1", "owner": "ops",
+        "accepted_until": "2020-01-01T00:00:00Z",
+    }]
+    issues = lint_model(model)
+    expired = [i for i in issues if "expired" in i["message"]]
+    assert expired and expired[0]["severity"] == "error"
+    unparseable = [i for i in issues if "unparseable" in i["message"]]
+    assert not unparseable
+
+
+def test_save_model_mtime_guard_still_refuses_stale_writer(tmp_path):
+    """The lock serialises the check with the write; the mtime compare
+    itself must keep refusing a stale writer."""
+    import os
+    import pytest
+    project = _project(tmp_path)
+    model = blank_for_project(project)
+    json_path = tmp_path / "threat-model.json"
+    md_path = tmp_path / "THREAT_MODEL.md"
+    save_model(model, json_path, md_path)
+    stale_mtime = json_path.stat().st_mtime - 100
+    with pytest.raises(RuntimeError, match="another"):
+        save_model(model, json_path, md_path, expected_mtime=stale_mtime)
+    # Matching mtime writes fine (and the sidecar lock file exists).
+    save_model(model, json_path, md_path,
+               expected_mtime=json_path.stat().st_mtime)
+    assert os.path.exists(str(json_path) + ".lock")
+
+
+def test_flows_differing_only_in_severity_get_distinct_ids(tmp_path):
+    """Severity is content: identical (entry, sink, boundary) at high
+    vs low severity are distinct flows — a shared id let the
+    left-wins merge keep the low-severity twin."""
+    project = _project(tmp_path)
+    base = {"entry_point": "EP-1", "sink": "S-1",
+            "missing_boundary": "no auth"}
+    model = from_context_map(project, {
+        "entry_points": [{"id": "EP-1", "name": "POST /x"}],
+        "sinks": [{"id": "S-1", "name": "exec"}],
+        "unchecked_flows": [
+            {**base, "severity": "high"},
+            {**base, "severity": "low"},
+        ],
+    })
+    ids = [f["id"] for f in model.data_flows]
+    assert len(ids) == 2 and ids[0] != ids[1]
+    threat_ids = [t["id"] for t in model.threats]
+    assert len(set(threat_ids)) == len(threat_ids)
+
+
+def test_category_match_never_flips_status(tmp_path):
+    """One unauthenticated disk-staged 'refuted' record must not
+    mass-refute every threat of its CWE category — category matches
+    attach evidence only; status flips require the record to name the
+    exact threat."""
+    project = _project(tmp_path)
+    model = from_context_map(project, {
+        "entry_points": [{"id": "EP-001", "name": "POST /run"}],
+        "sink_details": [
+            {"id": "SINK-001", "type": "subprocess", "file": "a.py"},
+            {"id": "SINK-002", "type": "subprocess", "file": "b.py"},
+        ],
+        "unchecked_flows": [
+            {"entry_point": "EP-001", "sink": "SINK-001",
+             "severity": "critical"},
+            {"entry_point": "EP-001", "sink": "SINK-002",
+             "severity": "critical"},
+        ],
+    })
+    before = [t["status"] for t in model.threats]
+    outcome = VerifiedOutcome(
+        finding_id="UNRELATED-999",
+        oracle=Oracle.SANDBOX,
+        status=OutcomeStatus.REFUTED,
+        reproducible=True,
+        evidence={},
+        cwe_id="CWE-78",
+        file="a.py",
+    )
+    link_verified_outcomes(model, [outcome])
+    # Evidence attached (operator can weigh it) …
+    assert all(t["evidence_ids"] for t in model.threats)
+    # … but no threat's status moved.
+    assert [t["status"] for t in model.threats] == before
+    assert not any(t["status"] == "refuted" for t in model.threats)
+
+
+def test_id_match_still_flips_status_both_directions(tmp_path):
+    project = _project(tmp_path)
+    model = from_context_map(project, {
+        "entry_points": [{"id": "EP-001", "name": "POST /run"}],
+        "sink_details": [
+            {"id": "SINK-001", "type": "subprocess", "file": "a.py"},
+        ],
+        "unchecked_flows": [
+            {"entry_point": "EP-001", "sink": "SINK-001",
+             "severity": "critical"},
+        ],
+    })
+    refute = VerifiedOutcome(
+        finding_id="SINK-001",
+        oracle=Oracle.CODEQL,
+        status=OutcomeStatus.REFUTED,
+        reproducible=True,
+        evidence={"provenance_verified": True},
+        cwe_id="CWE-78",
+        file="a.py",
+    )
+    link_verified_outcomes(model, [refute])
+    assert model.threats[0]["status"] == "refuted"
+
+
+def test_id_match_without_mechanical_provenance_never_flips(tmp_path):
+    """Two-direction guard for the flip gate: threat ids are
+    content-derived and predictable, so an id-matched record without
+    the collect_outcomes-minted ``provenance_verified`` flag (a
+    disk-staged artifact, a legacy unstamped record) attaches
+    evidence for the operator but must not move status — in either
+    direction."""
+    project = _project(tmp_path)
+    model = from_context_map(project, {
+        "entry_points": [{"id": "EP-001", "name": "POST /run"}],
+        "sink_details": [
+            {"id": "SINK-001", "type": "subprocess", "file": "a.py"},
+        ],
+        "unchecked_flows": [
+            {"entry_point": "EP-001", "sink": "SINK-001",
+             "severity": "critical"},
+        ],
+    })
+    before = [t["status"] for t in model.threats]
+    staged = [
+        VerifiedOutcome(
+            finding_id="SINK-001",
+            oracle=Oracle.CODEQL,
+            status=OutcomeStatus.REFUTED,
+            reproducible=True,
+            evidence={},  # unstamped / unverified
+            cwe_id="CWE-78",
+            file="a.py",
+        ),
+        VerifiedOutcome(
+            finding_id="SINK-001",
+            oracle=Oracle.SANDBOX,
+            status=OutcomeStatus.VERIFIED,
+            reproducible=True,
+            # A non-True value must not satisfy the gate either.
+            evidence={"provenance_verified": "yes"},
+            cwe_id="CWE-78",
+            file="a.py",
+        ),
+    ]
+    link_verified_outcomes(model, staged)
+    # Evidence attached for the operator to weigh …
+    assert model.threats[0]["evidence_ids"]
+    # … but no status moved.
+    assert [t["status"] for t in model.threats] == before

@@ -129,3 +129,58 @@ def test_kill_and_reap_idempotent_on_already_dead_pid():
     proc.wait(timeout=2)
     # PID has been reaped by .wait. _kill_and_reap must not raise.
     _kill_and_reap(proc.pid)
+
+
+class TestTeardownTargetSelfGroupGuard:
+    """_teardown_target's reaped-path killpg carries the same
+    confused-deputy guard as _kill_and_reap: with the supported
+    start_new_session=False shape the intermediate's PGID is RAPTOR's
+    OWN process group, and an unconditional killpg there SIGKILLed the
+    orchestrator (and every unrelated same-group process) on a timeout
+    the target itself provoked. Both directions: own group is never
+    signalled; a foreign group still gets the descendant sweep."""
+
+    def _teardown(self, popen, monkeypatch):
+        from core.sandbox import _spawn
+        killed: list[int] = []
+        monkeypatch.setattr(os, "killpg",
+                            lambda pgid, sig: killed.append(pgid))
+        death_r, death_w = os.pipe()
+        try:
+            # Deliberately NO popen.poll() here: poll() would reap the
+            # child, making the entry getpgid raise and the killpg
+            # branch unreachable — the guard would pass vacuously.
+            # _teardown_target's own grace loop must observe the child
+            # as a reapable zombie (the exit-then-reaped path under
+            # test).
+            _spawn._teardown_target(popen.pid, death_w, {death_w},
+                                    grace_s=5.0)
+            # _teardown_target reaped the child out from under Popen;
+            # record that so the Popen destructor doesn't complain.
+            popen.returncode = 0
+        finally:
+            try:
+                os.close(death_r)
+            except OSError:
+                pass
+        return killed
+
+    def test_own_group_never_killpged_on_reaped_path(self, monkeypatch):
+        # start_new_session=False: the child shares OUR process group.
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "pass"], start_new_session=False,
+        )
+        killed = self._teardown(proc, monkeypatch)
+        assert os.getpgrp() not in killed, (
+            "reaped-path killpg signalled RAPTOR's own process group")
+        assert killed == []
+
+    def test_foreign_group_still_swept_on_reaped_path(self, monkeypatch):
+        # start_new_session=True: the child leads its own group — the
+        # descendant sweep must still fire there.
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "pass"], start_new_session=True,
+        )
+        killed = self._teardown(proc, monkeypatch)
+        assert killed == [proc.pid], (
+            f"expected exactly the child's group swept, got {killed}")

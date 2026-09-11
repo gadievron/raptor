@@ -1127,9 +1127,14 @@ def main() -> None:
                 # Operator override for machine-project auto-expiry:
                 # explicitly choosing the project makes it
                 # operator-owned — clear the marker so it cannot
-                # expire out from under them.
-                p.expires_at = ""
-                mgr._save(p)
+                # expire out from under them. Locked RMW on a FRESH
+                # load: the unlocked stale-snapshot save raced other
+                # mutators and clobbered their writes wholesale.
+                with mgr._mutation_lock(p.name):
+                    fresh = mgr.load(p.name)
+                    if fresh is not None and fresh.expires_at:
+                        fresh.expires_at = ""
+                        mgr._save(fresh)
                 print(
                     f"  note: cleared auto-expiry marker on "
                     f"'{p.name}' — explicit use makes it "
@@ -1297,6 +1302,13 @@ def main() -> None:
                     "vi", "vim", "nvim", "nano", "emacs", "code",
                     "subl", "atom", "ed", "ex", "joe", "mg",
                 }
+                # Extra argv tokens are allowlist-verified too: the
+                # basename check alone still executed
+                # EDITOR='vim -c ":!cmd"' — vim runs the -c argument
+                # as a command (the exact vector described above).
+                # Only argument-free blocking-wait flags pass; any
+                # other token refuses the launch.
+                _SAFE_EDITOR_ARGS = {"-w", "--wait"}
                 editor_argv = shlex.split(editor)
                 editor_basename = os.path.basename(editor_argv[0]) if editor_argv else ""
                 if editor_basename not in _SAFE_EDITOR_NAMES:
@@ -1305,6 +1317,18 @@ def main() -> None:
                         f"not in allowlist {sorted(_SAFE_EDITOR_NAMES)}. "
                         "Set $EDITOR to a recognised editor (vi/vim/nvim/"
                         "nano/emacs/code/subl/atom) and try again.",
+                        file=sys.stderr,
+                    )
+                    return
+                bad_args = [a for a in editor_argv[1:]
+                            if a not in _SAFE_EDITOR_ARGS]
+                if bad_args:
+                    print(
+                        f"Refusing to launch editor: argument(s) "
+                        f"{bad_args!r} not in the editor-argument "
+                        f"allowlist {sorted(_SAFE_EDITOR_ARGS)}. Set "
+                        "$EDITOR to the bare editor name (flags like "
+                        "vim's -c execute arbitrary commands).",
                         file=sys.stderr,
                     )
                     return
@@ -2313,7 +2337,10 @@ def _print_findings(project, detailed: bool=False) -> None:
     from .findings_utils import merge_sca_findings
     from .merge import merge_findings
 
-    run_dirs = project.get_run_dirs(sweep=False)
+    # get_run_dirs returns NEWEST-first; both merge folds take
+    # later-overrides-earlier order, so pass oldest-first or the
+    # oldest run wins every tie (inverting the latest-wins contract).
+    run_dirs = list(reversed(project.get_run_dirs(sweep=False)))
     merged = merge_findings(run_dirs)
     sca_findings = merge_sca_findings(run_dirs)
 
@@ -2915,7 +2942,10 @@ def _do_merge(project, merge_type, yes) -> None:
         merged_dir = project.output_path / f"{cmd_type}-{unique_run_suffix('-')}"
 
         try:
-            stats = merge_runs(dirs, merged_dir)
+            # get_run_dirs_by_type groups NEWEST-first; merge_runs takes
+            # later-overrides-earlier order — pass oldest-first so the
+            # newest run wins ties (the documented latest-wins contract).
+            stats = merge_runs(list(reversed(dirs)), merged_dir)
         except Exception as e:  # noqa: BLE001 — abort merge, keep sources
             print(f"  {cmd_type}: merge failed — {e}")
             print("  Source runs preserved.")

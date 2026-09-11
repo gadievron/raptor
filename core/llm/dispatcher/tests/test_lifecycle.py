@@ -242,3 +242,79 @@ class TestInprocessTokenTTL:
             os.environ.pop("RAPTOR_LLM_TOKEN_FD", None)
             if d is not None:
                 d.shutdown()
+
+
+class TestAuditPathWiring:
+    """The L5 audit JSONL must land inside the run's output directory
+    whenever a run dir is resolvable at dispatcher construction —
+    in-memory-only is reserved for genuinely run-less invocations."""
+
+    def test_audit_path_for_run_dir_accessor(self, tmp_path):
+        from core.llm.dispatcher.lifecycle import audit_path_for_run_dir
+        assert audit_path_for_run_dir(tmp_path) == tmp_path / _AUDIT_FILENAME
+
+    def test_inprocess_route_writes_audit_into_run_dir(
+        self, monkeypatch, tmp_path,
+    ):
+        import os
+
+        from core.llm.dispatcher.lifecycle import (
+            ensure_inprocess_dispatcher_env,
+        )
+        monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
+        monkeypatch.delenv("RAPTOR_LLM_TOKEN_FD", raising=False)
+        d = ensure_inprocess_dispatcher_env(
+            label="test-audit", run_dir=tmp_path,
+        )
+        try:
+            assert d is not None
+            # server.start is audited at construction, so the trail
+            # exists immediately.
+            assert (tmp_path / _AUDIT_FILENAME).exists()
+        finally:
+            os.environ.pop("RAPTOR_LLM_SOCKET", None)
+            os.environ.pop("RAPTOR_LLM_TOKEN_FD", None)
+            if d is not None:
+                d.shutdown()
+
+    def test_inprocess_route_without_run_dir_stays_in_memory(
+        self, monkeypatch,
+    ):
+        import os
+
+        from core.llm.dispatcher.lifecycle import (
+            ensure_inprocess_dispatcher_env,
+        )
+        monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
+        monkeypatch.delenv("RAPTOR_LLM_TOKEN_FD", raising=False)
+        d = ensure_inprocess_dispatcher_env(label="test-noaudit")
+        try:
+            assert d is not None
+            assert d._audit_path is None
+        finally:
+            os.environ.pop("RAPTOR_LLM_SOCKET", None)
+            os.environ.pop("RAPTOR_LLM_TOKEN_FD", None)
+            if d is not None:
+                d.shutdown()
+
+
+class TestAuditTrailHardening:
+    """The audit append goes through the hardened trail writer: a
+    symlink planted at the predictable audit path must be refused
+    (O_NOFOLLOW), not followed to redirect the append."""
+
+    def test_symlinked_audit_path_refused(self, fake_creds, tmp_path):
+        victim = tmp_path / "victim.txt"
+        victim.write_text("untouched\n")
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        (run_dir / _AUDIT_FILENAME).symlink_to(victim)
+        d = dispatcher_for_run(run_dir, creds=fake_creds)
+        try:
+            # The append was refused: nothing rode through the
+            # symlink, and the failure latched the once-per-process
+            # warning flag instead of raising into the caller.
+            assert victim.read_text() == "untouched\n"
+            assert getattr(d, "_audit_warned", False) is True
+        finally:
+            d.shutdown()

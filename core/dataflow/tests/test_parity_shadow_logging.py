@@ -102,6 +102,29 @@ class TestShadowLogging:
         assert len(records) == 1
         assert records[0].kind == "charset_sub"
 
+    def test_verdict_stack_exception_never_breaks_the_run(
+        self, _log_path, tmp_path, monkeypatch,
+    ):
+        """The resolver/evaluator stack behind the shadow verdict
+        raises on realistic inputs (RecursionError from ast.parse on
+        deep code, KeyError from malformed inventory).  Telemetry
+        observing a run must swallow ALL of it — an escaping exception
+        discarded the whole Tier 0 verdict for the observed finding."""
+        import core.dataflow.sanitizer_cut_parity as parity
+
+        def boom(finding):
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(parity, "value_bound_verdict_for", boom)
+        src = _tmp_src(tmp_path, _VALIDATOR_SRC)
+        result = validator_dominates_sink(
+            _VALIDATOR_SRC, 2, 4,
+            file_path=str(src), cwe="CWE-79", language="python",
+        )
+        assert isinstance(result, bool)
+        # No record was written (the hook failed) but nothing raised.
+        assert read_parity_records(_log_path) == []
+
 
 def _tmp_src(tmp_path, text):
     f = tmp_path / "app.py"

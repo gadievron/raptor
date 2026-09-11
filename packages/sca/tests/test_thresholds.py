@@ -405,3 +405,50 @@ def test_drift_added_buckets_non_list_treated_as_empty() -> None:
             f"expected pass on added_buckets={bad_added!r}, "
             f"got fails={fails!r}"
         )
+
+
+def _pipeline_drift_row(added_buckets: list[str]) -> dict:
+    """Build the drift row exactly as the findings layer emits it —
+    evidence nested under the row's ``sca`` block."""
+    from packages.sca.findings import _supply_chain_finding_to_row
+    from packages.sca.models import (
+        Confidence, Dependency, PinStyle, SupplyChainFinding,
+    )
+
+    dep = Dependency(
+        ecosystem="oci", name="app-image", version="latest",
+        declared_in=Path("/repo/Dockerfile"), scope="main",
+        is_lockfile=False, pin_style=PinStyle.EXACT, direct=True,
+        purl="pkg:oci/app-image@latest",
+        parser_confidence=Confidence("high", reason="t"),
+    )
+    finding = SupplyChainFinding(
+        finding_id="sca:supply_chain:image_capability_drift:app-image",
+        kind="image_capability_drift",
+        dependency=dep,
+        detail="capability buckets changed between image builds",
+        evidence={"added_buckets": added_buckets},
+        severity="medium",
+        confidence=Confidence("high", reason="binary diff"),
+    )
+    return _supply_chain_finding_to_row(finding)
+
+
+def test_max_added_capability_buckets_fails_on_pipeline_row_shape() -> None:
+    """The findings row builder nests evidence under ``row['sca']`` —
+    the gate must read that path, otherwise the bucket cap is vacuous
+    and an over-threshold drift row never fails the build."""
+    cfg = thresholds.ThresholdConfig(max_added_capability_buckets=2)
+    rows = [_pipeline_drift_row(["alloc", "exec", "network"])]
+    passed, fails = thresholds.evaluate(rows, cfg)
+    assert passed is False
+    assert "+3 buckets > max 2" in fails[0]
+
+
+def test_max_added_capability_buckets_passes_on_pipeline_row_shape() -> None:
+    """Under-threshold nested-evidence row passes the same gate."""
+    cfg = thresholds.ThresholdConfig(max_added_capability_buckets=2)
+    rows = [_pipeline_drift_row(["alloc"])]
+    passed, fails = thresholds.evaluate(rows, cfg)
+    assert passed is True
+    assert fails == []

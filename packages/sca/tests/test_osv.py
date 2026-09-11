@@ -973,25 +973,37 @@ def test_corridor_without_ceiling_keeps_only_unfixed(
     assert [a.osv_id for a in results[0].advisories] == ["OSV-OPEN"]
 
 
-def test_corridor_ranges_authoritative_over_versions_list(
+def test_corridor_unions_ranges_with_versions_list(
     tmp_path: Path,
 ) -> None:
-    """When a block ships both ranges and an explicit versions array,
-    the (precise) range verdict wins — the enumeration of low affected
-    versions must not resurrect a pruned advisory."""
-    deps = [_corridor_dep("rangy", ceiling="2.0.0")]
+    """OSV affected-block semantics are a UNION: an explicitly
+    enumerated affected version inside the corridor matches even when
+    every range's verdict says no — and a corridor reaching neither
+    surface stays pruned."""
+    deps = [
+        _corridor_dep("rangy", ceiling="2.0.0"),
+        _corridor_dep("pruned", ceiling="2.0.0"),
+    ]
     http = FakeHttp(
-        batch_results=[["OSV-3"]],
+        batch_results=[["OSV-3"], ["OSV-3B"]],
         vuln_records={
             "OSV-3": _npm_record(
                 "OSV-3", "rangy",
                 events=[{"introduced": "0"}, {"fixed": "1.0.0"}],
                 versions=["0.5.0", "0.9.0"],
             ),
+            # Neither the range nor the enumerated versions reach the
+            # corridor (everything is above the 2.0.0 ceiling).
+            "OSV-3B": _npm_record(
+                "OSV-3B", "pruned",
+                events=[{"introduced": "3.0.0"}, {"fixed": "3.1.0"}],
+                versions=["3.0.5"],
+            ),
         },
     )
     results = OsvClient(http, JsonCache(root=tmp_path)).query_batch(deps)
-    assert results[0].advisories == []
+    assert [a.osv_id for a in results[0].advisories] == ["OSV-3"]
+    assert results[1].advisories == []
 
 
 def test_corridor_versions_list_fallback_when_no_ranges(

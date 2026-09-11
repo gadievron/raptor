@@ -99,14 +99,14 @@ class TestClaudecodeWorkerCap:
         )
 
         self._mock_primary(
-            monkeypatch, "claudecode", "anthropic.claude-mythos-5",
+            monkeypatch, "claudecode", "anthropic.claude-fable-5",
         )
         monkeypatch.setattr(
             "core.llm.concurrency.read_tuning_max_llm_workers",
             lambda: None,
         )
         assert (
-            derive_max_workers("anthropic.claude-mythos-5")
+            derive_max_workers("anthropic.claude-fable-5")
             == CC_MAX_WORKERS_DEFAULT
         )
 
@@ -114,14 +114,14 @@ class TestClaudecodeWorkerCap:
         from core.llm.concurrency import derive_max_workers
 
         self._mock_primary(
-            monkeypatch, "claudecode", "anthropic.claude-mythos-5",
+            monkeypatch, "claudecode", "anthropic.claude-fable-5",
         )
         monkeypatch.setattr(
             "core.llm.concurrency.read_tuning_max_llm_workers",
             lambda: None,
         )
         monkeypatch.setenv("RAPTOR_CC_MAX_WORKERS", "8")
-        assert derive_max_workers("anthropic.claude-mythos-5") == 8
+        assert derive_max_workers("anthropic.claude-fable-5") == 8
 
     def test_non_claudecode_primary_uncapped(self, monkeypatch):
         from core.llm.concurrency import derive_max_workers
@@ -137,13 +137,13 @@ class TestClaudecodeWorkerCap:
         from core.llm.concurrency import derive_max_workers
 
         self._mock_primary(
-            monkeypatch, "claudecode", "anthropic.claude-mythos-5",
+            monkeypatch, "claudecode", "anthropic.claude-fable-5",
         )
         monkeypatch.setattr(
             "core.llm.concurrency.read_tuning_max_llm_workers",
             lambda: 12,
         )
-        assert derive_max_workers("anthropic.claude-mythos-5") == 12
+        assert derive_max_workers("anthropic.claude-fable-5") == 12
 
 
 class TestUnknownRpmWorkerFloor:

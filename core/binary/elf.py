@@ -58,6 +58,9 @@ _SHT_SYMTAB = 2
 _SHT_STRTAB = 3
 _SHT_DYNSYM = 11
 
+# Program header types
+_PT_DYNAMIC = 2
+
 # Symbol section index — SHN_UNDEF means "imported"
 _SHN_UNDEF = 0
 _SHN_LORESERVE = 0xFF00
@@ -92,6 +95,10 @@ _MACHINE_ARCH = {
 _MAX_SHNUM = 100_000
 _MAX_DYNSYM_ENTRIES = 1_000_000
 _MAX_SHSTRNDX_BOUND = 100_000
+# Real .dynsym entries are 24 (ELF64) / 16 (ELF32) bytes. sh_entsize
+# is a 64-bit field in ELF64, so a hostile value would otherwise
+# drive a per-entry padding read of up to ~2**64 bytes (MemoryError).
+_MAX_SYM_ENTSIZE = 4096
 
 
 @dataclass
@@ -137,6 +144,14 @@ def parse_elf(path: Path) -> ElfMetadata | None:
         logger.debug("core.binary.elf: truncated / malformed %s: %s",
                      path, e)
         return None
+    except (ValueError, OverflowError) as e:
+        # f.seek() rejects offsets that don't fit a C off_t
+        # (e_shoff / sh_offset >= 2**63 in a crafted header) with
+        # ValueError or OverflowError depending on the io layer —
+        # same "malformed input" contract as struct.error.
+        logger.debug("core.binary.elf: pathological offsets in %s: %s",
+                     path, e)
+        return None
 
 
 def _parse_elf_stream(f) -> ElfMetadata | None:
@@ -168,33 +183,52 @@ def _parse_elf_stream(f) -> ElfMetadata | None:
     rest = f.read(rest_size)
     if len(rest) < rest_size:
         return None
-    (_e_type, e_machine, _e_version, _e_entry, _e_phoff,
-     e_shoff, _e_flags, _e_ehsize, _e_phentsize, _e_phnum,
+    (_e_type, e_machine, _e_version, _e_entry, e_phoff,
+     e_shoff, _e_flags, _e_ehsize, e_phentsize, e_phnum,
      e_shentsize, e_shnum, e_shstrndx) = struct.unpack(
         rest_fmt, rest,
     )
 
+    def _bail() -> ElfMetadata | None:
+        """We can't enumerate imports from the section headers.
+
+        When the binary has a PT_DYNAMIC segment it DOES import
+        symbols via the dynamic linker — returning header-only
+        metadata here would look like a successful parse with
+        ``imports=set()``, and the caller's radare2 fallback
+        (which reads the dynamic segment without section headers)
+        would never engage. A section-header-stripped (sstrip'd)
+        binary would then fingerprint as capability-free. Signal
+        "needs fallback" with ``None`` instead. Binaries without
+        PT_DYNAMIC (static / bare-metal) genuinely have no dynamic
+        imports, so header-only metadata is the truthful answer.
+        """
+        if _has_pt_dynamic(f, e_phoff, e_phentsize, e_phnum,
+                           bits=bits, endian=endian):
+            return None
+        return _bare_metadata(e_machine, bits, endianness)
+
     if e_shoff == 0 or e_shnum == 0 or e_shnum > _MAX_SHNUM:
         # No section headers — possible (PIE stripped binary)
         # but we can't enumerate imports without them. Bail.
-        return _bare_metadata(e_machine, bits, endianness)
+        return _bail()
     if e_shstrndx >= _MAX_SHSTRNDX_BOUND:
         # SHN_XINDEX or similar — would require reading
         # section 0 for the extended index. Not handling.
-        return _bare_metadata(e_machine, bits, endianness)
+        return _bail()
 
     # --- Section header table ----------------------------------
     sections = _read_section_headers(
         f, e_shoff, e_shentsize, e_shnum, bits=bits, endian=endian,
     )
     if sections is None or e_shstrndx >= len(sections):
-        return _bare_metadata(e_machine, bits, endianness)
+        return _bail()
 
     # --- Section-name string table -----------------------------
     shstrtab_section = sections[e_shstrndx]
     shstrtab = _read_section_bytes(f, shstrtab_section)
     if shstrtab is None:
-        return _bare_metadata(e_machine, bits, endianness)
+        return _bail()
 
     # Resolve section names so we can find .dynsym + .dynstr
     named_sections: list[tuple[str, _SectionHeader]] = []
@@ -212,14 +246,16 @@ def _parse_elf_stream(f) -> ElfMetadata | None:
             dynstr = sh
 
     if dynsym is None or dynstr is None:
-        # Static binary or stripped — no dynamic imports.
-        # Return metadata without imports.
-        return _bare_metadata(e_machine, bits, endianness)
+        # No .dynsym/.dynstr sections. Truly static binaries have
+        # no PT_DYNAMIC either → header-only metadata is accurate.
+        # A dynamic binary whose sections were doctored away needs
+        # the fallback tier (see _bail).
+        return _bail()
 
     # --- Read .dynstr (the symbol-name string table) -----------
     dynstr_bytes = _read_section_bytes(f, dynstr)
     if dynstr_bytes is None:
-        return _bare_metadata(e_machine, bits, endianness)
+        return _bail()
 
     # --- Walk .dynsym entries, collect imports -----------------
     imports = _read_dynsym_imports(
@@ -336,6 +372,10 @@ def _read_dynsym_imports(
     names (the imports)."""
     if dynsym.sh_entsize == 0 or dynsym.sh_size == 0:
         return set()
+    if dynsym.sh_entsize > _MAX_SYM_ENTSIZE:
+        # Bounds the per-entry padding read below — sh_entsize is
+        # attacker-chosen in a crafted binary.
+        return set()
     entries = dynsym.sh_size // dynsym.sh_entsize
     if entries > _MAX_DYNSYM_ENTRIES:
         return set()
@@ -375,6 +415,33 @@ def _read_dynsym_imports(
         if name:
             imports.add(name)
     return imports
+
+
+def _has_pt_dynamic(
+    f, e_phoff: int, e_phentsize: int, e_phnum: int,
+    *, bits: int, endian: str,
+) -> bool:
+    """True when the program header table contains a PT_DYNAMIC
+    segment — i.e. the binary imports symbols at load time even
+    if its section headers are absent or unusable."""
+    if e_phoff == 0 or e_phnum == 0:
+        return False
+    # ELF64 phdr: p_type(I) p_flags(I) then six Qs → 56 bytes.
+    # ELF32 phdr: p_type(I) then seven Is → 32 bytes.
+    # Only p_type is needed; it is the first field in both layouts.
+    record_size = 56 if bits == 64 else 32
+    if e_phentsize < record_size:
+        return False
+    type_fmt = endian + "I"
+    f.seek(e_phoff)
+    for _ in range(e_phnum):
+        buf = f.read(e_phentsize)
+        if len(buf) < record_size:
+            return False
+        (p_type,) = struct.unpack_from(type_fmt, buf)
+        if p_type == _PT_DYNAMIC:
+            return True
+    return False
 
 
 def _bare_metadata(e_machine: int, bits: int, endianness: str) -> ElfMetadata:

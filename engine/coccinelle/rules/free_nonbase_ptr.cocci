@@ -15,6 +15,12 @@ position p;
 @@
 
 (
+// Exception (unflagged, listed first so it shadows the subtraction
+// leg): subtracting offsetof() is container_of-style base recovery —
+// walking BACK from an embedded member to the true allocation base is
+// correct code, not a non-base free.
+  \(free\|kfree\|vfree\)(P - offsetof(...))
+|
 * \(free\|kfree\|vfree\)(P + E)@p
 |
 * \(free\|kfree\|vfree\)(P - E)@p

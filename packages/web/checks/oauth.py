@@ -38,7 +38,12 @@ class OAuthOpenRedirectCheck(Check):
 
         for path in auth_endpoints[:5]:
             try:
-                # Probe with an external redirect_uri
+                # Probe with an external redirect_uri. The redirect is
+                # OBSERVED, never followed: with internal following, a
+                # Location pointing at the probe host is out-of-scope
+                # and raises inside the client before this check could
+                # ever see the 3xx — the positive path was structurally
+                # dead.
                 resp = client.get(
                     path,
                     params={
@@ -48,6 +53,7 @@ class OAuthOpenRedirectCheck(Check):
                         "scope": "openid",
                         "state": "raptor_probe",
                     },
+                    allow_redirects=False,
                 )
 
                 location = resp.headers.get("Location", "")
@@ -96,9 +102,23 @@ class OAuthMissingStateCheck(Check):
             body, re.I
         )
 
-        for link in oauth_links[:3]:
+        flagged = 0
+        for link in oauth_links:
+            if flagged >= 3:
+                break
             parsed = urlparse(link)
             params = parse_qs(parsed.query)
+
+            # Only actual provider authorization URLs can be missing a
+            # state parameter: an authorization request carries
+            # response_type and/or client_id. Bare initiation links
+            # ('/auth/google/connect' — the app appends state during
+            # its server-side 302, the dominant correct pattern) and
+            # unrelated links that merely contain 'connect' carry no
+            # query and prove nothing.
+            if "response_type" not in params and "client_id" not in params:
+                continue
+            flagged += 1
 
             if "state" not in params:
                 return [self._result(

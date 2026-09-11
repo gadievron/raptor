@@ -38,9 +38,23 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+# Same hardened reader the sibling macro-config extractor uses for the
+# identical file set: symlink refused, regular-file only (a FIFO at the
+# path would otherwise hang the read), size gate before read. These
+# files live inside the scanned repo — never read them unbounded.
+from core.build.macro_config import (
+    _MAX_COMPILE_COMMANDS_BYTES,
+    _MAX_KCONFIG_BYTES,
+    _read_bounded,
+)
+
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
+
+# Makefiles are hand-written and small; generated monsters exist but
+# a CFLAGS regex scan over more than this is noise, not signal.
+_MAX_MAKEFILE_BYTES = 8 * 1024 * 1024
 
 
 # =====================================================================
@@ -135,7 +149,7 @@ def extract_flags(target: Path) -> BuildFlagsContext:
             ctx = _from_kconfig(kconfig_path)
             if ctx.extraction_confidence != "absent":
                 return ctx
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             logger.debug(".config parse failed: %s", exc)
 
     # 3. Makefile / Kbuild — best-effort CFLAGS regex
@@ -146,7 +160,7 @@ def extract_flags(target: Path) -> BuildFlagsContext:
                 ctx = _from_makefile(mf_path)
                 if ctx.extraction_confidence != "absent":
                     return ctx
-            except OSError as exc:
+            except (OSError, ValueError) as exc:
                 logger.debug("%s parse failed: %s", mf_name, exc)
                 continue
 
@@ -177,7 +191,7 @@ def _from_compile_commands(path: Path) -> BuildFlagsContext:
     have different flags (e.g. some compiled with ``-DCONFIG_KASAN``),
     and we want the most-hardened observed setting per flag.
     """
-    raw = path.read_text(encoding="utf-8", errors="replace")
+    raw = _read_bounded(path, _MAX_COMPILE_COMMANDS_BYTES)
     try:
         entries = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
@@ -242,7 +256,7 @@ def _from_kconfig(path: Path) -> BuildFlagsContext:
     config bits since the kernel build doesn't surface raw compiler
     flags via this file.
     """
-    text = path.read_text(encoding="utf-8", errors="replace")
+    text = _read_bounded(path, _MAX_KCONFIG_BYTES)
     configs: dict[str, bool] = {}
 
     for m in re.finditer(
@@ -316,7 +330,7 @@ def _from_makefile(path: Path) -> BuildFlagsContext:
     or follow ``include`` directives — confidence is ``best_effort``
     accordingly.
     """
-    text = path.read_text(encoding="utf-8", errors="replace")
+    text = _read_bounded(path, _MAX_MAKEFILE_BYTES)
     pieces = [m.group(1) for m in _CFLAGS_LINE_RE.finditer(text)]
     if not pieces:
         return BuildFlagsContext(

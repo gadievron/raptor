@@ -417,9 +417,11 @@ def confirm_finding_flow(
         return confirmation
 
     start = time.monotonic()
+    query_errors: list = []
     try:
         flows = server.run_taint_query(
             source_method, sink_call, timeout=timeout,
+            errors_out=query_errors,
         ) or []
     except Exception:
         logger.debug(
@@ -433,6 +435,25 @@ def confirm_finding_flow(
         finding["joern_flow_confirmation"] = confirmation
         return confirmation
     elapsed_ms = int((time.monotonic() - start) * 1000)
+
+    # Empty flows + query errors is AMBIGUOUS (see run_taint_query's
+    # errors_out contract): a server-degraded query must be booked
+    # ``confirmed: null``, never ``confirmed: false`` — Stage B treats
+    # false as evidence against the finding. Non-empty flows stand.
+    if not flows and query_errors:
+        logger.warning(
+            "joern flow confirmation degraded for %s -> %s: %s",
+            source_method, sink_call, query_errors,
+        )
+        confirmation = {
+            "confirmed": None,
+            "skipped": (
+                f"joern query degraded for {source_method} -> "
+                f"{sink_call} (server errors; no verdict)"
+            ),
+        }
+        finding["joern_flow_confirmation"] = confirmation
+        return confirmation
 
     confirmed = len(flows) > 0
     confirmation = {

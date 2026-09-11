@@ -43,12 +43,23 @@ _REVIEW_INSTRUCTIONS = (
     "  VERDICT: SAFE         (it does not)\n"
 )
 
-_VERDICT_RE = re.compile(r"VERDICT:\s*VULNERABLE", re.IGNORECASE)
+# One verdict per LINE, and the LAST one wins. The instructions demand
+# the reply END with exactly one verdict line, and they themselves
+# contain both template lines — a whole-reply substring search for
+# "VERDICT: VULNERABLE" grades any reply that echoes or reasons about
+# the vulnerable option as VULNERABLE even when it concludes SAFE,
+# inflating flagged counts in both A/B arms.
+_VERDICT_LINE_RE = re.compile(
+    r"^\s*VERDICT:\s*(VULNERABLE|SAFE)\b", re.IGNORECASE | re.MULTILINE,
+)
 
 
 def grade(reply: str) -> bool:
-    """True iff the model returned a VULNERABLE verdict."""
-    return bool(_VERDICT_RE.search(reply or ""))
+    """True iff the model's FINAL verdict line is VULNERABLE."""
+    verdicts = _VERDICT_LINE_RE.findall(reply or "")
+    if not verdicts:
+        return False
+    return verdicts[-1].upper() == "VULNERABLE"
 
 
 def _strategies_by_name() -> dict[str, object]:

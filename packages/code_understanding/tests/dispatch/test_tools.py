@@ -442,6 +442,53 @@ class TestGrep:
         result = json.loads(tools.grep("FINDME"))
         assert len(result["matches"]) >= 1
 
+    def test_long_line_truncated_not_chunked(self, tmp_path):
+        """A >_MAX_LINE_BYTES physical line is TRUNCATED for matching:
+        continuation bytes must not come back as extra 'lines' —
+        that drifted the line number of every subsequent match and
+        matched phantom mid-line content (minified JS, generated C)."""
+        f = tmp_path / "minified.js"
+        f.write_text(
+            ("x" * (_MAX_LINE_BYTES + 100)) + "\n"  # physical line 1
+            + "NEEDLE here\n"                        # physical line 2
+        )
+        tools = SandboxedTools.for_repo(tmp_path)
+        result = json.loads(tools.grep("NEEDLE"))
+        assert len(result["matches"]) == 1
+        assert result["matches"][0]["line"] == 2
+
+    def test_long_line_tail_not_matched_as_phantom_line(self, tmp_path):
+        """Content past the per-line cap belongs to a truncated line —
+        it must not surface as a match on a phantom line number."""
+        f = tmp_path / "one_line.txt"
+        f.write_text("x" * (_MAX_LINE_BYTES + 10) + "TAILNEEDLE")
+        tools = SandboxedTools.for_repo(tmp_path)
+        result = json.loads(tools.grep("TAILNEEDLE"))
+        # Truncated-for-matching semantics (documented): the tail of an
+        # over-long line is not scanned, and crucially not reported at
+        # a wrong line number.
+        assert result["matches"] == []
+
+    def test_hidden_dirs_skipped_as_documented(self, tmp_path):
+        """The documented contract skips hidden dirs (prior-agent
+        output under .claude/ etc. must not re-enter tool results);
+        an explicit path= into the hidden tree still works."""
+        (tmp_path / ".github" / "workflows").mkdir(parents=True)
+        (tmp_path / ".github" / "workflows" / "wf.yml").write_text(
+            "HIDDENNEEDLE\n",
+        )
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "a.c").write_text("HIDDENNEEDLE\n")
+        tools = SandboxedTools.for_repo(tmp_path)
+        result = json.loads(tools.grep("HIDDENNEEDLE"))
+        assert {m["file"] for m in result["matches"]} == {"src/a.c"}
+        # Explicit path into the hidden tree is honoured (walk root
+        # itself is never filtered).
+        scoped = json.loads(tools.grep("HIDDENNEEDLE", path=".github"))
+        assert {m["file"] for m in scoped["matches"]} == {
+            ".github/workflows/wf.yml",
+        }
+
     def test_skips_files_above_size_threshold(self, tmp_path):
         # Files larger than _MAX_GREP_FILE_BYTES are skipped (would
         # dominate wall-clock). The skip is reported in the result.

@@ -2103,6 +2103,44 @@ class TestLandlockDegradationWarnings(unittest.TestCase):
             run(["true"], capture_output=True, text=True)
         self.assertTrue(any("ABI v4" in m for m in cm.output))
 
+    @requires_userns
+    @requires_mount
+    def test_warns_when_tcp_allowlist_on_abi_lt_4_with_mount_ns(self):
+        """mount-ns substitutes for Landlock's FILESYSTEM rules only —
+        the TCP port allowlist still needs ABI v4. The mount-ns skip
+        of the availability block used to swallow this warning, so an
+        allowlist on an ABI < 4 kernel ran silently unenforced on
+        exactly the healthiest-looking hosts."""
+        import core.sandbox as mod
+        with TemporaryDirectory() as d, \
+                patch.object(mod.landlock, "check_landlock_available",
+                             return_value=True), \
+                patch.object(mod.landlock, "_get_landlock_abi",
+                             return_value=3), \
+                self.assertLogs("core.sandbox", level="WARNING") as cm, \
+                sandbox(target=d, output=d, block_network=False,
+                        allowed_tcp_ports=[443]):
+            pass
+        self.assertTrue(any("ABI v4" in m and "NOT enforced" in m
+                            for m in cm.output))
+
+    @requires_userns
+    @requires_mount
+    def test_no_tcp_allowlist_warning_on_abi_4_with_mount_ns(self):
+        """Opposite direction: ABI v4 enforces the allowlist — the
+        mount-ns shape must stay silent."""
+        import core.sandbox as mod
+        with TemporaryDirectory() as d, \
+                patch.object(mod.landlock, "check_landlock_available",
+                             return_value=True), \
+                patch.object(mod.landlock, "_get_landlock_abi",
+                             return_value=4), \
+                self.assertNoLogs("core.sandbox.context",
+                                  level="WARNING"), \
+                sandbox(target=d, output=d, block_network=False,
+                        allowed_tcp_ports=[443]):
+            pass
+
     def test_landlock_unavailable_raises_every_time(self):
         """Each sandbox() call raises when Landlock is unavailable — no silent degradation."""
         from unittest.mock import patch
@@ -2319,6 +2357,129 @@ class TestToolPathsKwarg(unittest.TestCase):
         from core.sandbox import sandbox
         with sandbox() as run, self.assertRaises(TypeError):
             run(["true"], tool_paths=["/opt/foo/bin"])
+
+
+class TestSandboxKwargsGuard(unittest.TestCase):
+    """Drift guard for the _SANDBOX_KWARGS mirror in profiles.py.
+
+    profiles.py cannot regenerate the set from sandbox()'s signature
+    (context.py imports profiles — circular), so it is a hand-kept
+    mirror. It once fell 7 parameters behind the signature and the
+    misuse guard silently accepted (and dropped or late-TypeErrored)
+    sandbox-level kwargs on inner run()/run_trusted(). Both drift
+    directions are failures: a missing name re-opens the silent-drop
+    hole; a stale extra name rejects a kwarg sandbox() no longer owns.
+    """
+
+    def test_mirror_matches_sandbox_signature_exactly(self):
+        import inspect
+
+        from core.sandbox.context import sandbox
+        from core.sandbox.profiles import _SANDBOX_KWARGS
+        sig_params = set(inspect.signature(sandbox).parameters)
+        self.assertEqual(
+            _SANDBOX_KWARGS, frozenset(sig_params),
+            "profiles._SANDBOX_KWARGS must mirror sandbox()'s "
+            "parameter list exactly — missing names silently pass the "
+            "misuse guard, extra names reject valid kwargs. "
+            f"missing={sorted(sig_params - _SANDBOX_KWARGS)} "
+            f"stale={sorted(_SANDBOX_KWARGS - sig_params)}")
+
+    def test_sandbox_level_kwarg_rejected_on_inner_run(self):
+        """One of the 7 formerly-missing names must now hit the guard
+        (early, clearly-messaged TypeError) instead of dropping or
+        failing deep inside subprocess."""
+        from core.sandbox import sandbox
+        with sandbox() as run:
+            with self.assertRaises(TypeError) as ctx:
+                run(["true"], writable_paths=["/tmp/x"])
+            self.assertIn("sandbox kwargs", str(ctx.exception))
+
+    def test_non_sandbox_kwargs_still_pass_the_guard(self):
+        """Opposite direction: ordinary subprocess kwargs must not be
+        caught by the widened guard."""
+        from core.sandbox import run as sandbox_run
+        try:
+            r = sandbox_run(["true"], capture_output=True, text=True,
+                            timeout=30)
+        except (RuntimeError, OSError, FileNotFoundError):
+            return  # host cannot run the child — guard not implicated
+        self.assertEqual(r.returncode, 0)
+
+
+class TestRunCheckKwarg:
+    """run() honours check= with subprocess.run semantics. Pre-fix the
+    kwarg was silently popped: callers' CalledProcessError handlers
+    were dead code and failures degraded silently (the binary-oracle
+    corpus drivers pass check=True to gate their build steps)."""
+
+    def test_check_true_raises_on_nonzero(self):
+        from core.sandbox import run as sandbox_run
+        with pytest.raises(subprocess.CalledProcessError) as ei:
+            sandbox_run(["false"], check=True,
+                        capture_output=True, text=True, timeout=30)
+        assert ei.value.returncode != 0
+
+    def test_check_false_and_default_return_the_result(self):
+        from core.sandbox import run as sandbox_run
+        r = sandbox_run(["false"], check=False,
+                        capture_output=True, text=True, timeout=30)
+        assert r.returncode != 0
+        r = sandbox_run(["false"],
+                        capture_output=True, text=True, timeout=30)
+        assert r.returncode != 0
+
+    def test_check_true_passes_on_success(self):
+        from core.sandbox import run as sandbox_run
+        r = sandbox_run(["true"], check=True,
+                        capture_output=True, text=True, timeout=30)
+        assert r.returncode == 0
+
+
+class TestSeccompFilterLostWarning(unittest.TestCase):
+    """A REQUESTED seccomp profile that cannot engage (libseccomp
+    missing/non-functional) must be loud on the warn-tier postures:
+    one once-per-process WARNING naming the lost layers. A profile of
+    ''/'none' is not a request and must stay silent."""
+
+    def _reset(self):
+        from core.sandbox import state
+        state.reset_warn_once("_seccomp_filter_lost_warned")
+
+    def test_requested_profile_unavailable_warns_once(self):
+        from core.sandbox import seccomp as seccomp_mod
+        self._reset()
+        try:
+            with patch.object(seccomp_mod, "check_seccomp_available",
+                              return_value=False):
+                with self.assertLogs("core.sandbox.seccomp",
+                                     level="WARNING") as cm:
+                    self.assertIsNone(
+                        seccomp_mod._make_seccomp_preexec("full"))
+                joined = "\n".join(cm.output)
+                self.assertIn("WITHOUT the seccomp layer", joined)
+                self.assertIn("docker.sock", joined)
+                # Once per process: the second call is silent.
+                with self.assertNoLogs("core.sandbox.seccomp",
+                                       level="WARNING"):
+                    self.assertIsNone(
+                        seccomp_mod._make_seccomp_preexec("full"))
+        finally:
+            self._reset()
+
+    def test_no_profile_requested_stays_silent(self):
+        from core.sandbox import seccomp as seccomp_mod
+        self._reset()
+        try:
+            with patch.object(seccomp_mod, "check_seccomp_available",
+                              return_value=False), \
+                 self.assertNoLogs("core.sandbox.seccomp",
+                                   level="WARNING"):
+                self.assertIsNone(seccomp_mod._make_seccomp_preexec(""))
+                self.assertIsNone(
+                    seccomp_mod._make_seccomp_preexec("none"))
+        finally:
+            self._reset()
 
 
 class TestSpeculativeToolPathsRetry(unittest.TestCase):

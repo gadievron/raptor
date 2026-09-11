@@ -207,10 +207,16 @@ def harvest_git_repo(
     repo = str(Path(source.repo_dir).resolve())
     patterns = source.compiled_patterns()
 
-    listing = _run_git([
-        "-C", repo, "log", "--grep=CVE-", "-i",
-        f"--max-count={max_commits}", "--format=%H",
-    ])
+    try:
+        listing = _run_git([
+            "-C", repo, "log", "--grep=CVE-", "-i",
+            f"--max-count={max_commits}", "--format=%H",
+        ])
+    except subprocess.TimeoutExpired:
+        # Recorded like a failed log so a single slow repo doesn't
+        # abort the other sources in a multi-source harvest.
+        result.errors.append(f"git log timed out after {_GIT_TIMEOUT}s")
+        return result
     if listing.returncode != 0:
         result.errors.append(
             f"git log failed: {listing.stderr.strip()[:300]}"
@@ -218,20 +224,30 @@ def harvest_git_repo(
         return result
 
     for sha in listing.stdout.split():
-        message = _run_git(
-            ["-C", repo, "show", "-s", "--format=%B", sha],
-            allow_promisor_fetch=allow_promisor_fetch,
-        )
-        if message.returncode != 0:
-            result.errors.append(f"{sha[:12]}: message read failed")
+        try:
+            message = _run_git(
+                ["-C", repo, "show", "-s", "--format=%B", sha],
+                allow_promisor_fetch=allow_promisor_fetch,
+            )
+            if message.returncode != 0:
+                result.errors.append(f"{sha[:12]}: message read failed")
+                continue
+            cves = {c.upper() for c in _CVE_RE.findall(message.stdout)}
+            if not cves:
+                continue
+            diff = _run_git(
+                ["-C", repo, "show", "--format=", "--no-color", sha],
+                allow_promisor_fetch=allow_promisor_fetch,
+            )
+        except subprocess.TimeoutExpired:
+            # One slow ``git show`` (huge diff, lazy promisor fetch)
+            # must not discard every completed commit and source —
+            # record it per-commit like the non-zero-exit paths above
+            # and keep walking.
+            result.errors.append(
+                f"{sha[:12]}: git timed out after {_GIT_TIMEOUT}s"
+            )
             continue
-        cves = {c.upper() for c in _CVE_RE.findall(message.stdout)}
-        if not cves:
-            continue
-        diff = _run_git(
-            ["-C", repo, "show", "--format=", "--no-color", sha],
-            allow_promisor_fetch=allow_promisor_fetch,
-        )
         if diff.returncode != 0:
             result.errors.append(
                 f"{sha[:12]}: diff read failed "
@@ -374,20 +390,15 @@ def dumps_pack(pack: dict) -> str:
 
 
 def write_pack(pack: dict, path: Path) -> None:
-    """Atomic write (tempfile + rename, same-dir)."""
-    import os
-    import tempfile
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        dir=str(path.parent), prefix=path.name + ".", suffix=".tmp",
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(dumps_pack(pack))
-        os.replace(tmp_name, path)
-    except BaseException:
-        Path(tmp_name).unlink(missing_ok=True)
-        raise
+    """Atomic + durable write via the shared primitive.
+
+    The pack is a merge-in-place store (additive-only history built
+    from many harvests), not a regeneratable one-shot output — a
+    crash-window torn or unsynced write would lose accumulated
+    provenance, so the fsync-before-rename discipline is earned here.
+    """
+    from core.atomic_fs import write_text_atomically
+    write_text_atomically(path, dumps_pack(pack))
 
 
 # =====================================================================

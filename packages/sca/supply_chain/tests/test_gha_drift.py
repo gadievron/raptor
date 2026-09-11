@@ -148,3 +148,72 @@ jobs:
 """)
     findings = scan_target(tmp_path, [])
     assert findings and findings[0].line == 8
+
+
+# ---------------------------------------------------------------------------
+# Quoted uses: specs — YAML-identical to bare, must be checked
+# ---------------------------------------------------------------------------
+
+def test_double_quoted_mutable_ref_flagged(tmp_path: Path) -> None:
+    """``uses: "owner/repo@main"`` — GitHub runs the quoted form
+    exactly like the bare one, so quoting a mutable ref must not
+    exempt it from the pinning check."""
+    _write_workflow(tmp_path, """\
+name: ci
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: "actions/checkout@main"
+""")
+    out = scan_target(tmp_path, [])
+    assert len(out) == 1
+    assert out[0].action == "actions/checkout"
+    assert out[0].ref == "main"
+    assert out[0].ref_kind == "branch_or_other"
+
+
+def test_single_quoted_tag_ref_flagged(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, """\
+name: ci
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: 'actions/checkout@v4'
+""")
+    out = scan_target(tmp_path, [])
+    assert len(out) == 1
+    assert out[0].ref_kind == "tag"
+
+
+def test_quoted_sha_pin_still_not_flagged(tmp_path: Path) -> None:
+    """The legitimate quoted shape — a full 40-char SHA pin — stays
+    quiet whether quoted or bare."""
+    _write_workflow(tmp_path, """\
+name: ci
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: "actions/checkout@8f4b7f84864484a7bf31766abe9204da3cbe65b3"
+""")
+    assert scan_target(tmp_path, []) == []
+
+
+def test_mismatched_quotes_do_not_match(tmp_path: Path) -> None:
+    """A line with unbalanced quoting isn't a well-formed uses: spec;
+    the matcher must not half-consume it and report a phantom ref."""
+    _write_workflow(tmp_path, """\
+name: ci
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: "actions/checkout@main'
+""")
+    assert scan_target(tmp_path, []) == []

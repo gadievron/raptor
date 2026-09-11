@@ -1,8 +1,9 @@
 """SAGE-recalled build commands on the CodeQL agent.
 
 An HMAC-verified build-reliability row may drive a traced build
-(`BuildSystem(type="sage_prior")`); a row whose MAC is missing or fails
-verification must never be auto-executed — it demotes to a single
+(`BuildSystem(type="sage_prior")`); a row whose MAC is missing, fails
+verification, or was minted for a DIFFERENT repo than the one being
+analysed must never be auto-executed — it demotes to a single
 operator-visible hint suggesting `--build-command`.
 
 No real SAGE server and no LLM: the SAGE client is a MagicMock and the
@@ -27,8 +28,17 @@ def _isolated_rowmac_key(tmp_path):
         yield
 
 
-def _stamped_row(cmd="make all", languages="cpp", repo_key="ab12cd34ef56"):
-    """A build-reliability row shaped like store_codeql_build_reliability's."""
+def _stamped_row(repo_path, cmd="make all", languages="cpp"):
+    """A build-reliability row shaped like store_codeql_build_reliability's.
+
+    The MAC binds the key of the repo that stored the row.
+    ``recall_context_for_codeql_build`` annotates every recalled row
+    with the CALLER's repo key and verification binds to that, so a
+    row is only verified when *repo_path* is the repo the agent
+    analyses — stamp a different path to exercise cross-repo demotion.
+    """
+    from core.sage.hooks import _repo_key
+    repo_key = _repo_key(str(repo_path))
     content = (
         f"CodeQL build reliability for repo myapp: "
         f"languages {languages}, outcome success, "
@@ -97,7 +107,7 @@ class TestSageBuildPrior:
     def test_verified_row_drives_sage_prior_build(self, tmp_path):
         """MAC verifies → the recalled command becomes the BuildSystem."""
         agent = _agent(tmp_path)
-        _run_with_row(agent, _stamped_row(cmd="make all"))
+        _run_with_row(agent, _stamped_row(tmp_path, cmd="make all"))
         lang_map = (
             agent.database_manager.create_databases_parallel.call_args[0][1]
         )
@@ -109,7 +119,7 @@ class TestSageBuildPrior:
         command and points at --build-command."""
         agent = _agent(tmp_path)
         messages = _run_with_row(
-            agent, _stamped_row(cmd="make all"), verify=False,
+            agent, _stamped_row(tmp_path, cmd="make all"), verify=False,
         )
         lang_map = (
             agent.database_manager.create_databases_parallel.call_args[0][1]
@@ -125,7 +135,7 @@ class TestSageBuildPrior:
     def test_unstamped_legacy_row_demotes_to_hint(self, tmp_path):
         """A row with no MAC token at all takes the same demote path."""
         agent = _agent(tmp_path)
-        row = _stamped_row(cmd="cmake --build build")
+        row = _stamped_row(tmp_path, cmd="cmake --build build")
         clean, _token = rowmac.strip(row["content"])
         row["content"] = clean
         messages = _run_with_row(agent, row)
@@ -136,4 +146,22 @@ class TestSageBuildPrior:
         assert any(
             "unverified" in m and "cmake --build build" in m
             for m in messages
+        ), messages
+
+    def test_foreign_repo_row_demotes_to_hint(self, tmp_path):
+        """A row MAC-minted while analysing repo A must never drive a
+        build in repo B — the rows live in the global methodology
+        domain, so a hostile repo A could otherwise plant a command
+        that executes inside repo B's checkout. Valid MAC, wrong repo
+        binding: demote to the operator hint."""
+        agent = _agent(tmp_path)
+        foreign_repo = tmp_path.parent / f"{tmp_path.name}-foreign"
+        row = _stamped_row(foreign_repo, cmd="make pwn")
+        messages = _run_with_row(agent, row)
+        lang_map = (
+            agent.database_manager.create_databases_parallel.call_args[0][1]
+        )
+        assert lang_map["cpp"].type == "no-build"
+        assert any(
+            "unverified" in m and "make pwn" in m for m in messages
         ), messages

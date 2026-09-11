@@ -11,6 +11,7 @@ Covers:
 from __future__ import annotations
 
 import re
+import shutil
 import sys
 import types
 from pathlib import Path
@@ -389,3 +390,118 @@ class TestToolChainWiring:
         cfg = semgrep_entries[0]["config"]
         assert cfg["keyword"] == "double free"
         Path(cfg["rule"]).unlink(missing_ok=True)
+
+
+class TestCppControlRelanguage:
+    """A cpp-language dynamic rule handed the .c fixture scans nothing
+    (semgrep's cpp key does not select .c files), so the control run
+    reported zero findings and the presence-detector cap was vacuous
+    on every C++ target. The control run now re-languages a copy of
+    the generated rule to the fixture's language."""
+
+    def test_relanguage_rewrites_generated_rule(self, tmp_path):
+        from core.audit.sweep import _relanguage_rule_config
+
+        rule = tmp_path / "rule.yaml"
+        rule.write_text(
+            "rules:\n  - id: hypothesis-check\n"
+            "    pattern-regex: free\\(\n"
+            "    languages: [cpp]\n    severity: WARNING\n"
+            "    message: check\n",
+        )
+        out = _relanguage_rule_config(str(rule), "cpp", "c")
+        assert out is not None
+        text = Path(out).read_text()
+        assert "languages: [c]" in text
+        assert "languages: [cpp]" not in text
+        Path(out).unlink()
+
+    def test_relanguage_refuses_unexpected_shape(self, tmp_path):
+        from core.audit.sweep import _relanguage_rule_config
+
+        rule = tmp_path / "rule.yaml"
+        rule.write_text("rules:\n  - id: x\n    languages:\n      - cpp\n")
+        assert _relanguage_rule_config(str(rule), "cpp", "c") is None
+        assert _relanguage_rule_config("/nonexistent.yaml", "cpp", "c") is None
+
+    def test_cpp_target_control_scan_uses_c_language(
+        self, tmp_path, monkeypatch,
+    ):
+        import core.audit.sweep as sweep_mod
+        from core.audit.sweep import _rule_matches_negative_control
+
+        rule = tmp_path / "rule.yaml"
+        rule.write_text(
+            "rules:\n  - id: hypothesis-check\n"
+            "    pattern-regex: free\\(\n"
+            "    languages: [cpp]\n    severity: WARNING\n"
+            "    message: check\n",
+        )
+        seen = {}
+
+        def fake_run_rule(target, config, timeout=60):
+            seen["config_text"] = Path(config).read_text()
+            seen["target"] = str(target)
+            return _FakeSemgrepResult([_finding(3)])
+
+        _install_fake_semgrep(monkeypatch, fake_run_rule)
+        monkeypatch.setattr(sweep_mod, "_negative_control_cache", {})
+
+        matched = _rule_matches_negative_control(
+            str(rule), "use after free", "src/handler.cpp",
+        )
+        assert matched is True  # cap engages on the cpp target
+        assert seen["target"].endswith("use_after_free.c")
+        assert "languages: [c]" in seen["config_text"]
+
+    def test_c_target_control_scan_unchanged(self, tmp_path, monkeypatch):
+        # Two-direction guard: a matching-language rule still scans
+        # with its ORIGINAL config (no rewrite, no temp copy).
+        import core.audit.sweep as sweep_mod
+        from core.audit.sweep import _rule_matches_negative_control
+
+        rule = tmp_path / "rule.yaml"
+        rule.write_text(
+            "rules:\n  - id: hypothesis-check\n"
+            "    pattern-regex: free\\(\n"
+            "    languages: [c]\n    severity: WARNING\n"
+            "    message: check\n",
+        )
+        seen = {}
+
+        def fake_run_rule(target, config, timeout=60):
+            seen["config"] = str(config)
+            return _FakeSemgrepResult([])
+
+        _install_fake_semgrep(monkeypatch, fake_run_rule)
+        monkeypatch.setattr(sweep_mod, "_negative_control_cache", {})
+
+        matched = _rule_matches_negative_control(
+            str(rule), "use after free", "src/handler.c",
+        )
+        assert matched is False
+        assert seen["config"] == str(rule)
+
+    @pytest.mark.skipif(
+        shutil.which("semgrep") is None, reason="semgrep not installed",
+    )
+    def test_cpp_uaf_rule_caps_against_real_semgrep(self, monkeypatch):
+        """Empirical pin of the vacuity: the generated cpp UAF rule
+        must match the guarded .c fixture through the re-languaged
+        control run (it reported zero findings on zero scanned files
+        before the fix)."""
+        import core.audit.sweep as sweep_mod
+        from core.audit.sweep import _rule_matches_negative_control
+
+        keyed = hypothesis_to_semgrep_rule_keyed(
+            "use after free of request buffer", "src/handler.cpp",
+        )
+        assert keyed is not None
+        rule_path, keyword = keyed
+        try:
+            monkeypatch.setattr(sweep_mod, "_negative_control_cache", {})
+            assert _rule_matches_negative_control(
+                rule_path, keyword, "src/handler.cpp",
+            ) is True
+        finally:
+            Path(rule_path).unlink()

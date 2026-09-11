@@ -138,55 +138,70 @@ def _filter_locally_built(
     ``([], candidates)`` — the operator can explicitly opt back in
     via ``--binary`` or ``--binary-auto`` when they know their builds
     are trustworthy.
+
+    Implementation: ONE ``git ls-files -z --stage`` invocation builds
+    both the tracked-path set and the submodule (gitlink, mode
+    ``160000``) prefix list. This replaces the per-candidate
+    ``--error-unmatch`` probes, which (a) cost one git spawn per
+    candidate, (b) classified exit code 1 by parsing ENGLISH stderr
+    substrings — locale-dependent — and (c) read a path INSIDE a
+    committed submodule as untracked ("did not match"), letting a
+    submodule-committed ELF pass the provenance filter as locally
+    built. Anything at or under a gitlink path is repo_committed
+    (fail-safe: the parent repo pinned that content). ``LC_ALL=C`` is
+    pinned regardless — classification must never depend on
+    translated output.
     """
     if not candidates:
         return [], []
     import subprocess
     try:
-        # ``git ls-files --error-unmatch <path>...`` returns non-zero
-        # if ANY path is untracked. Run per-path so we can split.
-        # One git invocation per candidate — the pre-probe filter can
-        # pass more than the result cap, but each call is comparable
-        # in cost to the readelf probe it replaces for dropped paths.
+        from core.config import RaptorConfig
+        from core.git import safe_git_command
+        from core.sandbox.preexec import set_pdeathsig
+        env = dict(RaptorConfig.get_safe_env())
+        env["LC_ALL"] = "C"
+        try:
+            proc = subprocess.run(
+                safe_git_command("-C", str(repo), "ls-files",
+                                 "-z", "--stage"),
+                capture_output=True, check=False,
+                timeout=30, env=env,
+                preexec_fn=set_pdeathsig(),
+            )
+        except subprocess.TimeoutExpired:
+            return [], candidates
+        if proc.returncode != 0:
+            # Not a git repo, or git errored — provenance
+            # unverifiable for this run; the conservative path fires.
+            return [], candidates
+        # -z output is raw filesystem bytes; decode with
+        # surrogateescape so entries compare equal to Path-derived
+        # strings for non-UTF-8 paths (os.fsdecode convention).
+        listing = (proc.stdout or b"").decode("utf-8", "surrogateescape")
+        tracked: set[str] = set()
+        submodule_prefixes: list[str] = []
+        for entry in listing.split("\0"):
+            if not entry:
+                continue
+            meta, sep, path = entry.partition("\t")
+            if not sep or not path:
+                continue
+            tracked.add(path)
+            if meta.split(" ", 1)[0] == "160000":
+                submodule_prefixes.append(path)
         locally_built: list[Path] = []
         repo_committed: list[Path] = []
         for c in candidates:
             try:
-                rel = c.resolve().relative_to(repo.resolve())
+                rel = c.resolve().relative_to(repo.resolve()).as_posix()
             except ValueError:
                 continue
-            try:
-                from core.config import RaptorConfig
-                from core.git import safe_git_command
-                from core.sandbox.preexec import set_pdeathsig
-                proc = subprocess.run(
-                    safe_git_command("-C", str(repo), "ls-files",
-                                    "--error-unmatch", "--", str(rel)),
-                    capture_output=True, text=True, check=False,
-                    timeout=10, env=RaptorConfig.get_safe_env(),
-                    preexec_fn=set_pdeathsig(),
-                )
-            except subprocess.TimeoutExpired:
-                repo_committed.append(c)
-                continue
-            if proc.returncode == 0:
-                repo_committed.append(c)
-            elif proc.returncode == 1:
-                # ``--error-unmatch`` returns 1 specifically for
-                # untracked-but-present paths. Other non-zero codes
-                # mean git failed (not a repo, command-not-found,
-                # permissions) — in that case we can't verify
-                # provenance, treat the candidate as repo_committed
-                # so the conservative path fires.
-                stderr = (proc.stderr or "").lower()
-                if "did not match" in stderr or "no such file" in stderr:
-                    locally_built.append(c)
-                else:
-                    repo_committed.append(c)
-            else:
-                # Not a git repo, or git unavailable / errored.
-                # Treat ALL candidates as unverifiable for this run.
-                return [], candidates
+            committed = rel in tracked or any(
+                rel == sm or rel.startswith(sm + "/")
+                for sm in submodule_prefixes
+            )
+            (repo_committed if committed else locally_built).append(c)
         return locally_built, repo_committed
     except FileNotFoundError:
         # ``git`` not on PATH — provenance unverifiable.

@@ -815,6 +815,115 @@ class TestLifecycle:
             d.shutdown()
 
 
+class TestMintValidationHardening:
+    """Mint-plane rejections: non-finite budgets, falsy-zero limits,
+    and empty/invalid model pin lists must ERROR — a scoped token must
+    never silently present as more (or differently) capped than it
+    enforces."""
+
+    @pytest.fixture
+    def dispatcher(self, fake_creds):
+        d = LLMDispatcher(run_id="mint-hard", creds=fake_creds,
+                          token_ttl_s=60, token_budget=10)
+        yield d
+        d.shutdown()
+
+    @pytest.mark.parametrize("bad_budget", [
+        float("nan"), float("inf"), float("-inf"), True,
+    ])
+    def test_non_finite_budget_rejected(self, dispatcher, bad_budget):
+        # NaN passes isinstance and every <= comparison is False —
+        # pre-fix it minted a token whose budget enforced NOTHING
+        # while reporting as capped. JSON round-trips NaN, so the
+        # wire can carry it.
+        with pytest.raises(ValueError, match="budget_usd"):
+            dispatcher.allocate_child("bad", budget_usd=bad_budget)
+
+    def test_finite_budget_still_mints(self, dispatcher):
+        _token, info = dispatcher.allocate_child("ok", budget_usd=2.5)
+        assert info["budget_usd"] == 2.5
+
+    def test_explicit_zero_ttl_rejected(self, dispatcher):
+        # Falsy-zero previously took the 30-min default — MORE
+        # capability than the 0 the caller asked for.
+        with pytest.raises(ValueError, match="ttl_s"):
+            dispatcher.allocate_child("bad", budget_usd=1.0, ttl_s=0)
+
+    def test_absent_ttl_takes_default(self, dispatcher):
+        token, _info = dispatcher.allocate_child(
+            "ok", budget_usd=1.0, ttl_s=None,
+        )
+        rec = dispatcher._tokens[token]
+        assert rec.expires_at > rec.issued_at
+
+    def test_explicit_zero_request_budget_rejected(self, dispatcher):
+        with pytest.raises(ValueError, match="request_budget"):
+            dispatcher.allocate_child(
+                "bad", budget_usd=1.0, request_budget=0,
+            )
+
+    def test_absent_request_budget_takes_default(self, dispatcher):
+        _token, info = dispatcher.allocate_child(
+            "ok", budget_usd=1.0, request_budget=None,
+        )
+        assert info["request_budget"] > 0
+
+    def test_empty_models_list_rejected(self, dispatcher):
+        # Pre-fix [] collapsed to None (any model) — a caller passing
+        # an empty pin list believed the token was pinned.
+        with pytest.raises(ValueError, match="models"):
+            dispatcher.allocate_child("bad", budget_usd=1.0, models=[])
+
+    @pytest.mark.parametrize("bad_models", [[""], [123], ["ok-model", ""]])
+    def test_invalid_model_entries_rejected(self, dispatcher, bad_models):
+        with pytest.raises(ValueError, match="invalid entries"):
+            dispatcher.allocate_child(
+                "bad", budget_usd=1.0, models=bad_models,
+            )
+
+    def test_none_models_still_means_unrestricted(self, dispatcher):
+        token, _info = dispatcher.allocate_child(
+            "ok", budget_usd=1.0, models=None,
+        )
+        assert dispatcher._tokens[token].model_allowlist is None
+
+    def test_valid_models_build_allowlist(self, dispatcher):
+        token, _info = dispatcher.allocate_child(
+            "ok", budget_usd=1.0, models=[_PRICED_MODEL],
+        )
+        allowlist = dispatcher._tokens[token].model_allowlist
+        assert allowlist is not None
+        assert _PRICED_MODEL in allowlist
+
+    def test_wire_mint_rejects_nan_and_empty_models(
+        self, fake_creds, tmp_path,
+    ):
+        # Same contract over the /_child/mint wire (Python's JSON
+        # parser accepts NaN, so it round-trips to allocate_child).
+        d = LLMDispatcher(run_id="mint-wire", creds=fake_creds,
+                          token_ttl_s=60, token_budget=10)
+        try:
+            worker = _worker_token(d)
+            with _uds_client(d) as client:
+                for payload in (
+                    b'{"budget_usd": NaN, "label": "x"}',
+                    b'{"budget_usd": 1.0, "models": [], "label": "x"}',
+                    b'{"budget_usd": 1.0, "ttl_s": 0, "label": "x"}',
+                ):
+                    resp = client.post(
+                        "http://_/_child/mint",
+                        headers={
+                            _TOKEN_HEADER: worker,
+                            "Content-Type": "application/json",
+                        },
+                        content=payload,
+                    )
+                    assert resp.status_code == 400, payload
+                    assert "mint rejected" in resp.json()["error"]
+        finally:
+            d.shutdown()
+
+
 # ---------------------------------------------------------------------------
 # Planes — TCP listener, admin isolation
 # ---------------------------------------------------------------------------

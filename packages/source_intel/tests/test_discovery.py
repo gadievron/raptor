@@ -253,3 +253,76 @@ def test_counters_reflect_scan_extent(tmp_path):
     result = discover_aliases(tmp_path)
     assert result.headers_scanned == 2
     assert result.sources_scanned >= 3  # a.h, b.h, u.c (headers also count as sources for usage)
+
+
+# =====================================================================
+# Family classification exclusivity (identifier-boundary markers)
+# =====================================================================
+
+
+def test_returns_nonnull_alias_not_misfiled_into_nonnull_family(tmp_path):
+    """`nonnull` is a substring of `returns_nonnull`; the marker match
+    must be identifier-bounded so a returns_nonnull alias is NOT also
+    classified as a nonnull(-args) annotation — that would tell
+    downstream consumers the ARGUMENTS are annotated when only the
+    return value is."""
+    (tmp_path / "h.h").write_text(
+        "#define RET_NN __attribute__((returns_nonnull))\n"
+        "#define NN_ARGS __attribute__((nonnull(1)))\n"
+    )
+    (tmp_path / "u.c").write_text(
+        "RET_NN void *get(void);\n"
+        "NN_ARGS int use(void *p);\n"
+    )
+    result = discover_aliases(tmp_path)
+    assert "RET_NN" in result.aliases_by_family["returns_nonnull"]
+    assert "RET_NN" not in result.aliases_by_family["nonnull"]
+    # The genuinely-nonnull alias still classifies.
+    assert "NN_ARGS" in result.aliases_by_family["nonnull"]
+    assert "NN_ARGS" not in result.aliases_by_family["returns_nonnull"]
+
+
+# =====================================================================
+# Single-character macro links in resolution chains
+# =====================================================================
+
+
+def test_single_char_macro_link_resolves_in_chain(tmp_path):
+    """A 1-character macro in the middle of an alias chain must still
+    be substituted during recursive expansion resolution — the token
+    regex uses the same >=1-character identifier rule as the define
+    regex."""
+    (tmp_path / "h.h").write_text(
+        "#define W __attribute__((warn_unused_result))\n"
+        "#define MY_WUR W\n"
+    )
+    (tmp_path / "u.c").write_text("MY_WUR int foo(void);\n")
+    result = discover_aliases(tmp_path)
+    assert "MY_WUR" in result.aliases_by_family["wur"]
+
+
+# =====================================================================
+# Usage counting across the sibling include/ scan root
+# =====================================================================
+
+
+def test_usage_in_sibling_include_tree_counts(tmp_path):
+    """Attribute macros defined in a sibling include/ tree are
+    normally APPLIED there too (public API headers). Usage counting
+    must cover every scan root, or the zero-usage filter drops
+    exactly the aliases the sibling-include walk exists to find."""
+    include = tmp_path / "include"
+    include.mkdir()
+    (include / "macros.h").write_text(
+        "#define ossl_wur __attribute__((warn_unused_result))\n"
+    )
+    (include / "api.h").write_text(
+        "ossl_wur int sign(void *ctx);\n"
+        "ossl_wur int verify(void *ctx);\n"
+    )
+    crypto = tmp_path / "crypto"
+    crypto.mkdir()
+    (crypto / "impl.c").write_text("int sign(void *ctx) { return 0; }\n")
+
+    result = discover_aliases(crypto)
+    assert "ossl_wur" in result.aliases_by_family["wur"]

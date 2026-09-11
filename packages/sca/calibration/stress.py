@@ -39,6 +39,15 @@ elapsed and keeps the better sample, so a genuine code regression
 the sweep. Count drifts are never re-measured — they are
 deterministic given upstream data.
 
+Timeout-abandoned scans get the same variance treatment inside
+:func:`run_stress_sweep` itself: the same registry roulette that
+produces 5× elapsed noise can push the largest project past its
+whole per-scan budget, so each timed-out scan is retried exactly
+once at the end of the sweep, on a fresh full budget, against the
+in-run caches the sweep just warmed — but only when its orphaned
+worker has actually finished (see the retry pass for the safety
+argument).
+
 What's deliberately NOT measured:
   * Cache hit ratio (fluctuates with TTL eviction)
   * SCA total runtime when including supply-chain / hygiene checks
@@ -95,9 +104,13 @@ from .project_samples import PROJECT_SAMPLES, ProjectSample
 
 from core.json import load_json, save_json
 
-# findings.json artifacts are RAPTOR-written run output — the
-# findings-class budget.
-_MAX_FINDINGS_BYTES = 64 * 1024 * 1024
+# Read budget for the (small, committed) stress-baseline file.
+# findings.json is deliberately NEVER re-read by this module: on
+# large corpus projects the artifact legitimately runs to hundreds
+# of MB, so any fixed read cap eventually turns a healthy scan into
+# a silent "no findings" — the per-ecosystem breakdown comes from
+# the in-process ``RunResult.eco_breakdown`` instead.
+_MAX_BASELINE_BYTES = 64 * 1024 * 1024
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +160,7 @@ def run_sweep_and_report(
     sca_timeout: int = 600,
     max_workers: int = 4,
     out: "Callable[[str], Any]" = print,
+    driver_failure_sink: list[str] | None = None,
 ) -> tuple[int, list[StressResult]]:
     """Drive sweep → elapsed re-measure → baseline compare → render,
     and NEVER exit without a summary.
@@ -170,6 +184,16 @@ def run_sweep_and_report(
 
     Returns ``(rc, results)`` — rc per :func:`diffs_to_exit_code`,
     or 2 when a phase failed.
+
+    ``driver_failure_sink``: caller-owned list (same pattern as
+    ``results_sink``) that receives a one-line description of any
+    driver-phase failure. rc=2 alone cannot tell "fail-level drift"
+    from "the re-measure / compare / render phase crashed AFTER all
+    scans completed" — the results list is then complete and
+    error-free, exactly the shape a drift-only rc=2 has. Consumers
+    that must never treat a crashed run as adjudicable drift (the
+    baseline-refresh gate, :func:`decide_baseline_refresh`) key off
+    this sink.
     """
     import signal
     import traceback
@@ -194,8 +218,21 @@ def run_sweep_and_report(
         sys.stderr.flush()
 
     prior_term = signal.getsignal(signal.SIGTERM)
+    handler_pid = os.getpid()
 
     def _on_term(signum: int, frame: object) -> None:
+        if os.getpid() != handler_pid:
+            # Fork-context children (inventory extractor workers, mp
+            # helpers) inherit this handler. The post-mortem below
+            # must never run in a child: its lock-taking
+            # (``_in_flight``) can block forever on a lock some
+            # sibling thread held at fork time — a terminate()d
+            # worker then never dies — and its output would
+            # interleave a bogus "sweep interrupted" summary into the
+            # real log. Die like an unhandled SIGTERM instead.
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            signal.raise_signal(signal.SIGTERM)
+            return
         _partial_summary("SIGTERM (cancellation / shutdown)")
         signal.signal(signal.SIGTERM, prior_term)
         signal.raise_signal(signal.SIGTERM)
@@ -237,6 +274,11 @@ def run_sweep_and_report(
                 f"{type(e).__name__}: {str(e)[:300]}")
             out(traceback.format_exc())
             _partial_summary("driver-phase failure")
+            if driver_failure_sink is not None:
+                driver_failure_sink.append(
+                    f"driver-phase failure: {type(e).__name__}: "
+                    f"{str(e)[:200]}"
+                )
             return 2, results
     finally:
         if prior_term is not None:
@@ -284,8 +326,8 @@ def run_stress_sweep(
     *,
     samples: Sequence[ProjectSample] | None = None,
     out_root: Path | None = None,
-    git_clone_timeout: int = 300,
-    sca_timeout: int = 600,
+    git_clone_timeout: float = 300,
+    sca_timeout: float = 600,
     max_workers: int = 4,
     use_existing_clones: bool = False,
     results_sink: "list[StressResult] | None" = None,
@@ -299,10 +341,15 @@ def run_stress_sweep(
     zero completions after forty finished scans is worse than none.
 
     Scans run in parallel (``max_workers`` threads). Each scan is
-    bounded by ``sca_timeout`` — if ``run_sca`` hasn't returned by
-    then, the result is recorded as an error and the sweep continues.
-    The underlying thread may linger until process exit, but won't
-    block other scans.
+    bounded by its OWN budget of ``git_clone_timeout + sca_timeout``,
+    measured from the moment a worker starts it (queue time excluded)
+    — if it hasn't returned by then, a timeout result is recorded and
+    the sweep continues. The scan thread itself cannot be killed and
+    may linger until process exit, but won't block other scans or the
+    final summary. After every other project has finished, each
+    timeout-abandoned scan whose orphaned worker has completed is
+    retried once on a fresh budget (see the retry pass below); a
+    successful retry replaces the timeout result wholesale.
 
     ``out_root`` defaults to a STABLE per-machine path under
     ``~/.raptor/cache/sca/stress/clones/``. Stable so that the
@@ -344,6 +391,13 @@ def run_stress_sweep(
             out_root = SCA_CACHE_ROOT / "stress" / "clones"
     out_root.mkdir(parents=True, exist_ok=True)
 
+    # Per-scan wall-clock budget: a scan must clone
+    # (``git_clone_timeout``) and then scan (``sca_timeout``). The
+    # budget is enforced against each scan's own start time — an
+    # earlier revision applied it as a single global deadline from
+    # sweep start, so once total wall time exceeded ONE scan's
+    # budget every still-running or still-queued healthy project
+    # was falsely reported as timed out.
     per_scan_budget = sca_timeout + git_clone_timeout
     results: list[StressResult] = (
         results_sink if results_sink is not None else []
@@ -386,6 +440,20 @@ def run_stress_sweep(
             max_workers=max_workers,
         )
         interrupted = False
+        # Futures whose scan overran its own budget. Their threads
+        # cannot be killed — the future is dropped from ``pending``
+        # (result already recorded) and the final shutdown skips
+        # joining them.
+        abandoned: set[concurrent.futures.Future] = set()
+        # Timeout-abandoned scans eligible for the end-of-sweep
+        # retry pass: (orphan future, sample, index of the timeout
+        # result in ``results``), recorded at abandonment time.
+        # Keying off the abandonment bookkeeping itself (rather than
+        # error-string matching) scopes the retry to exactly the
+        # timeout-abandonment shape.
+        timeout_abandoned: list[
+            tuple[concurrent.futures.Future, ProjectSample, int]
+        ] = []
         try:
             future_to_sample = {
                 executor.submit(
@@ -394,46 +462,275 @@ def run_stress_sweep(
                 ): sample
                 for sample in samples
             }
-            completed: set = set()
+            sweep_labels = {
+                f"{s.ecosystem}/{s.name}" for s in samples
+            }
+            pending: set[concurrent.futures.Future] = set(
+                future_to_sample,
+            )
+
+            def _record(result: StressResult) -> None:
+                results.append(result)
+                logger.info(
+                    "[%d/%d] %s/%s%s",
+                    len(results), len(future_to_sample),
+                    result.ecosystem, result.project,
+                    " (error)" if result.error else "",
+                )
+
+            # Poll granularity for budget checks. ``wait`` returns
+            # early on any completion, so the poll only bounds how
+            # late an over-budget scan is detected.
+            poll = min(1.0, max(0.05, per_scan_budget / 10.0))
             try:
-                for future in concurrent.futures.as_completed(
-                    future_to_sample, timeout=per_scan_budget,
-                ):
-                    completed.add(future)
-                    sample = future_to_sample[future]
-                    try:
-                        result = future.result()
-                    except BaseException as e:  # noqa: BLE001
-                        # BaseException, not Exception: a library
-                        # sys.exit() or comparable escape inside a
-                        # scan thread must degrade THIS project with
-                        # a named reason, never kill the sweep
-                        # summary-less (an uncaught SystemExit exits
-                        # with no traceback at all — the worst
-                        # post-mortem). KeyboardInterrupt is the
-                        # operator's and still propagates.
-                        if isinstance(e, KeyboardInterrupt):
-                            raise
-                        result = StressResult(
+                while pending:
+                    done, _not_done = concurrent.futures.wait(
+                        pending, timeout=poll,
+                        return_when=concurrent.futures.FIRST_COMPLETED,
+                    )
+                    for future in done:
+                        pending.discard(future)
+                        sample = future_to_sample[future]
+                        try:
+                            result = future.result()
+                        except BaseException as e:  # noqa: BLE001
+                            # BaseException, not Exception: a library
+                            # sys.exit() or comparable escape inside a
+                            # scan thread must degrade THIS project with
+                            # a named reason, never kill the sweep
+                            # summary-less (an uncaught SystemExit exits
+                            # with no traceback at all — the worst
+                            # post-mortem). KeyboardInterrupt is the
+                            # operator's and still propagates.
+                            if isinstance(e, KeyboardInterrupt):
+                                raise
+                            result = StressResult(
+                                project=sample.name,
+                                ecosystem=sample.ecosystem,
+                                elapsed_seconds=0.0,
+                                deps_analysed=0, vuln_findings=0,
+                                eco_breakdown={},
+                                error=(
+                                    f"unexpected {type(e).__name__}: "
+                                    f"{str(e)[:200]}"
+                                ),
+                            )
+                        _record(result)
+
+                    # Per-scan budget check. Only scans that have
+                    # actually STARTED (registered in the in-flight
+                    # registry) can time out, and only against their
+                    # own clock — queue time never counts.
+                    now = time.monotonic()
+                    for future in list(pending):
+                        sample = future_to_sample[future]
+                        label = f"{sample.ecosystem}/{sample.name}"
+                        started = _scan_started_at(label)
+                        if (started is None
+                                or now - started <= per_scan_budget):
+                            continue
+                        pending.discard(future)
+                        abandoned.add(future)
+                        _record(StressResult(
                             project=sample.name,
                             ecosystem=sample.ecosystem,
-                            elapsed_seconds=0.0,
+                            elapsed_seconds=now - started,
                             deps_analysed=0, vuln_findings=0,
                             eco_breakdown={},
                             error=(
-                                f"unexpected {type(e).__name__}: "
-                                f"{str(e)[:200]}"
+                                f"scan timed out: exceeded its "
+                                f"{per_scan_budget}s budget (clone "
+                                f"{git_clone_timeout}s + scan "
+                                f"{sca_timeout}s); worker abandoned "
+                                f"after {now - started:.0f}s"
                             ),
+                        ))
+                        timeout_abandoned.append(
+                            (future, sample, len(results) - 1),
                         )
-                    results.append(result)
+
+                    # Starvation escape: when EVERY worker is held by
+                    # an over-budget scan, queued futures may never
+                    # start and the loop would spin forever. Cancel
+                    # them with an honest reason instead. Trade-off:
+                    # an over-budget scan might still finish and free
+                    # its worker, but each queued scan would then
+                    # need a full budget of its own anyway — a
+                    # bounded sweep beats the best-case save.
+                    if pending and _over_budget_running(
+                        sweep_labels, per_scan_budget,
+                    ) >= max_workers:
+                        for future in list(pending):
+                            if not future.cancel():
+                                # Already running — its own budget
+                                # applies on later polls.
+                                continue
+                            pending.discard(future)
+                            sample = future_to_sample[future]
+                            _record(StressResult(
+                                project=sample.name,
+                                ecosystem=sample.ecosystem,
+                                elapsed_seconds=0.0,
+                                deps_analysed=0, vuln_findings=0,
+                                eco_breakdown={},
+                                error=(
+                                    "never started: all "
+                                    f"{max_workers} worker(s) held "
+                                    "by over-budget scans"
+                                ),
+                            ))
+
+                # ── End-of-sweep retry for timeout-abandoned scans ──
+                # A scan's wall clock is one sample of a network-
+                # dominated process (see confirm_elapsed_regressions):
+                # the same registry roulette behind 5× elapsed noise
+                # can push the largest project past its whole budget,
+                # and that single sample then errors the project and
+                # blocks any baseline refresh. Retry each timeout-
+                # abandoned scan exactly ONCE, sequentially, on a
+                # fresh full budget — cheap in the common case
+                # because the sweep just warmed the in-run registry
+                # caches (cold/warm pairs on one project have
+                # measured ~18×). Headroom-via-retry deliberately
+                # beats headroom-via-bigger-budget: a larger
+                # ``sca_timeout`` would also stretch every genuinely
+                # hung scan by the same amount.
+                #
+                # Scope is timeout-ABANDONMENT only. Clone failures
+                # and clone timeouts return normally from the worker
+                # (``subprocess`` timeout) — no orphan, and no warm-
+                # cache advantage either: the clone talks to the git
+                # host, not the registry caches the sweep warmed.
+                # "Never started" cancellations and driver crashes
+                # are not variance evidence. None of those retry.
+                #
+                # Concurrency safety: the orphaned worker cannot be
+                # killed, so a retry must never overlap it on the
+                # same clone dir / shared caches. ``orphan.done()``
+                # is a sufficient gate: the executor sets a future's
+                # result strictly AFTER ``_scan_one`` returns — i.e.
+                # after every filesystem write and the in-flight-
+                # registry pop in its ``finally`` — so a done orphan
+                # makes no further writes. Nor can a late orphan
+                # clobber the retry's RESULT: abandonment removed the
+                # orphan from ``pending``, and only futures still in
+                # ``pending`` are ever read into ``results``. When
+                # the orphan is still running at its retry slot, the
+                # retry is skipped and the timeout error stands —
+                # never two concurrent scans of one project.
+                for orphan, sample, idx in timeout_abandoned:
+                    label = f"{sample.ecosystem}/{sample.name}"
+                    if not orphan.done():
+                        logger.info(
+                            "sca.calibration.stress: timeout retry "
+                            "for %s — orphan still running, retry "
+                            "skipped (keeping the timeout error)",
+                            label,
+                        )
+                        continue
                     logger.info(
-                        "[%d/%d] %s/%s%s",
-                        len(results), len(future_to_sample),
-                        sample.ecosystem, sample.name,
-                        " (error)" if result.error else "",
+                        "sca.calibration.stress: timeout retry for "
+                        "%s — orphan finished; retrying once on a "
+                        "fresh %.0fs budget (warm in-run cache)",
+                        label, per_scan_budget,
                     )
-            except concurrent.futures.TimeoutError:
-                pass
+                    # Dedicated single-thread pool, not the sweep
+                    # executor: the sweep pool's threads can ALL be
+                    # held by other still-running orphans, and a
+                    # queued retry would have its fresh budget eaten
+                    # by queue time. A fresh thread starts the scan
+                    # immediately, so measuring the budget from
+                    # submit is measuring it from work start.
+                    retry_pool = concurrent.futures.ThreadPoolExecutor(
+                        max_workers=1,
+                        thread_name_prefix="sca-stress-timeout-retry",
+                    )
+                    try:
+                        retry = retry_pool.submit(
+                            _scan_one, sample, out_root,
+                            git_clone_timeout=git_clone_timeout,
+                        )
+                        try:
+                            second = retry.result(
+                                timeout=per_scan_budget,
+                            )
+                        except KeyboardInterrupt:
+                            raise
+                        except concurrent.futures.TimeoutError:
+                            # Ambiguous re-raise: ``result(timeout=)``
+                            # raises TimeoutError when the WAIT
+                            # expired, when the scan fn itself raised
+                            # one, and when the fn finished a moment
+                            # AFTER the wait expired. All three keep
+                            # the original timeout error (the budget
+                            # is the verdict); the split below is for
+                            # log accuracy only.
+                            if not retry.done():
+                                # The retry worker is now its own
+                                # orphan — never joined, like any
+                                # other abandoned scan; there is no
+                                # second retry.
+                                logger.warning(
+                                    "sca.calibration.stress: timeout "
+                                    "retry for %s — retry also timed "
+                                    "out; keeping the original "
+                                    "timeout error", label,
+                                )
+                            elif (exc := retry.exception()) is not None:
+                                logger.warning(
+                                    "sca.calibration.stress: timeout "
+                                    "retry for %s — retry raised "
+                                    "%s; keeping the original "
+                                    "timeout error", label,
+                                    type(exc).__name__,
+                                )
+                            else:
+                                logger.warning(
+                                    "sca.calibration.stress: timeout "
+                                    "retry for %s — retry finished "
+                                    "just past its budget; keeping "
+                                    "the original timeout error",
+                                    label,
+                                )
+                            continue
+                        except BaseException as e:  # noqa: BLE001
+                            # Same degrade-not-die posture as the
+                            # sweep loop: a raising retry keeps the
+                            # original timeout error.
+                            logger.warning(
+                                "sca.calibration.stress: timeout "
+                                "retry for %s — retry raised %s: %s; "
+                                "keeping the original timeout error",
+                                label, type(e).__name__, str(e)[:200],
+                            )
+                            continue
+                    finally:
+                        # wait=False: a timed-out retry must not
+                        # block the summary on its own thread.
+                        retry_pool.shutdown(wait=False)
+                    if second.error is not None:
+                        logger.warning(
+                            "sca.calibration.stress: timeout retry "
+                            "for %s — retry errored (%s); keeping "
+                            "the original timeout error",
+                            label, second.error,
+                        )
+                        continue
+                    # Wholesale replacement — counts, breakdown AND
+                    # elapsed all from the successful attempt,
+                    # matching the re-measure convention of using
+                    # the re-measured timing. (Unlike an elapsed
+                    # re-measure there is no count verdict to
+                    # preserve: the timed-out attempt produced no
+                    # counts at all.) In-place so ``results_sink``
+                    # consumers see the replacement too.
+                    results[idx] = second
+                    logger.info(
+                        "sca.calibration.stress: timeout retry for "
+                        "%s — succeeded in %.1fs (warm cache); "
+                        "timeout result replaced",
+                        label, second.elapsed_seconds,
+                    )
             except KeyboardInterrupt:
                 # Ctrl-C / SIGINT: without this, a plain shutdown
                 # drains the ENTIRE queued backlog (queued items
@@ -444,21 +741,13 @@ def run_stress_sweep(
                 interrupted = True
                 executor.shutdown(wait=False, cancel_futures=True)
                 raise
-            for future, sample in future_to_sample.items():
-                if future not in completed:
-                    results.append(StressResult(
-                        project=sample.name,
-                        ecosystem=sample.ecosystem,
-                        elapsed_seconds=float(per_scan_budget),
-                        deps_analysed=0, vuln_findings=0,
-                        eco_breakdown={},
-                        error=(
-                            f"scan timed out (>{per_scan_budget}s budget)"
-                        ),
-                    ))
         finally:
             if not interrupted:
-                executor.shutdown(wait=True)
+                # Abandoned (over-budget) scans cannot be joined
+                # without blocking the summary on exactly the scans
+                # the budget bounds — skip the join when any exist
+                # (interpreter exit still joins pool threads).
+                executor.shutdown(wait=not abandoned)
     finally:
         _hb_stop.set()
         if cleanup_dir is not None:
@@ -484,11 +773,30 @@ def _in_flight() -> list[str]:
     return [k for k, _ in items]
 
 
+def _scan_started_at(label: str) -> float | None:
+    """Monotonic start time of a currently-running scan, or None
+    when it hasn't started (still queued) or already finished."""
+    with _ACTIVE_SCANS_LOCK:
+        return _ACTIVE_SCANS.get(label)
+
+
+def _over_budget_running(labels: set[str], budget: float) -> int:
+    """Count of THIS sweep's currently-running scans older than
+    ``budget``. Restricted to the sweep's own labels so a
+    concurrent sweep in the same process can't inflate the count."""
+    now = time.monotonic()
+    with _ACTIVE_SCANS_LOCK:
+        return sum(
+            1 for label, t0 in _ACTIVE_SCANS.items()
+            if label in labels and now - t0 > budget
+        )
+
+
 def _scan_one(
     sample: ProjectSample,
     out_root: Path,
     *,
-    git_clone_timeout: int,
+    git_clone_timeout: float,
 ) -> StressResult:
     label = f"{sample.ecosystem}/{sample.name}"
     logger.info("sca.calibration.stress: scan starting: %s", label)
@@ -507,7 +815,7 @@ def _scan_one_inner(
     sample: ProjectSample,
     out_root: Path,
     *,
-    git_clone_timeout: int,
+    git_clone_timeout: float,
 ) -> StressResult:
     proj_out = out_root / f"{sample.ecosystem}-{sample.name}"
     proj_out.mkdir(parents=True, exist_ok=True)
@@ -575,38 +883,20 @@ def _scan_one_inner(
         )
     elapsed = time.monotonic() - t0
 
-    eco_breakdown = _read_eco_breakdown(sca_out / "findings.json")
-
     return StressResult(
         project=sample.name, ecosystem=sample.ecosystem,
         elapsed_seconds=elapsed,
         deps_analysed=run_result.deps_analysed,
         vuln_findings=run_result.vuln_findings,
-        eco_breakdown=eco_breakdown,
+        # In-process breakdown from the same finding list the
+        # ``vuln_findings`` count comes from. Re-reading the
+        # written findings.json here would put a size cap between
+        # the scan and its own numbers — an over-cap artifact then
+        # reads back as an empty breakdown, indistinguishable from
+        # a real zero-finding scan, and a baseline captured from it
+        # would bake that ``{}`` in.
+        eco_breakdown=dict(run_result.eco_breakdown),
     )
-
-
-def _read_eco_breakdown(findings_path: Path) -> dict[str, int]:
-    """Extract per-finding-ecosystem distribution of vuln findings.
-
-    Returns ``{}`` on missing / unreadable file — the scan layer
-    above already captures that as the ``error`` string.
-    """
-    breakdown: dict[str, int] = {}
-    data = load_json(findings_path, max_bytes=_MAX_FINDINGS_BYTES)
-    if not isinstance(data, list):
-        return breakdown
-    for f in data:
-        if not isinstance(f, dict):
-            continue
-        if f.get("vuln_type") != "sca:vulnerable_dependency":
-            continue
-        sca = f.get("sca") or {}
-        if not isinstance(sca, dict):
-            continue
-        eco = sca.get("ecosystem") or "?"
-        breakdown[eco] = breakdown.get(eco, 0) + 1
-    return breakdown
 
 
 def confirm_elapsed_regressions(
@@ -1013,7 +1303,7 @@ def _load_baseline(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
     try:
-        data = load_json(path, strict=True, max_bytes=_MAX_FINDINGS_BYTES)
+        data = load_json(path, strict=True, max_bytes=_MAX_BASELINE_BYTES)
         if data is not None:
             return data
         # is_file()/load race — treat like a read failure below.
@@ -1034,6 +1324,15 @@ def _rmtree(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
 
 
+# Human-readable labels for the severity enum. Only the rendered
+# text block uses them — data structures and JSON keep the
+# lowercase enum values (``StressDiff.severity``, exit-code logic).
+_SEVERITY_LABELS = {
+    "ok": "Ok", "warn": "Warn", "fail": "Fail",
+    "new": "New", "orphan": "Orphan",
+}
+
+
 def render_diffs(diffs: Sequence[StressDiff]) -> str:
     """Render diff results as a human-readable text block."""
     lines: list[str] = []
@@ -1043,9 +1342,9 @@ def render_diffs(diffs: Sequence[StressDiff]) -> str:
 
     lines.append(
         f"summary: {len(diffs)} project(s); "
-        f"ok={counts['ok']} warn={counts['warn']} "
-        f"fail={counts['fail']} new={counts['new']} "
-        f"orphan={counts['orphan']}"
+        f"Ok={counts['ok']} Warn={counts['warn']} "
+        f"Fail={counts['fail']} New={counts['new']} "
+        f"Orphan={counts['orphan']}"
     )
 
     # Order diffs: fail > warn > new > orphan > ok
@@ -1053,7 +1352,8 @@ def render_diffs(diffs: Sequence[StressDiff]) -> str:
     for d in sorted(diffs, key=lambda x: (
         severity_rank.get(x.severity, 9), x.project,
     )):
-        prefix = f"  [{d.severity:^6s}] {d.ecosystem}/{d.project}"
+        label = _SEVERITY_LABELS.get(d.severity, d.severity)
+        prefix = f"  [{label:^6s}] {d.ecosystem}/{d.project}"
         if not d.issues:
             lines.append(prefix)
             continue
@@ -1072,13 +1372,112 @@ def diffs_to_exit_code(diffs: Sequence[StressDiff]) -> int:
     return 0
 
 
+@dataclass(frozen=True)
+class BaselineRefreshDecision:
+    """Verdict on whether a sweep's results may become the new
+    baseline, plus the human-readable reason either way."""
+
+    allowed: bool
+    reason: str
+
+
+def decide_baseline_refresh(
+    rc: int,
+    results: Sequence[StressResult],
+    *,
+    operator_refresh: bool = False,
+    expected_count: int | None = None,
+    driver_failures: Sequence[str] = (),
+) -> BaselineRefreshDecision:
+    """Gate every baseline capture a sweep driver performs.
+
+    ``rc`` is the sweep exit code (:func:`diffs_to_exit_code`, or 2
+    for a driver-phase failure). Without ``operator_refresh`` the
+    verdict matches the long-standing behaviour: warn-only drift
+    (rc=1) refreshes, fail (rc=2) never does — the operator must
+    investigate first.
+
+    ``operator_refresh`` is the investigated-and-adjudicated signal
+    (a manual workflow dispatch with the ``refresh-baseline`` input
+    set). It extends the refresh to fail-level drift — but ONLY when
+    every fail IS drift. Any errored scan (clone failure, timeout,
+    driver exception surfaced as ``StressResult.error``) refuses the
+    whole refresh: :func:`write_baseline` silently skips errored
+    projects, so the captured file would bless a partial run as the
+    expected state. An incomplete result set (fewer results than
+    ``expected_count``) refuses for the same reason, and so does any
+    entry in ``driver_failures`` (:func:`run_sweep_and_report`'s
+    ``driver_failure_sink``): a post-sweep phase crash leaves a
+    complete, error-free results list whose rc=2 was earned by the
+    crash, not by adjudicable drift — count checks alone cannot see
+    it.
+    """
+    if rc == 0:
+        return BaselineRefreshDecision(
+            allowed=False,
+            reason="no drift — baseline already current",
+        )
+    if rc == 1:
+        return BaselineRefreshDecision(
+            allowed=True, reason="warn-only drift",
+        )
+    if not operator_refresh:
+        return BaselineRefreshDecision(
+            allowed=False,
+            reason=(
+                "fail-level drift — operator must investigate "
+                "(dispatch with refresh-baseline=true once the "
+                "drift is adjudicated as legitimate)"
+            ),
+        )
+    if driver_failures:
+        return BaselineRefreshDecision(
+            allowed=False,
+            reason=(
+                f"refusing operator refresh: the sweep driver itself "
+                f"failed ({'; '.join(driver_failures)[:300]}) — this "
+                "rc=2 was earned by the crash, not by adjudicable "
+                "drift; a baseline is never captured from a broken run"
+            ),
+        )
+    errored = [r for r in results if r.error is not None]
+    if errored:
+        names = ", ".join(
+            f"{r.ecosystem}/{r.project}" for r in errored
+        )
+        return BaselineRefreshDecision(
+            allowed=False,
+            reason=(
+                f"refusing operator refresh: {len(errored)} scan(s) "
+                f"errored ({names}) — a baseline is never captured "
+                "from a broken run; re-dispatch once the errors are "
+                "resolved"
+            ),
+        )
+    if expected_count is not None and len(results) < expected_count:
+        return BaselineRefreshDecision(
+            allowed=False,
+            reason=(
+                f"refusing operator refresh: only {len(results)} of "
+                f"{expected_count} scans completed — a partial sweep "
+                "must not become the baseline"
+            ),
+        )
+    return BaselineRefreshDecision(
+        allowed=True,
+        reason="operator-adjudicated fail-level drift",
+    )
+
+
 __all__ = [
     "DEFAULT_DEPS_FAIL_PCT", "DEFAULT_DEPS_WARN_PCT",
     "DEFAULT_ELAPSED_FAIL_X", "DEFAULT_ELAPSED_WARN_X",
     "DEFAULT_VULN_FAIL_PCT", "DEFAULT_VULN_WARN_PCT",
+    "BaselineRefreshDecision",
     "StressDiff", "StressResult",
     "compare_to_baseline", "configure_sweep_logging",
     "confirm_elapsed_regressions",
+    "decide_baseline_refresh",
     "run_sweep_and_report",
     "diffs_to_exit_code",
     "render_diffs", "run_stress_sweep", "write_baseline",

@@ -249,6 +249,29 @@ def load_alarms(out_dir: Path) -> list[dict[str, Any]]:
     return [rec for rec in load_jsonl(path) if isinstance(rec, dict)]
 
 
+def is_reuse_exempt(outcome: Any) -> bool:
+    """True for cross-run reused verdicts — exempt from the alarm.
+
+    A cross-run import re-asserts the ORIGIN run's already-gated
+    verdict at $0 with its evidence deliberately downgraded to
+    ``journal:recall:<run>`` provenance (verdict_reuse doctrine: the
+    LLM_ONLY tier cap is the designed penalty until a live tool
+    re-confirms).  ``journal:recall`` is not tool evidence, so an
+    unexempted chokepoint decayed the verdict one way — finding →
+    suspicious on every reuse — and fired the CRITICAL injection alarm
+    on a fully legitimate, LLM-free import path.
+    ``reused``/``reused_from_run`` are pipeline-set outcome fields,
+    unreachable from raw model output.  Single authority for BOTH
+    chokepoints (journal-write and findings-export) — the export
+    mirror used to sweep unexempted, re-introducing the exact decay
+    the journal side was fixed for.
+    """
+    return bool(
+        getattr(outcome, "reused", False)
+        and getattr(outcome, "reused_from_run", ""),
+    )
+
+
 def check_outcomes(
     out_dir: Path,
     outcomes: Iterable[Any],
@@ -257,9 +280,14 @@ def check_outcomes(
     run_id: str = "",
     enforce: bool = False,
 ) -> list[dict[str, Any]]:
-    """Sweep a batch of outcomes (post-loop export surface)."""
+    """Sweep a batch of outcomes (post-loop export surface).
+
+    Reused verdicts are exempt — see :func:`is_reuse_exempt`.
+    """
     emitted: list[dict[str, Any]] = []
     for outcome in outcomes:
+        if is_reuse_exempt(outcome):
+            continue
         rec = check_and_emit(
             out_dir, outcome, stage=stage, run_id=run_id, enforce=enforce,
         )

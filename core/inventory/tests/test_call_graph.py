@@ -7,6 +7,8 @@ verdicts silently, so the data layer needs explicit coverage.
 
 from __future__ import annotations
 
+import pytest
+
 from core.inventory.call_graph import (
     INDIRECTION_BRACKET_DISPATCH,
     INDIRECTION_DUNDER_IMPORT,
@@ -351,3 +353,56 @@ class TestLoadCallGraphs:
         self._tree(tmp_path)
         graphs = load_call_graphs(tmp_path, max_bytes=10)
         assert graphs == {}
+
+
+class TestLoaderLanguageDispatch:
+    """The loader must honour the checklist's content-refined language
+    field and route C++-marker headers to the cpp grammar; pure-suffix
+    dispatch degraded them through the C grammar (qualified chains
+    lost) and skipped .hxx entirely."""
+
+    CPP_HEADER = (
+        "namespace helper { void boot() { run(); } }\n"
+        "struct X { void go() { helper::boot(); } };\n"
+    )
+
+    def test_checklist_language_overrides_suffix(self, tmp_path):
+        pytest.importorskip("tree_sitter_cpp")
+        from core.inventory.call_graph import load_call_graphs
+
+        (tmp_path / "engine.h").write_text(self.CPP_HEADER)
+        graphs = load_call_graphs(
+            tmp_path,
+            checklist={"files": [{"path": "engine.h", "language": "cpp"}]},
+        )
+        assert any(c.chain == ["helper", "boot"]
+                   for c in graphs["engine.h"].calls)
+
+    def test_walk_mode_refines_cpp_headers_by_content(self, tmp_path):
+        pytest.importorskip("tree_sitter_cpp")
+        from core.inventory.call_graph import load_call_graphs
+
+        (tmp_path / "engine.h").write_text(self.CPP_HEADER)
+        graphs = load_call_graphs(tmp_path)
+        assert any(c.chain == ["helper", "boot"]
+                   for c in graphs["engine.h"].calls)
+
+    def test_plain_c_header_still_uses_c_grammar(self, tmp_path):
+        pytest.importorskip("tree_sitter_c")
+        from core.inventory.call_graph import load_call_graphs
+
+        (tmp_path / "util.h").write_text(
+            "static inline int add(int a, int b) { return helper(a, b); }\n"
+        )
+        graphs = load_call_graphs(tmp_path)
+        assert any(c.chain == ["helper"] for c in graphs["util.h"].calls)
+
+    def test_hxx_extension_recognised(self, tmp_path):
+        pytest.importorskip("tree_sitter_cpp")
+        from core.inventory.call_graph import load_call_graphs
+
+        (tmp_path / "other.hxx").write_text(
+            "namespace h2 { void b2() { r2(); } }\n"
+        )
+        graphs = load_call_graphs(tmp_path)
+        assert "other.hxx" in graphs

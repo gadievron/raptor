@@ -117,7 +117,18 @@ def generate(data: dict[str, Any]) -> str:
     if len(steps) > _MAX_STEPS:
         truncated_count = len(steps) - _MAX_STEPS
         steps = steps[:_MAX_STEPS]
+    # Same render-size rationale as the step cap above: every branch
+    # adds a node, an edge, and an O(len(steps)) matching pass, so an
+    # unbounded branches array re-opens the exact oversize failure
+    # modes the step cap closes.
+    _MAX_BRANCHES = 200
     branches = data.get("branches", [])
+    if not isinstance(branches, list):
+        branches = []
+    truncated_branches = 0
+    if len(branches) > _MAX_BRANCHES:
+        truncated_branches = len(branches) - _MAX_BRANCHES
+        branches = branches[:_MAX_BRANCHES]
     attacker_control = data.get("attacker_control") or {}
 
 
@@ -260,6 +271,15 @@ def generate(data: dict[str, Any]) -> str:
             f'(cap {_MAX_STEPS})"]'
         )
         lines.append("    style TRUNC fill:#fef9c3,stroke:#a16207")
+
+    if truncated_branches > 0:
+        lines.append("")
+        lines.append(
+            f'    TRUNCBR["⚠ Diagram truncated: '
+            f'{truncated_branches} additional branches not shown '
+            f'(cap {_MAX_BRANCHES})"]'
+        )
+        lines.append("    style TRUNCBR fill:#fef9c3,stroke:#a16207")
 
     return "\n".join(lines)
 

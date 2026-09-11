@@ -26,6 +26,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
+from core.analysis._joern_lines import strip_ansi
+
 from ._util import safe_joern_name_lenient as _safe_name
 
 
@@ -609,8 +611,9 @@ def _run_query(server: Any, query: str) -> list | None:
 
     Compatible with packages.joern.server.JoernServer.query() which
     returns a JoernResult with .raw_output (string) and .ok (bool).
-    For list queries (.l), the raw output is a Scala list representation
-    that we parse. For simple queries, returns the raw lines.
+    For list queries (.l), the raw output is a Scala list echo that we
+    parse — ``None`` when no list can be recognised (degraded query,
+    never an answer).
     """
     try:
         result = server.query(query)
@@ -620,8 +623,8 @@ def _run_query(server: Any, query: str) -> list | None:
             if not result.ok:
                 return None
             raw = getattr(result, "raw_output", "")
-            if not raw or raw.strip() == "List()":
-                return []
+            if not raw:
+                return None
             return _parse_scala_list(raw)
 
         # Direct list return (mock servers in tests)
@@ -659,44 +662,95 @@ def _split_scala_items(text: str) -> list:
     return items
 
 
-def _parse_scala_list(raw: str) -> list:
-    """Best-effort parse of Joern's Scala list output.
+# Live-REPL value-echo binder for the FINAL expression of a query
+# (``val res0: List[String] = List(...)``).  Intermediate statement
+# binders (``val src: ... = ...`` in the taint query) echo too, so
+# only ``res<N>`` binders anchor the answer and the LAST one wins.
+_VAL_ECHO_RE = re.compile(r"val res\d+: .*? = ")
 
-    Handles:
-    - List(a, b, c) → ["a", "b", "c"]
-    - List((a, b, 1), (c, d, 2)) → [["a", "b", "1"], ["c", "d", "2"]]
-    - Simple newline-separated values
+
+def _extract_list_literal(body: str) -> str | None:
+    """Balanced ``List(...)`` literal at the start of *body*, or None.
+
+    Paren depth is tracked outside double-quoted strings only, so a
+    quoted element containing parens cannot end the literal early; a
+    truncated echo (depth never returns to zero) yields None.
     """
-    raw = raw.strip()
-    if raw.startswith("List(") and raw.endswith(")"):
-        inner = raw[5:-1].strip()
-        if not inner:
-            return []
-        # Tuple list: List((a, b), (c, d))
-        if inner.startswith("("):
-            tuples = []
-            depth = 0
-            current = ""
-            for ch in inner:
-                if ch == "(":
-                    depth += 1
-                    if depth == 1:
-                        current = ""
-                        continue
-                elif ch == ")":
-                    depth -= 1
-                    if depth == 0:
-                        tuples.append(_split_scala_items(current))
-                        current = ""
-                        continue
-                if depth >= 1:
-                    current += ch
-            return tuples
-        # Simple list: List(a, b, c) — handle commas inside quoted strings
-        return _split_scala_items(inner)
+    if not body.startswith("List("):
+        return None
+    depth = 0
+    in_quotes = False
+    escaped = False
+    for i, ch in enumerate(body):
+        if escaped:
+            escaped = False
+            continue
+        if in_quotes:
+            if ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_quotes = False
+            continue
+        if ch == '"':
+            in_quotes = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return body[:i + 1]
+    return None
 
-    # Newline-separated fallback
-    return [ln.strip() for ln in raw.split("\n") if ln.strip()]
+
+def _parse_scala_list(raw: str) -> list | None:
+    """Parse Joern's Scala list output — bare or live-REPL echoed.
+
+    Handles (after ANSI stripping, same echo doctrine as
+    ``core.analysis._joern_lines``):
+    - ``List(a, b, c)`` → ``["a", "b", "c"]``
+    - ``List((a, b, 1), (c, d, 2))`` → ``[["a", "b", "1"], ...]``
+    - ``val res0: List[String] = List(...)`` — the server-transport
+      value echo, possibly multi-line, with intermediate binder echoes
+      before it (last ``res<N>`` binder wins)
+
+    Returns ``None`` when no list literal can be recognised.  There is
+    deliberately NO newline-separated fallback: an unrecognised echo
+    used to come back as a one-element garbage list (the echo line
+    itself), and that non-empty "result" minted joern-backed
+    confirmations from queries that returned nothing.  Unparseable
+    must read as no answer; ``List()`` must read as empty.
+    """
+    text = strip_ansi(raw).strip()
+    echoes = list(_VAL_ECHO_RE.finditer(text))
+    body = text[echoes[-1].end():].lstrip() if echoes else text
+    literal = _extract_list_literal(body)
+    if literal is None:
+        return None
+    inner = literal[5:-1].strip()
+    if not inner:
+        return []
+    # Tuple list: List((a, b), (c, d))
+    if inner.startswith("("):
+        tuples = []
+        depth = 0
+        current = ""
+        for ch in inner:
+            if ch == "(":
+                depth += 1
+                if depth == 1:
+                    current = ""
+                    continue
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    tuples.append(_split_scala_items(current))
+                    current = ""
+                    continue
+            if depth >= 1:
+                current += ch
+        return tuples
+    # Simple list: List(a, b, c) — handle commas inside quoted strings
+    return _split_scala_items(inner)
 
 
 def _classify_guard_text(text: str) -> str:

@@ -116,11 +116,31 @@ def host_recon_threshold_for_profile(profile_name: str,
 # sandbox().run() or run_trusted() — isolation is set on context creation,
 # not per-call. Defined here so sandbox-context's inner run() and the
 # top-level run_trusted() can both reference it.
+#
+# CONTRACT: this set mirrors sandbox()'s full parameter list (context.py).
+# It cannot be generated from inspect.signature(sandbox) here — context.py
+# imports THIS module, so importing sandbox back would be circular. A
+# drift-guard test (test_sandbox.py::TestSandboxKwargsGuard) asserts exact
+# parity with the signature in both directions; when you add a sandbox()
+# parameter, add it here too.
 _SANDBOX_KWARGS = frozenset({
     "block_network", "target", "output", "allowed_tcp_ports",
     "profile", "disabled", "limits", "map_root",
-    "use_egress_proxy", "proxy_hosts",
+    "use_egress_proxy", "proxy_hosts", "proxy_allowed_ports",
+    "require_proxy_netns",
     "restrict_reads", "readable_paths",
+    # writable_paths / exclude_tmp_baseline are sandbox()-level (the
+    # Landlock rule set and the tmp-baseline exception list are
+    # compiled into the preexec / mount plan at context setup).
+    "writable_paths", "exclude_tmp_baseline",
+    # observe implies audit_mode, decided at context creation.
+    "observe",
+    # loopback_unix_bridges is sandbox()-level (the forwarder lives in
+    # the child netns built per context; per-call would silently no-op).
+    "loopback_unix_bridges",
+    # omit_etc_reads rides the same context-compiled read allowlist as
+    # omit_proc_reads below.
+    "omit_etc_reads",
     # degraded_net_deny is context-level (the Landlock TCP-connect deny
     # is compiled into the preexec at sandbox() setup); a per-call
     # override would silently no-op.

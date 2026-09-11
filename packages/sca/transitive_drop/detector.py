@@ -21,11 +21,16 @@ alongside the underlying CVE.
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from dataclasses import dataclass
 
-from typing import TYPE_CHECKING
+from packages.sca.findings import severity_rank
+from packages.sca.versions import VersionError
+from packages.sca.versions import compare as version_compare
+
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from packages.sca.models import (
@@ -33,7 +38,7 @@ if TYPE_CHECKING:
         SupplyChainFinding,
         VulnFinding,
     )
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -191,10 +196,15 @@ def detect_droppable_transitives(
                 continue
             if latest is None:
                 continue
-            if parent_pinned and _version_lt(latest, parent_pinned):
-                # Latest stable is older than what we have pinned
-                # (operator on an unreleased dev pin? defensive).
-                continue
+            try:
+                if version_compare(eco, latest, parent_pinned) < 0:
+                    # Latest stable is older than what we have pinned
+                    # (operator on an unreleased dev pin? defensive).
+                    continue
+            except VersionError:
+                # Unorderable pin — fall through to the equality
+                # check below rather than dropping the candidate.
+                pass
             if parent_pinned == latest:
                 # Already at latest — no bump to suggest.
                 continue
@@ -250,32 +260,44 @@ def _canonical_name(ecosystem: str, name: str) -> str:
     return name.lower().replace("_", "-")
 
 
-_SEVERITY_ORDER = ("info", "low", "medium", "high", "critical")
-
-
 def _max_severity(a: str | None, b: str) -> str:
+    """Most-severe of the two labels. ``severity_rank`` maps the full
+    label set (including ``none``) and is case-insensitive — an
+    index-based comparison silently DEMOTED an already-recorded
+    severity whenever the incoming label fell outside its tuple
+    (``('high', 'none') → 'none'``)."""
     if a is None:
         return b
-    try:
-        return max(a, b, key=_SEVERITY_ORDER.index)
-    except ValueError:
-        return b
+    # severity_rank is annotated for the Severity literal but is
+    # deliberately tolerant of arbitrary strings (unknown → 0).
+    return max(a, b, key=cast("Callable[[str], int]", severity_rank))
 
 
-_STABLE_RE = re.compile(
-    r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?$"
-)
+# Leading numeric core of a version string (epoch-tolerant for
+# Debian-style ``1:1.2``). Used only to derive the comparison anchor
+# for the ecosystem-aware stability check below — ordering itself is
+# always ``versions.compare``.
+_NUMERIC_CORE_RE = re.compile(r"^v?(?:\d+:)?\d+(?:\.\d+)*")
 
 
-def _version_key(v: str) -> tuple[int, ...]:
-    m = _STABLE_RE.match(v)
+def _is_stable(ecosystem: str, version: str) -> bool:
+    """Ecosystem-aware release/prerelease split.
+
+    A version is stable when the ecosystem's comparator orders it at
+    or above its own leading numeric core: ``1.2.3-alpha`` < ``1.2.3``
+    → prerelease, while Maven's ``1.2.3-RELEASE`` == ``1.2.3`` and
+    PEP 440's ``1.2.3.post1`` > ``1.2.3`` → stable. A hand-rolled
+    ``v?N(.N)*`` regex mis-ordered or excluded such release-qualified
+    and epoch-carrying versions entirely. Unparseable strings are
+    non-stable so the ordering pass never sees them.
+    """
+    m = _NUMERIC_CORE_RE.match(version.strip())
     if not m:
-        return (0,)
-    return tuple(int(p) if p else 0 for p in m.groups())
-
-
-def _version_lt(a: str, b: str) -> bool:
-    return _version_key(a) < _version_key(b)
+        return False
+    try:
+        return version_compare(ecosystem, version, m.group(0)) >= 0
+    except VersionError:
+        return False
 
 
 def _latest_stable_version(
@@ -310,11 +332,14 @@ def _latest_stable_version(
                         candidates.append(v["version"])
     else:
         candidates = list((meta.get("releases") or {}).keys())
-    stable = [v for v in candidates if _STABLE_RE.match(v)]
+    stable = [v for v in candidates if _is_stable(ecosystem, v)]
     if not stable:
         return None
-    stable.sort(key=_version_key, reverse=True)
-    return stable[0]
+
+    def _cmp(a: str, b: str) -> int:
+        return version_compare(ecosystem, a, b)
+
+    return max(stable, key=functools.cmp_to_key(_cmp))
 
 
 def _dep_state_in_version(

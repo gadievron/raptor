@@ -1399,3 +1399,114 @@ def test_print_summary_notes_test_path_writes(capsys, tmp_path: Path) -> None:
                    exclude_patterns=["**/unrelated/**"])
     out = capsys.readouterr().out
     assert "test/fixture paths" not in out
+
+
+# ---------------------------------------------------------------------------
+# Rewriter-support predicate is derived from update's dispatch
+# ---------------------------------------------------------------------------
+
+def test_has_rewriter_agrees_with_update_dispatch() -> None:
+    """``_has_rewriter`` must agree with ``update``'s actual rewrite
+    dispatch for every manifest shape — it delegates to the shared
+    predicate, so a rewriter added on the update side is planned for
+    here without a second edit (a hand-mirrored table used to drift)."""
+    from packages.sca.harden import _has_rewriter
+    from packages.sca.update import supports_rewrite
+
+    supported = [
+        "pom.xml", "package.json", "pyproject.toml",
+        "requirements.txt", "requirements-dev.txt",
+        "Directory.Packages.props", "Directory.Build.targets",
+        "libs.versions.toml",
+        "app.csproj", "app.fsproj", "app.vbproj",
+        "Dockerfile", "Containerfile", "Dockerfile.slim",
+        "build.Dockerfile", "install.sh", "setup.bash",
+        ".github/workflows/ci.yml", ".github/workflows/ci.yaml",
+        "devcontainer.json", ".devcontainer.json",
+        "action.yml", "action.yaml",
+    ]
+    unsupported = [
+        "go.mod", "Cargo.toml", "Gemfile", "composer.json",
+        "build.gradle", "build.gradle.kts", "random.txt",
+        "config.yml",
+    ]
+    for name in supported:
+        p = Path(name)
+        assert supports_rewrite(p) is True, name
+        assert _has_rewriter(p) is True, name
+    for name in unsupported:
+        p = Path(name)
+        assert supports_rewrite(p) is False, name
+        assert _has_rewriter(p) is False, name
+
+
+# ---------------------------------------------------------------------------
+# plan(): fetch dedup + parallel walk
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _CountingRegistry:
+    """Fake registry recording every ``list_versions`` call."""
+
+    versions: List[str]
+    calls: List[str] = field(default_factory=list)
+
+    def list_versions(self, name: str) -> List[str]:
+        self.calls.append(name)
+        return list(self.versions)
+
+
+def test_plan_dedups_registry_fetch_per_name(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """The same (ecosystem, name) declared in several manifests fetches
+    its version list from the registry ONCE per run."""
+    from packages.sca import harden as harden_mod
+
+    deps = [
+        _dep(name="dup-dep", version="1.0", pin_style=PinStyle.EXACT),
+        _dep(name="dup-dep", version="1.0", pin_style=PinStyle.EXACT),
+        _dep(name="dup-dep", version="1.0", pin_style=PinStyle.EXACT),
+        _dep(name="other-dep", version="1.0", pin_style=PinStyle.EXACT),
+    ]
+    monkeypatch.setattr(harden_mod, "find_manifests",
+                        lambda _t, **_kw: [Path("/fake/requirements.txt")])
+    monkeypatch.setattr(harden_mod, "parse_manifest", lambda _m: deps)
+
+    registry = _CountingRegistry(["1.5"])
+    candidates = harden_mod.plan(
+        target=tmp_path,
+        registries={"PyPI": registry},
+        osv=_FakeOsv({"1.0": [], "1.5": []}),
+        offline=False, allow_major=False,
+    )
+    assert [c.status for c in candidates] == ["promoted"] * 4
+    assert sorted(registry.calls) == ["dup-dep", "other-dep"]
+
+
+def test_plan_parallel_walk_preserves_dep_order(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Above the sequential threshold the planner walks deps on a
+    thread pool; candidates must still come back in declaration order
+    (candidates.json determinism) with the same verdicts as the
+    sequential walk."""
+    from packages.sca import harden as harden_mod
+
+    names = [f"pkg-{i:02d}" for i in range(9)]
+    deps = [_dep(name=n, version="1.0", pin_style=PinStyle.EXACT)
+            for n in names]
+    monkeypatch.setattr(harden_mod, "find_manifests",
+                        lambda _t, **_kw: [Path("/fake/requirements.txt")])
+    monkeypatch.setattr(harden_mod, "parse_manifest", lambda _m: deps)
+
+    registry = _CountingRegistry(["1.5"])
+    candidates = harden_mod.plan(
+        target=tmp_path,
+        registries={"PyPI": registry},
+        osv=_FakeOsv({"1.0": [], "1.5": []}),
+        offline=False, allow_major=False,
+    )
+    assert [c.name for c in candidates] == names
+    assert all(c.status == "promoted" and c.to_version == "1.5"
+               for c in candidates)

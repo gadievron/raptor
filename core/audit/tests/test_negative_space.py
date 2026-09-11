@@ -418,6 +418,12 @@ class TestSiblingNegativeSpace:
         assert len(findings) >= 1
         assert any("handle_register" in f.evidence for f in findings)
         assert all(f.strategy == "sibling_asymmetry" for f in findings)
+        # Identity fields are load-bearing: the consumer routes each
+        # finding by (file, function) — findings without them matched
+        # no gap and the pass silently produced nothing.
+        deviant = [f for f in findings if f.function == "handle_register"]
+        assert deviant
+        assert all(f.file == "auth.py" for f in deviant)
 
     def test_no_findings_when_all_follow(self):
         from core.audit.negative_space import check_sibling_negative_space

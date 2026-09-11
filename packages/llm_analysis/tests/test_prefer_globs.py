@@ -231,3 +231,50 @@ class TestApplyExcludeDirGlobs:
         findings = [self._f("vendor/a.c"), self._f("vendor/b.c")]
         result = apply_exclude_dir_globs(findings, ["vendor/*"])
         assert result == []
+
+
+class TestProductionKeyShape:
+    """The SARIF parser and the validated-findings importer emit the
+    path under ``file`` (not ``file_path``) — the glob filters must
+    match both shapes, or --prefer / --exclude-dir silently no-op on
+    every pipeline-loaded finding."""
+
+    @staticmethod
+    def _sarif(path: str, **kw):
+        # Exact key shape parse_sarif_findings produces.
+        return {"file": path, "startLine": 1, "endLine": 1, **kw}
+
+    def test_exclude_drops_sarif_shaped_findings(self):
+        findings = [
+            self._sarif("vendor/zlib/inflate.c"),
+            self._sarif("src/http/server.c"),
+        ]
+        result = apply_exclude_dir_globs(findings, ["vendor/*"])
+        assert [f["file"] for f in result] == ["src/http/server.c"]
+
+    def test_prefer_sorts_sarif_shaped_findings(self):
+        findings = [
+            self._sarif("src/util.c"),
+            self._sarif("src/http/server.c"),
+        ]
+        result = apply_prefer_globs(findings, ["src/http/*"])
+        assert [f["file"] for f in result] == [
+            "src/http/server.c", "src/util.c",
+        ]
+
+    def test_file_path_key_still_matches(self):
+        # Two-direction: the enriched shape (``file_path``) keeps
+        # working alongside the parser shape.
+        findings = [
+            {"file_path": "vendor/lib.c"},
+            {"file": "vendor/other.c"},
+            {"file_path": "src/a.c"},
+        ]
+        result = apply_exclude_dir_globs(findings, ["vendor/*"])
+        assert result == [{"file_path": "src/a.c"}]
+
+    def test_file_path_wins_over_file_when_both_present(self):
+        # Enrichment layers may add file_path beside the parser's
+        # file — the richer key is authoritative.
+        findings = [{"file_path": "src/a.c", "file": "vendor/x.c"}]
+        assert apply_exclude_dir_globs(findings, ["vendor/*"]) == findings

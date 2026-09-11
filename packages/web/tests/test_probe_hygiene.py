@@ -124,14 +124,36 @@ class TestSmugglingVariants(unittest.TestCase):
         declared = int(re.search(r"Content-Length: (\d+)", clzero).group(1))
         self.assertEqual(declared, len(prefix))
 
-    def test_tecl_fast_400_flags_with_variant_named(self):
+    def test_tecl_stall_flags_with_variant_named(self):
         results, _ = self._run([
-            ("HTTP/1.1 200 OK\r\n\r\nok", 0.1),      # CL.TE clean
-            ("HTTP/1.1 400 Bad Request\r\n\r\n", 0.2),  # TE.CL desync
+            ("HTTP/1.1 200 OK\r\n\r\nok", 0.1),  # CL.TE clean
+            ("", 5.0),  # TE.CL: server sat on the ambiguous framing
         ])
         self.assertEqual(len(results), 1)
         self.assertIn("TE.CL", results[0].evidence)
         self.assertEqual(results[0].confidence, "low")
+
+    def test_fast_400_rejection_is_not_a_signal(self):
+        # An immediate 400 for a CL+TE request is the RECOMMENDED
+        # rejection of the ambiguity — flagging it marked every
+        # hardened proxy as a smuggling prerequisite.
+        results, _ = self._run([
+            ("HTTP/1.1 400 Bad Request\r\n\r\n", 0.1),
+            ("HTTP/1.1 400 Bad Request\r\n\r\n", 0.1),
+            ("HTTP/1.1 200 OK\r\n\r\nok", 0.1),
+        ])
+        self.assertEqual(results, [])
+
+    def test_digits_in_headers_or_body_are_not_a_status_line(self):
+        # 'Content-Length: 2400' and echoed request lines must never
+        # satisfy the signals: only real response status lines count.
+        results, _ = self._run([
+            ("HTTP/1.1 200 OK\r\nContent-Length: 2400\r\n\r\nx", 0.05),
+            ("HTTP/1.1 200 OK\r\nContent-Length: 2400\r\n\r\nx", 0.05),
+            # Error page quoting the request line: one status line only.
+            ("HTTP/1.1 200 OK\r\n\r\nbad: GET /raptor-clzero-probe HTTP/1.1", 0.1),
+        ])
+        self.assertEqual(results, [])
 
     def test_clzero_double_response_flags(self):
         results, _ = self._run([

@@ -182,6 +182,70 @@ class TestFieldIndex:
         assert la["writes"][0]["rhs_class"] == "from_local:v"
         assert la["writes"][0]["function"] == "ackm_on_ack"
 
+    def test_multi_level_chain_write_censused_on_terminal_field(self):
+        # `conn->pktns->largest_acked = ...` writes the TERMINAL field;
+        # a pairwise scan saw only `conn->pktns` and censused the write
+        # as a read of the middle segment, leaving the written field
+        # with zero write sites.
+        src = (
+            "void on_ack(struct conn *conn, uint64_t v)\n"
+            "{\n"
+            "    conn->pktns->largest_acked = v;\n"
+            "}\n"
+        )
+        fields = build_state_field_index({"src/c.c": src})["fields"]
+        la = fields["largest_acked"]
+        assert len(la["writes"]) == 1
+        assert la["writes"][0]["base"] == "pktns"
+        assert la["reads"] == []
+        # The middle segment is dereferenced — a read, never a write.
+        pk = fields["pktns"]
+        assert pk["writes"] == []
+        assert len(pk["reads"]) == 1
+
+    def test_multiplicative_compound_assignments_are_writes(self):
+        src = (
+            "void adjust(struct cc *cc)\n"
+            "{\n"
+            "    cc->cwnd *= 2;\n"
+            "    cc->rate /= 4;\n"
+            "    cc->slot %= 8;\n"
+            "}\n"
+        )
+        fields = build_state_field_index({"src/cc.c": src})["fields"]
+        for name in ("cwnd", "rate", "slot"):
+            bucket = fields[name]
+            assert len(bucket["writes"]) == 1, name
+            # Compound assignment reads the field too.
+            assert len(bucket["reads"]) == 1, name
+
+    def test_prefix_and_postfix_incdec_are_writes(self):
+        src = (
+            "void bump(struct s *st)\n"
+            "{\n"
+            "    ++st->pkt_count;\n"
+            "    st->ack_count++;\n"
+            "    --st->window;\n"
+            "}\n"
+        )
+        fields = build_state_field_index({"src/s.c": src})["fields"]
+        for name in ("pkt_count", "ack_count", "window"):
+            bucket = fields[name]
+            assert len(bucket["writes"]) == 1, name
+            assert bucket["writes"][0]["rhs_class"] == "unknown"
+            assert len(bucket["reads"]) == 1, name
+
+    def test_comparisons_are_not_writes(self):
+        src = (
+            "int chk(struct s *st, uint64_t v)\n"
+            "{\n"
+            "    if (st->limit != v) return 0;\n"
+            "    return st->limit <= v && st->limit >= 1;\n"
+            "}\n"
+        )
+        fields = build_state_field_index({"src/s.c": src})["fields"]
+        assert fields["limit"]["writes"] == []
+
     def test_state_fields_vocab_excludes_llm_prior(self):
         dm = {"state_fields": [
             {"field": "highest_sent", "authority": "local",
@@ -227,6 +291,103 @@ class TestLeads:
             [RULE_DEAD_STATE, RULE_PEER_WRITE],
         )
         assert channels == []
+
+
+class TestBranchGuards:
+    def test_fall_through_join_records_no_guard(self):
+        # The write site is a JOIN reached both around the branch and
+        # through it — the branch edge's polarity constrains nothing
+        # there.  Recording the negated condition as a dominating
+        # guard let a vacuously-guarded preservation proof refute the
+        # flagship ACK-of-unsent shape.
+        from core.audit.protocol_state import _branch_guards
+        src = (
+            "void f(struct s *st, uint64_t v)\n"
+            "{\n"
+            "    if (st->mode > 0) {\n"
+            "        st->aux = v;\n"
+            "    }\n"
+            "    st->largest_acked_pkt = v;\n"
+            "}\n"
+        )
+        assert _branch_guards(src, "f", 6) == []
+
+    def test_dominating_guard_still_recorded(self):
+        # Control: a write genuinely inside the guarded branch keeps
+        # its condition.
+        from core.audit.protocol_state import _branch_guards
+        src = (
+            "void g(struct s *st, uint64_t v)\n"
+            "{\n"
+            "    if (v >= st->highest_sent) {\n"
+            "        st->largest_acked_pkt = v;\n"
+            "    }\n"
+            "}\n"
+        )
+        guards = _branch_guards(src, "g", 4)
+        assert guards and any("highest_sent" in g for g in guards)
+
+
+class TestTruncatedCensus:
+    def test_all_sites_skipped_on_budget_is_not_preserved(self):
+        # With every site skipped on budget, per_site is empty and the
+        # vacuous "all 0 sites preserve" read became an authoritative
+        # refutation.  A truncated census must degrade.
+        from core.audit.protocol_state import (
+            build_state_field_index,
+            check_invariant_multi_site,
+        )
+        index = build_state_field_index(TWIN_TEXTS)
+        multi = check_invariant_multi_site(
+            INVARIANT, index, TWIN_TEXTS, budget_s=0.0,
+        )
+        assert multi["outcome"] == "inconclusive"
+        assert "partial census" in multi["reason"]
+
+    def test_site_cap_truncation_is_not_preserved(self):
+        # Every CHECKED site preserves, but the cap left sites
+        # unchecked — bounded evidence, not a preservation proof.
+        from core.audit.protocol_state import (
+            build_state_field_index,
+            check_invariant_multi_site,
+        )
+        index = build_state_field_index(TWIN_TEXTS)
+        multi = check_invariant_multi_site(
+            INVARIANT, index, TWIN_TEXTS, max_sites=1,
+        )
+        assert multi["outcome"] == "inconclusive"
+        assert "partial census" in multi["reason"]
+
+    def test_full_census_still_preserves(self):
+        # Control: the untruncated twin keeps its preservation proof.
+        from core.audit.protocol_state import (
+            build_state_field_index,
+            check_invariant_multi_site,
+        )
+        index = build_state_field_index(TWIN_TEXTS)
+        multi = check_invariant_multi_site(INVARIANT, index, TWIN_TEXTS)
+        assert multi["outcome"] == "preserved"
+
+
+class TestVacuousCensus:
+    def test_vacuous_preserved_is_inconclusive_not_refuted(self):
+        # Zero census write sites for the invariant's variables is
+        # bounded negative evidence (the regex census can be blind) —
+        # it must degrade to inconclusive, never mint an authoritative
+        # refutation.
+        src = (
+            "uint64_t get_foo(struct s *st)\n"
+            "{\n"
+            "    return st->foo_state;\n"
+            "}\n"
+        )
+        res = run_protocol_state_check(
+            ".", "src/v.c", "get_foo", "state invariant broken",
+            invariant="foo_state <= bar_sent",
+            source_texts={"src/v.c": src},
+        )
+        assert res.outcome == "inconclusive"
+        assert REASON_CENSUS_DEGRADED in res.reason
 
 
 class TestInvariantHarness:
@@ -379,3 +540,38 @@ class TestPrepassInvariants:
         )
         assert out["telemetry"]["invariants_checked"] == 0
         assert out["findings"] == []
+
+
+class TestInvariantReceiptBoundaries:
+    """Substring containment handed an unrelated entry's provenance
+    and receipt grade to a different variable's invariant ('x <= 10'
+    receipted by 'max_x <= 100')."""
+
+    def _dm(self, statement):
+        return {"invariants": [{
+            "statement": statement,
+            "provenance": "study_receipt",
+            "receipt": {"file": "notes.md", "quote": statement},
+        }]}
+
+    def test_embedded_identifier_does_not_receipt(self):
+        from core.audit.protocol_state import _invariant_receipt
+
+        assert _invariant_receipt(self._dm("max_x <= 100"), "x <= 10") \
+            is None
+
+    def test_exact_statement_still_receipts(self):
+        from core.audit.protocol_state import _invariant_receipt
+
+        entry = _invariant_receipt(self._dm("x <= 10"), "x <= 10")
+        assert entry is not None
+
+    def test_bounded_containment_still_receipts(self):
+        # A statement that carries the comparison as its own token
+        # run ("invariant: x <= 10 (from spec)") still matches.
+        from core.audit.protocol_state import _invariant_receipt
+
+        entry = _invariant_receipt(
+            self._dm("invariant: x <= 10 (from spec)"), "x <= 10",
+        )
+        assert entry is not None

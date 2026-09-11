@@ -327,6 +327,7 @@ def _scan_inventory(
     _MAX_FILE_BYTES_FOR_LOC = 20 * 1024 * 1024
     try:
         import os
+        import stat as _stat  # hoisted out of the per-file loop
         # ``followlinks=False`` (the default, but stated explicitly)
         # — a symlinked directory inside the target would otherwise
         # let an attacker make /describe walk arbitrary host paths.
@@ -355,7 +356,6 @@ def _scan_inventory(
                     continue
                 # Refuse symlinks: their target may be outside the
                 # tree and reading it leaks host-fs state into LOC.
-                import stat as _stat
                 if _stat.S_ISLNK(st.st_mode):
                     continue
                 # Refuse non-regular files (FIFOs, sockets, devices)

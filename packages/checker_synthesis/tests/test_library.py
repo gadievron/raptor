@@ -7,6 +7,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
 # Hard-SET (never setdefault): the code under test derives paths from
 # RAPTOR_DIR; an ambient value for another checkout must not win.
@@ -818,3 +820,175 @@ class TestGraduateRequiresControls:
             is not None
         graduated = lib.graduate(tmp_path / "engine")
         assert graduated == ["r1"]
+
+
+class TestPathConfinement:
+    """rule_id / engine become file-name components; ids also arrive
+    from persisted manifests and replayed metadata stores that are not
+    re-validated upstream, so the library boundary itself must confine
+    them — a traversal id must never write outside the library dir
+    (or, at graduation, outside the engine rules dir)."""
+
+    @staticmethod
+    def _everything_under(base: Path) -> bool:
+        base = base.resolve()
+        return all(
+            p.resolve().is_relative_to(base)
+            for p in base.rglob("*")
+        )
+
+    def test_add_rule_traversal_ids_confined(self, tmp_path):
+        root = tmp_path / "root"
+        lib_dir = root / "lib"
+        lib = RuleLibrary(lib_dir)
+        for bad_id in ("../../evil", "/abs/path", "a/b", ".."):
+            lib.add_rule(bad_id, "semgrep", f"rules: {bad_id}\n")
+        lib.add_rule("ok-rule", "../../evil-engine", "rules: e\n")
+        # Nothing escaped the library dir...
+        assert not (tmp_path / "evil.yml").exists()
+        assert not Path("/abs/path.yml").exists()
+        assert self._everything_under(lib_dir)
+        # ...and every entry's recorded path resolves inside it.
+        for e in lib.all_entries():
+            assert (lib_dir / e.rule_path).resolve().is_relative_to(
+                lib_dir.resolve(),
+            )
+
+    def test_add_rule_safe_id_round_trips(self, tmp_path):
+        lib = RuleLibrary(tmp_path / "lib")
+        entry = lib.add_rule("src_db.py.run_query.CWE-89.0", "semgrep",
+                             "rules: ok\n")
+        dest = tmp_path / "lib" / entry.rule_path
+        assert dest.exists()
+        assert dest.read_text() == "rules: ok\n"
+        assert entry.rule_path == "semgrep/src_db.py.run_query.CWE-89.0.yml"
+
+    def test_graduate_traversal_manifest_confined(self, tmp_path):
+        # Threat shape: the persisted manifest is loaded without
+        # re-validation, so a traversal rule_id stored there must not
+        # steer the graduation write outside the engine rules dir.
+        lib_dir = tmp_path / "lib"
+        (lib_dir / "semgrep").mkdir(parents=True)
+        (lib_dir / "semgrep" / "evil.yml").write_text("rules: evil\n")
+        manifest = {
+            "rules": [{
+                "rule_id": "../../escape",
+                "engine": "semgrep",
+                "cwe": "CWE-89",
+                "body_hash": _body_hash("rules: evil\n"),
+                "rule_path": "semgrep/evil.yml",
+                "rationale": "",
+                "seed_file": "",
+                "seed_function": "",
+                "dual_control": True,
+                "promoted_at": "ts",
+                "tp_rate": 1.0,
+                "fp_rate": 0.0,
+                "total_variants": 3,
+                "total_matches": 3,
+                "targets": [{
+                    "target_hash": "t1", "ts": "ts",
+                    "matches": 3, "variants": 3, "tp_rate": 1.0,
+                }],
+                "archived": False,
+                "rule_tier": "library",
+            }],
+        }
+        (lib_dir / "manifest.json").write_text(json.dumps(manifest))
+        lib = RuleLibrary(lib_dir)
+        engine_dir = tmp_path / "engine"
+        graduated = lib.graduate(engine_dir)
+        # Confined: whatever name it graduated under is INSIDE the dir.
+        assert not (tmp_path / "escape.yaml").exists()
+        assert not (tmp_path / "semgrep").exists()
+        if graduated:
+            assert self._everything_under(engine_dir)
+
+    def test_graduate_normal_id_round_trips(self, tmp_path):
+        lib = RuleLibrary(tmp_path / "lib")
+        result = _result(matches=3)
+        rule_file = tmp_path / "r1.yml"
+        rule_file.write_text(result.rule.body)
+        result.rule_path = rule_file
+        assert lib.promote(result, target_hash="t1", timestamp="ts") \
+            is not None
+        graduated = lib.graduate(tmp_path / "engine")
+        assert graduated == ["r1"]
+        dest = tmp_path / "engine" / "semgrep" / "rules" / "r1.yaml"
+        assert dest.read_text() == result.rule.body
+
+
+class TestRulePathCollision:
+    """Two rules may share a rule_id with different bodies (same seed
+    across runs / CVEs). Each body must keep its own file — otherwise
+    the earlier manifest entry points at the later entry's body and a
+    replay of entry 1 silently runs entry 2's rule."""
+
+    def test_same_id_different_bodies_get_distinct_files(self, tmp_path):
+        import hashlib
+
+        lib = RuleLibrary(tmp_path / "lib")
+        e1 = lib.add_rule("same-id", "semgrep", "rules: BODY-A\n")
+        e2 = lib.add_rule("same-id", "semgrep", "rules: BODY-B\n")
+        assert e1.rule_path != e2.rule_path
+        body1 = (tmp_path / "lib" / e1.rule_path).read_text()
+        body2 = (tmp_path / "lib" / e2.rule_path).read_text()
+        assert body1 == "rules: BODY-A\n"
+        assert body2 == "rules: BODY-B\n"
+        # On-disk content matches each entry's recorded body hash.
+        for e, body in ((e1, body1), (e2, body2)):
+            assert e.body_hash == hashlib.sha256(
+                body.encode(),
+            ).hexdigest()[:16]
+
+    def test_identical_body_still_dedups(self, tmp_path):
+        lib = RuleLibrary(tmp_path / "lib")
+        e1 = lib.add_rule("same-id", "semgrep", "rules: BODY-A\n")
+        e2 = lib.add_rule("same-id", "semgrep", "rules: BODY-A\n")
+        assert e1 is e2 or e1.rule_path == e2.rule_path
+        assert len(lib.all_entries()) == 1
+
+
+class TestRecordMatchFeedback:
+    """Per-match feedback is one verdict sample: it must nudge
+    precision, never divide the verdict count by the raw match count
+    (which includes untriaged sweep hits) — that let a single
+    true-positive report collapse a proven rule below the replay and
+    retirement thresholds."""
+
+    def test_positive_feedback_does_not_collapse_proven_rule(self, tmp_path):
+        lib = RuleLibrary(tmp_path / "lib")
+        lib.promote(_result(matches=3), target_hash="t1")
+        # Inflate raw match count with an untriaged sweep (coverage
+        # only, no verdicts).
+        sweep_matches = [Match(file=f"m{i}.c", line=i) for i in range(97)]
+        lib.update("r1", "t2", sweep_matches, [])
+        entry = lib.all_entries()[0]
+        assert entry.total_matches == 100
+        assert entry.tp_rate == 1.0
+
+        lib.record_match("r1", is_tp=True)
+        entry = RuleLibrary(tmp_path / "lib").all_entries()[0]
+        # A TP verdict must keep a perfect rule at 1.0 — not 4/101.
+        assert entry.tp_rate == 1.0
+
+    def test_negative_feedback_still_lowers_precision(self, tmp_path):
+        lib = RuleLibrary(tmp_path / "lib")
+        lib.promote(_result(matches=3), target_hash="t1")
+        lib.record_match("r1", is_tp=False)
+        entry = lib.all_entries()[0]
+        assert entry.tp_rate == 3 / 4
+
+    def test_update_preserves_recorded_feedback(self, tmp_path):
+        lib = RuleLibrary(tmp_path / "lib")
+        lib.promote(_result(matches=3), target_hash="t1")
+        lib.record_match("r1", is_tp=False)  # 3 TP / 4 verdicts
+        # A later replay recompute must not discard the FP verdict.
+        replay_matches = [Match(file="n.c", line=1)]
+        replay_triage = [
+            MatchTriage(match=replay_matches[0], status="variant",
+                        reasoning="t"),
+        ]
+        lib.update("r1", "t3", replay_matches, replay_triage)
+        entry = lib.all_entries()[0]
+        assert entry.tp_rate == pytest.approx(4 / 5)

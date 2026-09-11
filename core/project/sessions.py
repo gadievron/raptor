@@ -137,6 +137,11 @@ def _pid_running(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+    except OverflowError:
+        # A pid beyond the platform's pid_t (a planted huge-digit
+        # filename or ledger field) cannot be a live process — and
+        # OverflowError is not an OSError, so it crashed callers.
+        return False
     except OSError:
         return False
     return True
@@ -671,6 +676,31 @@ def session_binding(pid: int | None = None) -> tuple[str | None, str]:
     return name, "bound"
 
 
+def _pid_from_name(name: str) -> int | None:
+    """Canonical pid from a session filename stem, or None.
+
+    Three requirements, each load-bearing for the prune passes that
+    lock/unlink ``<pid>.run`` / ``<pid>.run.lock`` by the DERIVED pid:
+
+    * ASCII-only — ``str.isdigit`` accepts Unicode digits; ``int('²')``
+      then raises mid-prune (superscripts), and locale digits would
+      alias an ASCII pid's files.
+    * digits-only — everything else in the dir (ledgers, locks, tmp
+      slots) is skipped.
+    * exact round-trip — a planted ``'007'`` must never lock or unlink
+      LIVE pid 7's ledger and lock files.
+    """
+    if not (name.isascii() and name.isdigit()):
+        return None
+    try:
+        pid = int(name)
+    except ValueError:  # pragma: no cover — excluded by the checks above
+        return None
+    if str(pid) != name:
+        return None
+    return pid
+
+
 def _entry_state(pid: int, fields: dict[str, str]) -> str:
     """Classification for enumeration surfaces: live | stale | foreign
     | advisory | unknown.
@@ -721,9 +751,11 @@ def read_sessions(prune: bool = True,
         return sessions
     for f in children:
         name = f.name
-        if not name.isdigit():
-            continue  # .run ledgers, locks, tmp slots — not ours here
-        pid = int(name)
+        pid = _pid_from_name(name)
+        if pid is None:
+            continue  # .run ledgers, locks, tmp slots, non-canonical
+            # digit strings ('007' would alias pid 7's ledger/lock;
+            # a non-ASCII digit crashes int()) — not ours here
         fields = _parse_entry(f)
         state = _entry_state(pid, fields)
         prunable = state == "stale"
@@ -732,11 +764,21 @@ def read_sessions(prune: bool = True,
             # record_session: entry first (kills the writers' gate),
             # ledger under its lock, lock file last (writers
             # verify-after-lock, so this unlink cannot split it).
+            # The whole removal runs UNDER the ledger lock with a
+            # re-check: a recycled pid can re-register (fresh entry +
+            # ledger) between the state probe above and the unlinks —
+            # the fresh session's files must survive.
             with contextlib.suppress(OSError):
-                f.unlink(missing_ok=True)
+                removed = False
                 with _ledger_lock(pid):
-                    (SESSIONS_DIR / f"{pid}.run").unlink(missing_ok=True)
-                (SESSIONS_DIR / f"{pid}.run.lock").unlink(missing_ok=True)
+                    if _entry_state(pid, _parse_entry(f)) == "stale":
+                        f.unlink(missing_ok=True)
+                        (SESSIONS_DIR / f"{pid}.run").unlink(
+                            missing_ok=True)
+                        removed = True
+                if removed:
+                    (SESSIONS_DIR / f"{pid}.run.lock").unlink(
+                        missing_ok=True)
         if state in ("live", "advisory") or include_stale:
             if include_stale:
                 fields = dict(fields)
@@ -756,7 +798,7 @@ def read_sessions(prune: bool = True,
             stem = f.name[:-len(".run")]
             # stem must round-trip through int: a planted '007.run'
             # would otherwise lock/unlink pid 7's files.
-            if (not stem.isdigit() or stem != str(int(stem))
+            if (_pid_from_name(stem) is None
                     or (SESSIONS_DIR / stem).exists()):
                 continue
             with contextlib.suppress(OSError):
@@ -776,7 +818,7 @@ def read_sessions(prune: bool = True,
             if not f.name.endswith(".run.lock"):
                 continue
             stem = f.name[:-len(".run.lock")]
-            if (not stem.isdigit() or stem != str(int(stem))
+            if (_pid_from_name(stem) is None
                     or (SESSIONS_DIR / stem).exists()
                     or (SESSIONS_DIR / f"{stem}.run").exists()):
                 continue
@@ -1388,7 +1430,7 @@ def ledger_rewrite_pin_project(old_name: str, new_name: str) -> None:
         if not f.name.endswith(".run"):
             continue
         stem = f.name[:-len(".run")]
-        if not stem.isdigit() or stem != str(int(stem)):
+        if _pid_from_name(stem) is None:
             continue
         pid = int(stem)
         try:
@@ -1433,7 +1475,7 @@ def ledger_pinned_dirs(project: str) -> list[dict]:
         if not f.name.endswith(".run"):
             continue
         stem = f.name[:-len(".run")]
-        if not stem.isdigit() or stem != str(int(stem)):
+        if _pid_from_name(stem) is None:
             continue
         if not (SESSIONS_DIR / stem).exists():
             continue  # orphan ledger — never steers discovery
@@ -1467,7 +1509,7 @@ def ledger_repair_witnesses_for_dir(run_dir, new_project: str,
         if not f.name.endswith(".run"):
             continue
         stem = f.name[:-len(".run")]
-        if not stem.isdigit() or stem != str(int(stem)):
+        if _pid_from_name(stem) is None:
             continue
         pid = int(stem)
         try:
@@ -1509,7 +1551,7 @@ def ledger_runs_pinned_to(project: str) -> list[dict]:
         if not f.name.endswith(".run"):
             continue
         stem = f.name[:-len(".run")]
-        if not stem.isdigit() or stem != str(int(stem)):
+        if _pid_from_name(stem) is None:
             continue
         if not (SESSIONS_DIR / stem).exists():
             continue  # orphan ledger — never steers discovery

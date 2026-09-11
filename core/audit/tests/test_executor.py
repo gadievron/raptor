@@ -742,6 +742,243 @@ class TestAsyncGlanceBatch:
         assert sum(batch_calls) == 3
 
 
+def _clean_batch_outcomes(contexts):
+    outcomes = []
+    for ctx in contexts:
+        o = MagicMock()
+        o.status = "clean"
+        o.cost_usd = 0.0
+        o.model = None
+        o.hypothesis = ""
+        o.hypotheses = []
+        o.evidence_tool = ""
+        o.review_result = None
+        o.body = "clean"
+        o.file = ctx.get("file", "")
+        o.function = ctx.get("function", "")
+        o.line = 1
+        outcomes.append(o)
+    return outcomes
+
+
+class TestHeldGlanceRelease:
+    """A held glance-tier task released after study completion must be
+    flushed as a batch, not strand the loop at ``asyncio.wait(set())``
+    (ValueError aborted the run when only released glance work
+    remained)."""
+
+    def test_released_held_glance_task_flushes(self, monkeypatch) -> None:
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeBucket:
+            value: str
+
+        @dataclass
+        class FakeTriageResult:
+            bucket: FakeBucket
+
+        wq = [_gap("a.py", "g0")]
+        graph = TaskGraph.from_workqueue(wq, [])
+        result = _FakeResult()
+
+        shared = MagicMock()
+        shared.triage_results = {
+            "a.py:g0:1": FakeTriageResult(FakeBucket("glance")),
+        }
+
+        class FakeStudyQueue:
+            consumer_done = False
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def set_event_loop(self, loop, event) -> None:
+                pass
+
+            def pending_concepts(self):
+                # First call (dispatch-time suppression check) blocks
+                # the task; every later call reports the concept
+                # studied, so the loop's release path fires.
+                self.calls += 1
+                return frozenset({"c1"}) if self.calls == 1 else frozenset()
+
+        class FakeConceptIndex:
+            def concepts_for(self, file, name):
+                return {"c1"}
+
+        batch_calls: list[int] = []
+
+        def fake_batch_review_fn(contexts, config):
+            batch_calls.append(len(contexts))
+            return _clean_batch_outcomes(contexts)
+
+        import core.audit.executor as executor_mod
+        monkeypatch.setattr(executor_mod, "_get_batch_review_fn",
+                            lambda shared, config: fake_batch_review_fn)
+
+        import core.audit.orchestrator as orch_mod
+        monkeypatch.setattr(
+            orch_mod, "_build_context",
+            lambda config, gap, *a, **kw: {
+                "file": gap["file"], "function": gap["name"],
+            },
+        )
+        monkeypatch.setattr(orch_mod, "_commit_outcome",
+                            lambda *a, **kw: None)
+
+        stats = run_executor_sync(
+            graph, MagicMock(), shared, MagicMock(), result,
+            ExecutorConfig(max_workers=2),
+            review_one_fn=_mock_review_fn,
+            study_queue=FakeStudyQueue(),
+            concept_index_ref=[FakeConceptIndex()],
+        )
+
+        assert stats.completed == 1
+        assert sum(batch_calls) == 1
+        assert graph.pending == 0
+
+
+class TestSerialGlanceFlushUnlocksDependents:
+    """The serial loop's no-ready-tasks flush can complete glance
+    tasks and unlock their dependents — it must re-poll instead of
+    breaking with the subtree stranded unreviewed."""
+
+    def test_dependent_reviewed_after_flush(self, monkeypatch) -> None:
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeBucket:
+            value: str
+
+        @dataclass
+        class FakeTriageResult:
+            bucket: FakeBucket
+
+        wq = [_gap("a.py", "dep", 0.9), _gap("a.py", "base", 0.5)]
+        # dep depends on base; base is glance-tier so it queues into
+        # the batch instead of completing inline.
+        edges = [_edge("a.py", "dep", "a.py", "base")]
+        graph = TaskGraph.from_workqueue(wq, edges)
+        result = _FakeResult()
+
+        shared = MagicMock()
+        shared.triage_results = {
+            "a.py:base:1": FakeTriageResult(FakeBucket("glance")),
+        }
+
+        def fake_batch_review_fn(contexts, config):
+            return _clean_batch_outcomes(contexts)
+
+        import core.audit.executor as executor_mod
+        monkeypatch.setattr(executor_mod, "_get_batch_review_fn",
+                            lambda shared, config: fake_batch_review_fn)
+
+        import core.audit.orchestrator as orch_mod
+        monkeypatch.setattr(
+            orch_mod, "_build_context",
+            lambda config, gap, *a, **kw: {
+                "file": gap["file"], "function": gap["name"],
+            },
+        )
+        monkeypatch.setattr(orch_mod, "_commit_outcome",
+                            lambda *a, **kw: None)
+
+        individual: list[str] = []
+
+        def tracking_review(gap, shared_, config_, review_fn_, result_,
+                            **kw):
+            individual.append(gap["name"])
+            return _mock_review_fn(
+                gap, shared_, config_, review_fn_, result_, **kw)
+
+        stats = run_executor_sync(
+            graph, MagicMock(), shared, MagicMock(), result,
+            ExecutorConfig(max_workers=1),
+            review_one_fn=tracking_review,
+        )
+
+        assert stats.completed == 2
+        assert graph.pending == 0
+        assert individual == ["dep"]
+
+
+class TestBatchMidRaiseDoubleCommit:
+    """A mid-batch raise after some members already committed must
+    error-record only the REMAINING members — a second record for a
+    committed member double-committed and double-tallied it."""
+
+    def test_committed_members_skip_second_record(
+        self, monkeypatch,
+    ) -> None:
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeBucket:
+            value: str
+
+        @dataclass
+        class FakeTriageResult:
+            bucket: FakeBucket
+
+        wq = [_gap("a.py", f"f{i}", 0.9 - i * 0.1) for i in range(3)]
+        graph = TaskGraph.from_workqueue(wq, [])
+        result = _FakeResult()
+
+        shared = MagicMock()
+        shared.triage_results = {
+            f"a.py:f{i}:1": FakeTriageResult(FakeBucket("glance"))
+            for i in range(3)
+        }
+
+        def fake_batch_review_fn(contexts, config):
+            return _clean_batch_outcomes(contexts)
+
+        import core.audit.executor as executor_mod
+        monkeypatch.setattr(executor_mod, "_get_batch_review_fn",
+                            lambda shared, config: fake_batch_review_fn)
+
+        import core.audit.orchestrator as orch_mod
+        monkeypatch.setattr(
+            orch_mod, "_build_context",
+            lambda config, gap, *a, **kw: {
+                "file": gap["file"], "function": gap["name"],
+            },
+        )
+
+        submissions: list[tuple[str, str]] = []
+
+        def submit(outcome, gap):
+            submissions.append((outcome.function, outcome.status))
+            if len(submissions) == 2:
+                # Second member's commit blows up mid-batch.
+                raise ValueError("collector wedged")
+
+        collector = MagicMock()
+        collector.submit.side_effect = submit
+
+        stats = run_executor_sync(
+            graph, MagicMock(), shared, MagicMock(), result,
+            ExecutorConfig(max_workers=4),
+            review_one_fn=_mock_review_fn,
+            collector=collector,
+        )
+
+        # All three complete (committed member + two error records).
+        assert stats.completed == 3
+        assert stats.failed == 2
+        assert graph.pending == 0
+        # The member whose clean outcome committed before the raise
+        # is never error-recorded on top of it.
+        first_fn = submissions[0][0]
+        error_fns = {fn for fn, status in submissions
+                     if status == "error"}
+        assert first_fn not in error_fns
+        assert len(error_fns) == 2
+        assert result.errors == 2
+
+
 class TestGlanceFallbackBudget:
     """Budget exhaustion inside the glance-batch fallback path."""
 

@@ -216,8 +216,29 @@ def docker_build(
                 ),
             )
 
-    if image_tag and not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._/-]*(?::[a-zA-Z0-9._-]+)?$', image_tag) or image_tag and re.match(r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/', image_tag):
-        image_tag = None
+    # Reject invalid/registry-qualified tags LOUDLY. Silently substituting
+    # an auto-tag would let the agent keep using the name it passed —
+    # `docker_run` on a registry-qualified name gets `--pull always` and
+    # would pull the UPSTREAM image, verifying a different artifact than
+    # the one just built.
+    if image_tag and (
+        not re.match(
+            r'^[a-zA-Z0-9][a-zA-Z0-9._/-]*(?::[a-zA-Z0-9._-]+)?$', image_tag
+        )
+        or re.match(r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/', image_tag)
+    ):
+        return BuildResult(
+            ok=False,
+            reason="invalid_image_tag",
+            reason_class="unknown",
+            next_step_hint=(
+                f"image_tag {image_tag!r} is not a valid LOCAL tag "
+                "(lowercase repo[:tag], no registry host prefix, no "
+                "spaces). Re-call docker_build with a local name like "
+                "'cve-env-local:<cve-id>' or omit image_tag for an "
+                "auto-generated one."
+            ),
+        )
     if image_tag:
         tag = image_tag
     elif cve_id:

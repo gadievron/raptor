@@ -16,12 +16,15 @@ def correlate_results(results_by_id: dict[str, dict]) -> dict[str, Any]:
     Returns a dict with:
         agreement_matrix: {finding_id: {model: {verdict, score, ruling}}}
         clusters: [{pattern, finding_ids, models_agreed}]
-        unique_insights: [{finding_id, model, insight}]
+        unique_insights: [{finding_id, model, verdict, reasoning}]
+            (minority dissent; on an even split every voting model is
+            listed with its own verdict and ``tie: True`` — a 50/50
+            dispute has no majority to dissent from)
         confidence_signals: {finding_id:
             "high"|"high-negative"|"disputed"|"no-verdict"}
             ("no-verdict" = every model abstained — errored/refused;
             abstentions never count as votes)
-        summary: {agreed, disputed, total, models}
+        summary: {agreed, disputed, total_correlated, models}
     """
     matrix: dict[str, dict[str, dict]] = {}
     confidence: dict[str, str] = {}
@@ -52,10 +55,13 @@ def correlate_results(results_by_id: dict[str, dict]) -> dict[str, Any]:
             if a.get("model") and a.get("model") == active_model:
                 # Pull the post-pipeline values into the
                 # multi_model_analyses entry. Only overwrite
-                # fields where the top-level result has a value
-                # (don't clobber per-model reasoning with None).
+                # fields where the top-level result has a value —
+                # a present-but-None top-level field (e.g. an
+                # errored retry writing the key back) must not
+                # convert the active model's real vote into an
+                # abstention.
                 for key in ("is_exploitable", "exploitability_score", "ruling"):
-                    if key in result:
+                    if result.get(key) is not None:
                         a[key] = result[key]
 
         per_model = {}
@@ -100,20 +106,41 @@ def correlate_results(results_by_id: dict[str, dict]) -> dict[str, Any]:
                 if a.get("is_exploitable") is not None
                 and not a["is_exploitable"]
             ]
-            minority = (exploitable_models if len(exploitable_models) < len(non_exploitable_models)
-                        else non_exploitable_models)
-            majority_verdict = len(exploitable_models) >= len(non_exploitable_models)
-            for model in minority:
-                reasoning = next(
-                    (a.get("reasoning", "") for a in analyses if a.get("model") == model),
-                    "",
-                )
-                unique.append({
-                    "finding_id": fid,
-                    "model": model,
-                    "verdict": not majority_verdict,
-                    "reasoning": reasoning[:200],
-                })
+            n_exp = len(exploitable_models)
+            n_non = len(non_exploitable_models)
+            if n_exp == n_non:
+                # Even split (the common 1-vs-1 two-model dispute):
+                # there is no majority — filing one side as the
+                # dissenting minority would frame a 50/50 tie as
+                # leaning the other way in operator reports. Surface
+                # BOTH sides, each labelled with its own verdict and
+                # an explicit tie marker.
+                for a in analyses:
+                    if a.get("is_exploitable") is None:
+                        continue
+                    unique.append({
+                        "finding_id": fid,
+                        "model": a.get("model", "?"),
+                        "verdict": bool(a["is_exploitable"]),
+                        "tie": True,
+                        "reasoning": (a.get("reasoning") or "")[:200],
+                    })
+            else:
+                minority = (exploitable_models if n_exp < n_non
+                            else non_exploitable_models)
+                majority_verdict = n_exp > n_non
+                for model in minority:
+                    reasoning = next(
+                        (a.get("reasoning") or "" for a in analyses
+                         if a.get("model") == model),
+                        "",
+                    )
+                    unique.append({
+                        "finding_id": fid,
+                        "model": model,
+                        "verdict": not majority_verdict,
+                        "reasoning": reasoning[:200],
+                    })
 
     clusters = _build_clusters(matrix, results_by_id)
 

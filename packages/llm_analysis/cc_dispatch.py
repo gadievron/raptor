@@ -46,6 +46,15 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
     finding-derived user content, dropping the role separation CC's
     prompt-injection defences key off (see CCDispatchConfig).
     """
+    # Per-invocation debug-file discriminator. The dispatch_fn calling
+    # convention carries no finding id down to this layer, and a
+    # constant name means parallel CC failures truncate-write the SAME
+    # debug file (last-writer-wins) while every failed finding's
+    # ``cc_debug_file`` points at it — an operator debugging finding A
+    # then reads finding B's output. A short random token keeps each
+    # failure's artifact (and the pointer stored on its result) unique.
+    import uuid
+    _debug_tag = uuid.uuid4().hex[:8]
     # Administrative transport kill switch — this lane is a billed
     # `claude -p` spawn per finding that does not pass
     # run_cc_streaming, so it honours the switch itself. Same graceful
@@ -75,6 +84,17 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
     # FINDING_RESULT_SCHEMA happened to require, irrespective of
     # what the caller actually wanted.
     effective_schema = schema  # None means freeform — preserved.
+    if effective_schema is not None:
+        # The task schemas are descriptive dicts ({"field": "type —
+        # description"}). Native provider lanes convert them to real
+        # JSON Schema before use; the `claude -p --json-schema` flag
+        # needs the same conversion or the CLI receives a document a
+        # JSON-Schema validator treats as annotation-only (type/enum/
+        # required all unenforced) or rejects outright. Reuse the one
+        # canonical converter so both lanes constrain identically; it
+        # passes already-normalised schemas through unchanged.
+        from core.llm.providers import _normalize_schema
+        effective_schema = _normalize_schema(effective_schema)
     config = CCDispatchConfig(
         claude_bin=claude_bin,
         tools="Read,Grep,Glob",
@@ -172,7 +192,8 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
             redact_secrets(proc.stderr or ""),
         )[:500]
         result = {"error": f"exit code {proc.returncode}: {stderr_excerpt}"}
-        write_debug(out_dir, "dispatch", proc.stdout, proc.stderr, result)
+        write_debug(out_dir, f"dispatch_{_debug_tag}", proc.stdout,
+                    proc.stderr, result)
         return DispatchResult(result=result)
 
     # Parse with debug-on-failure. Pre-fix `parse_cc_structured` /
@@ -190,7 +211,8 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
             parsed = parse_cc_freeform(proc.stdout, proc.stderr)
     except (ValueError, KeyError, TypeError) as e:
         result = {"error": f"parse failure: {e!r}"}
-        write_debug(out_dir, "dispatch_parse", proc.stdout, proc.stderr, result)
+        write_debug(out_dir, f"dispatch_parse_{_debug_tag}", proc.stdout,
+                    proc.stderr, result)
         return DispatchResult(result=result)
 
     cost = parsed.pop("cost_usd", 0)
@@ -227,7 +249,8 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
                 unknown,
             )
             write_debug(
-                out_dir, "dispatch_schema", proc.stdout, proc.stderr,
+                out_dir, f"dispatch_schema_{_debug_tag}", proc.stdout,
+                proc.stderr,
                 {"warning": f"unknown fields stripped: {unknown}"},
             )
             for k in unknown:

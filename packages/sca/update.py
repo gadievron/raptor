@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
 import logging
 import os
 import re
@@ -49,7 +50,7 @@ from core.json import load_json, save_json
 _MAX_FINDINGS_BYTES = 64 * 1024 * 1024
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Callable, Iterable, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -265,10 +266,9 @@ def _run_cascade_validation(
     work_items: list[tuple[str, Path]] = []
     for eco, changes in by_eco.items():
         first_manifest = changes[0].manifest
-        try:
-            rel_parent = first_manifest.parent.relative_to(Path.cwd())
-        except ValueError:
-            rel_parent = Path(first_manifest.parent.name)
+        # Same anchoring ``_materialise_changes`` used when writing the
+        # proposed copies, so the resolver runs where they actually are.
+        rel_parent = _proposed_rel_path(first_manifest).parent
         eco_root = (proposed_root / rel_parent).resolve()
         if not eco_root.exists():
             eco_root = proposed_root
@@ -775,6 +775,33 @@ def _leading_int(version: str) -> int | None:
 # Manifest rewriters
 # ---------------------------------------------------------------------------
 
+def _proposed_rel_path(manifest: Path) -> Path:
+    """Anchor for a manifest's rewritten copy under ``proposed/``.
+
+    Manifests inside the current working directory keep their relative
+    structure. A manifest OUTSIDE cwd has no usable relative path, and
+    anchoring on the bare filename would collapse every same-named
+    manifest onto ONE proposed file (last writer wins) — the git patch
+    would then diff one manifest's original against another manifest's
+    rewritten content, a patch that applies cleanly while rewriting the
+    wrong file wholesale. Disambiguate deterministically with a short
+    hash of the manifest's resolved parent directory instead: same
+    manifest → same anchor across the writer (``_materialise_changes``)
+    and the reader (``_emit_git_patch``), different directories → never
+    collide.
+    """
+    resolved = manifest.resolve()
+    try:
+        return resolved.relative_to(Path.cwd())
+    except ValueError:
+        digest = hashlib.sha256(
+            # fsencode, not utf-8: a hostile repo can carry a dir name
+            # with surrogate bytes, and one UnicodeEncodeError here
+            # would abort materialisation for EVERY manifest.
+            os.fsencode(str(resolved.parent))).hexdigest()[:12]
+        return Path(digest) / resolved.name
+
+
 def _materialise_changes(
     plans: dict[tuple[str, str, str], _PlanEntry],
     findings_rows: list[dict[str, Any]],
@@ -822,14 +849,8 @@ def _materialise_changes(
                 out.append(_skip(plan, reason or "rewriter found no match"))
 
         if text != original:
-            try:
-                rel = manifest.resolve().relative_to(Path.cwd())
-            except ValueError:
-                # Anchor on the manifest's name so absolute paths still
-                # land somewhere sensible under proposed/.
-                rel = Path(manifest.name)
             from ._atomic import atomic_write_text
-            target = proposed_root / rel
+            target = proposed_root / _proposed_rel_path(manifest)
             atomic_write_text(target, text)
     return out
 
@@ -856,42 +877,65 @@ def _skip(plan: _PlanEntry, reason: str) -> UpgradeChange:
     )
 
 
-def _rewrite_one(
-    manifest: Path, text: str, plan: _PlanEntry,
-) -> tuple[str, bool, str | None]:
+def _resolve_rewriter(
+    manifest: Path,
+) -> Callable[[Path, str, _PlanEntry], tuple[str, bool, str | None]] | None:
+    """Single source of truth mapping a manifest file to its rewriter.
+
+    ``_rewrite_one`` (the rewrite path) and ``supports_rewrite`` (the
+    predicate harden's planner consults before proposing a bump) both
+    resolve through this one dispatch, so the two can never drift —
+    a drift would make harden silently mark patchable manifests
+    ``unsupported_manifest`` (or promise rewrites that then fail).
+    Returns the handler callable, or ``None`` when the file shape has
+    no rewriter.
+    """
     name = manifest.name
     suffix = manifest.suffix.lower()
     if name == "pom.xml":
-        return _rewrite_pom_xml(text, plan)
+        return lambda m, t, p: _rewrite_pom_xml(t, p)
     if name == "package.json":
-        return _rewrite_package_json(text, plan)
+        return lambda m, t, p: _rewrite_package_json(t, p)
     if name == "pyproject.toml":
-        return _rewrite_pyproject_toml(text, plan)
+        return lambda m, t, p: _rewrite_pyproject_toml(t, p)
     if name.startswith("requirements") and name.endswith(".txt"):
-        return _rewrite_requirements_txt(text, plan)
+        return lambda m, t, p: _rewrite_requirements_txt(t, p)
     # NuGet write surfaces. Two file shapes — caller picks the
     # right one via ``plan.manifest`` (set by the planner to
     # match the dep's source-origin field).
-    if name == "Directory.Packages.props":
-        return _rewrite_via_registry(manifest, text, plan)
-    # Pre-CPM central-version table: <PackageReference Update="X" Version="Y"/>
-    # in Directory.Build.targets. Same registry dispatch — the dedicated
-    # rewriter (rewriters/directory_build_targets.py) matches Update= rather
+    # ``Directory.Build.targets`` is the pre-CPM central-version table
+    # (<PackageReference Update="X" Version="Y"/>) — same registry
+    # dispatch; the dedicated rewriter
+    # (rewriters/directory_build_targets.py) matches Update= rather
     # than Include=.
-    if name == "Directory.Build.targets":
-        return _rewrite_via_registry(manifest, text, plan)
+    if name in ("Directory.Packages.props", "Directory.Build.targets"):
+        return _rewrite_via_registry
     if suffix in (".csproj", ".fsproj", ".vbproj"):
-        return _rewrite_via_registry(manifest, text, plan)
+        return _rewrite_via_registry
     # Gradle write surface — libs.versions.toml. Inline
     # build.gradle / build.gradle.kts edits are NOT supported
     # by harden today (DSL rewrite is risky given Turing-complete
     # Groovy / Kotlin). The catalog covers modern projects which
     # is where most operator demand is.
     if name == "libs.versions.toml":
-        return _rewrite_via_registry(manifest, text, plan)
+        return _rewrite_via_registry
     if _is_inline_install_file(manifest):
-        return _rewrite_inline_install(text, plan)
-    return text, False, f"no rewriter for {name}"
+        return lambda m, t, p: _rewrite_inline_install(t, p)
+    return None
+
+
+def supports_rewrite(manifest: Path) -> bool:
+    """Whether ``_rewrite_one`` can patch this manifest shape."""
+    return _resolve_rewriter(manifest) is not None
+
+
+def _rewrite_one(
+    manifest: Path, text: str, plan: _PlanEntry,
+) -> tuple[str, bool, str | None]:
+    handler = _resolve_rewriter(manifest)
+    if handler is None:
+        return text, False, f"no rewriter for {manifest.name}"
+    return handler(manifest, text, plan)
 
 
 def _rewrite_via_registry(
@@ -984,6 +1028,14 @@ def _is_inline_install_file(path: Path) -> bool:
         for j in range(len(parts) - 2):
             if parts[j] == ".github" and parts[j + 1] == "workflows":
                 return True
+        # Composite actions (``action.yml`` / ``action.yaml``) carry the
+        # same ``run:`` install lines the workflow parser extracts deps
+        # from — without this arm those deps would be discoverable but
+        # never rewritable. Must match the discovery predicate
+        # (``discovery._is_inline_install_source``) and the parser
+        # dispatch (``parsers.inline_installs._is_gha_workflow``).
+        if name in ("action.yml", "action.yaml"):
+            return True
     return False
 
 
@@ -1083,6 +1135,97 @@ def _rewrite_pom_xml(
 
 # ----- package.json ---------------------------------------------------------
 
+# Sections of package.json whose entries are dependency specs. The
+# rewrite is anchored INSIDE these blocks only: a ``scripts`` entry
+# named after the dep (``"jest": "jest --ci"``) or any other same-named
+# key elsewhere in the file must never be rewritten (turning a script
+# command into a version string) or consume the substitution slot
+# (leaving the real dependency pin untouched).
+_PACKAGE_JSON_DEP_SECTIONS = (
+    "dependencies", "devDependencies", "optionalDependencies",
+    "peerDependencies", "resolutions", "overrides",
+)
+
+
+def _json_object_end(text: str, open_brace: int) -> int | None:
+    """Index just past the ``}`` matching the ``{`` at ``open_brace``.
+
+    String- and escape-aware so braces inside JSON string values don't
+    unbalance the scan. Returns ``None`` for unbalanced input.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for i in range(open_brace, len(text)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return None
+
+
+def _json_brace_depth(text: str, upto: int) -> int:
+    """Object-brace nesting depth at index ``upto`` (string- and
+    escape-aware, same scanning rules as :func:`_json_object_end`).
+
+    Depth 1 == directly inside the root object, i.e. where package.json's
+    real top-level sections live."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for i in range(0, min(upto, len(text))):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+    return depth
+
+
+def _package_json_dep_spans(text: str) -> list[tuple[int, int]]:
+    """(start, end) index spans of the dependency-section object bodies
+    in ``text``, sorted by position."""
+    spans: list[tuple[int, int]] = []
+    for section in _PACKAGE_JSON_DEP_SECTIONS:
+        sec_re = re.compile(r'"' + re.escape(section) + r'"\s*:\s*\{')
+        for m in sec_re.finditer(text):
+            # Only a ROOT-level section key is a dependency section.
+            # The manifest is attacker-authored: a same-named key nested
+            # inside scripts/config/etc. is decoy content that would
+            # consume the substitution while the real top-level pin
+            # stays vulnerable — reported as applied.
+            if _json_brace_depth(text, m.start()) != 1:
+                continue
+            end = _json_object_end(text, m.end() - 1)
+            if end is not None:
+                spans.append((m.end(), end - 1))
+    spans.sort()
+    return spans
+
+
 def _rewrite_package_json(
     text: str, plan: _PlanEntry,
 ) -> tuple[str, bool, str | None]:
@@ -1090,9 +1233,10 @@ def _rewrite_package_json(
     operator the operator wrote.
 
     Operates on the raw text so trailing-newline / indentation
-    conventions are preserved. The dep can live in any of
-    ``dependencies`` / ``devDependencies`` / ``peerDependencies`` /
-    ``optionalDependencies`` — we don't enforce which.
+    conventions are preserved. The dep can live in any of the
+    dependency sections listed in ``_PACKAGE_JSON_DEP_SECTIONS`` — we
+    don't enforce which — but keys OUTSIDE those sections (``scripts``
+    entries etc.) are never touched.
     """
     # Capture the value between the colon and the closing quote of the
     # spec. The `name` may need JSON-string escaping if it contains
@@ -1103,28 +1247,25 @@ def _rewrite_package_json(
         r"([^\"]*?)"
         r'(")'
     )
-    rewrote = False
-    new_text = text
-
-    def _replace(m: re.Match) -> str:
-        nonlocal rewrote
-        prefix, current, suffix = m.group(1), m.group(2), m.group(3)
-        new_spec = _bump_npm_spec(current, plan.installed, plan.target,
-                                  floor_raise=plan.floor_raise)
-        if new_spec is None:
-            return m.group(0)
-        rewrote = True
-        return f"{prefix}{new_spec}{suffix}"
-
-    new_text, n_matched = pat.subn(_replace, text, count=1)
-    if rewrote:
-        return new_text, True, None
-    if n_matched == 0:
+    match: re.Match | None = None
+    for start, end in _package_json_dep_spans(text):
+        match = pat.search(text, start, end)
+        if match is not None:
+            break
+    if match is None:
         return text, False, "no matching spec found"
-    # The dep was found but _bump_npm_spec declined (VCS/alias/tarball, or
-    # a range whose target falls outside the operator's declared bounds) —
-    # don't mislabel that as 'not found'.
-    return text, False, "spec matched but not safely bumpable (out of declared range or unsupported form)"
+    new_spec = _bump_npm_spec(match.group(2), plan.installed, plan.target,
+                              floor_raise=plan.floor_raise)
+    if new_spec is None:
+        # The dep was found but _bump_npm_spec declined (VCS/alias/
+        # tarball, or a range whose target falls outside the operator's
+        # declared bounds) — don't mislabel that as 'not found'.
+        return text, False, ("spec matched but not safely bumpable "
+                             "(out of declared range or unsupported form)")
+    new_text = (text[:match.start()]
+                + match.group(1) + new_spec + match.group(3)
+                + text[match.end():])
+    return new_text, True, None
 
 
 def _bump_npm_spec(current: str, installed: str, target: str,
@@ -1236,7 +1377,26 @@ def _rewrite_requirements_txt(
             line_value = parts[0].strip()
             inline_comment = "  #" + parts[1] if len(parts) > 1 else ""
 
-        m = re.match(r"^([A-Za-z0-9_\-.]+)\s*([<>=!~]=?[^\s;]+)?", line_value)
+        # Name, optional extras (``uvicorn[standard]``), optional version
+        # spec. Extras must be consumed BEFORE the spec so the new pin
+        # splices after them — matching the name alone would leave the
+        # old pin in place after the extras (``uvicorn==NEW[standard]==
+        # OLD``: invalid requirement, vulnerable version retained).
+        # PEP 508 allows whitespace before the extras bracket AND inside
+        # the version spec (``uvicorn [standard] == 0.22.0`` — the
+        # parser accepts both, so findings exist for them). The extras
+        # capture swallows its leading space so the operator's spacing
+        # survives; the spec capture spans spaced operators and spaced
+        # comma-separated clauses so the WHOLE old spec is consumed —
+        # a partial match here splices the new pin mid-line and leaves
+        # the old version text behind (invalid requirement, vulnerable
+        # pin retained, reported applied).
+        m = re.match(
+            r"^([A-Za-z0-9_\-.]+)"
+            r"((?:\s*\[[^\]]*\])?)"
+            r"\s*([<>=!~]=?\s*[^\s;,]+(?:\s*,\s*[<>=!~]=?\s*[^\s;,]+)*)?",
+            line_value,
+        )
         if not m:
             out_lines.append(raw)
             continue
@@ -1246,7 +1406,7 @@ def _rewrite_requirements_txt(
         if comment_prefix and not plan.installed:
             out_lines.append(raw)
             continue
-        if (comment_prefix and not m.group(2)
+        if (comment_prefix and not m.group(3)
                 and line_value[m.end():].strip()):
             # No version specifier AND trailing text after the name →
             # prose ("# pytest pinned exactly: ..."), not a pin. A bare
@@ -1258,8 +1418,11 @@ def _rewrite_requirements_txt(
         # pin instead of collapsing them — they record the safe corridor
         # for future up/downgrades. Splicing on the match end keeps any
         # trailing PEP 508 marker (``; python_version >= ...``) intact.
+        # Normalise internal whitespace out of the captured spec —
+        # the bounds parser works on the compact ``>=1.0,<2.0`` form.
+        old_spec = re.sub(r"\s+", "", m.group(3)) if m.group(3) else ""
         new_spec = _pypi_pin_preserving_bounds(
-            m.group(2) or "", plan.target, floor_raise=plan.floor_raise)
+            old_spec, plan.target, floor_raise=plan.floor_raise)
         if new_spec is None:
             # Target falls outside the declared corridor — declining
             # (like the npm rewriter) beats emitting an unsatisfiable
@@ -1267,7 +1430,7 @@ def _rewrite_requirements_txt(
             declined = True
             out_lines.append(raw)
             continue
-        new_inner = m.group(1) + new_spec + line_value[m.end():]
+        new_inner = m.group(1) + m.group(2) + new_spec + line_value[m.end():]
         new_line = f"{comment_prefix}{new_inner}" if comment_prefix else new_inner
         new_line += inline_comment
         out_lines.append(raw.replace(stripped, new_line))
@@ -1568,12 +1731,16 @@ def _inline_sub_pypi(
     """``pip install foo==1.0`` / ``pip install 'foo>=2,<3'`` / ``foo``."""
     name_re = re.escape(name)
     # 1. Specifier form: ``pkg<spec>`` where <spec> is one or more
-    #    comma-joined PEP 440 clauses. Capture the WHOLE spec so range
-    #    bounds survive the pin (see _pypi_pin_preserving_bounds). ``,``
-    #    is excluded from the version class so clauses split cleanly;
-    #    ``;`` stays excluded to leave PEP 508 markers untouched.
+    #    comma-joined PEP 440 clauses. Optional extras between the name
+    #    and the spec (``uvicorn[standard]==0.22``) are captured and
+    #    preserved so the pin splices AFTER them. Capture the WHOLE
+    #    spec so range bounds survive the pin (see
+    #    _pypi_pin_preserving_bounds). ``,`` is excluded from the
+    #    version class so clauses split cleanly; ``;`` stays excluded
+    #    to leave PEP 508 markers untouched.
     spec_re = re.compile(
         rf"(?<![A-Za-z0-9._-])({name_re})"
+        rf"((?:\[[^\]\s]*\])?)"
         # Horizontal whitespace only between clauses — ``\s`` would let
         # the trailing ``\s*`` swallow the line's newline into the spec.
         rf"((?:[ \t]*(?:===|==|>=|<=|~=|!=|>|<)[ \t]*[^\s\\;\"',]+[ \t]*,?)+)",
@@ -1583,28 +1750,34 @@ def _inline_sub_pypi(
 
     def _pin_spec(m: re.Match) -> str:
         nonlocal declined
-        pinned = _pypi_pin_preserving_bounds(m.group(2), new_version)
+        pinned = _pypi_pin_preserving_bounds(m.group(3), new_version)
         if pinned is None:
             # Target outside the declared corridor — leave the spec
             # alone rather than emit an unsatisfiable one.
             declined = True
             return m.group(0)
-        return m.group(1) + pinned
+        return m.group(1) + m.group(2) + pinned
 
     new_text, n = spec_re.subn(_pin_spec, text, count=1)
     if declined:
         return text, False
     if n > 0:
         return new_text, True
-    # 2. Bare name (not part of another identifier or version-separated).
-    #    ``count=1`` — pin the first occurrence only, so a repeat of the
-    #    name later in the segment (e.g. inside a trailing comment) is
-    #    left alone.
+    # 2. Bare name (not part of another identifier or version-separated),
+    #    optionally carrying extras — the pin goes after them
+    #    (``uvicorn[standard]`` → ``uvicorn[standard]==X``). The
+    #    lookahead excludes ``[`` (an unclosed extras bracket is not a
+    #    bare name) and ``=`` (a single-``=`` form is not a pip spec;
+    #    pinning before it would emit ``pkg==X=Y``). ``count=1`` — pin
+    #    the first occurrence only, so a repeat of the name later in
+    #    the segment (e.g. inside a trailing comment) is left alone.
     bare = re.compile(
-        rf"(?<![A-Za-z0-9._-])({name_re})(?![A-Za-z0-9._@/-])",
+        rf"(?<![A-Za-z0-9._-])({name_re})"
+        rf"((?:\[[^\]\s]*\])?)"
+        rf"(?![A-Za-z0-9._@/=\[-])",
         re.IGNORECASE,
     )
-    new_text, n = bare.subn(rf"\1=={new_version}", text, count=1)
+    new_text, n = bare.subn(rf"\g<1>\g<2>=={new_version}", text, count=1)
     return (new_text, True) if n > 0 else (text, False)
 
 
@@ -1620,8 +1793,11 @@ def _inline_sub_eq_separated(
     new_text, n = pinned.subn(rf"\1={new_version}", text)
     if n > 0:
         return new_text, True
+    # ``[`` in the lookahead: a name directly followed by a bracket is
+    # some other token shape, not a bare package — refuse rather than
+    # splice a pin into the middle of it.
     bare = re.compile(
-        rf"(?<![A-Za-z0-9._-])({name_re})(?![A-Za-z0-9._@/=-])",
+        rf"(?<![A-Za-z0-9._-])({name_re})(?![A-Za-z0-9._@/=\[-])",
         re.IGNORECASE,
     )
     new_text, n = bare.subn(rf"\1={new_version}", text, count=1)
@@ -1640,8 +1816,9 @@ def _inline_sub_yum(
     new_text, n = pinned.subn(rf"\1-{new_version}", text)
     if n > 0:
         return new_text, True
+    # ``[`` in the lookahead — same rationale as the eq-separated form.
     bare = re.compile(
-        rf"(?<![A-Za-z0-9._-])({name_re})(?![A-Za-z0-9._@/=-])",
+        rf"(?<![A-Za-z0-9._-])({name_re})(?![A-Za-z0-9._@/=\[-])",
         re.IGNORECASE,
     )
     new_text, n = bare.subn(rf"\1-{new_version}", text, count=1)
@@ -1656,16 +1833,24 @@ def _inline_sub_at_separated(
     For scoped npm (``@anthropic-ai/claude-code@1.0``) the version
     separator is the LAST ``@``; the leading ``@scope/`` belongs to the
     name and must be preserved.
+
+    IGNORECASE matches the sibling substituters (pypi / eq-separated /
+    yum): install lines are matched tolerantly on case, and the
+    substitution preserves the file's own spelling via the captured
+    group.
     """
     name_re = re.escape(name)
     pinned = re.compile(
         rf"(?<![A-Za-z0-9._-])({name_re})@([^\s\\,;\"']+)",
+        re.IGNORECASE,
     )
     new_text, n = pinned.subn(rf"\1@{new_version}", text)
     if n > 0:
         return new_text, True
+    # ``[`` in the lookahead — same rationale as the eq-separated form.
     bare = re.compile(
-        rf"(?<![A-Za-z0-9._-])({name_re})(?![A-Za-z0-9._@/=-])",
+        rf"(?<![A-Za-z0-9._-])({name_re})(?![A-Za-z0-9._@/=\[-])",
+        re.IGNORECASE,
     )
     new_text, n = bare.subn(rf"\1@{new_version}", text, count=1)
     return (new_text, True) if n > 0 else (text, False)
@@ -1944,15 +2129,11 @@ def _emit_git_patch(
         if manifest in seen_manifests:
             continue
         seen_manifests.add(manifest)
-        try:
-            rel = manifest.relative_to(Path.cwd())
-        except ValueError:
-            rel = Path(manifest.name)
-        proposed = (out_dir / "proposed" / rel).resolve()
-        if not proposed.exists():
-            # Same fallback path the rewriter uses when the manifest
-            # lives outside cwd (rare).
-            proposed = (out_dir / "proposed" / manifest.name).resolve()
+        # Same anchoring the writer (``_materialise_changes``) used, so
+        # each manifest diffs against ITS OWN proposed copy — never a
+        # same-named copy from another directory.
+        proposed = (out_dir / "proposed"
+                    / _proposed_rel_path(manifest)).resolve()
         if proposed.exists():
             pairs.append((manifest, proposed))
 

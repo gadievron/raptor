@@ -164,11 +164,11 @@ The crash analysis uses a multi-agent system:
 | Agent | Role |
 |-------|------|
 | `crash-analysis-agent` | Main orchestrator (no network tools) |
-| `crash-report-fetcher-agent` | Fetch bug tracker, write `bug-report.json` |
-| `crash-analyzer-agent` | Deep root-cause analysis |
-| `crash-analyzer-checker-agent` | Rigorous validation |
-| `function-trace-generator-agent` | Execution tracing |
-| `coverage-analysis-generator-agent` | Code coverage |
+| `crash-report-fetcher` | Fetch bug tracker, write `bug-report.json` |
+| `crash-analyzer` | Deep root-cause analysis |
+| `crash-analysis-checker` | Rigorous validation |
+| `function-trace-generator` | Execution tracing |
+| `coverage-analyzer` | Code coverage |
 
 ### Validation Requirements
 

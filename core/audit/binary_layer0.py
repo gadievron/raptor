@@ -781,7 +781,16 @@ def format_layer0_context(
             # may be the EvidenceTier member or its plain-string value.
             raw = getattr(f.evidence_tier, "value", f.evidence_tier)
             tier = str(raw).replace("_", " ").title()
-            lines.append(f"- [{tier}] `{f.function}()`: {f.description}")
+            # function/description embed hostile-binary symbol text
+            # (callee names lifted from the binary): flatten newlines
+            # and neutralise tag/heading shapes so a crafted symbol
+            # cannot forge trusted prompt structure (same defence the
+            # evidence renderer applies via _safe_name).
+            from core.audit.prompt_defence import defend_prompt_field
+            lines.append(
+                f"- [{tier}] `{defend_prompt_field(f.function)}()`: "
+                f"{defend_prompt_field(f.description, 400)}"
+            )
         if len(findings) > 15:
             lines.append(f"  ...and {len(findings) - 15} more")
 

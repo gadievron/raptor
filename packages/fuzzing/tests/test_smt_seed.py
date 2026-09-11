@@ -83,6 +83,23 @@ class TestMagicValueRule:
         assert manifest["seed_count"] == 0
         assert any("64-bit" in s["reason"] for s in manifest["skipped"])
 
+    def test_filename_collision_recorded_not_silent(self, tmp_path):
+        # Two variables in one record sanitizing to the same token
+        # collide on the raw-seed filename; the drop must appear in
+        # the manifest (no-silent-truncation contract). '$x' and '#x'
+        # both sanitize to the same token.
+        manifest = synthesize_seeds(
+            [_record({"$x": 7, "#x": 9})], tmp_path)
+        collisions = [
+            s for s in manifest["skipped"]
+            if s["reason"] == "seed filename collision"
+        ]
+        assert len(collisions) == 1
+        assert collisions[0]["seed"]
+        # Direction two: the first write itself is recorded as a seed.
+        raws = [s for s in manifest["seeds"] if s["rule"] == "magic-value"]
+        assert len(raws) == 1
+
     def test_non_integer_value_skipped(self, tmp_path):
         manifest = synthesize_seeds([_record({"weird": "abc"})], tmp_path)
         assert manifest["seed_count"] == 0

@@ -114,6 +114,36 @@ _TOOL_NAMESPACES = frozenset(VALID_EVIDENCE_TOOLS | {
     # compute_tier's dispatched-name loophole (invisible to this
     # firewall).
     "dead_path_smt",
+    # Sibling condition-SMT detectors from the same mechanical pass
+    # (orchestrator._process_file_conditions): guard-sufficiency and
+    # signedness-mismatch solver runs whose ``:witness`` variants carry
+    # a concrete model. compute_tier now applies this firewall BEFORE
+    # its ``:witness`` confirmed check, so their namespaces must be
+    # known here or a genuine solver witness demotes to llm_only.
+    "insufficient_guard_smt", "signed_mismatch_smt",
+    # Live producer namespaces the firewall was missing — each stamp
+    # is set exclusively by pipeline code (never reachable from raw
+    # model output, which sanitize_llm_evidence_tool namespaces under
+    # llm-claimed:). Rejecting them force-demoted genuine
+    # confirmations at the journal chokepoint and fired the CRITICAL
+    # injection alarm on legitimate runs:
+    #   lifecycle           — bare "lifecycle" (orchestrator
+    #                         _proactive_validate, lifecycle
+    #                         precondition check)
+    #   api_boundary        — "api_boundary:caller-contract"
+    #                         (api_boundary.RULE_ID)
+    #   integer_truncation  — "integer_truncation:<rule_id>"
+    #   proto_length        — "proto_length:<rule_id>"
+    #   struct_field        — "struct_field:<rule_id>"
+    #                         (orchestrator _run_tool_chain binary-
+    #                         context checker legs)
+    #   validate            — "validate:observed_runtime" /
+    #                         "validate:replayed_crash"
+    #                         (validate_bridge) and
+    #                         "validate:confirmed-history"
+    #                         (findings_export history receipt)
+    "lifecycle", "api_boundary", "integer_truncation",
+    "proto_length", "struct_field", "validate",
 })
 
 
@@ -218,6 +248,19 @@ def _is_detection_variant(part: str) -> bool:
     return False
 
 
+# Namespaces whose PRESENCE in a stamp disqualifies the whole thing,
+# even next to a real receipt in a "+"-composite (unlike unknown
+# producer namespaces, which are merely ignored):
+#   triage      — records which LLM/mechanical shortcut produced the
+#                 verdict (see the _TOOL_NAMESPACES note): the verdict
+#                 behind it is an LLM guess, and no pipeline join ever
+#                 legitimately mixes it with a receipt.
+#   git_history — corroboration-only oracle kind (core.audit.
+#                 git_oracle: "corroborates, never a verdict"); its
+#                 module pins that no stamp carrying it may satisfy
+#                 this classifier.
+_POISON_NAMESPACES = frozenset({"triage", "git_history"})
+
 # Provenance wrappers: prefixes that record HOW a tool receipt was
 # earned, wrapped around the receipt itself.  ``clean-refuted:smt`` is
 # _promote_clean_refuted's stamp for "the LLM refuted its own
@@ -254,21 +297,66 @@ def is_tool_evidence(stamp: str) -> bool:
     namespaced composites (``"semgrep:rule-123"``, ``"critique:prefilter:id"``),
     and ``+``-joined multi-tool stamps (``"semgrep+joern"``).
 
-    Detection-role consistency variants (``consistency:*-majority``)
-    qualify only inside a composite that also carries a qualifying
-    receipt (the aggregation-promotion shape); alone they are a
-    statistical prior, not verification.
+    Composite policy (each ``+``-part judged on its own merits):
+
+    * Model-authored parts poison the WHOLE stamp: ``llm-claimed:``
+      prefixes (``sanitize_llm_evidence_tool`` prefixes only the full
+      raw model string, so ``llm-claimed:foo+semgrep`` means the
+      MODEL wrote ``foo+semgrep`` — the "semgrep" part is part of the
+      claim, not a receipt), the ``_LLM_ONLY_EVIDENCE`` vocabulary
+      ("llm", "manual", ...), miscased spellings of known tool names
+      ("Semgrep" — pipeline stamps are always lowercase), empty parts
+      (malformed join), and the ``_POISON_NAMESPACES`` (``triage:*``
+      LLM-shortcut provenance, ``git_history`` corroboration).
+    * A part in a known tool namespace qualifies; the stamp is tool
+      evidence when at least one part qualifies.
+    * Remaining unknown parts are ignored rather than rejecting the
+      whole stamp: such parts can only be minted by pipeline
+      ``_stamp_evidence`` calls (a producer namespace this table
+      hasn't learned yet), and vetoing the KNOWN receipts next to
+      them force-demoted genuine confirmations at the journal
+      chokepoint and fired the CRITICAL injection alarm on
+      legitimate runs.
+    * Detection-role variants (``consistency:*-majority``,
+      ``smt:check-toctou``, ...) never qualify alone — a statistical
+      prior corroborates, it does not convict. Two or more DISTINCT
+      detection namespaces agreeing DO qualify: that is exactly the
+      Bayesian aggregation-promotion receipt
+      (``orchestrator._aggregate_channel_confirmations`` stamps
+      ``"+".join(confirmed)`` only after >=2 independent channels
+      cross the posterior threshold; ``_probe_backed_suspicious``
+      applies the same two-namespace floor).
     """
     if not stamp or stamp == "none":
         return False
     parts = stamp.split("+") if "+" in stamp else [stamp]
     qualifying = 0
+    detection_namespaces: set = set()
     for p in parts:
+        p = p.strip()
+        if not p:
+            # "semgrep+" / "++": pipeline joins never emit empty
+            # parts — malformed stamp, not evidence.
+            return False
+        low = p.lower()
+        if low.startswith(LLM_CLAIM_PREFIX) or low in _LLM_ONLY_EVIDENCE:
+            return False
+        if (low.split(":", 1)[0] if ":" in low else low) in _POISON_NAMESPACES:
+            return False
         if _is_single_tool_evidence(p):
             qualifying += 1
-        elif not _is_detection_variant(p):
+        elif p != low and _is_single_tool_evidence(low):
+            # Miscased spelling of a known receipt ("Semgrep",
+            # "CodeQL:rule") — pipeline stamps are lowercase by
+            # construction, so this is model-authored text.
             return False
-    return qualifying > 0
+        elif _is_detection_variant(p):
+            detection_namespaces.add(
+                p.split(":", 1)[0] if ":" in p else p,
+            )
+    if qualifying > 0:
+        return True
+    return len(detection_namespaces) >= 2
 
 
 _LLM_ONLY_EVIDENCE = frozenset({

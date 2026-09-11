@@ -693,3 +693,150 @@ class TestRuleQuarantine:
             checklist,
         )
         assert gaps and gaps[0]["synthesis_rule_id"] == "rule-q"
+
+
+class TestTriageRuleHitsErrorGuard:
+    """Error-status outcomes say nothing about a rule — they must
+    record neither TP nor FP (a transport brownout previously retired
+    healthy rules as all-false-positive)."""
+
+    def _shared(self):
+        from core.audit.shared_state import SharedState
+        return SharedState()
+
+    @staticmethod
+    def _library():
+        class _Entry:
+            rule_id = "lib-rule"
+
+        class _Lib:
+            def __init__(self):
+                self.matches = []
+
+            def all_entries(self):
+                return [_Entry()]
+
+            def record_match(self, rule_id, is_tp):
+                self.matches.append((rule_id, is_tp))
+
+        return _Lib()
+
+    @staticmethod
+    def _pf(rule_id="lib-rule"):
+        import types
+        hit = types.SimpleNamespace(rule_id=rule_id)
+        return types.SimpleNamespace(hits=[hit])
+
+    @staticmethod
+    def _outcome(status):
+        from core.audit.orchestrator import ReviewOutcome
+        return ReviewOutcome(
+            file="a.c", function="f", status=status, body="b",
+        )
+
+    def test_error_outcome_records_nothing(self):
+        from core.audit.orchestrator import _triage_rule_hits
+
+        shared = self._shared()
+        lib = self._library()
+        _triage_rule_hits(
+            shared, self._outcome("error"),
+            {"synthesis_rule_id": "synth-1"}, self._pf(), lib,
+        )
+        assert lib.matches == []
+        assert shared.rule_triage == {}
+
+    def test_clean_outcome_records_fp(self):
+        from core.audit.orchestrator import _triage_rule_hits
+
+        shared = self._shared()
+        lib = self._library()
+        _triage_rule_hits(
+            shared, self._outcome("clean"),
+            {"synthesis_rule_id": "synth-1"}, self._pf(), lib,
+        )
+        assert lib.matches == [("lib-rule", False)]
+        # [tp_count, total]: one all-FP triage recorded.
+        assert shared.rule_triage.get("synth-1") == [0, 1]
+
+    def test_finding_outcome_records_tp(self):
+        from core.audit.orchestrator import _triage_rule_hits
+
+        shared = self._shared()
+        lib = self._library()
+        _triage_rule_hits(
+            shared, self._outcome("finding"), {}, self._pf(), lib,
+        )
+        assert lib.matches == [("lib-rule", True)]
+
+
+class TestSageReplayRuleIdShape(TestSageReplayRule):
+    """Ingestion-time shape check: SAGE is an agent-writable store and
+    a recalled rule_id flows into library filenames — traversal or
+    separator characters mark a planted record, not a slugified id."""
+
+    def test_traversal_rule_id_rejected(self, tmp_path):
+        from core.audit.checker_synthesis import _sage_replay_rule
+        from packages.checker_synthesis import Match
+
+        body = "rules:\n  - id: x\n"
+        rule_file = tmp_path / "x.yaml"
+        rule_file.write_text(body)
+        meta = self._meta(rule_file, body, rule_id="../../evil")
+
+        with patch(
+            "core.sage.recall_verified_proven_rules",
+            return_value=[meta],
+        ), patch(
+            "packages.checker_synthesis.synthesise._run_engine",
+            return_value=(
+                [Match(file="src/other.c", line=7, snippet="q()")], [],
+            ),
+        ):
+            assert _sage_replay_rule(
+                "semgrep", "CWE-89", self._seed(), tmp_path,
+            ) is None
+
+    def test_separator_rule_id_rejected(self, tmp_path):
+        from core.audit.checker_synthesis import _sage_replay_rule
+
+        body = "rules:\n  - id: x\n"
+        rule_file = tmp_path / "x.yaml"
+        rule_file.write_text(body)
+        meta = self._meta(rule_file, body, rule_id="a/b")
+
+        with patch(
+            "core.sage.recall_verified_proven_rules",
+            return_value=[meta],
+        ):
+            assert _sage_replay_rule(
+                "semgrep", "CWE-89", self._seed(), tmp_path,
+            ) is None
+
+    def test_slugified_rule_id_still_replays(self, tmp_path):
+        # Two-direction guard: the mint-time slug alphabet passes
+        # unchanged (covered again by the inherited happy-path test).
+        from core.audit.checker_synthesis import _sage_replay_rule
+        from packages.checker_synthesis import Match
+
+        body = "rules:\n  - id: ok\n"
+        rule_file = tmp_path / "ok.yaml"
+        rule_file.write_text(body)
+        meta = self._meta(
+            rule_file, body, rule_id="src_auth.c.check_pw.CWE-89.1",
+        )
+
+        with patch(
+            "core.sage.recall_verified_proven_rules",
+            return_value=[meta],
+        ), patch(
+            "packages.checker_synthesis.synthesise._run_engine",
+            return_value=(
+                [Match(file="src/other.c", line=7, snippet="q()")], [],
+            ),
+        ):
+            replay = _sage_replay_rule(
+                "semgrep", "CWE-89", self._seed(), tmp_path,
+            )
+        assert replay is not None
+        assert replay[1] == "sage:src_auth.c.check_pw.CWE-89.1"

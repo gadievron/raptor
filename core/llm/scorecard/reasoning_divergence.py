@@ -137,7 +137,18 @@ def record_reasoning_divergence(
         rule_id = str(result.get("rule_id") or "unknown")
         decision_class = f"{decision_class_prefix}:{rule_id}"
 
-        for model in reasonings:
+        # Only score models whose reasoning actually participated in
+        # the metric: ``divergence()`` drops short/empty texts before
+        # measuring, and ``per_model_distance`` keys are exactly the
+        # surviving panel. A filtered-out model contributed nothing to
+        # the outlier decision, so it earns neither ``correct`` nor
+        # ``incorrect`` here.
+        per_model_distance = metric["per_model_distance"]
+        included_models: list[str] = (
+            list(per_model_distance)
+            if isinstance(per_model_distance, dict) else []
+        )
+        for model in included_models:
             is_outlier = (model == outlier)
             outcome = "incorrect" if is_outlier else "correct"
             sample = None

@@ -418,3 +418,70 @@ def test_default_is_absent_not_empty():
     assert ctx.fortify_source_level is None
     assert ctx.stack_protector_level is None
     assert ctx.delete_null_pointer_checks is None
+
+
+# =====================================================================
+# Hardened reads — the build artifacts live inside the scanned repo
+# =====================================================================
+
+
+def test_oversized_makefile_refused_gracefully(tmp_path, monkeypatch):
+    """A byte-budget-busting Makefile degrades to 'absent' instead of
+    being slurped unbounded."""
+    import core.build.build_flags as bf
+    monkeypatch.setattr(bf, "_MAX_MAKEFILE_BYTES", 16)
+    (tmp_path / "Makefile").write_text(
+        "CFLAGS = -O2 -fstack-protector-strong -D_FORTIFY_SOURCE=2\n",
+    )
+    ctx = extract_flags(tmp_path)
+    assert ctx.source == "absent"
+    assert ctx.extraction_confidence == "absent"
+
+
+def test_oversized_compile_commands_falls_through(tmp_path, monkeypatch):
+    """compile_commands.json over budget is refused; extraction falls
+    through to the next source rather than raising."""
+    import core.build.build_flags as bf
+    monkeypatch.setattr(bf, "_MAX_COMPILE_COMMANDS_BYTES", 16)
+    (tmp_path / "compile_commands.json").write_text(json.dumps([
+        {"file": "a.c", "command": "gcc -fstack-protector-strong a.c"},
+    ]))
+    (tmp_path / "Makefile").write_text("CFLAGS = -fsanitize=address\n")
+    ctx = extract_flags(tmp_path)
+    assert ctx.source == "makefile"
+    assert ctx.sanitizers_enabled == ("address",)
+
+
+def test_fifo_makefile_refused_gracefully(tmp_path):
+    """A FIFO planted at a build-artifact path must not hang or crash
+    the extraction."""
+    import os
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("os.mkfifo not available on this platform")
+    os.mkfifo(tmp_path / "Makefile")
+    ctx = extract_flags(tmp_path)
+    assert ctx.source == "absent"
+
+
+def test_symlinked_compile_commands_refused(tmp_path):
+    """The hardened reader opens with O_NOFOLLOW — a symlink at the
+    artifact path (which could point anywhere) is refused and the
+    extraction degrades."""
+    real = tmp_path / "elsewhere.json"
+    real.write_text(json.dumps([
+        {"file": "a.c", "command": "gcc -fstack-protector a.c"},
+    ]))
+    (tmp_path / "compile_commands.json").symlink_to(real)
+    ctx = extract_flags(tmp_path)
+    assert ctx.source == "absent"
+
+
+def test_normal_sized_artifacts_still_parse(tmp_path):
+    """Two-direction: the byte budgets are generous — ordinary files
+    keep parsing."""
+    (tmp_path / "Makefile").write_text(
+        "CFLAGS = -fstack-protector-strong\n",
+    )
+    ctx = extract_flags(tmp_path)
+    assert ctx.source == "makefile"
+    assert ctx.stack_protector_level == "strong"

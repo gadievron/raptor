@@ -1103,3 +1103,86 @@ class TestTimeoutUnblocksCaller:
             assert per_model == {"wedged": []}
         finally:
             release.set()
+
+
+class TestFuturesTimeoutClassCoverage:
+    """``as_completed`` raises ``concurrent.futures.TimeoutError``,
+    which is only an alias of the builtin ``TimeoutError`` from Python
+    3.11 — on the 3.10 floor a bare ``except TimeoutError`` misses it
+    and the panel crashes instead of isolating the straggler."""
+
+    def test_distinct_futures_timeout_class_is_caught(self, monkeypatch):
+        """Simulate the 3.10 situation on any interpreter: bind the
+        module's futures-timeout name to a class DISTINCT from the
+        builtin and prove the except clause still isolates it."""
+        import core.llm.multi_model.dispatch as dispatch_mod
+
+        class DistinctTimeout(Exception):
+            """py3.10 stand-in: not a builtin TimeoutError subclass."""
+
+        def raising_as_completed(futures, timeout=None):
+            raise DistinctTimeout
+
+        monkeypatch.setattr(
+            dispatch_mod, "FuturesTimeoutError", DistinctTimeout)
+        monkeypatch.setattr(
+            dispatch_mod, "as_completed", raising_as_completed)
+
+        per_model, failed = dispatch_mod._dispatch_parallel(
+            lambda m: [], [FakeModel("m1")], max_parallel=1, timeout=0.1,
+        )
+        assert failed == ["m1"]
+        assert per_model == {"m1": []}
+
+    def test_real_futures_timeout_error_is_caught(self, monkeypatch):
+        from concurrent.futures import TimeoutError as CFTimeout
+
+        import core.llm.multi_model.dispatch as dispatch_mod
+
+        def raising_as_completed(futures, timeout=None):
+            raise CFTimeout
+
+        monkeypatch.setattr(
+            dispatch_mod, "as_completed", raising_as_completed)
+        per_model, failed = dispatch_mod._dispatch_parallel(
+            lambda m: [], [FakeModel("m1")], max_parallel=1, timeout=0.1,
+        )
+        assert failed == ["m1"]
+
+
+class TestPanelTimeoutParameter:
+    """``run_multi_model`` exposes the panel wall-clock budget."""
+
+    @staticmethod
+    def _capture_dispatch(monkeypatch):
+        import core.llm.multi_model.dispatch as dispatch_mod
+        captured = {}
+
+        def fake_dispatch(task, models, max_parallel, timeout=600.0):
+            captured["timeout"] = timeout
+            return {m.model_name: [] for m in models}, []
+
+        monkeypatch.setattr(
+            dispatch_mod, "_dispatch_parallel", fake_dispatch)
+        return captured
+
+    def test_custom_timeout_plumbed_through(self, monkeypatch):
+        captured = self._capture_dispatch(monkeypatch)
+        run_multi_model(
+            task=lambda m: [],
+            models=[FakeModel("m1")],
+            adapter=IdentityAdapter(),
+            timeout=42.5,
+        )
+        assert captured["timeout"] == 42.5
+
+    def test_default_timeout_is_600(self, monkeypatch):
+        """Other direction: the documented default is unchanged for
+        callers that don't opt in."""
+        captured = self._capture_dispatch(monkeypatch)
+        run_multi_model(
+            task=lambda m: [],
+            models=[FakeModel("m1")],
+            adapter=IdentityAdapter(),
+        )
+        assert captured["timeout"] == 600.0

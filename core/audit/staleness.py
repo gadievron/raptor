@@ -107,10 +107,16 @@ def stale_as_gaps(
     """Convert stale annotations into gap-format dicts for the orchestrator.
 
     Merges stale items with existing gaps, marking stale items with
-    is_stale=True and priority=0 (highest priority for re-review).
+    ``is_stale=True`` at ``PRIORITY_STALE`` — the documented stale
+    tier (below entry points and uncovered code, above fully-covered).
+    Staleness only ever LIFTS an existing gap's priority toward that
+    tier, never demotes one already ranked higher (an entry-point gap
+    that is also stale stays at the entry-point tier).
     Avoids duplicates — if a stale function is already in the gap list,
     just sets is_stale=True on the existing entry.
     """
+    from .gaps import PRIORITY_STALE
+
     by_key: dict = {}
     result = []
 
@@ -129,14 +135,15 @@ def stale_as_gaps(
         existing = by_key.get(key)
         if existing is not None:
             existing["is_stale"] = True
-            existing["priority"] = 0
+            existing["priority"] = min(
+                existing.get("priority", PRIORITY_STALE), PRIORITY_STALE)
         else:
             gap = {
                 "file": item.file,
                 "name": item.function,
                 "line_start": item.line_start,
                 "line_end": item.line_end,
-                "priority": 0,
+                "priority": PRIORITY_STALE,
                 "strategies": [],
                 "is_stale": True,
                 "sloc": max(0, item.line_end - item.line_start + 1) if item.line_end else 0,

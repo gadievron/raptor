@@ -360,51 +360,60 @@ def main() -> int:
             except socket.timeout:
                 _log("idle timeout — exiting")
                 return 0
-            with conn, conn.makefile("rwb") as stream:
-                for line in stream:
-                    try:
-                        req = json.loads(line)
-                    except json.JSONDecodeError as e:
-                        resp = {"id": None, "ok": False,
-                                "error": f"bad request: {e}"}
-                        stream.write(
-                            (json.dumps(resp) + "\n").encode())
-                        stream.flush()
-                        continue
-                    if req.get("op") == "shutdown":
-                        resp = {"id": req.get("id"), "ok": True,
-                                "bye": True}
-                        stream.write(
-                            (json.dumps(resp) + "\n").encode())
-                        stream.flush()
-                        return 0
-                    try:
-                        result = handler.run(req)
-                        resp = {"id": req.get("id"), "ok": True,
-                                **result}
-                    except _OpHung as e:
-                        # Answer, then die: the wedged JVM thread
-                        # cannot be cancelled, so a fresh worker is
-                        # the only recoverable state. The parent sees
-                        # the connection drop and may restart.
-                        _log(f"watchdog: {e} — exiting")
-                        resp = {"id": req.get("id"), "ok": False,
-                                "error": f"worker watchdog: {e}",
-                                "worker_exiting": True}
+            # An accepted socket is blocking regardless of the
+            # listener's timeout — an idle-but-connected (or wedged)
+            # parent would otherwise hold this JVM worker alive
+            # forever. The same idle budget applies per read.
+            conn.settimeout(args.idle_timeout)
+            try:
+                with conn, conn.makefile("rwb") as stream:
+                    for line in stream:
                         try:
+                            req = json.loads(line)
+                        except json.JSONDecodeError as e:
+                            resp = {"id": None, "ok": False,
+                                    "error": f"bad request: {e}"}
                             stream.write(
                                 (json.dumps(resp) + "\n").encode())
                             stream.flush()
-                        except (OSError, ValueError):
-                            # ValueError: write on a closed makefile.
-                            pass
-                        os._exit(_WATCHDOG_EXIT_CODE)
-                    except BaseException as e:  # noqa: BLE001 — one channel
-                        _log(traceback.format_exc())
-                        resp = {"id": req.get("id"), "ok": False,
-                                "error": f"{type(e).__name__}: {e}"}
-                    stream.write((json.dumps(resp) + "\n").encode())
-                    stream.flush()
+                            continue
+                        if req.get("op") == "shutdown":
+                            resp = {"id": req.get("id"), "ok": True,
+                                    "bye": True}
+                            stream.write(
+                                (json.dumps(resp) + "\n").encode())
+                            stream.flush()
+                            return 0
+                        try:
+                            result = handler.run(req)
+                            resp = {"id": req.get("id"), "ok": True,
+                                    **result}
+                        except _OpHung as e:
+                            # Answer, then die: the wedged JVM thread
+                            # cannot be cancelled, so a fresh worker is
+                            # the only recoverable state. The parent sees
+                            # the connection drop and may restart.
+                            _log(f"watchdog: {e} — exiting")
+                            resp = {"id": req.get("id"), "ok": False,
+                                    "error": f"worker watchdog: {e}",
+                                    "worker_exiting": True}
+                            try:
+                                stream.write(
+                                    (json.dumps(resp) + "\n").encode())
+                                stream.flush()
+                            except (OSError, ValueError):
+                                # ValueError: write on a closed makefile.
+                                pass
+                            os._exit(_WATCHDOG_EXIT_CODE)
+                        except BaseException as e:  # noqa: BLE001 — one channel
+                            _log(traceback.format_exc())
+                            resp = {"id": req.get("id"), "ok": False,
+                                    "error": f"{type(e).__name__}: {e}"}
+                        stream.write((json.dumps(resp) + "\n").encode())
+                        stream.flush()
+            except socket.timeout:
+                _log("idle timeout on connection — exiting")
+                return 0
     finally:
         session.close()
 

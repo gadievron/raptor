@@ -102,61 +102,12 @@ for _p in p_act:
           "message": "%s(%s) after atomic_read check — non-atomic check-then-act race" % (destructor, obj)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
-// atomic_dec_and_test in an if-condition followed by kfree without
-// a lock held around the check-then-act.
-@dec_test_kfree exists@
-expression obj;
-identifier cnt;
-position p_free != kfree_locked.p;
-@@
-
-if (<+... atomic_dec_and_test(&obj->cnt) ...+>)
-{
-... when != \(spin_lock\|spin_lock_irq\|spin_lock_bh\|spin_lock_irqsave\|mutex_lock\|write_lock\)(...)
-    when != \(atomic_dec\|atomic_inc\|atomic_set\|atomic_add\|atomic_sub\|atomic_cmpxchg\|atomic_xchg\|atomic_inc_return\|atomic_dec_return\)(...)
-kfree@p_free(obj);
-...
-}
-
-@script:python@
-p_free << dec_test_kfree.p_free;
-obj << dec_test_kfree.obj;
-@@
-
-import json, sys
-for _p in p_free:
-    _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
-          "line_end": int(_p.line_end), "col_end": int(_p.column_end),
-          "rule": "atomic_check_then_act",
-          "message": "kfree(%s) after atomic_dec_and_test — verify no concurrent inc can race" % obj}
-    sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
-
-// atomic_dec_and_test followed by a destructor-pattern call.
-@dec_test_destroy exists@
-expression obj;
-identifier cnt;
-identifier destructor =~ "^.*_\(put\|release\|destroy\|remove\|free\|drop\)$";
-position p_act != destroy_locked.p;
-@@
-
-if (<+... atomic_dec_and_test(&obj->cnt) ...+>)
-{
-... when != \(spin_lock\|spin_lock_irq\|spin_lock_bh\|spin_lock_irqsave\|mutex_lock\|write_lock\)(...)
-    when != \(atomic_dec\|atomic_inc\|atomic_set\|atomic_add\|atomic_sub\|atomic_cmpxchg\|atomic_xchg\|atomic_inc_return\|atomic_dec_return\)(...)
-destructor@p_act(obj, ...);
-...
-}
-
-@script:python@
-p_act << dec_test_destroy.p_act;
-obj << dec_test_destroy.obj;
-destructor << dec_test_destroy.destructor;
-@@
-
-import json, sys
-for _p in p_act:
-    _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
-          "line_end": int(_p.line_end), "col_end": int(_p.column_end),
-          "rule": "atomic_check_then_act",
-          "message": "%s(%s) after atomic_dec_and_test — verify no concurrent inc can race" % (destructor, obj)}
-    sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
+// No atomic_dec_and_test legs. `if (atomic_dec_and_test(&o->cnt))
+// kfree(o);` is the canonical race-free refcount put: dec-and-test
+// is itself the atomic check-then-act, and whether a concurrent
+// thread could still take a new reference is a whole-program
+// ownership property that a single-function pattern cannot decide.
+// Flagging the idiom means flagging every correct refcount release
+// in kernel-style code, so only the atomic_read legs above — where
+// the check and the action really are two separate non-atomic
+// steps — report findings.

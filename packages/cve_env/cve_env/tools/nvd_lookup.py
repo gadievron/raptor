@@ -149,21 +149,42 @@ def _osv_to_nvd_record(cve_id: str, osv_payload: dict[str, Any]) -> NvdRecord:
         pkg = affected.get("package", {}) or {}
         ecosystem = pkg.get("ecosystem", "")
         name = pkg.get("name", "")
-        # Take the first version range's introduced/fixed; OSV doesn't have
-        # CPEs but ecosystem/name + version range is the moral equivalent.
+        # Take the first version range's best version signal; OSV doesn't
+        # have CPEs but ecosystem/name + version range is the moral
+        # equivalent. Preference order: last_affected (an actually
+        # affected version) > a real introduced version > '<fixed'
+        # (range boundary). The ubiquitous "all versions before X" shape
+        # opens with {'introduced': '0'} — reporting version '0' would
+        # send the agent probing registries/tags for a junk version.
         for rng in affected.get("ranges", []) or []:
-            for event in rng.get("events", []) or []:
-                version = event.get("introduced") or event.get("fixed") or ""
-                if version and name:
-                    cpes.append(
-                        {
-                            "vendor": ecosystem.lower(),
-                            "product": name.lower(),
-                            "version": version,
-                            "cpe": f"{ecosystem.lower()}/{name.lower()}@{version}",
-                        }
-                    )
+            events = rng.get("events", []) or []
+            version = ""
+            for event in events:
+                last_affected = event.get("last_affected")
+                if last_affected and last_affected != "0":
+                    version = str(last_affected)
                     break
+            if not version:
+                for event in events:
+                    introduced = event.get("introduced")
+                    if introduced and introduced != "0":
+                        version = str(introduced)
+                        break
+            if not version:
+                for event in events:
+                    fixed = event.get("fixed")
+                    if fixed:
+                        version = f"<{fixed}"
+                        break
+            if version and name:
+                cpes.append(
+                    {
+                        "vendor": ecosystem.lower(),
+                        "product": name.lower(),
+                        "version": version,
+                        "cpe": f"{ecosystem.lower()}/{name.lower()}@{version}",
+                    }
+                )
             if cpes and cpes[-1]["product"] == name.lower():
                 break
         if len(cpes) >= 25:

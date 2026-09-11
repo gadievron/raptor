@@ -161,11 +161,12 @@ def test_shape_failure_still_records_scorecard_fail() -> None:
     assert cell.get("fail", 0) >= 1
 
 
-def test_json_decode_failure_retries_without_boundary_record() -> None:
-    """Malformed JSON is retryable — the per-attempt record policy for
-    it is unchanged by the disposition split (parity pin)."""
+def test_json_decode_failure_records_scorecard_fail() -> None:
+    """Malformed JSON is retryable AND a response-shape failure — the
+    model emitted output that failed to parse, which is exactly what
+    the ``_structured`` cell measures."""
     client = _client_with(json.JSONDecodeError("Expecting value", "", 0))
     with pytest.raises(Exception):
         client.generate_structured("p", _SCHEMA)
     cell = _fired_schema_cell(client).get("test-model", {})
-    assert cell.get("fail", 0) == 0
+    assert cell.get("fail", 0) >= 1

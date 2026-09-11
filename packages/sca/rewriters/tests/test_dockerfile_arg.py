@@ -305,3 +305,68 @@ def test_rewrite_idempotent_when_plan_already_at_target(
     results = rewrite_dockerfile_arg(dockerfile, edits)
     # Mismatch / no_change either way — never ``applied``.
     assert not results[0].applied
+
+
+# ---------------------------------------------------------------------------
+# Multi-stage Dockerfiles — every old-value ARG redeclaration is bumped
+# ---------------------------------------------------------------------------
+
+def test_multistage_redeclared_arg_all_occurrences_bumped(
+    tmp_path: Path,
+) -> None:
+    """Multi-stage builds redeclare the same ARG per stage; every
+    redeclaration still at the old value must be bumped. A first-match
+    ``count=1`` substitution used to bump one stage and leave the
+    redeclaration vulnerable while reporting applied."""
+    df = tmp_path / "Dockerfile"
+    df.write_text(
+        "ARG PG_VERSION=16.1\n"
+        "FROM base AS build\n"
+        "ARG PG_VERSION=16.1\n"
+        "FROM base AS runtime\n"
+        "ARG PG_VERSION=16.1\n"
+    )
+    edits = [RewriteEdit(
+        locator="PG_VERSION", old_value="16.1", new_value="16.4",
+    )]
+    results = rewrite_dockerfile_arg(df, edits)
+    assert results[0].applied
+    text = df.read_text()
+    assert text.count("ARG PG_VERSION=16.4") == 3
+    assert "16.1" not in text
+
+
+def test_multistage_fully_bumped_reports_no_change(tmp_path: Path) -> None:
+    """Every redeclaration already at the target → no_change
+    (idempotent re-run after the multi-occurrence bump)."""
+    df = tmp_path / "Dockerfile"
+    df.write_text(
+        "ARG PG_VERSION=16.4\n"
+        "FROM base AS build\n"
+        "ARG PG_VERSION=16.4\n"
+    )
+    edits = [RewriteEdit(
+        locator="PG_VERSION", old_value="16.1", new_value="16.4",
+    )]
+    results = rewrite_dockerfile_arg(df, edits)
+    assert not results[0].applied
+    assert results[0].reason == "no_change"
+
+
+def test_multistage_mixed_occurrences_bumps_stragglers(
+    tmp_path: Path,
+) -> None:
+    df = tmp_path / "Dockerfile"
+    df.write_text(
+        "ARG PG_VERSION=16.4\n"
+        "FROM base AS build\n"
+        "ARG PG_VERSION=16.1\n"
+    )
+    edits = [RewriteEdit(
+        locator="PG_VERSION", old_value="16.1", new_value="16.4",
+    )]
+    results = rewrite_dockerfile_arg(df, edits)
+    assert results[0].applied
+    text = df.read_text()
+    assert text.count("ARG PG_VERSION=16.4") == 2
+    assert "16.1" not in text

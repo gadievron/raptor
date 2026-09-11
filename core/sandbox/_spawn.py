@@ -664,11 +664,15 @@ def _teardown_target(child_pid: int, death_w: int, parent_fds: set,
             time.sleep(0.01)
     if not reaped:
         _kill_and_reap(child_pid)
-    elif pgid is not None:
+    elif pgid is not None and pgid != os.getpgrp():
         # The watcher swept the grandchild and exited on its own;
         # sweep any descendants that stayed in the intermediate's
         # original process group (same belt-and-braces killpg
-        # _kill_and_reap would have sent).
+        # _kill_and_reap would have sent). Same confused-deputy guard
+        # as _kill_and_reap: with the supported start_new_session=
+        # False escape hatch the captured PGID is RAPTOR'S OWN group —
+        # an unconditional killpg here would SIGKILL the orchestrator
+        # on a timeout the target itself provoked.
         try:
             os.killpg(pgid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError, OSError):
@@ -1809,6 +1813,24 @@ def run_sandboxed(
         _proc_mount_expected_unavailable = (
             _pidns_proc_mount_expectation(skip_pid_ns))
 
+        # libc handle resolved PRE-FORK and shared with both forked
+        # branches (PR_SET_PTRACER in the setup child; PDEATHSIG and
+        # the fresh-proc mount in the grandchild):
+        # ctypes.util.find_library("c") can shell out to
+        # /sbin/ldconfig, and spawning a subprocess from the forked
+        # child of this multi-threaded parent is the banned fork-storm
+        # pattern (same parent-side capture as landlock.py's _libc).
+        # None when libc cannot be loaded — the child sites degrade
+        # exactly as their load-failure branches always did.
+        _parent_libc = None
+        with contextlib.suppress(ImportError, OSError, AttributeError):
+            import ctypes as _pf_ctypes
+            import ctypes.util as _pf_ctypes_util
+            _parent_libc = _pf_ctypes.CDLL(
+                _pf_ctypes_util.find_library("c") or "libc.so.6",
+                use_errno=True,
+            )
+
         # posix_spawn() can't do the bespoke namespace setup, so we
         # need raw fork; the multi-threaded-fork DeprecationWarning is
         # filtered once at module level (fork-safety contract in the
@@ -2038,20 +2060,21 @@ def run_sandboxed(
             # The child here is uid 65534 ("nobody") after unshare but
             # before newuidmap — PR_SET_PTRACER doesn't require any
             # capability; it just declares permission to be traced.
-            if _audit_engaged or seccomp_profile == "debug":
+            if (_audit_engaged or seccomp_profile == "debug") \
+                    and _parent_libc is not None:
                 # prctl failure isn't fatal — Yama may already be
                 # permissive. Tracer's SEIZE is the actual gate.
-                # Legitimate failures: ctypes absent on minimal Python
-                # builds (ImportError), libc lookup/load failure
-                # (OSError), prctl symbol missing on exotic libcs
-                # (AttributeError — ctypes raises it on symbol access).
-                with contextlib.suppress(
-                    ImportError, OSError, AttributeError,
-                ):
+                # libc was resolved PRE-FORK (_parent_libc):
+                # find_library("c") can spawn /sbin/ldconfig, which is
+                # the banned post-fork fork-storm pattern. A parent
+                # that couldn't load libc at all skips this, matching
+                # the old load-failure suppression. Remaining
+                # legitimate failures: prctl symbol missing on exotic
+                # libcs (AttributeError — ctypes raises it on symbol
+                # access), OSError from the call itself.
+                with contextlib.suppress(OSError, AttributeError):
                     import ctypes as _c
-                    import ctypes.util as _cu
-                    _c_libc = _c.CDLL(_cu.find_library("c"),
-                                      use_errno=True)
+                    _c_libc = _parent_libc
                     _PR_SET_PTRACER = 0x59616d61
                     # PR_SET_PTRACER_ANY is `(unsigned long)-1` in the
                     # kernel header. ctypes.c_ulong(-1) wraps to the
@@ -2323,11 +2346,16 @@ def run_sandboxed(
                 # (no privilege change). The set-after-parent-died
                 # race is microseconds wide and covered by the
                 # parent-side backstop sweeps.
+                # libc was resolved PRE-FORK (_parent_libc):
+                # find_library("c") can spawn /sbin/ldconfig, the
+                # banned post-fork fork-storm pattern. None (parent
+                # could not load libc) takes the same warn path the
+                # old in-child load failure did.
+                _libc = _parent_libc
                 try:
-                    import ctypes as _ctypes
-                    import ctypes.util as _ctypes_util
-                    _libc_name = _ctypes_util.find_library("c") or "libc.so.6"
-                    _libc = _ctypes.CDLL(_libc_name, use_errno=True)
+                    if _libc is None:
+                        msg = "libc unavailable (pre-fork resolution)"
+                        raise OSError(msg)
                     _libc.prctl(1, int(signal.SIGKILL), 0, 0, 0)
                 except Exception:  # noqa: BLE001
                     warn_post_fork(
@@ -3134,16 +3162,49 @@ def run_sandboxed(
 
             # Parent: wait for tracer to signal ready. If tracer dies
             # before signalling, our read returns 0 bytes — treat as
-            # "tracer failed" and abort the sandbox.
+            # "tracer failed" and abort the sandbox. NON-BLOCKING with
+            # a deadline, same rationale as _drain_status_pipe:
+            # t_ready_w is deliberately inheritable (the tracer needs
+            # it PAST exec as its sync_fd), so a concurrent sibling
+            # fork holds a transient copy open for as long as ITS
+            # child runs — a blocking read here would hang this run on
+            # the sibling's schedule when our tracer died without
+            # writing. The 1-byte ready signal from a live tracer
+            # arrives regardless; only the EOF-on-death signal can be
+            # withheld, which the deadline bounds.
+            _tracer_ready_wait_timed_out = False
             try:
-                ready = os.read(t_ready_r, 1)
+                os.set_blocking(t_ready_r, False)
+                import select as _tr_sel
+                _tr_deadline = time.monotonic() + 15.0
+                ready = b""
+                while True:
+                    _tr_remaining = _tr_deadline - time.monotonic()
+                    if _tr_remaining <= 0:
+                        _tracer_ready_wait_timed_out = True
+                        break
+                    _tr_ready, _, _ = _tr_sel.select(
+                        [t_ready_r], [], [], _tr_remaining)
+                    if not _tr_ready:
+                        continue  # loop re-checks the deadline
+                    try:
+                        ready = os.read(t_ready_r, 1)
+                    except BlockingIOError:
+                        continue  # spurious wakeup — keep waiting
+                    break  # 1 byte (ready) or b"" (EOF — tracer died)
             finally:
                 os.close(t_ready_r)
                 _parent_fds.discard(t_ready_r)
             if not ready:
                 # Tracer failed to attach. Reap it (capture exit code
                 # for diagnostics), kill the target child (still
-                # blocked on go-pipe), abort.
+                # blocked on go-pipe), abort. On the deadline path the
+                # tracer may still be ALIVE but wedged — kill it first
+                # so the diagnostic waitpid cannot block forever.
+                if _tracer_ready_wait_timed_out:
+                    with contextlib.suppress(
+                            ProcessLookupError, OSError):
+                        os.kill(tracer_pid, signal.SIGKILL)
                 tracer_status: int | None = None
                 try:
                     _, tracer_status = os.waitpid(tracer_pid, 0)
@@ -3198,6 +3259,14 @@ def run_sandboxed(
                                  "signal before it could attach — "
                                  "OOM-killer? operator's session "
                                  "terminated?")
+                if _tracer_ready_wait_timed_out:
+                    # We SIGKILLed it ourselves above; the signal
+                    # diagnostic would misattribute that to an
+                    # external killer.
+                    rc_hint = ""
+                    cause = ("tracer did not signal ready within the "
+                             "15s deadline (wedged during attach or a "
+                             "badly stalled host) — killed")
                 msg = (
                     f"audit-mode tracer failed to attach to sandboxed "
                     f"child{rc_hint} — {cause}"
@@ -3308,7 +3377,11 @@ def run_sandboxed(
     _truncated = {1: False, 2: False}
     # time.monotonic() for deadline math — see _reap_tracer() above for the
     # NTP/wall-clock-jump rationale; same hazard applies here.
-    deadline = time.monotonic() + timeout if timeout else None
+    # `is not None`, NOT truthiness: timeout=0 means "zero budget
+    # remaining — immediate deadline", while a falsy check turned it
+    # into NO deadline (unbounded run) exactly when the caller asked
+    # for none at all.
+    deadline = (time.monotonic() + timeout) if timeout is not None else None
     # Exec-status verdict — populated in the finally so the pipe is read and
     # status_r reclaimed on EVERY exit path (success, timeout, exception).
     setup_status = None
@@ -3318,7 +3391,8 @@ def run_sandboxed(
             fds = [out_r, err_r]
             try:
                 while fds:
-                    remaining = (deadline - time.monotonic()) if deadline else None
+                    remaining = ((deadline - time.monotonic())
+                                 if deadline is not None else None)
                     if remaining is not None and remaining <= 0:
                         # Death-pipe EOF BEFORE killing the
                         # intermediate — see _teardown_target: a
@@ -3369,8 +3443,12 @@ def run_sandboxed(
                     _parent_fds.discard(fd)
 
         try:
-            # waitpid with a remaining timeout window.
-            if deadline:
+            # waitpid with a remaining timeout window. `is not None`,
+            # not truthiness — a deadline that already computed to a
+            # falsy float is not a thing, but keep the check shape
+            # identical to the deadline construction above (timeout=0
+            # must reach the bounded branch).
+            if deadline is not None:
                 while True:
                     pid_, status = os.waitpid(child_pid, os.WNOHANG)
                     if pid_ != 0:

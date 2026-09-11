@@ -453,15 +453,38 @@ class TestSMTAdapterIntegration:
         ev = a.run("# just a comment\n", tmp_path)
         assert not ev.success
 
-    def test_mixed_valid_and_invalid(self, tmp_path):
+    def test_mixed_valid_and_invalid_is_tool_failure(self, tmp_path):
         a = SMTAdapter()
-        # The first condition is fine; the second has unsupported syntax —
-        # smt_path_validator buckets that as "unknown" but the first still
-        # solves. The adapter should still report sat.
+        # The first condition is fine; the second has unsupported syntax
+        # and gets dropped to "unknown". sat over the surviving subset is
+        # NOT proof the full path is feasible, so the adapter must report
+        # a tool failure naming the dropped condition rather than clean
+        # confirming evidence over a near-empty check.
         ev = a.run("size > 0\nptr->field == 1\n", tmp_path)
-        # At minimum: doesn't crash. May return sat (unparseable conditions
-        # are dropped to unknown) or unknown depending on solver behaviour.
-        assert ev.success or "unknown" in (ev.error or "").lower()
+        assert not ev.success
+        assert "unparseable" in ev.error
+        assert "ptr->field" in ev.error
+
+    def test_fully_parsed_sat_still_confirms(self, tmp_path):
+        # Companion direction: when EVERY condition parses, sat evidence
+        # stays clean witness evidence — the partial-set failure above
+        # must not swallow legitimate results.
+        a = SMTAdapter()
+        ev = a.run("size > 0\nsize < 1024\n", tmp_path)
+        assert ev.success
+        assert "sat" in ev.summary
+        assert ev.matches
+
+    def test_unsat_with_dropped_conditions_stays_sound(self, tmp_path):
+        # unsat over a subset implies unsat over the whole set, so a
+        # dropped condition must not degrade an unsat result to failure —
+        # only annotate it.
+        a = SMTAdapter()
+        ev = a.run("x == 0\nx != 0\nptr->field == 1\n", tmp_path)
+        assert ev.success
+        assert "unsat" in ev.summary
+        assert "excluded" in ev.summary
+        assert ev.matches == []
 
 
 class TestSMTAdapterUnavailable:
@@ -492,3 +515,254 @@ class TestParseSarifBudget:
         p.write_text(json.dumps({"runs": []}))
         os.truncate(p, 100 * 1024 * 1024 + 1)
         assert _parse_sarif(p) is None
+
+
+class TestPrebuiltSarifParseFailure:
+    """run_prebuilt_query / run_prebuilt_queries_batch must convert a
+    SARIF parse failure into failure evidence exactly like run() does —
+    _parse_sarif returns None on unreadable output and the adapters
+    MUST NOT raise (len(None) / iterating None are TypeErrors)."""
+
+    def _adapter(self, tmp_path: Path) -> tuple[CodeQLAdapter, Path]:
+        db = tmp_path / "db"
+        db.mkdir()
+        a = CodeQLAdapter(
+            database_path=db, codeql_bin="/usr/bin/codeql", sandbox=False,
+        )
+        return a, db
+
+    def _query(self, tmp_path: Path, name: str = "q.ql",
+               qid: str | None = None) -> Path:
+        q = tmp_path / name
+        q.parent.mkdir(parents=True, exist_ok=True)
+        header = f"/**\n * @id {qid}\n */\n" if qid else ""
+        q.write_text(header + "import cpp\nselect 1\n")
+        return q
+
+    @staticmethod
+    def _fake_run_writing(text: str):
+        def fake_run(cmd, **kwargs):
+            for arg in cmd:
+                if arg.startswith("--output="):
+                    Path(arg.split("=", 1)[1]).write_text(text)
+            return MagicMock(returncode=0, stdout="", stderr="")
+        return fake_run
+
+    def test_prebuilt_corrupt_sarif_is_tool_failure(self, tmp_path):
+        a, db = self._adapter(tmp_path)
+        q = self._query(tmp_path)
+        with patch("subprocess.run",
+                   side_effect=self._fake_run_writing("{corrupt")):
+            ev = a.run_prebuilt_query(q, tmp_path)
+        assert not ev.success
+        assert "unreadable" in ev.error
+        assert ev.matches == []
+
+    def test_prebuilt_valid_sarif_still_succeeds(self, tmp_path):
+        a, db = self._adapter(tmp_path)
+        q = self._query(tmp_path)
+        sarif = json.dumps({"runs": [{"results": []}]})
+        with patch("subprocess.run",
+                   side_effect=self._fake_run_writing(sarif)):
+            ev = a.run_prebuilt_query(q, tmp_path)
+        assert ev.success
+        assert "no matches" in ev.summary
+
+    def test_batch_corrupt_sarif_is_tool_failure_for_every_query(self, tmp_path):
+        a, db = self._adapter(tmp_path)
+        q1 = self._query(tmp_path, "a/q1.ql")
+        q2 = self._query(tmp_path, "b/q2.ql")
+        with patch("subprocess.run",
+                   side_effect=self._fake_run_writing("{corrupt")):
+            results = a.run_prebuilt_queries_batch([q1, q2])
+        assert set(results) == {str(q1), str(q2)}
+        for ev in results.values():
+            assert not ev.success
+            assert "unreadable" in ev.error
+
+
+class TestBatchAttribution:
+    """Batch SARIF results map back to their originating query via
+    @id / filename stem. Results that map to no known query must not
+    vanish silently (the owning query would read as a clean refutable
+    "no matches"), and a stem shared by two queries must not credit
+    everything to whichever registered first."""
+
+    def _adapter(self, tmp_path: Path) -> CodeQLAdapter:
+        db = tmp_path / "db"
+        db.mkdir(exist_ok=True)
+        return CodeQLAdapter(
+            database_path=db, codeql_bin="/usr/bin/codeql", sandbox=False,
+        )
+
+    def _query(self, tmp_path: Path, rel: str, qid: str | None = None) -> Path:
+        q = tmp_path / rel
+        q.parent.mkdir(parents=True, exist_ok=True)
+        header = f"/**\n * @id {qid}\n */\n" if qid else ""
+        q.write_text(header + "import cpp\nselect 1\n")
+        return q
+
+    @staticmethod
+    def _sarif_with(rule_ids: list[str]) -> str:
+        return json.dumps({
+            "runs": [{
+                "results": [
+                    {
+                        "ruleId": rid,
+                        "message": {"text": f"hit for {rid}"},
+                        "locations": [{
+                            "physicalLocation": {
+                                "artifactLocation": {"uri": "src/a.c"},
+                                "region": {"startLine": 1},
+                            },
+                        }],
+                    }
+                    for rid in rule_ids
+                ],
+            }],
+        })
+
+    @staticmethod
+    def _fake_run_writing(text: str):
+        def fake_run(cmd, **kwargs):
+            for arg in cmd:
+                if arg.startswith("--output="):
+                    Path(arg.split("=", 1)[1]).write_text(text)
+            return MagicMock(returncode=0, stdout="", stderr="")
+        return fake_run
+
+    def test_unattributed_results_degrade_zero_match_queries(self, tmp_path):
+        a = self._adapter(tmp_path)
+        q1 = self._query(tmp_path, "a/first.ql", qid="raptor/first")
+        q2 = self._query(tmp_path, "b/second.ql", qid="raptor/second")
+        sarif = self._sarif_with(["raptor/first", "vendor/unknown-rule"])
+        with patch("subprocess.run",
+                   side_effect=self._fake_run_writing(sarif)):
+            results = a.run_prebuilt_queries_batch([q1, q2])
+        # The attributable match reaches its query.
+        assert results[str(q1)].success
+        assert len(results[str(q1)].matches) == 1
+        # The zero-match query cannot claim a clean "no matches" while
+        # an unattributed result exists — any of them could be its own.
+        assert not results[str(q2)].success
+        assert "could not be attributed" in results[str(q2)].error
+
+    def test_fully_attributed_batch_keeps_clean_no_matches(self, tmp_path):
+        # Direction guard: with every result attributed, a query with
+        # zero matches keeps its refutation-capable clean result.
+        a = self._adapter(tmp_path)
+        q1 = self._query(tmp_path, "a/first.ql", qid="raptor/first")
+        q2 = self._query(tmp_path, "b/second.ql", qid="raptor/second")
+        sarif = self._sarif_with(["raptor/first"])
+        with patch("subprocess.run",
+                   side_effect=self._fake_run_writing(sarif)):
+            results = a.run_prebuilt_queries_batch([q1, q2])
+        assert results[str(q1)].success
+        assert len(results[str(q1)].matches) == 1
+        assert results[str(q2)].success
+        assert results[str(q2)].matches == []
+        assert "no matches" in results[str(q2)].summary
+
+    def test_stem_collision_not_credited_to_first_query(self, tmp_path):
+        # Two queries share the stem "q" and declare no @id; a result
+        # with ruleId "q" is genuinely ambiguous. Crediting it to the
+        # first-registered query would fabricate its evidence AND hand
+        # the second a false refutation — both must degrade instead.
+        a = self._adapter(tmp_path)
+        q1 = self._query(tmp_path, "a/q.ql")
+        q2 = self._query(tmp_path, "b/q.ql")
+        sarif = self._sarif_with(["q"])
+        with patch("subprocess.run",
+                   side_effect=self._fake_run_writing(sarif)):
+            results = a.run_prebuilt_queries_batch([q1, q2])
+        assert results[str(q1)].matches == []
+        assert not results[str(q1)].success
+        assert not results[str(q2)].success
+
+
+class TestEnsurePackInstalledCaching:
+    """A failed `codeql pack install` must not be cached as installed —
+    the cache would suppress the retry that could succeed once the
+    operator fixes the environment."""
+
+    def _pack(self, tmp_path: Path) -> tuple[Path, Path]:
+        pack = tmp_path / "pack"
+        pack.mkdir()
+        (pack / "qlpack.yml").write_text("name: raptor/test-pack\n")
+        q = pack / "q.ql"
+        q.write_text("import cpp\nselect 1\n")
+        return pack, q
+
+    def test_failed_install_is_retried(self, tmp_path):
+        from packages.hypothesis_validation.adapters.codeql import (
+            _INSTALLED_PACK_DIRS,
+            _ensure_pack_installed,
+        )
+        pack, q = self._pack(tmp_path)
+        calls: list[list] = []
+
+        def failing_runner(cmd, **kwargs):
+            calls.append(cmd)
+            return MagicMock(returncode=1, stdout="", stderr="registry unreachable")
+
+        try:
+            _ensure_pack_installed(q, "codeql", failing_runner, {})
+            assert len(calls) == 1
+            # Second call retries instead of hitting a poisoned cache.
+            _ensure_pack_installed(q, "codeql", failing_runner, {})
+            assert len(calls) == 2
+        finally:
+            _INSTALLED_PACK_DIRS.discard(pack.resolve())
+            _INSTALLED_PACK_DIRS.discard(pack)
+
+    def test_successful_install_is_cached(self, tmp_path):
+        from packages.hypothesis_validation.adapters.codeql import (
+            _INSTALLED_PACK_DIRS,
+            _ensure_pack_installed,
+        )
+        pack, q = self._pack(tmp_path)
+        calls: list[list] = []
+
+        def ok_runner(cmd, **kwargs):
+            calls.append(cmd)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        try:
+            _ensure_pack_installed(q, "codeql", ok_runner, {})
+            _ensure_pack_installed(q, "codeql", ok_runner, {})
+            assert len(calls) == 1
+        finally:
+            _INSTALLED_PACK_DIRS.discard(pack.resolve())
+            _INSTALLED_PACK_DIRS.discard(pack)
+
+
+@pytest.mark.skipif(
+    not SMTAdapter().is_available(),
+    reason="z3-solver not installed",
+)
+class TestSMTUnsatConclusiveFlag:
+    """unsat is a definitive proof despite the empty match list — the
+    evidence must carry empty_matches_conclusive so the verdict ladder
+    can honour a confirmed reading of an infeasibility-phrased
+    hypothesis, while sat evidence must NOT carry the flag."""
+
+    def test_unsat_sets_flag(self, tmp_path):
+        a = SMTAdapter()
+        ev = a.run("x == 0\nx != 0\n", tmp_path)
+        assert ev.success
+        assert ev.matches == []
+        assert ev.empty_matches_conclusive is True
+
+    def test_sat_does_not_set_flag(self, tmp_path):
+        a = SMTAdapter()
+        ev = a.run("size > 0\nsize < 1024\n", tmp_path)
+        assert ev.success
+        assert ev.empty_matches_conclusive is False
+
+    def test_unsat_summary_names_both_readings(self, tmp_path):
+        # The evaluating LLM maps the proof onto the hypothesis's
+        # phrasing from the summary text.
+        a = SMTAdapter()
+        ev = a.run("x == 0\nx != 0\n", tmp_path)
+        assert "refutes" in ev.summary
+        assert "confirms" in ev.summary

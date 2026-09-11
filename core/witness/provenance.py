@@ -159,7 +159,20 @@ def _read_existing_key(path: Path):
                 f"chmod 600 {path}",
             )
             return _REFUSED
-        return os.read(fd, _KEY_LEN * 4)
+        # A single os.read may return fewer bytes than requested
+        # (network filesystems); a short read would land a healthy key
+        # in the wrong-length refusal, so loop to EOF. The cap stays at
+        # _KEY_LEN * 4 — genuinely oversized files still fail-close in
+        # the caller's length check.
+        chunks: list[bytes] = []
+        remaining = _KEY_LEN * 4
+        while remaining > 0:
+            chunk = os.read(fd, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
     except OSError:
         return None
     finally:
@@ -812,6 +825,71 @@ def sanitise_findings_evidence(
     return stats
 
 
+# ---------------------------------------------------------------------------
+# Witness-store manifests — content-MAC provenance for collect_outcomes
+# ---------------------------------------------------------------------------
+
+_MANIFEST_KIND = "witness-manifest"
+
+
+def manifest_content_sha256(manifest: Mapping[str, Any]) -> str:
+    """SHA-256 over the canonical (key-sorted, compact) JSON of the
+    manifest WITHOUT its provenance token — the exact content identity
+    the token authenticates. Covering the whole record rather than a
+    field subset means nothing in a validly-stamped manifest can be
+    rewritten under a surviving token (same construction as
+    ``triage_report_fields`` in core/sandbox/telemetry_mac)."""
+    from core.json import dumps_canonical
+    body = {str(k): manifest[k] for k in manifest if k != PROVENANCE_KEY}
+    try:
+        text = dumps_canonical(body)
+    except (TypeError, ValueError):
+        # Non-JSON-safe content can never match a writer-side hash
+        # (writers serialise the manifest, so theirs was JSON-safe).
+        return "<unhashable>"
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def witness_manifest_fields(manifest_sha256: str) -> dict:
+    """MAC fields for a WitnessStore manifest.
+
+    Deliberately NO run binding: a witness asserts a
+    location-independent fact ("these bytes produced this outcome on
+    this target"), so replaying a GENUINE record into another store
+    changes nothing a consumer acts on. The token defends AUTHORSHIP:
+    verified-outcome records feed threat-status flips, threat ids are
+    content-derived and attacker-predictable, and a disk-staging
+    attacker must not be able to mint a record naming an exact
+    threat id.
+    """
+    return {"kind": _MANIFEST_KIND, "manifest_sha256": manifest_sha256}
+
+
+def stamp_witness_manifest(manifest: dict) -> None:
+    """Stamp a manifest dict the store is about to persist. No usable
+    key → the manifest stays unstamped and consumers demote it to
+    evidence-only weight (the pre-stamp behaviour)."""
+    token = mint(witness_manifest_fields(manifest_content_sha256(manifest)))
+    if token:
+        manifest[PROVENANCE_KEY] = token
+
+
+def verify_witness_manifest(manifest: Mapping[str, Any]) -> bool:
+    """Whether *manifest* was written by a WitnessStore of THIS
+    install. False for unstamped (legacy / foreign / attacker-staged)
+    manifests and on any verification failure — the caller's demote
+    path, never an error."""
+    if not isinstance(manifest, Mapping):
+        return False
+    token = manifest.get(PROVENANCE_KEY)
+    if not token:
+        return False
+    return verify(
+        witness_manifest_fields(manifest_content_sha256(manifest)),
+        str(token),
+    )
+
+
 __all__ = [
     "BINDING_GRADE_KEY",
     "FEASIBILITY_TIER_STATUSES",
@@ -821,6 +899,7 @@ __all__ = [
     "feasibility_fields",
     "iris_refutation_fields",
     "key_usable",
+    "manifest_content_sha256",
     "mint",
     "run_binding",
     "run_binding_nonced",
@@ -831,6 +910,7 @@ __all__ = [
     "stamp_iris_refutation",
     "stamp_smt_feasibility",
     "stamp_witness_execution",
+    "stamp_witness_manifest",
     "verify",
     "verify_feasibility",
     "verify_feasibility_graded",
@@ -838,5 +918,7 @@ __all__ = [
     "verify_smt_feasibility",
     "verify_witness_execution",
     "verify_witness_execution_graded",
+    "verify_witness_manifest",
     "witness_execution_fields",
+    "witness_manifest_fields",
 ]

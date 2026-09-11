@@ -36,6 +36,8 @@ from packages.fuzzing.smt_seed import MANIFEST_NAME, SEED_DIR_NAME
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from packages.fuzzing.crash_collector import Crash
 
 logger = logging.getLogger(__name__)
@@ -50,6 +52,10 @@ _ID_RE = re.compile(r"(?:^|,)id:(\d+)")
 _SRC_RE = re.compile(r"(?:^|,)src:([\d+]+)")
 _ORIG_RE = re.compile(r"(?:^|,)orig:([^,]+)")
 _INSTANCE_RE = re.compile(r",instance:([^,]+)$")
+# Cross-instance import: afl-fuzz names imported queue entries
+# ``id:%06u,sync:%s,src:%06u`` — the src id belongs to the NAMED
+# source instance's queue, not the importing instance's.
+_SYNC_RE = re.compile(r"(?:^|,)sync:([^,]+)")
 
 
 @dataclass
@@ -118,29 +124,38 @@ def _queue_index(queue_dir: Path) -> dict[str, str]:
     return index
 
 
-def _root_orig_seeds(crash_name: str, queue_index: dict[str, str]) -> set[str] | None:
+def _root_orig_seeds(
+    crash_name: str,
+    instance: str,
+    queue_index_for: Callable[[str], dict[str, str]],
+) -> set[str] | None:
     """Walk the recorded src chain to the orig seed name(s).
 
-    Returns the set of distinct root seed names, or None when the chain
-    breaks (missing queue entry, no src on the crash, bounds hit) —
-    a broken chain can never support an attribution.
+    ``queue_index_for`` maps an instance name to that instance's queue
+    index: a ``sync:`` entry's ``src`` id belongs to the SOURCE
+    instance's queue, so resolving it against the local index would
+    root the chain at an unrelated same-numbered entry — a wrong
+    exact-lineage stamp, the one outcome this module promises never to
+    emit. Returns the set of distinct root seed names, or None when
+    the chain breaks (missing queue entry, no src on the crash, bounds
+    hit) — a broken chain can never support an attribution.
     """
-    frontier = _parse_srcs(crash_name)
+    frontier = [(instance, qid) for qid in _parse_srcs(crash_name)]
     if not frontier:
         return None
     roots: set[str] = set()
-    visited: set[str] = set()
+    visited: set[tuple[str, str]] = set()
     depth = 0
     while frontier:
         depth += 1
         if depth > _MAX_CHAIN_DEPTH or len(visited) > _MAX_VISITED:
             return None
-        next_frontier: list[str] = []
-        for qid in frontier:
-            if qid in visited:
+        next_frontier: list[tuple[str, str]] = []
+        for inst, qid in frontier:
+            if (inst, qid) in visited:
                 continue
-            visited.add(qid)
-            entry_name = queue_index.get(qid)
+            visited.add((inst, qid))
+            entry_name = queue_index_for(inst).get(qid)
             if entry_name is None:
                 return None
             orig = _parse_orig(entry_name)
@@ -150,7 +165,9 @@ def _root_orig_seeds(crash_name: str, queue_index: dict[str, str]) -> set[str] |
             parents = _parse_srcs(entry_name)
             if not parents:
                 return None
-            next_frontier.extend(parents)
+            sync = _SYNC_RE.search(entry_name)
+            parent_inst = sync.group(1) if sync else inst
+            next_frontier.extend((parent_inst, p) for p in parents)
         frontier = next_frontier
     return roots or None
 
@@ -187,6 +204,7 @@ def attribute_crashes(
         return summary
 
     queue_cache: dict[Path, dict[str, str]] = {}
+    collided_ids: set[str] = set()
     for crash in crashes:
         crash_file = Path(crash.input_file)
         located = _instance_for_crash(crash_file)
@@ -194,10 +212,14 @@ def attribute_crashes(
             summary.unattributed += 1
             continue
         instance, afl_out = located
-        queue_dir = afl_out / instance / "queue"
-        if queue_dir not in queue_cache:
-            queue_cache[queue_dir] = _queue_index(queue_dir)
-        roots = _root_orig_seeds(crash_file.name, queue_cache[queue_dir])
+
+        def _index_for(inst: str, _afl_out: Path = afl_out) -> dict[str, str]:
+            queue_dir = _afl_out / inst / "queue"
+            if queue_dir not in queue_cache:
+                queue_cache[queue_dir] = _queue_index(queue_dir)
+            return queue_cache[queue_dir]
+
+        roots = _root_orig_seeds(crash_file.name, instance, _index_for)
         if not roots or len(roots) != 1:
             summary.unattributed += 1
             continue
@@ -205,6 +227,24 @@ def attribute_crashes(
         entry = provenance.get(seed_name)
         if entry is None:
             summary.unattributed += 1
+            continue
+        if crash.crash_id in collided_ids:
+            summary.unattributed += 1
+            continue
+        if crash.crash_id in summary.attributed:
+            # Crashes sharing one crash_id cannot be told apart by
+            # consumers that key on it — a wrong finding-confirmation
+            # is worse than none, so drop EVERY attribution for the
+            # colliding id. (The collector suffixes merged
+            # multi-instance ids with ",instance:<name>", so this only
+            # fires on degenerate inputs.)
+            logger.warning(
+                "duplicate crash id %s in attribution input; "
+                "dropping all attributions for it", crash.crash_id,
+            )
+            del summary.attributed[crash.crash_id]
+            collided_ids.add(crash.crash_id)
+            summary.unattributed += 2
             continue
         summary.attributed[crash.crash_id] = CrashAttribution(
             crash_id=crash.crash_id,

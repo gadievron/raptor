@@ -33,11 +33,15 @@ pre-flight and still costs the full CD materialisation. Bounding
 ``cd_size`` (per declared entry, plus an absolute cap) closes that
 bypass while staying far above anything a legitimate archive needs.
 
-ZIP64 sentinels (``entries_total == 0xFFFF``) follow the locator
-back to the ZIP64 EOCD record at the absolute offset stored in the
-locator. Malformed / unparseable archives return ``None`` so the
-caller can fall through to the normal ZipFile() path (which will
-raise ``BadZipFile`` for genuinely broken inputs).
+When a ZIP64 EOCD locator is present, the ZIP64 EOCD record's totals
+override the classic EOCD's UNCONDITIONALLY — parity with
+``zipfile._EndRecData64``, which follows the locator even when the
+classic fields are non-sentinel (an archive can otherwise declare
+tiny classic values this gate would pass while ``ZipFile`` parses
+the huge ZIP64 central directory). Malformed / unparseable archives
+return ``None`` so the caller can fall through to the normal
+ZipFile() path (which will raise ``BadZipFile`` for genuinely broken
+inputs).
 """
 
 from __future__ import annotations
@@ -231,14 +235,39 @@ def _parse_eocd(
         return None
     # entries-on-disk @ +8 (uint16); total-entries @ +10 (uint16);
     # cd-size @ +12 (uint32)
-    entries_disk, entries_total, cd_size = struct.unpack_from(
+    _entries_disk, entries_total, cd_size = struct.unpack_from(
         "<HHI", tail, eocd_off + 8,
     )
-    if (entries_total != 0xFFFF and entries_disk != 0xFFFF
-            and cd_size != 0xFFFFFFFF):
-        return EocdSummary(entries_total=entries_total, cd_size=cd_size)
+    classic = EocdSummary(entries_total=entries_total, cd_size=cd_size)
 
-    # ZIP64 sentinel — try the locator (20 bytes BEFORE EOCD).
+    # ZIP64 parity with ``zipfile._EndRecData64``: the stdlib follows
+    # the ZIP64 locator UNCONDITIONALLY when it is present — even when
+    # the classic EOCD carries small non-sentinel values — and then
+    # uses the ZIP64 record's totals. Gating the follow-up on sentinel
+    # fields would let an archive declare tiny numbers in the classic
+    # EOCD (which this gate would pass) while ``ZipFile.__init__``
+    # materialises the huge ZIP64 central directory. So: attempt the
+    # locator always; fall back to the classic summary only where
+    # zipfile itself would (locator absent / record unreadable or
+    # signature mismatch).
+    zip64 = _peek_zip64(tail, eocd_off, total_size=total_size,
+                        fh=fh, blob=blob)
+    return zip64 if zip64 is not None else classic
+
+
+def _peek_zip64(
+    tail: bytes,
+    eocd_off: int,
+    *,
+    total_size: int,
+    fh=None,
+    blob: bytes | None = None,
+) -> EocdSummary | None:
+    """Follow the ZIP64 EOCD locator (20 bytes before the classic
+    EOCD) to the ZIP64 EOCD record; return its declared totals, or
+    ``None`` when the locator/record is absent or unreadable (the
+    caller then uses the classic EOCD fields, as zipfile does).
+    """
     loc_off = eocd_off - 20
     if loc_off < 0:
         return None

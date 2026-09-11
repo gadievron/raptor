@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from functools import lru_cache
 from typing import Any, TYPE_CHECKING
 from pathlib import Path
 
@@ -72,15 +73,35 @@ def _sha256_file(path: Path) -> str | None:
     Returns ``None`` on I/O error rather than raising; enrichment is
     best-effort and a broken read should downgrade to "no cache" not
     "abort /understand".
+
+    Memoised on (path, mtime, size): ``enrich_context_map`` calls
+    ``build_mitigation_context`` once per sink, and re-hashing a large
+    debug binary for every sink turns post-processing into
+    sinks × binary-size worth of hashing for one identical digest.
     """
     try:
+        st = Path(path).stat()
+    except OSError as e:
+        _LOG.debug("mitigation_enricher: stat failed on %s: %s", path, e)
+        return None
+    return _sha256_file_cached(str(path), st.st_mtime_ns, st.st_size)
+
+
+@lru_cache(maxsize=64)
+def _sha256_file_cached(
+    path_str: str, _mtime_ns: int, _size: int,
+) -> str | None:
+    """stat-keyed sha256 body — see ``_sha256_file``."""
+    try:
         h = hashlib.sha256()
-        with Path(path).open("rb") as f:
+        with Path(path_str).open("rb") as f:
             for chunk in iter(lambda: f.read(1024 * 1024), b""):
                 h.update(chunk)
         return h.hexdigest()
     except OSError as e:
-        _LOG.debug("mitigation_enricher: sha256 read failed on %s: %s", path, e)
+        _LOG.debug(
+            "mitigation_enricher: sha256 read failed on %s: %s", path_str, e,
+        )
         return None
 
 
@@ -100,6 +121,22 @@ def _availability_for_cwe(
     Consumers MUST distinguish all three — a truthy check on ``None``
     silently mis-treats CONDITIONAL as blocked.
     """
+    # Sparse contract for CWEs outside the families this substrate has
+    # opinions about (including missing/UNKNOWN): everything is
+    # CONDITIONAL/unknown, never "verified available" — asserting a
+    # write primitive for a CWE class we can't reason about would feed
+    # a fabricated exploitability posture into renderer ordering and
+    # downstream joins.
+    if cwe not in _KNOWN_CWE_FAMILIES:
+        return {
+            "arbitrary_write": None,
+            "format_n_write": None,
+            "got_overwrite": None,
+            "fini_array": None,
+            "hook_overwrite": None,
+            "stack_smash": None,
+        }
+
     protections = result.get("protections") or {}
     glibc_n_disabled = result.get("glibc_n_disabled")
 
@@ -122,9 +159,22 @@ def _availability_for_cwe(
 
     # GOT overwrite: blocked iff Full RELRO. .fini_array under Full
     # RELRO is also blocked; under partial RELRO both are writable.
-    full_relro = bool(protections.get("full_relro"))
-    got_overwrite = False if full_relro else True
-    fini_array = False if full_relro else True
+    # Tri-state on the DATA, not on falsiness: an empty/absent
+    # protections dict means the substrate produced no RELRO evidence,
+    # and "verified available" (True) must never be asserted from
+    # absence of data.
+    full_relro = protections.get("full_relro")
+    got_overwrite: bool | None
+    fini_array: bool | None
+    if full_relro is True:
+        got_overwrite = False
+        fini_array = False
+    elif full_relro is False:
+        got_overwrite = True
+        fini_array = True
+    else:
+        got_overwrite = None  # no RELRO evidence — unknown
+        fini_array = None
 
     # Hook overwrite: glibc 2.34+ removed __malloc_hook / __free_hook.
     # We only mark False when we KNOW glibc >= 2.34.
@@ -262,7 +312,10 @@ def build_mitigation_context(
         "priority_reason": reason,
         "verdict_for_downstream": {
             "verdict": verdict,
-            "impact": result.get("impact") or "code_execution",
+            # No fabricated default: an absent impact stays None —
+            # substituting "code_execution" over-claimed on results
+            # that never assessed impact.
+            "impact": result.get("impact") or None,
         },
     }
     if binary_sha:

@@ -55,8 +55,15 @@ from ...models import Confidence, Dependency, PinStyle
 # Only ARGs whose name ends in ``_VERSION`` are considered — keeps the
 # scope tight and excludes generic ARGs that aren't version pins
 # (``ARG BUILD_TARGET=runtime``, ``ARG USER=raptor``).
+#
+# Matched against the RIGHT-STRIPPED line: the old comment tail
+# ``(.+?)\s*$`` had a lazy body and a trailing ``\s*`` both matching
+# spaces, so a comment followed by a long space run backtracked
+# quadratically (measured; same class as the gemfile/nuget fixes).
+# With trailing whitespace pre-stripped, a greedy ``(.*)`` is
+# equivalent and linear.
 _ARG_RE = re.compile(
-    r"^\s*ARG\s+(\w+_VERSION)\s*=\s*(\S+?)\s*(?:#\s*(.+?)\s*)?$",
+    r"^\s*ARG\s+(\w+_VERSION)\s*=\s*(\S+?)\s*(?:#\s*(.*))?$",
     re.IGNORECASE,
 )
 
@@ -126,7 +133,8 @@ def extract(text: str, path: Path) -> list[Dependency]:
     """
     deps: list[Dependency] = []
     for line_no, raw in enumerate(text.splitlines(), start=1):
-        match = _ARG_RE.match(raw)
+        # rstrip is part of the regex contract — see ``_ARG_RE``.
+        match = _ARG_RE.match(raw.rstrip())
         if match is None:
             continue
         arg_name = match.group(1)

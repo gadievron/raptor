@@ -350,12 +350,25 @@ def _link_by_call_graph(
         by_func_name.setdefault(fn, []).append(fl)
 
     for file_path, cg in call_graphs.items():
-        calls = getattr(cg, "calls", None) or cg.get("calls", [])
+        # Attribute presence, not truthiness (type_confusion's shape
+        # check): a FileCallGraph whose ``calls`` is an EMPTY LIST is
+        # falsy, so ``getattr(...) or cg.get(...)`` fell through to
+        # ``.get`` on the object — one call-free file raised
+        # AttributeError and silently disabled the whole pass.
+        calls = getattr(cg, "calls", None)
+        if calls is None and isinstance(cg, dict):
+            calls = cg.get("calls", [])
+        if not calls:
+            continue
         for call in calls:
-            caller_name = getattr(call, "caller", None) or call.get(
-                "caller", ""
+            caller_name = (
+                call.caller if hasattr(call, "caller")
+                else call.get("caller", "")
             )
-            chain = getattr(call, "chain", None) or call.get("chain", [])
+            chain = (
+                call.chain if hasattr(call, "chain")
+                else call.get("chain", [])
+            )
             caller_fl = by_name.get((file_path, caller_name))
             if not caller_fl or not caller_fl.consumed:
                 continue

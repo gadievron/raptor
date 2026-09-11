@@ -49,7 +49,10 @@ if not (os.environ.get("CLAUDECODE")
 # fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+# Repo root comes from the launcher-set RAPTOR_DIR — the ONLY
+# path ever added to sys.path (hard lookup; KeyError if the
+# script is run outside the launcher, by design).
+sys.path.insert(0, os.environ["RAPTOR_DIR"])
 import core.startup.process_init  # noqa: E402,F401
 from core.json import dumps_display, load_json  # noqa: E402
 

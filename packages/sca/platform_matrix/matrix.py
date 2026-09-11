@@ -640,10 +640,13 @@ def _add_runner(
 
 
 def _is_dockerfile(path: Path) -> bool:
+    # Same name grammar as the bump walker's predicate — including
+    # the ``<variant>.Dockerfile`` capital-D suffix form, which the
+    # other consumers accept and this discovery pass must too.
     name = path.name
     if name in ("Dockerfile", "Containerfile"):
         return True
-    if name.startswith("Dockerfile."):
+    if name.startswith("Dockerfile.") or name.endswith(".Dockerfile"):
         return True
     return bool(name.endswith(".dockerfile"))
 

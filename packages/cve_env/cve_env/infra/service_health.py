@@ -246,12 +246,19 @@ def _probe_docker_registry(name: str, ref: str, anon_note: str) -> HealthResult:
     # not on PATH") and TimeoutExpired ("timeout after Ns") into
     # RunOutcome; the canonical "command_not_found:" stderr prefix
     # distinguishes the missing-binary case from a timeout.
+    from core.container.proc import PROXY_ENV_VARS
+
     from cve_env.utils.run import run_with_timeout
 
     start = time.monotonic()
+    # keep_env=PROXY_ENV_VARS: the real resolve path (core.container.
+    # registry) passes the operator proxy vars through — without them the
+    # probe fails as a transport error on proxy-only hosts while actual
+    # pulls succeed, turning doctor/bench-preflight into a false critical.
     outcome = run_with_timeout(
         ["docker", "manifest", "inspect", ref],
         timeout=_DOCKER_TIMEOUT_S,
+        keep_env=PROXY_ENV_VARS,
     )
     latency = (time.monotonic() - start) * 1000.0
     if outcome.returncode is None and outcome.stderr.startswith("command_not_found:"):
@@ -369,4 +376,17 @@ def render_table(results: list[HealthResult]) -> str:
 
 
 def has_critical_failure(results: list[HealthResult]) -> bool:
-    return any(not r.ok and r.name in CRITICAL_NAMES for r in results)
+    """True when a per-name critical service is down, OR when BOTH CVE
+    grounding sources (NVD and OSV) are down — either alone is enough for
+    grounding, but with neither the bench gives up on every CVE, so the
+    pair is critical even though no single name is."""
+    if any(not r.ok and r.name in CRITICAL_NAMES for r in results):
+        return True
+    nvd_seen = [r for r in results if r.name == "NVD API"]
+    osv_seen = [r for r in results if r.name == "OSV API"]
+    return bool(
+        nvd_seen
+        and osv_seen
+        and not any(r.ok for r in nvd_seen)
+        and not any(r.ok for r in osv_seen)
+    )

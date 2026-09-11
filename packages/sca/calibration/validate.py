@@ -246,9 +246,14 @@ def _extract_cve_ids(advisory: dict[str, Any]) -> list[str]:
     aliases = advisory.get("aliases") or []
     if isinstance(aliases, list):
         out.extend(a for a in aliases if isinstance(a, str) and a.startswith("CVE-"))
-    osv_id = advisory.get("osv_id") or ""
-    if isinstance(osv_id, str) and osv_id.startswith("CVE-"):
-        out.append(osv_id)
+    # ``findings.py::_advisory_summary`` archives the primary OSV
+    # record id under ``id``; ``osv_id`` is kept as a fallback for
+    # rows/fixtures written before the key settled. Without the
+    # ``id`` read, a CVE-primary OSV record with no CVE alias lost
+    # its exploited label entirely.
+    primary = advisory.get("id") or advisory.get("osv_id") or ""
+    if isinstance(primary, str) and primary.startswith("CVE-"):
+        out.append(primary)
     return out
 
 

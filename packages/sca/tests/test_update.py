@@ -1000,3 +1000,199 @@ def test_pom_target_written_verbatim() -> None:
     text, applied, _reason = update._rewrite_pom_xml(pom, plan)
     assert applied is True
     assert r"<version>2.17.1\g<1></version>" in text
+
+
+# ---------------------------------------------------------------------------
+# package.json rewrites are anchored inside the dependency sections
+# ---------------------------------------------------------------------------
+
+def test_package_json_scripts_entry_does_not_shadow_dep(
+    tmp_path: Path,
+) -> None:
+    """A ``scripts`` entry named after the dep and appearing BEFORE the
+    dependency sections must neither be rewritten into a version string
+    nor consume the substitution slot: the real devDependencies pin is
+    bumped, the script command survives verbatim."""
+    pkg = tmp_path / "package.json"
+    pkg.write_text(json.dumps({
+        "name": "demo",
+        "scripts": {"jest": "jest --coverage"},
+        "devDependencies": {"jest": "26.6.3"},
+    }, indent=2), encoding="utf-8")
+    findings = _findings_file(tmp_path, [_vuln_row(
+        ecosystem="npm", name="jest",
+        version="26.6.3", fixed_version="29.7.0",
+        manifest=pkg,
+    )])
+    out = tmp_path / "out"
+    update.main(["--findings", str(findings), "--out", str(out),
+                 "--allow-major", "--offline"])
+    proposed = next(iter((out / "proposed").rglob("package.json")))
+    obj = json.loads(proposed.read_text())
+    assert obj["devDependencies"]["jest"] == "29.7.0"
+    assert obj["scripts"]["jest"] == "jest --coverage"
+
+
+def test_package_json_dep_only_in_scripts_is_skipped(
+    tmp_path: Path,
+) -> None:
+    """When the dep name only appears as a ``scripts`` key (no entry in
+    any dependency section), the rewrite is skipped — never applied
+    against the script command."""
+    pkg = tmp_path / "package.json"
+    original = json.dumps({
+        "name": "demo",
+        "scripts": {"eslint": "eslint src/"},
+        "dependencies": {"lodash": "4.17.21"},
+    }, indent=2)
+    pkg.write_text(original, encoding="utf-8")
+    findings = _findings_file(tmp_path, [_vuln_row(
+        ecosystem="npm", name="eslint",
+        version="8.0.0", fixed_version="8.57.0",
+        manifest=pkg,
+    )])
+    out = tmp_path / "out"
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
+    changes = json.loads((out / "changes.json").read_text())
+    assert changes[0]["skipped_reason"] == "no matching spec found"
+    # Nothing materialised — the manifest was not touched at all.
+    assert not list((out / "proposed").rglob("package.json"))
+
+
+# ---------------------------------------------------------------------------
+# requirements.txt extras
+# ---------------------------------------------------------------------------
+
+def test_requirements_txt_extras_pin_rewritten(tmp_path: Path) -> None:
+    """``uvicorn[standard]==0.22.0`` — the new pin splices AFTER the
+    extras, replacing the old spec. Matching the bare name used to
+    emit ``uvicorn==0.30.0[standard]==0.22.0`` (invalid requirement,
+    vulnerable pin retained) while reporting applied."""
+    req = tmp_path / "requirements.txt"
+    req.write_text("uvicorn[standard]==0.22.0\nrequests==2.31.0\n",
+                   encoding="utf-8")
+    findings = _findings_file(tmp_path, [_vuln_row(
+        ecosystem="PyPI", name="uvicorn",
+        version="0.22.0", fixed_version="0.30.0",
+        manifest=req,
+    )])
+    out = tmp_path / "out"
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
+    proposed = next(iter((out / "proposed").rglob("requirements.txt")))
+    body = proposed.read_text()
+    assert "uvicorn[standard]==0.30.0\n" in body
+    assert "0.22.0" not in body
+    assert "requests==2.31.0" in body
+
+
+# ---------------------------------------------------------------------------
+# Composite actions are an inline-install rewrite surface
+# ---------------------------------------------------------------------------
+
+def test_action_yml_recognised_as_inline_install_file(
+    tmp_path: Path,
+) -> None:
+    """``action.yml`` (composite action) carries the same ``run:``
+    install lines as workflows; discovery and the parser both treat it
+    as an inline-install source, so the rewriter must too — otherwise
+    deps parsed from composite actions can never be rewritten."""
+    from packages.sca.update import (
+        _is_inline_install_file,
+        _PlanEntry,
+        _rewrite_one,
+    )
+    for name in ("action.yml", "action.yaml"):
+        assert _is_inline_install_file(Path(name)) is True
+    # Agrees with the discovery predicate.
+    from packages.sca.discovery import _is_inline_install_source
+    for name in ("action.yml", "action.yaml"):
+        assert _is_inline_install_source(Path(name)) is True
+
+    action = tmp_path / "action.yml"
+    text = ("runs:\n  using: composite\n  steps:\n"
+            "    - run: pip install semgrep==1.0.0\n")
+    plan = _PlanEntry(
+        ecosystem="PyPI", name="semgrep", installed="1.0.0",
+        target="1.5.0", manifest=action, advisory_ids=[],
+    )
+    new_text, applied, reason = _rewrite_one(action, text, plan)
+    assert applied is True, reason
+    assert "semgrep==1.5.0" in new_text
+
+
+def test_package_json_nested_decoy_section_not_consumed(
+    tmp_path: Path,
+) -> None:
+    """A ``dependencies`` object NESTED inside another section (the
+    manifest is attacker-authored) must not consume the substitution:
+    only the root-level section is a dependency section, so the real
+    top-level pin is bumped and the decoy stays untouched."""
+    pkg = tmp_path / "package.json"
+    pkg.write_text(json.dumps({
+        "name": "demo",
+        "scripts": {"dependencies": {"lodash": "4.17.4"}},
+        "dependencies": {"lodash": "4.17.4"},
+    }, indent=2), encoding="utf-8")
+    findings = _findings_file(tmp_path, [_vuln_row(
+        ecosystem="npm", name="lodash",
+        version="4.17.4", fixed_version="4.17.21",
+        manifest=pkg,
+    )])
+    out = tmp_path / "out"
+    update.main(["--findings", str(findings), "--out", str(out),
+                 "--offline"])
+    proposed = next(iter((out / "proposed").rglob("package.json")))
+    obj = json.loads(proposed.read_text())
+    assert obj["dependencies"]["lodash"] == "4.17.21"
+    assert obj["scripts"]["dependencies"]["lodash"] == "4.17.4"
+
+
+def test_package_json_decoy_only_is_clean_skip(tmp_path: Path) -> None:
+    """When the dep exists ONLY inside a nested decoy section, the
+    rewrite is refused — never applied against the decoy."""
+    from packages.sca.update import _PlanEntry, _rewrite_package_json
+    text = json.dumps({
+        "config": {"devDependencies": {"lodash": "4.17.4"}},
+    }, indent=2)
+    plan = _PlanEntry(ecosystem="npm", name="lodash",
+                      installed="4.17.4", target="4.17.21",
+                      manifest=Path("package.json"), advisory_ids=[])
+    new_text, applied, reason = _rewrite_package_json(text, plan)
+    assert applied is False
+    assert new_text == text
+    assert reason == "no matching spec found"
+
+
+def test_requirements_txt_spaced_extras_and_operator_rewritten(
+    tmp_path: Path,
+) -> None:
+    """PEP 508 allows whitespace before the extras bracket and around
+    the operator (``uvicorn [standard] == 0.22.0``) — the parser emits
+    an exact-pinned dep for it, so the rewriter must consume the WHOLE
+    spaced form. A name-only match used to splice the pin mid-line
+    (``uvicorn==0.30.0[standard] == 0.22.0``: invalid, vulnerable pin
+    retained, reported applied)."""
+    req = tmp_path / "requirements.txt"
+    req.write_text(
+        "uvicorn [standard] == 0.22.0\n"
+        'flask == 2.3.0 ; python_version >= "3.8"\n',
+        encoding="utf-8",
+    )
+    findings = _findings_file(tmp_path, [
+        _vuln_row(ecosystem="PyPI", name="uvicorn",
+                  version="0.22.0", fixed_version="0.30.0",
+                  manifest=req),
+        _vuln_row(ecosystem="PyPI", name="flask",
+                  version="2.3.0", fixed_version="2.3.3",
+                  manifest=req),
+    ])
+    out = tmp_path / "out"
+    update.main(["--findings", str(findings), "--out", str(out),
+                 "--offline"])
+    proposed = next(iter((out / "proposed").rglob("requirements.txt")))
+    body = proposed.read_text()
+    assert "uvicorn [standard]==0.30.0\n" in body
+    assert "0.22.0" not in body
+    # Spaced operator + trailing environment marker both survive.
+    assert 'flask==2.3.3 ; python_version >= "3.8"' in body
+    assert "2.3.0" not in body

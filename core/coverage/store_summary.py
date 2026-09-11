@@ -123,6 +123,10 @@ def read_tracking_status(run_dirs) -> dict[str, Any]:
     Mechanical check: does ANY run carry a ``coverage-read.json``
     record or a raw ``.reads-manifest``?
     """
+    # Materialise once: a generator input would be consumed by the
+    # loop and then re-consumed (empty) by the len() below, silently
+    # reporting runs=0.
+    run_dirs = list(run_dirs)
     latest_record = None
     pending_manifests = 0
     for rd in run_dirs:
@@ -138,7 +142,7 @@ def read_tracking_status(run_dirs) -> dict[str, Any]:
         if (rd / ".reads-manifest").is_file():
             pending_manifests += 1
     return {
-        "runs": len(list(run_dirs)),
+        "runs": len(run_dirs),
         "latest_record_mtime": latest_record,
         "pending_manifests": pending_manifests,
     }
@@ -184,9 +188,14 @@ def format_progress_trend(store_path) -> str | None:
                 if not line:
                     continue
                 try:
-                    rows.append(loads(line))
+                    row = loads(line)
                 except ValueError:
                     continue
+                # Valid JSON that isn't an object (a bare ``null`` /
+                # number / string line) would AttributeError on
+                # ``.get`` below — skip like a malformed line.
+                if isinstance(row, dict):
+                    rows.append(row)
     except OSError:
         return None
     if not rows:
@@ -375,7 +384,9 @@ def store_coverage_threshold_met(view: dict[str, Any], fail_under: float) -> boo
 
 def format_store_threshold_result(view: dict[str, Any], fail_under: float) -> str:
     pct = store_llm_coverage_percent(view)
-    status = "PASS" if pct >= fail_under else "FAIL"
+    # Title Case in human-readable output (never ALL_CAPS) — repo
+    # output-style rule.
+    status = "Pass" if pct >= fail_under else "Fail"
     return (
         f"Coverage threshold: {pct:.1f}% LLM item coverage; "
         f"required {fail_under:.1f}% — {status}"

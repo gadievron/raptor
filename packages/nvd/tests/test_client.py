@@ -94,6 +94,43 @@ class TestDiskCache:
         assert len(stub.calls) == 1
 
 
+class TestNegativeCache:
+    def test_definitive_404_is_disk_cached(self, stub, tmp_path) -> None:
+        stub.add(status=404)
+        c1 = NvdClient(disk_cache_dir=tmp_path / "nvd")
+        assert c1.get_payload("CVE-2024-1234") is None
+        calls_after_first = len(stub.calls)
+
+        c2 = NvdClient(disk_cache_dir=tmp_path / "nvd")
+        assert c2.get_payload("CVE-2024-1234") is None
+        assert len(stub.calls) == calls_after_first  # served from disk
+
+    def test_transient_failure_not_disk_cached(self, stub, tmp_path) -> None:
+        # Retry exhaustion on 429 (NVD quota/outage) must not be
+        # recorded as a 7-day "CVE does not exist" — a later run
+        # sharing the cache dir must go back to the network.
+        for _ in range(6):
+            stub.add(status=429)
+        c1 = NvdClient(disk_cache_dir=tmp_path / "nvd")
+        assert c1.get_payload("CVE-2024-1234") is None
+
+        stub._queue.clear()
+        stub.add(json=_cve_payload())
+        c2 = NvdClient(disk_cache_dir=tmp_path / "nvd")
+        assert c2.get_payload("CVE-2024-1234") is not None
+
+    def test_transient_failure_memoized_within_process(self, stub, tmp_path) -> None:
+        # In-process the miss IS remembered, so one batch doesn't
+        # hammer a downed NVD with fresh retry storms per lookup.
+        for _ in range(6):
+            stub.add(status=503)
+        client = NvdClient(disk_cache_dir=tmp_path / "nvd")
+        assert client.get_payload("CVE-2024-1234") is None
+        calls_after_first = len(stub.calls)
+        assert client.get_payload("CVE-2024-1234") is None
+        assert len(stub.calls) == calls_after_first
+
+
 class TestRateLimitRetry:
     def test_retries_on_429(self, stub) -> None:
         stub.add(status=429)

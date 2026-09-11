@@ -162,9 +162,13 @@ def target_has_c_sources(target: Path) -> bool:
 def _target_hash(target: Path) -> str:
     """Target identity for library TargetRecords.
 
-    Matches the convention in packages/llm_analysis/checker_followup.py
-    (sha256 of the resolved path, 12 hex chars) so sweep records and
-    per-run replay records refer to the same target the same way.
+    sha256 of the RESOLVED path, 12 hex chars — resolving first means
+    relative and symlinked spellings of one physical target dedup to a
+    single TargetRecord. Per-run replay records made by
+    packages/llm_analysis/checker_followup.py currently hash the path
+    string as passed (no resolve), so a non-canonical repo_root there
+    can still produce a second record for the same target; align that
+    site to the resolved convention rather than un-resolving this one.
     """
     return hashlib.sha256(str(target.resolve()).encode()).hexdigest()[:12]
 
@@ -231,6 +235,8 @@ def _sweep_cocci_rule(
     cwe: str,
     tp_rate: float | None,
     targets_tested: int,
+    provenance: str = "rule-library",
+    tier: str = "library",
 ) -> list[SweepMatch]:
     result = cocci_runner.run_rule(target, rule_path, no_includes=True)
     if result.errors:
@@ -248,8 +254,8 @@ def _sweep_cocci_rule(
             file=m.file,
             line=m.line,
             message=m.message,
-            provenance="rule-library",
-            tier="library",
+            provenance=provenance,
+            tier=tier,
             tp_rate=tp_rate,
             targets_tested=targets_tested,
         )
@@ -269,9 +275,12 @@ def _record(
 
     Empty triage → TargetRecord.tp_rate=None → excluded from the
     precision aggregate; only match counts and target coverage accrue.
+    Zero-match targets are recorded too: a target where the rule fired
+    nowhere is negative evidence — skipping it would let a stale rule
+    keep its precision forever (auto-archive can only trigger when the
+    target list grows) and overstate per-target confidence (counting
+    only hit-targets).
     """
-    if not matches:
-        return
     entry = lib.update(
         rule_id,
         _target_hash(target),
@@ -283,14 +292,27 @@ def _record(
         report.recorded_updates += 1
 
 
-def _graduated_rule_files(engine_rules_dir: Path) -> list[Path]:
-    rules_dir = engine_rules_dir / "semgrep" / "rules"
-    if not rules_dir.is_dir():
-        return []
-    return sorted(
-        p for p in rules_dir.iterdir()
+def _graduated_rule_files(
+    engine_rules_dir: Path,
+) -> tuple[list[Path], list[Path]]:
+    """(semgrep_files, cocci_files) graduated into the engine rules dir.
+
+    Graduation writes semgrep rules to ``semgrep/rules/*.y(a)ml`` AND
+    coccinelle rules to ``coccinelle/*.cocci`` — both engines must
+    join the sweep, otherwise graduated cocci rules would be silently
+    dropped (against the never-silently-dropped stance above).
+    """
+    semgrep_dir = engine_rules_dir / "semgrep" / "rules"
+    semgrep_files = sorted(
+        p for p in semgrep_dir.iterdir()
         if p.is_file() and p.suffix in (".yaml", ".yml")
-    )
+    ) if semgrep_dir.is_dir() else []
+    cocci_dir = engine_rules_dir / "coccinelle"
+    cocci_files = sorted(
+        p for p in cocci_dir.iterdir()
+        if p.is_file() and p.suffix == ".cocci"
+    ) if cocci_dir.is_dir() else []
+    return semgrep_files, cocci_files
 
 
 def run_sweep(
@@ -317,16 +339,30 @@ def run_sweep(
             ", ".join(unsupported),
         )
 
-    graduated = (
+    graduated_semgrep, graduated_cocci = (
         _graduated_rule_files(engine_rules_dir)
-        if engine_rules_dir is not None else []
+        if engine_rules_dir is not None else ([], [])
     )
-    report.rules_graduated = len(graduated)
+    report.rules_graduated = len(graduated_semgrep) + len(graduated_cocci)
     library_rule_ids = {e.rule_id for e in lib.all_entries()}
+    # Rules present BOTH as replayable library entries and as
+    # graduated files (the normal case — graduation copies FROM the
+    # library) run once, in the library loop. Sweeping the graduated
+    # copy again duplicated every match in the report and, with
+    # record=True, double-incremented total_matches via a second
+    # lib.update on the same target.
+    swept_library_ids = (
+        {e.rule_id for e in semgrep_entries}
+        | {e.rule_id for e in cocci_entries}
+    )
 
     for target in targets:
         target = Path(target)
-        run_cocci = bool(cocci_entries) and target_has_c_sources(target)
+        target_is_c = (
+            target_has_c_sources(target)
+            if (cocci_entries or graduated_cocci) else False
+        )
+        run_cocci = bool(cocci_entries) and target_is_c
         if cocci_entries and not run_cocci:
             report.cocci_skipped_targets.append(str(target))
 
@@ -373,8 +409,10 @@ def run_sweep(
                     _record(lib, report, entry.rule_id, target, matches,
                             timestamp)
 
-        for rule_file in graduated:
+        for rule_file in graduated_semgrep:
             rule_id = rule_file.stem
+            if rule_id in swept_library_ids:
+                continue  # already ran as a library entry on this target
             entry = next(
                 (e for e in lib.all_entries() if e.rule_id == rule_id),
                 None,
@@ -391,6 +429,28 @@ def run_sweep(
             report.matches.extend(matches)
             if record and rule_id in library_rule_ids:
                 _record(lib, report, rule_id, target, matches, timestamp)
+
+        if target_is_c:
+            for rule_file in graduated_cocci:
+                rule_id = rule_file.stem
+                if rule_id in swept_library_ids:
+                    continue
+                entry = next(
+                    (e for e in lib.all_entries() if e.rule_id == rule_id),
+                    None,
+                )
+                matches = _sweep_cocci_rule(
+                    report, target, rule_file,
+                    rule_id=rule_id,
+                    cwe=entry.cwe if entry else "",
+                    tp_rate=entry.tp_rate if entry else None,
+                    targets_tested=len(entry.targets) if entry else 0,
+                    provenance="graduated",
+                    tier="graduated",
+                )
+                report.matches.extend(matches)
+                if record and rule_id in library_rule_ids:
+                    _record(lib, report, rule_id, target, matches, timestamp)
 
     return report
 

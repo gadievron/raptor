@@ -1,5 +1,8 @@
 """Tests for the persistent sandboxed Ghidra server."""
 
+import sys
+import time
+
 import pytest
 
 from packages.ghidra.detect import pyghidra_available
@@ -427,3 +430,95 @@ class TestRestartBudget:
             server_mod.GhidraServerError, match="not started",
         ):
             srv.restart()
+
+
+class TestWorkerConnectionIdleTimeout:
+    """The worker must exit when idle past --idle-timeout WITH a
+    client connected, not only while waiting in accept() — an
+    idle-but-connected (or wedged) parent must not hold the JVM
+    worker process alive forever."""
+
+    def _run_worker(self, tmp_path, monkeypatch):
+        import threading
+
+        from packages.ghidra import server_worker
+
+        sock_path = str(tmp_path / "w.sock")
+        monkeypatch.setattr(
+            sys, "argv",
+            ["server_worker", sock_path, "--idle-timeout", "1"],
+        )
+        box: dict = {}
+
+        def run():
+            box["rc"] = server_worker.main()
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        return sock_path, thread, box
+
+    @staticmethod
+    def _connect_client(sock_path, thread=None, timeout=None):
+        """Connect once the worker is actually LISTENING.
+
+        The socket path exists after bind() but before listen(), so a
+        connect raced against worker startup can hit
+        ConnectionRefusedError under load. Mirror the production boot
+        wait (GhidraServer.start): poll connect with a small sleep
+        until a generous deadline, failing fast when the worker
+        thread has already died.
+        """
+        import socket as socket_mod
+
+        deadline = time.monotonic() + 10
+        while True:
+            client = socket_mod.socket(socket_mod.AF_UNIX,
+                                       socket_mod.SOCK_STREAM)
+            if timeout is not None:
+                client.settimeout(timeout)
+            try:
+                client.connect(sock_path)
+                return client
+            except (ConnectionRefusedError, FileNotFoundError):
+                client.close()
+                if thread is not None and not thread.is_alive():
+                    raise AssertionError(
+                        "worker exited before the client connected",
+                    ) from None
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(0.02)
+
+    def test_idle_connected_client_does_not_pin_worker(
+            self, tmp_path, monkeypatch):
+        sock_path, thread, box = self._run_worker(tmp_path, monkeypatch)
+        client = self._connect_client(sock_path, thread=thread)
+        try:
+            thread.join(timeout=8)
+            assert not thread.is_alive(), (
+                "worker still alive with an idle connected client")
+            assert box.get("rc") == 0
+        finally:
+            client.close()
+
+    def test_requests_still_served_under_connection_timeout(
+            self, tmp_path, monkeypatch):
+        import json as json_mod
+
+        sock_path, thread, box = self._run_worker(tmp_path, monkeypatch)
+        client = self._connect_client(sock_path, thread=thread, timeout=5)
+        try:
+            stream = client.makefile("rwb")
+            stream.write(b'{"id": 1, "op": "ping"}\n')
+            stream.flush()
+            resp = json_mod.loads(stream.readline())
+            assert resp == {"id": 1, "ok": True, "pong": True}
+            stream.write(b'{"id": 2, "op": "shutdown"}\n')
+            stream.flush()
+            resp = json_mod.loads(stream.readline())
+            assert resp["ok"] is True and resp["bye"] is True
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+            assert box.get("rc") == 0
+        finally:
+            client.close()

@@ -429,6 +429,59 @@ class TestTraversalGuard:
         assert result == STRAIGHT_LINE_SAFE_SRC
 
 
+class TestTargetRootConfinement:
+    """``target_root`` routes the untrusted finding path through
+    ``core.paths.confine`` — absolute paths must resolve under the
+    scanned tree; without a root the legacy pass-through holds."""
+
+    def test_absolute_path_inside_root_resolves(self, tmp_path):
+        src = _write(tmp_path, "app.py", STRAIGHT_LINE_SAFE_SRC)
+        result = resolve_finding(
+            _raptor_native(str(src), 1, 3), target_root=tmp_path,
+        )
+        assert isinstance(result, ResolvedFinding)
+        assert result.enclosing_function == "handle"
+
+    def test_relative_path_joins_root(self, tmp_path):
+        _write(tmp_path, "app.py", STRAIGHT_LINE_SAFE_SRC)
+        result = resolve_finding(
+            _raptor_native("app.py", 1, 3), target_root=tmp_path,
+        )
+        assert isinstance(result, ResolvedFinding)
+
+    def test_absolute_path_outside_root_refused(self, tmp_path):
+        root = tmp_path / "scanned"
+        root.mkdir()
+        outside = _write(tmp_path, "secret.py", STRAIGHT_LINE_SAFE_SRC)
+        result = resolve_finding(
+            _raptor_native(str(outside), 1, 3), target_root=root,
+        )
+        assert isinstance(result, ResolutionFailure)
+        assert "outside target root" in result.reason
+        # Refused by confinement, not by a failed read.
+        assert "cannot read" not in result.reason
+
+    def test_symlink_escaping_root_refused(self, tmp_path):
+        root = tmp_path / "scanned"
+        root.mkdir()
+        outside = _write(tmp_path, "secret.py", STRAIGHT_LINE_SAFE_SRC)
+        link = root / "app.py"
+        link.symlink_to(outside)
+        result = resolve_finding(
+            _raptor_native(str(link), 1, 3), target_root=root,
+        )
+        assert isinstance(result, ResolutionFailure)
+        assert "outside target root" in result.reason
+
+    def test_no_root_keeps_legacy_pass_through(self, tmp_path):
+        # Two-direction guard: without a root the resolver cannot know
+        # the scanned tree, so an absolute path is still read (legacy
+        # contract for callers that predate the parameter).
+        src = _write(tmp_path, "app.py", STRAIGHT_LINE_SAFE_SRC)
+        result = resolve_finding(_raptor_native(str(src), 1, 3))
+        assert isinstance(result, ResolvedFinding)
+
+
 # ---------------------------------------------------------------------------
 # Nested-function resolution
 # ---------------------------------------------------------------------------

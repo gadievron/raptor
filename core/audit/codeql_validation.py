@@ -102,12 +102,12 @@ def generate_taint_query(claim: DataflowClaim, *, language: str = "cpp") -> str:
  * @name Audit hypothesis: dataflow {source_fn} -> {sink_fn}
  * @description Tests whether data flows from {source_fn} to {sink_fn}
  * @kind path-problem
+ * @problem.severity warning
  * @id raptor/audit-hypothesis
  */
 
 import cpp
-import semmle.code.cpp.dataflow.TaintTracking
-import DataFlow::PathGraph
+import semmle.code.cpp.dataflow.new.TaintTracking
 
 module AuditHypothesisConfig implements DataFlow::ConfigSig {{
   predicate isSource(DataFlow::Node source) {{
@@ -131,6 +131,8 @@ module AuditHypothesisConfig implements DataFlow::ConfigSig {{
 }}
 
 module AuditHypothesisFlow = TaintTracking::Global<AuditHypothesisConfig>;
+
+import AuditHypothesisFlow::PathGraph
 
 from AuditHypothesisFlow::PathNode source, AuditHypothesisFlow::PathNode sink
 where AuditHypothesisFlow::flowPath(source, sink)

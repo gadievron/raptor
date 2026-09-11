@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.llm.config import ModelConfig
 
 from pydantic import BaseModel
 
@@ -103,6 +106,16 @@ def run_stage(
     5. ``sanitise_string()`` on every string field.
     6. Record telemetry.
 
+    ``model_id`` (``provider/model_name``) routes the generation to that
+    specific model: it is resolved to the matching ``ModelConfig`` on
+    the client's config and passed to ``generate_structured`` as a
+    per-call override, and the same ID selects the defence profile —
+    the profile always corresponds to the model that actually
+    generates. When the ID cannot be resolved the stage FAILS (error
+    result) rather than silently generating with the primary model:
+    callers pass ``model_id`` precisely because the primary must not
+    answer (e.g. independent cross-family verification).
+
     Returns a :class:`StageResult`; ``model`` is ``None`` when the call
     fails or the response doesn't validate after re-prompt.
     """
@@ -115,9 +128,23 @@ def run_stage(
         for pf in pf_results:
             defense_telemetry.record_preflight(hit=pf.has_injection_indicators)
 
-    # 2. Build prompt with defence envelope.
+    # 2. Build prompt with defence envelope; resolve any explicit
+    #    model routing before spending tokens.
+    model_override = None
     if model_id is None:
         model_id = _resolve_model_id(client)
+    else:
+        model_override = _resolve_model_config(client, model_id)
+        if model_override is None:
+            logger.warning(
+                "sca.llm: requested model %s not found on client config "
+                "— refusing to generate with the default model", model_id,
+            )
+            return StageResult(
+                model=None, raw=None, preflight_hit=any_hit,
+                confidence_haircut=haircut, cost=0.0,
+                error=f"model {model_id} not resolvable on client config",
+            )
     profile = get_profile_for(model_id)
     bundle = build_prompt(
         system=system,
@@ -131,7 +158,11 @@ def run_stage(
     user_prompt = next(
         (m.content for m in bundle.messages if m.role == "user"), "")
 
-    # 3. generate_structured
+    # 3. generate_structured — model_config overrides the client's
+    #    default model selection for this call only.
+    gen_kwargs: dict[str, Any] = {}
+    if model_override is not None:
+        gen_kwargs["model_config"] = model_override
     json_schema = schema_cls.model_json_schema()
     try:
         resp = client.generate_structured(
@@ -139,6 +170,7 @@ def run_stage(
             schema=json_schema,
             system_prompt=system_prompt,
             task_type=task_type,
+            **gen_kwargs,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("sca.llm: generate_structured failed: %s", exc)
@@ -168,6 +200,7 @@ def run_stage(
             schema=json_schema,
             system_prompt=system_prompt,
             task_type=task_type,
+            **gen_kwargs,
         )
         return _json.dumps(r2.result) if isinstance(r2.result, dict) else (r2.raw or "")
 
@@ -330,6 +363,31 @@ def _resolve_model_id(client) -> str:
         return f"{cfg.provider}/{cfg.model_name}"
     except Exception:  # noqa: BLE001
         return "unknown"
+
+
+def _resolve_model_config(client, model_id: str) -> "ModelConfig | None":
+    """Map a ``provider/model_name`` ID to the matching ``ModelConfig``
+    on the client's config, or ``None`` when no configured model
+    matches. Searched pools: primary, consensus, fallback, judge,
+    aggregate — the same pools checker selection draws from."""
+    try:
+        cfg = client.config
+    except Exception:  # noqa: BLE001
+        return None
+    candidates = []
+    primary = getattr(cfg, "primary_model", None)
+    if primary is not None:
+        candidates.append(primary)
+    for attr in ("consensus_models", "fallback_models",
+                 "judge_models", "aggregate_models"):
+        candidates.extend(getattr(cfg, attr, None) or [])
+    for mc in candidates:
+        try:
+            if f"{mc.provider}/{mc.model_name}" == model_id:
+                return mc
+        except Exception:  # noqa: BLE001, S112 — malformed entry: skip
+            continue
+    return None
 
 
 def _sanitise_model(m: BaseModel) -> BaseModel:

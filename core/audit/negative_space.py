@@ -568,6 +568,7 @@ def check_sibling_negative_space(
             siblings=enriched_siblings,
         )
         asymmetries = find_asymmetries(enriched_group)
+        sib_by_label = {s.label: s for s in enriched_siblings}
 
         for asym in asymmetries:
             prop = asym.property_name
@@ -583,7 +584,13 @@ def check_sibling_negative_space(
             )
             convention_str = conv_match.pattern if conv_match else concern
 
-            findings.extend(NegativeSpaceFinding(
+            for sib_label in asym.minority_siblings:
+                # Identity fields are load-bearing: the consumer
+                # routes each finding by (file, function), so a
+                # finding without them matched no gap and the whole
+                # sibling-asymmetry pass silently produced nothing.
+                sib = sib_by_label.get(sib_label)
+                findings.append(NegativeSpaceFinding(
                     check_type=f"sibling_missing_{concern}",
                     expected=(
                         f"{asym.majority_count}/{asym.majority_count + asym.minority_count} "
@@ -597,7 +604,9 @@ def check_sibling_negative_space(
                     confidence="high" if asym.is_high_confidence else "medium",
                     convention=convention_str,
                     strategy="sibling_asymmetry",
-                ) for sib_label in asym.minority_siblings)
+                    file=sib.file if sib else "",
+                    function=sib.function if sib else "",
+                ))
 
     return findings
 

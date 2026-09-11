@@ -464,6 +464,33 @@ class TestPythonHandlerAnalyzer:
         h = python_handlers(src, "a.py")[0]
         assert h.outcome_kind == "fail_closed"
 
+    def test_truthy_constant_return_is_permissive(self):
+        # `return "admin"` grants exactly like `return True` — a
+        # True-only reading classified every other truthy constant as
+        # fail-closed and refuted textbook fail-open on it.
+        for literal in ('"admin"', "1", "42"):
+            src = (
+                "def role_for(user):\n"
+                "    try:\n"
+                "        return lookup_role(user)\n"
+                "    except LookupError:\n"
+                f"        return {literal}\n"
+            )
+            h = python_handlers(src, "a.py")[0]
+            assert h.outcome_kind == "return_permissive", literal
+
+    def test_falsy_constant_returns_stay_fail_closed(self):
+        for literal in ("None", "0", '""', 'b""'):
+            src = (
+                "def role_for(user):\n"
+                "    try:\n"
+                "        return lookup_role(user)\n"
+                "    except LookupError:\n"
+                f"        return {literal}\n"
+            )
+            h = python_handlers(src, "a.py")[0]
+            assert h.outcome_kind == "fail_closed", literal
+
     def test_deeply_nested_expression_survives(self):
         # AST depth tracks source nesting; the enclosing-function
         # walker must not recurse per level (regression: a 20k-deep

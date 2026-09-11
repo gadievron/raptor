@@ -162,3 +162,11 @@ def test_run_compose_folds_failures_to_compose_error(tmp_path: Path) -> None:
             assert exc.stderr == "boom"
         else:  # pragma: no cover
             raise AssertionError("expected ComposeError")
+
+
+def test_extract_from_image_accepts_tab_after_from(tmp_path: Path) -> None:
+    # Dockerfile grammar allows any whitespace after the directive —
+    # "FROM\tdebian:11" previously missed the --pull freshness gate.
+    assert cb.extract_from_image("FROM\tdebian:11", tmp_path) == "debian:11"
+    assert cb.extract_from_image("from  alpine:3.19", tmp_path) == \
+        "alpine:3.19"

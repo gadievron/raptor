@@ -122,11 +122,24 @@ def _patch_url_for(ref: RepoRef) -> str | None:
     #     and `savannah.gnu.org` both legitimate); reject all
     #     attacker-controlled variants.
     from core.url_patterns import is_kernel_org_url
-    from urllib.parse import urlsplit
+    from urllib.parse import urlsplit, urlunsplit
+
+    def _cgit_base(u: str) -> str:
+        # Drop any query/fragment BEFORE appending the cgit commit
+        # query. A stable-branch repository_url like
+        # ``.../linux.git/?h=linux-5.4.y`` would otherwise keep its
+        # query (and defeat the ``.git`` suffix strip, since the query
+        # follows ``.git``), producing a malformed double-`?` URL and
+        # silently losing the patch_url source.
+        try:
+            p = urlsplit(u)
+            u = urlunsplit((p.scheme, p.netloc, p.path, "", ""))
+        except ValueError:
+            pass
+        return u.rstrip("/").removesuffix(".git")
+
     if is_kernel_org_url(url):
-        base = url.rstrip("/")
-        base = base.removesuffix(".git")
-        return f"{base}/commit/?id={sha}&format=patch"
+        return f"{_cgit_base(url)}/commit/?id={sha}&format=patch"
     try:
         parts = urlsplit(url)
     except ValueError:
@@ -137,14 +150,10 @@ def _patch_url_for(ref: RepoRef) -> str | None:
     # `/cgit/` as a path component is the cgit route convention,
     # but require it to be a true path component):
     if "/cgit/" in path:
-        base = url.rstrip("/")
-        base = base.removesuffix(".git")
-        return f"{base}/commit/?id={sha}&format=patch"
+        return f"{_cgit_base(url)}/commit/?id={sha}&format=patch"
     if host in ("git.savannah.gnu.org", "savannah.gnu.org",
                 "git.savannah.nongnu.org", "savannah.nongnu.org"):
-        base = url.rstrip("/")
-        base = base.removesuffix(".git")
-        return f"{base}/commit/?id={sha}&format=patch"
+        return f"{_cgit_base(url)}/commit/?id={sha}&format=patch"
 
     return None
 
@@ -212,6 +221,19 @@ def _parse_unified_diff(text: str) -> list[tuple[str, int]]:
     return out
 
 
+def _diff_only(body: str) -> str:
+    """Return the diff portion of a format-patch email body.
+
+    Slices from the first line-anchored ``diff --git `` header. When no
+    such header exists the body is returned unchanged (the caller's
+    parse step then rejects it as unparseable).
+    """
+    idx = body.find("diff --git ")
+    while idx > 0 and body[idx - 1] != "\n":
+        idx = body.find("diff --git ", idx + 1)
+    return body[idx:] if idx >= 0 else body
+
+
 def extract_via_patch_url(cve_id: str, ref: RepoRef) -> DiffBundle | None:
     """Fetch the forge's ``.patch`` URL and return a ``DiffBundle``.
 
@@ -240,6 +262,14 @@ def extract_via_patch_url(cve_id: str, ref: RepoRef) -> DiffBundle | None:
     if not body or not body.strip():
         return None
 
+    # Keep only the diff portion. A ``.patch`` response is a full
+    # format-patch email — mail headers + commit message + diffstat,
+    # THEN the unified diff. The clone/API bundles carry only diff
+    # bytes, and the agreement byte-delta comparison assumes comparable
+    # units: a small fix with a normal-sized commit message would
+    # otherwise systematically grade partial/disagree against an
+    # identical clone extraction.
+    body = _diff_only(body)
     parsed = _parse_unified_diff(body)
     if not parsed:
         return None

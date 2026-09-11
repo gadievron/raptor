@@ -114,7 +114,7 @@ def slopsquat_hunt_dispatch(
     try:
         manifests = find_manifests(repo)
         deps = []
-        with capture_parse_failures():
+        with capture_parse_failures() as parse_failures:
             for m in manifests:
                 # Inline manifests (Dockerfile RUN apt-get ...) aren't
                 # registry packages the slopsquat heuristic reasons about.
@@ -125,5 +125,26 @@ def slopsquat_hunt_dispatch(
     except Exception as exc:  # noqa: BLE001 — any SCA-side failure
         logger.warning("slopsquat_hunt: scan failed for %s: %s", repo_path, exc)
         return [{"error": f"slopsquat scan failed: {type(exc).__name__}: {exc}"}]
+
+    # Parse failures must be surfaced, not swallowed: a repo whose only
+    # manifest is malformed parses to zero deps, and "no findings"
+    # would then be indistinguishable from a clean scan — false
+    # assurance on exactly the LLM-generated manifests this mode
+    # targets.
+    if parse_failures:
+        summary = "; ".join(
+            f"{getattr(pf, 'path', '?')}: {getattr(pf, 'reason', 'parse failed')}"
+            for pf in parse_failures[:5]
+        )
+        logger.warning(
+            "slopsquat_hunt: %d manifest(s) failed to parse in %s: %s",
+            len(parse_failures), repo_path, summary,
+        )
+        if not findings:
+            return [{"error": (
+                f"slopsquat scan inconclusive: {len(parse_failures)} "
+                f"manifest(s) failed to parse ({summary}) — zero "
+                f"dependencies from those files were checked"
+            )}]
 
     return [_finding_to_variant(f, repo) for f in findings]

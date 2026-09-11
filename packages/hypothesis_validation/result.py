@@ -53,6 +53,12 @@ class Evidence:
     error: str = ""
     """Error message when success=False."""
 
+    empty_matches_conclusive: bool = False
+    """Adapter assertion that a clean run with no matches is itself a
+    definitive tool result (e.g. SMT unsat proving infeasibility) rather
+    than mere absence of evidence. Consulted by the verdict ladder before
+    downgrading a confirmed claim with no matches to refuted."""
+
     refers_to: str = ""
     """Stable hash of the hypothesis this evidence was produced for.
     Empty string means "unknown" (e.g. evidence built before provenance
@@ -68,10 +74,13 @@ class Evidence:
             "success": self.success,
             "error": self.error,
         }
-        # Only emit refers_to when populated, so the legacy serialized
-        # shape stays untouched for callers that don't set it.
+        # Only emit refers_to / empty_matches_conclusive when populated,
+        # so the legacy serialized shape stays untouched for callers
+        # that don't set them.
         if self.refers_to:
             d["refers_to"] = self.refers_to
+        if self.empty_matches_conclusive:
+            d["empty_matches_conclusive"] = True
         return d
 
 

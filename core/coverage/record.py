@@ -377,14 +377,22 @@ def build_from_findings(findings_path: Path, reads_manifest_path: Path | None = 
         return None
 
     findings = findings_data.get("findings", [])
+    if not isinstance(findings, list):
+        # findings.json is LLM-written — shape drift (a string / dict
+        # where the list belongs) must degrade like an empty file,
+        # not crash the validation-helper coverage step.
+        return None
 
     # Functions analysed (from findings with rulings)
     functions = []
     finding_files = set()
     for f in findings:
+        if not isinstance(f, dict):
+            continue
         file_path = f.get("file", "")
         func = f.get("function", "")
-        if file_path and func:
+        if isinstance(file_path, str) and isinstance(func, str) \
+                and file_path and func:
             functions.append({"file": file_path, "function": func})
             finding_files.add(file_path)
 

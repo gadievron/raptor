@@ -413,6 +413,75 @@ class TestLoopStreaming:
         assert result.terminated_by == "complete"
         assert result.tool_calls_made == 1
 
+    @pytest.mark.parametrize("raw", ["null", "[]", '"str"', "[1,2]"])
+    def test_streaming_non_dict_tool_json(self, raw: str):
+        """Valid JSON that isn't an object ('null', '[]', '\"str\"')
+        parses cleanly but can't be a tool-args dict — it must be
+        treated exactly like malformed JSON (empty input), not flow
+        into ``ToolCall.input`` and crash handler dispatch."""
+        chunks = [
+            StreamChunk(
+                type="tool_call_start",
+                tool_call_id="tc_1",
+                tool_call_name="echo",
+            ),
+            StreamChunk(
+                type="tool_call_delta",
+                tool_call_id="tc_1",
+                tool_call_input_delta=raw,
+            ),
+            StreamChunk(type="tool_call_end", tool_call_id="tc_1"),
+            StreamChunk(type="usage", input_tokens=10, output_tokens=5),
+            StreamChunk(
+                type="done", stop_reason=StopReason.NEEDS_TOOL_CALL,
+            ),
+        ]
+        seen_inputs: list[dict] = []
+
+        def handler(args: dict) -> str:
+            seen_inputs.append(args)
+            return "ok"
+
+        tool = ToolDef(
+            name="echo",
+            description="echo back",
+            input_schema={"type": "object"},
+            handler=handler,
+        )
+        provider = FakeStreamingProvider([
+            chunks,
+            self._text_complete_chunks("recovered"),
+        ])
+        loop = ToolUseLoop(provider, [tool], stream=True)
+        result = loop.run("test")
+        assert result.tool_calls_made == 1
+        assert result.terminated_by == "complete"
+        assert seen_inputs == [{}]
+
+    def test_streaming_valid_dict_tool_json_unchanged(self):
+        """The non-dict guard must not disturb well-formed object
+        args — they still reach the handler intact."""
+        seen_inputs: list[dict] = []
+
+        def handler(args: dict) -> str:
+            seen_inputs.append(args)
+            return "ok"
+
+        tool = ToolDef(
+            name="echo",
+            description="echo back",
+            input_schema={"type": "object"},
+            handler=handler,
+        )
+        provider = FakeStreamingProvider([
+            self._tool_call_chunks(args={"msg": "hi"}),
+            self._text_complete_chunks("done"),
+        ])
+        loop = ToolUseLoop(provider, [tool], stream=True)
+        result = loop.run("test")
+        assert result.terminated_by == "complete"
+        assert seen_inputs == [{"msg": "hi"}]
+
     def test_streaming_malformed_tool_json(self):
         chunks = [
             StreamChunk(
@@ -441,3 +510,100 @@ class TestLoopStreaming:
         result = loop.run("test")
         assert result.tool_calls_made == 1
         assert result.terminated_by == "complete"
+
+
+# ---------------------------------------------------------------------------
+# Stream-failure containment
+# ---------------------------------------------------------------------------
+
+
+class _ScriptedFailureProvider(_FakeBase):
+    """``turn_stream`` behaviour per scripted step:
+
+    * ``"fail_pre"`` — raises before yielding any chunk
+    * ``"fail_mid"`` — yields one text chunk, then raises
+    * ``"fail_credit"`` — raises a credit-exhaustion-shaped error
+      before any chunk
+    * a list of :class:`StreamChunk` — plays a healthy turn
+    """
+
+    def __init__(self, script: list) -> None:
+        super().__init__(_cfg())
+        self._script = list(script)
+        self.calls = 0
+
+    def supports_streaming(self) -> bool:
+        return True
+
+    def turn(self, messages, tools, **kw):
+        raise NotImplementedError("streaming only")
+
+    def turn_stream(self, messages, tools, **kw) -> Iterator[StreamChunk]:
+        step = self._script[min(self.calls, len(self._script) - 1)]
+        self.calls += 1
+        if step == "fail_pre":
+            msg = "stream failed mid-turn (ConnectionResetError): boom"
+            raise RuntimeError(msg)
+        if step == "fail_credit":
+            msg = "400 your credit balance is too low"
+            raise RuntimeError(msg)
+        if step == "fail_mid":
+            yield StreamChunk(type="text_delta", text="partial")
+            msg = "stream failed mid-turn (ConnectionResetError): boom"
+            raise RuntimeError(msg)
+        yield from step
+
+
+def _complete_chunks(text: str = "ok") -> list[StreamChunk]:
+    return [
+        StreamChunk(type="text_delta", text=text),
+        StreamChunk(type="usage", input_tokens=5, output_tokens=2),
+        StreamChunk(type="done", stop_reason=StopReason.COMPLETE),
+    ]
+
+
+class TestStreamFailureContainment:
+    def test_pre_content_failure_retries_and_succeeds(self):
+        """A stream that dies before ANY content chunk left no partial
+        state — the turn is re-issued and the run completes."""
+        p = _ScriptedFailureProvider(["fail_pre", _complete_chunks()])
+        loop = ToolUseLoop(p, [], stream=True)
+        out = loop.run("hi")
+        assert out.terminated_by == "complete"
+        assert out.final_text == "ok"
+        assert p.calls == 2
+
+    def test_pre_content_failure_retry_is_bounded(self):
+        from core.llm.tool_use.loop import _STREAM_PRE_CONTENT_RETRIES
+        p = _ScriptedFailureProvider(["fail_pre"])   # fails every time
+        loop = ToolUseLoop(p, [], stream=True)
+        with pytest.raises(RuntimeError, match="stream failed"):
+            loop.run("hi")
+        assert p.calls == _STREAM_PRE_CONTENT_RETRIES + 1
+
+    def test_mid_content_failure_propagates_typed_without_retry(self):
+        """Once partial content was consumed, a retry could
+        double-execute the turn — the converted typed error propagates
+        instead."""
+        p = _ScriptedFailureProvider(["fail_mid", _complete_chunks()])
+        loop = ToolUseLoop(p, [], stream=True)
+        with pytest.raises(RuntimeError, match="stream failed mid-turn"):
+            loop.run("hi")
+        assert p.calls == 1
+
+    def test_credit_exhaustion_not_retried(self):
+        """Credit exhaustion fails identically on every attempt —
+        retrying only burns time; it propagates immediately."""
+        p = _ScriptedFailureProvider(["fail_credit"])
+        loop = ToolUseLoop(p, [], stream=True)
+        with pytest.raises(RuntimeError, match="credit balance"):
+            loop.run("hi")
+        assert p.calls == 1
+
+    def test_healthy_stream_unaffected_by_containment(self):
+        p = _ScriptedFailureProvider([_complete_chunks("final")])
+        loop = ToolUseLoop(p, [], stream=True)
+        out = loop.run("hi")
+        assert out.terminated_by == "complete"
+        assert out.final_text == "final"
+        assert p.calls == 1

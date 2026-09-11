@@ -39,7 +39,12 @@ _HTML_SIGNALS = [
     (re.compile(r'wp-content/(?:plugins|themes)/', re.I), "WordPress"),
     (re.compile(r'/drupal\.js|drupal\.settings', re.I), "PHP/Drupal"),
     (re.compile(r'django-csrftoken|__django', re.I), "Python/Django"),
-    (re.compile(r'rails-ujs|csrf-token', re.I), "Ruby on Rails"),
+    # Rails-specific markers only: <meta name="csrf-token"> is emitted
+    # by Laravel, Phoenix, and many non-Rails stacks, and first-match-
+    # wins ordering would fingerprint those as Rails (steering wordlist
+    # and extension selection at .rb instead of the real stack).
+    # csrf-param is the Rails-form companion tag other stacks don't use.
+    (re.compile(r'rails-ujs|csrf-param|data-turbolinks', re.I), "Ruby on Rails"),
     (re.compile(r'laravel_token', re.I), "PHP/Laravel"),
     (re.compile(r'ng-version=|angular\.min\.js', re.I), "Angular"),
     (re.compile(r'react(?:\.development|\.production)\.min\.js|__react', re.I), "React"),

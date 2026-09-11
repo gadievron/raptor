@@ -72,6 +72,37 @@ class TestExtractImports:
         imports = extract_imports(Path("core/llm/client.py"), tmp_path)
         assert "core.llm.config" in imports
 
+    def _nested_pkg(self, tmp_path, source):
+        """core/a/b.py with *source*, inside a real nested package."""
+        pkg = tmp_path / "core" / "a"
+        pkg.mkdir(parents=True)
+        (tmp_path / "core" / "__init__.py").write_text("", encoding="utf-8")
+        (tmp_path / "core" / "client.py").write_text("", encoding="utf-8")
+        (pkg / "__init__.py").write_text("", encoding="utf-8")
+        (pkg / "b.py").write_text(source, encoding="utf-8")
+        return extract_imports(Path("core/a/b.py"), tmp_path)
+
+    def test_bare_relative_import_current_package(self, tmp_path):
+        # `from . import x` (module=None, level=1) — current package.
+        imports = self._nested_pkg(tmp_path, "from . import sibling\n")
+        assert "core.a" in imports
+        assert "core.a.sibling" in imports
+
+    def test_bare_relative_import_parent_package(self, tmp_path):
+        # `from .. import client` (module=None, level=2) must resolve
+        # against the PARENT package, not the current one — the wrong
+        # edges under-scoped PR scans and test dispatch.
+        imports = self._nested_pkg(tmp_path, "from .. import client\n")
+        assert "core" in imports
+        assert "core.client" in imports
+        assert "core.a.client" not in imports
+
+    def test_module_relative_import_parent_package(self, tmp_path):
+        # `from ..client import X` (module set, level=2) — the
+        # already-working branch keeps working.
+        imports = self._nested_pkg(tmp_path, "from ..client import X\n")
+        assert "core.client" in imports
+
     def test_filters_stdlib(self, tmp_path):
         (tmp_path / "test.py").write_text(
             "import json\nimport os\nfrom pathlib import Path\n",

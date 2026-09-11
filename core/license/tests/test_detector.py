@@ -50,16 +50,28 @@ class TestSpdxHeaderDetection:
         lic = detect_target_license(tmp_path)
         assert lic.classification == "oss"
 
-    def test_unknown_spdx_id_classified_proprietary(self, tmp_path):
-        # SPDX header present but not in our OSS allowlist — could
-        # be a custom commercial id, treat conservatively.
+    def test_unknown_spdx_id_classified_unknown(self, tmp_path):
+        # SPDX header present but not in our OSS allowlist — the
+        # allowlist is deliberately partial, so a miss is more
+        # likely a gap (a less-common OSI license) than a commercial
+        # id. Unknown, never proprietary: BSL-1.0/EPL-1.0-class ids
+        # were being flagged proprietary at high confidence.
         (tmp_path / "LICENSE").write_text(
             "SPDX-License-Identifier: AcmeCorp-Internal-1.0\n",
         )
         lic = detect_target_license(tmp_path)
+        assert lic.classification == "unknown"
+        assert lic.spdx_id == "AcmeCorp-Internal-1.0"
+
+    def test_unknown_spdx_id_with_proprietary_marker(self, tmp_path):
+        # ...unless the body itself carries a proprietary marker.
+        (tmp_path / "LICENSE").write_text(
+            "SPDX-License-Identifier: AcmeCorp-Internal-1.0\n"
+            "This software is confidential.\n",
+        )
+        lic = detect_target_license(tmp_path)
         assert lic.classification == "proprietary"
         assert lic.spdx_id == "AcmeCorp-Internal-1.0"
-        assert lic.confidence == "high"
 
 
 class TestCompoundSpdxHeader:
@@ -110,6 +122,43 @@ class TestCompoundSpdxHeader:
         lic = detect_target_license(tmp_path)
         assert lic.classification == "oss"
         assert lic.spdx_id == "GPL-3.0 WITH Classpath-exception-2.0"
+
+    def test_with_exception_does_not_launder_anded_operand(self, tmp_path):
+        # The WITH exception is laundered only for its OWN pair: an
+        # AND-joined non-OSS operand elsewhere in the expression must
+        # still drop the whole compound to proprietary. Pre-fix, a
+        # \bWITH\b-anywhere check judged the whole expression by its
+        # FIRST operand, so this exact shape classified oss/high.
+        (tmp_path / "LICENSE").write_text(
+            "SPDX-License-Identifier: MIT WITH Classpath-exception-2.0 "
+            "AND LicenseRef-Proprietary-1.0\n",
+        )
+        lic = detect_target_license(tmp_path)
+        assert lic.classification == "proprietary"
+        assert lic.confidence == "high"
+
+    def test_with_exception_pair_beside_oss_operand_stays_oss(
+            self, tmp_path):
+        # Benign direction: an OSS-principal WITH pair joined to an
+        # OSS operand keeps the compound OSS.
+        (tmp_path / "LICENSE").write_text(
+            "SPDX-License-Identifier: MIT WITH Classpath-exception-2.0 "
+            "AND Apache-2.0\n",
+        )
+        lic = detect_target_license(tmp_path)
+        assert lic.classification == "oss"
+        assert lic.confidence == "high"
+
+    def test_with_exception_non_oss_principal_is_proprietary(
+            self, tmp_path):
+        # The pair itself is judged by its principal: a non-OSS
+        # principal cannot ride the exception to an OSS verdict.
+        (tmp_path / "LICENSE").write_text(
+            "SPDX-License-Identifier: LicenseRef-Proprietary-1.0 "
+            "WITH Classpath-exception-2.0\n",
+        )
+        lic = detect_target_license(tmp_path)
+        assert lic.classification == "proprietary"
 
     def test_compound_takes_precedence_over_single(self, tmp_path):
         # Defends against the regex-precedence bug: the single-id
@@ -802,3 +851,74 @@ class TestFormatSummary:
         out = format_license_summary(lic, command="scan")
         assert "LICENSE-APACHE" not in out
         assert "MIT" in out
+
+
+class TestCompoundHeaderCaseAndBounds:
+    """The compound-header matcher is IGNORECASE and single-line; the
+    classifier must never mint an oss/high verdict from text it could
+    not decompose."""
+
+    def test_lowercase_prose_operators_classify_by_content(self, tmp_path):
+        # Empirically the inversion case: classified oss/high pre-fix.
+        (tmp_path / "LICENSE").write_text(
+            "SPDX-License-Identifier: Proprietary and Confidential\n",
+        )
+        lic = detect_target_license(tmp_path)
+        assert lic.classification == "proprietary"
+
+    def test_lowercase_or_between_oss_ids_is_oss(self, tmp_path):
+        (tmp_path / "LICENSE").write_text(
+            "SPDX-License-Identifier: MIT or Apache-2.0\n",
+        )
+        lic = detect_target_license(tmp_path)
+        assert lic.classification == "oss"
+        assert lic.confidence == "high"
+
+    def test_header_expression_is_newline_bounded(self, tmp_path):
+        # Prose on the NEXT line must not be swallowed into a phantom
+        # compound expression that demotes a genuinely-MIT file.
+        (tmp_path / "LICENSE").write_text(
+            "SPDX-License-Identifier: MIT\n"
+            "OR consult the documentation for licensing details\n",
+        )
+        lic = detect_target_license(tmp_path)
+        assert lic.spdx_id == "MIT"
+        assert lic.classification == "oss"
+
+
+class TestAllowlistAdditions:
+    def test_less_common_osi_ids_are_oss(self, tmp_path):
+        for spdx in ("BSL-1.0", "EPL-1.0", "CDDL-1.0"):
+            (tmp_path / "LICENSE").write_text(
+                f"SPDX-License-Identifier: {spdx}\n",
+            )
+            lic = detect_target_license(tmp_path)
+            assert lic.classification == "oss", spdx
+
+
+class TestUnlicenseFilename:
+    def test_unlicense_file_detected(self, tmp_path):
+        (tmp_path / "UNLICENSE").write_text(
+            "This is free and unencumbered software released into the "
+            "public domain.\n",
+        )
+        lic = detect_target_license(tmp_path)
+        assert lic.classification == "oss"
+        assert lic.spdx_id == "Unlicense"
+
+
+class TestReadLicenseFullHardening:
+    def test_fifo_swap_read_fails_closed(self, tmp_path):
+        # TOCTOU residual: the is_file() gate can be raced; the read
+        # itself must refuse non-regular files instead of blocking.
+        import os
+        from core.license.detector import _read_license_full
+        fifo = tmp_path / "COPYING.actually-a-fifo"
+        os.mkfifo(fifo)
+        assert _read_license_full(fifo, 4096) == ""
+
+    def test_regular_file_reads_and_truncates(self, tmp_path):
+        from core.license.detector import _read_license_full
+        f = tmp_path / "LICENSE"
+        f.write_text("A" * 100)
+        assert _read_license_full(f, 10) == "A" * 10

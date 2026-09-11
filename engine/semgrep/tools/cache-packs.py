@@ -199,6 +199,29 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     print(f"    python3 engine/semgrep/tools/cache-packs.py import {zip_name}")
 
 
+def _read_member_bounded(zf: zipfile.ZipFile, name: str) -> bytes | None:
+    """Decompress one bundle member with a hard size cap.
+
+    ``zf.read()`` inflates the whole member into memory with no bound,
+    so a small bundle carrying one high-ratio DEFLATE member could
+    exhaust memory. Read in chunks and stop one byte past
+    MAX_PACK_BYTES (the same ceiling the network fetch enforces);
+    return None when the cap is exceeded.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    with zf.open(name) as fh:
+        while True:
+            chunk = fh.read(65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_PACK_BYTES:
+                return None
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def cmd_import(args: argparse.Namespace) -> None:
     """Import a cache bundle into RAPTOR's registry-cache directory."""
     zip_path = Path(args.zipfile)
@@ -214,12 +237,29 @@ def cmd_import(args: argparse.Namespace) -> None:
         for name in sorted(zf.namelist()):
             if name == "manifest.json":
                 continue
-            if not name.startswith("c.p.") or not name.endswith(".json"):
+            # Flat namespace is the bundle contract (cmd_fetch writes
+            # cache_filename() members only): any separator or '..'
+            # segment is a traversal-shaped name that could escape
+            # CACHE_DIR — reject, never join it onto the cache dir.
+            if (
+                "/" in name
+                or "\\" in name
+                or ".." in name
+                or not name.startswith("c.p.")
+                or not name.endswith(".json")
+            ):
                 print(f"  skip: {name} (unexpected filename)")
                 skipped += 1
                 continue
             dest = CACHE_DIR / name
-            data = zf.read(name)
+            data = _read_member_bounded(zf, name)
+            if data is None:
+                print(
+                    f"  skip: {name} (exceeds the "
+                    f"{MAX_PACK_BYTES}-byte pack cap)"
+                )
+                skipped += 1
+                continue
             # Validate it's parseable JSON
             try:
                 json.loads(data)
@@ -240,7 +280,8 @@ def cmd_import(args: argparse.Namespace) -> None:
             # (ValueError) or a read error (OSError) shouldn't fail
             # the import.
             try:
-                m = json.loads(zf.read("manifest.json"))
+                raw = _read_member_bounded(zf, "manifest.json")
+                m = json.loads(raw) if raw is not None else None
                 if isinstance(m, dict):
                     print(f"\n  Bundle fetched: {m.get('fetched_utc', 'unknown')}")
             except (OSError, ValueError, zipfile.BadZipFile, zlib.error):

@@ -106,10 +106,58 @@ class TestPathIsGated:
     def test_leaf_without_gate_is_not_gated(self):
         facts = _StubFacts({})  # no callers, no gate
         result = _result_with_caps()
-        assert _path_is_gated(
-            "entry_fn", facts, result,
-            remaining_depth=3, visited=frozenset(),
-        ) is False
+        with patch(
+            "packages.source_intel.adapter._function_is_static",
+            return_value=True,
+        ):
+            assert _path_is_gated(
+                "entry_fn", facts, result,
+                remaining_depth=3, visited=frozenset(),
+                fn_file="/repo/x.c",
+            ) is False
+
+    def test_non_static_fn_cannot_prove_gating(self):
+        """The prereq scan is directory-scoped: a non-static function
+        may have unseen callers in other translation units, so its
+        in-scope caller set can't prove every path is gated — even
+        when every SEEN caller is."""
+        facts = _StubFacts({
+            "leaf_fn": [("/repo/x.c", 10, "gated_caller")],
+        })
+        result = _result_with_caps(_cap_for("gated_caller"))
+        with (
+            patch("packages.source_intel.adapter._line_uses_privileged_cap",
+                  return_value=True),
+            patch("packages.source_intel.adapter._function_is_static",
+                  return_value=False),
+            patch("packages.source_intel.analyze._enclosing_function",
+                  side_effect=lambda f, line: facts.enclosing(f, line)),
+        ):
+            assert _path_is_gated(
+                "leaf_fn", facts, result,
+                remaining_depth=3, visited=frozenset(),
+                fn_file="/repo/x.c",
+            ) is False
+
+    def test_unknown_defining_file_cannot_prove_gating(self):
+        """Without knowing where the function lives, its linkage —
+        and therefore caller-set completeness — can't be verified."""
+        facts = _StubFacts({
+            "leaf_fn": [("/repo/x.c", 10, "gated_caller")],
+        })
+        result = _result_with_caps(_cap_for("gated_caller"))
+        with (
+            patch("packages.source_intel.adapter._line_uses_privileged_cap",
+                  return_value=True),
+            patch("packages.source_intel.adapter._function_is_static",
+                  return_value=True),
+            patch("packages.source_intel.analyze._enclosing_function",
+                  side_effect=lambda f, line: facts.enclosing(f, line)),
+        ):
+            assert _path_is_gated(
+                "leaf_fn", facts, result,
+                remaining_depth=3, visited=frozenset(),
+            ) is False
 
     def test_depth_exhausted_without_gate(self):
         # one_hop → two_hop → ... (chain longer than depth)
@@ -122,12 +170,15 @@ class TestPathIsGated:
         with (
             patch("packages.source_intel.adapter._line_uses_privileged_cap",
                   return_value=False),
+            patch("packages.source_intel.adapter._function_is_static",
+                  return_value=True),
             patch("packages.source_intel.analyze._enclosing_function",
                   side_effect=lambda f, line: facts.enclosing(f, line)),
         ):
             assert _path_is_gated(
                 "one_hop", facts, result,
                 remaining_depth=2, visited=frozenset(),
+                fn_file="/repo/x.c",
             ) is False
 
     def test_cycle_returns_false_not_infinite(self):
@@ -140,12 +191,15 @@ class TestPathIsGated:
         with (
             patch("packages.source_intel.adapter._line_uses_privileged_cap",
                   return_value=False),
+            patch("packages.source_intel.adapter._function_is_static",
+                  return_value=True),
             patch("packages.source_intel.analyze._enclosing_function",
                   side_effect=lambda f, line: facts.enclosing(f, line)),
         ):
             assert _path_is_gated(
                 "a", facts, result,
                 remaining_depth=10, visited=frozenset(),
+                fn_file="/repo/x.c",
             ) is False
 
     def test_gate_two_hops_up(self):
@@ -157,12 +211,15 @@ class TestPathIsGated:
         with (
             patch("packages.source_intel.adapter._line_uses_privileged_cap",
                   return_value=True),
+            patch("packages.source_intel.adapter._function_is_static",
+                  return_value=True),
             patch("packages.source_intel.analyze._enclosing_function",
                   side_effect=lambda f, line: facts.enclosing(f, line)),
         ):
             assert _path_is_gated(
                 "leaf_fn", facts, result,
                 remaining_depth=3, visited=frozenset(),
+                fn_file="/repo/x.c",
             ) is True
 
     def test_any_ungated_caller_path_returns_false(self):
@@ -177,12 +234,15 @@ class TestPathIsGated:
         with (
             patch("packages.source_intel.adapter._line_uses_privileged_cap",
                   return_value=True),
+            patch("packages.source_intel.adapter._function_is_static",
+                  return_value=True),
             patch("packages.source_intel.analyze._enclosing_function",
                   side_effect=lambda f, line: facts.enclosing(f, line)),
         ):
             assert _path_is_gated(
                 "leaf_fn", facts, result,
                 remaining_depth=3, visited=frozenset(),
+                fn_file="/repo/x.c",
             ) is False
 
 
@@ -201,12 +261,12 @@ class TestPrivilegeBackWalkSuppresses:
     def test_returns_false_when_no_callers(self):
         facts = _StubFacts({})
         with (
-            patch("packages.source_intel.adapter.gather_prereqs",
-                  return_value=facts, create=True),
             patch("packages.source_intel.analyze._enclosing_function",
                   return_value="entry_fn"),
+            patch("packages.source_intel.adapter._function_is_static",
+                  return_value=True),
         ):
-            # Patch the import inside the function as well.
+            # Patch the import inside the gather helper as well.
             import packages.coccinelle.prereqs as p
             with patch.object(p, "gather_prereqs", return_value=facts), \
                     patch.object(Path, "is_dir", return_value=True):
@@ -242,6 +302,8 @@ class TestPrivilegeBackWalkSuppresses:
                   side_effect=_enc),
             patch("packages.source_intel.adapter._line_uses_privileged_cap",
                   return_value=True),
+            patch("packages.source_intel.adapter._function_is_static",
+                  return_value=True),
             patch.object(Path, "is_dir", return_value=True),
         ):
             assert _privilege_back_walk_suppresses(
@@ -270,6 +332,8 @@ class TestPrivilegeBackWalkSuppresses:
                   side_effect=_enc),
             patch("packages.source_intel.adapter._line_uses_privileged_cap",
                   return_value=False),
+            patch("packages.source_intel.adapter._function_is_static",
+                  return_value=True),
             patch.object(Path, "is_dir", return_value=True),
         ):
             assert _privilege_back_walk_suppresses(
@@ -302,6 +366,8 @@ class TestPrivilegeBackWalkSuppresses:
                   side_effect=_enc),
             patch("packages.source_intel.adapter._line_uses_privileged_cap",
                   return_value=True),
+            patch("packages.source_intel.adapter._function_is_static",
+                  return_value=True),
             patch.object(Path, "is_dir", return_value=True),
         ):
             # depth=1: walks one hop (leaf_fn → mid_fn). mid_fn body
@@ -315,3 +381,79 @@ class TestPrivilegeBackWalkSuppresses:
 
     def test_default_depth_is_three(self):
         assert _PRIV_BACK_WALK_DEFAULT_DEPTH == 3
+
+    def test_non_static_finding_fn_never_suppressed(self, tmp_path):
+        """Two-direction linkage gate on real files: the prereq scan
+        only sees the sink file's parent directory, so a NON-static
+        finding function may have ungated callers in other
+        translation units the walk can't see — even a fully-gated
+        in-scope caller set must not suppress. The identical shape
+        with `static` linkage (all callers provably in-file) still
+        suppresses."""
+        gated_line = 5
+        non_static = tmp_path / "a.c"
+        non_static.write_text(
+            "int leaf_fn(int a)\n"
+            "{\n"
+            "    return a * 2;\n"
+            "}\n"
+            "static int caller(int a)\n"
+            "{\n"
+            "    if (!capable(CAP_SYS_ADMIN)) return -1;\n"
+            "    return leaf_fn(a);\n"
+            "}\n"
+        )
+
+        facts = _StubFacts({
+            "leaf_fn": [(str(non_static), 8, "caller")],
+        })
+        finding = Finding(
+            finding_id="t", producer="codeql",
+            rule_id="cpp/use-after-free", message="m",
+            source=Step(file_path=str(non_static), line=3, column=1,
+                        snippet="s", label="source"),
+            sink=Step(file_path=str(non_static), line=3, column=1,
+                      snippet="x", label="sink"),
+            intermediate_steps=(), raw={},
+        )
+        caps = _result_with_caps(CapabilityEvidence(
+            cap_function="capable",
+            location=(str(non_static), gated_line + 2),
+            grade=GRADE_SAME_FUNCTION,
+            enclosing_function="caller",
+        ))
+
+        def _enc(file_path, line):
+            if line == 3:
+                return "leaf_fn"
+            return facts.enclosing(file_path, line)
+
+        with (
+            patch("packages.coccinelle.prereqs.gather_prereqs",
+                  return_value=facts),
+            patch("packages.source_intel.analyze._enclosing_function",
+                  side_effect=_enc),
+            patch("packages.source_intel.adapter._line_uses_privileged_cap",
+                  return_value=True),
+        ):
+            # Direction 1: non-static finding fn — must NOT suppress.
+            assert _privilege_back_walk_suppresses(
+                finding, caps, tmp_path,
+            ) is False
+
+            # Direction 2: identical shape, static linkage — still
+            # suppresses (the legitimately-gated case keeps working).
+            non_static.write_text(
+                "static int leaf_fn(int a)\n"
+                "{\n"
+                "    return a * 2;\n"
+                "}\n"
+                "static int caller(int a)\n"
+                "{\n"
+                "    if (!capable(CAP_SYS_ADMIN)) return -1;\n"
+                "    return leaf_fn(a);\n"
+                "}\n"
+            )
+            assert _privilege_back_walk_suppresses(
+                finding, caps, tmp_path,
+            ) is True

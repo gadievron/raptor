@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import re
 import subprocess
 import tempfile
@@ -77,19 +78,33 @@ _C_FILE_EXTS: tuple[str, ...] = (".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh
 
 def repo_looks_c_cpp(repo_path: str, max_files_to_check: int = 200) -> bool:
     """Heuristic check that the repo has C/C++ source. Bounded scan
-    so giant repos don't pay a rglob walk to discover the obvious."""
+    so giant repos don't pay a full walk to discover the obvious.
+
+    Noise dirs (.git and other hidden dirs, node_modules, build
+    output) are pruned and never consume the file budget — a real C
+    repo whose walk order surfaces thousands of .git objects or
+    vendored JS first must not exhaust the cap before reaching its
+    first ``.c`` file and get refused as "no C/C++ source".
+    """
     p = Path(repo_path)
     if not p.is_dir():
         return False
+    skip_dirs = {
+        "node_modules", "__pycache__", "venv", "env",
+        "build", "dist", "target",
+    }
     seen = 0
-    for entry in p.rglob("*"):
-        if not entry.is_file():
-            continue
-        seen += 1
-        if entry.suffix.lower() in _C_FILE_EXTS:
-            return True
-        if seen >= max_files_to_check:
-            return False
+    for dirpath, dirnames, filenames in os.walk(p, followlinks=False):
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if d not in skip_dirs and not d.startswith(".")
+        )
+        for fn in sorted(filenames):
+            if Path(fn).suffix.lower() in _C_FILE_EXTS:
+                return True
+            seen += 1
+            if seen >= max_files_to_check:
+                return False
     return False
 
 
@@ -184,11 +199,36 @@ def translate_pattern_to_cocci_rule(
         f"Translate this pattern into a Coccinelle .cocci rule:\n\n"
         f"{pattern}\n"
     )
+    # max_cost_usd enforcement for a one-shot call: the output side is
+    # bounded by max_tokens below; the input side is the pattern text,
+    # gated here by a size ceiling derived from the budget (≈4 chars
+    # per token at a conservative $10/Mtok input price) so a
+    # pathological pattern cannot bill unbounded input tokens against
+    # a knob that would otherwise be dead.
+    max_input_tokens = max(1_000, int(max_cost_usd / 10e-6))
+    if len(user_message) // 4 > max_input_tokens:
+        logger.warning(
+            "cocci_hunt: pattern (%d chars) exceeds the rule-gen "
+            "budget ($%.2f) input ceiling — skipping cocci translation",
+            len(user_message), max_cost_usd,
+        )
+        return None
     response = provider.generate(
         prompt=user_message,
         system_prompt=_RULE_GEN_SYSTEM,
         max_tokens=600,
     )
+    try:
+        actual_cost = float(getattr(response, "cost", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        actual_cost = 0.0  # provider gave no numeric cost — skip check
+    if actual_cost > max_cost_usd:
+        logger.warning(
+            "cocci_hunt: rule-gen call cost $%.4f exceeded its "
+            "$%.4f budget (single-shot call — spend is post-hoc "
+            "observable only)",
+            actual_cost, max_cost_usd,
+        )
     text = (getattr(response, "content", "") or "").strip()
     if not text:
         return None

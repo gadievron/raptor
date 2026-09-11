@@ -482,3 +482,48 @@ def test_e2e_no_gcc_invocation_when_source_scan_rejects(monkeypatch, tmp_path):
         result = v.validate_exploit(source, name)
         assert result.success is False
     assert sandbox_called["hit"] is False
+
+
+# ---------------------------------------------------------------------------
+# Digraph and non-space/tab whitespace spellings: gcc processes all of
+# these as live directives, so the scan must flag them too.
+# ---------------------------------------------------------------------------
+
+def test_digraph_include_blocked():
+    # `%:` is the standard C digraph for `#`.
+    violations = scan('%:include "/etc/passwd"\nint main(){}')
+    assert len(violations) == 1
+    assert violations[0].reason == "absolute path"
+    assert violations[0].path == "/etc/passwd"
+
+
+def test_digraph_embed_blocked():
+    violations = scan('%:embed "/etc/shadow"\nint main(){}')
+    assert len(violations) == 1
+
+
+def test_formfeed_prefixed_include_blocked():
+    violations = scan('\x0c#include "/proc/self/environ"\nint main(){}')
+    assert len(violations) == 1
+    assert violations[0].path == "/proc/self/environ"
+
+
+def test_vertical_tab_prefixed_include_blocked():
+    violations = scan('\x0b#include "/etc/passwd"\nint main(){}')
+    assert len(violations) == 1
+
+
+def test_formfeed_between_hash_and_keyword_blocked():
+    violations = scan('#\x0cinclude "/etc/passwd"\nint main(){}')
+    assert len(violations) == 1
+
+
+def test_digraph_relative_include_allowed():
+    # The digraph spelling of a benign include stays benign.
+    assert scan('%:include "helper.h"\nint main(){}') == []
+
+
+def test_digraph_mid_line_not_flagged():
+    # `%:` past line start is an expression token sequence, not a
+    # directive introducer.
+    assert scan('int main(){ int a = 1 %: 2; return a; }') == []

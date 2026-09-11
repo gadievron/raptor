@@ -330,17 +330,30 @@ def _extract_one_path(state, max_input_bytes: int) -> dict[str, Any]:
             # block extraction of the others (or the concrete input).
             pass
 
-    # Concrete satisfying input.
+    # Concrete satisfying input.  NEVER truncate: the path may be
+    # constrained on bytes beyond the cap (a length check at a high
+    # offset), so a shortened witness can violate the very constraints
+    # it claims to satisfy — replayed downstream (PoC seeds, fuzz
+    # corpora) it fails or takes a different path and a real finding
+    # reads as refuted.  Sibling engines (_reach/_overflow) refuse to
+    # truncate for the same reason; over-cap witnesses are withheld
+    # and flagged instead of shortened.
+    concrete_hex: Optional[str] = None
+    over_cap = False
     try:
-        raw = bytes(state.posix.dumps(0)[:max_input_bytes])
-        concrete_hex: Optional[str] = raw.hex()
+        raw = bytes(state.posix.dumps(0))
+        if len(raw) > max_input_bytes:
+            over_cap = True
+        else:
+            concrete_hex = raw.hex()
     except Exception:  # noqa: BLE001
-        concrete_hex = None
+        pass
 
     return {
         "constraints": constraint_strs,
         "stdin_bytes_touched": sorted(stdin_bytes),
         "concrete_input_hex": concrete_hex,
+        "concrete_input_over_cap": over_cap,
         "branch_count": len(constraint_strs),
     }
 

@@ -392,13 +392,15 @@ def _git_log_provenance(
 ) -> list[dict]:
     """Run ``git log`` over ``paths`` and parse provenance fields.
 
-    Output format: ``%H|%G?|%an|%ae|%aI|%cI|%s`` per commit, then
-    ``git log --name-only`` interleaves the touched paths.
-    We use a NUL-separated record format so subject lines with ``|``
-    don't break the parser.
+    Output format: seven NUL-terminated header fields per commit
+    (sha, sig status, author name/email, author/committer date,
+    subject), then ``git log --name-only`` interleaves the touched
+    paths.  Git cannot emit a NUL inside any of these fields, so the
+    NUL-delimited token stream is unambiguous; a form-feed record
+    marker sits between the previous commit's path list and the next
+    sha (see :func:`_parse_git_log` for why splitting the raw stream
+    on the form-feed alone would be wrong).
     """
-    # Use NUL between fields + form-feed between records so embedded
-    # ``|`` in subjects doesn't break parsing.
     fmt = "%x0c%H%x00%G?%x00%an%x00%ae%x00%aI%x00%cI%x00%s%x00"
     from core.git.clone import safe_git_command, signature_probe_overrides
     # Deliberate signature-verification site: re-enable ``%G?`` through
@@ -437,20 +439,37 @@ def _git_log_provenance(
 
 
 def _parse_git_log(stdout: str) -> list[dict]:
-    """Parse the NUL/FF-delimited git log stream into row dicts."""
+    """Parse the NUL/FF-delimited git log stream into row dicts.
+
+    Framing: git preserves control characters in commit subjects
+    (``%s``), so splitting the raw stream on the form-feed record
+    marker would let a ``\\f`` inside a subject shear the record in
+    two — both fragments then fail the field-count check and the
+    commit silently vanishes from the forgery analysis.  Git CANNOT
+    emit a NUL inside any formatted field, however, so we tokenise
+    on NUL instead: each record contributes exactly seven header
+    tokens, and the token FOLLOWING a record's subject consists of
+    the record's ``--name-only`` path list, the next record's
+    form-feed marker, and the next record's sha.  ``rfind`` of the
+    form-feed inside that boundary token is safe — the sha after it
+    is fixed-alphabet hex, so the LAST form-feed in the token is
+    always the record marker regardless of what the subject (own
+    token) or any path bytes before it contain.
+    """
+    tokens = stdout.split("\x00")
     out: list[dict] = []
-    for record in stdout.split("\x0c"):
-        record = record.strip("\n")
-        if not record:
-            continue
-        # The first 7 NUL-delimited fields are the header; the rest
-        # (newline-separated) are the touched paths.
-        parts = record.split("\x00")
-        if len(parts) < 8:
-            continue
-        sha, sig, an, ae, ai, ci, subj = parts[:7]
-        tail = "\x00".join(parts[7:])
-        paths_touched = [p for p in tail.splitlines() if p.strip()]
+    idx = 0
+    # Each record consumes 7 NUL-terminated tokens; tokens[idx] holds
+    # "<previous record's path tail>\x0c<sha>".
+    while idx + 7 <= len(tokens):
+        head = tokens[idx]
+        marker = head.rfind("\x0c")
+        if marker < 0:
+            break
+        if out:
+            out[-1]["paths_touched"] = _split_paths(head[:marker])
+        sha = head[marker + 1:].strip()
+        sig, an, ae, ai, ci, subj = tokens[idx + 1:idx + 7]
         out.append({
             "sha": sha,
             "sig_status": sig,
@@ -459,9 +478,18 @@ def _parse_git_log(stdout: str) -> list[dict]:
             "author_date_iso": ai,
             "committer_date_iso": ci,
             "subject": subj,
-            "paths_touched": paths_touched,
+            "paths_touched": [],
         })
+        idx += 7
+    # The final record's path list sits in the trailing token.
+    if out and idx < len(tokens):
+        out[-1]["paths_touched"] = _split_paths(tokens[idx])
     return out
+
+
+def _split_paths(tail: str) -> list[str]:
+    """Split a ``--name-only`` path block into its non-empty lines."""
+    return [p for p in tail.splitlines() if p.strip()]
 
 
 def _placeholder_dep(target: Path) -> Dependency:

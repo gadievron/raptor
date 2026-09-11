@@ -181,6 +181,17 @@ class TestEvictStale:
     def test_empty_specs(self):
         assert evict_stale([], {"a.py"}) == []
 
+    def test_fileless_spec_exempt_from_staleness(self):
+        """A spec stored with file='' (the LLM omitted 'file' at parse
+        time) has nothing to be stale against — evicting it churned
+        away accumulated taint vocabulary on every persist."""
+        specs = [_make_spec(
+            fn="parse_hdr", file="", evidence_tier=EvidenceTier.HEURISTIC,
+        )]
+        result = evict_stale(specs, {"a.py"})
+        assert len(result) == 1
+        assert result[0].function == "parse_hdr"
+
 
 class TestAssumptionStorage:
     def _make_assumption(self, **kw):

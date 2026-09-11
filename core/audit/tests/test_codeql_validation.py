@@ -43,6 +43,18 @@ class TestGenerateTaintQuery:
         assert "isSource" in query
         assert "isSink" in query
 
+    def test_modern_dataflow_api_imports(self):
+        # `import DataFlow::PathGraph` does not resolve against the
+        # module-based (ConfigSig) API — every generated query failed
+        # to compile ("could not resolve module DataFlow::PathGraph",
+        # reproduced with codeql query compile) and the channel was
+        # dead.  The flow module's own PathGraph is the modern shape.
+        query = generate_taint_query(_claim())
+        assert "semmle.code.cpp.dataflow.new.TaintTracking" in query
+        assert "import AuditHypothesisFlow::PathGraph" in query
+        assert "import DataFlow::PathGraph" not in query
+        assert "@problem.severity" in query
+
     def test_handles_valid_identifiers(self):
         query = generate_taint_query(_claim("foo_bar", "baz_qux"))
         assert "foo_bar" in query
@@ -639,3 +651,40 @@ class TestSourceLineLoadBound:
         lines = _load_source_lines("ok.c", tmp_path, {})
         assert lines is not None
         assert lines[1] == "  return 0;"
+
+
+class TestDetectDbLanguage:
+    """codeql_backend._detect_db_language — the pre-sweep's language
+    detection, verified against the CLI's real JSON output shape (the
+    old line scan never matched it and the pre-sweep silently died)."""
+
+    def test_real_cli_json_languages_array(self):
+        from core.audit.codeql_backend import _detect_db_language
+        stdout = (
+            '{\n'
+            '  "sourceLocationPrefix" : "/x/src",\n'
+            '  "languages" : [\n'
+            '    "cpp"\n'
+            '  ],\n'
+            '  "scratchDir" : "/x/db/working"\n'
+            '}\n'
+        )
+        assert _detect_db_language(stdout) == "cpp"
+
+    def test_primary_language_json_key(self):
+        from core.audit.codeql_backend import _detect_db_language
+        assert _detect_db_language(
+            '{"primaryLanguage": "java", "languages": ["java"]}',
+        ) == "java"
+
+    def test_legacy_yaml_line_fallback(self):
+        from core.audit.codeql_backend import _detect_db_language
+        assert _detect_db_language(
+            "sourceLocationPrefix: /x\nprimaryLanguage: python\n",
+        ) == "python"
+
+    def test_unrecognised_output_is_none(self):
+        from core.audit.codeql_backend import _detect_db_language
+        assert _detect_db_language("") is None
+        assert _detect_db_language("gibberish") is None
+        assert _detect_db_language('{"languages": []}') is None

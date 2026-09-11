@@ -1,0 +1,125 @@
+{
+  "by_ecosystem": {
+    "Alpine:v3.11": {
+      "spearman_rho": null,
+      "top_20_precision": 0.0,
+      "total": 14,
+      "with_signal": 0
+    },
+    "Alpine:v3.12": {
+      "spearman_rho": null,
+      "top_20_precision": 0.0,
+      "total": 24,
+      "with_signal": 0
+    },
+    "Alpine:v3.16": {
+      "spearman_rho": null,
+      "top_20_precision": 0.0,
+      "total": 6,
+      "with_signal": 0
+    },
+    "Alpine:v3.21": {
+      "spearman_rho": null,
+      "top_20_precision": 0.0,
+      "total": 26,
+      "with_signal": 0
+    },
+    "Alpine:v3.23": {
+      "spearman_rho": null,
+      "top_20_precision": 0.0,
+      "total": 20,
+      "with_signal": 0
+    },
+    "Alpine:v3.24": {
+      "spearman_rho": null,
+      "top_20_precision": 0.0,
+      "total": 44,
+      "with_signal": 0
+    },
+    "Alpine:v3.8": {
+      "spearman_rho": null,
+      "top_20_precision": 0.0,
+      "total": 1,
+      "with_signal": 0
+    },
+    "Cargo": {
+      "spearman_rho": 0.4685384206150784,
+      "top_20_precision": 0.6,
+      "total": 334,
+      "with_signal": 39
+    },
+    "Debian": {
+      "spearman_rho": null,
+      "top_20_precision": 0.0,
+      "total": 10905,
+      "with_signal": 0
+    },
+    "Go": {
+      "spearman_rho": 0.34338323615348293,
+      "top_20_precision": 1.0,
+      "total": 3537,
+      "with_signal": 217
+    },
+    "Maven": {
+      "spearman_rho": 0.4029485211577053,
+      "top_20_precision": 1.0,
+      "total": 825,
+      "with_signal": 76
+    },
+    "NuGet": {
+      "spearman_rho": 0.6678228351795538,
+      "top_20_precision": 0.35,
+      "total": 39,
+      "with_signal": 7
+    },
+    "Packagist": {
+      "spearman_rho": 0.42332710941056845,
+      "top_20_precision": 0.4,
+      "total": 415,
+      "with_signal": 82
+    },
+    "PyPI": {
+      "spearman_rho": 0.5974745620343568,
+      "top_20_precision": 0.95,
+      "total": 638,
+      "with_signal": 106
+    },
+    "RubyGems": {
+      "spearman_rho": 0.48706252507590103,
+      "top_20_precision": 1.0,
+      "total": 730,
+      "with_signal": 70
+    },
+    "Ubuntu": {
+      "spearman_rho": null,
+      "top_20_precision": 0.0,
+      "total": 4146,
+      "with_signal": 0
+    },
+    "npm": {
+      "spearman_rho": 0.7367438910352451,
+      "top_20_precision": 1.0,
+      "total": 3482,
+      "with_signal": 1443
+    }
+  },
+  "corpus_provenance": {
+    "epss_signals.json": "2026-09-08T10:16:08Z",
+    "exploitdb_signals.json": "2026-09-08T10:15:54Z",
+    "kev_signals.json": "2026-09-08T10:15:53Z",
+    "metasploit_signals.json": "2026-09-08T10:15:53Z"
+  },
+  "findings_total": 25186,
+  "findings_with_score": 25186,
+  "findings_with_signal": 2040,
+  "notes": [
+    "Spearman ρ 0.23 below threshold 0.40"
+  ],
+  "snapshot_date": "2026-09-08",
+  "spearman_rho": 0.23029264748193387,
+  "threshold_spearman": 0.4,
+  "threshold_top_20": 0.5,
+  "top_20_precision": 1.0,
+  "top_50_precision": 1.0,
+  "verdict": "needs_retune"
+}

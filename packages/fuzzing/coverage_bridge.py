@@ -145,12 +145,23 @@ def find_corpus_inputs(
             inputs.append(f)
 
     afl_dir = out_dir / "afl"
+    # The AFL runner writes merged_crashes under its own output dir
+    # (<out>/afl/merged_crashes) — a bare <out>/merged_crashes is
+    # tolerated for operator-staged inputs but never produced.
     _add_dir(out_dir / "merged_crashes")
+    _add_dir(afl_dir / "merged_crashes")
     if afl_dir.is_dir():
         for inst in sorted(afl_dir.iterdir()):
             _add_dir(inst / "crashes")
         for inst in sorted(afl_dir.iterdir()):
             _add_dir(inst / "queue")
+    # libFuzzer campaigns keep their working corpus and artifacts
+    # under <out>/libfuzzer/ — without this branch they replayed zero
+    # inputs and the bridge's coverage came only from stale counters.
+    libfuzzer_dir = out_dir / "libfuzzer"
+    if libfuzzer_dir.is_dir():
+        _add_dir(libfuzzer_dir / "crashes")
+        _add_dir(libfuzzer_dir / "corpus")
     return inputs
 
 
@@ -398,6 +409,7 @@ def emit_fuzz_coverage(
     crash_functions: set[str] | None = None,
     build_dir: Path | None = None,
     max_inputs: int = MAX_REPLAY_INPUTS,
+    harness: str = "afl",
     runner: Callable = _default_runner,
 ) -> Path | None:
     """End-to-end producer: replay corpus, collect gcov, write file.
@@ -407,6 +419,17 @@ def emit_fuzz_coverage(
     was collected.
     """
     binary = Path(binary)
+    # Env-build campaigns hand a source DIRECTORY as the target path.
+    # A directory cannot be replayed, and defaulting build_dir to its
+    # PARENT would rglob the operator's surrounding tree — a sibling
+    # project's gcov artifacts would then masquerade as this
+    # campaign's coverage.
+    if not binary.is_file():
+        logger.debug(
+            "fuzz coverage bridge: %s is not an executable file "
+            "(directory/env-build target) — skipping", binary,
+        )
+        return None
     build_dir = Path(build_dir) if build_dir else binary.parent
     if not has_gcov_instrumentation(build_dir):
         logger.debug(
@@ -414,6 +437,24 @@ def emit_fuzz_coverage(
             build_dir,
         )
         return None
+
+    # Start replay from zeroed counters: .gcda files accumulate across
+    # every execution of the instrumented binary (build-time test
+    # suites, previous bridge runs), and gcov merges them — leftover
+    # counters would be attributed to THIS campaign. The .gcno graph
+    # files stay; the target recreates .gcda on first replay.
+    removed = 0
+    for gcda in build_dir.rglob("*.gcda"):
+        try:
+            gcda.unlink()
+            removed += 1
+        except OSError:
+            logger.debug("could not remove stale counter %s", gcda)
+    if removed:
+        logger.info(
+            "fuzz coverage bridge: cleared %d pre-existing .gcda "
+            "counter file(s) under %s", removed, build_dir,
+        )
 
     inputs = find_corpus_inputs(out_dir, max_inputs=max_inputs)
     if inputs:
@@ -442,7 +483,7 @@ def emit_fuzz_coverage(
         iterations=iterations,
         crashes=crashes,
         crash_functions=crash_functions,
-        harness="afl",
+        harness=harness,
     )
     path = write_fuzz_coverage(out_dir, coverage)
     n_reached = sum(

@@ -111,6 +111,47 @@ def test_attempts_saved_uses_default_max_attempts(tmp_path: Path):
     assert rep.tier0_attempts_saved(max_attempts=2) == 10
 
 
+def test_library_backend_rows_counted_and_excluded_from_tier0_savings(
+        tmp_path: Path):
+    """Tier 1B curated-table SOUND rows carry backend='library'. They
+    must appear in every backend split (or table rows don't sum to the
+    totals) but must NOT count as zero-cost Tier 0 short-circuits —
+    each one spent an LLM extraction call."""
+    db = tmp_path / "lib.db"
+    _make_db(db, [
+        _row("f1", "CWE-78", "CVE-1", "Python", "sound", "smt"),
+        _row("f2", "CWE-78", "CVE-2", "Python", "sound", "library"),
+        _row("f3", "CWE-78", "CVE-3", "Python", "sound", "codeql"),
+    ])
+    rep = r.analyze(db)
+    assert rep.sound == 3
+    assert rep.sound_by_backend["library"] == 1
+    # Backend counts sum to the sound total.
+    assert sum(rep.sound_by_backend.values()) == rep.sound
+    # Per-CWE / per-language sound buckets include the library column
+    # and sum to the totals.
+    assert rep.by_cwe["CWE-78"]["sound"]["library"] == 1
+    assert sum(rep.by_cwe["CWE-78"]["sound"].values()) == 3
+    assert sum(rep.by_language["Python"]["sound"].values()) == 3
+    # Zero-cost savings math counts only smt rows.
+    assert rep.tier0_share_of_sound == 1 / 3
+    assert rep.tier0_attempts_saved() == 3
+
+
+def test_render_text_library_rows_visible_in_all_tables(tmp_path: Path):
+    db = tmp_path / "libr.db"
+    _make_db(db, [
+        _row("f1", "CWE-78", "CVE-1", "Python", "sound", "smt"),
+        _row("f2", "CWE-78", "CVE-2", "Python", "sound", "library"),
+    ])
+    text = r.render_text(r.analyze(db))
+    # Backend split names the library bucket with its count.
+    assert "library" in text
+    assert "1/2 (50.0%)" in text
+    # Breakdown tables carry the lib column.
+    assert "1 lib" in text
+
+
 def test_render_text_handles_empty_report():
     """Renderer must not crash when nothing has been processed yet —
     analyzer is meant to be run while the bridge is still warming up."""

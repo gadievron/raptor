@@ -262,3 +262,117 @@ class TestRunFridaSession:
         fo._run_frida_session(1234, "// script", tmp_path / "obs.jsonl",
                               SimpleNamespace(frida_timeout_s=1))
         assert created and not any(p.exists() for p in created)
+
+
+class TestScriptExportResolution:
+    """The generated script must survive both Frida API generations:
+    modern runtimes removed the static two-arg Module.findExportByName,
+    which made every lookup throw and left zero functions hooked."""
+
+    def test_feature_detects_modern_lookup(self):
+        script = _generate_frida_script(["parse"])
+        assert "Module.findGlobalExportByName" in script
+        assert "typeof Module.findGlobalExportByName" in script
+
+    def test_keeps_legacy_lookup_for_old_runtimes(self):
+        script = _generate_frida_script(["parse"])
+        assert "Module.findExportByName(null, name)" in script
+
+
+class TestSessionCommandLine:
+    def _capture_cmd(self, monkeypatch, tmp_path):
+        captured: dict = {}
+
+        def _fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(fo.subprocess, "run", _fake_run)
+        fo._run_frida_session(
+            1234, "// script", tmp_path / "obs.jsonl",
+            SimpleNamespace(frida_timeout_s=30),
+        )
+        return captured["cmd"]
+
+    def test_no_pause_flag_absent(self, tmp_path, monkeypatch):
+        # Current frida CLIs reject --no-pause as an unrecognized
+        # argument before attaching — the flag must never be passed.
+        cmd = self._capture_cmd(monkeypatch, tmp_path)
+        assert "--no-pause" not in cmd
+
+    def test_quiet_mode_with_session_window(self, tmp_path, monkeypatch):
+        cmd = self._capture_cmd(monkeypatch, tmp_path)
+        assert "-q" in cmd
+        assert "-t" in cmd
+        # Session window sits under the subprocess backstop timeout.
+        assert int(cmd[cmd.index("-t") + 1]) < 30
+
+    def test_stdout_persisted_to_log_file(self, tmp_path, monkeypatch):
+        stdout = 'message: {\'type\': \'send\', \'payload\': \'{"type":"ready","hooked":2}\'} data: None\n'
+
+        def _fake_run(cmd, **kwargs):
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+        monkeypatch.setattr(fo.subprocess, "run", _fake_run)
+        log_file = tmp_path / "obs.jsonl"
+        ok = fo._run_frida_session(
+            1234, "// script", log_file, SimpleNamespace(frida_timeout_s=30),
+        )
+        assert ok is True
+        assert log_file.read_text() == stdout
+
+    def test_timeout_partial_stdout_persisted(self, tmp_path, monkeypatch):
+        def _raise_with_partial(*args, **kwargs):
+            raise subprocess.TimeoutExpired(
+                cmd=["frida"], timeout=1,
+                output='message: {\'type\': \'send\', \'payload\': \'{"type":"call","function":"f","args":[]}\'} data: None\n',
+            )
+
+        monkeypatch.setattr(fo.subprocess, "run", _raise_with_partial)
+        log_file = tmp_path / "obs.jsonl"
+        ok = fo._run_frida_session(
+            1234, "// script", log_file, SimpleNamespace(frida_timeout_s=1),
+        )
+        assert ok is True
+        assert "call" in log_file.read_text()
+
+
+class TestParseCliFraming:
+    """The frida CLI emits send() payloads on stdout wrapped in a
+    Python-repr line — never in the -o log. The parser must unwrap
+    that framing AND keep accepting raw JSONL (both directions)."""
+
+    def _log(self, tmp_path, content):
+        p = tmp_path / "obs.jsonl"
+        p.write_text(content)
+        return p
+
+    def test_cli_wrapped_call_and_return(self, tmp_path):
+        content = (
+            "message: {'type': 'send', 'payload': "
+            "'{\"type\":\"call\",\"function\":\"malloc\","
+            "\"args\":[\"0x40\"],\"ts\":1}'} data: None\n"
+            "message: {'type': 'send', 'payload': "
+            "'{\"type\":\"return\",\"function\":\"malloc\","
+            "\"retval\":\"0xdead\",\"ts\":2}'} data: None\n"
+        )
+        obs = _parse_observations(self._log(tmp_path, content))
+        assert len(obs) == 1
+        assert obs[0].function == "malloc"
+        assert obs[0].args == ["0x40"]
+        assert obs[0].retval == "0xdead"
+
+    def test_cli_wrapped_ready_ignored(self, tmp_path):
+        content = (
+            "message: {'type': 'send', 'payload': "
+            "'{\"type\":\"ready\",\"hooked\":3}'} data: None\n"
+        )
+        assert _parse_observations(self._log(tmp_path, content)) == []
+
+    def test_raw_jsonl_still_parses(self, tmp_path):
+        content = (
+            '{"type": "call", "function": "f", "args": ["1"], "ts": 1}\n'
+        )
+        obs = _parse_observations(self._log(tmp_path, content))
+        assert len(obs) == 1
+        assert obs[0].function == "f"

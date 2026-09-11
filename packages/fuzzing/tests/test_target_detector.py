@@ -79,6 +79,57 @@ class TestDetect(unittest.TestCase):
         finally:
             os.unlink(tmp)
 
+    def test_big_endian_elf_machine_read_in_file_byte_order(self):
+        # e_machine uses the file's own byte order (EI_DATA=2 → MSB).
+        # An unconditional little-endian read byte-swapped every
+        # big-endian ELF's arch label (s390x 0x16 read as 0x1600).
+        be_magic = (
+            b"\x7fELF\x02\x02\x01\x00" + b"\x00" * 8   # EI_DATA = 2
+            + b"\x00\x02"                              # e_type (BE)
+            + b"\x00\x16"                              # e_machine s390x (BE)
+        )
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(be_magic)
+            f.write(b"\x00" * 1024)
+            tmp = Path(f.name)
+        try:
+            tmp.chmod(0o755)
+            info = detect(tmp)
+            self.assertEqual(info.kind, "elf-linux")
+            self.assertEqual(info.arch, "machine_0x16")
+        finally:
+            os.unlink(tmp)
+
+    def test_little_endian_elf_machine_unchanged(self):
+        # Direction two: the LE read stays correct.
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(ELF_MAGIC)
+            f.write(b"\x00" * 1024)
+            tmp = Path(f.name)
+        try:
+            tmp.chmod(0o755)
+            self.assertEqual(detect(tmp).arch, "x86_64")
+        finally:
+            os.unlink(tmp)
+
+    def test_directory_c_detection_single_walk(self):
+        # Nested C sources are still recognised through the
+        # single-walk scan (the per-extension '**' globs it replaced
+        # cost up to five full traversals on non-C trees).
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            deep = root / "src" / "lib"
+            deep.mkdir(parents=True)
+            (deep / "parser.c").write_text("int main(void){return 0;}\n")
+            self.assertEqual(detect(root).kind, "source-c")
+
+    def test_directory_without_c_sources_is_unknown(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "docs").mkdir()
+            (root / "docs" / "readme.md").write_text("hi\n")
+            self.assertEqual(detect(root).kind, "unknown")
+
     def test_macho_binary_detection(self):
         with tempfile.NamedTemporaryFile(delete=False) as f:
             f.write(MACHO_64_LE_MAGIC)

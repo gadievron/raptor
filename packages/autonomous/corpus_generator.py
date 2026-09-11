@@ -100,7 +100,16 @@ class CorpusGenerator:
                 # work per analysis. On a real fuzz target
                 # (curl, bash) this took 5+ seconds doing
                 # nothing but rebuilding the same string.
-                strings_blob = ' '.join(self.binary_strings)
+                #
+                # Join with newline, NOT space: several indicators
+                # carry trailing-space semantics ('get ', 'post ')
+                # and a space join lets them match across string
+                # boundaries — 'target' followed by any other string
+                # rendered as 'target other', which contains 'get '.
+                # No extracted string contains a newline (strings
+                # output is split on it), so '\n' cannot create a
+                # cross-boundary match.
+                strings_blob = '\n'.join(self.binary_strings)
 
                 for format_name, indicators in format_indicators.items():
                     if any(ind in strings_blob for ind in indicators):

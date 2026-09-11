@@ -434,10 +434,13 @@ class TestNewProvidersUnconfiguredKeyReturns503:
 
 
 class TestCredentialStoreReadsAggregatorEnvs:
-    """Real CredentialStore() — verify every aggregator key is
-    read at init time and the env vars are erased afterwards."""
+    """Real CredentialStore() — every aggregator key is read at init
+    time and KEPT in the environ: no worker-side dispatcher factory
+    routes these providers, so workers authenticate (and detect the
+    provider) env-direct — erasure silently killed their auth in
+    every spawned worker."""
 
-    def test_all_new_keys_read_then_erased(self, monkeypatch):
+    def test_all_new_keys_read_and_kept_in_env(self, monkeypatch):
         env_to_set = {
             "MISTRAL_API_KEY":    "mistral-test",
             "GROQ_API_KEY":       "groq-test",
@@ -468,8 +471,45 @@ class TestCredentialStoreReadsAggregatorEnvs:
         assert creds.get("replicate") == "replicate-test"
         assert creds.get("azure_openai") == "azure-test"
         assert creds.get("azure_openai_endpoint") == "https://example-azure.invalid"
-        # Each env var was erased from os.environ as part of read.
-        for k in env_to_set:
-            assert os.environ.get(k) is None, (
-                f"{k} not erased from environ — leak surface"
+        # Each env var STAYS in os.environ — workers reach these
+        # providers env-direct (worker env is built from the live
+        # environ after the store is constructed), so erasing them
+        # here would strip worker auth for exactly these providers.
+        for k, v in env_to_set.items():
+            assert os.environ.get(k) == v, (
+                f"{k} erased from environ — env-direct worker auth "
+                f"for its provider would silently break"
+            )
+
+    def test_kept_keys_warn_once_by_name(self, monkeypatch, caplog):
+        import logging
+
+        monkeypatch.setenv("MISTRAL_API_KEY", "mistral-test-value")
+        with caplog.at_level(logging.WARNING):
+            CredentialStore()
+        kept_warnings = [
+            m for m in caplog.messages if "MISTRAL_API_KEY" in m
+        ]
+        assert kept_warnings, "no warning naming the kept key"
+        # Names only — never the value.
+        assert all("mistral-test-value" not in m for m in kept_warnings)
+
+    def test_routable_provider_keys_still_erased(self, monkeypatch):
+        # Opposite direction: providers the worker-side factories DO
+        # route through the dispatcher (anthropic/openai/gemini/AWS)
+        # keep the read-and-erase isolation.
+        for var in (
+            "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+        ):
+            monkeypatch.setenv(var, f"{var.lower()}-test")
+        creds = CredentialStore()
+        assert creds.get("anthropic") == "anthropic_api_key-test"
+        assert creds.get("openai") == "openai_api_key-test"
+        assert creds.get("gemini") == "gemini_api_key-test"
+        for var in (
+            "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+        ):
+            assert os.environ.get(var) is None, (
+                f"{var} not erased — dispatcher-routable keys must "
+                f"not linger in the environ"
             )

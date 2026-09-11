@@ -478,13 +478,9 @@ def format_json(report: DescribeReport) -> str:
     return dumps_display(doc, indent=2)
 
 
-def _short_int(n: int) -> str:
-    """52000 → '52k'; 1500000 → '1.5M'."""
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f}M"
-    if n >= 1_000:
-        return f"{round(n / 1_000)}k"
-    return str(n)
+# Shared with the start-line renderer — one implementation so the two
+# human-facing size formats can never drift.
+from packages.describe.start_line import _short_loc as _short_int  # noqa: E402
 
 
 __all__ = [

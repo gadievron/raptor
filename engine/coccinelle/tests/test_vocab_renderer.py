@@ -294,3 +294,125 @@ class TestRealRules:
         vocab = FakeVocab()
         result = render(rule_path, vocab)
         assert result is None
+
+
+class TestAllMarkersProcessed:
+    """Every ``@vocab`` marker in a rule file must be processed.
+
+    The renderer used to stop marker scanning after the first
+    tmpl-disjunction or when-block splice (it consumed the whole rest
+    of the file), so a rule whose allocator trigger extended but whose
+    deallocator suppression did not minted findings on
+    project-vocabulary code — an actively harmful asymmetric splice.
+    """
+
+    def test_marker_after_tmpl_disjunction_is_processed(self, tmp_path):
+        rule = tmp_path / "test.cocci"
+        rule.write_text(
+            "// @vocab: allocators\n"
+            "// @vocab-tmpl: ptr = %s(...);\n"
+            "(\n"
+            "  ptr = kmalloc(...);\n"
+            ")\n"
+            "// @vocab: deallocators\n"
+            "... when != kfree(ptr)\n"
+        )
+        vocab = FakeVocab(
+            allocators=frozenset({"xmalloc"}),
+            deallocators=frozenset({"xfree"}),
+        )
+        result = render(rule, vocab)
+        assert result is not None
+        text = result.read_text()
+        assert "ptr = xmalloc(...);" in text
+        assert "when != xfree(...)" in text
+        Path(result).unlink()
+
+    def test_marker_after_when_block_is_processed(self, tmp_path):
+        rule = tmp_path / "test.cocci"
+        rule.write_text(
+            "// @vocab: lock_releases\n"
+            "... when != mutex_unlock(&M)\n"
+            "// @vocab: lock_acquires\n"
+            r"\(mutex_lock\|mutex_trylock\)(&M);" + "\n"
+        )
+        vocab = FakeVocab(
+            lock_acquires=frozenset({"foo_lock"}),
+            lock_releases=frozenset({"foo_unlock"}),
+        )
+        result = render(rule, vocab)
+        assert result is not None
+        text = result.read_text()
+        assert "when != foo_unlock(...)" in text
+        assert r"\|foo_lock\)" in text
+        Path(result).unlink()
+
+    def test_indented_marker_is_processed(self, tmp_path):
+        # Markers inside an indented construct (a when block nested in
+        # an if body) were invisible to the anchored marker regex.
+        rule = tmp_path / "test.cocci"
+        rule.write_text(
+            "if (...) {\n"
+            "  // @vocab: deallocators\n"
+            "  ... when != kfree(ptr)\n"
+            "  return E;\n"
+            "}\n"
+        )
+        vocab = FakeVocab(deallocators=frozenset({"xfree"}))
+        result = render(rule, vocab)
+        assert result is not None
+        text = result.read_text()
+        assert "when != xfree(...)" in text
+        assert "return E;" in text
+        Path(result).unlink()
+
+    def test_text_after_spliced_block_is_preserved_verbatim(self, tmp_path):
+        rule = tmp_path / "test.cocci"
+        rule.write_text(
+            "// @vocab: deallocators\n"
+            "... when != kfree(ptr)\n"
+            "    when != vfree(ptr)\n"
+            "trailing_pattern(ptr);\n"
+        )
+        vocab = FakeVocab(deallocators=frozenset({"xfree"}))
+        result = render(rule, vocab)
+        assert result is not None
+        text = result.read_text()
+        assert text.endswith("trailing_pattern(ptr);\n")
+        # Splice lands after the LAST existing when clause.
+        assert text.index("when != vfree") < text.index("when != xfree")
+        Path(result).unlink()
+
+
+class TestLockImbalanceMarkerSymmetry:
+    """The mutex leg's acquire alternation and release guard must
+    extend together — a learned acquire without its learned release in
+    the when-guard turns every balanced wrapper-locked function into
+    an imbalance verdict."""
+
+    RULES_DIR = Path(__file__).parent.parent / "rules"
+
+    def test_mutex_leg_extends_both_sides(self):
+        vocab = FakeVocab(
+            lock_acquires=frozenset({"foo_lock"}),
+            lock_releases=frozenset({"foo_unlock"}),
+        )
+        result = render(self.RULES_DIR / "lock_imbalance.cocci", vocab)
+        assert result is not None
+        text = result.read_text()
+        assert r"\|mutex_lock_killable\|foo_lock\)" in text
+        assert "when != foo_unlock(...)" in text
+        Path(result).unlink()
+
+    def test_resource_leak_extends_trigger_and_both_guards(self):
+        vocab = FakeVocab(
+            allocators=frozenset({"xmalloc"}),
+            deallocators=frozenset({"xfree"}),
+        )
+        result = render(self.RULES_DIR / "resource_leak_err.cocci", vocab)
+        assert result is not None
+        text = result.read_text()
+        assert "ptr =@p_alloc xmalloc(...);" in text
+        # Outer liability guard AND inner error-path guard both extend.
+        assert text.count("when != xfree(...)") == 2
+        Path(result).unlink()

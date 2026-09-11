@@ -738,11 +738,20 @@ def strip_json_fences(text: str) -> str:
     AND defeats prepend-prefix attacks where attacker-controlled tool
     output (a finding's source code, a SARIF result message) coaxes the
     LLM into echoing a fenced JSON block early in its response.
+
+    "Last" means the last json.loads-VALID block (same rule as
+    parse_cc_structured's fence scan): a trailing fenced block that
+    merely STARTS with "{" or "[" but doesn't parse (a code sketch,
+    a truncated echo) must not shadow an earlier valid answer. When
+    no candidate parses, the last "{"/"["-starting block is still
+    returned so callers keep their own error handling on malformed
+    output.
     """
     if "```" not in text:
         return text
     parts = text.split("```")
     last_candidate: str | None = None
+    last_valid: str | None = None
     for part in parts[1::2]:
         lines = part.strip().split("\n", 1)
         # First line is a language tag ("json") only when it doesn't
@@ -763,6 +772,13 @@ def strip_json_fences(text: str) -> str:
                 candidate = rest.lstrip()
         if candidate and candidate[0] in "{[":
             last_candidate = candidate
+            try:
+                json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            last_valid = candidate
+    if last_valid is not None:
+        return last_valid
     return last_candidate if last_candidate is not None else text
 
 
@@ -1054,15 +1070,31 @@ def parse_stream_json_lines(lines: list[str]) -> StreamJsonResult:
             # the last from ``content`` and under-counted usage. The
             # final ``result`` event below stays the authoritative
             # override for token totals where present.
-            message = obj.get("message", {})
-            content_blocks = message.get("content", [])
-            texts = [block.get("text", "") for block in content_blocks if isinstance(block, dict) and block.get("type") == "text"]
+            # ``.get(key, default)`` only defaults on a MISSING key —
+            # a literal JSON null (or non-object) message/usage/content
+            # arrives as None and must degrade to "no content / no
+            # token figures", not AttributeError (same malformed-
+            # envelope tolerance as extract_envelope_metadata).
+            message = obj.get("message")
+            if not isinstance(message, dict):
+                message = {}
+            content_blocks = message.get("content")
+            if not isinstance(content_blocks, list):
+                content_blocks = []
+            texts = [
+                text_val
+                for block in content_blocks
+                if isinstance(block, dict) and block.get("type") == "text"
+                and isinstance(text_val := block.get("text"), str)
+            ]
             text = "\n".join(texts)
             if text:
                 result.content = (
                     f"{result.content}\n{text}" if result.content else text
                 )
-            usage = message.get("usage", {})
+            usage = message.get("usage")
+            if not isinstance(usage, dict):
+                usage = {}
             result.input_tokens += usage.get("input_tokens", 0) or 0
             result.output_tokens += usage.get("output_tokens", 0) or 0
             cache_read = usage.get("cache_read_input_tokens", 0)
@@ -1087,7 +1119,11 @@ def parse_stream_json_lines(lines: list[str]) -> StreamJsonResult:
             cost = obj.get("total_cost_usd")
             if isinstance(cost, (int, float)):
                 result.cost_usd = cost
-            usage = obj.get("usage", {})
+            usage = obj.get("usage")
+            if not isinstance(usage, dict):
+                # A null / non-object ``usage`` on the result event
+                # degrades the same way as on assistant events.
+                usage = {}
             if isinstance(usage.get("input_tokens"), int):
                 result.input_tokens = usage["input_tokens"]
             if isinstance(usage.get("output_tokens"), int):
@@ -1112,9 +1148,10 @@ def parse_stream_json_lines(lines: list[str]) -> StreamJsonResult:
 # endpoint bandwidth x the call deadline — a hostile or compromised
 # endpoint could stream gigabytes into parent memory. Ceilings are
 # generous (the largest legitimate stream-json transcripts are a few
-# MiB) and env-overridable; a single readline allocation is bounded
-# separately so one endless unterminated line can't balloon inside
-# readline itself.
+# MiB) and env-overridable; a single line's accumulation is bounded
+# separately (_STREAM_READ_MAX) so one endless unterminated line
+# can't balloon the pending-line buffer — it is flushed in fragments
+# the JSON parser skips.
 _STREAM_STDOUT_CAP_DEFAULT = 64 * 1024 * 1024
 _STREAM_STDERR_CAP_DEFAULT = 8 * 1024 * 1024
 _STREAM_READ_MAX = 16 * 1024 * 1024
@@ -1230,12 +1267,17 @@ def run_cc_streaming(
             f"({_CC_TRANSPORT_DISABLED_ENV} is set): refusing live spawn"
         )
 
+    # Binary pipes throughout — every pipe read/write below goes
+    # through the raw fds (os.read / os.write), with decoding at the
+    # line-split points using errors="replace". A text-mode wrapper
+    # would add (a) a second buffering layer the raw-fd reads cannot
+    # see, silently losing data, and (b) a strict UTF-8 decode that
+    # raises mid-loop on a single invalid byte from the child.
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
         env=env,
         cwd=cwd if cwd is not None else neutral_cwd(),
     )
@@ -1279,71 +1321,126 @@ def run_cc_streaming(
         _env_byte_cap("RAPTOR_CC_STREAM_STDERR_CAP", _STREAM_STDERR_CAP_DEFAULT),
     )
     stderr_fd = proc.stderr.fileno() if proc.stderr else None
+    # Stdout follows the same raw-fd discipline as stderr: readline()
+    # on a buffered wrapper can block on a PARTIAL line (data with no
+    # trailing newline yet) even after select() reports the fd
+    # readable, blowing past the deadline. os.read chunks accumulate
+    # in a byte buffer that is split into lines here. NOTHING else may
+    # read proc.stdout — bytes pulled into a wrapper's buffer would be
+    # invisible to the raw-fd reads and silently lost.
+    stdout_fd = proc.stdout.fileno() if proc.stdout else None
+    stdout_buf = bytearray()
+
+    def _split_stdout_lines(final: bool = False) -> None:
+        """Move complete lines out of ``stdout_buf`` into ``collected``.
+
+        Bounded per line: an endless unterminated line is flushed in
+        ``_STREAM_READ_MAX`` fragments the JSON parser skips, so one
+        line can't balloon the buffer. ``final=True`` also flushes a
+        trailing newline-less remainder (the child's last line).
+        """
+        while True:
+            nl = stdout_buf.find(b"\n")
+            if nl == -1:
+                if len(stdout_buf) >= _STREAM_READ_MAX:
+                    fragment = bytes(stdout_buf[:_STREAM_READ_MAX])
+                    del stdout_buf[:_STREAM_READ_MAX]
+                    collected.append(fragment.decode("utf-8", "replace"))
+                    continue
+                break
+            line = bytes(stdout_buf[:nl + 1])
+            del stdout_buf[:nl + 1]
+            collected.append(line.decode("utf-8", "replace"))
+        if final and stdout_buf:
+            collected.append(bytes(stdout_buf).decode("utf-8", "replace"))
+            stdout_buf.clear()
+
     start = _time.monotonic()
     deadline = start + timeout_s if timeout_s else None
 
-    while proc.poll() is None:
-        remaining = None
-        if deadline is not None:
-            remaining = deadline - _time.monotonic()
-            if remaining <= 0:
-                _close_stdin()
-                proc.kill()
-                proc.wait()
-                raise subprocess.TimeoutExpired(cmd, timeout_s or 0)
-        read_set = [s for s in (proc.stdout, proc.stderr) if s]
-        write_set = [stdin_fd] if stdin_fd is not None else []
-        ready, writable, _ = select.select(
-            read_set, write_set, [], min(remaining or 1.0, 1.0),
-        )
-        if stdin_fd is not None and stdin_fd in writable:
-            try:
-                stdin_pos += os.write(
-                    stdin_fd, stdin_data[stdin_pos:stdin_pos + 65536],
-                )
-            except BlockingIOError:
-                pass
-            except (BrokenPipeError, OSError):
-                # A child that exits at startup (bad flag, missing
-                # backend) closes its end before consuming the prompt.
-                # Swallow so control reaches the returncode path below,
-                # which reports "claude -p exited N" with the child's
-                # stderr instead of crashing the caller.
-                _close_stdin()
-            if stdin_fd is not None and stdin_pos >= len(stdin_data):
-                _close_stdin()
-        if proc.stdout in ready:
-            # Bounded readline: an endless unterminated line otherwise
-            # accumulates inside readline itself. Oversize lines split
-            # into fragments the parser skips.
-            line = proc.stdout.readline(_STREAM_READ_MAX)
-            if line:
-                collected.append(line)
-        if proc.stderr in ready and stderr_fd is not None:
-            chunk = os.read(stderr_fd, 65536)
-            if chunk:
-                stderr_chunks.append(chunk)
+    # try/finally so ANY abnormal exit from the loop below (select /
+    # OS error, a bug in the drain logic) reaps the child — an
+    # unhandled raise otherwise leaks a running, billed subprocess.
+    try:
+        while proc.poll() is None:
+            remaining = None
+            if deadline is not None:
+                remaining = deadline - _time.monotonic()
+                if remaining <= 0:
+                    _close_stdin()
+                    proc.kill()
+                    proc.wait()
+                    raise subprocess.TimeoutExpired(cmd, timeout_s or 0)
+            read_set = [
+                fd for fd in (stdout_fd, stderr_fd) if fd is not None
+            ]
+            write_set = [stdin_fd] if stdin_fd is not None else []
+            ready, writable, _ = select.select(
+                read_set, write_set, [], min(remaining or 1.0, 1.0),
+            )
+            if stdin_fd is not None and stdin_fd in writable:
+                try:
+                    stdin_pos += os.write(
+                        stdin_fd, stdin_data[stdin_pos:stdin_pos + 65536],
+                    )
+                except BlockingIOError:
+                    pass
+                except (BrokenPipeError, OSError):
+                    # A child that exits at startup (bad flag, missing
+                    # backend) closes its end before consuming the
+                    # prompt. Swallow so control reaches the returncode
+                    # path below, which reports "claude -p exited N"
+                    # with the child's stderr instead of crashing the
+                    # caller.
+                    _close_stdin()
+                if stdin_fd is not None and stdin_pos >= len(stdin_data):
+                    _close_stdin()
+            if stdout_fd is not None and stdout_fd in ready:
+                chunk = os.read(stdout_fd, 65536)
+                if chunk:
+                    stdout_buf += chunk
+                    _split_stdout_lines()
+            if stderr_fd is not None and stderr_fd in ready:
+                chunk = os.read(stderr_fd, 65536)
+                if chunk:
+                    stderr_chunks.append(chunk)
 
-    # Child exited — if it did so without consuming the whole prompt,
-    # release our end so nothing lingers.
-    _close_stdin()
+        # Child exited — if it did so without consuming the whole
+        # prompt, release our end so nothing lingers.
+        _close_stdin()
 
-    if proc.stdout:
-        while True:
-            line = proc.stdout.readline(_STREAM_READ_MAX)
-            if not line:
+        # Drain whatever stdout remains without blocking (zero-timeout
+        # select guards each read: a grandchild that inherited the
+        # write end keeps the pipe open after the child exits, and an
+        # unguarded read-to-EOF loop would wedge dispatch forever —
+        # same hazard the stderr drain below guards against).
+        while stdout_fd is not None:
+            ready, _, _ = select.select([stdout_fd], [], [], 0)
+            if not ready:
                 break
-            collected.append(line)
-    # Drain whatever stderr remains without blocking (zero-timeout
-    # select guards against a grandchild holding the pipe open).
-    while stderr_fd is not None:
-        ready, _, _ = select.select([stderr_fd], [], [], 0)
-        if not ready:
-            break
-        chunk = os.read(stderr_fd, 65536)
-        if not chunk:
-            break
-        stderr_chunks.append(chunk)
+            chunk = os.read(stdout_fd, 65536)
+            if not chunk:
+                break
+            stdout_buf += chunk
+            _split_stdout_lines()
+        _split_stdout_lines(final=True)
+        # Drain whatever stderr remains without blocking (zero-timeout
+        # select guards against a grandchild holding the pipe open).
+        while stderr_fd is not None:
+            ready, _, _ = select.select([stderr_fd], [], [], 0)
+            if not ready:
+                break
+            chunk = os.read(stderr_fd, 65536)
+            if not chunk:
+                break
+            stderr_chunks.append(chunk)
+    finally:
+        # Normal paths reach here with the process already exited
+        # (the loop condition / timeout path saw to it) — this only
+        # fires on an abnormal unwind while the child still runs.
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
 
     for stream_name, capture in (
         ("stdout", collected), ("stderr", stderr_chunks),

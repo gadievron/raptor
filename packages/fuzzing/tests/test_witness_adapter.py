@@ -15,13 +15,8 @@ These tests pin:
 from __future__ import annotations
 
 import hashlib
-import sys
 from pathlib import Path
 
-
-# packages/fuzzing/tests/test_witness_adapter.py → parents[3] = repo root
-REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
 
 from core.witness import WitnessOutcome, WitnessSource, WitnessStore  # noqa: E402
 from packages.fuzzing.crash_collector import Crash  # noqa: E402

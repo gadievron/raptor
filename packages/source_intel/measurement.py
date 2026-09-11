@@ -277,10 +277,18 @@ def _aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
     same = n - improved - regressed
     err_rate_baseline = baseline_errors / n if n else 0.0
     err_rate_si = si_errors / n if n else 0.0
-    err_reduction = (
-        (err_rate_baseline - err_rate_si) / err_rate_baseline * 100
-        if err_rate_baseline > 0 else 0.0
-    )
+    if err_rate_baseline > 0:
+        err_reduction = (
+            (err_rate_baseline - err_rate_si) / err_rate_baseline * 100
+        )
+    elif si_errors:
+        # Perfect baseline, SI introduced errors: relative reduction
+        # from zero is undefined, but reporting a neutral 0.0 would
+        # hide a pure SI-induced regression behind the headline
+        # metric. -inf keeps it unmistakably negative.
+        err_reduction = float("-inf")
+    else:
+        err_reduction = 0.0
     return {
         "n": n,
         "baseline_errors": baseline_errors,
@@ -436,8 +444,13 @@ def main() -> int:
     print(f"  improved by SI:      {stats['improved']}")
     print(f"  regressed by SI:     {stats['regressed']}")
     print(f"  same verdict:        {stats['same']}")
-    print(f"  error reduction:     {stats['err_reduction']:.1f}%  "
-          f"(exit gate: ≥10%)")
+    if stats["err_reduction"] == float("-inf"):
+        print(f"  error reduction:     regressed — baseline had zero "
+              f"errors, SI introduced {stats['si_errors']}  "
+              f"(exit gate: ≥10%)")
+    else:
+        print(f"  error reduction:     {stats['err_reduction']:.1f}%  "
+              f"(exit gate: ≥10%)")
 
     if args.output and results:
         with args.output.open("w", newline="", encoding="utf-8") as f:

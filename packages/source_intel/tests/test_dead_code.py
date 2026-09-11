@@ -300,7 +300,7 @@ def test_verdict_dead_code_branch_unit(tmp_path, monkeypatch):
     ):
         if hasattr(adapter_mod, helper):
             monkeypatch.setattr(
-                adapter_mod, helper, lambda fi, res: False,
+                adapter_mod, helper, lambda fi, res, **kw: False,
             )
     v2 = SourceIntelValidator(repo_root=tmp_path)
     assert v2.validate(finding) != ValidatorVerdict.NOT_EXPLOITABLE

@@ -28,6 +28,17 @@ _MAX_CONFIG_BYTES = 8 * 1024 * 1024
 # for every importer.
 OUTPUT_FILE = REPO_ROOT / ".startup-output"
 
+# Provider -> API-key env var. ONE table for both the banner's key
+# scan (check_llm) and the key-source label (_key_source): two copies
+# drifted apart means the banner probes a provider the label can't
+# name, or vice versa.
+_PROVIDER_ENV_KEYS: dict[str, str] = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
+}
+
 
 # ---------------------------------------------------------------------------
 # Checks
@@ -141,8 +152,19 @@ def _semgrep_version() -> str | None:
     ``semgrep --version`` costs ~1s of Python CLI startup, too slow
     to pay on every banner.
     """
+    import shutil
+    import sys
     from importlib.metadata import PackageNotFoundError, version
 
+    # Report the binary scans actually run: when PATH resolves to a
+    # semgrep OUTSIDE this interpreter's environment, our own dist
+    # metadata describes a different install — use the (disk-cached)
+    # CLI probe of the PATH binary instead.
+    exe = shutil.which("semgrep")
+    if exe:
+        prefix = str(Path(sys.prefix).resolve()) + os.sep
+        if not str(Path(exe).resolve()).startswith(prefix):
+            return _cached_cli_version("semgrep")
     try:
         return version("semgrep")
     except PackageNotFoundError:
@@ -163,8 +185,10 @@ def _joern_version() -> str | None:
 def _version_newer(latest: str, installed: str) -> bool:
     """True when *latest* is strictly newer than *installed*.
 
-    Compares as integer tuples; non-numeric trailing segments are
-    ignored so ``1.82.0rc1`` compares as ``(1, 82, 0)``.
+    Compares as integer tuples; parsing stops at the first
+    non-numeric segment, so ``1.82.0rc1`` compares as ``(1, 82)`` —
+    strictly older than the ``1.82.0`` release ``(1, 82, 0)``, which
+    matches pre-release semantics.
     """
     def _parse(v: str) -> tuple[int, ...]:
         parts: list[int] = []
@@ -465,8 +489,16 @@ def check_llm() -> tuple[list, list]:
     warnings = []
 
     try:
-        # Read config
-        config_path = Path.home() / ".config/raptor/models.json"
+        # Read config — same resolution as core.llm.detection's
+        # _models_config_path: RAPTOR_CONFIG overrides the default
+        # location, so the banner validates the file a run would
+        # actually load (a hardcoded default validated the WRONG
+        # file whenever the operator pointed RAPTOR_CONFIG away).
+        config_path_str = os.getenv("RAPTOR_CONFIG")
+        config_path = (
+            Path(config_path_str).resolve() if config_path_str
+            else Path.home() / ".config/raptor/models.json"
+        )
         models = []
         if config_path.exists():
             # Auto-tighten if readable by others (contains API keys).
@@ -488,12 +520,7 @@ def check_llm() -> tuple[list, list]:
                 models = data.get("models", []) if isinstance(data, dict) else data
 
         # Also check env vars for providers not in models.json
-        env_keys = {
-            "anthropic": "ANTHROPIC_API_KEY",
-            "openai": "OPENAI_API_KEY",
-            "gemini": "GEMINI_API_KEY",
-            "mistral": "MISTRAL_API_KEY",
-        }
+        env_keys = _PROVIDER_ENV_KEYS
         config_providers = {m.get("provider") for m in models}
         for provider, env_var in env_keys.items():
             key = os.getenv(env_var)
@@ -528,9 +555,13 @@ def check_llm() -> tuple[list, list]:
 
             key_status = {}
             if validator_available:
-                # Validate keys in parallel
-                with ThreadPoolExecutor(max_workers=4) as pool:
-                    futures = {}
+                # Validate keys in parallel. No `with` block: the
+                # context manager's shutdown(wait=True) would JOIN a
+                # hung probe thread, re-creating the very hang the
+                # timeout below exists to bound.
+                pool = ThreadPoolExecutor(max_workers=4)
+                futures = {}
+                try:
                     seen = set()
                     for m in models:
                         provider = m.get("provider", "unknown")
@@ -539,31 +570,33 @@ def check_llm() -> tuple[list, list]:
                             continue
                         seen.add(provider)
                         futures[pool.submit(_test_key, provider, api_key, m.get("api_base"))] = provider
-                    # `as_completed(timeout=5)` is an AGGREGATE
-                    # timeout — applies to the iterator, not to
-                    # individual futures. Pre-fix: with 5 providers
-                    # configured, timeout=5 covered ALL of them
-                    # collectively, so a single slow provider
-                    # (network-misconfigured Anthropic endpoint
-                    # taking 5s to fail-DNS) consumed the whole
-                    # budget and the remaining providers never had
-                    # their results collected — they got marked
-                    # False as if THEIR keys failed.
-                    #
-                    # Wrap each `future.result()` in its own
-                    # per-task `timeout=5` so each provider gets a
-                    # full 5-second budget independent of others.
-                    # as_completed itself has no timeout; the
-                    # per-future result(timeout=5) (plus _test_key's
-                    # own request timeout) bounds total wall-clock
-                    # at ~5×N seconds worst case (acceptable for
-                    # startup banner).
-                    for future in as_completed(futures):
-                        provider = futures[future]
-                        try:
-                            key_status[provider] = future.result(timeout=5)
-                        except Exception:  # noqa: BLE001
+                    # Two timeout layers, both required:
+                    # * per-future result(timeout=5): one slow
+                    #   provider must not consume the collection
+                    #   budget and mark OTHER providers' keys failed.
+                    # * as_completed(timeout=5*N): the aggregate
+                    #   wall-clock bound. result(timeout=...) on a
+                    #   COMPLETED future can never fire (as_completed
+                    #   yields only completed futures), so without
+                    #   this the loop waited on as_completed forever
+                    #   when a probe hung past _test_key's own
+                    #   request timeout (trickling endpoint, stalled
+                    #   proxy) — banner and doctor hung with it.
+                    pending = dict(futures)
+                    try:
+                        budget = 5 * max(1, len(futures))
+                        for future in as_completed(futures, timeout=budget):
+                            provider = futures[future]
+                            pending.pop(future, None)
+                            try:
+                                key_status[provider] = future.result(timeout=5)
+                            except Exception:  # noqa: BLE001
+                                key_status[provider] = False
+                    except TimeoutError:
+                        for provider in pending.values():
                             key_status[provider] = False
+                finally:
+                    pool.shutdown(wait=False, cancel_futures=True)
 
             # Build output lines (same format as before). Dedupe
             # per-provider warnings: `key_status` is keyed by
@@ -714,12 +747,7 @@ def _test_key(provider: str, api_key: str, api_base: str | None = None) -> bool:
 def _key_source(provider: str, model_entry: dict | None = None) -> str:
     if provider == "ollama":
         return "local"
-    env_keys = {
-        "anthropic": "ANTHROPIC_API_KEY",
-        "openai": "OPENAI_API_KEY",
-        "gemini": "GEMINI_API_KEY",
-        "mistral": "MISTRAL_API_KEY",
-    }
+    env_keys = _PROVIDER_ENV_KEYS
     if model_entry and model_entry.get("_from_env"):
         return f"via {env_keys.get(provider, 'env')}"
     env_var = env_keys.get(provider, "")
@@ -810,7 +838,15 @@ def check_env(unavailable_features: set) -> tuple[list, list]:
     # avoids noise without missing real signal.
 
     out_dir = RaptorConfig.get_out_dir()
-    out_ok = out_dir.exists() and os.access(out_dir, os.W_OK)
+    if out_dir.exists():
+        out_ok = os.access(out_dir, os.W_OK)
+    else:
+        # Fresh clone: out/ is gitignored and created by the first
+        # run — judge whether that creation CAN succeed instead of
+        # failing a healthy checkout for a dir that isn't meant to
+        # exist yet.
+        parent = out_dir.parent
+        out_ok = parent.is_dir() and os.access(parent, os.W_OK)
     parts.append("out/ ✓" if out_ok else "out/ ✗")
     if not out_ok:
         warnings.append("out/ directory not writable")
@@ -1157,8 +1193,17 @@ def main() -> None:
     except Exception:  # noqa: BLE001
         output = f"{logo}\n\nraptor:~$ {quote}"
 
-    OUTPUT_FILE.write_text(output, encoding="utf-8")
+    # Print FIRST: the banner must reach the operator even when the
+    # persist fails (read-only checkout, full disk) — pre-fix a write
+    # failure killed both.
     print(output)
+    try:
+        OUTPUT_FILE.write_text(output, encoding="utf-8")
+    except OSError as exc:
+        print(
+            f"warning: could not persist banner to {OUTPUT_FILE}: {exc}",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":

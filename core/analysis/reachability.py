@@ -87,6 +87,7 @@ from core.inventory.call_graph import (
     INDIRECTION_DUNDER_IMPORT,
     INDIRECTION_DYNAMIC_IMPORT,
     INDIRECTION_EVAL,
+    INDIRECTION_FN_POINTER,
     INDIRECTION_GETATTR,
     INDIRECTION_GETATTR_OPAQUE,
     INDIRECTION_IMPORTLIB,
@@ -136,6 +137,13 @@ _TEST_FILE_PATTERN = re.compile(
 )
 
 
+# Languages whose extractor records ``#include`` headers in the file's
+# imports map (``imports["foo"] = "foo.h"``) rather than name bindings.
+# A header entry never shadows a same-file function definition, so the
+# same-file bare-name fast-path must not treat it as one.
+_HEADER_IMPORT_LANGS = frozenset({"c", "cpp"})
+
+
 # Indirection flags that can mask a static "not called" claim.
 # Python flags first; JS flags second. The resolver doesn't
 # distinguish — any present flag → file is a confounder when it
@@ -150,6 +158,7 @@ _MASKING_FLAGS: set[str] = {
     INDIRECTION_DYNAMIC_IMPORT,
     INDIRECTION_EVAL,
     INDIRECTION_REFLECT,
+    INDIRECTION_FN_POINTER,
 }
 
 # Subset of ``_MASKING_FLAGS`` whose dispatcher has no recorded tail
@@ -170,6 +179,17 @@ _OPAQUE_MASKING_FLAGS: set[str] = {
     INDIRECTION_DYNAMIC_IMPORT,
     INDIRECTION_EVAL,
     INDIRECTION_REFLECT,
+    # C/C++ ``(*fp)(...)`` / known-fn-pointer-var calls: the extractor
+    # records the POINTER VARIABLE's name in the chain, never the
+    # dispatched target's, so the runtime target is genuinely unknown
+    # — a fn-pointer-dispatched static was reading a confident
+    # no_path_from_entry. OPAQUE by the set's own definition (no
+    # recorded tail name for the target). Residual: the 1-hop
+    # ``function_called`` branch still gates non-wildcard masking on
+    # a tail-name mention, which a pure ``fp = my_static; ... fp()``
+    # file never has — closing that needs address-taken extraction
+    # in the call-graph layer.
+    INDIRECTION_FN_POINTER,
 }
 
 
@@ -225,7 +245,13 @@ class _FunctionCalledIndex:
 # inventory dict reusing the address of a GC'd one doesn't return
 # the wrong index. Capped — matches the ``_INDEX_CACHE`` policy
 # already used by ``callers_of`` / ``callees_of``.
-_FN_CALLED_INDEX_CACHE: dict[int, tuple[dict[str, Any], _FunctionCalledIndex]] = {}
+# OrderedDict + move_to_end-on-hit so eviction drops the least-
+# recently-USED entry (same LRU pattern as ``_INDEX_CACHE``) — a plain
+# dict's ``next(iter())`` eviction always dropped the FIRST-inserted
+# slot regardless of use.
+_FN_CALLED_INDEX_CACHE: OrderedDict[
+    int, tuple[dict[str, Any], _FunctionCalledIndex],
+] = OrderedDict()
 _FN_CALLED_INDEX_CACHE_MAX = 8
 _FN_CALLED_INDEX_CACHE_LOCK = threading.Lock()
 
@@ -235,9 +261,10 @@ _FN_CALLED_INDEX_CACHE_LOCK = threading.Lock()
 # thousands of findings that's 100M file-walks per analysis pass; with
 # the index each call is hash-lookup-fast (adversarial review P1-C-2).
 # Map shape: ``{normalised_path: {name: [item, item, ...]}}``.
-_BO_ITEM_INDEX_CACHE: dict[
+# LRU (OrderedDict + move_to_end), same pattern as ``_INDEX_CACHE``.
+_BO_ITEM_INDEX_CACHE: OrderedDict[
     int, tuple[dict[str, Any], dict[str, dict[str, list[dict[str, Any]]]]],
-] = {}
+] = OrderedDict()
 _BO_ITEM_INDEX_CACHE_MAX = 8
 _BO_ITEM_INDEX_CACHE_LOCK = threading.Lock()
 
@@ -276,15 +303,15 @@ def _get_bo_item_index(
     with _BO_ITEM_INDEX_CACHE_LOCK:
         cached = _BO_ITEM_INDEX_CACHE.get(inv_id)
         if cached is not None and cached[0] is inventory:
+            _BO_ITEM_INDEX_CACHE.move_to_end(inv_id)
             return cached[1]
         if cached is not None:
             _BO_ITEM_INDEX_CACHE.pop(inv_id, None)
     idx = _build_bo_item_index(inventory)
     with _BO_ITEM_INDEX_CACHE_LOCK:
         _BO_ITEM_INDEX_CACHE[inv_id] = (inventory, idx)
-        if len(_BO_ITEM_INDEX_CACHE) > _BO_ITEM_INDEX_CACHE_MAX:
-            oldest = next(iter(_BO_ITEM_INDEX_CACHE))
-            _BO_ITEM_INDEX_CACHE.pop(oldest, None)
+        while len(_BO_ITEM_INDEX_CACHE) > _BO_ITEM_INDEX_CACHE_MAX:
+            _BO_ITEM_INDEX_CACHE.popitem(last=False)
     return idx
 
 
@@ -364,15 +391,15 @@ def _get_function_called_index(
     with _FN_CALLED_INDEX_CACHE_LOCK:
         cached = _FN_CALLED_INDEX_CACHE.get(inv_id)
         if cached is not None and cached[0] is inventory:
+            _FN_CALLED_INDEX_CACHE.move_to_end(inv_id)
             return cached[1]
         if cached is not None:
             _FN_CALLED_INDEX_CACHE.pop(inv_id, None)
     idx = _build_function_called_index(inventory)
     with _FN_CALLED_INDEX_CACHE_LOCK:
         _FN_CALLED_INDEX_CACHE[inv_id] = (inventory, idx)
-        if len(_FN_CALLED_INDEX_CACHE) > _FN_CALLED_INDEX_CACHE_MAX:
-            oldest = next(iter(_FN_CALLED_INDEX_CACHE))
-            _FN_CALLED_INDEX_CACHE.pop(oldest, None)
+        while len(_FN_CALLED_INDEX_CACHE) > _FN_CALLED_INDEX_CACHE_MAX:
+            _FN_CALLED_INDEX_CACHE.popitem(last=False)
     return idx
 
 
@@ -469,9 +496,20 @@ def function_called(
         # this drops _resolves_to invocations from 74M to ~hundreds —
         # the main istio-1.4 scan-perf fix (cProfile flagged
         # _resolves_to + its inner generator at >190s of 410s total).
+        #
+        # A bound module may also be a dotted ANCESTOR of
+        # target_module: ``import numpy as np`` binds ``np`` →
+        # ``numpy``, and ``np.linalg.solve(...)`` resolves through
+        # ``_resolves_to`` (head ``np`` → ``numpy``, middle
+        # ``linalg``) to target_module ``numpy.linalg``. Without the
+        # ancestor test the fast-path skipped exactly the files the
+        # slow path would have matched, reading aliased package calls
+        # as NOT_CALLED.
         target_in_imports = False
         for bound in imports.values():
-            if (bound in (target_module, target_dot_func) or bound.startswith(target_module_dot)):
+            if (bound in (target_module, target_dot_func)
+                    or bound.startswith(target_module_dot)
+                    or target_module.startswith(bound + ".")):
                 target_in_imports = True
                 break
 
@@ -560,12 +598,33 @@ def function_called(
         # JS / TS behaves the same with named-import binding).
         if not file_has_evidence:
             file_module = _file_path_to_module(path)
-            if file_module == target_module:
+            # Stripped-form alias: a caller holding the legacy
+            # collapsed convention queries ``pkg.helper`` for a
+            # function defined in ``pkg/__init__.py`` — semantically
+            # the same module, so match both spellings.
+            if file_module is not None and file_module.endswith(".__init__"):
+                stripped_module = file_module[: -len(".__init__")]
+            else:
+                stripped_module = None
+            if target_module in (file_module, stripped_module):
+                # The imports-shadowing skip below only applies where
+                # the imports map records NAME BINDINGS (Python / JS-
+                # style: an import binds the bare name, shadowing a
+                # same-file def). The C/C++ extractor records
+                # ``#include "foo.h"`` as ``imports["foo"] = "foo.h"``
+                # — preprocessor text, not a binding — so a static C
+                # function named after an included header (foo.c
+                # includes foo.h and defines foo()) must still match
+                # its same-file calls. Fail toward CALLED.
+                imports_bind_names = (
+                    (file_record.get("language") or "").lower()
+                    not in _HEADER_IMPORT_LANGS
+                )
                 for call in calls:
                     chain = call.get("chain") or []
                     if len(chain) != 1 or chain[0] != target_func:
                         continue
-                    if chain[0] in imports:
+                    if imports_bind_names and chain[0] in imports:
                         continue
                     file_has_evidence = True
                     evidence.append(
@@ -605,8 +664,30 @@ def function_called(
             if file_mentions_tail:
                 uncertain_reasons.extend((path, flag) for flag in sorted(non_wildcard_flags))
 
+        # Wildcard masking has two plausibility signals. The import-
+        # root heuristic (_wildcard_could_provide) needs SOME other
+        # recorded import from the target's root package — but the
+        # extractor drops the wildcard's own source module entirely,
+        # so a file whose ONLY import is ``from mymod import *``
+        # carries no such witness. Its tell is instead a BARE call to
+        # the target's name that neither a recorded import nor a
+        # local definition in this file binds: exactly what a
+        # wildcard binding of ``target_func`` looks like. Without it
+        # the file contributed nothing and the query read NOT_CALLED
+        # with empty uncertain_reasons.
         if INDIRECTION_WILDCARD_IMPORT in flags and (
             _wildcard_could_provide(imports, target_module, target_func)
+            or (
+                target_func not in imports
+                and not any(
+                    isinstance(it, dict) and it.get("name") == target_func
+                    for it in file_record.get("items") or []
+                )
+                and any(
+                    (c.get("chain") or []) == [target_func]
+                    for c in calls
+                )
+            )
         ):
             uncertain_reasons.append((path, INDIRECTION_WILDCARD_IMPORT))
 
@@ -1936,6 +2017,15 @@ def _file_path_to_module(rel_path: str) -> str | None:
     module, not a function-qualified candidate list. The two helpers
     serve different fast-paths and intentionally diverge in scope.
 
+    ``pkg/__init__.py`` maps to ``pkg.__init__`` — matching
+    ``core.paths.path_to_module``, which every ``function_called``
+    caller (the enrichment prepass, reach_audit, the CodeQL
+    prefilter) uses to build the queried qualified name. The old
+    collapsed ``pkg`` form never matched those queries, so every
+    ``__init__.py`` function read not_called through the same-file
+    bare-name fast-path; the fast-path keeps a stripped-form alias
+    for callers still holding the collapsed convention.
+
     Returns ``None`` for paths with no extension (extensionless
     scripts, Makefile-shaped artefacts) — those don't participate
     in module-style namespacing.
@@ -1947,10 +2037,6 @@ def _file_path_to_module(rel_path: str) -> str | None:
     if not p.suffix:
         return None
     parts = list(p.with_suffix("").parts)
-    if not parts:
-        return None
-    if parts[-1] == "__init__":
-        parts.pop()
     if not parts:
         return None
     return ".".join(parts)
@@ -2363,8 +2449,17 @@ def _select_item_by_line(
          CLOSEST one <= the query line (extractors sometimes under-
          report ``line_end``; the containing function is still the one
          that starts nearest above the finding).
-      3. Otherwise (query line precedes every candidate) keep the
-         first candidate — the legacy deterministic tie-break.
+      3. Otherwise (query line precedes every candidate) the line
+         cannot disambiguate — return ALL candidates, exactly like
+         ``line == 0``. This constraint is load-bearing for the
+         suppression-grade consumers (``binary_oracle_absent``,
+         ``is_lexically_dead``): they require EVERY returned candidate
+         to be dead, so a first-candidate tie-break here would let a
+         dead namesake hard-suppress a live function whenever the
+         finding line sits above the first definition. The promote-only
+         consumers (``binary_call_edge_present``, the frida witnesses)
+         use any-of semantics, so widening to all candidates can only
+         promote reachability — the fail-safe direction.
 
     No-op when ``line`` is 0/unset or there's at most one candidate.
     """
@@ -2390,7 +2485,10 @@ def _select_item_by_line(
             preceding,
             key=lambda it: int(it.get("line_start") or 0),
         )]
-    return candidates[:1]
+    # Query line precedes every candidate: no disambiguation possible —
+    # behave like line == 0 (all candidates) so the dead-witness
+    # accessors keep their ALL-namesakes-dead requirement (rule 3).
+    return candidates
 
 
 def binary_call_edge_present(
@@ -2582,26 +2680,13 @@ def binary_oracle_absent(
             return False
         # Soundness gate (E1 stripped-binary fallback + adversarial
         # review P0-C-4): the corpus-earned suppression property is
-        # conditional on full-DWARF evidence. Refuse to fire when
-        # (a) no per-binary records exist (legacy inventory or
-        # writer bug — no tier evidence ⇒ no trust) OR (b) ANY
-        # contributing binary was symbol-only (could be inlined,
-        # not absent — we just can't see it without DWARF).
-        per_binary = bo.get("binaries") or []
-        if not per_binary:
-            return False
-        if any(isinstance(b, dict) and b.get("tier") != "full"
-               for b in per_binary):
-            return False
-        # (c) ANY contributing binary lacks suppression grade — an
-        # env-built binary whose build command was GUESSED (detector
-        # synthesis): a guessed container configuration can compile
-        # out features the real build includes, so its absence is not
-        # suppression evidence (S5.4 operator-ratified rule; absent
-        # key = legacy inventory = full grade).
-        if any(isinstance(b, dict)
-               and b.get("suppression_grade") is False
-               for b in per_binary):
+        # conditional on full-DWARF evidence AND on the build not
+        # being detector-guessed — the shared predicate
+        # ``absent_earns_suppression`` is the single authority (its
+        # ANY-full-tier drifted copy in ``extract_verdicts`` leaked
+        # symbol-only ``absent`` evidence into suppression).
+        from core.analysis.binary_oracle import absent_earns_suppression
+        if not absent_earns_suppression(bo.get("binaries")):
             return False
         any_confirmed = True
     return any_confirmed
@@ -2623,35 +2708,33 @@ def is_lexically_dead(
     each other read as mutually CALLED in the static graph, but the
     whole scope is dead. Detected at inventory-build time and stored
     as ``lexical_dead=True`` on the matching item; this accessor is a
-    path/name-keyed lookup (no index build).
+    path/name-keyed lookup via the shared inverse index.
 
-    Match is exact on ``(name, line)`` when ``line > 0`` — defensive
-    against shadowed names / overloads. With ``line == 0`` it matches
-    by name within the file (first hit wins). Returns ``False`` when
-    the file or function isn't found (false-negative-safe: never
-    claims dead when uncertain).
+    Line disambiguation uses :func:`_select_item_by_line` SPAN
+    containment (the same heuristic as ``binary_oracle_absent``) —
+    production callers (semgrep / codeql / the agent chokepoint) pass
+    the line OF THE FINDING, which is typically inside the function,
+    so the old exact ``line_start`` equality never matched and the
+    witness silently never fired through those callers. When the line
+    cannot disambiguate (``line == 0``, or it precedes every
+    candidate), EVERY same-name candidate must be dead — first-hit-
+    wins would let a dead namesake hard-suppress a live function
+    (mirrors the P0-C-3 rule). Returns ``False`` when the file or
+    function isn't found (false-negative-safe: never claims dead when
+    uncertain).
     """
     if not file_path or not name:
         return False
     normalised = file_path.replace("\\", "/")
-    for file_record in inventory.get("files", []):
-        if not isinstance(file_record, dict):
-            continue
-        rec_path = file_record.get("path")
-        if not isinstance(rec_path, str):
-            continue
-        if rec_path.replace("\\", "/") != normalised:
-            continue
-        for item in file_record.get("items", []):
-            if not isinstance(item, dict):
-                continue
-            if item.get("name") != name:
-                continue
-            if line and item.get("line_start") != line:
-                continue
-            return bool(item.get("lexical_dead"))
+    idx = _get_bo_item_index(inventory)
+    by_name = idx.get(normalised)
+    if not by_name:
         return False
-    return False
+    candidates = by_name.get(name)
+    if not candidates:
+        return False
+    candidates = _select_item_by_line(candidates, line)
+    return all(bool(it.get("lexical_dead")) for it in candidates)
 
 
 # ---------------------------------------------------------------------------
@@ -3233,11 +3316,19 @@ def _item_is_entry(item: dict[str, Any], language: str,
     return False
 
 
-_ENTRY_SET_CACHE: dict[int, tuple[dict[str, Any], frozenset]] = {}
+# LRU caches (OrderedDict + move_to_end-on-hit, popitem(last=False)
+# eviction) — same pattern as ``_INDEX_CACHE``; a plain dict's
+# ``next(iter())`` eviction dropped the FIRST-inserted entry even when
+# it was the hottest one.
+_ENTRY_SET_CACHE: OrderedDict[
+    int, tuple[dict[str, Any], frozenset],
+] = OrderedDict()
 _ENTRY_SET_CACHE_MAX = 8
 _ENTRY_SET_CACHE_LOCK = threading.Lock()
 
-_FILES_BY_PATH_CACHE: dict[int, tuple[dict[str, Any], dict[str, dict[str, Any]]]] = {}
+_FILES_BY_PATH_CACHE: OrderedDict[
+    int, tuple[dict[str, Any], dict[str, dict[str, Any]]],
+] = OrderedDict()
 _FILES_BY_PATH_CACHE_MAX = 8
 _FILES_BY_PATH_CACHE_LOCK = threading.Lock()
 
@@ -3261,6 +3352,7 @@ def _files_by_path(inventory: dict[str, Any]) -> dict[str, dict[str, Any]]:
     with _FILES_BY_PATH_CACHE_LOCK:
         cached = _FILES_BY_PATH_CACHE.get(inv_id)
         if cached is not None and cached[0] is inventory:
+            _FILES_BY_PATH_CACHE.move_to_end(inv_id)
             return cached[1]
     index: dict[str, dict[str, Any]] = {}
     for fr in inventory.get("files", []):
@@ -3269,13 +3361,14 @@ def _files_by_path(inventory: dict[str, Any]) -> dict[str, dict[str, Any]]:
         path = (fr.get("path") or "").replace("\\", "/")
         if path:
             index[path] = fr
-    # FIFO eviction (matches the sibling ``_ENTRY_SET_CACHE`` pattern):
-    # drop the oldest entry when full, instead of wiping every entry —
-    # keeps the cache useful under multi-inventory pipelines.
+    # LRU eviction (matches the sibling ``_ENTRY_SET_CACHE`` pattern):
+    # drop the least-recently-used entry when full, instead of wiping
+    # every entry — keeps the cache useful under multi-inventory
+    # pipelines.
     with _FILES_BY_PATH_CACHE_LOCK:
-        if len(_FILES_BY_PATH_CACHE) >= _FILES_BY_PATH_CACHE_MAX:
-            _FILES_BY_PATH_CACHE.pop(next(iter(_FILES_BY_PATH_CACHE)))
         _FILES_BY_PATH_CACHE[inv_id] = (inventory, index)
+        while len(_FILES_BY_PATH_CACHE) > _FILES_BY_PATH_CACHE_MAX:
+            _FILES_BY_PATH_CACHE.popitem(last=False)
     return index
 
 
@@ -3286,6 +3379,7 @@ def _entry_functions(inventory: dict[str, Any]) -> frozenset:
     with _ENTRY_SET_CACHE_LOCK:
         cached = _ENTRY_SET_CACHE.get(inv_id)
         if cached is not None and cached[0] is inventory:
+            _ENTRY_SET_CACHE.move_to_end(inv_id)
             return cached[1]
     library_mode = bool(inventory.get("treat_exports_as_entries"))
     header_api_raw = inventory.get("header_api")
@@ -3296,6 +3390,15 @@ def _entry_functions(inventory: dict[str, Any]) -> frozenset:
             continue
         lang = fr.get("language") or ""
         path = fr.get("path") or ""
+        # Test files never seed entries. The framework entry sets below
+        # are built with exclude_test_files=True; without the same
+        # exclusion here a test-file item (a test ``main``, a public
+        # test helper) seeds the entry set, and forward_closure expands
+        # SEED nodes normally (it only blocks traversal INTO test-file
+        # callees) — so production functions called only from tests
+        # read entry-reachable.
+        if _is_test_file(path):
+            continue
         items = fr.get("items", []) or []
         nested_keys = _nested_function_keys(items)
         for item in items:
@@ -3316,13 +3419,16 @@ def _entry_functions(inventory: dict[str, Any]) -> frozenset:
     frozen = frozenset(entries)
     with _ENTRY_SET_CACHE_LOCK:
         _ENTRY_SET_CACHE[inv_id] = (inventory, frozen)
-        if len(_ENTRY_SET_CACHE) > _ENTRY_SET_CACHE_MAX:
-            _ENTRY_SET_CACHE.pop(next(iter(_ENTRY_SET_CACHE)), None)
+        while len(_ENTRY_SET_CACHE) > _ENTRY_SET_CACHE_MAX:
+            _ENTRY_SET_CACHE.popitem(last=False)
     return frozen
 
 
-# (reachable_set, closure_truncated) per inventory.
-_ENTRY_REACHABLE_CACHE: dict[int, tuple[dict[str, Any], frozenset, bool]] = {}
+# (reachable_set, closure_truncated) per inventory. LRU, same pattern
+# as ``_INDEX_CACHE``.
+_ENTRY_REACHABLE_CACHE: OrderedDict[
+    int, tuple[dict[str, Any], frozenset, bool],
+] = OrderedDict()
 # Closure depth for the entry set. Far above any realistic call-chain
 # depth so reachability isn't lost to truncation (a truncated closure
 # would falsely read deep-reachable functions as NO_PATH). It's a single
@@ -3346,6 +3452,7 @@ def _entry_reachable_set(
     with _ENTRY_REACHABLE_CACHE_LOCK:
         cached = _ENTRY_REACHABLE_CACHE.get(inv_id)
         if cached is not None and cached[0] is inventory:
+            _ENTRY_REACHABLE_CACHE.move_to_end(inv_id)
             return cached[1], cached[2]
     entries = _entry_functions(inventory)
     fc = forward_closure(
@@ -3358,10 +3465,8 @@ def _entry_reachable_set(
     frozen = frozenset(reachable)
     with _ENTRY_REACHABLE_CACHE_LOCK:
         _ENTRY_REACHABLE_CACHE[inv_id] = (inventory, frozen, fc.truncated)
-        if len(_ENTRY_REACHABLE_CACHE) > _ENTRY_REACHABLE_CACHE_MAX:
-            _ENTRY_REACHABLE_CACHE.pop(
-                next(iter(_ENTRY_REACHABLE_CACHE)), None,
-            )
+        while len(_ENTRY_REACHABLE_CACHE) > _ENTRY_REACHABLE_CACHE_MAX:
+            _ENTRY_REACHABLE_CACHE.popitem(last=False)
     return frozen, fc.truncated
 
 
@@ -3412,6 +3517,43 @@ def _is_nested_function(
         if ols < target.line and target.line <= ole:
             return True
     return False
+
+
+def _python_internal_signal(
+    inventory: dict[str, Any], fn: InternalFunction,
+) -> bool:
+    """Does a confident "internal, not externally reachable" signal
+    fire for the Python function ``fn``?
+
+    The three orthogonal signals (same set ``entry_reachability``
+    documents for its target): structural nesting, explicit ``__all__``
+    exclusion, or the leading-underscore convention when no ``__all__``
+    is declared. ``False`` means no signal fires — the function could
+    be library API / externally imported / reflection-dispatched, so
+    any dead-code claim resting on it must stay uncertain.
+    """
+    if _is_nested_function(inventory, fn):
+        return True
+    exports = _file_python_exports(inventory, fn.file_path)
+    if exports is not None:
+        return fn.name not in exports
+    return fn.name.startswith("_")
+
+
+def _confident_dead_signals(
+    inventory: dict[str, Any], fn: InternalFunction,
+) -> bool:
+    """Would ``entry_reachability`` treat a not-entry-reachable ``fn``
+    as confidently dead (before the masking walk)? Mirrors the target-
+    side gates: reportable entry-model language, plus the Python
+    internal-signal check for heuristic-tier Python.
+    """
+    lang = _file_language(inventory, fn.file_path)
+    if lang not in _REPORTABLE_ENTRY_LANGS:
+        return False
+    if lang == "python" and not _python_internal_signal(inventory, fn):
+        return False
+    return True
 
 
 def _file_masks_target(
@@ -3545,20 +3687,12 @@ def entry_reachability(
     # NOT_CALLED layer surfaces them instead of an over-confident
     # dead verdict. The witness tier stays HEURISTIC; no suppression
     # is licensed by any signal.
-    if lang == "python":
-        is_nested = _is_nested_function(inventory, target)
-        if not is_nested:
-            exports = _file_python_exports(inventory, target.file_path)
-            if exports is not None:
-                # Explicit ``__all__`` contract. Author declared what's
-                # exported; anything in ``__all__`` may be reached
-                # externally even with no in-project caller.
-                if target.name in exports:
-                    return "uncertain"
-            elif not target.name.startswith("_"):
-                # No ``__all__`` AND public-named AND not nested —
-                # no signal fires; can't claim dead.
-                return "uncertain"
+    if lang == "python" and not _python_internal_signal(inventory, target):
+        # No signal fires (public-named with no ``__all__``, or the
+        # module's ``__all__`` exports the name) — could be library
+        # API, externally-imported, or reflection-dispatched; can't
+        # claim dead.
+        return "uncertain"
     # Call-masking indirection (reflection / func-like macros) in the
     # target's file, or in any function that transitively calls it, could
     # hide an entry edge the static graph didn't capture → don't claim
@@ -3587,10 +3721,24 @@ def entry_reachability(
     if rc.truncated:
         return "uncertain"
     for fn in rc.nodes:
-        if isinstance(fn, InternalFunction) and _file_masks_target(
+        if not isinstance(fn, InternalFunction):
+            continue
+        if _file_masks_target(
             inventory, fn.file_path, target.name,
             target_module=target_module,
         ):
+            return "uncertain"
+        if fn == target:
+            continue
+        # A confident dead claim on the target rests on every
+        # transitive caller being confidently dead too: the target is
+        # unreached only if its callers are. A caller that itself only
+        # reads uncertain by the same gates the target passed (non-
+        # reportable entry-model language; a public Python name with
+        # no ``__all__``; an ``__all__``-exported name) may be live —
+        # and would make the target live through it. Degrade to
+        # uncertain rather than claim a dead island.
+        if not _confident_dead_signals(inventory, fn):
             return "uncertain"
     return "no_path_from_entry"
 
@@ -4142,20 +4290,13 @@ def _find_file_record(
     inventory: dict[str, Any],
     path: str,
 ) -> dict[str, Any] | None:
-    """Linear scan of the inventory's files for a path match.
-
-    Files lists are typically hundreds of entries; linear scan is
-    fast in practice (single-digit microseconds per query).
-    Consumers needing sub-millisecond latency across many queries
-    can pre-build a path→record map.
+    """Path-keyed file-record lookup via the shared
+    :func:`_files_by_path` index — O(1) per query after a one-time
+    per-inventory build. ``enclosing_function`` is called once per
+    finding/function on 30k-file inventories; the previous linear
+    scan here was one of the two O(N_files)-per-call hot spots.
     """
-    norm = path.replace("\\", "/")
-    for file_record in inventory.get("files", []):
-        if not isinstance(file_record, dict):
-            continue
-        if (file_record.get("path", "")).replace("\\", "/") == norm:
-            return file_record
-    return None
+    return _files_by_path(inventory).get(path.replace("\\", "/"))
 
 
 __all__ = [

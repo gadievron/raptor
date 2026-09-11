@@ -30,12 +30,16 @@ class HostHeaderInjectionCheck(Check):
     def run(self, client, target_url, session=None, discovery=None):
         findings = []
 
-        # Probe each override header
+        # Probe each override header. Redirects are OBSERVED, not
+        # followed: with internal following, a Location reflecting the
+        # probe host is out-of-scope and raises inside the client, so
+        # the redirect-poisoning leg below could never fire.
         for header_name in _OVERRIDE_HEADERS:
             try:
                 resp = client.get(
                     "/",
                     headers={header_name: _ATTACKER_HOST},
+                    allow_redirects=False,
                 )
                 body = resp.text
                 if isinstance(body, str) and _ATTACKER_HOST in body:

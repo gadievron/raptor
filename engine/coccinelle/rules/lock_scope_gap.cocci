@@ -2,10 +2,16 @@
 // scope that previously protected it.
 //
 // The pattern: a field is accessed while a lock is held, the lock is
-// released, and then the same field (or another field of the same
-// object) is accessed again WITHOUT re-acquiring the lock. Between
-// unlock and the unprotected access, another thread can mutate or
-// free the object.
+// released, and then the SAME field is accessed again WITHOUT
+// re-acquiring the lock. Between unlock and the unprotected access,
+// another thread can mutate the field, so the second read can disagree
+// with the value the critical section reasoned about.
+//
+// Only the same-field re-access is reported: a lock protects specific
+// fields, not the whole object, so touching a DIFFERENT field of the
+// same object after unlock (immutable ids, owner-private state) is the
+// normal shape of correct code and carries no evidence the lock was
+// meant to cover it.
 //
 // Covers CWE-362 / CWE-667: race condition via inadequate locking scope.
 // @role: detection
@@ -14,13 +20,13 @@
 @spin_scope_gap@
 expression L;
 expression ptr;
-identifier fld, fld2;
+identifier fld;
 position p_gap;
 @@
 
 \(spin_lock\|spin_lock_irq\|spin_lock_bh\)(&L);
 ... when any
-ptr->fld2
+ptr->fld
 ... when any
 \(spin_unlock\|spin_unlock_irq\|spin_unlock_bh\)(&L);
 ... when != \(spin_lock\|spin_lock_irq\|spin_lock_bh\)(&L)
@@ -45,13 +51,13 @@ for _p in p_gap:
 @mutex_scope_gap@
 expression M;
 expression ptr;
-identifier fld, fld2;
+identifier fld;
 position p_gap;
 @@
 
 \(mutex_lock\|mutex_lock_interruptible\|mutex_lock_killable\)(&M);
 ... when any
-ptr->fld2
+ptr->fld
 ... when any
 mutex_unlock(&M);
 ... when != \(mutex_lock\|mutex_lock_interruptible\|mutex_lock_killable\)(&M)
@@ -76,13 +82,13 @@ for _p in p_gap:
 @rw_scope_gap@
 expression L;
 expression ptr;
-identifier fld, fld2;
+identifier fld;
 position p_gap;
 @@
 
 \(read_lock\|write_lock\|read_lock_irq\|write_lock_irq\|read_lock_bh\|write_lock_bh\)(&L);
 ... when any
-ptr->fld2
+ptr->fld
 ... when any
 \(read_unlock\|write_unlock\|read_unlock_irq\|write_unlock_irq\|read_unlock_bh\|write_unlock_bh\)(&L);
 ... when != \(read_lock\|write_lock\|read_lock_irq\|write_lock_irq\|read_lock_bh\|write_lock_bh\)(&L)

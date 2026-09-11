@@ -22,6 +22,8 @@ from core.tar import (
 from core.zip import (
     DEFAULT_MAX_ENTRIES,
     DEFAULT_MAX_MEMBER_BYTES,
+    ZipEntryCountExceeded,
+    ZipOpenError,
     ZipTotalBytesExceeded,
     extract_files_from_zip,
 )
@@ -193,13 +195,15 @@ def extract_to_dir(path, dest, *,
                    max_member_bytes: int = DEFAULT_MAX_MEMBER_BYTES) -> dict[str, Any]:
     """Extract a Tier-1 archive (``path``) into ``dest``; return a summary dict
     ``{"format", "files", "bytes", "dropped"}`` (``dropped`` counts members
-    rejected at the write boundary — out-of-tree or unwritable names).
+    rejected at the write boundary — out-of-tree or unwritable names — plus,
+    for zip, members the primitive's safety filter rejected or skipped as
+    encrypted).
 
     Tier 1: zip, tar, ``.tar.{gz,xz,bz2}``, and single-file gz/bz2/xz/zst.
     Raises ``UnsupportedArchive`` for unknown formats and
     ``DecompressionLimitExceeded`` / ``ArchiveError`` on unsafe or corrupt
-    input — a corrupt or truncated tar REFUSES instead of returning an
-    empty "success" summary that downstream consumers would treat as a
+    input — a corrupt or truncated tar OR zip REFUSES instead of returning
+    an empty "success" summary that downstream consumers would treat as a
     complete extraction.
     """
     src = Path(path)
@@ -225,10 +229,22 @@ def extract_to_dir(path, dest, *,
     sink = _DiskSink(dest, max_total_bytes, max_files)
     try:
         if fmt == "zip":
+            # Count members the primitive skips (safety-filter rejects
+            # + encrypted entries) into the summary's ``dropped`` so a
+            # degraded extraction is visible to consumers — pre-fix
+            # those skips were debug logs only and the summary read as
+            # a clean success.
+            zip_skips = {"n": 0}
+
+            def _count_zip_skip(_info: Any, _reason: str) -> None:
+                zip_skips["n"] += 1
+
             members = extract_files_from_zip(
                 src, selector=_keep_files, max_member_bytes=max_member_bytes,
-                max_entry_count=max_files, max_total_bytes=max_total_bytes)
+                max_entry_count=max_files, max_total_bytes=max_total_bytes,
+                on_skipped=_count_zip_skip)
             stats = _write_members(members, dest, max_total_bytes, max_files)
+            stats["dropped"] += zip_skips["n"]
         elif fmt == "tar":
             # Stream the on-disk tar member-by-member ("r|*"). read_bytes()
             # would materialise the whole archive in RAM before any cap
@@ -259,8 +275,14 @@ def extract_to_dir(path, dest, *,
                 stats = sink.stats()
             else:
                 stats = _write_single_file(chain([head], chunks), src, dest)
-    except (ZipTotalBytesExceeded, TarTotalBytesExceeded, TarEntryCountExceeded) as e:
+    except (ZipTotalBytesExceeded, ZipEntryCountExceeded,
+            TarTotalBytesExceeded, TarEntryCountExceeded) as e:
         raise DecompressionLimitExceeded(str(e)) from e
+    except ZipOpenError as e:
+        # Corrupt / unreadable zip — REFUSE, typed, mirroring the tar
+        # arm below (a silently-empty extraction used to be promoted
+        # into raptor's sha-keyed _sources cache as a complete tree).
+        raise ArchiveError(f"corrupt or unreadable zip archive: {e}") from e
     except tarfile.TarError as e:
         # TarOpenError (unreadable archive) + mid-stream ReadError on a
         # truncated tar. Both REFUSE, typed, instead of leaking raw

@@ -222,6 +222,14 @@ def import_journal(
             # unreviewed, consistent with journal.reviewed_set() and
             # the gap computation's index fold.
             continue
+        if entry.edge_callee:
+            # Tier-1 edge-contract review: only the CALL EDGE was
+            # examined, not the caller's body. JournalEntry.key
+            # documents the invariant ("an edge review must never mark
+            # the caller function itself as reviewed") — marking the
+            # caller's full range here made unreviewed functions
+            # vanish from store-derived gap listings.
+            continue
         rng = ranges.get((entry.file, entry.function))
         if rng is None:
             # Try the entry's own line_start/line_end (may be present

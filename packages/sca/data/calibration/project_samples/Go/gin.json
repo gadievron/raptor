@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-28T20:30:34Z",
+    "fetched_at": "2026-09-01T11:17:20Z",
     "git_ref": "v1.9.1",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of gin",
@@ -42,6 +42,7 @@
       "cvss_score": 6.3,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00369,
       "exploit_evidence": {
@@ -51,8 +52,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-45gg-vh54-h5m9",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 7.738267610541371,
       "reachability": {
@@ -81,7 +87,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -120,6 +131,7 @@
       "cvss_score": 5.9,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.93305,
       "exploit_evidence": {
@@ -129,8 +141,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-45x7-px36-x8w8",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 30.820977985856786,
       "reachability": {
@@ -160,7 +177,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -194,6 +216,7 @@
       "cvss_score": 9.1,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.07314,
       "exploit_evidence": {
@@ -203,8 +226,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-5cgq-3rg8-m6cv",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 12.164913015278017,
       "reachability": {
@@ -233,7 +261,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -268,6 +301,7 @@
       "cvss_score": 5.3,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00504,
       "exploit_evidence": {
@@ -277,8 +311,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-78mq-xcr3-xm33",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 6.521149982087391,
       "reachability": {
@@ -307,7 +346,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -341,6 +385,7 @@
       "cvss_score": 9.1,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.0042,
       "exploit_evidence": {
@@ -350,8 +395,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-89gr-r52h-f8rx",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 11.184748657962581,
       "reachability": {
@@ -380,7 +430,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -414,6 +469,7 @@
       "cvss_score": 5.3,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00412,
       "exploit_evidence": {
@@ -423,8 +479,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-9m57-25v3-79x9",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 6.513531824864722,
       "reachability": {
@@ -453,7 +514,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -488,6 +554,7 @@
       "cvss_score": 9.1,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.006,
       "exploit_evidence": {
@@ -497,8 +564,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-f5wc-c3c7-36mc",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 11.210340416639225,
       "reachability": {
@@ -527,7 +599,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -561,6 +638,7 @@
       "cvss_score": 5.3,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.0051,
       "exploit_evidence": {
@@ -570,8 +648,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-f6x5-jh6r-wrfv",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 6.521646818427999,
       "reachability": {
@@ -600,7 +683,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -634,8 +722,9 @@
       "cvss_score": 7.5,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
-      "epss": 0.00905,
+      "epss": 0.00921,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -643,10 +732,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-hcg3-q754-cr77",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
-      "raptor_risk_estimate": 9.275030958752,
+      "raptor_risk_estimate": 9.276905812867506,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -661,10 +755,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40391821499999997,
+        "epss_multiplier": 0.403999863,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.275030958752,
+        "final": 9.276905812867506,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -673,7 +767,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -707,6 +806,7 @@
       "cvss_score": 5.3,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00561,
       "exploit_evidence": {
@@ -716,8 +816,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-j5w8-q4qc-rx2x",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 6.525869927323174,
       "reachability": {
@@ -746,7 +851,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -780,6 +890,7 @@
       "cvss_score": 9.1,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00412,
       "exploit_evidence": {
@@ -789,8 +900,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-jppx-rxg9-jmrx",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 11.183611246465842,
       "reachability": {
@@ -819,7 +935,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -853,6 +974,7 @@
       "cvss_score": 7.5,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00473,
       "exploit_evidence": {
@@ -862,8 +984,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-q4h4-gmj2-qvw2",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 9.224409897633365,
       "reachability": {
@@ -892,7 +1019,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -926,6 +1058,7 @@
       "cvss_score": 6.5,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00279,
       "exploit_evidence": {
@@ -935,8 +1068,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-qpw4-5x99-6vjp",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 7.974786985951819,
       "reachability": {
@@ -965,7 +1103,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -999,6 +1142,7 @@
       "cvss_score": 9.1,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00525,
       "exploit_evidence": {
@@ -1008,8 +1152,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-rm3j-f69w-wqmq",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 11.19967718385729,
       "reachability": {
@@ -1038,7 +1187,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1072,6 +1226,7 @@
       "cvss_score": 9.1,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.03153,
       "exploit_evidence": {
@@ -1081,8 +1236,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-v778-237x-gjrc",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 11.57331686053628,
       "reachability": {
@@ -1111,7 +1271,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1127,14 +1292,14 @@
           "0.52.0"
         ],
         "id": "GHSA-vgwf-h737-ff37",
-        "modified": "2026-08-28T18:45:07.841348+00:00",
+        "modified": "2026-08-31T15:45:51.336753+00:00",
         "published": "2026-06-25T22:18:17+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2026-39830",
-          "https://access.redhat.com/errata/RHSA-2026:29455",
           "https://access.redhat.com/errata/RHSA-2026:41066",
           "https://access.redhat.com/errata/RHSA-2026:42146",
-          "https://access.redhat.com/errata/RHSA-2026:42796"
+          "https://access.redhat.com/errata/RHSA-2026:42796",
+          "https://access.redhat.com/errata/RHSA-2026:43052"
         ],
         "severity": {
           "score": 9.1,
@@ -1146,6 +1311,7 @@
       "cvss_score": 9.1,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00621,
       "exploit_evidence": {
@@ -1155,8 +1321,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-vgwf-h737-ff37",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 11.213326121818167,
       "reachability": {
@@ -1185,7 +1356,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1220,6 +1396,7 @@
       "cvss_score": 7.5,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00467,
       "exploit_evidence": {
@@ -1229,8 +1406,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-w879-237q-wc7r",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 9.22370682734005,
       "reachability": {
@@ -1259,7 +1441,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1294,6 +1481,7 @@
       "cvss_score": 10.0,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00503,
       "exploit_evidence": {
@@ -1303,8 +1491,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-x527-x647-q7gg",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 12.303900332133251,
       "reachability": {
@@ -1333,7 +1526,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1358,6 +1556,7 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00623,
       "exploit_evidence": {
@@ -1367,8 +1566,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GO-2025-4116",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 4.929059549315321,
       "reachability": {
@@ -1397,7 +1601,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1415,6 +1624,7 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": null,
       "exploit_evidence": {
@@ -1424,8 +1634,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GO-2026-5932",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
       "raptor_risk_estimate": 8.014881938024999,
       "reachability": {
@@ -1454,7 +1669,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1465,7 +1685,7 @@
           "0.55.0"
         ],
         "id": "GO-2026-6303",
-        "modified": "2026-08-28T15:15:16.725706+00:00",
+        "modified": "2026-08-29T10:10:52.440319+00:00",
         "published": "2026-08-28T14:47:45+00:00",
         "references": [
           "https://go.dev/issue/80213",
@@ -1477,8 +1697,9 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.7.0",
+      "direct": true,
       "ecosystem": "Go",
-      "epss": null,
+      "epss": 0.00325,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1486,10 +1707,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GO-2026-6303",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
-      "raptor_risk_estimate": 8.014881938024999,
+      "raptor_risk_estimate": 4.910435998434638,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1504,10 +1730,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.400958475,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.014881938024999,
+        "final": 4.910435998434638,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1516,7 +1742,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1551,6 +1782,7 @@
       "cvss_score": 6.3,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00369,
       "exploit_evidence": {
@@ -1560,8 +1792,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-45gg-vh54-h5m9",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 7.738267610541371,
       "reachability": {
@@ -1590,7 +1827,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1629,6 +1871,7 @@
       "cvss_score": 5.9,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.93305,
       "exploit_evidence": {
@@ -1638,8 +1881,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-45x7-px36-x8w8",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 30.820977985856786,
       "reachability": {
@@ -1669,7 +1917,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1703,6 +1956,7 @@
       "cvss_score": 9.1,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.07314,
       "exploit_evidence": {
@@ -1712,8 +1966,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-5cgq-3rg8-m6cv",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 12.164913015278017,
       "reachability": {
@@ -1742,7 +2001,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1777,6 +2041,7 @@
       "cvss_score": 5.3,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00504,
       "exploit_evidence": {
@@ -1786,8 +2051,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-78mq-xcr3-xm33",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 6.521149982087391,
       "reachability": {
@@ -1816,7 +2086,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1850,6 +2125,7 @@
       "cvss_score": 9.1,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.0042,
       "exploit_evidence": {
@@ -1859,8 +2135,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-89gr-r52h-f8rx",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 11.184748657962581,
       "reachability": {
@@ -1889,7 +2170,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1923,6 +2209,7 @@
       "cvss_score": 5.3,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00412,
       "exploit_evidence": {
@@ -1932,8 +2219,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-9m57-25v3-79x9",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 6.513531824864722,
       "reachability": {
@@ -1962,7 +2254,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1997,6 +2294,7 @@
       "cvss_score": 9.1,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.006,
       "exploit_evidence": {
@@ -2006,8 +2304,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-f5wc-c3c7-36mc",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 11.210340416639225,
       "reachability": {
@@ -2036,7 +2339,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2070,6 +2378,7 @@
       "cvss_score": 5.3,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.0051,
       "exploit_evidence": {
@@ -2079,8 +2388,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-f6x5-jh6r-wrfv",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 6.521646818427999,
       "reachability": {
@@ -2109,7 +2423,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2143,8 +2462,9 @@
       "cvss_score": 7.5,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
-      "epss": 0.00905,
+      "epss": 0.00921,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2152,10 +2472,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-hcg3-q754-cr77",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
-      "raptor_risk_estimate": 9.275030958752,
+      "raptor_risk_estimate": 9.276905812867506,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2170,10 +2495,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40391821499999997,
+        "epss_multiplier": 0.403999863,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.275030958752,
+        "final": 9.276905812867506,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2182,7 +2507,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2216,6 +2546,7 @@
       "cvss_score": 5.3,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00561,
       "exploit_evidence": {
@@ -2225,8 +2556,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-j5w8-q4qc-rx2x",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 6.525869927323174,
       "reachability": {
@@ -2255,7 +2591,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2289,6 +2630,7 @@
       "cvss_score": 9.1,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00412,
       "exploit_evidence": {
@@ -2298,8 +2640,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-jppx-rxg9-jmrx",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 11.183611246465842,
       "reachability": {
@@ -2328,7 +2675,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2362,6 +2714,7 @@
       "cvss_score": 7.5,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00473,
       "exploit_evidence": {
@@ -2371,8 +2724,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-q4h4-gmj2-qvw2",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 9.224409897633365,
       "reachability": {
@@ -2401,7 +2759,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2435,6 +2798,7 @@
       "cvss_score": 6.5,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00279,
       "exploit_evidence": {
@@ -2444,8 +2808,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-qpw4-5x99-6vjp",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 7.974786985951819,
       "reachability": {
@@ -2474,7 +2843,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2508,6 +2882,7 @@
       "cvss_score": 9.1,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00525,
       "exploit_evidence": {
@@ -2517,8 +2892,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-rm3j-f69w-wqmq",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 11.19967718385729,
       "reachability": {
@@ -2547,7 +2927,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2581,6 +2966,7 @@
       "cvss_score": 9.1,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.03153,
       "exploit_evidence": {
@@ -2590,8 +2976,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-v778-237x-gjrc",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 11.57331686053628,
       "reachability": {
@@ -2620,7 +3011,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2636,14 +3032,14 @@
           "0.52.0"
         ],
         "id": "GHSA-vgwf-h737-ff37",
-        "modified": "2026-08-28T18:45:07.841348+00:00",
+        "modified": "2026-08-31T15:45:51.336753+00:00",
         "published": "2026-06-25T22:18:17+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2026-39830",
-          "https://access.redhat.com/errata/RHSA-2026:29455",
           "https://access.redhat.com/errata/RHSA-2026:41066",
           "https://access.redhat.com/errata/RHSA-2026:42146",
-          "https://access.redhat.com/errata/RHSA-2026:42796"
+          "https://access.redhat.com/errata/RHSA-2026:42796",
+          "https://access.redhat.com/errata/RHSA-2026:43052"
         ],
         "severity": {
           "score": 9.1,
@@ -2655,6 +3051,7 @@
       "cvss_score": 9.1,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00621,
       "exploit_evidence": {
@@ -2664,8 +3061,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-vgwf-h737-ff37",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 11.213326121818167,
       "reachability": {
@@ -2694,7 +3096,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2729,6 +3136,7 @@
       "cvss_score": 7.5,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00467,
       "exploit_evidence": {
@@ -2738,8 +3146,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-w879-237q-wc7r",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 9.22370682734005,
       "reachability": {
@@ -2768,7 +3181,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2803,6 +3221,7 @@
       "cvss_score": 10.0,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00503,
       "exploit_evidence": {
@@ -2812,8 +3231,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-x527-x647-q7gg",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 12.303900332133251,
       "reachability": {
@@ -2842,7 +3266,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2867,6 +3296,7 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00623,
       "exploit_evidence": {
@@ -2876,8 +3306,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GO-2025-4116",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 4.929059549315321,
       "reachability": {
@@ -2906,7 +3341,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2924,6 +3364,7 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": null,
       "exploit_evidence": {
@@ -2933,8 +3374,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GO-2026-5932",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
       "raptor_risk_estimate": 8.014881938024999,
       "reachability": {
@@ -2963,7 +3409,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2974,7 +3425,7 @@
           "0.55.0"
         ],
         "id": "GO-2026-6303",
-        "modified": "2026-08-28T15:15:16.725706+00:00",
+        "modified": "2026-08-29T10:10:52.440319+00:00",
         "published": "2026-08-28T14:47:45+00:00",
         "references": [
           "https://go.dev/issue/80213",
@@ -2986,8 +3437,9 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/crypto",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
-      "epss": null,
+      "epss": 0.00325,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2995,10 +3447,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GO-2026-6303",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
-      "raptor_risk_estimate": 8.014881938024999,
+      "raptor_risk_estimate": 4.910435998434638,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3013,10 +3470,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.400958475,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.014881938024999,
+        "final": 4.910435998434638,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3025,7 +3482,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3058,6 +3520,7 @@
       "cvss_score": 6.1,
       "dep_name": "golang.org/x/net",
       "dep_version": "v0.10.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00851,
       "exploit_evidence": {
@@ -3067,8 +3530,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GHSA-2wrh-6pvc-2jm9",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/net@v0.10.0",
       "raptor_risk_estimate": 11.110768577141247,
       "reachability": {
@@ -3105,7 +3573,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3141,6 +3614,7 @@
       "cvss_score": 7.5,
       "dep_name": "golang.org/x/net",
       "dep_version": "v0.10.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.03796,
       "exploit_evidence": {
@@ -3150,8 +3624,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GHSA-4374-p667-p6c8",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/net@v0.10.0",
       "raptor_risk_estimate": 14.169396250124999,
       "reachability": {
@@ -3188,7 +3667,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3225,6 +3709,7 @@
       "cvss_score": 5.3,
       "dep_name": "golang.org/x/net",
       "dep_version": "v0.10.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.91969,
       "exploit_evidence": {
@@ -3234,8 +3719,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GHSA-4v7x-pqxf-cx7m",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/net@v0.10.0",
       "raptor_risk_estimate": 20.774080626663746,
       "reachability": {
@@ -3272,7 +3762,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3306,6 +3801,7 @@
       "cvss_score": 6.5,
       "dep_name": "golang.org/x/net",
       "dep_version": "v0.10.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00326,
       "exploit_evidence": {
@@ -3315,8 +3811,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GHSA-5cv4-jp36-h3mw",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/net@v0.10.0",
       "raptor_risk_estimate": 11.760762947212498,
       "reachability": {
@@ -3353,7 +3854,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3403,15 +3909,16 @@
           "https://github.com/apache/apisix/issues/10320"
         ],
         "severity": {
-          "score": 5.3,
+          "score": 6.9,
           "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L/E:H"
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N/E:A"
         },
         "summary": "HTTP/2 Stream Cancellation Attack"
       },
-      "cvss_score": 5.3,
+      "cvss_score": 6.9,
       "dep_name": "golang.org/x/net",
       "dep_version": "v0.10.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.99999,
       "exploit_evidence": {
@@ -3423,8 +3930,13 @@
         "kev_listed": true,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GHSA-qppj-fm5r-hxr3",
       "in_kev": true,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/net@v0.10.0",
       "raptor_risk_estimate": 69.80517661915114,
       "reachability": {
@@ -3446,7 +3958,7 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 53.0,
+        "cvss_base": 69.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.909594897,
@@ -3461,7 +3973,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3496,6 +4013,7 @@
       "cvss_score": 4.4,
       "dep_name": "golang.org/x/net",
       "dep_version": "v0.10.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00401,
       "exploit_evidence": {
@@ -3505,8 +4023,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GHSA-qxp5-gwg8-xv66",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/net@v0.10.0",
       "raptor_risk_estimate": 7.968730846065,
       "reachability": {
@@ -3543,7 +4066,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3567,13 +4095,17 @@
           "https://groups.google.com/g/golang-announce/c/ezSKR9vqbqA",
           "https://pkg.go.dev/vuln/GO-2025-3595"
         ],
-        "severity": null,
-        "severity_fallback": "medium",
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:P/VC:N/VI:N/VA:N/SC:L/SI:L/SA:N"
+        },
         "summary": "golang.org/x/net vulnerable to Cross-site Scripting"
       },
-      "cvss_score": null,
+      "cvss_score": 5.3,
       "dep_name": "golang.org/x/net",
       "dep_version": "v0.10.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00513,
       "exploit_evidence": {
@@ -3583,10 +4115,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GHSA-vvgc-356p-c3xw",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/net@v0.10.0",
-      "raptor_risk_estimate": 7.25461699395,
+      "raptor_risk_estimate": 9.612367516983749,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -3606,13 +4143,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.401917839,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.25461699395,
+        "final": 9.612367516983749,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3621,7 +4158,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3646,6 +4188,7 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/net",
       "dep_version": "v0.10.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00874,
       "exploit_evidence": {
@@ -3655,8 +4198,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GO-2024-3333",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/net@v0.10.0",
       "raptor_risk_estimate": 7.2878683971,
       "reachability": {
@@ -3693,7 +4241,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3718,6 +4271,7 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/net",
       "dep_version": "v0.10.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00502,
       "exploit_evidence": {
@@ -3727,8 +4281,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GO-2026-4440",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/net@v0.10.0",
       "raptor_risk_estimate": 7.253603793299999,
       "reachability": {
@@ -3765,7 +4324,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3789,6 +4353,7 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/net",
       "dep_version": "v0.10.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00482,
       "exploit_evidence": {
@@ -3798,8 +4363,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GO-2026-4441",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/net@v0.10.0",
       "raptor_risk_estimate": 7.251761610299999,
       "reachability": {
@@ -3836,7 +4406,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3850,7 +4425,7 @@
           "1.26.3"
         ],
         "id": "GO-2026-4918",
-        "modified": "2026-08-26T10:42:13.935325+00:00",
+        "modified": "2026-08-31T10:25:58.576217+00:00",
         "published": "2026-05-07T19:21:40+00:00",
         "references": [
           "https://go.dev/cl/761581",
@@ -3864,6 +4439,7 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/net",
       "dep_version": "v0.10.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00781,
       "exploit_evidence": {
@@ -3873,8 +4449,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GO-2026-4918",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/net@v0.10.0",
       "raptor_risk_estimate": 7.2793022461499985,
       "reachability": {
@@ -3911,7 +4492,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3935,6 +4521,7 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/net",
       "dep_version": "v0.10.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00235,
       "exploit_evidence": {
@@ -3944,8 +4531,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GO-2026-5025",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/net@v0.10.0",
       "raptor_risk_estimate": 7.2290106502499984,
       "reachability": {
@@ -3982,7 +4574,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3996,7 +4593,7 @@
           "0.55.0"
         ],
         "id": "GO-2026-5026",
-        "modified": "2026-08-27T10:40:55.701358+00:00",
+        "modified": "2026-08-31T10:25:59.035069+00:00",
         "published": "2026-05-22T02:46:43+00:00",
         "references": [
           "https://go.dev/cl/767220",
@@ -4010,6 +4607,7 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/net",
       "dep_version": "v0.10.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00692,
       "exploit_evidence": {
@@ -4019,8 +4617,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GO-2026-5026",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/net@v0.10.0",
       "raptor_risk_estimate": 7.2711045318,
       "reachability": {
@@ -4057,7 +4660,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4081,6 +4689,7 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/net",
       "dep_version": "v0.10.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00223,
       "exploit_evidence": {
@@ -4090,8 +4699,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GO-2026-5027",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/net@v0.10.0",
       "raptor_risk_estimate": 7.22790534045,
       "reachability": {
@@ -4128,7 +4742,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4152,6 +4771,7 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/net",
       "dep_version": "v0.10.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00223,
       "exploit_evidence": {
@@ -4161,8 +4781,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GO-2026-5029",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/net@v0.10.0",
       "raptor_risk_estimate": 7.22790534045,
       "reachability": {
@@ -4199,7 +4824,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4223,6 +4853,7 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/net",
       "dep_version": "v0.10.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00223,
       "exploit_evidence": {
@@ -4232,8 +4863,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GO-2026-5030",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/net@v0.10.0",
       "raptor_risk_estimate": 7.22790534045,
       "reachability": {
@@ -4270,7 +4906,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4297,6 +4938,7 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/net",
       "dep_version": "v0.10.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00549,
       "exploit_evidence": {
@@ -4306,8 +4948,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GO-2026-5942",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/net@v0.10.0",
       "raptor_risk_estimate": 7.257932923349999,
       "reachability": {
@@ -4344,7 +4991,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4368,6 +5020,7 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/sys",
       "dep_version": "v0.0.0-20220704084225-05e143d24a9e",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00114,
       "exploit_evidence": {
@@ -4377,8 +5030,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/sys:v0.0.0-20220704084225-05e143d24a9e:GO-2026-5024",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/sys@v0.0.0-20220704084225-05e143d24a9e",
       "raptor_risk_estimate": 4.8972495244889185,
       "reachability": {
@@ -4407,7 +5065,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4431,6 +5094,7 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/sys",
       "dep_version": "v0.6.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00114,
       "exploit_evidence": {
@@ -4440,8 +5104,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/sys:v0.6.0:GO-2026-5024",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/sys@v0.6.0",
       "raptor_risk_estimate": 4.8972495244889185,
       "reachability": {
@@ -4470,7 +5139,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4494,6 +5168,7 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/sys",
       "dep_version": "v0.8.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00114,
       "exploit_evidence": {
@@ -4503,8 +5178,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/sys:v0.8.0:GO-2026-5024",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/sys@v0.8.0",
       "raptor_risk_estimate": 4.8972495244889185,
       "reachability": {
@@ -4533,7 +5213,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4556,6 +5241,7 @@
       "cvss_score": null,
       "dep_name": "golang.org/x/text",
       "dep_version": "v0.9.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.00475,
       "exploit_evidence": {
@@ -4565,8 +5251,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:golang.org/x/text:v0.9.0:GO-2026-5970",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/golang.org/x/text@v0.9.0",
       "raptor_risk_estimate": 4.919810269012161,
       "reachability": {
@@ -4595,7 +5286,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4629,6 +5325,7 @@
       "cvss_score": 7.5,
       "dep_name": "google.golang.org/protobuf",
       "dep_version": "v1.26.0-rc.1",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.01262,
       "exploit_evidence": {
@@ -4638,8 +5335,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:google.golang.org/protobuf:v1.26.0-rc.1:GHSA-8r3f-844c-mc37",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/google.golang.org/protobuf@v1.26.0-rc.1",
       "raptor_risk_estimate": 13.731762651187498,
       "reachability": {
@@ -4649,8 +5351,8 @@
           "reason": "import + advisory symbol(s) (Unmarshal) found in source"
         },
         "evidence": [
-          "render/protobuf.go:9",
-          "binding/protobuf.go:11",
+          "binding/protobuf.go:12",
+          "render/protobuf.go:10",
           "testdata/protoexample/test.pb.go:10",
           "testdata/protoexample/test.pb.go:11",
           "[symbol] Unmarshal"
@@ -4674,7 +5376,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4708,6 +5415,7 @@
       "cvss_score": 7.5,
       "dep_name": "google.golang.org/protobuf",
       "dep_version": "v1.30.0",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.01262,
       "exploit_evidence": {
@@ -4717,8 +5425,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:google.golang.org/protobuf:v1.30.0:GHSA-8r3f-844c-mc37",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/google.golang.org/protobuf@v1.30.0",
       "raptor_risk_estimate": 13.731762651187498,
       "reachability": {
@@ -4728,8 +5441,8 @@
           "reason": "import + advisory symbol(s) (Unmarshal) found in source"
         },
         "evidence": [
-          "render/protobuf.go:9",
-          "binding/protobuf.go:11",
+          "binding/protobuf.go:12",
+          "render/protobuf.go:10",
           "testdata/protoexample/test.pb.go:10",
           "testdata/protoexample/test.pb.go:11",
           "[symbol] Unmarshal"
@@ -4753,7 +5466,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4787,6 +5505,7 @@
       "cvss_score": 7.5,
       "dep_name": "gopkg.in/yaml.v3",
       "dep_version": "v3.0.0-20200313102051-9f266ea9e77c",
+      "direct": true,
       "ecosystem": "Go",
       "epss": 0.03965,
       "exploit_evidence": {
@@ -4796,8 +5515,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:gopkg.in/yaml.v3:v3.0.0-20200313102051-9f266ea9e77c:GHSA-hp87-p4gw-j4gq",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/gopkg.in/yaml.v3@v3.0.0-20200313102051-9f266ea9e77c",
       "raptor_risk_estimate": 8.003244476667719,
       "reachability": {
@@ -4826,7 +5550,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -4845,6 +5574,7 @@
       "cvss_score": null,
       "dep_name": "rsc.io/pdf",
       "dep_version": "v0.1.1",
+      "direct": false,
       "ecosystem": "Go",
       "epss": null,
       "exploit_evidence": {
@@ -4854,8 +5584,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Go:rsc.io/pdf:v0.1.1:GO-2026-5781",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:golang/rsc.io/pdf@v0.1.1",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -4884,7 +5619,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     }
   ]
 }

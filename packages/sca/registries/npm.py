@@ -16,7 +16,8 @@ import urllib.parse
 
 from core.json import MISSING, JsonCache
 
-from ._negative_cache import log_fetch_failure
+from ._negative_cache import log_fetch_failure, should_negative_cache
+from ._url import registry_cache_key
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -28,13 +29,20 @@ logger = logging.getLogger(__name__)
 _CACHE_KEY_PREFIX = "npm-versions"
 _DEFAULT_TTL = 24 * 3600
 
-# npm registry name grammar: lowercase, optionally ``@scope/`` prefixed,
-# URL-safe punctuation only, ≤ 214 chars. Names that fail this can't
-# exist on the registry, so we return the not-found path WITHOUT
-# caching — a degenerate name (``lodash/..``) must never influence
-# which cache file a legitimate name reads or writes.
+# npm registry name grammar: optionally ``@scope/`` prefixed, URL-safe
+# punctuation only, ≤ 214 chars. NEW packages must be lowercase, but
+# legacy mixed-case names published before npm's lowercase rule
+# (``JSONStream``, the event-stream incident class) still exist and
+# resolve — rejecting them here silently reported them as not-found,
+# hiding exactly the aged, high-blast-radius packages the supply-chain
+# detectors care most about. So uppercase letters are accepted; the
+# dangerous shapes (``/`` splices, ``..`` segments, leading ``.``/
+# ``_``, whitespace) stay blocked. Names that fail this can't exist
+# on the registry, so we return the not-found path WITHOUT caching —
+# a degenerate name (``lodash/..``) must never influence which cache
+# file a legitimate name reads or writes.
 _NPM_NAME_RE = re.compile(
-    r"^(@[a-z0-9-~][a-z0-9-._~]*/)?[a-z0-9-~][a-z0-9-._~]*$"
+    r"^(@[A-Za-z0-9-~][A-Za-z0-9-._~]*/)?[A-Za-z0-9-~][A-Za-z0-9-._~]*$"
 )
 _NPM_MAX_NAME_LEN = 214
 
@@ -45,13 +53,6 @@ def _valid_npm_name(name: str) -> bool:
         and _NPM_NAME_RE.match(name) is not None
     )
 
-
-def _cache_name_component(name: str) -> str:
-    """Percent-encode the package name for cache-key use so the key
-    identity matches the URL identity (``lodash/..`` can no longer
-    alias ``lodash`` after the cache layer drops degenerate path
-    segments). Old raw-name entries re-fetch once."""
-    return urllib.parse.quote(name, safe="")
 
 # Cap raised above the global 50 MB default. Popular scoped
 # namespaces like ``@grafana/runtime`` / ``@grafana/ui`` ship
@@ -70,6 +71,16 @@ _NPM_META_MAX_BYTES = 200 * 1024 * 1024
 # at fetch saves disk + cuts cold-parse cost on subsequent reads.
 # Conservative list — when in doubt, leave it in.
 #
+# ``maintainers`` is INTENTIONALLY KEPT (not stripped) at both the
+# per-version and top level: the bump evaluator's maintainer-change
+# detector compares ``versions[v].maintainers`` across the current
+# and target versions, and the registry-metadata supply-chain pass
+# reads the top-level ``maintainers`` plus the previous version's
+# per-version list (maintainer-added / low-bus-factor signals). Both
+# consume the SAME ``get_metadata`` envelope this strip runs on —
+# stripping the field silently disabled maintainer-takeover
+# detection against the real client.
+#
 # ``devDependencies`` is the single biggest win: on a representative
 # 31 MB envelope (next.js, 3768 versions) it accounted for 16 MB (52%).
 # RAPTOR scans the runtime ``dependencies`` graph for vulns, not the
@@ -79,14 +90,15 @@ _NPM_VERSION_STRIP_FIELDS = frozenset((
     "_defaultsLoaded", "_engineSupported", "_id", "_nodeVersion",
     "_npmJsonOpts", "_npmOperationalInternal", "_npmVersion",
     "author", "bugs", "description", "directories", "engines",
-    "keywords", "main", "maintainers", "repository", "taskr",
+    "keywords", "main", "repository", "taskr",
 ))
 
-# Top-level fields with no RAPTOR consumer.
+# Top-level fields with no RAPTOR consumer. (``maintainers`` has a
+# consumer — see the per-version comment above — so it stays.)
 _NPM_TOP_STRIP_FIELDS = frozenset((
     "_id", "_rev", "_attachments", "readme", "readmeFilename",
     "homepage", "author", "bugs", "contributors", "description",
-    "keywords", "repository", "users", "maintainers",
+    "keywords", "repository", "users",
 ))
 
 
@@ -173,7 +185,13 @@ class NpmClient:
             # direction.
             return None
         encoded = urllib.parse.quote(name, safe="@")
-        cache_key = f"npm-meta:{_cache_name_component(name)}"
+        # Key components are percent-encoded (``lodash/..`` can't alias
+        # ``lodash``); the resolved base URL joins the key so a private-
+        # mirror (NPM_CONFIG_REGISTRY) answer is never served as the
+        # public registry's or vice versa.
+        cache_key = registry_cache_key(
+            "npm-meta", name, base_url=self._base_url,
+        )
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -190,9 +208,12 @@ class NpmClient:
             )
         except Exception as e:                # noqa: BLE001
             log_fetch_failure(logger, "sca.registries.npm", name, e)
-            if self._cache is not None:
-                # Cache the failure for the same TTL so subsequent
-                # detectors don't re-query the same dead name.
+            if self._cache is not None and should_negative_cache(e):
+                # Authoritative 404/410: cache the miss for the same
+                # TTL so subsequent detectors don't re-query the same
+                # dead name. Transient failures stay uncached — a
+                # registry outage must not read as "package doesn't
+                # exist" for a whole TTL window.
                 self._cache.put(cache_key, None, ttl_seconds=self._ttl)
             return None
         # Strip security-irrelevant fields before caching: devDeps,
@@ -214,7 +235,9 @@ class NpmClient:
             # Invalid grammar → not-found, uncached (see get_metadata).
             return []
         encoded = urllib.parse.quote(name, safe="@")
-        cache_key = f"{_CACHE_KEY_PREFIX}:{_cache_name_component(name)}"
+        cache_key = registry_cache_key(
+            _CACHE_KEY_PREFIX, name, base_url=self._base_url,
+        )
         if self._cache is not None:
             cached = self._cache.get(cache_key, ttl_seconds=self._ttl)
             if cached is not None:
@@ -231,14 +254,15 @@ class NpmClient:
             )
         except Exception as e:                # noqa: BLE001
             log_fetch_failure(logger, "sca.registries.npm", name, e)
-            if self._cache is not None:
-                # Negative-cache the empty result so re-queries on the
-                # same TTL window don't re-hit the registry. Same
-                # rationale as ``get_metadata``: workspace-internal
-                # names that 404 on every call would otherwise burn
-                # the same lookup once per detector. The empty list
-                # collides cleanly with the cached-empty-result path
-                # below — both surface as ``[]``.
+            if self._cache is not None and should_negative_cache(e):
+                # Negative-cache the empty result (authoritative
+                # 404/410 only) so re-queries in the same TTL window
+                # don't re-hit the registry. Same rationale as
+                # ``get_metadata``: workspace-internal names that 404
+                # on every call would otherwise burn the same lookup
+                # once per detector. The empty list collides cleanly
+                # with the cached-empty-result path below — both
+                # surface as ``[]``. Transient failures stay uncached.
                 self._cache.put(cache_key, [], ttl_seconds=self._ttl)
             return []
 

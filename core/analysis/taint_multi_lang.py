@@ -501,7 +501,9 @@ def _extract_rust_functions(
         if brace_offset < 0:
             continue
         body_start = match.end() + brace_offset + 1
-        body_end = _find_brace_end(content, match.end() + brace_offset)
+        body_end = _find_brace_end(
+            content, match.end() + brace_offset, rust_lifetimes=True,
+        )
         if body_end > body_start:
             results.append((name, params, body_start, body_end))
     return results
@@ -514,11 +516,15 @@ def _parse_rust_params(params_str: str) -> list[str]:
         part = part.strip()
         if not part or part == "self" or part.startswith("&self"):
             continue
-        # Rust: "name: Type" or "mut name: Type"
+        # Rust: "name: Type" or "mut name: Type". ``mut`` is a
+        # whole token — a bare removeprefix("mut") truncated names
+        # that merely START with it ("mutation" -> "ation", breaking
+        # every body match for the param).
         colon_idx = part.find(":")
         if colon_idx > 0:
             name_part = part[:colon_idx].strip()
-            name_part = name_part.lstrip("&").removeprefix("mut").strip()
+            name_part = name_part.lstrip("&").strip()
+            name_part = re.sub(r"^mut\s+", "", name_part).strip()
             if name_part:
                 params.append(name_part)
     return params
@@ -560,8 +566,27 @@ def _extract_callees_rust(body: str) -> list[str]:
 # -- Shared utilities --
 
 
-def _find_brace_end(content: str, open_pos: int) -> int:
-    """Find the matching close brace for an open brace at open_pos."""
+# A Rust character literal at a given position: 'x', '\n', '\'',
+# '\u{1F600}'. Anything else starting with an apostrophe is a
+# lifetime ('a, 'static) or a loop label ('outer:) — NOT a string
+# opener.
+_RUST_CHAR_LITERAL = re.compile(
+    r"'(?:\\u\{[0-9a-fA-F_]{1,6}\}|\\.|[^\\'])'"
+)
+
+
+def _find_brace_end(
+    content: str, open_pos: int, *, rust_lifetimes: bool = False,
+) -> int:
+    """Find the matching close brace for an open brace at open_pos.
+
+    ``rust_lifetimes=True`` (the Rust extractor) changes apostrophe
+    handling: ``'`` opens a character literal only when a complete
+    one starts at that position; otherwise it is a lifetime or loop
+    label. Treating every apostrophe as a string opener made
+    ``&'static str`` swallow all following braces up to the next
+    stray apostrophe, corrupting the extracted body extents.
+    """
     if open_pos >= len(content) or content[open_pos] != "{":
         return open_pos
     depth = 1
@@ -580,6 +605,13 @@ def _find_brace_end(content: str, open_pos: int) -> int:
                     scan -= 1
                 if n_bs % 2 == 0:
                     in_string = False
+        elif rust_lifetimes and ch == "'":
+            m = _RUST_CHAR_LITERAL.match(content, pos)
+            if m is not None:
+                # Skip the whole char literal in one step (the -1
+                # compensates for the shared pos += 1 below).
+                pos = m.end() - 1
+            # else: lifetime / label — no state change.
         elif ch in ('"', "'", "`"):
             in_string = True
             string_char = ch

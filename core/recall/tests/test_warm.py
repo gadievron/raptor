@@ -172,6 +172,28 @@ class TestMissingLineConservatism:
         assert warm["true_finding_damage_count"] == 1
 
 
+class TestCweFormatNormalisation:
+    """'cwe-79' / '79' name the same class as 'CWE-79' — a raw string
+    compare would read them as cross-CWE and exonerate the record from
+    the damage count."""
+
+    MATCHED = [{"id": "T", "cwe": "CWE-79", "file": "src/A.java",
+                "line_start": None}]
+
+    def test_noncanonical_spellings_still_count_as_damage(self):
+        for spelling in ("cwe-79", "79", "CWE-79"):
+            warm = apply_would_suppress(
+                _report([]), [_record(cwe=spelling)],
+                matched_expected=[dict(self.MATCHED[0])])
+            assert warm["true_finding_damage_count"] == 1, spelling
+
+    def test_genuinely_different_cwe_still_refuses(self):
+        warm = apply_would_suppress(
+            _report([]), [_record(cwe="cwe-89")],
+            matched_expected=[dict(self.MATCHED[0])])
+        assert warm["true_finding_damage_count"] == 0
+
+
 class TestB44DamageBlindness:
     """The exact b44 stop-ship miss as fixtures (b45, composed with
     the landed b42 missing-line conservatism): enforced drops on real

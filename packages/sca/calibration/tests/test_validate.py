@@ -10,12 +10,39 @@ import json
 from pathlib import Path
 
 from packages.sca.calibration.validate import (
+    _extract_cve_ids,
     _ranks,
     _spearman_rho,
     _top_n_precision,
     _verdict,
     validate_corpus,
 )
+
+
+# ---------------------------------------------------------------------------
+# _extract_cve_ids — primary id key
+# ---------------------------------------------------------------------------
+
+
+def test_extract_cve_ids_reads_primary_id_key():
+    """findings.py archives the primary OSV id under ``id`` — a
+    CVE-primary record without a CVE alias must still yield its
+    CVE (pre-fix only the never-emitted ``osv_id`` key was read)."""
+    assert _extract_cve_ids(
+        {"id": "CVE-2023-1234", "aliases": []},
+    ) == ["CVE-2023-1234"]
+
+
+def test_extract_cve_ids_legacy_osv_id_fallback():
+    assert _extract_cve_ids(
+        {"osv_id": "CVE-2020-0001", "aliases": []},
+    ) == ["CVE-2020-0001"]
+
+
+def test_extract_cve_ids_skips_informational():
+    assert _extract_cve_ids(
+        {"id": "CVE-2023-1234", "aliases": [], "informational": "unsound"},
+    ) == []
 
 
 # ---------------------------------------------------------------------------

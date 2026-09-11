@@ -19,6 +19,7 @@ so every test runs against a fresh, usable key.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -323,3 +324,34 @@ def test_own_key_never_reuses_other_purpose_keys(tmp_path, monkeypatch):
     p = integrity._key_path()
     assert p.name == "scorecard-mac.key"
     assert p.name not in ("rowmac.key", "telemetry-mac.key")
+
+
+# ---------------------------------------------------------------------------
+# Key loader: short-read tolerance
+# ---------------------------------------------------------------------------
+
+
+def test_chunked_key_read_loads_full_key(tmp_path, monkeypatch) -> None:
+    """os.read may legally return fewer bytes than requested; chunked
+    delivery must not land a healthy key in the wrong-length refusal
+    (which would clamp the sidecar's trust surface for no reason)."""
+    key_file = tmp_path / "scorecard-mac.key"
+    data = os.urandom(32)
+    key_file.write_bytes(data)
+    key_file.chmod(0o600)
+    real_read = os.read
+    monkeypatch.setattr(os, "read", lambda fd, n: real_read(fd, min(n, 5)))
+    assert integrity._read_existing_key(key_file) == data
+
+
+def test_truncated_key_file_reads_exact_length(tmp_path, monkeypatch) -> None:
+    # Two-direction guard: the loop reads to EOF, never pads — a torn
+    # 10-byte key still fails the caller's length check (fail-closed).
+    key_file = tmp_path / "scorecard-mac.key"
+    key_file.write_bytes(os.urandom(10))
+    key_file.chmod(0o600)
+    real_read = os.read
+    monkeypatch.setattr(os, "read", lambda fd, n: real_read(fd, min(n, 5)))
+    got = integrity._read_existing_key(key_file)
+    assert isinstance(got, bytes)
+    assert len(got) == 10

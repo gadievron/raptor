@@ -499,9 +499,11 @@ def _do_hunt(args: argparse.Namespace) -> dict:
             cost_by_model[model.model_name] = 0.0
             return slopsquat_hunt_dispatch(model, pattern, repo_path)
         if use_cocci:
-            # cocci dispatch tracks no per-call cost callback (only one
-            # small LLM round-trip) — record a nominal value so the
-            # "model contributed" signal still shows in operator output.
+            # cocci dispatch exposes no per-call cost callback, so its one
+            # rule-translation LLM round-trip cannot be metered from here;
+            # record an explicit 0.0. Known under-report: total_cost_usd
+            # omits that call (and the >0 display gates skip the model's
+            # cost line) until the dispatch grows cost plumbing.
             cost_by_model[model.model_name] = 0.0
             return cocci_hunt_dispatch(model, pattern, repo_path)
         return default_hunt_dispatch(
@@ -720,7 +722,12 @@ def _print_summary(payload: dict, output_path: Path) -> None:
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
-    if not args.map and not args.model:
+    # The slopsquat hunt backend is offline and model-independent
+    # (--model is documented as ignored there), so requiring a dummy
+    # --model would gate nothing. --hunt-tool has no effect on --trace,
+    # which always needs a model.
+    slopsquat_hunt = args.hunt is not None and args.hunt_tool == "slopsquat"
+    if not args.map and not args.model and not slopsquat_hunt:
         parser.error("--model is required for --hunt and --trace")
     if args.map and args.model:
         parser.error("--model is not used for binary --map")
@@ -736,10 +743,19 @@ def main() -> int:
     import core.llm.config as _cfg_mod
     from core.llm.config import set_operator_primary_override
     _saved_override = _cfg_mod._operator_primary_override
+    # Same snapshot/restore discipline for RAPTOR_TRAJECTORY_DIR:
+    # ``_main_body`` points it at the run's out dir, and an in-process
+    # caller must not see that leak into subsequent tests/consumers
+    # (trajectory writes would land in a stale directory).
+    _saved_traj = os.environ.get("RAPTOR_TRAJECTORY_DIR")
     try:
         return _main_body(args)
     finally:
         set_operator_primary_override(_saved_override)
+        if _saved_traj is None:
+            os.environ.pop("RAPTOR_TRAJECTORY_DIR", None)
+        else:
+            os.environ["RAPTOR_TRAJECTORY_DIR"] = _saved_traj
 
 
 def _main_body(args) -> int:
@@ -752,7 +768,12 @@ def _main_body(args) -> int:
         # writes <out>/trajectories/<run_id>/trajectory.json so
         # operators can see per-turn tool calls after the run. The
         # dispatch reads this env var via core.trajectories.auto;
-        # unset → no-op.
+        # unset → no-op. The resolved --out deliberately wins over an
+        # inherited RAPTOR_TRAJECTORY_DIR for the run's duration so
+        # trajectories co-locate with the run's other artefacts; main()
+        # restores the prior value afterwards, so the operator's env is
+        # never durably clobbered and nothing leaks to in-process
+        # callers.
         os.environ["RAPTOR_TRAJECTORY_DIR"] = str(out_dir)
         if args.map:
             payload = _do_map(args)

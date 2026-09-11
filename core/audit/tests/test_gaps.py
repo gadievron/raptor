@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from core.audit.gaps import (
     PRIORITY_DEAD_CODE,
     PRIORITY_ENTRY_POINT,
@@ -216,6 +218,39 @@ class TestComputeGaps:
         gaps = compute_gaps(_sample_checklist(), [], scope="nonexistent/")
         assert gaps == []
 
+    def test_scope_dot_slash_prefix_matches(self):
+        # "./ipc" is the same checklist-relative path as "ipc";
+        # unnormalised it matched zero files and the run reported 0
+        # gaps — indistinguishable from full coverage.
+        for scope in ("./src/auth", "././src/auth", "./src/auth/"):
+            gaps = compute_gaps(_sample_checklist(), [], scope=scope)
+            assert {g["name"] for g in gaps} == {"check_password"}, scope
+
+    def test_scope_absolute_under_target_matches(self):
+        # target_path is /tmp/target in _sample_checklist.
+        gaps = compute_gaps(
+            _sample_checklist(), [], scope="/tmp/target/src/auth",
+        )
+        assert {g["name"] for g in gaps} == {"check_password"}
+
+    def test_scope_absolute_target_root_means_whole_tree(self):
+        for scope in ("/tmp/target", "/tmp/target/"):
+            gaps = compute_gaps(_sample_checklist(), [], scope=scope)
+            assert len(gaps) == 4, scope
+
+    def test_scope_absolute_outside_target_errors_loudly(self):
+        # An absolute scope that is not under the target can never
+        # match a checklist path — silence here read as "0 gaps =
+        # fully covered", so it must refuse instead.
+        with pytest.raises(ValueError, match="outside"):
+            compute_gaps(_sample_checklist(), [], scope="/abs/elsewhere")
+
+    def test_scope_absolute_without_target_path_errors_loudly(self):
+        checklist = _sample_checklist()
+        checklist.pop("target_path")
+        with pytest.raises(ValueError, match="never match"):
+            compute_gaps(checklist, [], scope="/tmp/target/src/auth")
+
     def test_scope_target_root_means_whole_tree(self):
         # "." is the parent of a repo-root file (a top-level
         # index.js / main.c); the prefix matcher can never match it, so a
@@ -249,6 +284,11 @@ class TestComputeGaps:
                             "metadata": {
                                 "binary_oracle": {
                                     "classification": "absent",
+                                    # Suppression-grade evidence: the
+                                    # priority read applies the same
+                                    # tier/suppression_grade discipline
+                                    # as the reachability chokepoint.
+                                    "binaries": [{"tier": "full"}],
                                 },
                             },
                         },
@@ -261,6 +301,42 @@ class TestComputeGaps:
         dead = next(g for g in gaps if g["name"] == "dead_fn")
         assert dead["priority"] == PRIORITY_DEAD_CODE
         assert live["priority"] < dead["priority"]
+
+    def test_binary_absent_without_suppression_grade_not_deprioritized(self):
+        # Mirror of core.analysis.reachability.binary_oracle_absent's
+        # soundness gate (the authority for the discipline): an
+        # ``absent`` classification with no per-binary records, with a
+        # symbol-only contributor, or with a guessed-build contributor
+        # (suppression_grade false) is not suppression-grade evidence
+        # and must NOT deprioritise the function.
+        for bo in (
+            {"classification": "absent"},
+            {"classification": "absent",
+             "binaries": [{"tier": "symbol_only"}]},
+            {"classification": "absent",
+             "binaries": [{"tier": "full", "suppression_grade": False}]},
+            {"classification": "absent",
+             "binaries": [{"tier": "full"},
+                          {"tier": "symbol_only"}]},
+        ):
+            checklist = {
+                "files": [
+                    {
+                        "path": "src/handler.c",
+                        "items": [
+                            {
+                                "name": "maybe_dead",
+                                "line_start": 10,
+                                "line_end": 50,
+                                "metadata": {"binary_oracle": bo},
+                            },
+                        ],
+                    },
+                ],
+            }
+            gaps = compute_gaps(checklist, [])
+            fn = next(g for g in gaps if g["name"] == "maybe_dead")
+            assert fn["priority"] != PRIORITY_DEAD_CODE, bo
 
     def test_binary_absent_sorted_last(self):
         checklist = {
@@ -275,6 +351,11 @@ class TestComputeGaps:
                             "metadata": {
                                 "binary_oracle": {
                                     "classification": "absent",
+                                    # Suppression-grade evidence: the
+                                    # priority read applies the same
+                                    # tier/suppression_grade discipline
+                                    # as the reachability chokepoint.
+                                    "binaries": [{"tier": "full"}],
                                 },
                             },
                         },
@@ -289,6 +370,192 @@ class TestComputeGaps:
         }
         gaps = compute_gaps(checklist, [])
         assert gaps[-1]["name"] == "dead_fn"
+
+    def test_binary_absent_beats_size_and_sink_promotions(self):
+        # Oracle-absent code is dead regardless of body size or the
+        # sinks it lexically mentions — pre-fix the large-sloc and
+        # sink-reachability arms ran first and handed absent
+        # functions the TOP tier.
+        checklist = {
+            "files": [
+                {
+                    "path": "src/handler.c",
+                    "items": [
+                        {
+                            "name": "huge_dead",
+                            "line_start": 1,
+                            "line_end": 400,
+                            "metadata": {
+                                "binary_oracle": {
+                                    "classification": "absent",
+                                    # Suppression-grade evidence: the
+                                    # priority read applies the same
+                                    # tier/suppression_grade discipline
+                                    # as the reachability chokepoint.
+                                    "binaries": [{"tier": "full"}],
+                                },
+                            },
+                        },
+                        {
+                            "name": "sinky_dead",
+                            "line_start": 410,
+                            "line_end": 460,
+                            "metadata": {
+                                "binary_oracle": {
+                                    "classification": "absent",
+                                    # Suppression-grade evidence: the
+                                    # priority read applies the same
+                                    # tier/suppression_grade discipline
+                                    # as the reachability chokepoint.
+                                    "binaries": [{"tier": "full"}],
+                                },
+                            },
+                        },
+                    ],
+                },
+            ],
+        }
+        context_map = {
+            "sinks": [{
+                "file": "src/handler.c",
+                "function": "sinky_dead",
+                "target": "system",
+            }],
+        }
+        gaps = compute_gaps(checklist, [], context_map=context_map)
+        for gap in gaps:
+            assert gap["priority"] == PRIORITY_DEAD_CODE, gap["name"]
+
+    def test_unmeasured_entry_point_keeps_top_tier(self):
+        # sloc == 0 means UNMEASURED (checklist item without a
+        # line_end), not trivial — the small-entry demotion must not
+        # swallow it. Counterpart of test_trivial_entry_point_demoted
+        # (the measured-small direction of the same threshold).
+        checklist = {
+            "files": [{
+                "path": "a.c",
+                "items": [{"name": "handler", "line_start": 10}],
+            }],
+        }
+        context_map = {
+            "entry_points": [{"file": "a.c", "name": "handler"}],
+        }
+        gaps = compute_gaps(checklist, [], context_map=context_map)
+        assert gaps[0]["name"] == "handler"
+        assert gaps[0]["priority"] == PRIORITY_ENTRY_POINT
+
+    def test_degenerate_coverage_record_does_not_crash(self):
+        # On-disk records with null files/functions values must
+        # degrade to "no coverage from this record", not crash the
+        # whole gap computation.
+        records = [
+            {"tool": "semgrep", "files": None, "files_examined": None},
+            {"tool": "audit", "files": {"src/handler.c": None}},
+        ]
+        gaps = compute_gaps(_sample_checklist(), records)
+        assert {g["name"] for g in gaps} == {
+            "parse_request", "handle_error", "tiny_helper",
+            "check_password",
+        }
+
+    def test_function_source_never_reads_outside_target(
+        self, tmp_path, monkeypatch,
+    ):
+        # Absolute checklist paths and symlink escapes must be
+        # rejected (treated as unreadable) — pre-fix the raw join let
+        # an absolute path read any file on the host into the
+        # parser-shape classifier.
+        outside = tmp_path / "outside.c"
+        outside.write_text("int f(char *p) {\n    return p[0];\n}\n")
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "link.c").symlink_to(outside)
+
+        captured = []
+        import core.audit.parser_shape as ps_mod
+        real = ps_mod.parser_shape
+
+        def spy(source, **kw):
+            captured.append(source)
+            return real(source, **kw)
+
+        monkeypatch.setattr(ps_mod, "parser_shape", spy)
+
+        checklist = {
+            "target_path": str(target),
+            "files": [
+                {
+                    "path": str(outside),  # absolute — rejected
+                    "items": [
+                        {"name": "f", "line_start": 1, "line_end": 3},
+                    ],
+                },
+                {
+                    "path": "link.c",  # symlink escape — rejected
+                    "items": [
+                        {"name": "f", "line_start": 1, "line_end": 3},
+                    ],
+                },
+            ],
+        }
+        gaps = compute_gaps(checklist, [])
+        assert len(gaps) == 2
+        assert captured == [None, None]
+
+
+class TestAnnotationsDirWiring:
+    """--annotations-dir on gap computation: stale annotations merge
+    in as re-review gaps (the parameter was a documented no-op)."""
+
+    @staticmethod
+    def _target_with_annotation(tmp_path):
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "auth.c").write_text(
+            "int f() { return 1; }\n", encoding="utf-8")
+        ann_dir = tmp_path / "annotations"
+        ann_dir.mkdir()
+        # Stored hash cannot match the current source hash prefix.
+        (ann_dir / "auth.c.md").write_text(
+            "## old_fn\n"
+            "<!-- meta: status=clean hash=0000000000 "
+            "line_start=1 line_end=1 -->\n\n"
+            "Reviewed before the rewrite.\n",
+            encoding="utf-8",
+        )
+        checklist = {
+            "target_path": str(target),
+            "files": [{
+                "path": "auth.c",
+                "items": [
+                    {"name": "f", "line_start": 1, "line_end": 1},
+                ],
+            }],
+        }
+        return checklist, ann_dir
+
+    def test_stale_annotation_merged_as_gap(self, tmp_path):
+        from core.audit.gaps import PRIORITY_STALE
+        checklist, ann_dir = self._target_with_annotation(tmp_path)
+        gaps = compute_gaps(checklist, [], annotations_dir=ann_dir)
+        stale = [g for g in gaps if g.get("is_stale")]
+        assert [(g["name"], g["priority"]) for g in stale] == [
+            ("old_fn", PRIORITY_STALE),
+        ]
+        # Sorted into the stale tier, ahead of the trivial helper.
+        assert gaps[0]["name"] == "old_fn"
+
+    def test_stale_annotation_respects_scope(self, tmp_path):
+        checklist, ann_dir = self._target_with_annotation(tmp_path)
+        gaps = compute_gaps(
+            checklist, [], annotations_dir=ann_dir, scope="other",
+        )
+        assert gaps == []
+
+    def test_no_annotations_dir_unchanged(self, tmp_path):
+        checklist, _ann_dir = self._target_with_annotation(tmp_path)
+        gaps = compute_gaps(checklist, [])
+        assert not any(g.get("is_stale") for g in gaps)
 
 
 class TestLoadChecklist:

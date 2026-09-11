@@ -333,18 +333,33 @@ def inspect_app_bundle(path: Path, binary_sha256: str) -> tuple[AppBundleMetadat
     return metadata, [record]
 
 
-def select_slice(slices: list[MachOSlice], requested_arch: str | None, host_arch: str | None) -> MachOSlice | None:
+def select_slice(
+    slices: list[MachOSlice],
+    requested_arch: str | None,
+    host_arch: str | None,
+    host_bits: int | None = None,
+) -> MachOSlice | None:
     if not slices:
         return None
+    # An explicitly requested arch is taken literally: 'arm' is the
+    # canonical name of the 32-bit arm slice (cpu_type 12), so remapping
+    # it to arm64 would make the 32-bit slice unselectable.
     aliases = {
         "aarch64": "arm64",
-        "arm": "arm64",
         "amd64": "x86_64",
         "x64": "x86_64",
         "i386": "x86",
         "armv7": "arm",
     }
-    wanted = aliases.get(str(requested_arch or host_arch or ""), str(requested_arch or host_arch or ""))
+    if requested_arch:
+        wanted = aliases.get(str(requested_arch), str(requested_arch))
+    else:
+        # Fallback arch names come from coarse analyser output where
+        # 'arm'/'x86' cover both widths and bits carries the split
+        # (e.g. arm64 reported as arch='arm', bits=64).
+        wanted = aliases.get(str(host_arch or ""), str(host_arch or ""))
+        if host_bits == 64:
+            wanted = {"arm": "arm64", "x86": "x86_64"}.get(wanted, wanted)
     for item in slices:
         if item.arch == wanted:
             return item

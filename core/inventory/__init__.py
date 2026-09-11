@@ -257,6 +257,13 @@ def update_checklist(output_dir, transform_fn) -> None:
 
     Use this instead of separate load + save_checklist when modifying
     an existing checklist.
+
+    Raises ``ValueError`` when an EXISTING checklist fails to load
+    (malformed, oversize, unreadable): proceeding with ``{}`` would
+    hand the transform an empty dict and then OVERWRITE the real file
+    with a fresh provenance-stamped near-empty checklist — corruption
+    must surface, never destroy the data needed to diagnose it. A
+    genuinely missing file still starts from ``{}``.
     """
     from core.json import load_json, save_json
 
@@ -267,6 +274,14 @@ def update_checklist(output_dir, transform_fn) -> None:
             current = load_json(
                 checklist_path, max_bytes=_MAX_CHECKLIST_BYTES,
             )
+            if not isinstance(current, dict):
+                msg = (
+                    f"refusing checklist read-modify-write: existing "
+                    f"{checklist_path} failed to load as a JSON object "
+                    f"(malformed, oversize, or unreadable) — writing "
+                    f"would replace it with a near-empty checklist"
+                )
+                raise ValueError(msg)
         if current is None:
             current = {}
         updated = transform_fn(current)

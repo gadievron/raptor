@@ -251,3 +251,29 @@ def test_deep_ast_does_not_hit_recursion_limit(extract, template):
     src = template.format(open="(" * DEPTH, close=")" * DEPTH)
     g = extract(src)
     assert ["g"] in [c.chain for c in g.calls]
+
+
+# ---------------------------------------------------------------------------
+# Scala import selectors
+# ---------------------------------------------------------------------------
+
+
+class TestScalaImportSelectors:
+    """``import com.foo.{Bar, Baz}`` — the standard Scala multi-import
+    form — previously bound NEITHER selector and minted a phantom
+    ``foo → com.foo`` binding from the path segments."""
+
+    def test_brace_selectors_bind_each_name(self):
+        g = extract_call_graph_scala("import com.foo.{Bar, Baz}\n")
+        assert g.imports.get("Bar") == "com.foo.Bar"
+        assert g.imports.get("Baz") == "com.foo.Baz"
+        assert "foo" not in g.imports
+
+    def test_renamed_selector_binds_alias(self):
+        g = extract_call_graph_scala("import com.foo.{Baz => B}\n")
+        assert g.imports.get("B") == "com.foo.Baz"
+        assert "Baz" not in g.imports
+
+    def test_plain_import_unchanged(self):
+        g = extract_call_graph_scala("import com.foo.Qux\n")
+        assert g.imports.get("Qux") == "com.foo.Qux"

@@ -102,8 +102,64 @@ class TestHunks:
             "@@ -1 +1 @@\n-o\n+n\n")
         spans = parse_fix_hunks(diff, (".java",))
         assert len(spans) == 2
+        assert spans[0].file == "src/A.java"
         assert spans[0].pre == (10, 11) and spans[0].post is None
         assert spans[1].pre is None and spans[1].post == (19, 21)
+
+    def test_deleted_file_keeps_pre_image_spans(self):
+        # A fix that DELETES the vulnerable file still has a pre-fix
+        # location — dropping the pre span would erase the
+        # vulnerability from ground truth.
+        diff = (
+            "diff --git a/src/Gone.java b/src/Gone.java\n"
+            "deleted file mode 100644\n"
+            "index 1111111..0000000\n"
+            "--- a/src/Gone.java\n"
+            "+++ /dev/null\n"
+            "@@ -1,10 +0,0 @@\n" + "-x\n" * 10)
+        spans = parse_fix_hunks(diff, (".java",))
+        assert len(spans) == 1
+        assert spans[0].file == "src/Gone.java"
+        assert spans[0].pre == (1, 10)
+        assert spans[0].post is None
+
+    def test_rename_attributes_each_side_to_its_own_path(self):
+        # Pre spans belong to the pre-fix path (the only one existing
+        # at the pinned pre-fix sha); post spans to the renamed path.
+        diff = (
+            "diff --git a/src/Old.java b/src/New.java\n"
+            "similarity index 90%\n"
+            "rename from src/Old.java\n"
+            "rename to src/New.java\n"
+            "index 1111111..2222222 100644\n"
+            "--- a/src/Old.java\n"
+            "+++ b/src/New.java\n"
+            "@@ -5,3 +5,4 @@\n"
+            "-a\n-b\n-c\n+w\n+x\n+y\n+z\n")
+        spans = parse_fix_hunks(diff, (".java",))
+        assert len(spans) == 2
+        pre_spans = [s for s in spans if s.pre is not None]
+        post_spans = [s for s in spans if s.post is not None]
+        assert pre_spans[0].file == "src/Old.java"
+        assert pre_spans[0].pre == (5, 7)
+        assert pre_spans[0].post is None
+        assert post_spans[0].file == "src/New.java"
+        assert post_spans[0].post == (5, 8)
+        assert post_spans[0].pre is None
+
+    def test_pure_rename_labels_nothing_and_does_not_leak(self):
+        # A pure rename carries no ---/+++ lines; the section must not
+        # inherit the previous file's paths.
+        diff = (
+            "--- a/src/A.java\n+++ b/src/A.java\n"
+            "@@ -1,2 +1,2 @@\n-x\n-y\n+x\n+z\n"
+            "diff --git a/src/Old.java b/src/New.java\n"
+            "similarity index 100%\n"
+            "rename from src/Old.java\n"
+            "rename to src/New.java\n")
+        spans = parse_fix_hunks(diff, (".java",))
+        assert len(spans) == 1
+        assert spans[0].file == "src/A.java"
 
 
 class TestGenerate:

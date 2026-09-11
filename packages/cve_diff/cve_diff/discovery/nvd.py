@@ -73,8 +73,16 @@ class NvdDiscoverer:
         if not pairs:
             return None
 
-        vulns = payload.get("vulnerabilities") or []
-        raw = ((vulns[0] or {}).get("cve") or {}) if vulns else {}
+        vulns = payload.get("vulnerabilities")
+        if not isinstance(vulns, list):
+            vulns = []
+        # Guard the slot type: a non-dict first element (mangled proxy
+        # response / contract drift) must degrade to "no metadata", not
+        # raise AttributeError out of the discovery layer.
+        first = vulns[0] if vulns and isinstance(vulns[0], dict) else {}
+        raw = first.get("cve") or {}
+        if not isinstance(raw, dict):
+            raw = {}
 
         tuples: list[PatchTuple] = []
         for slug, sha in pairs:

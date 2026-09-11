@@ -195,6 +195,11 @@ class MassAssignmentCheck(Check):
         if not candidates:
             candidates = ["/api/user", "/api/me", "/api/profile", "/api/v1/user"]
 
+        def _shows_privilege(payload: object) -> bool:
+            return isinstance(payload, dict) and (
+                payload.get("is_admin") is True or payload.get("role") == "admin"
+            )
+
         for path in candidates[:3]:
             try:
                 resp = client.post(
@@ -205,12 +210,26 @@ class MassAssignmentCheck(Check):
                 if resp.status_code in (200, 201):
                     try:
                         data = resp.json()
-                        if data.get("is_admin") is True or data.get("role") == "admin":
-                            return [self._result(
+                        if not _shows_privilege(data):
+                            continue
+                        # The POST response echoing the submitted fields
+                        # (validation errors, request-echo APIs) is not
+                        # persistence. Mass assignment is proven only by
+                        # a follow-up READ showing the attribute stuck.
+                        verify = client.get(path)
+                        try:
+                            persisted = verify.json()
+                        except Exception:
+                            continue
+                        if not _shows_privilege(persisted):
+                            continue
+                        return [self._result(
                                 passed=False, url=target_url.rstrip("/") + path,
                                 evidence=(
                                     f"POST {path} with {{is_admin: true, role: admin}} "
-                                    f"returned: {json.dumps(data)[:300]}"
+                                    f"returned: {json.dumps(data)[:300]}; follow-up GET "
+                                    f"shows the attribute persisted: "
+                                    f"{json.dumps(persisted)[:200]}"
                                 ),
                                 detail=(
                                     "The endpoint appears to accept and persist attacker-supplied "

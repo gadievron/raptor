@@ -121,6 +121,15 @@ def test_rejects_empty_name():
     assert safe_member_reason(info) == UnsafeMemberReason.UNRECOGNISED_TYPE
 
 
+def test_rejects_whitespace_only_name():
+    # Mirrors the tar twin: a " " member name is as degenerate as an
+    # empty one (the modules are mirrored; the checks had drifted).
+    info = zipfile.ZipInfo(" ")
+    info.file_size = 0
+    info.compress_size = 0
+    assert safe_member_reason(info) == UnsafeMemberReason.UNRECOGNISED_TYPE
+
+
 # ---------------------------------------------------------------------------
 # Special-file rejections (Unix mode in external_attr)
 # ---------------------------------------------------------------------------

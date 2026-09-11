@@ -781,3 +781,171 @@ def test_zero_dep_yaml_manifest_still_filtered(tmp_path):
 
     assert deps == []
     assert statuses == []
+
+
+# ---------------------------------------------------------------------------
+# pip-compile `# via` parent map — canonical keys
+# ---------------------------------------------------------------------------
+
+
+def test_pip_compile_via_map_uses_canonical_keys():
+    """Dotted PyPI names (``zope.interface``) must land under the
+    same PEP 503 canonical key the consumer looks them up with —
+    otherwise the parent linkage is lost and the transitive-drop
+    detector skips the dep."""
+    from packages.sca.transitive import (
+        _extract_pip_compile_via, _parent_map_key,
+    )
+
+    blob = (
+        b"zope.interface==5.4.0\n"
+        b"    # via zope.event\n"
+        b"ruamel.yaml==0.18.6\n"
+        b"    # via\n"
+        b"    #   my_parent\n"
+        b"    #   other.parent\n"
+    )
+    parents = _extract_pip_compile_via(blob)
+    # Producer keys == consumer keys, for dotted and underscored names.
+    assert parents[_parent_map_key("PyPI", "zope.interface")] == [
+        "zope-event",
+    ]
+    assert parents[_parent_map_key("PyPI", "ruamel.yaml")] == [
+        "my-parent", "other-parent",
+    ]
+
+
+def test_via_parents_flow_through_to_cascade_deps(tmp_path, monkeypatch):
+    """End-to-end through the cascade path: a dotted transitive keeps
+    its ``source_extra['via']`` parents."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    manifests = [_manifest("PyPI", proj / "requirements.txt")]
+    direct = [_direct("PyPI", "zope-event", "4.5", proj / "requirements.txt")]
+
+    fake_resolver = MagicMock()
+    fake_resolver.is_available.return_value = True
+    fake_resolver.dry_run.return_value = ResolverResult(
+        ecosystem="PyPI", success=True, available=True,
+        proposed_lockfile=(
+            b"zope-event==4.5\n"
+            b"zope.interface==5.4.0\n"
+            b"    # via zope.event\n"
+        ),
+    )
+    monkeypatch.setattr(
+        "packages.sca.resolvers.get_resolver",
+        lambda eco, project_dir=None: fake_resolver,
+    )
+
+    deps, _ = expand_missing_transitives(manifests, direct)
+    trans = {d.name: d for d in deps}
+    assert "zope-interface" in trans
+    assert (trans["zope-interface"].source_extra or {}).get("via") == [
+        "zope-event",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Per-project-dir resolver routing (mixed-tool monorepos)
+# ---------------------------------------------------------------------------
+
+
+def test_mixed_tool_dirs_each_get_their_matching_resolver(
+    tmp_path, monkeypatch,
+):
+    """A monorepo with a poetry dir and a pip dir under the same
+    ecosystem must route each dir through the resolver whose
+    ``matches()`` picked it — one resolver chosen from the first dir
+    would run the wrong tool against the other."""
+    poetry_dir = tmp_path / "svc-poetry"
+    pip_dir = tmp_path / "svc-pip"
+    poetry_dir.mkdir()
+    pip_dir.mkdir()
+    (poetry_dir / "pyproject.toml").write_text("[tool.poetry]\n")
+    (pip_dir / "requirements.txt").write_text("a==1.0\n")
+
+    manifests = [
+        _manifest("PyPI", poetry_dir / "pyproject.toml"),
+        _manifest("PyPI", pip_dir / "requirements.txt"),
+    ]
+    direct = [
+        _direct("PyPI", "a", "1.0", poetry_dir / "pyproject.toml"),
+        _direct("PyPI", "b", "2.0", pip_dir / "requirements.txt"),
+    ]
+
+    calls: dict[str, list] = {"poetry": [], "pip": []}
+
+    def _stub(tag: str) -> MagicMock:
+        r = MagicMock()
+        r.is_available.return_value = True
+
+        def _dry_run(pd, timeout=120):
+            calls[tag].append(pd)
+            return ResolverResult(
+                ecosystem="PyPI", success=True, available=True,
+                proposed_lockfile=b"t==9.9\n",
+            )
+        r.dry_run.side_effect = _dry_run
+        return r
+
+    poetry_stub = _stub("poetry")
+    pip_stub = _stub("pip")
+
+    def fake_get_resolver(eco, project_dir=None):
+        assert project_dir is not None, (
+            "resolver selection must be per project_dir"
+        )
+        if (project_dir / "pyproject.toml").exists():
+            return poetry_stub
+        return pip_stub
+
+    monkeypatch.setattr(
+        "packages.sca.resolvers.get_resolver", fake_get_resolver,
+    )
+
+    deps, statuses = expand_missing_transitives(manifests, direct)
+
+    assert calls["poetry"] == [poetry_dir]
+    assert calls["pip"] == [pip_dir]
+    # Both dirs resolved successfully via their own tool.
+    assert all(s.method == "cascade_resolver" for s in statuses)
+    assert {d.name for d in deps} == {"t"}
+
+
+def test_dedup_across_multiple_project_dirs_unchanged(
+    tmp_path, monkeypatch,
+):
+    """The direct-dep dedup key set is loop-invariant; hoisting it
+    must not change behaviour when several (eco, project_dir) groups
+    each emit overlapping transitives."""
+    d1 = tmp_path / "one"
+    d2 = tmp_path / "two"
+    d1.mkdir()
+    d2.mkdir()
+    manifests = [
+        _manifest("PyPI", d1 / "requirements.txt"),
+        _manifest("PyPI", d2 / "requirements.txt"),
+    ]
+    direct = [
+        _direct("PyPI", "a", "1.0", d1 / "requirements.txt"),
+        _direct("PyPI", "b", "2.0", d2 / "requirements.txt"),
+    ]
+
+    fake_resolver = MagicMock()
+    fake_resolver.is_available.return_value = True
+    fake_resolver.dry_run.return_value = ResolverResult(
+        ecosystem="PyPI", success=True, available=True,
+        # Both groups produce the direct deps AND one new transitive.
+        proposed_lockfile=b"a==1.0\nb==2.0\nc==3.0\n",
+    )
+    monkeypatch.setattr(
+        "packages.sca.resolvers.get_resolver",
+        lambda eco, project_dir=None: fake_resolver,
+    )
+
+    deps, statuses = expand_missing_transitives(manifests, direct)
+    # Direct deps stripped in every group; only the new transitive
+    # survives (once per project_dir, as before).
+    assert {d.name for d in deps} == {"c"}
+    assert all(s.method == "cascade_resolver" for s in statuses)

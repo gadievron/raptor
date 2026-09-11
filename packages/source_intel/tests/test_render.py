@@ -494,3 +494,69 @@ def test_returns_nonnull_warns_when_delete_null_checks_on():
     text = "\n".join(lines)
     assert "wrong" in text.lower()
     assert "eliminate" in text.lower()
+
+
+# =====================================================================
+# Unknown-attribution attributes survive the finding-function filter
+# =====================================================================
+
+
+def test_unknown_attribution_attribute_retained_under_filter():
+    """Alias observations with no attributed function
+    (``function_name == ""``, the non-adjacent alias-match shape)
+    must survive a finding_function filter — every other axis
+    retains unknown-attribution evidence, and absence of attribution
+    must not silently mean absence of evidence for one axis only."""
+    r = _result_with_wur(
+        _wur("validate_input"),
+        _wur(""),  # file-level alias observation, unattributed
+    )
+    lines = derive_evidence_strings(r, finding_function="validate_input")
+    # Both observations render: the attributed one and the
+    # unattributed file-level one.
+    assert len([ln for ln in lines if "warn_unused_result" in ln]) == 2
+
+
+# =====================================================================
+# FORTIFY phrase prose consistency
+# =====================================================================
+
+
+def test_alloc_size_fortify_phrase_literal_token_is_well_formed():
+    """The FORTIFY level phrase is a literal token the LLM reasons
+    about — no stray underscores italicising the digit in markdown."""
+    from packages.source_intel.render import _alloc_size_fortify_phrase
+
+    phrase = _alloc_size_fortify_phrase(
+        BuildFlagsContext(fortify_source_level=2,
+                          extraction_confidence="high"),
+    )
+    assert phrase.startswith("_FORTIFY_SOURCE=2")
+    assert "=_2_" not in phrase
+
+
+def test_fortify_phrases_treat_kconfig_level_1_as_full_interception():
+    """Kernel CONFIG_FORTIFY_SOURCE doesn't tier: level=1 from
+    kconfig intercepts like glibc level 2. The prose must not call
+    the same build fact 'limited' while the verdict policy treats it
+    as full interception."""
+    from packages.source_intel.render import (
+        _access_fortify_phrase,
+        _alloc_size_fortify_phrase,
+    )
+
+    kconfig = BuildFlagsContext(
+        fortify_source_level=1, source="kconfig",
+        extraction_confidence="high",
+    )
+    for phrase_fn in (_alloc_size_fortify_phrase, _access_fortify_phrase):
+        phrase = phrase_fn(kconfig)
+        assert "CONFIG_FORTIFY_SOURCE" in phrase
+        assert "limited" not in phrase.lower()
+
+    # glibc level 1 keeps the limited-coverage caveat.
+    glibc = BuildFlagsContext(
+        fortify_source_level=1, extraction_confidence="high",
+    )
+    for phrase_fn in (_alloc_size_fortify_phrase, _access_fortify_phrase):
+        assert "limited" in phrase_fn(glibc).lower()

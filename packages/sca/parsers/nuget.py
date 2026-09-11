@@ -236,14 +236,24 @@ def parse_msbuild_project(path: Path) -> list[Dependency]:
     # to EVERY csproj in the solution. Emit AFTER the inline walk so
     # csproj's explicit reference wins via first-write-wins dedup.
     for global_pkg in global_packages:
+        # Same spec classification as inline references: a
+        # GlobalPackageReference may carry a bracket range
+        # (``[1.0,2.0)``) just like any Version attribute; defaulting
+        # to EXACT recorded the raw range string as a pinned version.
+        g_pin, g_norm = _classify_version_spec(global_pkg.version)
+        g_floor, g_ceiling = _spec_corridor(global_pkg.version)
+        g_version = g_norm if g_norm is not None else global_pkg.version
         dep = _build_msbuild_dep(
             name=global_pkg.name,
-            version=global_pkg.version,
+            version=g_version,
             scope="main",
             declared_in=path,
             source_extra=source_extra,
             source_origin="cpm_global",
+            pin_style=g_pin,
             resolved_in=global_pkg.declared_in,
+            version_floor=g_floor,
+            version_ceiling=g_ceiling,
         )
         if dep.key() in seen_keys:
             continue

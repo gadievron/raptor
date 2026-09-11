@@ -682,7 +682,12 @@ class CrashAnalyser:
                 "process handle SIGBUS -s true -n true",   # Stop on bus errors
                 "process handle SIGILL -s true -n true",   # Stop on illegal instructions
                 "process handle SIGFPE -s true -n true",   # Stop on floating point exceptions
-                f"process launch -o {lldb_out} -e {lldb_err}",  # Input via subprocess stdin (no path in script — CWE-78 safe)
+                # Quote the redirect paths: `process launch` args are
+                # shell-style tokenised, so an unquoted binary dir
+                # containing spaces splits into wrong args (same class
+                # as the `-i` case documented in _run_lldb_fallback).
+                # Input via subprocess stdin (no path in script — CWE-78 safe).
+                f'process launch -o "{lldb_out}" -e "{lldb_err}"',
                 "register read",                   # Get register state
                 "thread backtrace --extended true", # Get full backtrace
                 "disassemble --count 10 --start-address $pc",  # Examine instructions at PC
@@ -864,9 +869,17 @@ class CrashAnalyser:
             "(lldb)",
         )
         for line in lines:
-            if "register read" in line.lower() or in_registers:
+            lower = line.lower()
+            # `lldb -s` echoes each script command with its prompt,
+            # so the section opener arrives as `(lldb) register read`.
+            # Check the trigger BEFORE the terminators: the echo line
+            # both contains `register read` and `(lldb)`, and testing
+            # terminators first would close the section on the very
+            # line that opens it.
+            if "register read" in lower:
                 in_registers = True
-                lower = line.lower()
+                continue  # the echoed command line carries no data
+            if in_registers:
                 # Reset on any known section start.
                 if any(term in lower for term in section_terminators):
                     in_registers = False
@@ -1047,25 +1060,23 @@ class CrashAnalyser:
         # a regex: line begins with optional whitespace, a
         # register name (alphanumeric + underscore), whitespace,
         # then a hex value. Anything else gets skipped.
-        import re as _re
-        gdb_reg_re = _re.compile(
+        #
+        # There is deliberately NO section gate here: `gdb -batch
+        # -x script` does not echo script commands, so the output
+        # contains no `info registers` marker line to key a state
+        # machine on — the value-line shape itself is the
+        # discriminator. The other sections the script produces
+        # cannot false-match: backtrace lines start with `#N`,
+        # disassembly lines start with `=>`/`0x`, memory dumps
+        # start with `0xADDR:`, and `bt full` locals use
+        # `name = 0x...` whose `=` breaks the name-then-hex shape.
+        gdb_reg_re = re.compile(
             r'^\s*([a-z][a-z0-9_]*)\s+(0x[0-9a-fA-F]+)\b'
         )
-        in_registers = False
         for line in lines:
-            lower = line.lower()
-            if "info registers" in lower or in_registers:
-                in_registers = True
-                # Section terminators (any other GDB command output
-                # below registers).
-                if any(t in lower for t in (
-                    "backtrace", "disassemble", "(gdb)", "info ",
-                )) and "info registers" not in lower:
-                    in_registers = False
-                    continue
-                m = gdb_reg_re.match(line)
-                if m:
-                    context.registers[m.group(1)] = m.group(2)
+            m = gdb_reg_re.match(line)
+            if m:
+                context.registers[m.group(1)] = m.group(2)
 
         # Extract stack trace
         in_backtrace = False
@@ -1264,7 +1275,9 @@ class CrashAnalyser:
             if sys_platform == "Darwin":
                 # macOS: ASLR has been mandatory since 10.7
                 # (Lion, 2011) and is not operator-controllable.
-                info["aslr_enabled"] = True
+                # binary_info is dict[str, str]: use the same
+                # 'true'/'false' string convention as asan_enabled.
+                info["aslr_enabled"] = "true"
                 info["aslr_level"] = "macos-default"
             elif sys_platform == "Linux":
                 result = _run_trusted(
@@ -1275,7 +1288,9 @@ class CrashAnalyser:
                 )
                 if result.returncode == 0:
                     aslr_level = result.stdout.strip()
-                    info["aslr_enabled"] = aslr_level != "0"
+                    info["aslr_enabled"] = (
+                        "true" if aslr_level != "0" else "false"
+                    )
                     info["aslr_level"] = aslr_level
                 else:
                     info["aslr_enabled"] = "unknown"
@@ -1289,7 +1304,9 @@ class CrashAnalyser:
                     timeout=5,
                 )
                 if result.returncode == 0:
-                    info["aslr_enabled"] = "1" in result.stdout
+                    info["aslr_enabled"] = (
+                        "true" if "1" in result.stdout else "false"
+                    )
                 else:
                     info["aslr_enabled"] = "unknown"
         except (OSError, subprocess.SubprocessError):

@@ -1,12 +1,19 @@
 # Role / persona-swap injection patterns.
 # Hits suggest the content is asking the model to assume a different role —
 # common opener for "developer mode" / "DAN" / jailbreak templates.
+#
+# Whitespace runs use ``[^\S\n]+`` (one or more whitespace chars EXCLUDING
+# newline) rather than a literal space — same convention as english.txt,
+# for the same reason: a literal space failed to match double-spaced,
+# tab-separated, and NBSP-separated variants, all realistic injection
+# delivery vectors. Newlines stay excluded so single-line semantics hold;
+# cross-line evasion is the multiline corpora's job.
 
-you are now (?:a |an )?(?:dan|aim|developer mode|jailbreak|unrestricted|evil|uncensored)
-let'?s play (?:a game|pretend|roleplay)
-pretend (?:to be|you are|that you are|you have no)
-act as (?:if you were |a |an )?(?:dan|aim|jailbreak|unrestricted|developer|hacker|attacker)
-you have no (?:restrictions|filters|limits|safety|guidelines)
-roleplay as (?:a |an )?(?:hacker|attacker|criminal|unrestricted)
-your new (?:role|persona|identity|character) is
-from now on (?:you (?:are|will|must)|respond)
+you[^\S\n]+are[^\S\n]+now[^\S\n]+(?:an?[^\S\n]+)?(?:dan|aim|developer[^\S\n]+mode|jailbreak|unrestricted|evil|uncensored)
+let'?s[^\S\n]+play[^\S\n]+(?:a[^\S\n]+game|pretend|roleplay)
+pretend[^\S\n]+(?:to[^\S\n]+be|you[^\S\n]+are|that[^\S\n]+you[^\S\n]+are|you[^\S\n]+have[^\S\n]+no)
+act[^\S\n]+as[^\S\n]+(?:if[^\S\n]+you[^\S\n]+were[^\S\n]+|an?[^\S\n]+)?(?:dan|aim|jailbreak|unrestricted|developer|hacker|attacker)
+you[^\S\n]+have[^\S\n]+no[^\S\n]+(?:restrictions|filters|limits|safety|guidelines)
+roleplay[^\S\n]+as[^\S\n]+(?:an?[^\S\n]+)?(?:hacker|attacker|criminal|unrestricted)
+your[^\S\n]+new[^\S\n]+(?:role|persona|identity|character)[^\S\n]+is
+from[^\S\n]+now[^\S\n]+on[^\S\n]+(?:you[^\S\n]+(?:are|will|must)|respond)

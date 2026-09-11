@@ -231,9 +231,25 @@ def _check_coccinelle(shape: TargetShape) -> ToolCheck | None:
     if not shutil.which("spatch"):
         return _doctor_deferral("Coccinelle")
     version = _bin_version("spatch")
-    # Cocci is C-only today. If primary language isn't C/C++,
-    # warn that it'll run but find nothing.
-    if shape.primary_language not in (None, "cpp"):
+    # Cocci is C-only today. primary_language is None exactly when NO
+    # source language was detected at all — an "ok / applicable"
+    # checkmark on an empty or unrecognised tree would be a positive
+    # applicability claim with nothing behind it (honest will-0-fire
+    # warning beats silent uselessness).
+    if shape.primary_language is None:
+        return ToolCheck(
+            name="Coccinelle",
+            status="warn",
+            version=version,
+            detail=(
+                "rule pack is C-only — no recognised source language "
+                "detected in the target, applicability unknown"
+            ),
+            hint=None,
+        )
+    # If the primary language isn't C/C++, warn that it'll run but
+    # find nothing.
+    if shape.primary_language != "cpp":
         return ToolCheck(
             name="Coccinelle",
             status="warn",

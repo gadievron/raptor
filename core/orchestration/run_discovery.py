@@ -106,6 +106,18 @@ def collect_sibling_runs(
     parent = Path(search_root) if search_root else origin_dir.parent
     _scan_dir(parent, marker, exclude, dir_filter, seen, results)
 
+    # Target gate BEFORE the global-fallback decision: wrong-target
+    # siblings must not count as "found" — pre-fix they suppressed the
+    # global scan and were then filtered out, losing valid prior
+    # evidence that only existed under the global out root.
+    def _target_gated(dirs: list[Path]) -> list[Path]:
+        if target_path is None:
+            return dirs
+        return [d for d in dirs
+                if recorded_target_matches(d, target_path)]
+
+    results = _target_gated(results)
+
     if search_global and not results:
         try:
             from core.config import RaptorConfig
@@ -115,10 +127,8 @@ def collect_sibling_runs(
         if out_root and out_root.is_dir() and out_root.resolve() != parent.resolve():
             _scan_dir(out_root, marker, exclude, seen=seen, results=results,
                       dir_filter=dir_filter)
+            results = _target_gated(results)
 
-    if target_path is not None:
-        results = [d for d in results
-                   if recorded_target_matches(d, target_path)]
     return results
 
 

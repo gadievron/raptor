@@ -52,14 +52,30 @@ class ConditionalBlock:
     directive: str   # "if" | "ifdef" | "ifndef"
 
 
-@lru_cache(maxsize=512)
 def _index_file(path_str: str) -> tuple[ConditionalBlock, ...]:
-    """Parse a file once and cache the list of conditional blocks.
+    """Parse a file and cache the list of conditional blocks.
 
     Returns an empty tuple when the file can't be read or contains
-    no preprocessor conditionals. Caching is keyed on path string so
-    callers with `Path` objects normalise to text first.
+    no preprocessor conditionals. The cache key includes the file's
+    (mtime_ns, size) alongside the path, so an edited file re-parses
+    automatically — a path-only key would keep serving pre-edit
+    blocks to fresh analyze() runs in long-lived processes, attaching
+    wrong #if conditions to new match lines.
     """
+    try:
+        st = Path(path_str).stat()
+    except OSError:
+        return ()
+    return _index_file_stat(path_str, st.st_mtime_ns, st.st_size)
+
+
+@lru_cache(maxsize=512)
+def _index_file_stat(
+    path_str: str, mtime_ns: int, size: int,
+) -> tuple[ConditionalBlock, ...]:
+    """Cached parse behind :func:`_index_file` — keyed on the stat
+    identity captured by the caller (the extra params exist purely
+    to participate in the lru_cache key)."""
     path = Path(path_str)
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -122,6 +138,6 @@ def enclosing_condition(file_path: str, line: int) -> str | None:
 
 
 def clear_cache() -> None:
-    """Drop the file-index cache. Tests use this between runs that
-    mutate the same path's contents."""
-    _index_file.cache_clear()
+    """Drop the file-index cache. Stat-keyed invalidation already
+    covers file edits; this is the explicit whole-cache reset."""
+    _index_file_stat.cache_clear()

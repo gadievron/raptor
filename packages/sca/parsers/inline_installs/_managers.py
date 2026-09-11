@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass
 
 from ...models import PinStyle
-from ..requirements import _spec_bounds
+from ..requirements import _classify_specifier, _spec_bounds
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -79,6 +79,39 @@ _PIP_FLAGS_WITH_VALUE = {
     "--prefix", "--root",
     "--cache-dir",
     "--retries",
+    # Every remaining value-taking pip flag. A value-taking flag not
+    # listed here makes its VALUE parse as a positional — ``pip
+    # install --progress-bar off foo`` emitted a phantom package
+    # ``off``. (Boolean flags need no entry; their next token really
+    # is a package.)
+    "--progress-bar",
+    "--proxy",
+    "--timeout",
+    "--exists-action",
+    "--log",
+    "--cert",
+    "--client-cert",
+    "--no-binary",
+    "--only-binary",
+    "--platform",
+    "--python-version",
+    "--implementation",
+    "--abi",
+    "--upgrade-strategy",
+    "--install-option",
+    "--global-option",
+    "--config-settings", "-C",
+    "--hash",
+    "--src",
+    "--build",
+    "-b",
+    "--report",
+    "--python",
+    "-p",
+    "--keyring-provider",
+    "--use-feature",
+    "--use-deprecated",
+    "--resume-retries",
 }
 
 
@@ -137,7 +170,12 @@ def _classify_pip_token(
     ``requirements._spec_bounds``). Returns None when the token doesn't
     look like a package spec (caller skips silently rather than yielding
     garbage)."""
-    m = re.match(rf"^({_NAME_RE})\s*(.*)$", tok)
+    # Optional extras group (``pkg[security]==1.0``): extras select
+    # optional features of the SAME PyPI package, so the dep is
+    # recorded under the base name. The previous name-only match left
+    # ``[...]`` in the residue, failed the operator check, and dropped
+    # the dependency entirely.
+    m = re.match(rf"^({_NAME_RE})\s*(?:\[[^\]]*\])?\s*(.*)$", tok)
     if m is None:
         return None
     name = m.group(1)
@@ -154,28 +192,16 @@ def _classify_pip_token(
         spec = SpecifierSet(rest)
     except Exception:                   # noqa: BLE001 — invalid PEP 508
         return _legacy_single_spec(name, rest)
-    items = list(spec)
-    if not items:
+    if not list(spec):
         return name, None, PinStyle.WILDCARD, None, None
     floor, ceiling = _spec_bounds(spec)
-    # An ``==`` / ``===`` clause pins the version exactly even alongside
-    # range bounds: ``foo>=2.0,==2.7.0,<3.0`` resolves to exactly 2.7.0.
-    # The sibling bounds record the safe corridor (floor for downgrades,
-    # ceiling for upgrades) that harden preserves across runs — the
-    # effective version is the ``==`` operand. Mirrors the requirements
-    # parser's _classify_specifier so both surfaces agree.
-    exact = next(
-        (s for s in items if s.operator in ("==", "===")), None)
-    if exact is not None:
-        return name, exact.version, PinStyle.EXACT, floor, ceiling
-    if len(items) == 1:
-        only = items[0]
-        op = only.operator
-        ver = only.version
-        if op == "~=":
-            return name, ver, PinStyle.TILDE, floor, ceiling
-        return name, ver, PinStyle.RANGE, floor, ceiling
-    return name, None, PinStyle.RANGE, floor, ceiling
+    # Classification is DELEGATED to the requirements.txt parser so
+    # the two pip surfaces cannot drift. The local copy had already
+    # drifted once: a single ``!=`` / ``>`` / ``<`` clause recorded
+    # its operand as the installed version even though the spec
+    # EXCLUDES it (``foo!=1.5`` flagged 1.5's CVEs).
+    pin_style, version = _classify_specifier(spec, None)
+    return name, version, pin_style, floor, ceiling
 
 
 def _legacy_single_spec(
@@ -190,12 +216,18 @@ def _legacy_single_spec(
     m = re.match(r"^(==|>=|<=|~=|>|<|!=)\s*(\S+)$", rest)
     if m is None:
         return None
-    op, version = m.group(1), m.group(2)
+    op, operand = m.group(1), m.group(2)
     pin = PinStyle.EXACT if op in ("==", "===") else (
         PinStyle.TILDE if op == "~=" else PinStyle.RANGE
     )
-    floor = version if op in (">=", ">") else None
-    ceiling = version if op in ("<", "<=") else None
+    # ``>`` / ``<`` / ``!=`` EXCLUDE their operand — recording it as
+    # the installed version would flag advisories for precisely the
+    # version guaranteed not installed. Same rule as the requirements
+    # parser's ``_classify_specifier``; the corridor bounds below
+    # still carry the ``>`` / ``<`` edges.
+    version = None if op in (">", "<", "!=") else operand
+    floor = operand if op in (">=", ">") else None
+    ceiling = operand if op in ("<", "<=") else None
     return name, version, pin, floor, ceiling
 
 
@@ -241,12 +273,28 @@ _YUM_FLAGS_WITH_VALUE = {
 }
 
 
+# Name/version split for a yum/dnf NEVRA-ish token. The version part
+# (everything after the split dash) must be dash-separated segments
+# that EACH start with a digit — the RPM version-release convention
+# (``1.18.0-2.el8``). Requiring that keeps digit-bearing package
+# NAMES intact: ``java-1.8.0-openjdk`` has an ``openjdk`` segment, so
+# no split applies and the whole token is the (unpinned) name; the
+# old first-dash-digit split mangled it into name ``java`` + bogus
+# version ``1.8.0-openjdk``.
+_YUM_SPLIT_RE = re.compile(
+    rf"^({_NAME_RE}?)-(\d[^\s-]*(?:-\d[^\s-]*)*)$"
+)
+
+# Real RPM tokens are tens of characters; anything longer is hostile
+# or garbage — skip before the (backtracking) split regex runs.
+_MAX_YUM_TOKEN_LEN = 300
+
+
 def _parse_yum_args(
     args: str,
 ) -> Iterator[_ParsedRow]:
-    """``yum install nginx-1.18.0-2.el8`` — version follows a dash; we
-    split on the first dash followed by a digit. Plain ``nginx`` is
-    unpinned."""
+    """``yum install nginx-1.18.0-2.el8`` — see ``_YUM_SPLIT_RE`` for
+    the name/version split rule. Plain ``nginx`` is unpinned."""
     skip_next = False
     for tok in _tokenise(args):
         if skip_next:
@@ -258,7 +306,9 @@ def _parse_yum_args(
         if tok.startswith("-"):
             continue
         tok = tok.strip("'\"")
-        m = re.match(rf"^({_NAME_RE}?)-(\d\S*)$", tok)
+        if len(tok) > _MAX_YUM_TOKEN_LEN:
+            continue
+        m = _YUM_SPLIT_RE.match(tok)
         if m:
             yield m.group(1), m.group(2), PinStyle.EXACT
         elif re.match(rf"^{_NAME_RE}$", tok):

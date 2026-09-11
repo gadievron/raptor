@@ -14,6 +14,8 @@ You will be invoked with the following information:
 
 Please create a "traces" subdirectory in the working directory to operate in.
 
+**Sandbox the untrusted build and run.** The target repository is untrusted — its build scripts execute arbitrary code. Run the target rebuild (step 2) and the crashing execution (step 3) via `libexec/raptor-run-sandboxed <cmd> [args...]` with the `OUTPUT_DIR` environment variable set to the directory the command writes into (the repo tree for the build, the working directory for the run). Exception: if the sandbox's environment sanitisation strips a loader variable the instrumented run requires (`LD_LIBRARY_PATH` for `libtrace.so`), fall back to direct execution for that run only and note the exemption in your report. Building the instrumentation library itself (step 1, RAPTOR's own skill sources) needs no sandbox.
+
 ## Generating Function Traces
 
 To generate function-level execution traces, you need to:

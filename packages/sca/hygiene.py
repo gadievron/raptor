@@ -53,7 +53,10 @@ logger = logging.getLogger(__name__)
 # alongside a manifest. Empty tuple = no expectation (Maven / Cargo /
 # Go projects without dependency-locking are normal).
 _EXPECTED_LOCKFILES: dict[str, tuple[str, ...]] = {
-    "npm": ("package-lock.json", "yarn.lock", "pnpm-lock.yaml", "shrinkwrap.json"),
+    # npm's shrinkwrap lockfile is named ``npm-shrinkwrap.json`` —
+    # there is no bare ``shrinkwrap.json`` in the npm toolchain.
+    "npm": ("package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+            "npm-shrinkwrap.json"),
     "PyPI": ("Pipfile.lock", "poetry.lock", "uv.lock",
              "requirements.txt", "requirements.lock"),
     "Cargo": ("Cargo.lock",),

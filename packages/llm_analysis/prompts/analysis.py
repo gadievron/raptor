@@ -45,12 +45,17 @@ _ANALYSIS_BLOCK_PRIORITIES: dict[str, int] = {
     "caller-call-sites": 2,
     "ghidra-context": 2,
     "verified-exemplars": 2,
-    "sage-historical-context": 3,
 }
 
 _ANALYSIS_BLOCK_PRIORITY_PREFIXES: list[tuple[str, int]] = [
     ("dataflow-step-", 0),
     ("dataflow-sanitizer-", 0),
+    # SAGE recall blocks are shed-first regardless of subtype — the
+    # actual kinds are pipeline-specific ("sage-crash-pattern-recall",
+    # "sage-web-payload-recall", ...), so an exact-kind entry here
+    # would never match and the block would silently get the default
+    # priority, outliving blocks ranked above it.
+    ("sage-", 3),
 ]
 
 _EXPLOIT_BLOCK_PRIORITIES: dict[str, int] = {
@@ -998,7 +1003,14 @@ def _render_ast_view_block(
     """
     function = ast_view.get("function") or "?"
     file_str = file_path_override or ast_view.get("file") or "?"
-    lines = ast_view.get("lines") or (0, 0)
+    # Same JSON-roundtrip type defence as calls_made / returns below:
+    # a corrupted-cache "lines" arriving as an int / dict / short list
+    # must not crash the renderer with a TypeError on indexing.
+    raw_lines = ast_view.get("lines")
+    if isinstance(raw_lines, (list, tuple)) and len(raw_lines) >= 2:
+        lines = (raw_lines[0], raw_lines[1])
+    else:
+        lines = (0, 0)
     signature = (ast_view.get("signature") or "").strip()
     has_asm = bool(ast_view.get("has_inline_asm"))
 

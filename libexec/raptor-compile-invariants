@@ -78,14 +78,21 @@ def main() -> int:
     model = DomainModel.load(dm_path)
 
     from core.concepts.model import CONFIDENCE_GRADES
+    try:
+        floor = CONFIDENCE_GRADES.index(parsed.min_confidence)
+    except ValueError:
+        floor = 0
     qualified = [
         inv for inv in model.invariants
         if inv.statement and inv.negation and not inv.mechanical_rule
-        # Same grade ladder compile_model enforces — off-ladder
-        # confidences (e.g. "derived" threat-frame invariants) never
-        # compile, so counting them as eligible overstates the work.
+        # Same eligibility compile_model enforces — off-ladder
+        # confidences (e.g. "derived" threat-frame invariants),
+        # grades below the --min-confidence floor, and invariants
+        # past the --max cap never compile, so counting them as
+        # eligible overstates the work.
         and inv.confidence in CONFIDENCE_GRADES
-    ]
+        and CONFIDENCE_GRADES.index(inv.confidence) >= floor
+    ][:parsed.max]
     if not qualified:
         _progress("no uncompiled invariants with statement + negation")
         return 0
@@ -174,6 +181,11 @@ def main() -> int:
         f"done: {len(succeeded)} compiled, {len(failed)} failed "
         f"(manifest: compiled-invariants.json)"
     )
+    # Every attempted invariant failing (e.g. LLM transport down) is a
+    # failed run — callers chaining on exit status must not proceed as
+    # if rules were produced.
+    if failed and not succeeded:
+        return 1
     return 0
 
 

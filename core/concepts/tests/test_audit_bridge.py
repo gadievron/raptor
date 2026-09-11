@@ -853,6 +853,18 @@ class TestGuardInScope:
         inv = {"id": "g", "evidence": ["documented in the manpage"]}
         assert _guard_in_scope(inv, "any/file.c")
 
+    def test_whitespace_evidence_does_not_crash(self):
+        # LLM-authored models can carry whitespace-only string
+        # evidence — split()[0] on it raised IndexError, aborting one
+        # consumer mid-run and failing another open.
+        inv = {"id": "g", "evidence": ["  ", "\t"]}
+        assert _guard_in_scope(inv, "any/file.c")
+
+    def test_whitespace_evidence_ignored_beside_real_scope(self):
+        inv = {"id": "g", "evidence": ["  ", "lib/parse.c:12 note"]}
+        assert _guard_in_scope(inv, "lib/parse.c")
+        assert not _guard_in_scope(inv, "lib/other.c")
+
 
 class TestProvenanceTierTags:
     """Injected domain knowledge must carry provenance tiers —
@@ -936,6 +948,76 @@ class TestNameVariantJoin:
             tmp_path, "binary:/x", "sym.parse_header")
         assert primers, "decorated name found no contract primer"
         assert any("parse_header" in p for p in primers)
+
+    def test_concept_primer_joins_top_level_invariants(self, tmp_path):
+        """The DOMAIN-SPECIFIC concept primer must render from the
+        schema study writers actually produce: Concept.to_dict rows
+        (id/description/evidence) with invariants in the model's
+        top-level list, joined by concept id."""
+        import json
+
+        from core.concepts.audit_bridge import (
+            _load_cached,
+            primers_from_domain_model,
+        )
+        (tmp_path / "domain-model.json").write_text(json.dumps({
+            "version": "1",
+            "concepts": [{
+                "id": "buf_ownership",
+                "description": "caller owns buf until release",
+                "confidence": "traced",
+                "evidence": [{
+                    "type": "code_path", "file": "h.c",
+                    "item": "consume_buf", "observation": "takes buf",
+                }],
+            }],
+            "invariants": [{
+                "id": "inv_release_once",
+                "concept": "buf_ownership",
+                "statement": "buf must be released exactly once",
+                "negation": "double release corrupts the pool",
+            }],
+            "contracts": [],
+        }), encoding="utf-8")
+        _load_cached.cache_clear()
+        primers = primers_from_domain_model(
+            tmp_path, "h.c", "consume_buf",
+        )
+        concept_primers = [
+            p for p in primers if "CONCEPT — buf ownership" in p
+        ]
+        assert concept_primers, "expected a concept primer"
+        assert "buf must be released exactly once" in concept_primers[0]
+        assert "caller owns buf until release" in concept_primers[0]
+        # No provenance stamp on the invariant → fail-closed hint tier.
+        assert "[unverified]" in concept_primers[0]
+
+    def test_concept_primer_accepts_inline_string_invariants(
+        self, tmp_path,
+    ):
+        """Inline concept["invariants"] entries (plain strings) are a
+        supported consumer shape and must keep producing a primer."""
+        import json
+
+        from core.concepts.audit_bridge import (
+            _load_cached,
+            primers_from_domain_model,
+        )
+        (tmp_path / "domain-model.json").write_text(json.dumps({
+            "version": "1",
+            "concepts": [{
+                "id": "buf_ownership",
+                "description": "caller owns buf",
+                "invariants": ["callers must own buf"],
+                "evidence": [{"file": "h.c", "item": "f"}],
+            }],
+        }), encoding="utf-8")
+        _load_cached.cache_clear()
+        primers = primers_from_domain_model(tmp_path, "h.c", "f")
+        assert any(
+            "callers must own buf" in p and "[unverified]" in p
+            for p in primers
+        )
 
     def test_bare_prefix_name_yields_no_empty_variant(self):
         """A name that IS a bare r2 prefix must not produce an

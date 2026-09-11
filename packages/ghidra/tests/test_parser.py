@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from packages.ghidra.parser import parse_dict, parse_export, _looks_auto_named
 

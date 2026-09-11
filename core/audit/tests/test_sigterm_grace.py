@@ -80,6 +80,41 @@ class TestInstallSigtermGrace:
         monkeypatch.setattr("signal.signal", _boom)
         assert orch.install_sigterm_grace() is False
 
+    def test_install_uninstall_roundtrip_restores_disposition(
+            self, monkeypatch):
+        """The handler is process-wide state: a REAL install must be
+        reversible, or it leaks past the installing test and every
+        later fork child in this process inherits salvage semantics
+        instead of dying on TERM."""
+        monkeypatch.setitem(orch._sigterm_state, "installed", False)
+        prev = signal.getsignal(signal.SIGTERM)
+        assert prev is not orch._handle_sigterm
+        assert orch.install_sigterm_grace() is True
+        assert signal.getsignal(signal.SIGTERM) is orch._handle_sigterm
+        assert orch.uninstall_sigterm_grace() is True
+        assert signal.getsignal(signal.SIGTERM) is prev
+        # Idempotent: nothing installed, nothing to restore.
+        assert orch.uninstall_sigterm_grace() is False
+
+    def test_uninstall_leaves_foreign_handler_untouched(
+            self, monkeypatch):
+        """A handler installed OVER ours is someone else's state —
+        uninstall clears only the bookkeeping."""
+        monkeypatch.setitem(orch._sigterm_state, "installed", False)
+        prev = signal.getsignal(signal.SIGTERM)
+        assert orch.install_sigterm_grace() is True
+
+        def _foreign(signum, frame):
+            pass
+
+        signal.signal(signal.SIGTERM, _foreign)
+        try:
+            assert orch.uninstall_sigterm_grace() is True
+            assert signal.getsignal(signal.SIGTERM) is _foreign
+            assert orch._sigterm_state["installed"] is False
+        finally:
+            signal.signal(signal.SIGTERM, prev)
+
 
 class TestHandlerSemantics:
 

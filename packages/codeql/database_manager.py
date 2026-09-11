@@ -10,6 +10,7 @@ import errno
 import hashlib
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -687,7 +688,6 @@ class DatabaseManager:
         coincides. The `_gc_stale_markers` path globs `.staging-*` so
         the trailing uniquifier doesn't break orphan cleanup.
         """
-        import secrets
         canonical = self.get_database_dir(repo_hash, language)
         return (
             canonical.parent
@@ -729,29 +729,68 @@ class DatabaseManager:
 
     def _gc_stale_markers(self, repo_dir: Path, max_age_seconds: int = 3600) -> None:
         """Best-effort cleanup of `.stale.*` and `.staging-*` markers older
-        than `max_age_seconds`. Called on cache miss so the cache is
-        self-healing without depending on the manual `--cleanup` CLI being
-        run on a schedule.
+        than `max_age_seconds`, plus `.kept-*` fallback DBs on a 24h TTL.
+        Called on cache miss so the cache is self-healing without depending
+        on the manual `--cleanup` CLI being run on a schedule.
 
         1 hour TTL is generous: any active reader will have finished using
         an evicted DB by then; any abandoned staging from a crashed writer
         is genuinely orphaned by then.
+
+        `.kept-*` entries are promote-failure fallback DBs that were handed
+        to a caller as its live database (see _detach_staging_from_gc) —
+        an in-flight analysis may still be lazily reading dataset chunks
+        from them well past the 1h staging TTL, so they get a 24h TTL:
+        long enough that no single analysis is still running, short enough
+        that abandoned fallbacks don't accumulate.
         """
         if not repo_dir.is_dir():
             return
-        cutoff = time.time() - max_age_seconds
+        now = time.time()
+        cutoff = now - max_age_seconds
+        kept_cutoff = now - 24 * 3600
         for entry in repo_dir.iterdir():
             name = entry.name
-            if not (name.startswith(".staging-") or ".stale." in name):
+            if name.startswith(".kept-"):
+                entry_cutoff = kept_cutoff
+            elif name.startswith(".staging-") or ".stale." in name:
+                entry_cutoff = cutoff
+            else:
                 continue
             try:
-                if entry.stat().st_mtime < cutoff:
+                if entry.stat().st_mtime < entry_cutoff:
                     if entry.is_dir():
                         shutil.rmtree(entry, ignore_errors=True)
                     else:
                         entry.unlink(missing_ok=True)
             except OSError:
                 pass  # best-effort
+
+    def _detach_staging_from_gc(self, staging_path: Path, language: str) -> Path:
+        """Move a kept-as-final staging DB out of the staging GC's scope.
+
+        The promote-failure fallbacks hand the caller a DB living at a
+        `.staging-*` path, but _gc_stale_markers reaps any `.staging-*`
+        entry older than 1h on every sibling run's cache miss — a
+        long-running analysis (routinely >1h on large DBs) could have
+        its database rmtree'd out from under it mid-query. A same-
+        directory rename to a `.kept-*` name (24h GC TTL instead of 1h)
+        is atomic and keeps already-open FDs valid. On rename failure
+        the original path is returned: the GC race remains for that
+        run, but the caller still has a usable DB.
+        """
+        kept = staging_path.with_name(
+            f".kept-{language}-{os.getpid()}-{secrets.token_hex(4)}"
+        )
+        try:
+            os.rename(staging_path, kept)
+        except OSError as e:
+            logger.warning(
+                "Could not move fallback DB out of staging-GC scope (%s); "
+                "%s remains subject to the 1h staging TTL", e, staging_path,
+            )
+            return staging_path
+        return kept
 
     def _evict_stale_canonical(
         self, repo_hash: str, language: str, max_age_days: int,
@@ -1465,16 +1504,23 @@ class DatabaseManager:
                             except OSError:
                                 # Eviction may have failed, OR succeeded but
                                 # a third writer slipped into the empty slot.
-                                # Don't validate-and-cascade; keep staging.
-                                final_path = staging_path
+                                # Don't validate-and-cascade; keep staging
+                                # (renamed out of the staging GC's scope).
+                                final_path = self._detach_staging_from_gc(
+                                    staging_path, language
+                                )
                     else:
                         # Genuine I/O error (permissions, disk full); fall back
                         # to using staging directly so the caller's analysis
-                        # can still proceed. Future runs will rebuild.
+                        # can still proceed. Future runs will rebuild. Rename
+                        # out of the staging GC's scope first so a sibling's
+                        # cache-miss GC can't delete it mid-analysis.
                         logger.warning(
                             "Could not promote staging to canonical (%s); using staging path", e
                         )
-                        final_path = staging_path
+                        final_path = self._detach_staging_from_gc(
+                            staging_path, language
+                        )
 
             # Count files in database (use whatever path won out above).
             # Cosmetic-only: a force=True writer in another window could
@@ -1726,14 +1772,23 @@ class DatabaseManager:
             if not db_subdirs:
                 logger.debug("No db-* subdir in %s", db_path)
                 return False
-            # At least one db-* subdir must hold > 100KB of data
-            # (the smallest realistic codeql DB observed in
-            # practice). Empty / kilobyte-sized = aborted build.
+            # At least one db-* subdir must hold > 10KB of data.
+            # Threshold trade-off (both directions):
+            #   - Too HIGH (the previous 100KB) rejects legitimately
+            #     tiny DBs from one-file / fixture targets — a
+            #     permanent cache miss, and the lost-race branch then
+            #     evicts a sibling's VALID small canonical (rebuild /
+            #     evict churn on every run).
+            #   - Too LOW stops catching aborted builds: CodeQL writes
+            #     codeql-database.yml first, so a build killed early
+            #     leaves the yml plus an empty or byte-sized db-* dir.
+            # 10KB keeps the aborted-build signature (empty / sub-KB
+            # dataset dirs) while admitting small-but-complete DBs.
             for sub in db_subdirs:
                 total_size = sum(
                     f.stat().st_size for f in sub.rglob("*") if f.is_file()
                 )
-                if total_size > 100 * 1024:
+                if total_size > 10 * 1024:
                     return True
             logger.debug(
                 "db-* subdirs present but trivially small in %s (likely aborted build)", db_path

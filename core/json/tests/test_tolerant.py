@@ -634,3 +634,81 @@ class TestFenceScan:
         parse_llm_json(text)
         elapsed = time.perf_counter() - t0
         assert elapsed < 5.0, f"fence scan took {elapsed:.2f}s on hostile input"
+
+
+class TestRecursionBombContract:
+    """parse_llm_json documents a does-not-raise contract; a
+    RecursionError from the recursive stdlib parser (Python <= 3.13,
+    deeply-nested input) must surface as a failure diagnostic.
+    Simulated via monkeypatch — newer stdlib parsers are iterative."""
+
+    def test_recursion_error_returns_diagnostic(self, monkeypatch):
+        import core.json.tolerant as tolerant_mod
+
+        def bombing_loads(text, **kwargs):
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(tolerant_mod.json, "loads", bombing_loads)
+        parsed, diag = parse_llm_json('{"a": 1}')
+        assert parsed is None
+        assert diag.strategy == "failed"
+        assert "nested too deeply" in (diag.final_error or "")
+
+
+class TestBracketSpanArrays:
+    """require_object=False callers whose prompt asks for a JSON ARRAY:
+    every element must survive, whatever wrapping the model used."""
+
+    _ARRAY = (
+        '[{"target": "a", "assumption": "x"},'
+        ' {"target": "b", "assumption": "y"},'
+        ' {"target": "c", "assumption": "z"}]'
+    )
+
+    def test_pure_array_all_elements(self):
+        parsed, diag = parse_llm_json(self._ARRAY, require_object=False)
+        assert isinstance(parsed, list) and len(parsed) == 3
+        assert diag.strategy == "strict"
+
+    def test_fenced_array_all_elements(self):
+        text = "```json\n" + self._ARRAY + "\n```\n"
+        parsed, diag = parse_llm_json(text, require_object=False)
+        assert isinstance(parsed, list) and len(parsed) == 3
+        assert diag.strategy == "fence"
+
+    def test_prose_wrapped_bare_array_all_elements(self):
+        """Pre-fix: no top-level {...} exists, so brace_span extracted
+        the LAST object inside the array — 1 of 3 elements survived."""
+        text = ("Here are the assumptions I extracted:\n\n"
+                + self._ARRAY + "\n\nLet me know if you need more.")
+        parsed, diag = parse_llm_json(text, require_object=False)
+        assert isinstance(parsed, list) and len(parsed) == 3
+        assert diag.strategy == "bracket_span"
+        assert diag.prose_before_bytes > 0
+        assert diag.prose_after_bytes > 0
+
+    def test_trailing_numeric_citation_does_not_beat_payload(self):
+        """`[2]` strict-parses as a JSON array — largest-wins keeps the
+        real payload ahead of a trailing citation span."""
+        text = ("As discussed [1]:\n" + self._ARRAY
+                + "\nSee also the spec [2].")
+        parsed, diag = parse_llm_json(text, require_object=False)
+        assert isinstance(parsed, list) and len(parsed) == 3
+        assert diag.strategy == "bracket_span"
+
+    def test_require_object_true_never_returns_array(self):
+        """Object-contract callers are unaffected by the new strategy:
+        the same prose+array input still resolves via brace_span to an
+        object (the pre-existing contract)."""
+        text = "prose\n" + self._ARRAY + "\nmore prose"
+        parsed, diag = parse_llm_json(text)  # require_object=True
+        assert isinstance(parsed, dict)
+        assert diag.strategy == "brace_span"
+
+    def test_unparseable_bracket_span_falls_through(self):
+        """A bracket span that is not JSON (markdown link text) must
+        not block the ladder — the object strategies still run."""
+        text = 'see [the docs] here\n{"a": 1}\n'
+        parsed, diag = parse_llm_json(text, require_object=False)
+        assert parsed == {"a": 1}
+        assert diag.strategy == "brace_span"

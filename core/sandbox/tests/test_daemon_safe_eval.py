@@ -61,6 +61,25 @@ class TestRejectedExpressions:
         with pytest.raises(ValueError, match="disallowed call"):
             _safe_eval("fns[0](1)", {"fns": None})
 
+    @pytest.mark.parametrize("expr,bindings", [
+        # A binding parsed from hostile target stdout is an int;
+        # ``bytes(<int>)`` allocates VALUE-many zero bytes before the
+        # unpack helpers' [:sz] cap, so a RAM-scale value would OOM
+        # the daemon. The bit-length budgets never catch it (1<<40
+        # has bit_length 41). Ints must be refused BEFORE bytes().
+        ("u64(x)", {"x": 1 << 40}),
+        ("u32(x)", {"x": 1 << 40}),
+        ("u16(x)", {"x": 1 << 40}),
+        ("u64(1099511627776)", {}),
+        # Small ints refuse too — u64(<int>) always decoded to 0, so
+        # no legitimate plan shape loses anything.
+        ("u64(x)", {"x": 5}),
+        ("u64(True)", {}),
+    ])
+    def test_unpack_helpers_refuse_int_arguments(self, expr, bindings):
+        with pytest.raises(ValueError, match="raw recv bytes"):
+            _safe_eval(expr, bindings)
+
 
 class TestAcceptedExpressions:
     """Every documented-legitimate compute shape still evaluates."""

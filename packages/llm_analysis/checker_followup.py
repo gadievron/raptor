@@ -390,36 +390,45 @@ def emit_variant_matches_for_finding(
                 )
 
             _try_promote_to_library(result, repo_root)
-    except Exception:
-        logger.warning("checker_followup: synthesis failed", exc_info=True)
-        return 0
 
-    if result.rule is None:
+        # Result consumption and match recording stay INSIDE the
+        # swallow-all try: the module contract is that a synthesis /
+        # recording failure can never break the caller's analysis
+        # loop, and an OSError from the matches-file write path, a
+        # malformed triage entry, or a synthesiser returning None
+        # would otherwise escape after the except above.
+        if result is None or result.rule is None:
+            logger.debug(
+                "checker_followup: no rule produced for %s:%s "
+                "(errors: %s)",
+                seed.file, seed.line_start,
+                "; ".join(result.errors[:3])
+                if result is not None and result.errors else "none",
+            )
+            return 0
         logger.debug(
-            "checker_followup: no rule produced for %s:%s "
-            "(errors: %s)",
-            seed.file, seed.line_start,
-            "; ".join(result.errors[:3]) if result.errors else "none",
+            "checker_followup: rule %s produced — %d match(es), "
+            "positive_control=%s, dual_control=%s",
+            result.rule.rule_id,
+            len(result.matches),
+            result.positive_control,
+            result.dual_control,
+        )
+        if not result.matches:
+            return 0
+
+        return _record_matches(
+            seed=seed,
+            result=result,
+            out_dir=out_dir,
+            checklist=checklist,
+            repo_root=repo_root,
+        )
+    except Exception:
+        logger.warning(
+            "checker_followup: variant emission failed", exc_info=True,
         )
         return 0
-    logger.debug(
-        "checker_followup: rule %s produced — %d match(es), "
-        "positive_control=%s, dual_control=%s",
-        result.rule.rule_id,
-        len(result.matches),
-        result.positive_control,
-        result.dual_control,
-    )
-    if not result.matches:
-        return 0
-
-    return _record_matches(
-        seed=seed,
-        result=result,
-        out_dir=out_dir,
-        checklist=checklist,
-        repo_root=repo_root,
-    )
 
 
 def _record_matches(

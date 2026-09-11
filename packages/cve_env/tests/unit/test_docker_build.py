@@ -552,3 +552,40 @@ def test_phase67_docker_build_revalidates_raw_text_against_p14(
     assert "P14" in r.reason or "validation" in r.reason.lower(), (
         f"reason should cite P14/validation; got reason={r.reason!r}"
     )
+
+
+@patch("core.container.proc.subprocess.run")
+def test_docker_build_rejects_registry_qualified_tag_loudly(
+    mock_run: MagicMock, tmp_path: object
+) -> None:
+    """An invalid/registry-qualified image_tag is a hard error, never a
+    silent auto-tag substitution — an agent reusing the tag it passed
+    would docker_run the registry name and pull the UPSTREAM image
+    (--pull always for external origins), verifying a different artifact
+    than the one just built."""
+    reset_docker_build_state()
+    ctx = Path(str(tmp_path))
+    (ctx / "Dockerfile").write_text("FROM debian:11\nRUN true\n")
+    for bad in ("docker.io/library/foo:1", "registry.example.com/foo:1",
+                "foo bar", "-rm"):
+        r = docker_build(context_dir=str(ctx), image_tag=bad)
+        assert r.ok is False, bad
+        assert r.reason == "invalid_image_tag", bad
+        assert "image_tag" in r.next_step_hint
+    mock_run.assert_not_called()
+
+
+@patch("core.container.proc.subprocess.run")
+def test_docker_build_accepts_local_tag(
+    mock_run: MagicMock, tmp_path: object
+) -> None:
+    """Companion direction: a plain local repo[:tag] keeps building."""
+    reset_docker_build_state()
+    mock_run.return_value = MagicMock(
+        returncode=0, stdout="Successfully built abc123\n", stderr=""
+    )
+    ctx = Path(str(tmp_path))
+    (ctx / "Dockerfile").write_text("FROM debian:11\nRUN true\n")
+    r = docker_build(context_dir=str(ctx), image_tag="cve-env-local:ok1")
+    assert r.ok is True
+    assert r.image_tag == "cve-env-local:ok1"

@@ -719,33 +719,55 @@ def test_down_stack_bounds_stop_timeout(tmp_path: Path) -> None:
 
 
 def test_unpublished_container_gets_container_ip_endpoint() -> None:
+    # Batched form: two unpublished containers resolve from ONE
+    # docker-inspect invocation (one JSON line each, keyed by full Id).
     inspect_payload = (
-        '{"nets":{"proj_default":{"IPAddress":"172.19.0.7"}},'
-        '"exposed":{"80/tcp":{},"9999/tcp":{}}}'
+        '{"id":"cid1full",'
+        '"nets":{"proj_default":{"IPAddress":"172.19.0.7"}},'
+        '"exposed":{"80/tcp":{},"9999/tcp":{}}}\n'
+        '{"id":"cid2full",'
+        '"nets":{"proj_default":{"IPAddress":"172.19.0.8"}},'
+        '"exposed":{"6379/tcp":{}}}'
     )
 
     from core.container.proc import RunOutcome
-    with patch.object(cco, "run_cli",
-                      return_value=RunOutcome(returncode=0,
-                                              stdout=inspect_payload,
-                                              stderr="",
-                                              timed_out=False)):
-        out = cco._with_container_endpoint(
-            cco.ComposeContainer(service="web", container_id="cid",
-                                 host_port=None, container_port=None))
-    assert out.host_ip == "172.19.0.7"
-    assert out.host_port == 80  # preferred HTTP-shaped port wins
-    assert out.container_port == 80
+    calls: list[list[str]] = []
 
-    # Inspect failure leaves the container untouched (best-effort).
+    def _fake_run_cli(argv, **kwargs):
+        calls.append(argv)
+        return RunOutcome(returncode=0, stdout=inspect_payload,
+                          stderr="", timed_out=False)
+
+    published = cco.ComposeContainer(service="lb", container_id="cid0",
+                                     host_port=8080, container_port=80)
+    with patch.object(cco, "run_cli", _fake_run_cli):
+        out = cco._with_container_endpoints((
+            published,
+            cco.ComposeContainer(service="web", container_id="cid1",
+                                 host_port=None, container_port=None),
+            cco.ComposeContainer(service="cache", container_id="cid2",
+                                 host_port=None, container_port=None),
+        ))
+    assert len(calls) == 1  # one batched spawn, not one per container
+    assert "cid1" in calls[0] and "cid2" in calls[0]
+    assert "cid0" not in calls[0]  # published containers not inspected
+    assert out[0] is published
+    assert out[1].host_ip == "172.19.0.7"
+    assert out[1].host_port == 80  # preferred HTTP-shaped port wins
+    assert out[1].container_port == 80
+    assert out[2].host_ip == "172.19.0.8"
+    assert out[2].host_port == 6379
+
+    # Inspect failure leaves the containers untouched (best-effort).
     with patch.object(cco, "run_cli",
                       return_value=RunOutcome(returncode=1, stdout="",
                                               stderr="no such object",
                                               timed_out=False)):
-        out = cco._with_container_endpoint(
+        out = cco._with_container_endpoints((
             cco.ComposeContainer(service="web", container_id="cid",
-                                 host_port=None, container_port=None))
-    assert out.host_port is None and out.host_ip == "127.0.0.1"
+                                 host_port=None, container_port=None),
+        ))
+    assert out[0].host_port is None and out[0].host_ip == "127.0.0.1"
 
 
 # -- staging keepalive (live-owner protection for the reaper) ------------------
@@ -795,3 +817,87 @@ class TestStagingKeepalive:
         with pytest.raises(cco.ComposeError):
             cco.rewrite_for_localhost(src / "docker-compose.yml")
         assert scratch_mod._keepalive_paths == set()
+
+
+# -- device allowlist (S: raw host devices must never map into a stack) --------
+
+
+class TestDeviceFilter:
+    """The allowlist must hold under lexical evasion: /dev/fd is a
+    symlinked dir, so a ``..`` traversal through it reaches raw host
+    disks while satisfying a naive prefix match."""
+
+    def _kept(self, devices: list[Any]) -> list[Any]:
+        spec: dict[str, Any] = {"devices": list(devices)}
+        cco._filter_devices(spec)
+        return spec.get("devices", [])
+
+    def test_safe_pseudo_devices_kept(self) -> None:
+        kept = self._kept([
+            "/dev/null:/dev/null",
+            "/dev/urandom:/dev/urandom:r",
+            {"source": "/dev/zero", "target": "/dev/zero"},
+            "/dev/fd/1:/dev/fd/1",
+        ])
+        assert len(kept) == 4
+
+    def test_traversal_through_dev_fd_dropped(self) -> None:
+        assert self._kept(["/dev/fd/../../../dev/sda:/dev/sda:rwm"]) == []
+        assert self._kept(
+            [{"source": "/dev/fd/../../../dev/nvme0n1", "target": "/dev/x"}]
+        ) == []
+
+    def test_prefix_lookalikes_dropped(self) -> None:
+        # Exact match only: "/dev/nullXYZ" passed the old startswith.
+        assert self._kept(["/dev/nullXYZ:/dev/n"]) == []
+        assert self._kept(["/dev/fd/notdigit:/dev/x"]) == []
+        assert self._kept(["/dev/sda:/dev/sda"]) == []
+
+    def test_kept_sources_are_forwarded_normalized(self) -> None:
+        # dockerd resolves ".." THROUGH symlinks, so a raw
+        # "/dev/fd/0/../1" names a different object than its lexical
+        # form — only the normalized spelling may be forwarded.
+        assert self._kept(["/dev/fd/0/../1:/dev/x:rwm"]) == \
+            ["/dev/fd/1:/dev/x:rwm"]
+        assert self._kept(
+            [{"source": "/dev/fd/0/../1", "target": "/dev/n"}]
+        ) == [{"source": "/dev/fd/1", "target": "/dev/n"}]
+        # POSIX normpath preserves a leading "//" (implementation-
+        # defined root), so the double-slash spelling stays dropped —
+        # fail closed rather than guess the platform's semantics.
+        assert self._kept(["//dev//null:/dev/n"]) == []
+
+    def test_fd_children_must_be_ascii_digits(self) -> None:
+        # str.isdigit() admits Unicode digit codepoints; the daemon
+        # has no such fd entries — refuse rather than probe.
+        assert self._kept(["/dev/fd/١:/dev/x"]) == []
+
+    def test_allow_all_passthrough(self) -> None:
+        spec: dict[str, Any] = {"devices": ["/dev/sda:/dev/sda"]}
+        cco._filter_devices(spec, allow_all=True)
+        assert spec["devices"] == ["/dev/sda:/dev/sda"]
+
+
+# -- staging failure paths (decode errors, copy budget) ------------------------
+
+
+def test_gated_document_decode_error_is_compose_error(tmp_path: Path) -> None:
+    bad = tmp_path / "docker-compose.yml"
+    bad.write_bytes(b"services:\n  a:\n    image: x\xff\n")
+    with pytest.raises(cco.ComposeError, match="not valid UTF-8"):
+        cco._load_gated_document(bad, what="file")
+
+
+def test_staging_budget_refuses_oversized_source(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "docker-compose.yml").write_text("services: {}\n")
+    (src / "blob.bin").write_bytes(b"x" * 4096)
+    monkeypatch.setattr(cco, "_STAGING_MAX_BYTES", 1024)
+    with pytest.raises(cco.ComposeError, match="staging budget"):
+        cco._require_stageable_size(src)
+    # Direction 2: under budget passes silently.
+    monkeypatch.setattr(cco, "_STAGING_MAX_BYTES", 1 << 20)
+    cco._require_stageable_size(src)

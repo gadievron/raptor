@@ -75,7 +75,20 @@ def _find_switch_no_default(filepath, decl_line, ret_line, var_name):
     assign_re = re.compile(r'\b' + re.escape(var_name) + r'\s*=[^=]')
     switch_re = re.compile(r'\bswitch\s*\(')
     i = decl_line  # 0-based index after decl_line (1-based)
+    pre_depth = 0
     while i < ret_line - 1 and i < len(lines):
+        if not switch_re.search(lines[i]):
+            # An assignment at nesting depth 0 before the switch is an
+            # unconditional initialisation that dominates the return —
+            # whatever the switch does, the variable is already set.
+            # (Same depth-0 heuristic as the after-switch scan below.)
+            if pre_depth == 0 and assign_re.search(lines[i]):
+                return None
+            for ch in lines[i]:
+                if ch == '{':
+                    pre_depth += 1
+                elif ch == '}':
+                    pre_depth -= 1
         if switch_re.search(lines[i]):
             sw_line = i + 1  # 1-based
             depth = 0

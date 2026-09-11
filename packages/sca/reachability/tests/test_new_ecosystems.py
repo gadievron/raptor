@@ -233,6 +233,21 @@ def test_nuget_vb_imports(tmp_path: Path) -> None:
     assert r.verdict == "imported"
 
 
+def test_nuget_package_id_case_insensitive(tmp_path: Path) -> None:
+    """NuGet package ids are case-insensitive: a lowercased
+    ``<PackageReference Include="newtonsoft.json">`` must still
+    match ``using Newtonsoft.Json;``."""
+    (tmp_path / "App.cs").write_text(
+        "using Newtonsoft.Json;\nclass App {}\n", encoding="utf-8")
+    scan = rnuget.scan_imports(tmp_path)
+    r = rnuget.resolve_dep("newtonsoft.json", scan, target=tmp_path)
+    assert r.verdict == "imported"
+    # Case-folding must not create matches for genuinely different
+    # package ids.
+    r2 = rnuget.resolve_dep("newtonsoft.jsonnet", scan, target=tmp_path)
+    assert r2.verdict == "not_reachable"
+
+
 def test_nuget_only_in_tests_dir(tmp_path: Path) -> None:
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "App.cs").write_text(

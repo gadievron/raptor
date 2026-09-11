@@ -59,6 +59,7 @@ to compliance ship a tighter policy.
 from __future__ import annotations
 
 import logging
+import re
 import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -78,7 +79,25 @@ def _quote_seg(value: str, *, safe: str = "") -> str:
     versions come from scanned manifests - raw interpolation lets a
     hostile name containing ``/``, ``?``, ``#`` or ``..`` redirect the
     registry request (or alias / abort the cache path). Same encoding
-    the registries/ clients use."""
+    the registries/ clients use.
+
+    Dot segments are REJECTED, not encoded: ``urllib.parse.quote``
+    never encodes ``.`` (always-safe set), so a segment that IS
+    ``.``/``..`` would survive encoding verbatim and traverse the
+    composed registry path server-side. Empty segments (which collapse
+    to ``//``) are rejected for the same reason. When ``safe``
+    includes ``/`` the check applies per path component. Raises
+    ``ValueError``; the enrichment callers catch it and skip the dep
+    (it then flows through ``on_unknown`` policy handling).
+    """
+    components = value.split("/") if "/" in safe else [value]
+    for comp in components:
+        if comp in ("", ".", ".."):
+            msg = (
+                f"refusing URL path segment {value!r}: empty or dot "
+                f"segment would traverse the registry path"
+            )
+            raise ValueError(msg)
     return urllib.parse.quote(value, safe=safe)
 
 
@@ -259,12 +278,12 @@ def _evaluate_one(
     if spdx is None or not spdx.strip():
         return _unknown_finding(dep, policy)
 
-    spdx = spdx.strip()
     # SPDX-2.0 license expressions:
     #   ``MIT``                          single id
     #   ``MIT OR Apache-2.0``            either is fine
     #   ``GPL-3.0 AND BSD-3-Clause``     both apply
     #   ``GPL-2.0 WITH Classpath-...``   license with exception
+    #   ``(MIT OR X) AND Apache-2.0``    parenthesised compound
     # Operator semantics:
     #   * OR  — choosing ONE license is sufficient; finding only if
     #           NO choice can satisfy the policy.
@@ -273,33 +292,167 @@ def _evaluate_one(
     #   * WITH — license-with-exception; treat as the base license
     #            for now. (Per-exception policy is a future
     #            refinement; today we evaluate the left side.)
-    # We don't support parenthesised compounds like
-    # ``(MIT OR BSD-3-Clause) AND Apache-2.0`` yet; they'd need a
-    # real parser. Almost all real PyPI / npm / Maven license
-    # expressions are flat OR / AND.
-    if " OR " in spdx:
-        return _evaluate_or(dep, spdx, policy)
-    if " AND " in spdx:
-        return _evaluate_and(dep, spdx, policy)
-    if " WITH " in spdx:
-        # ``GPL-2.0 WITH Classpath-exception-2.0`` → evaluate
-        # the base license. Future refinement: a
-        # ``policy.allow_exceptions`` set could change the
-        # verdict if the exception is recognised.
-        base = spdx.split(" WITH ", 1)[0].strip()
-        return _classify(dep, base, policy)
+    spdx = spdx.strip()
+    # Strict leaf validation only for paren-bearing expressions: those
+    # went through structural decomposition, so a leaf that is not a
+    # well-formed SPDX id means the decomposition hit garbage (e.g.
+    # ``( OR MIT)`` collapsing to the pseudo-id ``OR MIT``). Flat
+    # free-text declarations (``Apache License 2.0``) keep their
+    # long-standing exact-match-then-default handling.
+    strict = "(" in spdx or ")" in spdx
+    return _evaluate_expr(dep, spdx, policy, _strict=strict)
 
-    return _classify(dep, spdx, policy)
+
+# Recursion / nesting ceiling for hostile registry metadata; real
+# license expressions never nest anywhere near this deep.
+_MAX_SPDX_DEPTH = 10
+
+# Length ceiling for the whole expression, checked BEFORE any parsing.
+# The paren-peel loop below rescans the string once per stripped layer
+# (quadratic in the worst case), so an unbounded upstream-controlled
+# string is a CPU sink — a 120 KB all-paren wrap costs minutes, and
+# registry license fields carry no upstream length cap. With 4096 the
+# oversized short-circuit is sub-millisecond and the worst input that
+# PASSES the gate (a maximal balanced paren wrap) stays bounded at
+# ~0.1 s — no longer input-scalable — while the cap is orders of
+# magnitude past any real SPDX expression (the longest observed in the
+# wild are a few hundred chars). Oversized expressions fail CLOSED to
+# the on_unknown action, same as every other undecomposable shape.
+# Trade-off if this is ever revisited: raising it only slows the
+# hostile case (cost grows quadratically); lowering it risks flagging
+# legitimate many-choice OR chains as unknown.
+_MAX_SPDX_EXPR_LEN = 4096
+
+# SPDX-2.0 §A.1 license-id charset (alphanumerics plus ``.+-``), used
+# for the strict leaf check above.
+_SPDX_ID_RE = re.compile(r"[A-Za-z0-9.+\-]+")
+
+
+def _evaluate_expr(
+    dep: Dependency,
+    spdx: str,
+    policy: LicensePolicy,
+    _depth: int = 0,
+    _strict: bool = False,
+) -> LicenseFinding | None:
+    """Recursive SPDX expression evaluation, parentheses included.
+
+    ``declared_license`` is upstream-author-controlled registry
+    metadata. Parenthesised expressions are valid SPDX-2.0, and the
+    previous flat splitter turned ``(AGPL-3.0-only OR SSPL-1.0)`` into
+    fragments (``(AGPL-3.0-only`` / ``SSPL-1.0)``) that missed the
+    deny set's exact match and fell through to the default-ALLOW leaf
+    — a silent bypass of the operator's deny list. Expressions that
+    still cannot be decomposed (unbalanced parens, empty operands,
+    pathological nesting or length) take the ``on_unknown`` action
+    instead of default-allow: unparseable is unknown, never clean.
+
+    Operator precedence follows SPDX: OR binds loosest (top-level OR
+    split first), then AND, then WITH.
+    """
+    if _depth > _MAX_SPDX_DEPTH or len(spdx) > _MAX_SPDX_EXPR_LEN:
+        return _unparseable_finding(dep, spdx, policy)
+    inner = _strip_outer_parens(spdx)
+    if inner is None or not inner:
+        return _unparseable_finding(dep, spdx, policy)
+    or_parts = _split_top_level(inner, "OR")
+    if or_parts is None or any(not p for p in or_parts):
+        return _unparseable_finding(dep, spdx, policy)
+    if len(or_parts) > 1:
+        return _evaluate_or(dep, spdx, or_parts, policy, _depth, _strict)
+    and_parts = _split_top_level(inner, "AND")
+    if and_parts is None or any(not p for p in and_parts):
+        return _unparseable_finding(dep, spdx, policy)
+    if len(and_parts) > 1:
+        return _evaluate_and(dep, and_parts, policy, _depth, _strict)
+    if " WITH " in inner:
+        # ``GPL-2.0 WITH Classpath-exception-2.0`` → evaluate the
+        # base license. Future refinement: a ``policy.allow_exceptions``
+        # set could change the verdict if the exception is recognised.
+        base = inner.split(" WITH ", 1)[0].strip()
+        if not base:
+            return _unparseable_finding(dep, spdx, policy)
+        return _evaluate_expr(dep, base, policy, _depth + 1, _strict)
+    if "(" in inner or ")" in inner:
+        # Balanced but not decomposable (e.g. ``MIT(x)``) — never
+        # exact-match a paren-bearing token against the policy sets.
+        return _unparseable_finding(dep, spdx, policy)
+    if _strict and _SPDX_ID_RE.fullmatch(inner) is None:
+        # A leaf that fell out of structural decomposition but is not
+        # a well-formed SPDX id means the expression was garbage (e.g.
+        # ``( OR MIT)`` collapsing to the pseudo-id ``OR MIT``) —
+        # never exact-match it into the default-allow leaf.
+        return _unparseable_finding(dep, spdx, policy)
+    return _classify(dep, inner, policy)
+
+
+def _strip_outer_parens(expr: str) -> str | None:
+    """Peel fully-enclosing balanced parentheses; ``None`` when the
+    expression is unbalanced. ``(A) AND (B)`` is returned unchanged —
+    only parens wrapping the WHOLE expression are stripped."""
+    expr = expr.strip()
+    while expr.startswith("(") and expr.endswith(")"):
+        depth = 0
+        enclosing = True
+        for i, ch in enumerate(expr):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth < 0:
+                    return None
+                if depth == 0 and i < len(expr) - 1:
+                    enclosing = False
+                    break
+        if enclosing and depth != 0:
+            return None
+        if not enclosing:
+            break
+        expr = expr[1:-1].strip()
+    return expr
+
+
+def _split_top_level(expr: str, op: str) -> list[str] | None:
+    """Split ``expr`` on `` <op> `` at parenthesis depth 0; ``None``
+    when the parens are unbalanced. Single-element list when the
+    operator does not occur at the top level."""
+    needle = f" {op} "
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    i = 0
+    while i < len(expr):
+        ch = expr[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth < 0:
+                return None
+        elif depth == 0 and expr.startswith(needle, i):
+            parts.append(expr[start:i])
+            i += len(needle)
+            start = i
+            continue
+        i += 1
+    if depth != 0:
+        return None
+    parts.append(expr[start:])
+    return [p.strip() for p in parts]
 
 
 def _evaluate_or(
     dep: Dependency,
     spdx: str,
+    choices: list[str],
     policy: LicensePolicy,
+    _depth: int = 0,
+    _strict: bool = False,
 ) -> LicenseFinding | None:
     """OR-expression policy semantics: ONE choice satisfying the
-    policy is enough.  Evaluate each choice through ``_classify``;
-    return no-finding as soon as any choice classifies as allowed.
+    policy is enough.  Evaluate each choice recursively (a choice may
+    itself be a parenthesised compound); return no-finding as soon as
+    any choice evaluates as allowed.
 
     Without this nuance the OR-handler over-flags: with the
     default ``allow``-by-default policy, both ``MIT`` and
@@ -309,8 +462,10 @@ def _evaluate_or(
     policy — and fell through to ``incompatible`` for every
     common ``MIT OR Apache-2.0`` style dual-license declaration.
     """
-    choices = [s.strip() for s in spdx.split(" OR ")]
-    classified = [(c, _classify(dep, c, policy)) for c in choices]
+    classified = [
+        (c, _evaluate_expr(dep, c, policy, _depth + 1, _strict))
+        for c in choices
+    ]
     # If any choice resolves to "no finding" (allowed under the
     # policy), the OR is satisfied.
     if any(f is None for _, f in classified):
@@ -340,15 +495,17 @@ def _evaluate_or(
 
 def _evaluate_and(
     dep: Dependency,
-    spdx: str,
+    choices: list[str],
     policy: LicensePolicy,
+    _depth: int = 0,
+    _strict: bool = False,
 ) -> LicenseFinding | None:
     """AND-expression policy semantics: ALL parts apply, so any
-    deny / warn on any part propagates. First non-None finding
-    wins (operator sees the most-significant violation)."""
-    choices = [s.strip() for s in spdx.split(" AND ")]
+    deny / warn on any part propagates. Parts evaluate recursively
+    (a part may itself be a parenthesised compound). First non-None
+    finding wins (operator sees the most-significant violation)."""
     for c in choices:
-        f = _classify(dep, c, policy)
+        f = _evaluate_expr(dep, c, policy, _depth + 1, _strict)
         if f is not None:
             return f
     return None
@@ -430,6 +587,38 @@ def _unknown_finding(
         confidence=Confidence(
             "medium",
             reason="declared_license is None after enrichment",
+        ),
+    )
+
+
+def _unparseable_finding(
+    dep: Dependency,
+    spdx: str,
+    policy: LicensePolicy,
+) -> LicenseFinding | None:
+    """An expression the evaluator could not decompose (unbalanced
+    parentheses, empty operand, pathological nesting). Takes the
+    operator's ``on_unknown`` action — an expression we cannot read is
+    an UNKNOWN license posture, never a clean pass. Pre-fix these fell
+    through exact-set-membership misses to the default-ALLOW leaf, so
+    a malformed (or deliberately obfuscated) declaration bypassed the
+    deny list silently."""
+    if policy.on_unknown == "allow":
+        return None
+    severity = "high" if policy.on_unknown == "deny" else "info"
+    return LicenseFinding(
+        finding_id=_finding_id(dep, "license_unknown"),
+        kind="license_unknown",
+        dependency=dep,
+        spdx=spdx,
+        detail=(
+            f"Unparseable SPDX license expression {spdx!r} — "
+            f"cannot evaluate it against the license policy"
+        ),
+        severity=severity,
+        confidence=Confidence(
+            "medium",
+            reason="declared license expression failed SPDX parsing",
         ),
     )
 
@@ -662,9 +851,12 @@ def _fetch_maven_license(
             return cached or None
 
     group_id, artifact_id = coord.split(":", 1)
-    # Group dots become path separators by Maven-repo convention;
-    # each resulting segment (and the artifact / version) is encoded
-    # individually so hostile coordinates can't traverse the path.
+    # Group dots become path separators by Maven-repo convention; each
+    # resulting segment (and the artifact / version) goes through
+    # _quote_seg, which REJECTS dot/empty segments outright (quote()
+    # never encodes ``.``, so encoding alone cannot neutralise ``..``)
+    # and percent-encodes the rest — hostile coordinates can't
+    # traverse the composed path.
     group_path = "/".join(
         _quote_seg(seg) for seg in group_id.split(".")
     )

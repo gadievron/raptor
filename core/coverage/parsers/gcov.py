@@ -18,6 +18,25 @@ from pathlib import Path
 _NEVER = ("-", "#####", "=====")
 _SOURCE_RE = re.compile(r"Source:(.*)")
 
+# Coverage artifacts scale with the instrumented tree — same budget
+# class as the sibling coverage_py parser (_MAX_REPORT_BYTES there).
+# These files arrive via the artifact-import path (another principal's
+# write grant), so the read is size-gated instead of unbounded.
+_MAX_REPORT_BYTES = 256 * 1024 * 1024
+
+
+def _read_report_text(path: Path) -> str | None:
+    """Bounded read for a coverage artifact; None when unreadable or
+    over the byte budget (skipped like any malformed input)."""
+    try:
+        with path.open("rb") as fh:
+            raw = fh.read(_MAX_REPORT_BYTES + 1)
+    except OSError:
+        return None
+    if len(raw) > _MAX_REPORT_BYTES:
+        return None
+    return raw.decode("utf-8", errors="replace")
+
 
 def parse_gcov(path) -> dict[str, set[int]]:
     """Parse a ``.gcov`` file, or a directory of them."""
@@ -30,12 +49,18 @@ def parse_gcov(path) -> dict[str, set[int]]:
 
 
 def _parse_one_gcov(gcov_file: Path, out: dict[str, set[int]]) -> None:
-    try:
-        text = gcov_file.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    text = _read_report_text(gcov_file)
+    if text is None:
         return
-    src = None
+    # Prefer the Source: header; fall back to the .gcov stem
+    # (Path.stem strips the .gcov suffix: foo.c.gcov -> foo.c).
+    src: str | None = None
     lines: set[int] = set()
+
+    def _flush() -> None:
+        if lines:
+            out.setdefault(src or gcov_file.stem, set()).update(lines)
+
     for raw in text.splitlines():
         parts = raw.split(":", 2)              # count : lineno : source
         if len(parts) < 2:
@@ -45,6 +70,15 @@ def _parse_one_gcov(gcov_file: Path, out: dict[str, set[int]]) -> None:
             if len(parts) > 2:
                 m = _SOURCE_RE.match(parts[2].strip())
                 if m:
+                    # A gcov file can carry MULTIPLE Source: sections
+                    # (headers included with -a/-l runs). Flush the
+                    # accumulated lines to the CURRENT source before
+                    # switching — without this every section's lines
+                    # were attributed to the LAST file (overstated
+                    # runtime coverage on it, first file's coverage
+                    # vanished).
+                    _flush()
+                    lines = set()
                     src = m.group(1).strip()
             continue
         try:
@@ -62,17 +96,13 @@ def _parse_one_gcov(gcov_file: Path, out: dict[str, set[int]]) -> None:
         except ValueError:
             pass                               # human-readable non-zero count
         lines.add(lineno)
-    if lines:
-        # Prefer the Source: header; fall back to the .gcov stem
-        # (Path.stem strips the .gcov suffix: foo.c.gcov -> foo.c).
-        out.setdefault(src or gcov_file.stem, set()).update(lines)
+    _flush()
 
 
 def parse_lcov(path) -> dict[str, set[int]]:
     """Parse an lcov ``.info`` file (``SF:`` / ``DA:`` records)."""
-    try:
-        text = Path(path).read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    text = _read_report_text(Path(path))
+    if text is None:
         return {}
     out: dict[str, set[int]] = {}
     cur = None

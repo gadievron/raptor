@@ -58,7 +58,10 @@ class _LifecycleHarness:
         self.child_args: list | None = None
         self.started_dirs: list[Path] = []
 
-        def _spy_run_script(script_path, args):
+        def _spy_run_script(script_path, args, **kwargs):
+            # **kwargs: tolerate keyword extensions to the real
+            # _run_script signature (e.g. out_dir) — the spy asserts on
+            # the child argv only.
             self.child_args = list(args)
             return 0
 

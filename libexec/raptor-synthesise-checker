@@ -35,7 +35,6 @@ from core.json import dumps_display  # noqa: E402
 
 def main() -> int:
     import argparse
-    import json
     import logging
 
     parser = argparse.ArgumentParser(
@@ -123,6 +122,24 @@ def main() -> int:
     from core.llm.client import LLMClient
     from core.llm.task_types import TaskType
     client = LLMClient()
+
+    # Self-serve the in-process LLM dispatcher for dispatcher-only
+    # providers (Bedrock) — same gate as raptor-compile-invariants /
+    # raptor-study-run / raptor-llm-ask. Without a route every LLM
+    # call fails, and llm_callable's broad except would silently turn
+    # that transport misconfiguration into "no rule passed positive
+    # control". No-op when a route exists or none is needed.
+    try:
+        from core.llm.dispatcher.lifecycle import (
+            ensure_route_for_model_configs,
+        )
+        configs = [getattr(client.config, "primary_model", None)]
+        configs += list(getattr(client.config, "fallback_models", []) or [])
+        ensure_route_for_model_configs(
+            configs, label="raptor-synthesise-checker",
+        )
+    except Exception:  # noqa: BLE001 — provider errors surface at call time
+        pass
 
     def llm_callable(prompt, schema, system_prompt):
         try:

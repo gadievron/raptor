@@ -279,3 +279,48 @@ requests = "^2.31"
     deps = parse(_write(tmp_path, body))
     assert deps
     assert all(d.declared_license is None for d in deps)
+
+
+# ---------------------------------------------------------------------------
+# Specifier classification shared with the requirements parser
+# ---------------------------------------------------------------------------
+
+def test_exact_pin_among_multiple_clauses(tmp_path: Path) -> None:
+    # ``foo>=1,==1.5,<2`` pins exactly 1.5 — the == operand must win
+    # over the range classification (same rule as requirements.txt).
+    body = '[project]\nname = "x"\ndependencies = ["foo>=1,==1.5,<2"]\n'
+    [d] = parse(_write(tmp_path, body))
+    assert d.pin_style is PinStyle.EXACT
+    assert d.version == "1.5"
+    assert (d.version_floor, d.version_ceiling) == ("1", "2")
+
+
+def test_exclusion_operand_not_recorded_as_version(tmp_path: Path) -> None:
+    # ``bar!=2.0`` excludes 2.0; recording it as the installed version
+    # flagged advisories for the one version guaranteed absent.
+    body = '[project]\nname = "x"\ndependencies = ["bar!=2.0", "baz==3.1"]\n'
+    deps = {d.name: d for d in parse(_write(tmp_path, body))}
+    assert deps["bar"].version is None
+    assert deps["bar"].pin_style is PinStyle.RANGE
+    # Other direction: == still records its operand.
+    assert deps["baz"].version == "3.1"
+    assert deps["baz"].pin_style is PinStyle.EXACT
+
+
+def test_string_dependencies_value_not_iterated_charwise(tmp_path: Path) -> None:
+    # ``dependencies = "requests==1.0"`` (scalar, not array) used to be
+    # iterated character-wise — single letters are valid PEP 508 names,
+    # so it emitted one phantom dep per character.
+    body = '[project]\nname = "x"\ndependencies = "requests==1.0"\n'
+    assert parse(_write(tmp_path, body)) == []
+
+
+def test_list_dependencies_still_parse(tmp_path: Path) -> None:
+    body = '[project]\nname = "x"\ndependencies = ["requests==1.0"]\n'
+    [d] = parse(_write(tmp_path, body))
+    assert (d.name, d.version) == ("requests", "1.0")
+
+
+def test_string_build_requires_not_iterated_charwise(tmp_path: Path) -> None:
+    body = '[build-system]\nrequires = "setuptools"\n'
+    assert parse(_write(tmp_path, body)) == []

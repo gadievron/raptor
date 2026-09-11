@@ -204,7 +204,7 @@ class TestBedrockRouteOverrides:
             primary_model=None,
             fallback_models=[
                 ModelConfig(provider="bedrock",
-                            model_name="anthropic.claude-mythos-5",
+                            model_name="anthropic.claude-fable-5",
                             api_key="K_BR"),
             ],
             specialized_models={},
@@ -212,8 +212,8 @@ class TestBedrockRouteOverrides:
 
     def test_route_prefixed_override_resolves_configured_entry(self):
         cfg = self._bedrock_cfg()
-        mc = cfg.config_for_model("bedrock/anthropic.claude-mythos-5")
-        assert mc.model_name == "anthropic.claude-mythos-5"
+        mc = cfg.config_for_model("bedrock/anthropic.claude-fable-5")
+        assert mc.model_name == "anthropic.claude-fable-5"
         assert mc.api_key == "K_BR"
 
     def test_unconfigured_bedrock_id_keeps_wire_form(self):
@@ -221,6 +221,54 @@ class TestBedrockRouteOverrides:
         # the vendor-dotted wire form, never the fully-bared name.
         cfg = LLMConfig(primary_model=None, fallback_models=[],
                         specialized_models={})
-        mc = cfg.config_for_model("bedrock/anthropic.claude-mythos-5")
+        mc = cfg.config_for_model("bedrock/anthropic.claude-fable-5")
         assert mc.provider == "bedrock"
-        assert mc.model_name == "anthropic.claude-mythos-5"
+        assert mc.model_name == "anthropic.claude-fable-5"
+
+
+class TestSynthesizedBorrowKeepsRouting:
+    """The synthesized (borrowed-credential) branch must carry the
+    lender's Bedrock routing fields, and a SigV4 Bedrock lender
+    (api_key=None by design) must still count as a lender."""
+
+    def test_sigv4_bedrock_entry_lends_routing_fields(self, monkeypatch):
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        monkeypatch.setenv("RAPTOR_BEDROCK_PROFILE", "team-signing")
+        cfg = LLMConfig(
+            primary_model=None,
+            fallback_models=[
+                ModelConfig(provider="bedrock",
+                            model_name="anthropic.claude-opus-4-6",
+                            api_key=None,  # SigV4: dispatcher signs
+                            bedrock_api="runtime",
+                            aws_profile="team-signing",
+                            aws_region="eu-west-1"),
+            ],
+            specialized_models={},
+        )
+        got = cfg.config_for_model("anthropic.claude-sonnet-4-6")
+        assert got.provider == "bedrock"
+        assert got.model_name == "anthropic.claude-sonnet-4-6"
+        # Routing fields ride along — dropping them sent the override
+        # to the default surface with ambient region resolution.
+        assert got.bedrock_api == "runtime"
+        assert got.aws_profile == "team-signing"
+        assert got.aws_region == "eu-west-1"
+
+    def test_keyless_non_bedrock_entry_still_does_not_lend(self, monkeypatch):
+        # Two-direction guard: auth-unresolvable entries (keyless
+        # non-Bedrock) must keep NOT lending — the override falls to
+        # the bare-config path with defaults, not the lender's fields.
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        cfg = LLMConfig(
+            primary_model=None,
+            fallback_models=[
+                ModelConfig(provider="anthropic",
+                            model_name="claude-opus-4-6",
+                            api_key=None, max_tokens=12345),
+            ],
+            specialized_models={},
+        )
+        got = cfg.config_for_model("claude-sonnet-9-9")
+        assert got.api_key is None
+        assert got.max_tokens != 12345

@@ -41,7 +41,12 @@ def _proximity_desc(score: int) -> str:
 
 
 def _build_proximity_index(attack_paths: list[dict]) -> dict[str, int]:
-    """Return finding_id → best proximity score across all paths."""
+    """Return finding_id → best proximity score across all paths.
+
+    Keys are sanitized with the same ``_sid`` applied to tree node ids
+    — the join is by sanitized id on the node side, so raw keys would
+    never match a finding id containing a char outside [A-Za-z0-9_-].
+    """
     index: dict[str, int] = {}
     for path in attack_paths:
         fid = path.get("finding") or path.get("finding_id", "")
@@ -50,6 +55,8 @@ def _build_proximity_index(attack_paths: list[dict]) -> dict[str, int]:
             score = int(score)
         except (TypeError, ValueError):
             score = 0
+        if fid:
+            fid = _sid(str(fid))
         if fid and score > index.get(fid, -1):
             index[fid] = score
     return index
@@ -60,6 +67,8 @@ def _build_disproven_index(disproven_list: list[dict]) -> dict[str, str]:
     index: dict[str, str] = {}
     for entry in disproven_list:
         fid = entry.get("finding", "")
+        if fid:
+            fid = _sid(str(fid))  # match sanitized node ids (see above)
         reason = entry.get("why_wrong", entry.get("lesson", ""))
         if fid and fid not in index and reason:
             index[fid] = reason
@@ -71,6 +80,8 @@ def _build_hypothesis_index(hypotheses: list[dict]) -> dict[str, str]:
     index: dict[str, str] = {}
     for h in hypotheses:
         fid = h.get("finding") or h.get("finding_id", "")
+        if fid:
+            fid = _sid(str(fid))  # match sanitized node ids (see above)
         status = _sanitize(h.get("status", ""))
         claim = h.get("claim") or h.get("hypothesis", "")
         if fid and fid not in index:
@@ -126,7 +137,14 @@ def _find_subgraph_groups(
 
     def children_of(nid: str) -> list[str]:
         raw = node_map.get(nid, {}).get("leads_to", "") or ""
-        return [t.strip() for t in raw.split(",") if t.strip() and t.strip() in node_map]
+        # Sanitize each target before the membership test: node_map
+        # keys are already sanitized ids, so a raw comparison silently
+        # disabled grouping whenever an id contained a char outside
+        # [A-Za-z0-9_-] (the flat edge paths already sanitize).
+        return [
+            _sid(t.strip()) for t in raw.split(",")
+            if t.strip() and _sid(t.strip()) in node_map
+        ]
 
     def descendants(nid: str, _seen: set | None = None) -> list[str]:
         # Cycle protection. Pre-fix `descendants(child)` recursed
@@ -273,10 +291,41 @@ def generate(
             if node.get("id") not in all_subgraph_ids:
                 continue
             nid = node.get("id", "?")
+            if nid == root_id:
+                # Every root -> child edge was already drawn above;
+                # re-emitting here duplicated each of them. (The old
+                # guard tested the edge TARGET instead of the source,
+                # which both re-drew root's edges and dropped
+                # legitimate cycle edges INTO root.)
+                continue
             leads_to_raw = node.get("leads_to", "") or ""
             targets = [_sid(t.strip()) for t in leads_to_raw.split(",") if t.strip() and _sid(t.strip()) in node_map]
-            # root edge already drawn above
-            lines.extend(f"    {nid} --> {target}" for target in targets if target != root_id)
+            lines.extend(f"    {nid} --> {target}" for target in targets)
+
+        # Nodes not reachable from the root (disconnected components)
+        # still get declared — silently dropping them left the status
+        # class list referencing nodes with no declaration, and the
+        # operator never learned those nodes existed.
+        orphan_nodes = [
+            n for n in nodes if n.get("id") not in all_subgraph_ids
+        ]
+        if orphan_nodes:
+            lines.append("")
+            lines.append("    %% Nodes not reachable from the root")
+            for node in orphan_nodes:
+                nid = node.get("id", "?")
+                status = node.get("status", "unexplored")
+                label = _node_label(node, proximity_idx, disproven_idx)
+                open_ch, close_ch = _node_shape(status)
+                lines.append(f"    {nid}{open_ch}{label}{close_ch}")
+            for node in orphan_nodes:
+                nid = node.get("id", "?")
+                leads_to_raw = node.get("leads_to", "") or ""
+                targets = [
+                    _sid(t.strip()) for t in leads_to_raw.split(",")
+                    if t.strip() and _sid(t.strip()) in node_map
+                ]
+                lines.extend(f"    {nid} --> {target}" for target in targets)
 
     else:
         # Flat rendering, original approach
@@ -316,6 +365,20 @@ def generate(
 
     if root_id and root_id in node_map:
         lines.append(f"    style {root_id} stroke-width:3px")
+
+    # The proximity/disproven/hypothesis annotations join companion
+    # finding ids against tree NODE ids — nothing in the producer
+    # contract forces those to coincide. When enrichment data exists
+    # but no id matched any node, say so in the output instead of
+    # silently rendering an unannotated tree.
+    enrichment_keys = (
+        set(proximity_idx) | set(disproven_idx) | set(hyp_idx)
+    )
+    if enrichment_keys and not (enrichment_keys & set(node_map)):
+        lines.append(
+            "    %% note: companion finding ids matched no tree node id"
+            " — proximity/ruled-out annotations not shown"
+        )
 
     return "\n".join(lines)
 

@@ -94,6 +94,19 @@ def normalise_name_provenance(value: object) -> str:
     return ""
 
 
+def _rebase_item_address(item: Dict[str, Any], delta: int) -> Dict[str, Any]:
+    """Copy of *item* with its ``address`` shifted by *delta*.
+
+    Import/export/string/bookmark records are free-form dicts; only a
+    genuine integer address moves (missing/junk addresses pass through
+    untouched — bool is excluded because it is an int subtype).
+    """
+    addr = item.get("address")
+    if isinstance(addr, int) and not isinstance(addr, bool):
+        return {**item, "address": addr + delta}
+    return item
+
+
 @dataclass
 class REFunction:
     """A function identified by an RE tool."""
@@ -451,8 +464,19 @@ class REDatabase:
         # so an address-keyed union without normalisation matches
         # NOTHING and duplicates every function. Estimate the delta
         # from shared function names and rebase *other* first.
+        # EVERY address-carrying record must move by the same delta
+        # as the functions — an xref/comment/string/bookmark left in
+        # the secondary engine's address space dangles or lands
+        # inside an unrelated function of the merged database.
         delta = self._estimate_base_delta(other)
         other_functions = other.functions
+        other_xrefs = other.xrefs
+        other_comments = other.comments
+        other_segments = other.segments
+        other_imports = other.imports
+        other_exports = other.exports
+        other_strings = other.strings
+        other_bookmarks = other.bookmarks
         if delta:
             other_functions = [
                 REFunction(
@@ -470,6 +494,38 @@ class REDatabase:
                 )
                 for f in other.functions
             ]
+            other_xrefs = [
+                REXref(
+                    from_addr=x.from_addr + delta,
+                    to_addr=x.to_addr + delta,
+                    kind=x.kind,
+                    source_tool=x.source_tool,
+                )
+                for x in other.xrefs
+            ]
+            other_comments = [
+                REComment(
+                    address=c.address + delta,
+                    function=c.function,
+                    kind=c.kind,
+                    text=c.text,
+                    source_tool=c.source_tool,
+                )
+                for c in other.comments
+            ]
+            other_segments = [
+                RESegment(
+                    name=s.name,
+                    start=s.start + delta,
+                    end=s.end + delta,
+                    permissions=s.permissions,
+                )
+                for s in other.segments
+            ]
+            other_imports = [_rebase_item_address(i, delta) for i in other.imports]
+            other_exports = [_rebase_item_address(e, delta) for e in other.exports]
+            other_strings = [_rebase_item_address(s, delta) for s in other.strings]
+            other_bookmarks = [_rebase_item_address(b, delta) for b in other.bookmarks]
 
         # Functions — union by address, self wins
         by_addr: Dict[int, REFunction] = {}
@@ -481,7 +537,7 @@ class REDatabase:
 
         # Xrefs — union, dedup
         seen_xrefs: set[tuple[int, int, str]] = set()
-        for xref in (*self.xrefs, *other.xrefs):
+        for xref in (*self.xrefs, *other_xrefs):
             key = (xref.from_addr, xref.to_addr, xref.kind)
             if key not in seen_xrefs:
                 seen_xrefs.add(key)
@@ -496,15 +552,18 @@ class REDatabase:
         result.types = list(by_name.values())
 
         # Comments — both kept
-        result.comments = [*self.comments, *other.comments]
+        result.comments = [*self.comments, *other_comments]
 
         # Segments — self wins
-        result.segments = list(self.segments) if self.segments else list(other.segments)
+        result.segments = list(self.segments) if self.segments else list(other_segments)
 
         # Imports/exports/strings — union by name+address
-        for attr in ("imports", "exports", "strings"):
+        for attr, other_items in (
+            ("imports", other_imports),
+            ("exports", other_exports),
+            ("strings", other_strings),
+        ):
             self_items = getattr(self, attr)
-            other_items = getattr(other, attr)
             seen: set = set()
             merged: List[Dict[str, Any]] = []
             for item in (*self_items, *other_items):
@@ -518,7 +577,7 @@ class REDatabase:
             setattr(result, attr, merged)
 
         # Bookmarks — union
-        result.bookmarks = [*self.bookmarks, *other.bookmarks]
+        result.bookmarks = [*self.bookmarks, *other_bookmarks]
 
         return result
 

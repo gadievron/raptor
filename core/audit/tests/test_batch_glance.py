@@ -329,3 +329,81 @@ class TestRefusalVocabularyIsNarrow:
         wrapper = RuntimeError("All cloud models failed (tried 1 model(s)).")
         wrapper.__cause__ = cause
         assert _classify_batch_error(wrapper) == "refusal"
+
+
+class TestSiblingDisambiguation:
+    """Same-file same-name siblings (static #if branches, overloads)
+    must not collapse onto one result: the schema's line_start echo
+    keys results back, and the bare-pair fallback fires only when the
+    pair is unique in the batch."""
+
+    @staticmethod
+    def _client(items: list[dict]) -> MagicMock:
+        client = MagicMock()
+        response = MagicMock()
+        response.text = json.dumps(items)
+        response.model = "test-model"
+        response.cost = 0.001
+        client.generate.return_value = response
+        return client
+
+    def _sibling_contexts(self) -> list[dict]:
+        a = _ctx("a.c", "handler")
+        a["line_start"], a["line_end"] = 10, 30
+        b = _ctx("a.c", "handler")
+        b["line_start"], b["line_end"] = 100, 130
+        return [a, b]
+
+    def test_siblings_get_distinct_verdicts_via_line_echo(self) -> None:
+        client = self._client([
+            {"file": "a.c", "function": "handler", "line_start": 10,
+             "status": "clean", "body": "first sibling"},
+            {"file": "a.c", "function": "handler", "line_start": 100,
+             "status": "suspicious", "body": "second sibling"},
+        ])
+        fn = make_batch_review_fn(client)
+        outcomes = fn(self._sibling_contexts(), MagicMock())
+        assert [o.status for o in outcomes] == ["clean", "suspicious"]
+        assert outcomes[0].body == "first sibling"
+        assert outcomes[1].body == "second sibling"
+
+    def test_siblings_without_echo_error_route(self) -> None:
+        # One un-echoed element for an AMBIGUOUS pair must not serve
+        # both contexts (that was the verdict-swap bug) — both fall
+        # back to individual review.
+        client = self._client([
+            {"file": "a.c", "function": "handler",
+             "status": "suspicious", "body": "which one?"},
+        ])
+        fn = make_batch_review_fn(client)
+        outcomes = fn(self._sibling_contexts(), MagicMock())
+        assert all(o.status == "error" for o in outcomes)
+
+    def test_unique_pair_matches_without_echo(self) -> None:
+        # Models that omit the echo keep working for unambiguous
+        # batches — the pre-existing behavior.
+        client = self._client([
+            {"file": "a.py", "function": "f1",
+             "status": "clean", "body": "ok"},
+        ])
+        fn = make_batch_review_fn(client)
+        outcomes = fn([_ctx("a.py", "f1")], MagicMock())
+        assert outcomes[0].status == "clean"
+
+    def test_prompt_asks_for_line_start_echo(self) -> None:
+        contexts = self._sibling_contexts()
+        user, system = format_batch_prompt(contexts)
+        assert "line_start" in system
+        # The listing distinguishes the siblings by line range.
+        assert "a.c:handler:10-30" in user
+        assert "a.c:handler:100-130" in user
+
+    def test_line_start_is_schema_legal(self) -> None:
+        # parse_batch_response's strict schema must not drop elements
+        # carrying the requested echo field.
+        raw = json.dumps([
+            {"file": "a.c", "function": "handler", "line_start": 10,
+             "status": "clean", "body": "ok"},
+        ])
+        results = parse_batch_response(raw, self._sibling_contexts())
+        assert len(results) == 1

@@ -53,6 +53,7 @@ import argparse
 import logging
 import subprocess
 import sys
+import threading
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -83,6 +84,7 @@ from .update import (
     _emit_git_patch,
     _materialise_changes,
     _PlanEntry,
+    supports_rewrite,
 )
 from .versions import compare as version_compare
 
@@ -446,7 +448,7 @@ def plan(
                      "(%s); promotion compat-check degrades to skip", exc)
         platform_matrix = None
 
-    out: list[HardenCandidate] = []
+    active_deps: list[Dependency] = []
     for dep in raw_deps:
         if dep.commented_out:
             # Commented-out lines (``# pkg==X`` in requirements.txt or
@@ -457,13 +459,42 @@ def plan(
             # Pinning a commented-out hint would rewrite a comment that
             # the operator deliberately left disabled.
             continue
-        out.append(_plan_one(dep, registries=registries, osv=osv,
-                             kev=kev, epss=epss,
-                             offline=offline, allow_major=allow_major,
-                             pin_only=pin_only, pin_debian=pin_debian,
-                             platform_matrix=platform_matrix,
-                             library_mode=library_mode))
-    return out
+        active_deps.append(dep)
+
+    # Per-run memo of the registry version fetch, keyed
+    # (ecosystem, name, suite): the same dep declared in several
+    # manifests would otherwise repeat the round-trip per declaration.
+    # The memo is checked and populated under the lock; the fetch
+    # itself runs outside it, so a concurrent same-key fetch can at
+    # worst duplicate one round-trip (the clients' own disk cache
+    # absorbs it) — never block unrelated fetches behind it.
+    fetch_memo: dict[tuple[str, str, str | None], list[str]] = {}
+    fetch_lock = threading.Lock()
+
+    def _plan_worker(dep: Dependency) -> HardenCandidate:
+        return _plan_one(dep, registries=registries, osv=osv,
+                         kev=kev, epss=epss,
+                         offline=offline, allow_major=allow_major,
+                         pin_only=pin_only, pin_debian=pin_debian,
+                         platform_matrix=platform_matrix,
+                         library_mode=library_mode,
+                         fetch_memo=fetch_memo, fetch_lock=fetch_lock)
+
+    # Per-dep planning is dominated by registry / OSV round-trips and
+    # each dep is independent, so thread the walk. The client objects
+    # (HttpClient + JsonCache-backed registries, OSV, KEV, EPSS) are
+    # the same ones ``supply_chain.registry_metadata.scan_deps``
+    # already shares across its 8-worker pool, and JsonCache locks
+    # internally. Below the worker count the executor's spin-up
+    # overhead exceeds the sequential cost (same threshold as
+    # registry_metadata). ``pool.map`` preserves dep order, so
+    # candidates.json stays deterministic.
+    if len(active_deps) <= 4:
+        return [_plan_worker(dep) for dep in active_deps]
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=8,
+                            thread_name_prefix="sca-harden-plan") as pool:
+        return list(pool.map(_plan_worker, active_deps))
 
 
 def _supports_library_floor_raise(dep: Dependency) -> bool:
@@ -535,6 +566,8 @@ def _plan_one(
     pin_debian: bool = False,
     platform_matrix=None,
     library_mode: bool = False,
+    fetch_memo: dict[tuple[str, str, str | None], list[str]] | None = None,
+    fetch_lock: threading.Lock | None = None,
 ) -> HardenCandidate:
     # The parser annotates a dep whose version is owned by a *central* file
     # (CPM Directory.Packages.props, pre-CPM Directory.Build.targets/props)
@@ -630,9 +663,19 @@ def _plan_one(
     # the governing base image's suite so the pin is installable there;
     # everything else lists all of the ecosystem's versions.
     def _fetch() -> list[str]:
+        key = (dep.ecosystem, dep.name, debian_suite)
+        if fetch_memo is not None and fetch_lock is not None:
+            with fetch_lock:
+                if key in fetch_memo:
+                    return list(fetch_memo[key])
         if debian_suite is not None:
-            return registry.versions_in_suite(dep.name, debian_suite)
-        return registry.list_versions(dep.name)
+            fetched = registry.versions_in_suite(dep.name, debian_suite)
+        else:
+            fetched = registry.list_versions(dep.name)
+        if fetch_memo is not None and fetch_lock is not None:
+            with fetch_lock:
+                fetch_memo[key] = list(fetched)
+        return fetched
 
     if offline:
         # Best-effort: try the cache via the registry client. If it
@@ -871,23 +914,14 @@ def _plan_one(
 def _has_rewriter(manifest: Path) -> bool:
     """True if ``update._rewrite_one`` knows how to patch this file.
 
-    Mirrors the dispatch table in ``update.py``. Update both together
-    when adding a new rewriter — and a drift here causes harden to
-    silently mark patchable manifests as ``unsupported_manifest``.
+    Delegates to update's own dispatch predicate — both this check and
+    the actual rewrite resolve through ``update._resolve_rewriter``, so
+    a new rewriter landing there is picked up here automatically (a
+    hand-mirrored copy of the dispatch table used to live here; any
+    drift made harden silently mark patchable manifests
+    ``unsupported_manifest``).
     """
-    name = manifest.name
-    if name in ("pom.xml", "package.json", "pyproject.toml",
-                "Directory.Packages.props", "Directory.Build.targets",
-                "libs.versions.toml"):
-        return True
-    if name.startswith("requirements") and name.endswith(".txt"):
-        return True
-    if manifest.suffix.lower() in (".csproj", ".fsproj", ".vbproj"):
-        return True
-    # Delegate to update's own predicate so the two dispatches stay
-    # in lockstep when new file-shapes land.
-    from .update import _is_inline_install_file
-    return bool(_is_inline_install_file(manifest))
+    return supports_rewrite(manifest)
 
 
 def _versions_above_installed(

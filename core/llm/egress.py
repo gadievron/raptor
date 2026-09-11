@@ -83,6 +83,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
@@ -153,6 +154,14 @@ _PROXY_VAR_NAMES = (
     "http_proxy", "https_proxy", "no_proxy", "all_proxy",
 )
 _original_proxy_env: dict[str, str] | None = None
+
+# Serialises the enable/disable state transitions. Without it, two
+# first-callers racing enable_llm_egress can both pass the
+# ``_original_proxy_env is None`` check-then-act, and the loser
+# snapshots the ALREADY-REWRITTEN loopback pointer as the "operator"
+# proxy env — poisoning every trusted-subprocess env later derived
+# from operator_proxy_env().
+_STATE_LOCK = threading.Lock()
 
 
 def operator_proxy_env() -> dict[str, str]:
@@ -302,8 +311,21 @@ def _hostname_of(url: str) -> str:
 
 
 def _is_loopback(host: str) -> bool:
-    h = host.lower()
-    return h in _LOCAL_BYPASS or h.startswith("127.")
+    from ipaddress import ip_address
+    h = host.lower().strip().strip("[]")
+    if h in _LOCAL_BYPASS:
+        return True
+    # Only IP LITERALS earn the loopback classification. The previous
+    # substring test (``startswith("127.")``) also matched HOSTNAMES
+    # like ``127.attacker.example``, which were then fetched DIRECT —
+    # past the operator proxy and the chokepoint allowlist. Parse
+    # first (same shape as detection.py's ``_host_is_local``); names
+    # that merely look loopback-ish take the normal proxy path, and
+    # ``is_loopback`` covers all of 127.0.0.0/8 plus IPv6 ``::1``.
+    try:
+        return ip_address(h).is_loopback
+    except ValueError:
+        return False
 
 
 def url_is_loopback(url: str) -> bool:
@@ -397,7 +419,17 @@ def enable_llm_egress(config: LLMConfig) -> None:
     No-op when ``config`` resolves to an empty allowlist (e.g. no
     models configured) — saves the proxy bring-up cost and avoids
     surprising env mutation in CC-only or autodetect-empty modes.
+
+    Thread-safe: the enable transition is serialised by a module lock
+    so concurrent first-callers cannot snapshot each other's loopback
+    rewrite as the operator proxy env.
     """
+    with _STATE_LOCK:
+        _enable_llm_egress_locked(config)
+
+
+def _enable_llm_egress_locked(config: LLMConfig) -> None:
+    """Body of :func:`enable_llm_egress`; caller holds ``_STATE_LOCK``."""
     global _enabled, _original_proxy_env
 
     allowlist = derive_allowlist(config)
@@ -512,8 +544,9 @@ def _reset_for_tests() -> None:
     Does NOT clear env vars or the singleton proxy — those are
     process-wide concerns the test fixture handles separately."""
     global _enabled, _original_proxy_env
-    _enabled = False
-    _original_proxy_env = None
+    with _STATE_LOCK:
+        _enabled = False
+        _original_proxy_env = None
 
 
 __all__ = [

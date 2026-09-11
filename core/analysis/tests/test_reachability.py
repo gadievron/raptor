@@ -1128,3 +1128,206 @@ def test_php_plain_class_not_entry():
     assert not _php_framework_entry("lonely", _java_item("lonely", class_attrs=["SomeBase"]))
     assert not _php_framework_entry("lonely", _java_item("lonely"))
     assert _php_framework_entry("x", {"name": "x", "kind": "function"}) is False
+
+
+# ---------------------------------------------------------------------------
+# Imports fast-path — bound module as dotted ANCESTOR of the target
+# module (``import numpy as np; np.linalg.solve(...)``). The old
+# fast-path only accepted bound == target_module / bound deeper, so it
+# skipped exactly the files the slow path (_resolves_to) would have
+# matched.
+# ---------------------------------------------------------------------------
+
+
+def test_ancestor_bound_aliased_package_chain_resolves():
+    inv = _inv(("src/a.py", "import numpy as np\nnp.linalg.solve(m)\n"))
+    r = function_called(inv, "numpy.linalg.solve")
+    assert r.verdict == Verdict.CALLED
+    assert r.evidence == (("src/a.py", 2),)
+
+
+def test_ancestor_bound_plain_import_chain_resolves():
+    inv = _inv(("src/a.py", "import numpy\nnumpy.linalg.solve(m)\n"))
+    assert function_called(
+        inv, "numpy.linalg.solve").verdict == Verdict.CALLED
+
+
+def test_ancestor_bound_different_submodule_stays_not_called():
+    inv = _inv(("src/a.py", "import numpy as np\nnp.random.seed(1)\n"))
+    assert function_called(
+        inv, "numpy.linalg.solve").verdict == Verdict.NOT_CALLED
+
+
+# ---------------------------------------------------------------------------
+# Wildcard import whose source module the extractor dropped — the tell
+# is a BARE call to the target's name that neither a recorded import
+# nor a local definition binds.
+# ---------------------------------------------------------------------------
+
+
+def test_wildcard_only_import_with_bare_unbound_call_masks():
+    """``from mymod import *; helper()`` — the file's ONLY import is
+    the wildcard, so `_wildcard_could_provide` has no same-root
+    witness. This must read UNCERTAIN (with reasons), never
+    NOT_CALLED with empty uncertain_reasons."""
+    inv = _inv(("src/a.py", "from mymod import *\nhelper()\n"))
+    r = function_called(inv, "mymod.helper")
+    assert r.verdict == Verdict.UNCERTAIN
+    assert r.uncertain_reasons
+
+
+def test_wildcard_with_local_def_binding_stays_not_called():
+    """A module-level def after the wildcard shadows the wildcard
+    binding — the bare call resolves locally; no masking."""
+    inv = _inv((
+        "src/a.py",
+        "from mymod import *\ndef helper():\n    pass\nhelper()\n",
+    ))
+    inv["files"][0]["items"] = [
+        {"name": "helper", "kind": "function", "line_start": 2},
+    ]
+    r = function_called(inv, "mymod.helper")
+    assert r.verdict == Verdict.NOT_CALLED
+
+
+def test_wildcard_without_tail_mention_stays_not_called():
+    inv = _inv(("src/a.py", "from mymod import *\nx = 1\n"))
+    r = function_called(inv, "mymod.helper")
+    assert r.verdict == Verdict.NOT_CALLED
+
+
+# ---------------------------------------------------------------------------
+# __init__.py module convention — _file_path_to_module now matches
+# core.paths.path_to_module (keeps ``__init__``), with a stripped-form
+# alias for callers holding the collapsed convention.
+# ---------------------------------------------------------------------------
+
+
+def test_init_py_same_file_call_matches_path_to_module_form():
+    """Every function_called caller derives the queried module via
+    core.paths.path_to_module → ``pkg.__init__.helper``. The old
+    collapsed form never matched, so every __init__.py function read
+    not_called."""
+    inv = _inv((
+        "pkg/__init__.py",
+        "def helper():\n    return 1\ndef entry():\n    helper()\n",
+    ))
+    r = function_called(inv, "pkg.__init__.helper")
+    assert r.verdict == Verdict.CALLED
+
+
+def test_init_py_same_file_call_matches_stripped_alias():
+    inv = _inv((
+        "pkg/__init__.py",
+        "def helper():\n    return 1\ndef entry():\n    helper()\n",
+    ))
+    r = function_called(inv, "pkg.helper")
+    assert r.verdict == Verdict.CALLED
+
+
+# ---------------------------------------------------------------------------
+# C function-pointer dispatch masks dead-island claims
+# ---------------------------------------------------------------------------
+
+
+def test_c_fn_pointer_dispatch_masks_dead_island_claim():
+    """``(*fp)(...)`` records the pointer VARIABLE's name in the
+    chain — the dispatched target is genuinely unknown, so a static
+    with no resolved caller must read uncertain, not a confident
+    no_path_from_entry."""
+    inv = _entry_inv(
+        "app.c", "c",
+        [_fn("main", 1), _fn("cb_target", 20, "static")],
+        [{"caller": "main", "chain": ["fp"], "line": 3}],
+        indirection=["fn_pointer"],
+    )
+    assert _er(inv, "app.c", "cb_target", 20) == "uncertain"
+
+
+def test_c_static_orphan_without_fn_pointer_still_dead():
+    inv = _entry_inv(
+        "app.c", "c",
+        [_fn("main", 1), _fn("orphan", 20, "static")],
+        [],
+    )
+    assert _er(inv, "app.c", "orphan", 20) == "no_path_from_entry"
+
+
+# ---------------------------------------------------------------------------
+# is_lexically_dead — span containment + namesake safety
+# ---------------------------------------------------------------------------
+
+
+def test_is_lexically_dead_fires_on_interior_line():
+    """Production callers (semgrep/codeql/the agent chokepoint) pass
+    the line OF THE FINDING — inside the function. Exact line_start
+    equality meant the witness never fired through those callers."""
+    from core.analysis.reachability import is_lexically_dead
+    inv = {"files": [{"path": "src/m.py", "items": [
+        {"name": "dead", "kind": "function", "line_start": 10,
+         "line_end": 20, "lexical_dead": True},
+    ]}]}
+    assert is_lexically_dead(inv, "src/m.py", "dead", 15) is True
+    assert is_lexically_dead(inv, "src/m.py", "dead", 10) is True
+    assert is_lexically_dead(inv, "src/m.py", "dead", 0) is True
+
+
+def test_is_lexically_dead_line0_with_live_namesake_refuses():
+    """With no line to disambiguate, a dead namesake must never
+    hard-suppress a live function sharing its name (P0-C-3 rule)."""
+    from core.analysis.reachability import is_lexically_dead
+    inv = {"files": [{"path": "src/m.py", "items": [
+        {"name": "dup", "kind": "function", "line_start": 1,
+         "line_end": 5, "lexical_dead": True},
+        {"name": "dup", "kind": "function", "line_start": 10,
+         "line_end": 20},
+    ]}]}
+    assert is_lexically_dead(inv, "src/m.py", "dup", 0) is False
+    # Span disambiguation still resolves each namesake correctly.
+    assert is_lexically_dead(inv, "src/m.py", "dup", 3) is True
+    assert is_lexically_dead(inv, "src/m.py", "dup", 15) is False
+
+
+def test_is_lexically_dead_line_preceding_all_requires_all_dead():
+    """When the query line precedes every same-name candidate, the
+    line cannot disambiguate — EVERY namesake must be dead, exactly
+    like line=0. A first-candidate tie-break would let a dead
+    namesake hard-suppress a live function whenever the finding line
+    sits above the first definition."""
+    from core.analysis.reachability import is_lexically_dead
+    mixed = {"files": [{"path": "src/m.py", "items": [
+        {"name": "dup", "kind": "function", "line_start": 10,
+         "line_end": 20, "lexical_dead": True},
+        {"name": "dup", "kind": "function", "line_start": 50,
+         "line_end": 60},
+    ]}]}
+    # Line 3 precedes both namesakes; the live one must veto.
+    assert is_lexically_dead(mixed, "src/m.py", "dup", 3) is False
+    all_dead = {"files": [{"path": "src/m.py", "items": [
+        {"name": "dup", "kind": "function", "line_start": 10,
+         "line_end": 20, "lexical_dead": True},
+        {"name": "dup", "kind": "function", "line_start": 50,
+         "line_end": 60, "lexical_dead": True},
+    ]}]}
+    assert is_lexically_dead(all_dead, "src/m.py", "dup", 3) is True
+
+
+def test_is_lexically_dead_line0_all_namesakes_dead_fires():
+    from core.analysis.reachability import is_lexically_dead
+    inv = {"files": [{"path": "src/m.py", "items": [
+        {"name": "dup", "kind": "function", "line_start": 1,
+         "line_end": 5, "lexical_dead": True},
+        {"name": "dup", "kind": "function", "line_start": 10,
+         "line_end": 20, "lexical_dead": True},
+    ]}]}
+    assert is_lexically_dead(inv, "src/m.py", "dup", 0) is True
+
+
+def test_is_lexically_dead_unknown_stays_false():
+    from core.analysis.reachability import is_lexically_dead
+    inv = {"files": [{"path": "src/m.py", "items": [
+        {"name": "f", "kind": "function", "line_start": 1},
+    ]}]}
+    assert is_lexically_dead(inv, "src/m.py", "f", 1) is False
+    assert is_lexically_dead(inv, "src/m.py", "missing", 1) is False
+    assert is_lexically_dead(inv, "src/other.py", "f", 1) is False

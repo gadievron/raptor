@@ -777,3 +777,77 @@ class TestRepoHashDirtyTree:
         (repo / "a.py").write_text("x = 2\n")  # same size, new content
         h2 = db_manager.compute_repo_hash(repo)
         assert h1 != h2
+
+
+class TestKeptFallbackDbGC:
+    """Promote-failure fallback DBs must survive the 1h staging GC.
+
+    Pre-fix the fallback handed the caller a `.staging-*` path, and a
+    sibling run's cache-miss GC could rmtree the in-use DB mid-analysis
+    (analyses routinely run past the 1h TTL)."""
+
+    def test_detach_renames_out_of_staging_namespace(
+        self, db_manager, tmp_path,
+    ):
+        staging = tmp_path / ".staging-cpp-1234-abcd"
+        staging.mkdir()
+        (staging / "codeql-database.yml").write_text("x")
+
+        kept = db_manager._detach_staging_from_gc(staging, "cpp")
+
+        assert kept != staging
+        assert kept.name.startswith(".kept-cpp-")
+        assert kept.is_dir()
+        assert not staging.exists()
+        assert (kept / "codeql-database.yml").exists()
+
+    def test_gc_spares_kept_dir_past_staging_ttl(self, db_manager, tmp_path):
+        repo_dir = tmp_path / "cache" / "abc"
+        repo_dir.mkdir(parents=True)
+        kept = repo_dir / ".kept-cpp-1234-abcd"
+        kept.mkdir()
+        # 2 hours old: past the 1h staging TTL but within the 24h kept TTL.
+        old_mtime = time.time() - 7200
+        os.utime(kept, (old_mtime, old_mtime))
+
+        db_manager._gc_stale_markers(repo_dir)
+
+        assert kept.exists()
+
+    def test_gc_reaps_kept_dir_past_24h(self, db_manager, tmp_path):
+        # Two-direction: abandoned fallbacks must not accumulate forever.
+        repo_dir = tmp_path / "cache" / "abc"
+        repo_dir.mkdir(parents=True)
+        kept = repo_dir / ".kept-cpp-1234-abcd"
+        kept.mkdir()
+        old_mtime = time.time() - 25 * 3600
+        os.utime(kept, (old_mtime, old_mtime))
+
+        db_manager._gc_stale_markers(repo_dir)
+
+        assert not kept.exists()
+
+
+class TestValidateDatabaseSizeFloor:
+    """Size-floor trade-off (see validate_database): small-but-complete
+    DBs must validate; empty/byte-sized aborted builds must not."""
+
+    def _make_db(self, tmp_path, payload_bytes: int):
+        db = tmp_path / "cpp-db"
+        (db / "db-cpp").mkdir(parents=True)
+        (db / "codeql-database.yml").write_text("primaryLanguage: cpp\n")
+        (db / "db-cpp" / "data.trie").write_bytes(b"x" * payload_bytes)
+        return db
+
+    def test_small_but_complete_db_validates(self, db_manager, tmp_path):
+        # ~20KB: a legitimately tiny one-file target DB. The previous
+        # 100KB floor made this a permanent cache miss and drove
+        # evict/rebuild churn in the lost-race branch.
+        db = self._make_db(tmp_path, 20 * 1024)
+        assert db_manager.validate_database(db) is True
+
+    def test_aborted_build_still_rejected(self, db_manager, tmp_path):
+        # Two-direction: yml + near-empty db-* dir is the aborted-build
+        # signature and must keep failing validation.
+        db = self._make_db(tmp_path, 512)
+        assert db_manager.validate_database(db) is False

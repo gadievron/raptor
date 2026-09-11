@@ -537,3 +537,67 @@ class TestReadingListLanguageGate:
             # omit rule retained for languages without a resolver
             assert "For other languages, omit reading_list" in prompt
             assert "at least one external contract" in prompt
+
+
+class _CannedResponseClient:
+    """Stub LLM client returning one canned response object."""
+
+    def __init__(self, response):
+        self._response = response
+
+    def generate(self, prompt, **kwargs):
+        return self._response
+
+
+class TestRuleRefinementResponsePayload:
+    """call_llm_for_rule_refinement must read the production client's
+    ``.content`` payload — the old ``hasattr(response, "text")`` check
+    never matched LLMResponse, so the refinement leg returned the
+    dataclass repr, which never parses as rule YAML."""
+
+    def _refine(self, response):
+        from types import SimpleNamespace
+
+        from core.audit.llm_review import call_llm_for_rule_refinement
+
+        return call_llm_for_rule_refinement(
+            "refine", SimpleNamespace(),
+            client=_CannedResponseClient(response),
+        )
+
+    def test_content_attribute_wins(self) -> None:
+        class _R:
+            content = "rules: []"
+
+            def __repr__(self) -> str:
+                return "LLMResponse(content='rules: []')"
+
+        assert self._refine(_R()) == "rules: []"
+
+    def test_legacy_text_attribute_still_read(self) -> None:
+        class _R:
+            text = "rules: []"
+
+        assert self._refine(_R()) == "rules: []"
+
+    def test_plain_string_passthrough(self) -> None:
+        assert self._refine("rules: []") == "rules: []"
+
+    def test_non_string_content_falls_through_to_text(self) -> None:
+        class _R:
+            content = None
+            text = "rules: []"
+
+        assert self._refine(_R()) == "rules: []"
+
+
+class TestDeadLlmOnlyEvidenceRemoved:
+    def test_module_local_duplicate_gone(self) -> None:
+        # The live vocabulary is core.audit.evidence_grade._LLM_ONLY_EVIDENCE
+        # (delegated to via _normalize_evidence_tool); the module-local
+        # copy here was dead and could silently drift from the real one.
+        import core.audit.llm_review as llm_review
+
+        assert not hasattr(llm_review, "_LLM_ONLY_EVIDENCE")
+        from core.audit.evidence_grade import _LLM_ONLY_EVIDENCE
+        assert "manual" in _LLM_ONLY_EVIDENCE

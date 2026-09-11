@@ -935,3 +935,130 @@ def test_reference_urls_scheme_allowlist() -> None:
     )
     assert "<data:text/html" not in md
     assert "<https://nvd.nist.gov/vuln/detail/CVE-2099-9999>" in md
+
+
+# ---------------------------------------------------------------------------
+# License section escaping + severity label
+# ---------------------------------------------------------------------------
+
+def _license_finding(spdx: str, name: str = "leftpad",
+                     severity: str = "high") -> object:
+    from packages.sca.models import LicenseFinding
+    return LicenseFinding(
+        finding_id=f"sca:license:denied:npm:{name}",
+        kind="license_denied",         # type: ignore[arg-type]
+        dependency=_dep(name=name),
+        spdx=spdx,
+        detail="denied by policy",
+        severity=severity,             # type: ignore[arg-type]
+        confidence=Confidence("high", reason="registry metadata"),
+    )
+
+
+def test_license_section_defangs_hostile_spdx() -> None:
+    """Registry-sourced SPDX strings are untrusted: backticks must
+    not escape the code span, control bytes must not reach the
+    terminal, autofetch markup must not render."""
+    hostile = "MIT`\x1b[31m![](https://evil.example/x)`"
+    md = render_markdown_report(
+        target=Path("/repo"), deps_analysed=1,
+        vuln_findings=[], hygiene_findings=[],
+        license_findings=[_license_finding(hostile)],
+    )
+    assert "\x1b" not in md
+    assert "![](" not in md
+    # Backticks in the value are neutralised, so the code span the
+    # renderer opens is the only one on the line.
+    license_line = next(
+        line for line in md.splitlines() if line.startswith("- License:")
+    )
+    assert license_line.count("`") == 2
+
+
+def test_license_section_normal_spdx_unchanged() -> None:
+    md = render_markdown_report(
+        target=Path("/repo"), deps_analysed=1,
+        vuln_findings=[], hygiene_findings=[],
+        license_findings=[_license_finding("GPL-3.0-only")],
+    )
+    assert "- License: `GPL-3.0-only`" in md
+
+
+def test_license_section_escapes_dep_name_in_heading() -> None:
+    md = render_markdown_report(
+        target=Path("/repo"), deps_analysed=1,
+        vuln_findings=[], hygiene_findings=[],
+        license_findings=[_license_finding("MIT", name="left\x1bpad")],
+    )
+    assert "\x1b" not in md
+    assert "left\\x1bpad" in md
+
+
+def test_license_section_severity_title_case() -> None:
+    """License severities use the shared display labels like every
+    other section — raw lowercase enum values stay in findings.json."""
+    md = render_markdown_report(
+        target=Path("/repo"), deps_analysed=1,
+        vuln_findings=[], hygiene_findings=[],
+        license_findings=[_license_finding("MIT", severity="high")],
+    )
+    assert "- Severity: **High**" in md
+    assert "- Severity: **high**" not in md
+
+
+# ---------------------------------------------------------------------------
+# Summary severity table includes "none"
+# ---------------------------------------------------------------------------
+
+def _none_severity_finding():
+    d = _dep()
+    adv = _adv(severity="none", score=0.0)
+    findings = build_vuln_findings(
+        [d], [OsvResult(dep_key=d.key(), advisories=[adv])],
+    )
+    assert findings[0].severity == "none"
+    return findings
+
+
+def test_summary_table_includes_none_severity_row() -> None:
+    """``none`` (CVSS 0.0) findings are counted by the summary — the
+    table must show them; an all-none input used to render a
+    header-only table."""
+    md = render_markdown_report(
+        target=Path("/repo"), deps_analysed=1,
+        vuln_findings=_none_severity_finding(),
+        hygiene_findings=[],
+    )
+    assert "| None (CVSS 0.0) | 1 |" in md
+    # The all-none input does NOT fall into the empty-table branch.
+    assert "| (none) | 0 |" not in md
+
+
+def test_summary_table_empty_input_keeps_placeholder_row() -> None:
+    """No findings at all still renders the explicit zero row."""
+    md = render_markdown_report(
+        target=Path("/repo"), deps_analysed=1,
+        vuln_findings=[], hygiene_findings=[],
+    )
+    assert "| (none) | 0 |" in md
+
+
+# ---------------------------------------------------------------------------
+# Per-finding reachability bullet uses display labels
+# ---------------------------------------------------------------------------
+
+def test_reachability_bullet_uses_display_label() -> None:
+    d = _dep()
+    findings = build_vuln_findings(
+        [d], [OsvResult(dep_key=d.key(), advisories=[_adv()])],
+        reachability={d.key(): Reachability(
+            verdict="not_function_reachable",
+            confidence=Confidence("high", reason="call graph"),
+        )},
+    )
+    md = render_markdown_report(
+        target=Path("/repo"), deps_analysed=1,
+        vuln_findings=findings, hygiene_findings=[],
+    )
+    assert "- Reachability: Not function reachable (" in md
+    assert "- Reachability: not_function_reachable" not in md

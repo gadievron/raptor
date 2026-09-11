@@ -210,9 +210,36 @@ class OobListener:
     @property
     def callback_base(self) -> str:
         host = self._callback_host or self._bind_host
-        if ":" not in host:
-            host = f"{host}:{self.port}"
-        return f"http://{host}"
+        if host in ("0.0.0.0", "::") and self._callback_host is None:  # noqa: S104
+            # Wildcard bind with no operator-asserted callback host:
+            # minted canaries would tell the target to fetch from ITS
+            # OWN loopback/interface, so the listener could never see a
+            # genuine callback. Mint them anyway (local targets still
+            # work) but say so loudly.
+            logger.warning(
+                "OOB callback host defaults to the bind interface %s — "
+                "remote targets cannot reach it; pass an externally "
+                "reachable callback host",
+                host,
+            )
+        return f"http://{self._format_host_port(host, self.port)}"
+
+    @staticmethod
+    def _format_host_port(host: str, port: int) -> str:
+        """HOST[:PORT] with correct IPv6 bracketing.
+
+        A bare ':' test misreads every IPv6 literal as host:port and
+        emits an unparseable URL ('http://::1') as the canary base.
+        """
+        if host.startswith("["):
+            # Already bracketed; append the port unless one is present.
+            return host if host.rsplit("]", 1)[-1].startswith(":") else f"{host}:{port}"
+        if ":" in host:
+            head, _, tail = host.rpartition(":")
+            if head and tail.isdigit() and ":" not in head:
+                return host  # plain host:port
+            return f"[{host}]:{port}"  # unbracketed IPv6 literal
+        return f"{host}:{port}"
 
     # -- mint / record / correlate -----------------------------------------
 

@@ -139,7 +139,13 @@ class TestComputeInjectionPriority:
         assert compute_injection_priority(Confidence.LOW) == 2
 
     def test_corroborated_upgrades(self):
-        assert compute_injection_priority(Confidence.LOW, is_corroborated=True) == 1
+        # Docstring contract: corroborated evidence is never shed —
+        # cross-tool agreement is the point of fusion. (The old branch
+        # order capped corroborated LOW at shed-last.)
+        assert compute_injection_priority(Confidence.LOW, is_corroborated=True) == 0
+
+    def test_uncorroborated_low_still_sheds_first(self):
+        assert compute_injection_priority(Confidence.LOW) == 2
 
     def test_high_stays_high_even_if_corroborated(self):
         assert compute_injection_priority(Confidence.HIGH, is_corroborated=True) == 0

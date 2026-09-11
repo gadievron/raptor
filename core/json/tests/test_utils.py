@@ -614,6 +614,30 @@ class TestLoadJsonMaxBytes(unittest.TestCase):
             p.write_text(json.dumps({"k": "v" * 100_000}))
             self.assertEqual(load_json(p)["k"], "v" * 100_000)
 
+    def test_file_grown_past_budget_after_fstat_refused(self):
+        # Grow-window: a file that grows between the fstat gate and
+        # the read must still be refused — the read is capped at
+        # max_bytes + 1 and re-checked, never buffered unbounded.
+        # Simulated by making fstat report a tiny (gate-passing) size
+        # while the file on disk is over budget.
+        import types
+        from unittest import mock
+
+        with TemporaryDirectory() as d:
+            p = Path(d) / "grow.json"
+            p.write_text(json.dumps({"k": "v" * 1000}))
+            real_fstat = os.fstat
+
+            def tiny_fstat(fd):
+                st = real_fstat(fd)
+                return types.SimpleNamespace(
+                    st_mode=st.st_mode, st_size=min(st.st_size, 10))
+
+            with mock.patch("core.json.utils.os.fstat", tiny_fstat):
+                self.assertIsNone(load_json(p, max_bytes=100))
+                with self.assertRaises(ValueError):
+                    load_json(p, strict=True, max_bytes=100)
+
     def test_missing_file_still_none(self):
         self.assertIsNone(
             load_json("/nonexistent/path.json", max_bytes=10))

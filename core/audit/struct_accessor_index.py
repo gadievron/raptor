@@ -156,10 +156,17 @@ def build_index_from_joern(
     groups by field name, and annotates with enclosing function
     and lock context.
     """
+    # Member accesses are OPERATOR calls in the CPG — their ``name``
+    # is "<operator>.fieldAccess" / "<operator>.indirectFieldAccess",
+    # never "base->field".  The old name-regex query matched the
+    # operator names themselves (they contain a dot), so every access
+    # collapsed onto the "fieldAccess" pseudo-field.  The field
+    # identifier is the access's SECOND argument.
     query = (
-        'cpg.call.where(_.name(".*->.*|.*\\\\..*"))'
+        'cpg.call.nameExact("<operator>.fieldAccess", '
+        '"<operator>.indirectFieldAccess")'
         '.map(c => (c.method.head.name, c.method.head.filename, '
-        'c.name, c.lineNumber.headOption.getOrElse(-1)))'
+        'c.argument(2).code, c.lineNumber.headOption.getOrElse(-1)))'
         '.l'
     )
 
@@ -181,10 +188,21 @@ def build_index_from_joern(
         if not isinstance(row, (list, tuple)) or len(row) < 4:
             continue
         func_name, file_path, access_name, line = row
-        parts = access_name.rsplit(".", 1) if "." in access_name else access_name.rsplit("->", 1)
-        if len(parts) < 2:
+        access_name = str(access_name).strip()
+        if access_name.startswith("<operator>"):
+            # Operator pseudo-name — a backend handing back call NAMES
+            # instead of field identifiers must be dropped, never
+            # collapsed onto a "fieldAccess" pseudo-field.
             continue
-        field_name = parts[-1]
+        # argument(2).code is normally the bare field identifier;
+        # tolerate full access expressions ("pkt->len", "s.len") from
+        # older transports by taking the last path segment.
+        if "->" in access_name:
+            field_name = access_name.rsplit("->", 1)[-1].strip()
+        elif "." in access_name:
+            field_name = access_name.rsplit(".", 1)[-1].strip()
+        else:
+            field_name = access_name
         if not field_name or len(field_name) < _MIN_FIELD_LEN:
             continue
         if field_name in _NOISE_FIELDS:

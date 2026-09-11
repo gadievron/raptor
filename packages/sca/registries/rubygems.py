@@ -10,11 +10,15 @@ Same shape as the other registry clients.
 from __future__ import annotations
 
 import logging
-import urllib.parse
 
 from core.json import MISSING, JsonCache
 
-from ._negative_cache import log_fetch_failure
+from ._negative_cache import log_fetch_failure, should_negative_cache
+from ._url import (
+    UnsafeUrlComponentError,
+    quote_segment,
+    registry_cache_key,
+)
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -25,14 +29,6 @@ logger = logging.getLogger(__name__)
 
 _CACHE_KEY_PREFIX = "rubygems-versions"
 _DEFAULT_TTL = 24 * 3600
-
-
-def _key_component(value: str) -> str:
-    """Percent-encode one cache-key component so the key identity is
-    injective — a raw name containing ``/`` or ``..`` could otherwise
-    alias another package's cache file after JsonCache path
-    sanitisation. Old raw-name entries re-fetch once."""
-    return urllib.parse.quote(value, safe="")
 
 
 class RubyGemsClient:
@@ -54,7 +50,13 @@ class RubyGemsClient:
         self._offline = offline
 
     def list_versions(self, name: str) -> list[str]:
-        cache_key = f"{_CACHE_KEY_PREFIX}:{_key_component(name)}"
+        try:
+            encoded = quote_segment(name)
+        except UnsafeUrlComponentError:
+            # Not a name RubyGems could ever serve — not-found path
+            # without touching the cache.
+            return []
+        cache_key = registry_cache_key(_CACHE_KEY_PREFIX, name)
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -65,10 +67,10 @@ class RubyGemsClient:
 
         try:
             data = self._http.get_json(
-                f"https://rubygems.org/api/v1/versions/{name}.json")
+                f"https://rubygems.org/api/v1/versions/{encoded}.json")
         except Exception as e:                # noqa: BLE001
             log_fetch_failure(logger, "sca.registries.rubygems", name, e)
-            if self._cache is not None:
+            if self._cache is not None and should_negative_cache(e):
                 self._cache.put(cache_key, [], ttl_seconds=self._ttl)
             return []
 
@@ -82,7 +84,11 @@ class RubyGemsClient:
 
         Used by ``_latest_stable_version`` in the transitive-drop
         detector (turns the gem name into a releases list)."""
-        cache_key = f"rubygems-meta:{_key_component(name)}"
+        try:
+            encoded = quote_segment(name)
+        except UnsafeUrlComponentError:
+            return None
+        cache_key = registry_cache_key("rubygems-meta", name)
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -91,14 +97,14 @@ class RubyGemsClient:
             return None
         try:
             data = self._http.get_json(
-                f"https://rubygems.org/api/v1/gems/{name}.json",
+                f"https://rubygems.org/api/v1/gems/{encoded}.json",
             )
         except Exception as e:                # noqa: BLE001
             logger.warning(
                 "sca.registries.rubygems: meta fetch failed for "
                 "%r: %s", name, e,
             )
-            if self._cache is not None:
+            if self._cache is not None and should_negative_cache(e):
                 self._cache.put(cache_key, None, ttl_seconds=self._ttl)
             return None
         # Adapt to a ``releases`` shape so _latest_stable_version
@@ -127,8 +133,12 @@ class RubyGemsClient:
         # every platform-pinned gem 404s. Caching on the canonical version
         # also dedups the java/x64/x86 variants onto one fetch.
         canonical = version.split("-", 1)[0]
-        cache_key = (f"rubygems-vmeta:{_key_component(name)}:"
-                     f"{_key_component(canonical)}")
+        try:
+            encoded = quote_segment(name)
+            enc_version = quote_segment(canonical)
+        except UnsafeUrlComponentError:
+            return None
+        cache_key = registry_cache_key("rubygems-vmeta", name, canonical)
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -137,8 +147,8 @@ class RubyGemsClient:
             return None
         try:
             data = self._http.get_json(
-                f"https://rubygems.org/api/v2/rubygems/{name}/"
-                f"versions/{canonical}.json",
+                f"https://rubygems.org/api/v2/rubygems/{encoded}/"
+                f"versions/{enc_version}.json",
             )
         except Exception as e:                # noqa: BLE001
             # A 404 here is expected and non-fatal: yanked versions (e.g.
@@ -150,7 +160,7 @@ class RubyGemsClient:
                 "sca.registries.rubygems: version-meta fetch failed "
                 "for %r==%r: %s", name, version, e,
             )
-            if self._cache is not None:
+            if self._cache is not None and should_negative_cache(e):
                 self._cache.put(cache_key, None, ttl_seconds=self._ttl)
             return None
         if self._cache is not None:

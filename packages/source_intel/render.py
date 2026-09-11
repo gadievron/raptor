@@ -200,11 +200,16 @@ def derive_evidence_strings(
         return _truncate(lines, max_lines)
 
     # Filter attributes to the finding's function when supplied.
+    # Unknown-attribution observations (function_name stays "" for
+    # non-adjacent alias matches) are RETAINED, matching every other
+    # axis's unknown-function handling below — absence of attribution
+    # must not silently mean absence of evidence for one axis only.
     observations = list(result.attributes)
     if finding_function:
         observations = [
             ev for ev in observations
             if ev.function_name == finding_function
+            or not ev.function_name
         ]
     # Literal observations first, then known-alias.
     observations.sort(key=lambda ev: 0 if ev.match_source == "literal" else 1)
@@ -1060,11 +1065,23 @@ def _alloc_size_fortify_phrase(build_flags: BuildFlagsContext | None) -> str:
         )
     if level >= 2:
         return (
-            f"FORTIFY_SOURCE=_{level}_ — fortified intrinsics will "
+            f"_FORTIFY_SOURCE={level} — fortified intrinsics will "
             f"bounds-check operations against the returned buffer at "
             f"runtime; some overflows in the caller would be caught."
         )
     if level == 1:
+        # Kernel CONFIG_FORTIFY_SOURCE doesn't tier: kconfig
+        # extraction maps "enabled" to level=1 by convention, but it
+        # intercepts the same write-class calls as glibc level 2.
+        # Mirrors the verdict-side threshold in the adapter — the
+        # prose must not call the same build fact "limited" while
+        # the verdict policy treats it as full interception.
+        if build_flags.source == "kconfig":
+            return (
+                "CONFIG_FORTIFY_SOURCE enabled — the kernel fortify "
+                "layer doesn't tier; write-class intrinsics are "
+                "bounds-checked at runtime like glibc level 2."
+            )
         return (
             "FORTIFY_SOURCE=1 — limited runtime bounds-checking active; "
             "caller-side memcpy_chk catches overflows when the source "
@@ -1328,6 +1345,15 @@ def _access_fortify_phrase(build_flags: BuildFlagsContext | None) -> str:
             f"caught."
         )
     if level == 1:
+        # Same kconfig caveat as the alloc_size phrase: kernel
+        # fortify doesn't tier, level=1 means full write-class
+        # interception there.
+        if build_flags.source == "kconfig":
+            return (
+                "CONFIG_FORTIFY_SOURCE enabled — kernel fortify "
+                "doesn't tier; runtime bounds-checking active on the "
+                "annotated parameters like glibc level 2."
+            )
         return (
             "FORTIFY_SOURCE=1 — limited runtime bounds-checking active."
         )
@@ -1486,22 +1512,23 @@ def derive_mitigations_found(
     earns an entry; ABSENCE earns no entry (don't emit
     ``hardened: False`` because we may have missed signal).
 
-    Walks every evidence axis on ``result`` that could meaningfully
-    indicate hardening / verdict-suppression:
+    Walks the evidence axes carried on ``result`` itself:
 
       * axis_2 abort  — abort-class call in finding's function
-        (`abort_dominates` if grade=dominates, `abort_proximate`
-        for same_function/same_path)
-      * axis_4 priv   — privileged capable() in finding's function
-        (`priv_dominates`)
-      * axis_6 fortify — FORTIFY_SOURCE active + fortified call
-        (`fortify_intercepted`)
-      * axis_7 dead   — function dead per PR-4 + static
-        (`dead_code`)
-      * axis_8 valid  — downstream relational+early-exit guard
-        (`downstream_validation`)
+        (`abort_dominates` grade=dominates, `abort_on_path`
+        grade=same_path, `abort_proximate` grade=same_function)
+      * axis_4 priv   — global-credential ``capable()`` check on a
+        root-equivalent constant in the finding's function
+        (`privilege_gate`)
+      * axis_6 fortify — FORTIFY_SOURCE observed in build flags
+        (`fortify_source`)
       * axis_3 paired — alloc paired with free in function
         (`paired_free` — informational for leak findings)
+
+    Result-independent axes (dead-code, downstream validation) are
+    verdict-side checks in the adapter and are NOT re-derived here.
+    ``_finding_file`` / ``_finding_line`` are reserved for future
+    per-location filtering and currently unused.
 
     Each entry includes location when known so Stage D LLM can
     cross-reference the source.
@@ -1528,22 +1555,47 @@ def derive_mitigations_found(
             location=ab.location,
         ))
 
-    # axis_4 privilege — capable() in same function
+    # axis_4 privilege — capable() in same function. Same criteria
+    # as the tier-1 render prose and the adapter verdict policy: only
+    # a GLOBAL-credential check (`capable`) on a root-equivalent
+    # constant is a privilege gate. Namespace-scoped checks
+    # (ns_capable & friends) are reachable from an unprivileged
+    # process via `unshare -U`, and bounded caps (CAP_NET_ADMIN, …)
+    # are not root-equivalent — emitting either as `privilege_gate`
+    # would steer consumers toward discounting reachable bugs. The
+    # grade gate matters too: on same_path the check may guard a
+    # branch the sink isn't on.
     for cap in result.capabilities:
         if (finding_function and cap.enclosing_function
                 and cap.enclosing_function != finding_function):
             continue
+        if cap.cap_function not in _GLOBAL_CRED_CAP_FUNCTIONS:
+            continue
+        if cap.grade not in (GRADE_DOMINATES, GRADE_SAME_FUNCTION):
+            continue
+        priv_const = _privileged_cap_constant_on_line(
+            cap.location[0], cap.location[1],
+        )
+        if priv_const is None:
+            continue
         mitigations.append(Mitigation(
             name="privilege_gate",
             axis="axis_4", confidence="medium",
-            detail=f"{cap.cap_function} (grade={cap.grade})",
+            detail=f"{cap.cap_function}({priv_const}) (grade={cap.grade})",
             location=cap.location,
         ))
 
-    # axis_6 FORTIFY — surface only when level present
+    # axis_6 FORTIFY — surface only when level present. Kernel
+    # CONFIG_FORTIFY_SOURCE doesn't tier (kconfig level=1 intercepts
+    # like glibc level 2), so kconfig-sourced flags grade high at any
+    # enabled level — mirroring the adapter's verdict threshold.
     if result.build_flags and result.build_flags.fortify_source_level:
         level = result.build_flags.fortify_source_level
-        confidence = "high" if level >= 2 else "medium"
+        confidence = (
+            "high"
+            if level >= 2 or result.build_flags.source == "kconfig"
+            else "medium"
+        )
         mitigations.append(Mitigation(
             name="fortify_source",
             axis="axis_6", confidence=confidence,

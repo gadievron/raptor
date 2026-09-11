@@ -24,9 +24,12 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-# Add parent directory to path for imports
-# packages/static-analysis/scanner.py -> repo root
-sys.path.insert(0, str(Path(__file__).parents[2]))
+# Python path safety: the only permitted sys.path addition is the
+# launcher-pinned RAPTOR_DIR (hard lookup — a KeyError here means the
+# script was invoked outside the RAPTOR launcher / raptor.py /
+# conftest environment, and importing core.* from a __file__-derived
+# guess could silently pick up another checkout's modules).
+sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.json import dumps_display
 from core.config import RaptorConfig
@@ -184,10 +187,14 @@ def _drop_unreachable_registry_packs(
                 probe_port = parsed.port or (
                     443 if parsed.scheme == "https" else 80
                 )
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(3)
     try:
-        sock.connect((probe_host, probe_port))
+        # create_connection iterates every getaddrinfo family — an
+        # AF_INET-only socket misclassified IPv6-only hosts/proxies
+        # as airgapped and dropped every registry pack.
+        sock = socket.create_connection(
+            (probe_host, probe_port), timeout=3,
+        )
+        sock.close()
         return configs
     except (TimeoutError, OSError):
         dropped = [n for n, _ in needs_network]
@@ -209,8 +216,6 @@ def _drop_unreachable_registry_packs(
         )
         drop_set = {c for _, c in needs_network}
         return [(n, c) for n, c in configs if c not in drop_set]
-    finally:
-        sock.close()
 
 
 def _resolve_baseline_packs(
@@ -1161,6 +1166,43 @@ def run_single_semgrep(
         return str(sarif), False
 
 
+def _append_extra_configs(
+    configs: list[tuple[str, str]],
+    extra_configs: list[str] | None,
+) -> None:
+    """Append operator ``--extra-config`` entries to *configs* in place.
+
+    Single shared implementation for the parallel/sequential
+    dispatchers and the expanded stage, so the dedup discipline
+    cannot drift between copies:
+
+    Duplicate paths are dropped (main() pre-dedups by resolved value;
+    the defensive dedup here guards callers that don't go through
+    main()). Basename collisions across distinct paths get a
+    positional suffix so the per-pack SARIF filename
+    ``semgrep_extra_<name>.sarif`` is unique — without this, two
+    paths like ``/a/rules.yml`` + ``/b/rules.yml`` would both write
+    to ``semgrep_extra_rules.sarif`` and the silent-drop detector
+    would NOT fire (the file exists, just from the other pack's
+    worker).
+    """
+    seen_extra: set = set()
+    used_names: set = {n for n, _ in configs}
+    for extra in (extra_configs or []):
+        if extra in seen_extra:
+            logger.warning("--extra-config: duplicate path dropped: %s", extra)
+            continue
+        seen_extra.add(extra)
+        base = f"extra_{_sanitize_pack_name(Path(extra).name)}"
+        unique = base
+        i = 0
+        while unique in used_names:
+            i += 1
+            unique = f"{base}_{i}"
+        used_names.add(unique)
+        configs.append((unique, extra))
+
+
 def semgrep_scan_parallel(
     repo_path: Path,
     rules_dirs: list[str],
@@ -1247,29 +1289,9 @@ def semgrep_scan_parallel(
     # value becomes a peer pack (its own SARIF, merged into combined
     # results). Names are derived from the path so the operator can spot
     # which extra-config produced which finding. Paths are deduped by
-    # resolved value (the validation pass at the CLI already resolves
-    # paths, but a defensive dedup here guards against future callers
-    # that don't go through main()). Basename collisions across distinct
-    # paths get a positional suffix so the per-pack SARIF filename
-    # ``semgrep_extra_<name>.sarif`` is unique — without this, two paths
-    # like ``/a/rules.yml`` + ``/b/rules.yml`` would both write to
-    # ``semgrep_extra_rules.sarif`` and the silent-drop detector would
-    # NOT fire (the file exists, just from the other pack's worker).
-    _seen_extra: set = set()
-    _used_names: set = {n for n, _ in configs}
-    for _idx, extra in enumerate(extra_configs or []):
-        if extra in _seen_extra:
-            logger.warning("--extra-config: duplicate path dropped: %s", extra)
-            continue
-        _seen_extra.add(extra)
-        base = f"extra_{_sanitize_pack_name(Path(extra).name)}"
-        unique = base
-        _i = 0
-        while unique in _used_names:
-            _i += 1
-            unique = f"{base}_{_i}"
-        _used_names.add(unique)
-        configs.append((unique, extra))
+    # resolved value — see _append_extra_configs for the dedup +
+    # basename-collision-rename rationale.
+    _append_extra_configs(configs, extra_configs)
 
     configs = _drop_unreachable_registry_packs(configs)
 
@@ -1429,23 +1451,9 @@ def semgrep_scan_sequential(
             configs.append((pack_name, RaptorConfig.get_semgrep_config(pack_identifier)))
             added_packs.add(pack_identifier)
 
-    # Operator --extra-config — see parallel sibling for dedup +
-    # basename-collision-rename rationale.
-    _seen_extra: set = set()
-    _used_names: set = {n for n, _ in configs}
-    for extra in (extra_configs or []):
-        if extra in _seen_extra:
-            logger.warning("--extra-config: duplicate path dropped: %s", extra)
-            continue
-        _seen_extra.add(extra)
-        base = f"extra_{_sanitize_pack_name(Path(extra).name)}"
-        unique = base
-        _i = 0
-        while unique in _used_names:
-            _i += 1
-            unique = f"{base}_{_i}"
-        _used_names.add(unique)
-        configs.append((unique, extra))
+    # Operator --extra-config — shared dedup + basename-collision
+    # rename (see _append_extra_configs).
+    _append_extra_configs(configs, extra_configs)
 
     configs = _drop_unreachable_registry_packs(configs)
 
@@ -1922,7 +1930,10 @@ def run_expanded_semgrep_stage(
                     (pack_name, RaptorConfig.get_semgrep_config(pack_id)),
                 )
                 added_packs.add(pack_id)
-        configs.extend((f"extra_{_sanitize_pack_name(Path(extra).name)}", extra) for extra in extra_configs or [])
+        # Shared dedup + basename-collision rename — pre-fix this was
+        # a bare extend, so duplicate CLI paths ran twice against the
+        # expanded corpus and colliding basenames shared a pack name.
+        _append_extra_configs(configs, extra_configs)
         configs = _drop_unreachable_registry_packs(configs)
 
         all_findings: list[dict] = []
@@ -3103,7 +3114,13 @@ def main() -> None:
             )
             print("⏱  Semgrep and CodeQL stages running concurrently "
                   "(CodeQL lines tagged [codeql])", flush=True)
-            logging.getLogger().addFilter(_stage_tag)
+            # Attach to the 'raptor' logger, not the root logger:
+            # get_logger() records are created on 'raptor' (which has
+            # propagate=False), and logger-level filters are only
+            # consulted on the logger a record is logged to — a
+            # root-logger filter never saw these records and the
+            # promised [codeql] tag was never applied.
+            logging.getLogger("raptor").addFilter(_stage_tag)
             _codeql_pool = ThreadPoolExecutor(
                 max_workers=1, thread_name_prefix="codeql-stage")
             _codeql_t0 = time.time()
@@ -3180,7 +3197,8 @@ def main() -> None:
                 print(f"⚠️  CodeQL stage failed: {e}", file=sys.stderr)
             finally:
                 _codeql_pool.shutdown(wait=False)
-                logging.getLogger().removeFilter(_stage_tag)
+                # Symmetric with the addFilter above (raptor logger).
+                logging.getLogger("raptor").removeFilter(_stage_tag)
             print(f"⏱  CodeQL stage finished "
                   f"({time.time() - _codeql_t0:.0f}s, "
                   f"{len(codeql_sarifs)} SARIF file(s))", flush=True)

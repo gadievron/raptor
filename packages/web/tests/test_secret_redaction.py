@@ -49,7 +49,10 @@ def test_web_crawler_redacts_secret_url_artifacts_by_default():
         }
     )
 
-    results = crawler.get_results()
+    # Data plane stays RAW (probes must hit real URLs)...
+    assert api_key in str(crawler.get_results())
+    # ...and the persisted artifact projection redacts.
+    results = crawler.artifact_results()
     rendered = str(results)
 
     assert api_key not in rendered
@@ -83,7 +86,7 @@ def test_web_crawler_can_preserve_secret_url_artifacts_for_debugging():
         }
     )
 
-    rendered = str(crawler.get_results())
+    rendered = str(crawler.artifact_results())
 
     assert api_key in rendered
     assert access_probe in rendered
@@ -191,7 +194,7 @@ def test_web_client_can_preserve_secret_urls_for_debugging():
     )
 
 
-def test_web_fuzzer_redacts_finding_urls_by_default():
+def test_web_fuzzer_findings_keep_raw_urls_and_artifacts_redact_them():
     redaction_probe = "access-" + "e" * 24
     client = WebClient("https://example.test")
     fuzzer = WebFuzzer(client, DummyLLM())
@@ -204,9 +207,16 @@ def test_web_fuzzer_redacts_finding_urls_by_default():
         "sqli",
     )
 
+    # Data plane: the hit carries the URL the probe actually used, so
+    # replay verification and browser re-probes target a real endpoint.
     assert finding is not None
-    assert redaction_probe not in finding["url"]
-    assert "access_token=[REDACTED]" in finding["url"]
+    assert finding["url"].endswith(f"access_token={redaction_probe}")
+
+    # Persist boundary: the artifact projection redacts it.
+    from packages.web.scanner import _redact_json_artifact
+    rendered = str(_redact_json_artifact(finding))
+    assert redaction_probe not in rendered
+    assert "access_token=[REDACTED]" in rendered
 
 
 def test_web_fuzzer_can_preserve_finding_urls_for_debugging():
@@ -246,7 +256,7 @@ def test_web_crawler_redacts_sensitive_prefilled_form_input_values_by_default():
         }
     )
 
-    results = crawler.get_results()
+    results = crawler.artifact_results()
     rendered = str(results)
 
     assert csrf_probe not in rendered
@@ -272,7 +282,7 @@ def test_web_crawler_can_preserve_prefilled_form_input_values_for_debugging():
         }
     )
 
-    rendered = str(crawler.get_results())
+    rendered = str(crawler.artifact_results())
 
     assert csrf_probe in rendered
     assert api_probe in rendered
@@ -295,7 +305,7 @@ def test_web_crawler_redacts_secret_urls_inside_non_sensitive_form_values():
         }
     )
 
-    rendered = str(crawler.get_results())
+    rendered = str(crawler.artifact_results())
 
     assert refresh_probe not in rendered
     assert "refresh_token=[REDACTED]" in rendered
@@ -320,7 +330,7 @@ def test_web_crawler_redacts_concatenated_secret_form_input_names():
         }
     )
 
-    rendered = str(crawler.get_results())
+    rendered = str(crawler.artifact_results())
 
     assert access_probe not in rendered
     assert client_probe not in rendered

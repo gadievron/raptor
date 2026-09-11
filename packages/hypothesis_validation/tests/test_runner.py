@@ -263,13 +263,55 @@ class TestValidateInconclusive:
         llm = FakeLLM([
             {"tool": "cocci", "rule": "bad rule",
              "expected_evidence": "x", "reasoning": "..."},
-            # No second LLM call expected — runner short-circuits on tool failure
+            # Failed runs still get an evaluation pass — the LLM may
+            # propose a refined rule for a compile error — but the
+            # mechanical floor keeps the verdict inconclusive.
+            {"verdict": "inconclusive",
+             "reasoning": "tool reported: parse error",
+             "refined_rule": ""},
         ])
         result = validate(h, [adapter], llm)
         assert result.inconclusive
         assert "parse error" in result.reasoning
-        # Only one LLM call: the rule generation, not evaluation
-        assert len(llm.calls) == 1
+        # Two LLM calls: rule generation, then evaluation of the failure.
+        assert len(llm.calls) == 2
+
+    def test_tool_error_with_llm_confirmed_stays_inconclusive(self):
+        # Direction guard: even if the LLM claims confirmed over a
+        # failed run, the verdict floor holds — tool output is the
+        # verdict, not LLM opinion.
+        h = Hypothesis(claim="c", target=Path("/src"))
+        adapter = FakeAdapter("cocci", evidence=ToolEvidence(
+            tool="cocci", rule="r", success=False, error="parse error",
+        ))
+        llm = FakeLLM([
+            {"tool": "cocci", "rule": "bad rule",
+             "expected_evidence": "x", "reasoning": "..."},
+            {"verdict": "confirmed", "reasoning": "looks vulnerable",
+             "refined_rule": ""},
+        ])
+        result = validate(h, [adapter], llm)
+        assert result.inconclusive
+
+    def test_tool_error_refinement_retries_the_tool(self):
+        # A rule-compile failure is exactly the class a refinement round
+        # can fix: the evaluation pass on the failed run may return a
+        # refined rule, and the loop must run the tool again with it.
+        h = Hypothesis(claim="c", target=Path("/src"))
+        adapter = FakeAdapter("cocci", evidence=ToolEvidence(
+            tool="cocci", rule="r", success=False, error="syntax error near line 2",
+        ))
+        llm = FakeLLM([
+            {"tool": "cocci", "rule": "bad rule",
+             "expected_evidence": "x", "reasoning": "..."},
+            {"verdict": "inconclusive", "reasoning": "rule did not compile",
+             "refined_rule": "fixed rule"},
+            {"verdict": "inconclusive", "reasoning": "still failing",
+             "refined_rule": ""},
+        ])
+        result = validate(h, [adapter], llm)
+        assert result.inconclusive
+        assert [c["rule"] for c in adapter.run_calls] == ["bad rule", "fixed rule"]
 
     def test_inconclusive_when_llm_picks_unknown_tool(self):
         h = Hypothesis(claim="c", target=Path("/src"))

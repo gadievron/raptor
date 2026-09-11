@@ -111,6 +111,30 @@ def test_rule_catches_raw_title_in_heading_append():
     assert any(v.detail == "title" for v in vs)
 
 
+def test_rule_catches_attribute_receiver_accumulator():
+    """Method-style writers accumulate through Attribute-chain
+    receivers (``self.lines.append``) — a bare-Name-only receiver
+    match left them invisible to the audit."""
+    src = (
+        "class Writer:\n"
+        "    def add(self, f):\n"
+        '        self.lines.append(f"### {f.get(\'title\')}")\n'
+    )
+    vs = audit_source(src)
+    assert any(v.detail == "title" for v in vs)
+
+
+def test_rule_ignores_attribute_receiver_without_accumulator_token():
+    # Two-direction guard: an Attribute receiver whose chain carries
+    # no accumulator token is still not a sink.
+    src = (
+        "class Writer:\n"
+        "    def add(self, f):\n"
+        '        self.records.append({"title": f.get("title")})\n'
+    )
+    assert audit_source(src) == []
+
+
 def test_rule_catches_raw_body_print():
     """The raptor-review / raptor-annotate fix shape: annotation body
     printed to the terminal."""

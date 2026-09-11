@@ -176,3 +176,15 @@ def test_allowlisted_near_name_not_flagged() -> None:
     even though it's distance-1 from a popular package."""
     findings = scan_deps([_dep("pnpm")])
     assert findings == []
+
+
+def test_damerau_levenshtein_clamps_at_cutoff() -> None:
+    """This module's convention: the shared implementation CLAMPS at
+    ``cutoff`` — exact distances below it, ``cutoff`` itself once the
+    true distance reaches or exceeds it (callers treat ``== cutoff``
+    as "too far", so the exact overflow amount is irrelevant)."""
+    assert _damerau_levenshtein("abc", "abd", 2) == 1     # exact below
+    assert _damerau_levenshtein("ab", "ba", 2) == 1       # transposition
+    assert _damerau_levenshtein("abcd", "wxyz", 2) == 2   # true 4 → clamp
+    assert _damerau_levenshtein("abcd", "abXY", 2) == 2   # true 2 → cutoff
+    assert _damerau_levenshtein("a" * 30, "b" * 30, 3) == 3

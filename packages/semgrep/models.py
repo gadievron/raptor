@@ -14,6 +14,14 @@ from core.json.bounded import loads_bounded
 _MAX_TOOL_OUTPUT_BYTES = 128 * 1024 * 1024
 
 
+def _coerce_int(value: Any) -> int:
+    """Best-effort int coercion for SARIF region fields; 0 on failure."""
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return 0
+
+
 @dataclass
 class SemgrepFinding:
     """A single finding from a Semgrep rule, parsed from SARIF."""
@@ -55,13 +63,13 @@ class SemgrepFinding:
             artifact = phys.get("artifactLocation") or {}
             file = artifact.get("uri", "")
             region = phys.get("region") or {}
-            try:
-                line = int(region.get("startLine", 0))
-                column = int(region.get("startColumn", 0))
-                line_end = int(region.get("endLine", 0))
-                column_end = int(region.get("endColumn", 0))
-            except (ValueError, TypeError):
-                pass
+            # Per-field coercion: a single try around all four meant
+            # one bad value (e.g. startColumn: null) silently discarded
+            # every later field even when it was parseable.
+            line = _coerce_int(region.get("startLine", 0))
+            column = _coerce_int(region.get("startColumn", 0))
+            line_end = _coerce_int(region.get("endLine", 0))
+            column_end = _coerce_int(region.get("endColumn", 0))
 
         return cls(
             file=file,
@@ -159,7 +167,14 @@ def parse_sarif(text: str) -> list[SemgrepFinding]:
         if not isinstance(run, dict):
             continue
         results = run.get("results") or []
-        findings.extend(SemgrepFinding.from_sarif_result(result) for result in results)
+        # Skip non-dict / empty entries outright: converting them
+        # produced phantom SemgrepFinding(file='', line=0) records that
+        # inflated finding_count downstream.
+        findings.extend(
+            SemgrepFinding.from_sarif_result(result)
+            for result in results
+            if result and isinstance(result, dict)
+        )
     return findings
 
 

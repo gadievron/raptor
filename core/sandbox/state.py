@@ -168,6 +168,12 @@ _degraded_net_open_override_warned = False
 # than the netns tier; warned once per process at engagement.
 _proxy_tier2_port_pin_warned = False
 _seccomp_arch_missing_warned = False
+# A REQUESTED seccomp profile could not engage (libseccomp missing or
+# non-functional) on a warn-tier posture: the filter builder returns
+# None and the child runs FILTERLESS. Fail-closed postures (strict,
+# run_untrusted*) refuse before reaching the builder; this latch is the
+# loud once-per-process notice for the default run()/sandbox() paths.
+_seccomp_filter_lost_warned = False
 _mount_unavailable_warned = False
 _ptrace_unavailable_warned = False
 # Set once when check_unshare_engages returns None (the probe couldn't RUN —

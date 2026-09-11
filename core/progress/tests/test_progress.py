@@ -34,14 +34,31 @@ class CalculateETATest(unittest.TestCase):
 
 class ClearEOLTest(unittest.TestCase):
     def test_status_line_includes_clear_eol(self) -> None:
-        """Each status line carries `\\033[K` after the carriage
-        return so longer prior lines don't bleed through."""
+        """On a TTY, each status line carries `\\033[K` after the
+        carriage return so longer prior lines don't bleed through."""
         with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            err.isatty = lambda: True
             p = HackerProgress(total=5, operation="t")
             p.start_time = p.start_time - 5.0  # Get past throttle.
             p.last_update = 0
             p.update(current=1)
             self.assertIn("\r\x1b[K", err.getvalue())
+
+    def test_non_tty_update_emits_nothing(self) -> None:
+        """Off a TTY (CI logs, pipes) the per-tick redraw is
+        suppressed entirely — no ANSI litter — while the counter
+        still advances for finish()'s final plain line."""
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            p = HackerProgress(total=5, operation="t")
+            p.start_time = p.start_time - 5.0
+            p.last_update = 0
+            p.update(current=3)
+            self.assertEqual(err.getvalue(), "")
+            self.assertEqual(p.current, 3)
+            p.finish()
+            out = err.getvalue()
+            self.assertIn("3/5", out)
+            self.assertNotIn("\x1b[K", out)
 
 
 class ExitMessageTest(unittest.TestCase):

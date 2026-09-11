@@ -19,8 +19,6 @@ import pytest
 
 # packages/zkpox/tests/test_libexec_raptor_zkpox.py → parents[3] = repo root
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
-
 
 def _mount_ns_usable() -> bool:
     if sys.platform != "linux":

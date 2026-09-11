@@ -352,3 +352,57 @@ def test_operator_proxy_honoured_via_core_http() -> None:
         assert isinstance(sh._client(), UrllibClient)
     finally:
         sh._client_singleton = None
+
+
+def test_registry_probe_keeps_proxy_env() -> None:
+    """The probe must use the SAME env policy as the real resolve path
+    (core.container.registry passes keep_env=PROXY_ENV_VARS) — without it,
+    proxy-only hosts fail all four registry probes as transport errors and
+    doctor reports a false critical while actual pulls succeed."""
+    from types import SimpleNamespace
+
+    from core.container.proc import PROXY_ENV_VARS
+
+    from cve_env.infra.service_health import _probe_docker_registry
+
+    seen: dict[str, Any] = {}
+
+    def fake_run(cmd, *, timeout, keep_env=frozenset(), **kw):
+        seen["keep_env"] = keep_env
+        return SimpleNamespace(returncode=0, timed_out=False,
+                               stdout="{}", stderr="")
+
+    with patch("cve_env.utils.run.run_with_timeout", side_effect=fake_run):
+        r = _probe_docker_registry("Docker Hub", "alpine:3.19", "anon")
+    assert r.ok is True
+    assert seen["keep_env"] == PROXY_ENV_VARS
+
+
+def test_nvd_and_osv_both_down_is_critical() -> None:
+    """The module documents NVD+OSV both-down as bench-fatal (no grounding
+    source at all); has_critical_failure must treat the PAIR as critical
+    even though neither name is individually critical."""
+    from cve_env.infra.service_health import has_critical_failure
+
+    both_down = [
+        HealthResult("DNS resolution", ok=True, latency_ms=1.0),
+        HealthResult("GitHub API", ok=True, latency_ms=1.0),
+        HealthResult("Docker Hub", ok=True, latency_ms=1.0),
+        HealthResult("NVD API", ok=False, latency_ms=1.0, detail="429"),
+        HealthResult("OSV API", ok=False, latency_ms=1.0, detail="down"),
+    ]
+    assert has_critical_failure(both_down) is True
+
+
+def test_one_grounding_source_up_is_not_critical() -> None:
+    """Companion direction: either of NVD/OSV alone keeps the bench viable."""
+    from cve_env.infra.service_health import has_critical_failure
+
+    nvd_down_only = [
+        HealthResult("DNS resolution", ok=True, latency_ms=1.0),
+        HealthResult("GitHub API", ok=True, latency_ms=1.0),
+        HealthResult("Docker Hub", ok=True, latency_ms=1.0),
+        HealthResult("NVD API", ok=False, latency_ms=1.0, detail="429"),
+        HealthResult("OSV API", ok=True, latency_ms=1.0),
+    ]
+    assert has_critical_failure(nvd_down_only) is False

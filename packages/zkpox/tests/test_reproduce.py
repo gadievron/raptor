@@ -21,8 +21,6 @@ import pytest
 
 # packages/zkpox/tests/test_reproduce.py → parents[3] = repo root
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
-
 import core.sandbox  # noqa: E402
 from core.hash import sha256_file  # noqa: E402
 from core.sandbox import SandboxSetupError  # noqa: E402

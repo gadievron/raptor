@@ -178,3 +178,54 @@ class TestExportAll:
         out.mkdir()
         counts = export_all_to_ghidra(out, gpr, [_record(metadata={})])
         assert counts["total"] == 0
+
+
+class TestRedbCacheCandidates:
+    """Project-state failures must degrade one candidate at a time —
+    a vanished project json (load() → None) or a failing attach-slot
+    computation must not discard candidates that are still perfectly
+    resolvable."""
+
+    def _candidates(self, tmp_path, *, load_result="project",
+                    attach_raises=False):
+        from pathlib import Path
+
+        from packages.ghidra.roundtrip import redb_cache_candidates
+
+        project = MagicMock()
+        project.output_dir = str(tmp_path / "proj-out")
+        mgr = MagicMock()
+        mgr.get_active.return_value = "myproj"
+        mgr.load.return_value = (
+            project if load_result == "project" else None)
+
+        def fake_attach_dir(proj, gpr):
+            if attach_raises:
+                raise OSError("attach slot unavailable")
+            return Path(proj.output_dir) / "attach-slot"
+
+        with patch("core.project.project.ProjectManager",
+                   return_value=mgr), \
+             patch("packages.ghidra.attach.attach_dir", fake_attach_dir):
+            return redb_cache_candidates(tmp_path / "target.gpr")
+
+    def test_all_slots_present_on_healthy_project(self, tmp_path):
+        candidates = self._candidates(tmp_path)
+        assert [c.name for c in candidates] == ["re-database.json"] * 3
+        assert "attach-slot" in str(candidates[0])
+        assert "ghidra-target" in str(candidates[1])
+        assert "ghidra-import-target" in str(candidates[2])
+
+    def test_vanished_project_degrades_to_global_slot(self, tmp_path):
+        """ProjectManager.load() returns None when the registered
+        project's state file vanished — the global slot must survive
+        without an AttributeError eating the whole try block."""
+        candidates = self._candidates(tmp_path, load_result=None)
+        assert len(candidates) == 1
+        assert "ghidra-import-target" in str(candidates[0])
+
+    def test_attach_failure_keeps_legacy_project_slot(self, tmp_path):
+        candidates = self._candidates(tmp_path, attach_raises=True)
+        assert len(candidates) == 2
+        assert "ghidra-target" in str(candidates[0])
+        assert "ghidra-import-target" in str(candidates[1])

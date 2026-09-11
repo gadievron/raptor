@@ -65,6 +65,38 @@ class TestSpanSlicedRead:
         assert "tty_flag" in src
         assert "unrelated" in src
 
+
+class TestPathContainment:
+    """file_path comes from LLM-writable run artefacts: an absolute
+    path discards target_path under `/` semantics and `../` escapes
+    the root — both must refuse (CWE-22).  Legitimate relative reads,
+    subdirectories included, keep working."""
+
+    def test_absolute_path_refused(self, tmp_path):
+        target = _target(tmp_path)
+        outside = tmp_path.parent / "secret.txt"
+        outside.write_text("sentinel-outside", encoding="utf-8")
+        assert read_function_source(target, str(outside), "f") == ""
+
+    def test_dotdot_escape_refused(self, tmp_path):
+        target = tmp_path / "root"
+        target.mkdir()
+        (target / "f.c").write_text(_SOURCE, encoding="utf-8")
+        (tmp_path / "secret.txt").write_text(
+            "sentinel-outside", encoding="utf-8",
+        )
+        assert read_function_source(
+            target, "../secret.txt", "f",
+        ) == ""
+
+    def test_relative_path_still_reads(self, tmp_path):
+        target = _target(tmp_path)
+        sub = target / "sub"
+        sub.mkdir()
+        (sub / "g.c").write_text("int g;\n", encoding="utf-8")
+        assert "tty_flag" in read_function_source(target, "f.c", "f")
+        assert read_function_source(target, "sub/g.c", "g") == "int g;\n"
+
     def test_toctou_fires_only_on_the_containing_function(self, tmp_path):
         from core.audit.binary_layer0 import (
             callees_from_source,

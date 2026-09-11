@@ -182,6 +182,72 @@ class TestGlanceEscalation:
             )
 
 
+class TestGlanceReviewFailureOutcomes:
+    """Non-budget failures in the escalation / fallback reviews must
+    commit an ``error`` outcome (a still-a-gap status): the caller
+    marks the task complete regardless, so a swallowed failure left
+    the function counted reviewed with no journal row anywhere."""
+
+    def test_escalation_failure_commits_error_outcome(
+        self, tmp_path, env,
+    ):
+        from core.audit.executor import _process_glance_batch
+
+        task = _task()
+        shared = _shared(task)
+        result = _result()
+
+        def raising_review_one_fn(gap, *a, **kw):
+            raise ValueError("boom in escalated review")
+
+        committed: set = set()
+        _process_glance_batch(
+            [task],
+            lambda contexts, config_: [_glance_outcome("suspicious")],
+            shared, _config(tmp_path), result,
+            raising_review_one_fn,
+            review_fn=lambda *a, **kw: None,
+            committed_keys=committed,
+        )
+
+        assert [o.status for o in env] == ["error"]
+        assert env[0].file == task.gap["file"]
+        assert env[0].function == task.gap["name"]
+        assert result.errors == 1
+        # The error record IS the member's committed outcome — the
+        # async caller's mid-batch except path must not add another.
+        assert committed == {task.key}
+
+    def test_fallback_failure_commits_error_outcome(
+        self, tmp_path, env,
+    ):
+        from core.audit.executor import _process_glance_batch
+
+        task = _task()
+        shared = _shared(task)
+        result = _result()
+
+        def failing_batch(contexts, config_):
+            raise ValueError("batch parse error")  # forces the fallback
+
+        def raising_review_one_fn(gap, *a, **kw):
+            raise ValueError("boom in fallback review")
+
+        committed: set = set()
+        _process_glance_batch(
+            [task],
+            failing_batch,
+            shared, _config(tmp_path), result,
+            raising_review_one_fn,
+            review_fn=lambda *a, **kw: None,
+            committed_keys=committed,
+        )
+
+        assert [o.status for o in env] == ["error"]
+        assert result.errors == 1
+        assert committed == {task.key}
+
+
 class TestEscalateHelper:
     def test_counts_against_shared_cap(self, tmp_path):
         from core.audit.executor import _escalate_glance_suspicious

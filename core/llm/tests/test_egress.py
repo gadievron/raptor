@@ -363,6 +363,25 @@ class TestUrlIsLoopback:
         assert not egress.url_is_loopback("http://ollama.internal.corp:11434")
         assert not egress.url_is_loopback("not a url")
 
+    def test_loopback_lookalike_hostnames_are_not_loopback(self):
+        """Only IP literals earn the loopback classification — a
+        '127.'-prefixed HOSTNAME resolves wherever its owner points it,
+        and classifying it loopback fetched it DIRECT past the proxy
+        and the chokepoint allowlist."""
+        assert not egress._is_loopback("127.attacker.example")
+        assert not egress._is_loopback("127.0.0.1.evil")
+        assert not egress._is_loopback("localhost.attacker.example")
+        assert not egress.url_is_loopback("http://127.attacker.example/x")
+
+    def test_ip_literals_still_loopback(self):
+        """Other direction: real loopback literals keep the bypass."""
+        assert egress._is_loopback("127.0.0.1")
+        assert egress._is_loopback("127.5.4.3")  # full 127.0.0.0/8
+        assert egress._is_loopback("::1")
+        assert egress._is_loopback("[::1]")
+        assert egress._is_loopback("localhost")
+        assert egress._is_loopback("0.0.0.0")
+
 
 class TestLoopbackSafeGet:
     def test_loopback_bypasses_proxy_env(self, monkeypatch):
@@ -606,3 +625,70 @@ def test_augment_child_no_proxy_adds_imds_only():
 def test_augment_child_no_proxy_deduplicates():
     out = egress.augment_child_no_proxy("169.254.169.254")
     assert out == "169.254.169.254"
+
+
+class TestEnableIsThreadSafe:
+
+    def test_racing_first_callers_snapshot_operator_env_once(
+        self, monkeypatch,
+    ):
+        """Concurrent first-callers must serialise: without the module
+        lock, the check-then-act on ``_original_proxy_env`` let the
+        losing thread snapshot the ALREADY-REWRITTEN loopback pointer
+        as the operator proxy env, poisoning every trusted-subprocess
+        env derived from operator_proxy_env()."""
+        import threading
+        import time
+
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:3128")
+
+        state_lock = threading.Lock()
+        concurrent = 0
+        max_concurrent = 0
+
+        class _StubProxy:
+            port = 51234
+
+        def slow_get_proxy(allowed_hosts, **kwargs):
+            nonlocal concurrent, max_concurrent
+            with state_lock:
+                concurrent += 1
+                max_concurrent = max(max_concurrent, concurrent)
+            # Widen the race window between the idempotency check and
+            # the snapshot/env mutation.
+            time.sleep(0.05)
+            with state_lock:
+                concurrent -= 1
+            return _StubProxy()
+
+        import core.sandbox.proxy as proxy_mod
+        monkeypatch.setattr(proxy_mod, "get_proxy", slow_get_proxy)
+
+        cfg = _config(primary=_model())  # anthropic default
+        errors: list[BaseException] = []
+        barrier = threading.Barrier(2)
+
+        def call():
+            try:
+                barrier.wait(timeout=10)
+                egress.enable_llm_egress(cfg)
+            except BaseException as exc:  # noqa: BLE001 — surfaced below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=call) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+        assert errors == []
+        # The enable transition ran one caller at a time.
+        assert max_concurrent == 1
+        # The snapshot holds the OPERATOR's route, never the loopback
+        # rewrite the winning thread installed.
+        snap = egress.operator_proxy_env()
+        assert snap["HTTPS_PROXY"] == "http://proxy.corp:3128"
+        assert egress._original_proxy_env == {
+            "HTTPS_PROXY": "http://proxy.corp:3128",
+        }
+        # And the live env was rewritten exactly as before.
+        assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:51234"

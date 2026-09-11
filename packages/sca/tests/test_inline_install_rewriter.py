@@ -623,3 +623,85 @@ def test_maven_does_not_match_unrelated_mvn_goal() -> None:
     # regex matched nothing relevant, falling through to the
     # not-found branch.
     assert msg is not None and "not found" in msg
+
+
+# ---------------------------------------------------------------------------
+# PyPI extras ([standard] etc.) — pin goes AFTER the extras
+# ---------------------------------------------------------------------------
+
+def test_pypi_extras_pinned_form_bumped_after_extras() -> None:
+    text = "RUN pip install uvicorn[standard]==0.22.0\n"
+    plan = _plan("PyPI", "uvicorn", "0.30.0", installed="0.22.0")
+    new, hit, _ = _rewrite_inline_install(text, plan)
+    assert hit is True
+    assert new == "RUN pip install uvicorn[standard]==0.30.0\n"
+
+
+def test_pypi_extras_unpinned_gets_pin_after_extras() -> None:
+    """Bare-name form with extras: the pin splices after ``[standard]``.
+    The old lookahead ignored ``[`` and produced
+    ``uvicorn==0.30.0[standard]`` — an invalid requirement."""
+    text = "RUN pip install uvicorn[standard]\n"
+    plan = _plan("PyPI", "uvicorn", "0.30.0")
+    new, hit, _ = _rewrite_inline_install(text, plan)
+    assert hit is True
+    assert new == "RUN pip install uvicorn[standard]==0.30.0\n"
+
+
+def test_pypi_single_eq_form_left_alone() -> None:
+    """``uvicorn=0.22`` (single ``=``) is not a pip spec; splicing a pin
+    before the ``=`` would emit ``uvicorn==X=0.22``. Leave it alone."""
+    text = "RUN pip install uvicorn=0.22\n"
+    plan = _plan("PyPI", "uvicorn", "0.30.0")
+    new, hit, _ = _rewrite_inline_install(text, plan)
+    assert hit is False
+    assert new == text
+
+
+def test_pypi_plain_forms_still_rewritten() -> None:
+    """Extras handling must not regress the plain shapes."""
+    plan = _plan("PyPI", "uvicorn", "0.30.0", installed="0.22.0")
+    new, hit, _ = _rewrite_inline_install(
+        "RUN pip install uvicorn==0.22.0\n", plan)
+    assert hit is True and "uvicorn==0.30.0" in new
+    new, hit, _ = _rewrite_inline_install(
+        "RUN pip install uvicorn\n", plan)
+    assert hit is True and "uvicorn==0.30.0" in new
+
+
+# ---------------------------------------------------------------------------
+# @-separated substituter aligned with siblings (IGNORECASE, [ boundary)
+# ---------------------------------------------------------------------------
+
+def test_npm_pinned_case_tolerant_and_spelling_preserved() -> None:
+    """The @-separated substituter matches names case-insensitively like
+    its pypi/apt/yum siblings, and the captured group keeps the file's
+    own spelling."""
+    text = "RUN npm install -g Lodash@4.17.20\n"
+    plan = _plan("npm", "lodash", "4.17.21", installed="4.17.20")
+    new, hit, _ = _rewrite_inline_install(text, plan)
+    assert hit is True
+    assert new == "RUN npm install -g Lodash@4.17.21\n"
+
+
+def test_npm_exact_case_still_rewritten() -> None:
+    text = "RUN npm install -g lodash@4.17.20\n"
+    plan = _plan("npm", "lodash", "4.17.21", installed="4.17.20")
+    new, hit, _ = _rewrite_inline_install(text, plan)
+    assert hit is True
+    assert new == "RUN npm install -g lodash@4.17.21\n"
+
+
+def test_bare_name_followed_by_bracket_not_mangled() -> None:
+    """A name directly followed by ``[`` is some other token shape, not
+    a bare package — no pin spliced mid-token."""
+    from packages.sca.update import (
+        _inline_sub_at_separated,
+        _inline_sub_eq_separated,
+        _inline_sub_yum,
+    )
+    for sub_fn in (_inline_sub_at_separated, _inline_sub_eq_separated,
+                   _inline_sub_yum):
+        new, hit = sub_fn(" curl[weird", "curl", "8.0.0")
+        assert hit is False
+        assert new == " curl[weird"

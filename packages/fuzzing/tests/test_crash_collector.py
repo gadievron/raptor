@@ -1,11 +1,8 @@
 """Tests for packages/fuzzing/crash_collector.py."""
 
-import sys
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from packages.fuzzing.crash_collector import Crash, CrashCollector
 
@@ -174,6 +171,31 @@ class TestCollectCrashes:
         crashes = collector.collect_crashes()
         assert crashes[0].timestamp is not None
 
+    def test_symlinks_in_crashes_dir_are_rejected(self, tmp_path):
+        # The crashes dir is target-writable: a hostile fuzz target can
+        # plant an 'id:'-named symlink to a host file, which would be
+        # hashed here and persisted into the witness store / LLM
+        # prompts. Symlinks must never be followed.
+        secret = tmp_path / "host-secret"
+        secret.write_bytes(b"private key material")
+        crashes_dir = tmp_path / "crashes"
+        crashes_dir.mkdir()
+        (crashes_dir / "id:000000,sig:11").symlink_to(secret)
+        collector = CrashCollector(crashes_dir)
+        assert collector.collect_crashes() == []
+
+    def test_regular_files_survive_symlink_filter(self, tmp_path):
+        # Direction two: the guard must not eat real crash files that
+        # sit next to a planted symlink.
+        secret = tmp_path / "host-secret"
+        secret.write_bytes(b"private key material")
+        crashes_dir = tmp_path / "crashes"
+        crashes_dir.mkdir()
+        (crashes_dir / "id:000000,sig:11").symlink_to(secret)
+        _make_crash_file(crashes_dir, "id:000001,sig:06", b"real crash")
+        crashes = CrashCollector(crashes_dir).collect_crashes()
+        assert [c.crash_id for c in crashes] == ["000001"]
+
     def test_crash_input_file_is_path(self, tmp_path):
         _make_crash_file(tmp_path, "id:000000,sig:11")
         collector = CrashCollector(tmp_path)
@@ -276,3 +298,31 @@ class TestHashFile:
         f.write_bytes(b"test")
         collector = CrashCollector(tmp_path)
         assert len(collector._hash_file(f)) == 16
+
+
+# ---------------------------------------------------------------------------
+# Merged multi-instance crash ids
+# ---------------------------------------------------------------------------
+
+class TestMergedInstanceCrashIds:
+    """AFL ids are only unique per instance; merged_crashes filenames
+    carry an ``,instance:<name>`` suffix and crash_id must keep it —
+    consumers key dicts by crash_id (SMT attribution, witnesses) and
+    two instances' ``id:000000`` must not collapse into one key."""
+
+    def test_instance_suffix_carried_into_crash_id(self, tmp_path):
+        _make_crash_file(
+            tmp_path, "id:000000,sig:11,src:000001,instance:main", b"a")
+        _make_crash_file(
+            tmp_path, "id:000000,sig:06,src:000002,instance:secondary1", b"b")
+        crashes = CrashCollector(tmp_path).collect_crashes()
+        ids = sorted(c.crash_id for c in crashes)
+        assert ids == [
+            "000000,instance:main",
+            "000000,instance:secondary1",
+        ]
+
+    def test_single_instance_id_unchanged(self, tmp_path):
+        _make_crash_file(tmp_path, "id:000042,sig:11,src:000001", b"a")
+        crashes = CrashCollector(tmp_path).collect_crashes()
+        assert crashes[0].crash_id == "000042"

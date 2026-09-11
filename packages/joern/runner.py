@@ -22,6 +22,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.analysis._joern_lines import parse_marker_line, parse_marker_records
+
 from .models import FlowStep, JoernCPG, JoernMethodSummary, JoernResult, TaintFlow
 from .prereqs import _joern_parse_path, _joern_path
 from typing import TYPE_CHECKING
@@ -82,6 +84,19 @@ def _escape_scala_string(value: str) -> str:
     )
 
 
+#: The one Scala-side escape helper for CPG text interpolated into a
+#: JSON-string record context (``MARKER:{json}`` lines). Order matters:
+#: backslash before quote. ``\r`` is stripped; ``\n`` and every
+#: remaining C0 control char (tab included — strict ``json.loads``
+#: rejects ALL raw control chars) plus U+0085/U+2028/U+2029 (Python
+#: ``str.splitlines`` splits on these before any parsing) flatten to
+#: single spaces so each record stays one line. Kept on ONE line so
+#: the quote-escape and newline-escape stay visibly paired. Generated
+#: queries embed this constant; the ``queries/*.sc`` files carry the
+#: identical line (drift-guarded by tests/test_template_json_escaping).
+SCALA_JSON_ESC_DEF = r'''def jsonEsc(v: String): String = v.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", " ").flatMap(c => if (c.toInt < 0x20 || c.toInt == 0x85 || c.toInt == 0x2028 || c.toInt == 0x2029) " " else c.toString)'''
+
+
 def _default_sandbox_runner():
     """Return the default sandbox runner for subprocess calls.
 
@@ -105,6 +120,9 @@ def _default_sandbox_runner():
 _STALL_CALIBRATION_FILES = 10
 _STALL_MULTIPLIER = 3
 _STALL_FLOOR_S = 30
+# Watchdog poll cadence. Small enough that a kill lands within ~1s of
+# the threshold being crossed, large enough to cost nothing.
+_STALL_POLL_INTERVAL_S = 1.0
 
 
 def _drain_stream(stream, chunks: list[str]) -> None:
@@ -123,8 +141,17 @@ class _StallMonitor:
     """Monitor joern-parse stderr for per-file progress and kill on stall.
 
     Measures wall clock of the first N files, then sets a stall threshold
-    of max(p90 * 3, 30s). If any subsequent file exceeds that threshold
-    with no progress, the subprocess is killed.
+    of max(p90 * 3, 30s). Once calibrated, a watchdog thread
+    (:meth:`watch`) kills the subprocess when NO progress line has
+    arrived for a full threshold window.
+
+    The kill decision lives on a timer, not in the stderr reader loop:
+    a per-line check only ever runs when the next line ARRIVES — i.e.
+    after the allegedly stalled file already finished (killing a
+    healthy build retroactively), and never during a genuine hang,
+    where no line arrives to trigger it. A pre-calibration hang (fewer
+    than N progress lines, then silence) has no threshold yet and is
+    covered by the caller's overall ``proc.wait(timeout)``.
     """
 
     def __init__(
@@ -140,40 +167,60 @@ class _StallMonitor:
         self._total_files = 0
         self._killed = False
         self._stderr_lines: list[str] = []
+        # Set when the reader hits EOF / the build exits — lets the
+        # watchdog stop promptly without polling the process table.
+        self._done = threading.Event()
 
     def run(self) -> None:
         """Read stderr line by line, track file processing times."""
-        for raw_line in self._proc.stderr:
-            line = raw_line.strip()
-            if not line:
-                continue
-            self._stderr_lines.append(line)
+        try:
+            for raw_line in self._proc.stderr:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                self._stderr_lines.append(line)
 
-            if self._is_file_progress(line):
-                now = time.monotonic()
-                elapsed = now - self._last_progress
-                self._total_files += 1
+                if self._is_file_progress(line):
+                    now = time.monotonic()
+                    elapsed = now - self._last_progress
+                    self._total_files += 1
 
-                if self._total_files <= _STALL_CALIBRATION_FILES:
-                    self._file_times.append(elapsed)
-                    if self._total_files == _STALL_CALIBRATION_FILES:
-                        self._calibrate()
-                elif self._threshold and elapsed > self._threshold:
-                    logger.warning(
-                        "Joern CPG build stalled after %d/%s files "
-                        "(%.1fs > %.1fs threshold)",
-                        self._total_files, "?",
-                        elapsed, self._threshold,
-                    )
+                    if self._total_files <= _STALL_CALIBRATION_FILES:
+                        self._file_times.append(elapsed)
+                        if self._total_files == _STALL_CALIBRATION_FILES:
+                            self._calibrate()
+
+                    # Float assignment is atomic under the GIL; the
+                    # watchdog reads it without a lock.
+                    self._last_progress = now
+                    if self._on_progress:
+                        self._on_progress(
+                            f"Joern CPG: {self._total_files} files processed"
+                        )
+        finally:
+            self._done.set()
+
+    def watch(self) -> None:
+        """Kill the build when progress stops for a threshold window.
+
+        Runs in its own thread alongside :meth:`run`. Exits when the
+        reader reaches EOF (build finished or was killed).
+        """
+        while not self._done.wait(_STALL_POLL_INTERVAL_S):
+            threshold = self._threshold
+            if threshold is None:
+                continue  # still calibrating
+            elapsed = time.monotonic() - self._last_progress
+            if elapsed > threshold:
+                logger.warning(
+                    "Joern CPG build stalled after %d files "
+                    "(no progress for %.1fs > %.1fs threshold)",
+                    self._total_files, elapsed, threshold,
+                )
+                self._killed = True
+                with contextlib.suppress(OSError):
                     self._proc.kill()
-                    self._killed = True
-                    return
-
-                self._last_progress = now
-                if self._on_progress:
-                    self._on_progress(
-                        f"Joern CPG: {self._total_files} files processed"
-                    )
+                return
 
     def _calibrate(self) -> None:
         if len(self._file_times) < 2:
@@ -445,6 +492,22 @@ def discover_frontend_args(target: Path) -> FrontendArgs:
     return fa
 
 
+def _failed_build_cpg(cpg_path: Path, target: Path) -> JoernCPG:
+    """Failure-path result: never leave a partial cpg.bin behind.
+
+    A timeout or stall kill can interrupt joern-parse mid-write.
+    flatgraph writes its JSON schema manifest as the FINAL bytes, so a
+    truncated file has no parseable tail manifest — and the load-time
+    structural probes cannot vouch for such a file. Deleting the
+    partial file here (plus ``build_failed`` on the handle) keeps a
+    killed build from being manifested as a fresh cache entry and
+    served as a permanent cache hit on every later run.
+    """
+    with contextlib.suppress(OSError):
+        cpg_path.unlink(missing_ok=True)
+    return JoernCPG(path=cpg_path, target=target, build_failed=True)
+
+
 def build_cpg(
     target: Path,
     *,
@@ -585,16 +648,16 @@ def build_cpg(
             )
         except subprocess.TimeoutExpired:
             logger.warning("joern-parse timed out after %ds", timeout)
-            return JoernCPG(path=cpg_path, target=target)
+            return _failed_build_cpg(cpg_path, target)
         except OSError as e:
             logger.error("joern-parse failed: %s", e)
-            return JoernCPG(path=cpg_path, target=target)
+            return _failed_build_cpg(cpg_path, target)
     except subprocess.TimeoutExpired:
         logger.warning("joern-parse timed out after %ds", timeout)
-        return JoernCPG(path=cpg_path, target=target)
+        return _failed_build_cpg(cpg_path, target)
     except OSError as e:
         logger.error("joern-parse failed: %s", e)
-        return JoernCPG(path=cpg_path, target=target)
+        return _failed_build_cpg(cpg_path, target)
 
     elapsed = int((time.monotonic() - start) * 1000)
 
@@ -655,13 +718,19 @@ def _build_cpg_with_stall_monitor(
         )
     except OSError as e:
         logger.error("joern-parse failed to start: %s", e)
-        return JoernCPG(path=cpg_path, target=target)
+        return _failed_build_cpg(cpg_path, target)
 
     monitor = _StallMonitor(proc, on_progress=on_progress)
     monitor_thread = threading.Thread(
         target=monitor.run, daemon=True, name="joern-stall-monitor",
     )
     monitor_thread.start()
+    # Timer-based kill decision — see _StallMonitor.watch: the reader
+    # loop cannot detect a stall (no line arrives during one).
+    watchdog_thread = threading.Thread(
+        target=monitor.watch, daemon=True, name="joern-stall-watchdog",
+    )
+    watchdog_thread.start()
 
     # Drain stdout in its own thread. The monitor owns stderr; leaving
     # stdout unread until after exit let a chatty joern-parse fill the
@@ -686,9 +755,10 @@ def _build_cpg_with_stall_monitor(
         proc.kill()
         proc.wait()
         logger.warning("joern-parse timed out after %ds", timeout)
-        return JoernCPG(path=cpg_path, target=target)
+        return _failed_build_cpg(cpg_path, target)
 
     monitor_thread.join(timeout=5)
+    watchdog_thread.join(timeout=5)
     stdout_thread.join(timeout=5)
 
     stdout = "".join(stdout_chunks)
@@ -697,7 +767,7 @@ def _build_cpg_with_stall_monitor(
 
     if monitor.was_killed:
         logger.warning("joern-parse was killed by stall monitor")
-        return JoernCPG(path=cpg_path, target=target)
+        return _failed_build_cpg(cpg_path, target)
 
     if proc.returncode != 0:
         stderr_text = monitor.stderr_output
@@ -747,11 +817,6 @@ def run_query(
             errors=[f"CPG not found: {cpg.path}"],
         )
 
-    if validate:
-        err = _validate_query(query)
-        if err:
-            return JoernResult(query=query, errors=[err])
-
     joern = _joern_path() or "joern"
 
     query_path = Path(query)
@@ -768,6 +833,20 @@ def run_query(
         script_body = query
     for marker, replacement in (substitutions or {}).items():
         script_body = script_body.replace(marker, replacement)
+
+    if validate:
+        # Validate what will EXECUTE: the resolved script body with
+        # substitutions applied. Pre-fix the check ran on the raw
+        # ``query`` argument — for a .sc file that is the filesystem
+        # PATH — and substitutions were spliced in afterwards, so
+        # neither the body nor any substituted value ever met the
+        # blocked-pattern check the ``validate=True`` contract
+        # promises. The length cap applies to inline queries only:
+        # .sc templates are in-repo, code-trust files whose bodies
+        # legitimately exceed the inline cap.
+        err = _validate_query(script_body, check_length=not is_script_file)
+        if err:
+            return JoernResult(query=query, errors=[err])
 
     # joern's CLI flag surface drifts across releases: `--script-content`
     # does not exist in 4.x, and `--import` there means "compile .sc onto
@@ -995,21 +1074,27 @@ import io.shiftleft.semanticcpg.language._
 import io.shiftleft.codepropertygraph.generated.nodes.CfgNode
 import scala.util.Try
 
+''' + SCALA_JSON_ESC_DEF + r'''
+
 implicit val engineContext: EngineContext = EngineContext(config = EngineConfig(maxCallDepth = __MAX_CALL_DEPTH__))
 val source = __SOURCE_FILTER__
 val sink = cpg.call.name("__SINK_CALL__").argument
-val flows = sink.reachableByFlows(source).l
+// .take(500) BEFORE .l bounds materialisation. Higher = more flows
+// materialised and echoed per query (unbounded transport bytes);
+// lower = real flows silently dropped past the cap (the JOERN_FLOW
+// protocol has no truncation marker). 500 mirrors tiered_taint.sc.
+val flows = sink.reachableByFlows(source).take(500).l
 val flowLines = flows.map { flow =>
   val steps = flow.elements.map { e =>
     val ln = e.lineNumber.getOrElse(0)
-    val cd = e.code.take(200).replace("\\", "\\\\").replace("\"", "\\\"")
+    val cd = jsonEsc(e.code.take(200))
     val (fn, fl) = e match {
       case n: CfgNode =>
         (Try(n.method.name).getOrElse(""), Try(n.method.filename).getOrElse(""))
       case _ => ("", "")
     }
-    val fnEsc = fn.replace("\\", "\\\\").replace("\"", "\\\"")
-    val flEsc = fl.replace("\\", "\\\\").replace("\"", "\\\"")
+    val fnEsc = jsonEsc(fn)
+    val flEsc = jsonEsc(fl)
     s"""{"line":${ln},"code":"${cd}","function":"${fnEsc}","file":"${flEsc}"}"""
   }.mkString(",")
   "JOERN_FLOW:[" + steps + "]"
@@ -1197,9 +1282,17 @@ _CPG_MANIFEST_TAIL_BYTES = 8 * 1024 * 1024
 def cpg_method_count(cpg_path: Path) -> int | None:
     """METHOD node count from the flatgraph tail manifest.
 
-    Returns None when the file or its manifest cannot be read — the
-    caller must treat None as "unknown", never as "empty": only a
-    positively-parsed zero may reject a CPG.
+    Returns None when the file or its manifest cannot be read. Caller
+    contract splits by cost of a wrong call:
+
+    * Destructive consumers (:func:`_reject_empty_cpg`, which DELETES
+      the file) must treat None as "unknown" — only a positively
+      parsed zero may destroy a build.
+    * Cache gates (:func:`build_cpg_cached` admission,
+      :func:`load_cached_cpg` service) require a positively parsed
+      count: a killed writer truncates the tail manifest, so None
+      there means a graph nobody can vouch for, and the worst case of
+      refusing it is a rebuild.
     """
     try:
         size = cpg_path.stat().st_size
@@ -1368,14 +1461,22 @@ def load_cached_cpg(
         )
         return None
 
-    # Refuse structurally-empty cached CPGs (including ones written
-    # before the empty check existed — the probe reads the file, not
-    # the manifest field, so legacy caches are covered).
-    if cpg_method_count(cpg_path) == 0:
+    # Refuse structurally-broken cached CPGs (including ones written
+    # before these checks existed — the probe reads the file, not the
+    # manifest field, so legacy caches are covered). Zero METHOD nodes
+    # is an empty graph; an unreadable tail manifest (None) means the
+    # file was truncated after the cache manifest was written — the
+    # write-time gate in build_cpg_cached guarantees every admitted
+    # cpg.bin had a parseable count, so None here is corruption, not
+    # "unknown".
+    count = cpg_method_count(cpg_path)
+    if count == 0 or count is None:
         logger.info(
-            "CPG cache at %s contains zero METHOD nodes — refusing the "
-            "cached graph; this cache will be rebuilt",
+            "CPG cache at %s is %s — refusing the cached graph; this "
+            "cache will be rebuilt",
             cpg_dir,
+            "empty (zero METHOD nodes)" if count == 0
+            else "unreadable (no flatgraph manifest)",
         )
         return None
 
@@ -1446,15 +1547,32 @@ def build_cpg_cached(
         exclude_dirs=exclude_dirs,
     )
 
-    if cpg.exists():
-        _write_cpg_manifest(
-            cpg_dir, target, content_hash,
-            languages=cpg.languages,
-            build_time_ms=cpg.build_time_ms,
-            frontend_args_fingerprint=frontend_args.fingerprint(),
-            method_count=cpg_method_count(cpg.path),
-            exclude_dirs=exclude_dirs,
-        )
+    # Cache admission gates. A manifest is a promise that cpg.bin is a
+    # complete graph for content_hash, so it is written only when
+    # (a) the build path signalled success (a timeout / stall-kill can
+    # leave a partial file that would otherwise become a permanent
+    # cache hit), and (b) the flatgraph tail manifest parses to a
+    # method count — a fresh successful build always has one, so an
+    # unreadable tail here means truncation (or a format this probe
+    # cannot vouch for; that degrades to rebuild-per-run, never to
+    # serving an unverifiable graph).
+    if cpg.exists() and not cpg.build_failed:
+        method_count = cpg_method_count(cpg.path)
+        if method_count is None:
+            logger.warning(
+                "CPG at %s has no parseable flatgraph manifest — "
+                "refusing to cache it (this run still uses the build; "
+                "the next run rebuilds)", cpg.path,
+            )
+        else:
+            _write_cpg_manifest(
+                cpg_dir, target, content_hash,
+                languages=cpg.languages,
+                build_time_ms=cpg.build_time_ms,
+                frontend_args_fingerprint=frontend_args.fingerprint(),
+                method_count=method_count,
+                exclude_dirs=exclude_dirs,
+            )
 
     return cpg
 
@@ -1497,14 +1615,6 @@ def _infer_call(code: str) -> str:
     return m.group(1) if m else ""
 
 
-def _try_parse_flow_json(json_str: str) -> tuple:
-    try:
-        data = json.loads(json_str)
-        return data, None
-    except (json.JSONDecodeError, ValueError) as exc:
-        return None, str(exc)
-
-
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -1517,56 +1627,56 @@ def _parse_output(stdout: str) -> tuple:
     (joern 4.x) wraps values in ANSI colour codes and echoes the final
     string as ``val resN: String = \"\"\"JOERN_FLOWS_START...``, and
     each flow may appear multiple times (println + value echoes, the
-    latter with escaped quotes).  So: strip ANSI, match sentinels by
-    prefix/suffix rather than exact line, accept any line whose payload
-    parses as JSON, and dedupe.
+    latter with escaped quotes).  ``parse_marker_line`` owns that
+    transport tolerance; echo discrimination is by the echo prefix
+    shape, not by escaped quotes in the payload (genuinely printed
+    records deliberately contain ``\\"`` via jsonEsc).
+
+    A genuinely printed record that fails to decode is recorded in
+    ``errors`` regardless of sentinel state: the subprocess transport
+    never prints the final-expression sentinels, and sentinel-gated
+    error recording let dropped flows read as genuine negatives to
+    refuting callers that honour the ``result.errors`` contract.
     """
     flows: list[TaintFlow] = []
     errors: list[str] = []
     seen_flows: set[str] = set()
-    in_flows = False
 
     for raw_line in stdout.splitlines():
         line = _ANSI_ESCAPE_RE.sub("", raw_line).strip()
+        # Sentinel lines are framing, never content.
         if line.endswith("JOERN_FLOWS_START"):
-            in_flows = True
             continue
         if line.startswith("JOERN_FLOWS_END") or line.endswith("JOERN_FLOWS_END"):
-            in_flows = False
             continue
 
-        marker_idx = line.find("JOERN_FLOW:")
-        if marker_idx < 0:
+        records, decode_error = parse_marker_line(line, "JOERN_FLOW:")
+        if decode_error is not None:
+            errors.append(f"failed to parse flow: {decode_error}")
             continue
-
-        json_str = line[marker_idx + len("JOERN_FLOW:"):]
-        steps_data, parse_err = _try_parse_flow_json(json_str)
-        if parse_err:
-            # Value echoes re-print flows with escaped quotes; only
-            # report unparseable lines inside the sentinel block that
-            # aren't such echoes.
-            if in_flows and '\\"' not in json_str:
-                errors.append(f"failed to parse flow: {parse_err}")
-            continue
-        dedupe_key = json.dumps(steps_data, sort_keys=True)
-        if dedupe_key in seen_flows:
-            continue
-        seen_flows.add(dedupe_key)
-        if isinstance(steps_data, list) and steps_data:
-            steps = [FlowStep.from_dict(s) for s in steps_data if isinstance(s, dict)]
-            if steps:
-                src_fn = steps[0].function or _infer_function(steps[0].code)
-                sink_fn = _infer_call(steps[-1].code) if len(steps) > 1 else ""
-                funcs = {s.function for s in steps if s.function}
-                flow = TaintFlow(
-                    source_method=src_fn,
-                    source_param=steps[0].variable or steps[0].code,
-                    sink_call=sink_fn,
-                    sink_arg_idx=-1,
-                    steps=steps,
-                    is_inter_procedural=len(funcs) > 1,
-                )
-                flows.append(flow)
+        for steps_data in records:
+            dedupe_key = json.dumps(steps_data, sort_keys=True)
+            if dedupe_key in seen_flows:
+                continue
+            seen_flows.add(dedupe_key)
+            if isinstance(steps_data, list) and steps_data:
+                steps = [
+                    FlowStep.from_dict(s)
+                    for s in steps_data if isinstance(s, dict)
+                ]
+                if steps:
+                    src_fn = steps[0].function or _infer_function(steps[0].code)
+                    sink_fn = _infer_call(steps[-1].code) if len(steps) > 1 else ""
+                    funcs = {s.function for s in steps if s.function}
+                    flow = TaintFlow(
+                        source_method=src_fn,
+                        source_param=steps[0].variable or steps[0].code,
+                        sink_call=sink_fn,
+                        sink_arg_idx=-1,
+                        steps=steps,
+                        is_inter_procedural=len(funcs) > 1,
+                    )
+                    flows.append(flow)
 
     return flows, errors
 
@@ -1614,8 +1724,21 @@ def _parse_errors(stderr: str) -> list[str]:
     return errors
 
 
+_SUMMARY_MARKER = "METHOD_SUMMARY:"
+
+
 def _build_summary_batch_query(method_names: list[str]) -> str | None:
-    """Build a Joern query that fetches summaries for multiple methods."""
+    """Build a Joern query that fetches summaries for multiple methods.
+
+    One ``METHOD_SUMMARY:{json}`` line per method with every string
+    field jsonEsc'd — the previous pipe-and-comma format carried CPG
+    code snippets with zero escaping, so a ``|`` or ``,`` inside a
+    snippet forged extra fields/entries. Records are println'd (the
+    ``joern --script`` subprocess transport sees stdout but not the
+    final expression) AND carried in the final expression's string
+    echo (the server's /query-sync returns the final expression echo
+    but not println output).
+    """
     if not method_names:
         return None
     safe = [n for n in method_names if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", n)]
@@ -1623,47 +1746,62 @@ def _build_summary_batch_query(method_names: list[str]) -> str | None:
         return None
     names_list = ", ".join(f'"{n}"' for n in safe)
     return (
+        SCALA_JSON_ESC_DEF + "\n"
+        # .take(200) on the RAW element BEFORE jsonEsc — escape-then-
+        # truncate can bisect an injected \" and leave a dangling
+        # backslash that breaks the whole record.
+        'def jsonArr(xs: List[String]): String = '
+        'xs.map(x => "\\"" + jsonEsc(x.take(200)) + "\\"")'
+        '.mkString("[", ",", "]")\n'
+        # Explicit EngineContext, mirroring tiered_taint.sc's
+        # `(tier1Ctx)` style: the server REPL session is persistent,
+        # and an earlier query's top-level `implicit val engineContext`
+        # (standard_sinks.sc declares one) makes bare implicit
+        # resolution ambiguous with JoernConsole's own context —
+        # a compile error that silently loses the whole batch.
+        "val summaryCtx = "
+        "io.joern.dataflowengineoss.queryengine.EngineContext()\n"
         f"val names = List({names_list})\n"
-        "names.map { n =>\n"
-        '  val m = cpg.method.nameExact(n).headOption.getOrElse(null)\n'
-        '  if (m != null) {\n'
-        '    val taints = m.parameter.reachableBy(cpg.method.nameExact(n).parameter).code.l\n'
+        "val summaryLines = names.map { n =>\n"
+        "  val m = cpg.method.nameExact(n).headOption.getOrElse(null)\n"
+        "  if (m != null) {\n"
+        "    val taints = m.parameter.reachableBy(cpg.method.nameExact(n).parameter)(summaryCtx).code.l\n"
         '    val pre = m.ast.isCall.name(".*check.*|.*assert.*|.*validate.*").code.l\n'
-        '    val ret = m.methodReturn.typ.name.l\n'
-        '    s"METHOD:${n}|TAINTS:${taints.mkString(",")}|PRE:${pre.mkString(",")}|RET:${ret.mkString(",")}"\n'
-        '  } else s"METHOD:${n}|NOTFOUND"\n'
-        "}.mkString(\"\\n\")"
+        "    val ret = m.methodReturn.typ.name.l\n"
+        '    s"""METHOD_SUMMARY:{"method":"${jsonEsc(n)}","found":true,'
+        '"taints":${jsonArr(taints)},"pre":${jsonArr(pre)},'
+        '"ret":${jsonArr(ret)}}"""\n'
+        '  } else s"""METHOD_SUMMARY:{"method":"${jsonEsc(n)}","found":false}"""\n'
+        "}\n"
+        "summaryLines.foreach(println)\n"
+        'summaryLines.mkString("\\n")'
     )
 
 
 def parse_summary_output(raw: str) -> dict[str, JoernMethodSummary]:
-    """Parse the batch summary output into JoernMethodSummary objects."""
+    """Parse ``METHOD_SUMMARY:{json}`` lines into JoernMethodSummary objects.
+
+    ``parse_marker_records`` owns the transport tolerance: ANSI strip,
+    echo prefixes/framing, Java-escaped value-echo recovery (a
+    ONE-method batch's final expression echoes as a single-line escaped
+    string), and println/echo dedupe.  A genuinely printed record that
+    fails to decode is logged as a warning — the return shape has no
+    error slot, so the log is the record; echo duplicates stay silent.
+    """
+    records, errors = parse_marker_records(raw, _SUMMARY_MARKER)
+    for err in errors:
+        logger.warning("method summary record dropped: %s", err)
     results: dict[str, JoernMethodSummary] = {}
-    for line in raw.splitlines():
-        line = line.strip().strip('"')
-        if not line.startswith("METHOD:"):
+    for data in records:
+        if not isinstance(data, dict) or not data.get("found"):
             continue
-        parts = line.split("|")
-        name = parts[0].removeprefix("METHOD:")
-        if len(parts) < 2 or "NOTFOUND" in parts[1]:
+        name = data.get("method", "")
+        if not isinstance(name, str) or not name:
             continue
-        taints: list[str] = []
-        pre: list[str] = []
-        ret: list[str] = []
-        for part in parts[1:]:
-            if part.startswith("TAINTS:"):
-                val = part.removeprefix("TAINTS:")
-                taints = [v for v in val.split(",") if v]
-            elif part.startswith("PRE:"):
-                val = part.removeprefix("PRE:")
-                pre = [v for v in val.split(",") if v]
-            elif part.startswith("RET:"):
-                val = part.removeprefix("RET:")
-                ret = [v for v in val.split(",") if v]
         results[name] = JoernMethodSummary(
             method=name,
-            taint_rules=taints,
-            preconditions=pre,
-            returns=ret,
+            taint_rules=[str(v) for v in data.get("taints") or [] if v],
+            preconditions=[str(v) for v in data.get("pre") or [] if v],
+            returns=[str(v) for v in data.get("ret") or [] if v],
         )
     return results

@@ -234,10 +234,15 @@ class DomainModel:
     # ----- persistence -------------------------------------------
 
     def save(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(asdict(self), indent=2) + "\n", encoding="utf-8")
-        tmp.rename(path)
+        # Shared atomic writer: unique tempfile in the destination
+        # directory + fsync + os.replace. A fixed '<path>.tmp' name
+        # let two concurrent studies interleave their temp writes and
+        # rename a torn model into place.
+        from core.atomic_fs import write_text_atomically
+
+        write_text_atomically(
+            path, json.dumps(asdict(self), indent=2) + "\n",
+        )
 
     @classmethod
     def load(cls, path: Path) -> DomainModel:

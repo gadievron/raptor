@@ -266,16 +266,23 @@ def iter_trajectory_json(
     for entry in sorted(root.iterdir()):
         if not entry.is_dir():
             continue
-        candidate = entry / TRAJECTORY_FILENAME
-        if not candidate.is_file():
-            continue
-        try:
-            raw = candidate.read_text(encoding="utf-8")
-            parsed = json.loads(raw)
-        except (OSError, json.JSONDecodeError) as e:
-            _log.warning(
-                f"skipping unreadable trajectory {candidate}: "
-                f"{type(e).__name__}: {e}",
-            )
-            continue
-        yield candidate, parsed
+        # Canonical file first, then salvage files: ``_write_atomic``
+        # falls back to ``trajectory-<hex>.json`` on a run_id collision
+        # or a planted symlink, and data that was written must stay
+        # readable. The salvage glob never matches the canonical name,
+        # so nothing is yielded twice.
+        candidates = [entry / TRAJECTORY_FILENAME]
+        candidates.extend(sorted(entry.glob("trajectory-*.json")))
+        for candidate in candidates:
+            if not candidate.is_file():
+                continue
+            try:
+                raw = candidate.read_text(encoding="utf-8")
+                parsed = json.loads(raw)
+            except (OSError, json.JSONDecodeError) as e:
+                _log.warning(
+                    f"skipping unreadable trajectory {candidate}: "
+                    f"{type(e).__name__}: {e}",
+                )
+                continue
+            yield candidate, parsed

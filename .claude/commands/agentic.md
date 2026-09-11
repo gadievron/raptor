@@ -144,7 +144,7 @@ The pipeline produces a report with one of three modes:
 **`"mode": "prep_only"`** — No LLM was available and orchestration did not run.
 The pipeline completed scanning, SARIF parsing, deduplication, code reading,
 dataflow extraction, and structured output — but no analysis. Read the findings
-from `autonomous_analysis_report.json` in the output directory. Each finding
+from `<output_dir>/autonomous/autonomous_analysis_report.json`. Each finding
 includes `code`, `surrounding_context`, `file_path`, line numbers, `dataflow`,
 and `feasibility`. If the user asks you to analyse them, for each finding:
 
@@ -183,7 +183,7 @@ prints `interactive` AND the AskUserQuestion tool is available, ask — "N explo
 findings. What next?" — options:
 
 1. **Validate the set (Recommended)** — run the exploitability-validation pipeline on
-   this run's findings: `/validate <target> --findings <output_dir>/autonomous_analysis_report.json`.
+   this run's findings: `/validate <target> --findings <output_dir>/autonomous/autonomous_analysis_report.json`.
    Cost note in the description: state this run's actual analysis spend (sum the
    per-finding `cost_usd` values from the report) and that validation adds a further
    multi-stage LLM pass (Stages A–F) per finding. (`--validate` on the original

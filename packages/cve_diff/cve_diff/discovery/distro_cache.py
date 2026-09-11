@@ -129,9 +129,15 @@ class DistroFetcher:
                 return hit
         result = fetcher(cve_id)
         err = result.get("error", "")
+        # Only definitive answers may enter the 7-day disk cache. Rate
+        # limits / load shedding (429, 403) and server errors (5xx) are
+        # transient — disk-caching one bench run's 429 storm would make
+        # every later run (long after the limit refilled) read the
+        # cached error and report the distro advisory as unavailable
+        # until TTL expiry. 404/410 = "distro has no record": definitive.
         cacheable = (
             "error" not in result
-            or (err.startswith("http ") and not err.startswith("http 5"))
+            or err in ("http 404", "http 410")
         )
         if cacheable and self.cache_enabled and self._disk is not None:
             self._disk.put(f"{distro}/{cve_id}", result, ttl_seconds=_CACHE_TTL)

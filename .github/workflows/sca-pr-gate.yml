@@ -1,7 +1,7 @@
 name: SCA PR gate
 
-# Runs raptor-sca against the PR head AND main, then diffs the two
-# findings.json sets. Fails the build when the PR introduces a new
+# Runs raptor-sca against the PR merge result AND main, then diffs
+# the two findings.json sets. Fails the build when the PR introduces a new
 # vulnerability at the configured severity threshold (default: high).
 #
 # Posts a markdown delta comment on the PR — operators see exactly
@@ -64,15 +64,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Checkout PR head
+      - name: Checkout PR merge result
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # Need full history so we can check out main as the
           # baseline below.
           fetch-depth: 0
-          # Avoid the default merge-commit checkout — we want the
-          # PR head exactly as it would be merged.
-          ref: ${{ github.event.pull_request.head.sha }}
+          # Default pull_request checkout = the PR merged into the
+          # current base — the tree this gate actually judges. An
+          # exact head.sha checkout breaks on PRs based on an older
+          # main: the scan runs main's workflow against a tree that
+          # may predate the tooling it invokes (bin/raptor-sca), and
+          # the diff would blame the PR for baseline drift it never
+          # introduced.
 
       - name: Enable the netns egress tier (unprivileged user namespaces)
         # The SCA resolvers dry-run untrusted manifests with egress
@@ -96,11 +100,11 @@ jobs:
           python -m pip install --upgrade pip==26.1.1
           pip install -r requirements.txt
 
-      - name: Scan PR head
+      - name: Scan PR merge result
         run: bin/raptor-sca . --out /tmp/sca-pr --no-image-scanning
 
       - name: Scan main baseline
-        # We checkout main into a sibling dir so the PR-head working
+        # We checkout main into a sibling dir so the merge-result working
         # tree stays untouched (cleanup on workflow termination is
         # automatic; this is just hygiene).
         run: |

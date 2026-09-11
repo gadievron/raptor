@@ -224,6 +224,18 @@ class SandboxedTools:
                         if not raw:
                             break
                         lineno += 1
+                        if len(raw) == _MAX_LINE_BYTES and not raw.endswith(b"\n"):
+                            # Over-long physical line: TRUNCATE it for
+                            # matching by draining the remainder. Without
+                            # this, each continuation chunk came back as
+                            # an extra "line", drifting the reported line
+                            # number of every subsequent match (minified
+                            # JS / generated one-liners) and matching
+                            # phantom mid-line "lines".
+                            while True:
+                                rest = fh.readline(_MAX_LINE_BYTES)
+                                if not rest or rest.endswith(b"\n"):
+                                    break
                         # errors="replace" never raises — invalid bytes become
                         # U+FFFD. No try/except needed.
                         line = raw.decode("utf-8", errors="replace")
@@ -369,15 +381,22 @@ class SandboxedTools:
         not just different orders. That breaks reproducibility.
         """
         skip_dirs = {
-            ".git", ".hg", ".svn", "node_modules", "__pycache__",
-            "venv", ".venv", "env", ".env",
-            "build", "dist", ".tox", ".mypy_cache", ".pytest_cache",
+            "node_modules", "__pycache__", "venv", "env",
+            "build", "dist",
             "target",  # rust/maven
         }
         for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
             # In-place mutation tells os.walk not to descend.
             # Sort to fix deterministic order for cap-truncation.
-            dirnames[:] = sorted(d for d in dirnames if d not in skip_dirs)
+            # Hidden dirs (leading '.') are skipped as documented —
+            # this covers .git/.hg/.tox/.mypy_cache and also keeps
+            # prior-agent output under e.g. .claude/ out of tool
+            # results. The walk ROOT itself is never filtered, so
+            # `path=".github"` still reaches inside hidden trees.
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if d not in skip_dirs and not d.startswith(".")
+            )
             for fn in sorted(filenames):
                 f = Path(dirpath) / fn
                 # Symlink check — don't follow links to outside repo_root

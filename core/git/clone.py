@@ -391,17 +391,26 @@ def _validate_writable_path(p: Path, *, role: str) -> None:
     # Reject these prefixes outright. Operator-legitimate sandbox
     # work belongs under /tmp, /var/tmp, $HOME, or a dedicated
     # workspace — not in system pseudo-fs locations.
-    _str = str(p)
+    #
+    # Checked on BOTH the literal spelling and the resolved path: the
+    # literal-only check was defeated by ``..`` traversal
+    # (``/tmp/x/../../dev/shm/evil``) and by a symlink whose target
+    # lives under a denied prefix — the resolved form reveals both.
+    # The literal form stays checked too (macOS-symlink parity with
+    # the root checks below: a literal ``/run/...`` spelling is
+    # refused whatever it resolves to).
+    resolved = p.resolve()
     _DENY_PREFIXES = ("/dev/", "/proc/", "/sys/", "/run/")
-    for prefix in _DENY_PREFIXES:
-        if _str.startswith(prefix) or _str == prefix.rstrip("/"):
-            msg = (
-                f"{role}={str(p)!r} is under a system pseudo-fs prefix "
-                f"({prefix}); refusing to grant the sandbox write "
-                f"access. Use /tmp, /var/tmp, $HOME, or a dedicated "
-                f"workspace path instead."
-            )
-            raise ValueError(msg)
+    for candidate in (str(p), str(resolved)):
+        for prefix in _DENY_PREFIXES:
+            if candidate.startswith(prefix) or candidate == prefix.rstrip("/"):
+                msg = (
+                    f"{role}={str(p)!r} is under a system pseudo-fs prefix "
+                    f"({prefix}); refusing to grant the sandbox write "
+                    f"access. Use /tmp, /var/tmp, $HOME, or a dedicated "
+                    f"workspace path instead."
+                )
+                raise ValueError(msg)
     # Two checks against root, both required:
     #
     # 1. The RESOLVED form catches `/tmp/work -> /` symlink attacks
@@ -419,7 +428,6 @@ def _validate_writable_path(p: Path, *, role: str) -> None:
     #
     # Either form being root → reject. Caught by core/sandbox/tests/
     # — first surfaced when the sandbox suite ran on macOS.
-    resolved = p.resolve()
     for label, candidate in (("resolved", resolved), ("literal", p)):
         if candidate.parent == candidate:
             msg = (

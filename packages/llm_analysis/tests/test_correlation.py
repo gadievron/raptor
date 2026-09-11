@@ -272,3 +272,91 @@ class TestAbstentions:
         minority = [u["model"] for u in result["unique_insights"]
                     if u["finding_id"] == "f-001"]
         assert minority == ["claude"]
+
+
+class TestStaleVerdictNormalisation:
+    """The active model's per-model entry is refreshed from the
+    post-pipeline top-level result — but a present-but-None top-level
+    field must never convert a real vote into an abstention."""
+
+    @staticmethod
+    def _results(top_exploitable):
+        return {
+            "f1": {
+                "analysed_by": "m1",
+                "is_exploitable": top_exploitable,
+                "exploitability_score": 0.9,
+                "ruling": None,
+                "multi_model_analyses": [
+                    {"model": "m1", "is_exploitable": True,
+                     "exploitability_score": 0.9},
+                    {"model": "m2", "is_exploitable": False,
+                     "exploitability_score": 0.1},
+                ],
+            },
+        }
+
+    def test_present_none_does_not_clobber_vote(self):
+        results = self._results(top_exploitable=None)
+        out = correlate_results(results)
+        # m1's real True vote survives; the panel stays a 1v1 dispute
+        # instead of collapsing to a single-voter "high-negative".
+        assert out["agreement_matrix"]["f1"]["m1"]["is_exploitable"] is True
+        assert out["confidence_signals"]["f1"] == "disputed"
+
+    def test_real_value_still_normalises(self):
+        # Two-direction: a genuine post-pipeline flip IS pulled in.
+        results = self._results(top_exploitable=False)
+        out = correlate_results(results)
+        assert out["agreement_matrix"]["f1"]["m1"]["is_exploitable"] is False
+        assert out["confidence_signals"]["f1"] == "high-negative"
+
+
+class TestTieHandling:
+    """A 1-vs-1 dispute has no majority — neither side may be framed
+    as the dissenting minority against an implied consensus."""
+
+    @staticmethod
+    def _tied():
+        return {
+            "f1": {
+                "analysed_by": "m1",
+                "is_exploitable": True,
+                "multi_model_analyses": [
+                    {"model": "m1", "is_exploitable": True,
+                     "reasoning": "yes"},
+                    {"model": "m2", "is_exploitable": False,
+                     "reasoning": "no"},
+                ],
+            },
+        }
+
+    def test_even_split_lists_both_sides_with_own_verdicts(self):
+        out = correlate_results(self._tied())
+        insights = out["unique_insights"]
+        assert len(insights) == 2
+        by_model = {i["model"]: i for i in insights}
+        assert by_model["m1"]["verdict"] is True
+        assert by_model["m2"]["verdict"] is False
+        assert all(i["tie"] is True for i in insights)
+
+    def test_real_minority_still_framed_as_minority(self):
+        # Two-direction: a genuine 2v1 keeps the minority framing.
+        results = {
+            "f1": {
+                "analysed_by": "m1",
+                "is_exploitable": True,
+                "multi_model_analyses": [
+                    {"model": "m1", "is_exploitable": True},
+                    {"model": "m2", "is_exploitable": True},
+                    {"model": "m3", "is_exploitable": False,
+                     "reasoning": "dissent"},
+                ],
+            },
+        }
+        out = correlate_results(results)
+        insights = out["unique_insights"]
+        assert len(insights) == 1
+        assert insights[0]["model"] == "m3"
+        assert insights[0]["verdict"] is False
+        assert "tie" not in insights[0]

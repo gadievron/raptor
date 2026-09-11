@@ -47,6 +47,7 @@ from dataclasses import asdict  # noqa: E402
 
 from core.concepts.model import StudyItem  # noqa: E402
 from core.json import load_json, loads, save_json  # noqa: E402
+from core.paths import confine  # noqa: E402
 
 # Study artifacts (reading/study lists) are small RAPTOR-written run
 # output.
@@ -566,11 +567,17 @@ def _detect_refcount_fields(fields: list[str], block: str) -> list[str]:
 
 def _extract_doc_comment(source: str, pos: int) -> str:
     """Extract doc comment preceding a definition."""
-    before = source[:pos].rstrip()
-    lines = before.split("\n")
     doc_lines: list[str] = []
     in_block = False
-    for line in reversed(lines):
+    # Walk lines backwards from pos instead of copying and splitting
+    # the whole file prefix: this function runs once per struct/function
+    # match, and the scan almost always stops within a few lines —
+    # per-match prefix copies would be quadratic on large files.
+    end = pos
+    while end > 0:
+        nl = source.rfind("\n", 0, end)
+        line = source[nl + 1:end]
+        end = nl
         stripped = line.strip()
         if stripped.endswith("*/"):
             in_block = True
@@ -630,9 +637,9 @@ def _extract_functions(
     Returns ALL regex matches including forward declarations and
     implementations of the same function — a forward declaration may
     carry attributes or decorations absent from the implementation.
-    Downstream consumers (call graph, type index) use dict-last-wins
-    on name keys, so the implementation (with body) naturally takes
-    precedence.
+    Downstream consumers (call graph, type index) prefer the entry
+    with a body when merging on name keys, so the implementation
+    takes precedence regardless of scan order.
     """
     nl_index = _nl_index if _nl_index is not None else _build_newline_index(source)
     results = []
@@ -986,8 +993,13 @@ def _build_type_reference_index(
     Usage classes: 'writer' (assigns to struct fields), 'reader'
     (reads struct fields), 'passthru' (only forwards the pointer).
     """
-    # Build a name→fn lookup for functions (which have bodies)
-    fn_by_name: dict[str, dict] = {f["name"]: f for f in functions}
+    # Build a name→fn lookup preferring entries with bodies: a bodyless
+    # forward/extern declaration scanned after the implementation must
+    # not replace it, or usage classification degrades to 'passthru'.
+    fn_by_name: dict[str, dict] = {}
+    for f in functions:
+        if f.get("body") or f["name"] not in fn_by_name:
+            fn_by_name[f["name"]] = f
 
     index: dict[str, set[str]] = {}
     for fn in prototypes + functions:
@@ -1263,7 +1275,10 @@ def _build_call_graph(functions: list[dict]) -> dict[str, list[str]]:
     for f in functions:
         body = f.get("body", "")
         if not body:
-            graph[f["name"]] = []
+            # A bodyless declaration of a function whose implementation
+            # was already recorded must not wipe its call edges — the
+            # definition wins regardless of scan order.
+            graph.setdefault(f["name"], [])
             continue
         candidates = {m.group(1) for m in _CALL_SITE_RE.finditer(body)}
         called = sorted((candidates & known_names) - {f["name"]})
@@ -1662,8 +1677,13 @@ def _scan_file_result(
     except OSError:
         return [], [], [], {}
 
-    if concept_filter and not any(term in content for term in concept_filter):
-        return [], [], [], {}
+    if concept_filter:
+        # Terms arrive lowercased; compare against lowercased content so
+        # the gate is case-insensitive like the relevance filter that
+        # runs after it (exact-case matches still match).
+        content_low = content.lower()
+        if not any(term in content_low for term in concept_filter):
+            return [], [], [], {}
 
     rel = str(sf.relative_to(source_root)) if sf.is_relative_to(source_root) else str(sf)
     nl_index = _build_newline_index(content)
@@ -1877,8 +1897,14 @@ def _scope_from_reading_list(
     collected: set[Path] = set()
     frontier: set[Path] = set()
     for sf in seed_files:
-        p = (source_root / sf).resolve()
-        if p.is_file():
+        # reading-list.json is an LLM-authored artifact: confine each
+        # seed to the source root (symlink-aware) before it can start
+        # the include walk. _resolve_include already enforces the same
+        # containment for every chased include — an absolute or
+        # ../-traversal source_file must not be the one path that
+        # escapes the target tree.
+        p = confine(source_root, sf)
+        if p is not None and p.is_file():
             frontier.add(p)
 
     for _depth in range(max_depth + 1):
@@ -2174,6 +2200,12 @@ def _chase_reading_list_definitions(
     if not idents:
         return []
 
+    # The scanned repo is untrusted input — spawn helpers with the
+    # sanitised environment (allowlist) rather than the full inherited
+    # one, like every other subprocess that touches scanned trees.
+    from core.config import RaptorConfig
+    safe_env = RaptorConfig.get_safe_env()
+
     target_resolved = target.resolve()
     candidates: set[Path] = set()
 
@@ -2193,6 +2225,7 @@ def _chase_reading_list_definitions(
                 ["grep", "-rlE", "--include=*.c", "--include=*.h",
                  combined, str(source_root)],
                 capture_output=True, text=True, timeout=60, check=False,
+                env=safe_env,
             )
             for line in proc.stdout.strip().split("\n"):
                 if not line:
@@ -2221,6 +2254,7 @@ def _chase_reading_list_definitions(
                 ["find", str(source_root), "-type", "f", "("]
                 + name_args + [")"],
                 capture_output=True, text=True, timeout=30, check=False,
+                env=safe_env,
             )
             for line in proc.stdout.strip().split("\n"):
                 if not line:
@@ -2512,7 +2546,10 @@ def main() -> None:
                          "<target>/decomp-map.json).")
     ap.add_argument("--force", action="store_true",
                     help="Re-run even if study-list.json already exists.")
-    parsed, _extras = ap.parse_known_args(sys.argv[1:])
+    # Strict parsing: a typo'd scoping flag (e.g. a misspelled
+    # --identifier) must error out, not silently degrade the run to a
+    # full unscoped extraction of the whole tree.
+    parsed = ap.parse_args(sys.argv[1:])
 
     target = Path(parsed.target).resolve()
     output_dir = Path(parsed.output_dir)
@@ -2584,6 +2621,18 @@ def main() -> None:
             p = Path(d).resolve()
             if p.is_dir() and p not in search_dirs:
                 search_dirs.append(p)
+                if not p.is_relative_to(source_root):
+                    # Main-path include resolution only accepts files
+                    # under the source root; out-of-tree dirs feed the
+                    # identifier-driven external-header pass only. Say
+                    # so instead of silently ignoring the flag.
+                    print(
+                        f"study-prep: WARNING: --include-dir {p} is "
+                        f"outside the source root ({source_root}); it "
+                        f"is only consulted by the external-header "
+                        f"pass, which requires --identifier",
+                        file=sys.stderr,
+                    )
 
     is_scoped = False
     if target.is_file():
@@ -2613,8 +2662,14 @@ def main() -> None:
                 and not f.is_symlink()
             )
             if len(source_files) > 500 and parsed.identifier:
+                scope_idents = parsed.identifier
+                if parsed.correlate:
+                    # Correlation targets must survive file scoping:
+                    # a file defining a correlate name but not
+                    # --identifier still belongs to the study.
+                    scope_idents += "," + parsed.correlate.replace("+", ",")
                 source_files = _grep_scope(
-                    source_files, parsed.identifier, target,
+                    source_files, scope_idents, target,
                 )
 
         # Chase reading-list identifiers to their definitions outside target.
@@ -2775,6 +2830,29 @@ def main() -> None:
                       f"{len(semantic_concepts)} semantic concepts",
                       file=sys.stderr)
 
+    # Merge --correlate identifiers BEFORE the pass-2 file filter is
+    # built: a correlation study must parse the files that define its
+    # targets, so files defining a correlate name but not --identifier
+    # cannot be skipped (and standalone --correlate gets a filter set
+    # instead of an unscoped scan).
+    correlate_identifiers = None
+    if parsed.correlate:
+        correlate_identifiers = [
+            s.strip() for s in re.split(r"[,+]", parsed.correlate)
+            if s.strip()
+        ]
+        if len(correlate_identifiers) < 2:
+            correlate_identifiers = None
+        else:
+            print(f"study-prep: correlation requested for {correlate_identifiers}",
+                  file=sys.stderr)
+            if not identifiers:
+                identifiers = list(correlate_identifiers)
+            else:
+                for ci in correlate_identifiers:
+                    if ci not in identifiers:
+                        identifiers.append(ci)
+
     cf: frozenset[str] | None = None
     if identifiers and c_files:
         partial_type_ref = _build_type_reference_index(all_prototypes, all_functions)
@@ -2782,13 +2860,17 @@ def main() -> None:
         for one_ident in identifiers:
             bare = re.sub(r"^(?:struct|union|enum)\s+", "", one_ident.lower())
             bare_no_t = bare.removesuffix("_t")
-            search_terms.add(one_ident)
+            search_terms.add(one_ident.lower())
             search_terms.add(bare)
             for key in (one_ident, bare, bare_no_t, bare_no_t + "_t",
                         "struct " + bare):
                 for fn_name, _cls in partial_type_ref.get(key, []):
                     if bare_no_t in fn_name.lower():
-                        search_terms.add(fn_name)
+                        search_terms.add(fn_name.lower())
+        # All terms lowercased: _scan_file_result matches them against
+        # lowercased content, keeping this gate case-insensitive like
+        # every other identifier comparison in the pipeline (a
+        # case-mismatched --identifier must not skip every file).
         cf = frozenset(search_terms)
         label = ",".join(identifiers) if len(identifiers) <= 3 else f"{len(identifiers)} identifiers"
         print(f"study-prep: identifier filter ({label}): {len(cf)} search terms",
@@ -2908,27 +2990,6 @@ def main() -> None:
                   f"from {len(_deferred_concepts)} concepts (in-memory)",
                   file=sys.stderr)
 
-    # Merge --correlate identifiers early so the relevance filter and doc
-    # discovery see them (previously this ran after both, so standalone
-    # --correlate produced an empty filter set).
-    correlate_identifiers = None
-    if parsed.correlate:
-        correlate_identifiers = [
-            s.strip() for s in re.split(r"[,+]", parsed.correlate)
-            if s.strip()
-        ]
-        if len(correlate_identifiers) < 2:
-            correlate_identifiers = None
-        else:
-            print(f"study-prep: correlation requested for {correlate_identifiers}",
-                  file=sys.stderr)
-            if not identifiers:
-                identifiers = list(correlate_identifiers)
-            else:
-                for ci in correlate_identifiers:
-                    if ci not in identifiers:
-                        identifiers.append(ci)
-
     if identifiers:
         # ident_exact: names that match tier 0 exactly (struct defs)
         # ident_stems: names eligible for stem-in-name tier 1 promotion
@@ -2976,8 +3037,10 @@ def main() -> None:
                 if f.get("file", "").endswith(tuple(_HEADER_EXTENSIONS)):
                     fn_declared_in.setdefault(f["name"], set()).add(f["file"])
 
-            for fn_name, headers in fn_declared_in.items():
-                if headers & tier0_headers:
+            # 'decl_headers', not 'headers': the pass-1 header file
+            # list named 'headers' is still read further down.
+            for fn_name, decl_headers in fn_declared_in.items():
+                if decl_headers & tier0_headers:
                     api_fns.add(fn_name)
 
         # All declared items for return-type and param-dominance checks

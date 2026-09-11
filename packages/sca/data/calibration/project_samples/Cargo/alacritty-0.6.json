@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-28T20:34:29Z",
+    "fetched_at": "2026-09-01T11:27:48Z",
     "git_ref": "v0.6.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of alacritty-0.6",
@@ -28,6 +28,7 @@
       "cvss_score": null,
       "dep_name": "ansi_term",
       "dep_version": "0.11.0",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -37,8 +38,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:ansi_term:0.11.0:RUSTSEC-2021-0139",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/ansi_term@0.11.0",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -67,7 +73,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -98,6 +109,7 @@
       "cvss_score": 7.5,
       "dep_name": "arc-swap",
       "dep_version": "0.4.7",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.01599,
       "exploit_evidence": {
@@ -107,8 +119,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:arc-swap:0.4.7:GHSA-9pqx-g3jh-qpqq",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/arc-swap@0.4.7",
       "raptor_risk_estimate": 6.54944692920842,
       "reachability": {
@@ -137,7 +154,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -160,6 +182,7 @@
       "cvss_score": null,
       "dep_name": "atty",
       "dep_version": "0.2.14",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -169,8 +192,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:atty:0.2.14:GHSA-g98v-hv3f-hcfr",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/atty@0.2.14",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -199,7 +227,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -224,6 +257,7 @@
       "cvss_score": null,
       "dep_name": "atty",
       "dep_version": "0.2.14",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -233,8 +267,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:atty:0.2.14:RUSTSEC-2021-0145",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/atty@0.2.14",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -263,7 +302,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -284,6 +328,7 @@
       "cvss_score": null,
       "dep_name": "atty",
       "dep_version": "0.2.14",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -293,8 +338,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:atty:0.2.14:RUSTSEC-2024-0375",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/atty@0.2.14",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -323,7 +373,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -357,6 +412,7 @@
       "cvss_score": 7.5,
       "dep_name": "bzip2",
       "dep_version": "0.3.3",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.01212,
       "exploit_evidence": {
@@ -366,8 +422,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:bzip2:0.3.3:GHSA-96jv-r488-c2rj",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/bzip2@0.3.3",
       "raptor_risk_estimate": 9.99297868566161,
       "reachability": {
@@ -397,7 +458,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -431,6 +497,7 @@
       "cvss_score": 8.1,
       "dep_name": "crossbeam-utils",
       "dep_version": "0.7.2",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.01239,
       "exploit_evidence": {
@@ -440,8 +507,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:crossbeam-utils:0.7.2:GHSA-qc84-gqf4-9926",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/crossbeam-utils@0.7.2",
       "raptor_risk_estimate": 10.139072286516607,
       "reachability": {
@@ -471,7 +543,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -492,6 +569,7 @@
       "cvss_score": null,
       "dep_name": "derivative",
       "dep_version": "2.1.1",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -501,8 +579,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:derivative:2.1.1:RUSTSEC-2024-0388",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/derivative@2.1.1",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -531,7 +614,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -565,6 +653,7 @@
       "cvss_score": 5.5,
       "dep_name": "image",
       "dep_version": "0.23.10",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.00384,
       "exploit_evidence": {
@@ -574,8 +663,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:image:0.23.10:GHSA-9wgh-vjj7-7433",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/image@0.23.10",
       "raptor_risk_estimate": 4.729843591096147,
       "reachability": {
@@ -604,7 +698,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -626,6 +725,7 @@
       "cvss_score": null,
       "dep_name": "instant",
       "dep_version": "0.1.7",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -635,8 +735,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:instant:0.1.7:RUSTSEC-2024-0384",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/instant@0.1.7",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -665,7 +770,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -706,6 +816,7 @@
       "cvss_score": 4.7,
       "dep_name": "lock_api",
       "dep_version": "0.4.1",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.00324,
       "exploit_evidence": {
@@ -715,8 +826,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:lock_api:0.4.1:GHSA-5wg8-7c9q-794v",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/lock_api@0.4.1",
       "raptor_risk_estimate": 4.038782206462155,
       "reachability": {
@@ -745,7 +861,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -768,6 +889,7 @@
       "cvss_score": null,
       "dep_name": "memmap",
       "dep_version": "0.7.0",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -777,8 +899,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:memmap:0.7.0:RUSTSEC-2020-0077",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/memmap@0.7.0",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -807,7 +934,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -838,6 +970,7 @@
       "cvss_score": 5.5,
       "dep_name": "miow",
       "dep_version": "0.2.1",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.00387,
       "exploit_evidence": {
@@ -847,8 +980,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:miow:0.2.1:RUSTSEC-2020-0080",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/miow@0.2.1",
       "raptor_risk_estimate": 4.730024045804764,
       "reachability": {
@@ -877,7 +1015,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -911,6 +1054,7 @@
       "cvss_score": 5.5,
       "dep_name": "miow",
       "dep_version": "0.3.5",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.00387,
       "exploit_evidence": {
@@ -920,8 +1064,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:miow:0.3.5:GHSA-jrcf-4jp8-m28v",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/miow@0.3.5",
       "raptor_risk_estimate": 4.730024045804764,
       "reachability": {
@@ -950,7 +1099,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -988,6 +1142,7 @@
       "cvss_score": 5.5,
       "dep_name": "net2",
       "dep_version": "0.2.35",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.00398,
       "exploit_evidence": {
@@ -997,8 +1152,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:net2:0.2.35:GHSA-458v-4hrf-g3m4",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/net2@0.2.35",
       "raptor_risk_estimate": 4.730685713069695,
       "reachability": {
@@ -1027,7 +1187,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1048,6 +1213,7 @@
       "cvss_score": null,
       "dep_name": "net2",
       "dep_version": "0.2.35",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -1057,8 +1223,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:net2:0.2.35:RUSTSEC-2020-0016",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/net2@0.2.35",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -1087,7 +1258,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1124,6 +1300,7 @@
       "cvss_score": 6.7,
       "dep_name": "nix",
       "dep_version": "0.18.0",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.0165,
       "exploit_evidence": {
@@ -1133,8 +1310,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:nix:0.18.0:GHSA-76w9-p8mg-j927",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/nix@0.18.0",
       "raptor_risk_estimate": 8.628832126818748,
       "reachability": {
@@ -1166,7 +1348,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1189,6 +1376,7 @@
       "cvss_score": null,
       "dep_name": "openssl",
       "dep_version": "0.10.30",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -1198,8 +1386,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:GHSA-3gxf-9r58-2ghg",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/openssl@0.10.30",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -1228,7 +1421,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1255,6 +1453,7 @@
       "cvss_score": null,
       "dep_name": "openssl",
       "dep_version": "0.10.30",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -1264,8 +1463,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:GHSA-6hcf-g6gr-hhcr",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/openssl@0.10.30",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -1294,7 +1498,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1317,13 +1526,17 @@
           "https://github.com/rust-openssl/rust-openssl/commit/718d07ff8ff7be417d5b7a6a0047f1607520b3b6",
           "https://github.com/rust-openssl/rust-openssl"
         ],
-        "severity": null,
-        "severity_fallback": "high",
+        "severity": {
+          "score": 7.2,
+          "severity": "high",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N/E:U"
+        },
         "summary": "rust-openssl has incorrect bounds assertion in aes key wrap"
       },
-      "cvss_score": null,
+      "cvss_score": 7.2,
       "dep_name": "openssl",
       "dep_version": "0.10.30",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.00251,
       "exploit_evidence": {
@@ -1333,10 +1546,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:GHSA-8c75-8mhr-p7r9",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/openssl@0.10.30",
-      "raptor_risk_estimate": 6.0096189138967455,
+      "raptor_risk_estimate": 6.181322311436653,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1348,13 +1566,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 70.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 72.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.400580853,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.0096189138967455,
+        "final": 6.181322311436653,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1363,7 +1581,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1387,6 +1610,7 @@
       "cvss_score": null,
       "dep_name": "openssl",
       "dep_version": "0.10.30",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -1396,8 +1620,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:GHSA-9qwg-crg9-m2vc",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/openssl@0.10.30",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -1426,7 +1655,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1450,13 +1684,17 @@
           "https://github.com/rust-openssl/rust-openssl/commit/1d109020d98fff2fb2e45c39a373af3dff99b24c",
           "https://github.com/rust-openssl/rust-openssl"
         ],
-        "severity": null,
-        "severity_fallback": "high",
+        "severity": {
+          "score": 8.3,
+          "severity": "high",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:N/VA:L/SC:N/SI:N/SA:N"
+        },
         "summary": "rust-openssl: Unchecked callback length in PSK/cookie trampolines leaks adjacent memory to peer"
       },
-      "cvss_score": null,
+      "cvss_score": 8.3,
       "dep_name": "openssl",
       "dep_version": "0.10.30",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.0028,
       "exploit_evidence": {
@@ -1466,10 +1704,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:GHSA-hppc-g8h3-xhp3",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/openssl@0.10.30",
-      "raptor_risk_estimate": 6.011839053645189,
+      "raptor_risk_estimate": 7.128323449322154,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1481,13 +1724,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 70.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 83.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.40072884,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.011839053645189,
+        "final": 7.128323449322154,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1496,7 +1739,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1520,13 +1768,17 @@
           "https://github.com/rust-openssl/rust-openssl/commit/09b425e5f59a2466d806e71a83a9a449c914c596",
           "https://github.com/rust-openssl/rust-openssl"
         ],
-        "severity": null,
-        "severity_fallback": "high",
+        "severity": {
+          "score": 7.2,
+          "severity": "high",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N/E:U"
+        },
         "summary": "rust-openssl: Deriver::derive and PkeyCtxRef::derive can overflow short buffers on OpenSSL 1.1.1"
       },
-      "cvss_score": null,
+      "cvss_score": 7.2,
       "dep_name": "openssl",
       "dep_version": "0.10.30",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.00285,
       "exploit_evidence": {
@@ -1536,10 +1788,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:GHSA-pqf5-4pqq-29f5",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/openssl@0.10.30",
-      "raptor_risk_estimate": 6.012221836360439,
+      "raptor_risk_estimate": 6.183999603113595,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1551,13 +1808,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 70.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 72.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.400754355,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.012221836360439,
+        "final": 6.183999603113595,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1566,7 +1823,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1590,15 +1852,16 @@
           "https://rustsec.org/advisories/RUSTSEC-2024-0357.html"
         ],
         "severity": {
-          "score": 6.5,
+          "score": 6.9,
           "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L"
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:L/SC:N/SI:N/SA:N"
         },
         "summary": "openssl's `MemBio::get_buf` has undefined behavior with empty buffers"
       },
-      "cvss_score": 6.5,
+      "cvss_score": 6.9,
       "dep_name": "openssl",
       "dep_version": "0.10.30",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -1608,10 +1871,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:GHSA-q445-7m23-qrmw",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/openssl@0.10.30",
-      "raptor_risk_estimate": 9.116928204503438,
+      "raptor_risk_estimate": 9.677969940165186,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1623,13 +1891,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 65.0,
+        "cvss_base": 69.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.116928204503438,
+        "final": 9.677969940165186,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1638,7 +1906,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1662,15 +1935,19 @@
           "https://github.com/sfackler/rust-openssl/commit/f014afb230de4d77bc79dea60e7e58c2f47b60f2",
           "https://crates.io/crates/openssl"
         ],
-        "severity": null,
-        "severity_fallback": "medium",
+        "severity": {
+          "score": 6.3,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:L/VI:N/VA:L/SC:N/SI:N/SA:N"
+        },
         "summary": "rust-openssl ssl::select_next_proto use after free"
       },
-      "cvss_score": null,
+      "cvss_score": 6.3,
       "dep_name": "openssl",
       "dep_version": "0.10.30",
+      "direct": false,
       "ecosystem": "Cargo",
-      "epss": 0.00667,
+      "epss": 0.0068,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1678,10 +1955,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:GHSA-rpmj-rpgj-qmpm",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/openssl@0.10.30",
-      "raptor_risk_estimate": 3.452266534745976,
+      "raptor_risk_estimate": 5.438215503778594,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1693,13 +1975,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 63.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40270370099999997,
+        "epss_multiplier": 0.40277004,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.452266534745976,
+        "final": 5.438215503778594,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1708,7 +1990,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1742,6 +2029,7 @@
       "cvss_score": 4.5,
       "dep_name": "openssl",
       "dep_version": "0.10.30",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.00331,
       "exploit_evidence": {
@@ -1751,8 +2039,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:GHSA-xcf7-rvmh-g6q4",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/openssl@0.10.30",
       "raptor_risk_estimate": 3.8672636382904693,
       "reachability": {
@@ -1781,7 +2074,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1805,13 +2103,17 @@
           "https://github.com/rust-openssl/rust-openssl/commit/5af6895c907773699f37f583f409b862284062b1",
           "https://github.com/rust-openssl/rust-openssl"
         ],
-        "severity": null,
-        "severity_fallback": "low",
+        "severity": {
+          "score": 1.7,
+          "severity": "low",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:L/SC:N/SI:N/SA:N/E:U"
+        },
         "summary": "rust-opennssl has an Out-of-bounds read in PEM password callback when returning an oversized length"
       },
-      "cvss_score": null,
+      "cvss_score": 1.7,
       "dep_name": "openssl",
       "dep_version": "0.10.30",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.00294,
       "exploit_evidence": {
@@ -1821,10 +2123,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:GHSA-xmgf-hq76-4vx2",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/openssl@0.10.30",
-      "raptor_risk_estimate": 0.0858987263606841,
+      "raptor_risk_estimate": 1.46027834813163,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1836,13 +2143,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 1.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 17.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.400800282,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 0.0858987263606841,
+        "final": 1.46027834813163,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1851,7 +2158,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1872,13 +2184,17 @@
           "https://nvd.nist.gov/vuln/detail/CVE-2026-42327",
           "https://github.com/rust-openssl/rust-openssl"
         ],
-        "severity": null,
-        "severity_fallback": "high",
+        "severity": {
+          "score": 8.7,
+          "severity": "high",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N"
+        },
         "summary": "rust-openssl has undefined behavior in X509Ref::ocsp_responders for certificates with non-UTF-8 OCSP URLs"
       },
-      "cvss_score": null,
+      "cvss_score": 8.7,
       "dep_name": "openssl",
       "dep_version": "0.10.30",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.00211,
       "exploit_evidence": {
@@ -1888,10 +2204,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:GHSA-xp3w-r5p5-63rr",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/openssl@0.10.30",
-      "raptor_risk_estimate": 6.006556652174754,
+      "raptor_risk_estimate": 7.4652918391314795,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1903,13 +2224,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 70.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 86.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.400376733,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.006556652174754,
+        "final": 7.4652918391314795,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1918,7 +2239,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -1943,6 +2269,7 @@
       "cvss_score": null,
       "dep_name": "openssl",
       "dep_version": "0.10.30",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -1952,8 +2279,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:GHSA-xphf-cx8h-7q9g",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/openssl@0.10.30",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -1982,7 +2314,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2003,13 +2340,17 @@
           "https://nvd.nist.gov/vuln/detail/CVE-2026-44662",
           "https://github.com/rust-openssl/rust-openssl"
         ],
-        "severity": null,
-        "severity_fallback": "medium",
+        "severity": {
+          "score": 5.1,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:L/SC:N/SI:N/SA:N"
+        },
         "summary": "rust-openssl vulnerable to heap buffer overflow when encrypting with AES key-wrap-with-padding"
       },
-      "cvss_score": null,
+      "cvss_score": 5.1,
       "dep_name": "openssl",
       "dep_version": "0.10.30",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.00172,
       "exploit_evidence": {
@@ -2019,10 +2360,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:GHSA-xv59-967r-8726",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/openssl@0.10.30",
-      "raptor_risk_estimate": 3.430611969711893,
+      "raptor_risk_estimate": 4.374030261382663,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2034,13 +2380,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 51.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.40017771599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.430611969711893,
+        "final": 4.374030261382663,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2049,7 +2395,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2073,6 +2424,7 @@
       "cvss_score": null,
       "dep_name": "openssl",
       "dep_version": "0.10.30",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -2082,8 +2434,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:RUSTSEC-2023-0022",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/openssl@0.10.30",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -2112,7 +2469,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2136,6 +2498,7 @@
       "cvss_score": null,
       "dep_name": "openssl",
       "dep_version": "0.10.30",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -2145,8 +2508,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:RUSTSEC-2023-0023",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/openssl@0.10.30",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -2175,7 +2543,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2199,6 +2572,7 @@
       "cvss_score": null,
       "dep_name": "openssl",
       "dep_version": "0.10.30",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -2208,8 +2582,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:RUSTSEC-2023-0024",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/openssl@0.10.30",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -2238,7 +2617,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2263,6 +2647,7 @@
       "cvss_score": null,
       "dep_name": "openssl",
       "dep_version": "0.10.30",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -2272,8 +2657,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:RUSTSEC-2023-0072",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/openssl@0.10.30",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -2302,7 +2692,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2326,6 +2721,7 @@
       "cvss_score": null,
       "dep_name": "openssl",
       "dep_version": "0.10.30",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -2335,8 +2731,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:RUSTSEC-2024-0357",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/openssl@0.10.30",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -2365,7 +2766,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2394,6 +2800,7 @@
       "cvss_score": null,
       "dep_name": "rand",
       "dep_version": "0.7.3",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -2403,8 +2810,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:rand:0.7.3:GHSA-cq8v-f236-94qc",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/rand@0.7.3",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -2433,7 +2845,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2460,6 +2877,7 @@
       "cvss_score": null,
       "dep_name": "rand",
       "dep_version": "0.7.3",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -2469,8 +2887,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:rand:0.7.3:RUSTSEC-2026-0097",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/rand@0.7.3",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -2499,7 +2922,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2534,6 +2962,7 @@
       "cvss_score": 7.5,
       "dep_name": "regex",
       "dep_version": "1.4.1",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.1446,
       "exploit_evidence": {
@@ -2543,8 +2972,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:regex:1.4.1:GHSA-m5pq-gvj9-9vr8",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/regex@1.4.1",
       "raptor_risk_estimate": 7.604368750811974,
       "reachability": {
@@ -2573,7 +3007,12 @@
       },
       "severity": "high",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2602,6 +3041,7 @@
       "cvss_score": null,
       "dep_name": "remove_dir_all",
       "dep_version": "0.5.3",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -2611,8 +3051,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:remove_dir_all:0.5.3:GHSA-mc8h-8q98-g5hr",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/remove_dir_all@0.5.3",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -2641,7 +3086,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2666,6 +3116,7 @@
       "cvss_score": null,
       "dep_name": "remove_dir_all",
       "dep_version": "0.5.3",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -2675,8 +3126,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:remove_dir_all:0.5.3:RUSTSEC-2023-0018",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/remove_dir_all@0.5.3",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -2705,7 +3161,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2726,6 +3187,7 @@
       "cvss_score": null,
       "dep_name": "rusttype",
       "dep_version": "0.9.2",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -2735,8 +3197,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:rusttype:0.9.2:RUSTSEC-2021-0140",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/rusttype@0.9.2",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -2765,7 +3232,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2786,6 +3258,7 @@
       "cvss_score": null,
       "dep_name": "servo-fontconfig",
       "dep_version": "0.5.1",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -2795,8 +3268,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:servo-fontconfig:0.5.1:RUSTSEC-2025-0059",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/servo-fontconfig@0.5.1",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -2825,7 +3303,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2850,6 +3333,7 @@
       "cvss_score": null,
       "dep_name": "shlex",
       "dep_version": "0.1.1",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.0078,
       "exploit_evidence": {
@@ -2859,8 +3343,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:shlex:0.1.1:RUSTSEC-2024-0006",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/shlex@0.1.1",
       "raptor_risk_estimate": 3.4572099000971908,
       "reachability": {
@@ -2889,7 +3378,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -2924,6 +3418,7 @@
       "cvss_score": 9.8,
       "dep_name": "smallvec",
       "dep_version": "1.4.2",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.01666,
       "exploit_evidence": {
@@ -2933,8 +3428,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:smallvec:1.4.2:GHSA-43w2-9j62-hq99",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/smallvec@1.4.2",
       "raptor_risk_estimate": 8.565124991237074,
       "reachability": {
@@ -2963,7 +3463,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3001,6 +3506,7 @@
       "cvss_score": 5.5,
       "dep_name": "socket2",
       "dep_version": "0.3.15",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.00398,
       "exploit_evidence": {
@@ -3010,8 +3516,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:socket2:0.3.15:GHSA-458v-4hrf-g3m4",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/socket2@0.3.15",
       "raptor_risk_estimate": 4.730685713069695,
       "reachability": {
@@ -3040,7 +3551,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3067,6 +3583,7 @@
       "cvss_score": null,
       "dep_name": "thread_local",
       "dep_version": "1.0.1",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -3076,8 +3593,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:thread_local:1.0.1:GHSA-9hpw-r23r-xgm5",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/thread_local@1.0.1",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -3106,7 +3628,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3130,6 +3657,7 @@
       "cvss_score": null,
       "dep_name": "thread_local",
       "dep_version": "1.0.1",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -3139,8 +3667,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:thread_local:1.0.1:RUSTSEC-2022-0006",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/thread_local@1.0.1",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -3169,7 +3702,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3203,6 +3741,7 @@
       "cvss_score": 6.2,
       "dep_name": "time",
       "dep_version": "0.1.44",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.01641,
       "exploit_evidence": {
@@ -3212,8 +3751,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:time:0.1.44:GHSA-wcg3-cvx6-7396",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/time@0.1.44",
       "raptor_risk_estimate": 5.417057364880413,
       "reachability": {
@@ -3242,7 +3786,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3263,6 +3812,7 @@
       "cvss_score": null,
       "dep_name": "ttf-parser",
       "dep_version": "0.6.2",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -3272,8 +3822,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:ttf-parser:0.6.2:RUSTSEC-2026-0192",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/ttf-parser@0.6.2",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -3302,7 +3857,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3341,6 +3901,7 @@
       "cvss_score": 9.8,
       "dep_name": "xcb",
       "dep_version": "0.9.0",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.01754,
       "exploit_evidence": {
@@ -3350,8 +3911,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:xcb:0.9.0:GHSA-2xpg-3hx4-fm9r",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/xcb@0.9.0",
       "raptor_risk_estimate": 8.57455675734081,
       "reachability": {
@@ -3380,7 +3946,12 @@
       },
       "severity": "critical",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3404,13 +3975,17 @@
           "https://github.com/rustsec/advisory-db/pull/2355",
           "https://github.com/rust-x-bindings/rust-xcb/commit/da830976870c1174e3b33eb0643177be3991c002"
         ],
-        "severity": null,
-        "severity_fallback": "low",
+        "severity": {
+          "score": 1.7,
+          "severity": "low",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N/E:U"
+        },
         "summary": "Rust XCB `xcb::Connection::connect_to_fd*` functions violate I/O safety"
       },
-      "cvss_score": null,
+      "cvss_score": 1.7,
       "dep_name": "xcb",
       "dep_version": "0.9.0",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -3420,10 +3995,15 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:xcb:0.9.0:GHSA-655h-hg88-5qmf",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/xcb@0.9.0",
-      "raptor_risk_estimate": 0.1402604339154375,
+      "raptor_risk_estimate": 2.3844273765624373,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3435,13 +4015,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 1.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 17.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 0.1402604339154375,
+        "final": 2.3844273765624373,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3450,7 +4030,12 @@
       },
       "severity": "low",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3485,6 +4070,7 @@
       "cvss_score": 5.5,
       "dep_name": "xcb",
       "dep_version": "0.9.0",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": 0.00401,
       "exploit_evidence": {
@@ -3494,8 +4080,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:xcb:0.9.0:GHSA-c8hq-x4mm-p6q6",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/xcb@0.9.0",
       "raptor_risk_estimate": 4.730866167778312,
       "reachability": {
@@ -3524,7 +4115,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3551,6 +4147,7 @@
       "cvss_score": null,
       "dep_name": "xcb",
       "dep_version": "0.9.0",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -3560,8 +4157,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:xcb:0.9.0:RUSTSEC-2025-0051",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/xcb@0.9.0",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -3590,7 +4192,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     },
     {
       "advisory": {
@@ -3611,6 +4218,7 @@
       "cvss_score": null,
       "dep_name": "yaml-rust",
       "dep_version": "0.4.4",
+      "direct": false,
       "ecosystem": "Cargo",
       "epss": null,
       "exploit_evidence": {
@@ -3620,8 +4228,13 @@
         "kev_listed": false,
         "msf_modules": []
       },
+      "exposure_factor": 0.0,
       "finding_id": "sca:vuln:Cargo:yaml-rust:0.4.4:RUSTSEC-2024-0320",
       "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
       "purl": "pkg:cargo/yaml-rust@0.4.4",
       "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
@@ -3650,7 +4263,12 @@
       },
       "severity": "medium",
       "ssvc_automatable": null,
-      "ssvc_exploitation": null
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
     }
   ]
 }

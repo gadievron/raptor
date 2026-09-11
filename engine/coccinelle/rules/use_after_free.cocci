@@ -15,18 +15,32 @@
 // the canonical safe list-free loop (`nxt = cur->next; free(cur);
 // cur = nxt;`) reassigns from a plain expression via the loop back
 // edge, and `p = q;` after a free is equally a fresh value.
+//
+// The `when != <iterator>_safe(...) { ... }` clauses exclude paths
+// through the _safe iterator family: those macros reassign the cursor
+// from the prefetched next pointer at every step, but the reassignment
+// is hidden inside the macro body, so the loop back edge from
+// `kfree(e)` to the next iteration's `e->fld` read looks like a UAF
+// to `when != E = E2` while being the canonical CORRECT deletion
+// idiom. Deleting through a NON-safe iterator (no prefetch, cursor
+// advance reads the freed node) still fires.
 // @role: verification
 
 // kfree variant — field dereference after free
 @kfree_then_deref@
 expression E, E2;
 identifier fld;
+iterator name list_for_each_entry_safe, list_for_each_safe, list_for_each_entry_safe_reverse, hlist_for_each_entry_safe;
 position p_use;
 @@
 
 // @vocab: deallocators
 \(kfree\|kvfree\|vfree\|kfree_sensitive\)(E);
 ... when != E = E2
+    when != list_for_each_entry_safe(...) { ... }
+    when != list_for_each_safe(...) { ... }
+    when != list_for_each_entry_safe_reverse(...) { ... }
+    when != hlist_for_each_entry_safe(...) { ... }
 * E->fld@p_use
 
 @script:python@
@@ -53,6 +67,10 @@ position p_use;
 // @vocab: deallocators
 \(kfree\|kvfree\|vfree\|kfree_sensitive\)(E);
 ... when != E = E2
+    when != list_for_each_entry_safe(...) { ... }
+    when != list_for_each_safe(...) { ... }
+    when != list_for_each_entry_safe_reverse(...) { ... }
+    when != hlist_for_each_entry_safe(...) { ... }
 * fn(E@p_use, ...)
 
 @script:python@
@@ -83,6 +101,10 @@ position p_use;
 
 free(E);
 ... when != E = E2
+    when != list_for_each_entry_safe(...) { ... }
+    when != list_for_each_safe(...) { ... }
+    when != list_for_each_entry_safe_reverse(...) { ... }
+    when != hlist_for_each_entry_safe(...) { ... }
 * E->fld@p_use
 
 @script:python@

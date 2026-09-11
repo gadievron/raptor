@@ -356,6 +356,57 @@ def test_cache_miss_on_model_family_change():
     assert len(calls) == 2
 
 
+def test_errored_parse_is_not_cached_and_reextracts():
+    """A malformed response must not poison the cache: cache hits
+    return an empty error list, so caching an errored parse would
+    permanently record a transient failure as 'no validators in this
+    file'. The next call re-extracts and surfaces errors again."""
+    responses = iter([
+        "{ not json",                                    # transient garbage
+        json.dumps({"validators": [_valid_validator_dict()]}),
+    ])
+    calls: List[PromptBundle] = []
+
+    def _flaky(bundle: PromptBundle) -> Optional[str]:
+        calls.append(bundle)
+        return next(responses)
+
+    cache: dict = {}
+    content = "pass\n" * 30
+
+    first_c, first_e = extract_from_content(
+        file_path="x.py", content=content, extractor=_flaky, cache=cache,
+    )
+    assert first_c == () and first_e  # errored, nothing cached
+    assert cache == {}
+
+    second_c, second_e = extract_from_content(
+        file_path="x.py", content=content, extractor=_flaky, cache=cache,
+    )
+    assert len(calls) == 2            # re-extracted, not served from cache
+    assert len(second_c) == 1 and second_e == []
+
+
+def test_error_free_parse_is_cached():
+    """Counter-direction: an error-free result still populates the
+    cache and the second call is a hit."""
+    extractor, calls = _recording_extractor(
+        {"validators": [_valid_validator_dict()]},
+    )
+    cache: dict = {}
+    content = "pass\n" * 30
+
+    extract_from_content(
+        file_path="x.py", content=content, extractor=extractor, cache=cache,
+    )
+    assert len(cache) == 1
+    candidates, errors = extract_from_content(
+        file_path="x.py", content=content, extractor=extractor, cache=cache,
+    )
+    assert len(calls) == 1
+    assert len(candidates) == 1 and errors == []
+
+
 def test_no_cache_means_no_caching():
     extractor, calls = _recording_extractor({"validators": []})
     extract_from_content(file_path="x.py", content="pass\n" * 5, extractor=extractor)

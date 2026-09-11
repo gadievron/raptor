@@ -189,7 +189,7 @@ def test_vtable_slot_junk_is_filtered() -> None:
     """Slot lines whose ``method`` token is a raw address, ``0x...``,
     or section-prefixed entry must be dropped — they're not real
     callees."""
-    # The filter logic in _extract_vtable_edges:
+    # The filter logic in _parse_vtable_output:
     #   skip if method starts with "0x" / "section." / "loc." / "0"
     #   AND requires at least one alphanumeric / underscore.
     for junk in ("0x00000000", "0x12345678", "section.text", "loc.42"):

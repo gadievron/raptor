@@ -29,7 +29,9 @@ import logging
 import re
 from dataclasses import dataclass
 
-from ..models import Confidence, Dependency, Manifest, PinStyle
+from ..models import Confidence, Dependency, Manifest
+from ._closest_manifest import project_host_dep
+from ._closest_manifest import rel_to_target as _rel
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -42,12 +44,19 @@ logger = logging.getLogger(__name__)
 # `uses:` line shape (after YAML key trimming):
 #   uses: owner/repo@ref
 #   uses: owner/repo/sub-action@ref
+#   uses: "owner/repo@ref"        (quoted — YAML-identical to bare)
 #   uses: ./local-action          (no @ref — local action, ignore)
 #   uses: docker://image:tag      (Docker action — different threat model)
+# The spec may be wrapped in matching single or double quotes — YAML
+# treats the quoted and bare scalars identically, so GitHub runs a
+# quoted mutable ref exactly like a bare one; skipping quoted lines
+# would leave them unchecked for pinning.
 _USES_RE = re.compile(
     r"""
     ^\s*-?\s*uses\s*:\s*
+    (?P<quote>["']?)
     (?P<spec>[A-Za-z0-9_./+-]+@[A-Za-z0-9_./+-]+)
+    (?P=quote)
     \s*(?:\#.*)?$
     """,
     re.VERBOSE,
@@ -167,48 +176,12 @@ def _project_host_dep(
     """Anchor the finding to whichever manifest sits closest to the
     workflow file. For most projects this'll be the root pyproject /
     package.json / pom.xml — fine for the report's source column."""
-    closest: Manifest | None = None
-    for m in manifests:
-        if m.is_lockfile:
-            continue
-        try:
-            import os
-            common = os.path.commonpath([m.path.parent, path])
-        except ValueError:
-            continue
-        if not closest:
-            closest = m
-        else:
-            import os
-            existing_common = os.path.commonpath(
-                [closest.path.parent, path]
-            )
-            if len(common) > len(existing_common):
-                closest = m
-    declared_in = closest.path if closest else target
-    ecosystem = closest.ecosystem if closest else "Project"
-    return Dependency(
-        ecosystem=ecosystem,
+    return project_host_dep(
+        manifests, path, target,
         name="<github-actions>",
-        version=None,
-        declared_in=declared_in,
         scope="build",
-        is_lockfile=False,
-        pin_style=PinStyle.UNKNOWN,
-        direct=True,
-        purl="",
-        parser_confidence=Confidence(
-            "low",
-            reason="placeholder for gha-drift finding host",
-        ),
+        reason="placeholder for gha-drift finding host",
     )
-
-
-def _rel(path: Path, target: Path) -> Path:
-    try:
-        return path.relative_to(target)
-    except ValueError:
-        return path
 
 
 __all__ = ["GhaDriftFinding", "scan_target"]

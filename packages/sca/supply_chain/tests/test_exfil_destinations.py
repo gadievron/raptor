@@ -311,3 +311,63 @@ def test_non_test_go_file_still_scanned(tmp_path: Path) -> None:
     assert len(findings) >= 1, (
         "production .go file should still emit exfil findings"
     )
+
+
+# ---------------------------------------------------------------------------
+# Userinfo decoys — the host is what the runtime connects to
+# ---------------------------------------------------------------------------
+
+def test_userinfo_decoy_flags_the_real_host(tmp_path: Path) -> None:
+    """``https://api.github.com@pastebin.com/raw/x`` connects to
+    ``pastebin.com`` — everything before the ``@`` is userinfo the
+    server never sees.  The URL parser must evaluate the REAL host,
+    not the decoy in the userinfo position."""
+    _write(tmp_path / "loader.py", """\
+PAYLOAD = "https://api.github.com@pastebin.com/raw/abc123"
+""")
+    findings = scan_target(tmp_path, [])
+    assert any(f.category == "paste" for f in findings), (
+        "userinfo decoy must not hide the pastebin destination"
+    )
+
+
+def test_userinfo_on_benign_host_not_flagged(tmp_path: Path) -> None:
+    """Credentials on a legitimate host stay quiet — the userinfo
+    skip must not distort which host gets evaluated."""
+    _write(tmp_path / "client.py", """\
+API = "https://user:t0ken@api.github.com/repos/x/y"
+""")
+    findings = scan_target(tmp_path, [])
+    assert findings == []
+
+
+# ---------------------------------------------------------------------------
+# Line numbers — rolling counter must agree with a full recount
+# ---------------------------------------------------------------------------
+
+def test_line_numbers_correct_across_multiple_matches(
+    tmp_path: Path,
+) -> None:
+    """Several URLs (flagged and unflagged) spread over known lines;
+    each finding's line must equal the source line the URL sits on."""
+    _write(tmp_path / "multi.py", """\
+A = "https://example.com/ok"
+B = "https://pastebin.com/raw/one"
+# filler
+# filler
+
+C = "https://transfer.sh/get/two"
+D = "https://example.org/also-ok"
+E = "https://termbin.com/three"
+""")
+    findings = scan_target(tmp_path, [])
+    by_line = {f.line for f in findings}
+    expected = set()
+    body = (tmp_path / "multi.py").read_text(encoding="utf-8")
+    for n, line in enumerate(body.splitlines(), start=1):
+        if "pastebin.com" in line or "transfer.sh" in line \
+                or "termbin.com" in line:
+            expected.add(n)
+    # Every flagged URL sits on the line the finding reports.
+    assert by_line == expected
+    assert len(findings) == len(expected)

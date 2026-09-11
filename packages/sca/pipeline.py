@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -250,6 +251,15 @@ class RunResult:
     # mistake an empty result for a clean project. Empty when no
     # parser failed.
     parse_failures: list = field(default_factory=list)
+    # Per-finding-ecosystem distribution of the vuln findings
+    # (suppressed included — it partitions the same list
+    # ``vuln_findings`` counts, so the values always sum to it).
+    # Computed in-process so consumers never have to re-read
+    # findings.json: any size-capped re-read degrades to "no
+    # findings" on large legitimate artifacts (hundreds of MB on
+    # big projects), which is indistinguishable from a genuinely
+    # empty result.
+    eco_breakdown: dict[str, int] = field(default_factory=dict)
 
 
 def _suppression_entry_label(entry: _suppressions.SuppressionEntry) -> str:
@@ -1083,6 +1093,11 @@ def run_sca(
     if offline_db is not None:
         offline_db.close()
 
+    eco_breakdown: dict[str, int] = {}
+    for f in vuln_findings:
+        eco = f.dependency.ecosystem or "?"
+        eco_breakdown[eco] = eco_breakdown.get(eco, 0) + 1
+
     return RunResult(
         target=target,
         output_dir=output_dir,
@@ -1092,6 +1107,7 @@ def run_sca(
         sarif_path=sarif_path,
         deps_analysed=len(joined),
         vuln_findings=len(vuln_findings),
+        eco_breakdown=eco_breakdown,
         hygiene_findings=len(hygiene_findings),
         supply_chain_findings=len(supply_chain_findings),
         license_findings=len(license_findings),
@@ -1498,12 +1514,23 @@ def _run_version_diff_review(client, canonical, supply_chain_findings, http, out
         logger.debug("sca.pipeline: no previous deps found — skipping version-diff review")
         return 0
 
-    prev_deps: dict = {}
+    prev_deps: dict[tuple[str, str], str] = {}
     try:
         rows = _json_mod.loads(prev_path.read_text(encoding="utf-8"))
         for row in rows:
-            key = (row.get("ecosystem", ""), row.get("name", ""))
-            prev_deps[key] = row.get("version", "")
+            if not isinstance(row, dict):
+                continue
+            # findings.json nests ecosystem/name/version under the
+            # "sca" extension block (see findings._vuln_finding_to_row);
+            # top-level keys are tolerated for older/foreign row shapes.
+            sca_block = row.get("sca")
+            src = sca_block if isinstance(sca_block, dict) else row
+            name = src.get("name") or row.get("name") or ""
+            if not name:
+                continue
+            ecosystem = src.get("ecosystem") or row.get("ecosystem") or ""
+            version = src.get("version") or row.get("version") or ""
+            prev_deps[(ecosystem, name)] = version
     except Exception:
         logger.debug("sca.pipeline: failed to parse previous deps", exc_info=True)
         return 0
@@ -1766,6 +1793,10 @@ def _run_upgrade_impact(
 
     dep_by_key = {d.key(): d for d in canonical}
     results = []
+    # A dep with N advisories yields N findings for the same upgrade —
+    # assess each (ecosystem, name, old, new) pair once and reuse the
+    # verdict instead of repeating the full-tree grep + paid LLM call.
+    assessed: dict[tuple[str, str, str, str], Any] = {}
 
     for vf in vuln_findings:
         if vf.suppressed:
@@ -1776,9 +1807,15 @@ def _run_upgrade_impact(
         if dep is None:
             continue
         new_version = vf.fixed_version
+        upgrade_key = (
+            dep.ecosystem, dep.name, dep.version or "", new_version,
+        )
+        if upgrade_key in assessed:
+            continue
         verdict = assess_upgrade_impact(
             client, dep, new_version, target,
         )
+        assessed[upgrade_key] = verdict
         if verdict is None:
             continue
         results.append({
@@ -1809,21 +1846,28 @@ def _run_upgrade_impact(
 
 
 def _classify_inline_source(path: Path) -> str:
-    """Map a file path to the inline source_kind expected by the LLM reviewer."""
-    name = path.name.lower()
-    if "dockerfile" in name or name == "containerfile":
+    """Map a file path to the inline source_kind expected by the LLM reviewer.
+
+    Delegates to the same file-shape predicates the inline-install parser
+    registry dispatches on, so classification always agrees with the
+    parser that produced the manifest. A loose substring match here once
+    diverged: ``deploy-dockerfile.sh`` classified as ``dockerfile`` even
+    though the ``.sh`` parser had parsed it.
+    """
+    from .parsers.inline_installs import (
+        _is_devcontainer_json,
+        _is_dockerfile,
+        _is_gha_workflow,
+        _is_shell_script,
+    )
+    if _is_dockerfile(path):
         return "dockerfile"
-    if "devcontainer" in name:
+    if _is_devcontainer_json(path):
         return "devcontainer"
-    if path.suffix in (".sh", ".bash"):
+    if _is_shell_script(path):
         return "shell_script"
-    if path.suffix in (".yml", ".yaml"):
-        parts = path.parts
-        for j in range(len(parts) - 2):
-            if parts[j] == ".github" and parts[j + 1] == "workflows":
-                return "gha_workflow"
-        if name in ("action.yml", "action.yaml"):
-            return "gha_workflow"
+    if _is_gha_workflow(path):
+        return "gha_workflow"
     return "shell_script"
 
 
@@ -1900,6 +1944,17 @@ def _relpath(path: Path, target: Path) -> str:
         return str(path)
 
 
+_PLACEHOLDER_VERSION_RE = re.compile(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?")
+
+
+def _is_placeholder_version(version: str) -> bool:
+    """True when a declared version still contains an unexpanded
+    variable reference (``${FOO_VERSION}`` / ``$FOO_VERSION`` from a
+    Dockerfile RUN line or shell script) rather than a concrete
+    version string."""
+    return bool(_PLACEHOLDER_VERSION_RE.search(version))
+
+
 def select_canonical_for_osv(
     deps: Iterable[Dependency],
 ) -> list[Dependency]:
@@ -1911,9 +1966,19 @@ def select_canonical_for_osv(
     - When multiple lockfile rows exist with *different* versions for
       the same ``(ecosystem, name)`` (e.g., npm hoists multiple copies),
       keep both — they're independent installs.
-    - When only manifest rows exist for a name, keep them with their
+    - When only manifest rows exist for a name, keep every *distinct*
       declared version (best-effort; loose pins may produce false
-      positives, callers should treat those as candidates).
+      positives, callers should treat those as candidates). Two
+      manifests declaring different versions are independent claims —
+      dropping one would silently skip its OSV query and could hide a
+      vulnerable declared version.
+    - Exception: a manifest "version" that is an unexpanded variable
+      reference (``black==${BLACK_VERSION}`` scanned literally from a
+      Dockerfile RUN line) is not a distinct declaration — when any
+      concrete version exists for the name, the placeholder row is the
+      same declaration seen pre-expansion and is dropped. Only when
+      every row is a placeholder does one survive, so the dep still
+      surfaces at all.
     - When no row carries a version but one carries a corridor bound
       (``version_floor`` / ``version_ceiling`` from a range pin like
       ``pkg<2.0``), keep the first such row — the OSV client resolves
@@ -1950,9 +2015,13 @@ def select_canonical_for_osv(
         manifest_versions = [r for r in rows
                              if not r.is_lockfile and r.version is not None]
         if manifest_versions:
-            r = manifest_versions[0]
-            triple = (key[0], key[1], r.version or "")
-            if triple not in seen_versions:
+            resolved = [r for r in manifest_versions
+                        if not _is_placeholder_version(r.version or "")]
+            keep = resolved if resolved else manifest_versions[:1]
+            for r in keep:
+                triple = (key[0], key[1], r.version or "")
+                if triple in seen_versions:
+                    continue
                 seen_versions.add(triple)
                 out.append(r)
             continue

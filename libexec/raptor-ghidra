@@ -184,6 +184,16 @@ def _do_import(gpr: Path, args: argparse.Namespace, out_dir: Path):
     """Shared import logic for attach and import subcommands."""
     from packages.ghidra.bridge import GhidraBridge
 
+    if args.binary and not args.enrich:
+        # --binary only feeds the r2 enrichment pass — without --enrich
+        # it would be dropped on the floor and the operator's requested
+        # r2 data would silently be missing from the cache.
+        print(
+            "warning: --binary is only used with --enrich; ignoring it — "
+            "pass --enrich to merge r2 analysis into the import",
+            file=sys.stderr,
+        )
+
     with GhidraBridge(gpr, program_name=args.program) as bridge:
         if args.enrich:
             db = bridge.import_and_enrich(
@@ -617,9 +627,16 @@ def _cmd_decompile(args: argparse.Namespace) -> int:
         if func is not None and db is not None and db.binary_path:
             binary = Path(db.binary_path)
             # The cached database's binary_path is derived data —
-            # only follow it into the project's own directory or a
-            # RAPTOR out/ dir, never arbitrary local paths.
-            allowed = (gpr.parent.resolve(), Path("out").resolve())
+            # only follow it into the project's own directory or the
+            # RAPTOR checkout's out/ dir, never arbitrary local paths.
+            # The out/ anchor must be the repo root, not the process
+            # cwd: a cwd-relative anchor refuses legitimate out/
+            # binaries when the CLI is invoked from elsewhere, and —
+            # worse — admits <scanned-repo>/out when the cwd sits
+            # inside a hostile repo, letting a crafted cache point at
+            # a planted file there.
+            repo_root = Path(__file__).resolve().parents[1]
+            allowed = (gpr.parent.resolve(), (repo_root / "out").resolve())
             contained = any(
                 binary.resolve().is_relative_to(a) for a in allowed
                 if a.exists()

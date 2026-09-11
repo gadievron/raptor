@@ -1052,3 +1052,134 @@ def test_compare_text_includes_cost_and_calls(tmp_path):
     assert rc == 0
     assert "haiku $$" in out and "sonnet $$" in out
     assert "haiku calls" in out and "sonnet calls" in out
+
+
+# ---------------------------------------------------------------------------
+# summary — per-call subset cells excluded from totals
+# ---------------------------------------------------------------------------
+
+
+def test_summary_totals_exclude_per_call_subset_cells(tmp_path):
+    """``_usage`` is the per-model roll-up of every real call; the
+    ``_structured`` cell re-counts the structured subset of those same
+    calls. Summing both inflates the per-model call/spend totals."""
+    import json as _json
+    path = tmp_path / "sc.json"
+    sc = ModelScorecard(path, shadow_rate=0.0)
+    sc.record_event("codeql:py/sqli", "haiku",
+                    EventType.CHEAP_SHORT_CIRCUIT, "correct")
+    sc.register_uses([
+        # 10 real calls, 6 of which were structured calls.
+        {"model": "haiku", "decision_class": "_usage",
+         "calls": 10, "cost_usd": 0.25},
+        {"model": "haiku", "decision_class": "_structured",
+         "calls": 6, "schema_valid_pass": 6},
+    ])
+    rc, out, _ = _capture(
+        cli_mod.cmd_summary, _make_args(path=path, json=True))
+    assert rc == 0
+    parsed = _json.loads(out)
+    assert parsed["calls_by_model"]["haiku"] == 10
+    assert parsed["spend_by_model"]["haiku"] == pytest.approx(0.25)
+    assert parsed["total_spend_usd"] == pytest.approx(0.25)
+
+
+def test_summary_totals_still_include_usage_rollup(tmp_path):
+    """The ``_usage`` roll-up itself keeps feeding the totals — only
+    the subset cells are excluded."""
+    import json as _json
+    path = tmp_path / "sc.json"
+    sc = ModelScorecard(path, shadow_rate=0.0)
+    sc.register_uses([
+        {"model": "haiku", "decision_class": "_usage",
+         "calls": 3, "cost_usd": 0.03},
+    ])
+    rc, out, _ = _capture(
+        cli_mod.cmd_summary, _make_args(path=path, json=True))
+    assert rc == 0
+    parsed = _json.loads(out)
+    assert parsed["calls_by_model"]["haiku"] == 3
+    assert parsed["total_spend_usd"] == pytest.approx(0.03)
+
+
+# ---------------------------------------------------------------------------
+# samples — producer-specific sample fields render
+# ---------------------------------------------------------------------------
+
+
+def test_render_samples_producer_specific_fields(tmp_path):
+    """Samples written by producers that don't use the
+    this_reasoning/other_reasoning/note shape (self-consistency,
+    dataflow validation, cross-family, validate feedback) must still
+    render a body, not an empty section."""
+    sc = ModelScorecard(tmp_path / "sc.json", shadow_rate=0.0)
+    sc.retain_samples = True
+    sc.record_event(
+        "agentic:r", "haiku", EventType.SELF_CONSISTENCY, "incorrect",
+        sample={
+            "pre_verdict": "positive",
+            "post_verdict": "negative",
+            "post_reasoning": "retry found the bounds check",
+        },
+    )
+    stat = sc.get_stat("agentic:r", "haiku")
+    rendered = cli_mod._render_samples(stat)
+    assert "pre_verdict" in rendered
+    assert "positive" in rendered
+    assert "post_verdict" in rendered
+    assert "retry found the bounds check" in rendered
+
+
+def test_render_samples_validate_feedback_fields(tmp_path):
+    sc = ModelScorecard(tmp_path / "sc.json", shadow_rate=0.0)
+    sc.retain_samples = True
+    sc.record_event(
+        "audit:CWE-79", "haiku", EventType.VALIDATE_FEEDBACK, "incorrect",
+        sample={
+            "function_id": "src/app.py:render",
+            "prior_verdict": "clean",
+            "validate_verdict": "exploitable",
+            "reason": "reflected parameter reaches template",
+        },
+    )
+    stat = sc.get_stat("audit:CWE-79", "haiku")
+    rendered = cli_mod._render_samples(stat)
+    for expected in ("src/app.py:render", "clean", "exploitable",
+                     "reflected parameter reaches template"):
+        assert expected in rendered
+
+
+def test_render_samples_legacy_shape_unchanged(tmp_path):
+    """The original cheap-vs-full pair still renders under its named
+    headings (and isn't duplicated by the generic fallback)."""
+    sc = ModelScorecard(tmp_path / "sc.json", shadow_rate=0.0)
+    sc.retain_samples = True
+    sc.record_event(
+        "codeql:py/sqli", "haiku", EventType.CHEAP_SHORT_CIRCUIT,
+        "incorrect",
+        sample={"this_reasoning": "cheap said FP",
+                "other_reasoning": "full found the bug"},
+    )
+    stat = sc.get_stat("codeql:py/sqli", "haiku")
+    rendered = cli_mod._render_samples(stat)
+    assert rendered.count("cheap said FP") == 1
+    assert rendered.count("full found the bug") == 1
+
+
+# ---------------------------------------------------------------------------
+# reset — bare invocation refused gracefully
+# ---------------------------------------------------------------------------
+
+
+def test_reset_bare_invocation_prints_error_not_traceback(tmp_path):
+    """A ``reset`` with no filter and no --all is refused by the
+    substrate; the CLI must surface the reason and exit nonzero
+    instead of raising."""
+    path = tmp_path / "sc.json"
+    ModelScorecard(path).record_event(
+        "dc", "m", EventType.CHEAP_SHORT_CIRCUIT, "correct")
+    rc, _, err = _capture(cli_mod.cmd_reset, _make_args(path=path))
+    assert rc != 0
+    assert "filter" in err
+    # Nothing was deleted.
+    assert ModelScorecard(path).get_stats()

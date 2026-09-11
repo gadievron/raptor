@@ -136,3 +136,55 @@ def test_network_error_not_cached(tmp_fetcher: DistroFetcher, tmp_path: Path) ->
     # Network errors should NOT be cached
     assert tmp_fetcher._disk.get(f"debian/{cve}", ttl_seconds=86400) is None
     assert tmp_fetcher._disk.get(f"ubuntu/{cve}", ttl_seconds=86400) is None
+
+
+def test_rate_limit_errors_not_disk_cached(tmp_fetcher: DistroFetcher, tmp_path: Path) -> None:
+    """429/403 are transient (rate limit / load shed): disk-caching one
+    run's 429 storm would make every later run — long after the limit
+    refilled — read the cached error for the full 7-day TTL. A fresh
+    fetcher must go back to the network and succeed."""
+    cve = "CVE-2016-5195"
+
+    class _LimitedClient:
+        def request(self, method, url, **kw):
+            if "debian" in url:
+                raise HttpError("http 429", status=429)
+            if "ubuntu" in url:
+                raise HttpError("http 403", status=403)
+            raise HttpError("http 429", status=429)
+
+    with patch.object(distro_cache, "_client", return_value=_LimitedClient()):
+        out = tmp_fetcher.fetch_all(cve)
+    assert out["debian"]["error"] == "http 429"
+    assert out["ubuntu"]["error"] == "http 403"
+    # Nothing hit the 7-day disk cache.
+    assert tmp_fetcher._disk.get(f"debian/{cve}", ttl_seconds=86400 * 7) is None
+    assert tmp_fetcher._disk.get(f"ubuntu/{cve}", ttl_seconds=86400 * 7) is None
+
+    # After the limit refills, a fresh instance fetches successfully.
+    class _OkClient:
+        def request(self, method, url, **kw):
+            if "debian" in url:
+                return _ok_response("ok")
+            if "ubuntu" in url:
+                return _json_response({"cves": [{"id": cve, "references": []}]})
+            return _json_response({"references": [], "affected_release": []})
+
+    fresh = DistroFetcher(cache_dir=tmp_path)
+    with patch.object(distro_cache, "_client", return_value=_OkClient()):
+        out2 = fresh.fetch_all(cve)
+    assert "error" not in out2["debian"]
+
+
+def test_definitive_404_still_disk_cached(tmp_fetcher: DistroFetcher, tmp_path: Path) -> None:
+    """The other direction: 404 = "distro has no record" is a definitive
+    answer and stays cacheable (a retry must not re-hit the tracker)."""
+    cve = "CVE-2016-5195"
+
+    class _NotFoundClient:
+        def request(self, method, url, **kw):
+            raise HttpError("http 404", status=404)
+
+    with patch.object(distro_cache, "_client", return_value=_NotFoundClient()):
+        tmp_fetcher.fetch_all(cve)
+    assert tmp_fetcher._disk.get(f"debian/{cve}", ttl_seconds=86400 * 7) is not None

@@ -40,7 +40,7 @@ def generate_single(path_data: dict[str, Any], path_index: int) -> str:
     steps = path_data.get("steps", [])
     proximity = path_data.get("proximity") or 0
     blockers = path_data.get("blockers", [])
-    status = path_data.get("status", "uncertain")
+    status = _sanitize(str(path_data.get("status", "uncertain")))
 
     try:
         proximity = int(proximity)
@@ -51,8 +51,12 @@ def generate_single(path_data: dict[str, Any], path_index: int) -> str:
 
     lines = ["flowchart TD"]
     rt_tag = " [Runtime Confirmed]" if has_runtime else ""
+    # Each raw part (name, status) is sanitized exactly once at
+    # extraction above. _sanitize is not idempotent ('&' → '&amp;' →
+    # '&amp;amp;'), so re-sanitizing the assembled label mangled any
+    # name containing &, < or > in the rendered title.
     title_label = f"{name}{rt_tag}\\nProximity: {proximity}/10,{prox_desc}\\nStatus: {status}"
-    lines.append(f'    TITLE_{path_index}["{_sanitize(title_label)}"]')
+    lines.append(f'    TITLE_{path_index}["{title_label}"]')
     lines.append(f"    style TITLE_{path_index} fill:#f0f0f0,stroke:#999,font-weight:bold")
     lines.append("")
 
@@ -65,9 +69,20 @@ def generate_single(path_data: dict[str, Any], path_index: int) -> str:
         # Steps may be objects or strings
         if isinstance(step, dict):
             step_type = _sanitize(str(step.get("type", "call")).upper())
-            desc = _sanitize(step.get("description", step.get("action", str(step))))
+            # `or`-chained so an explicit null description doesn't
+            # render the literal text 'None'; the whole-dict fallback
+            # only applies when neither key exists at all.
+            desc_raw = step.get("description") or step.get("action")
+            if desc_raw is None and "description" not in step \
+                    and "action" not in step:
+                desc_raw = str(step)
+            desc = _sanitize(desc_raw) if desc_raw else ""
             loc = _sanitize(step.get("call_site") or step.get("definition") or "")
-            tainted = _sanitize(step.get("tainted_var", ""))
+            tainted = _sanitize(step.get("tainted_var") or "")
+            # The step's outcome is the value-level evidence an
+            # operator judges exploitability by ('sent 24 bytes' means
+            # little without 'RIP=0x41414141') — render it.
+            outcome = _sanitize(step.get("result") or "")
             # runtime_evidence comes raw from attack-paths.json; a
             # non-dict value (string, list, null) would crash the
             # whole section on the .get() calls below — coerce like
@@ -83,6 +98,11 @@ def generate_single(path_data: dict[str, Any], path_index: int) -> str:
             if desc:
                 short = desc if len(desc) <= 80 else desc[:77] + "..."
                 parts.append(short)
+            if outcome:
+                short_outcome = (
+                    outcome if len(outcome) <= 80 else outcome[:77] + "..."
+                )
+                parts.append(f"result: {short_outcome}")
             if rt_ev.get("function_observed"):
                 # call_count comes raw from runtime-evidence JSON; coerce to
                 # int so a non-numeric value can't reach the Mermaid label.

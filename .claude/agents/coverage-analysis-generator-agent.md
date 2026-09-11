@@ -14,6 +14,8 @@ You will be invoked with the following information:
 
 Please create a "gcov" subdirectory in the working directory to operate in.
 
+**Sandbox the untrusted build and run.** The target repository is untrusted — its build scripts execute arbitrary code. Run the coverage rebuild (step 1) and the crashing execution (step 2) via `libexec/raptor-run-sandboxed <cmd> [args...]` with the `OUTPUT_DIR` environment variable set to the build tree (the run must be able to write its `.gcda` files there). Never run configure, make, or the target binary directly.
+
 ## Generating Coverage Data
 
 To generate gcov coverage data, you need to:

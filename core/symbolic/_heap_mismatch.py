@@ -86,6 +86,22 @@ _ALLOC_KEY = "_raptor_heap_allocs"
 _MISMATCH_KEY = "_raptor_heap_mismatch"
 
 
+def _append_alloc(state, ptr, size) -> None:
+    """Record an allocation with copy-on-write discipline.
+
+    angr's ``SimStateGlobals.copy`` is a SHALLOW copy, so forked
+    sibling states share the same list object.  An in-place append
+    leaks the allocation into mutually exclusive branches — the safe
+    branch's copy then satisfies ``dst == <other branch's alloc>`` and
+    mints a false heap-overflow confirmation.  Rebuild-and-reassign
+    (the pattern the realloc/free hooks already use) keeps each
+    state's view isolated.
+    """
+    allocs = list(state.globals.get(_ALLOC_KEY, ()))
+    allocs.append((ptr, size))
+    state.globals[_ALLOC_KEY] = allocs
+
+
 def _install_heap_hooks(project) -> int:
     """Hook malloc/calloc/realloc + memcpy/memmove/strncpy + free.
 
@@ -104,9 +120,7 @@ def _install_heap_hooks(project) -> int:
                 SIM_PROCEDURES["libc"]["malloc"], size,
             )
             ptr = result.ret_expr
-            allocs = self.state.globals.get(_ALLOC_KEY, [])
-            allocs.append((ptr, size))
-            self.state.globals[_ALLOC_KEY] = allocs
+            _append_alloc(self.state, ptr, size)
             return ptr
 
     class _TrackedCalloc(angr.SimProcedure):
@@ -116,9 +130,7 @@ def _install_heap_hooks(project) -> int:
                 SIM_PROCEDURES["libc"]["calloc"], nmemb, size,
             )
             ptr = result.ret_expr
-            allocs = self.state.globals.get(_ALLOC_KEY, [])
-            allocs.append((ptr, total))
-            self.state.globals[_ALLOC_KEY] = allocs
+            _append_alloc(self.state, ptr, total)
             return ptr
 
     class _TrackedRealloc(angr.SimProcedure):

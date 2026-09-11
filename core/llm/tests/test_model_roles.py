@@ -92,6 +92,23 @@ class TestRoleValidation:
         with pytest.raises(ConfigError, match="All models are configured as fallback"):
             resolve_model_roles(None, [m])
 
+    def test_roleless_primary_with_fallback_entry_allowed(self):
+        """A role-less entry is an implicit analysis model — one
+        role:fallback sibling must not trip the all-fallback refusal."""
+        primary = ModelConfig(provider="anthropic", model_name="opus")
+        fb = ModelConfig(provider="openai", model_name="gpt-5.2", role="fallback")
+        r = resolve_model_roles(primary, [fb])
+        assert r["analysis_model"] is primary
+        assert fb in r["fallback_models"]
+
+    def test_all_explicit_fallback_still_raises(self):
+        # Two-direction guard: with NO role-less entry present, an
+        # all-fallback configuration keeps refusing.
+        m1 = ModelConfig(provider="anthropic", model_name="opus", role="fallback")
+        m2 = ModelConfig(provider="openai", model_name="gpt-5.2", role="fallback")
+        with pytest.raises(ConfigError, match="All models are configured as fallback"):
+            resolve_model_roles(m1, [m2])
+
     def test_multiple_code_raises(self):
         m1 = ModelConfig(provider="anthropic", model_name="opus", role="analysis")
         m2 = ModelConfig(provider="ollama", model_name="deepseek", role="code")

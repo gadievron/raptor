@@ -245,16 +245,27 @@ def _parse_unified_diff(text: str) -> ParsedDiff | None:
     return ParsedDiff(files=files, text=normalised)
 
 
-def extract_unified_diff(response: str) -> ParsedDiff | None:
-    """Extract the unified diff from an LLM patch response.
+def extract_unified_diffs(response: str) -> list[ParsedDiff]:
+    """Extract EVERY parseable unified diff from an LLM patch response.
 
     Preference order: fenced ```diff / ```patch blocks, then any fenced
-    block whose body looks diff-shaped, then the raw response from its
-    first diff header onward. Returns None when nothing parses — the
-    caller annotates ``format: not-a-unified-diff`` and skips the rest.
+    block whose body looks diff-shaped, then (only when no fence
+    parsed) the raw response from its first diff header onward.
+
+    ALL parseable fenced blocks are returned, not just the first: the
+    gate must scope-check the response's full diff content — a
+    response leading with a benign in-scope decoy diff and following
+    with a second fenced diff touching unrelated code would otherwise
+    earn a clean gate block while the saved artifact (the whole
+    response) carried the unexamined payload. Byte-identical repeats
+    (LLMs frequently restate the same diff while explaining it) are
+    deduplicated so they don't read as two conflicting patches.
+
+    Empty list when nothing parses — the caller annotates
+    ``format: not-a-unified-diff`` and skips the rest.
     """
     if not response or not response.strip():
-        return None
+        return []
 
     tagged: list[str] = []
     untagged: list[str] = []
@@ -265,10 +276,15 @@ def extract_unified_diff(response: str) -> ParsedDiff | None:
             tagged.append(body)
         elif "--- " in body and "@@" in body:
             untagged.append(body)
+    results: list[ParsedDiff] = []
+    seen_texts: set[str] = set()
     for body in tagged + untagged:
         parsed = _parse_unified_diff(body)
-        if parsed is not None:
-            return parsed
+        if parsed is not None and parsed.text not in seen_texts:
+            seen_texts.add(parsed.text)
+            results.append(parsed)
+    if results:
+        return results
 
     # Raw fallback: response contains a bare diff outside any fence.
     lines = response.splitlines()
@@ -278,8 +294,17 @@ def extract_unified_diff(response: str) -> ParsedDiff | None:
             and idx + 1 < len(lines)
             and lines[idx + 1].startswith("+++ ")
         ):
-            return _parse_unified_diff("\n".join(lines[idx:]))
-    return None
+            parsed = _parse_unified_diff("\n".join(lines[idx:]))
+            return [parsed] if parsed is not None else []
+    return []
+
+
+def extract_unified_diff(response: str) -> ParsedDiff | None:
+    """First parseable diff, or None. Prefer :func:`extract_unified_diffs`
+    for gating — a multi-fence response carries content beyond the
+    first block."""
+    diffs = extract_unified_diffs(response)
+    return diffs[0] if diffs else None
 
 
 # ---------------------------------------------------------------------------
@@ -750,8 +775,8 @@ def run_patch_gate(
     result = GateResult()
     slack = scope_slack if scope_slack is not None else _env_scope_slack()
 
-    diff = extract_unified_diff(response_text)
-    if diff is None:
+    diffs = extract_unified_diffs(response_text)
+    if not diffs:
         result.format = "not-a-unified-diff"
         result.notes.append(
             "no parseable unified diff in the response — remaining "
@@ -759,6 +784,25 @@ def run_patch_gate(
         )
         return result
     result.format = "unified-diff"
+    if len(diffs) == 1:
+        diff = diffs[0]
+    else:
+        # Multiple distinct diff blocks: gate them as ONE combined
+        # patch so every hunk is scope-checked and every block must
+        # apply. Gating only the first block would let a benign
+        # in-scope decoy front for a second, unexamined block in the
+        # saved artifact (the operator reads the whole response under
+        # the gate header). Distinct blocks that conflict fail the
+        # apply step — an honest annotation for a self-contradicting
+        # response.
+        diff = ParsedDiff(
+            files=[fd for d in diffs for fd in d.files],
+            text="".join(d.text for d in diffs),
+        )
+        result.notes.append(
+            f"response contained {len(diffs)} distinct diff blocks — "
+            "all gated together as one combined patch"
+        )
 
     # Some flows (multi-model PatchTask over imported or SCA-shaped
     # findings) genuinely lack file or line context — annotate honestly
@@ -784,9 +828,18 @@ def run_patch_gate(
     # Leading-scheme strip only — the old substring-replace corrupted
     # paths containing a literal file:// mid-string.
     rel = strip_file_uri(_strip_diff_prefix(file_path))
-    source_file = (Path(repo_path) / rel).resolve()
+    repo_root = Path(repo_path).resolve()
+    source_file = (repo_root / rel).resolve()
     try:
-        source_file.relative_to(Path(repo_path).resolve())
+        # Containment check AND re-anchoring in one step. `rel` must be
+        # repo-relative from here on: SARIF findings routinely carry
+        # absolute in-repo paths (file:///… URIs), and pathlib's
+        # absolute-join semantics silently DISCARD the left operand —
+        # `scratch / "patched" / rel` with an absolute `rel` would
+        # alias the REAL repo file, so the scratch copy step raised
+        # SameFileError and callers' broad except turned that crash
+        # into a silent gate skip for the whole absolute-path class.
+        rel = str(source_file.relative_to(repo_root))
     except ValueError:
         result.gate = "skipped"
         result.notes.append("finding path escapes the repo — gate skipped")

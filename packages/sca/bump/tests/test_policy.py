@@ -522,3 +522,27 @@ def test_block_on_minor_skew_negative_ignored(tmp_path: Path) -> None:
                    "thresholds:\n  block_on_minor_skew: -1\n")
     policy = load_policy(tmp_path, trust_repo=True)
     assert policy.thresholds.block_on_minor_skew == 0
+
+
+def test_path_match_leading_doublestar_anchors_at_root() -> None:
+    """``**/tests/**`` must match a ROOT-LEVEL ``tests/`` directory —
+    the shared --exclude matcher anchors a leading ``**/`` at the root
+    (raw fnmatch misses it) and skip rules are documented as sharing
+    that convention, so both operator surfaces must agree."""
+    from packages.sca.bump.policy import _path_match
+
+    assert _path_match("**/tests/**", "tests/data/requirements.txt")
+    # Nested form keeps matching too.
+    assert _path_match("**/tests/**", "pkg/tests/data/requirements.txt")
+    # Non-matching paths stay unmatched.
+    assert not _path_match("**/tests/**", "src/requirements.txt")
+
+
+def test_path_match_plain_glob_semantics_preserved() -> None:
+    """Pre-existing skip-rule shapes keep their behavior: ``*`` spans
+    ``/``, matching is case-sensitive, backslash paths normalise."""
+    from packages.sca.bump.policy import _path_match
+
+    assert _path_match("test/data/*", "test/data/deep/file.txt")
+    assert not _path_match("Test/data/*", "test/data/file.txt")
+    assert _path_match("test/data/*", "test\\data\\file.txt")

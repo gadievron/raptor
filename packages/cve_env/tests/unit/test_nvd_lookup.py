@@ -271,3 +271,73 @@ def test_osv_fallback_silently_fails_when_osv_also_down(mock_fetch: Any) -> None
     r = nvd_lookup("CVE-2014-0160")
     assert r.ok is False
     assert r.reason_class == "rate_limited"  # original NVD class preserved
+
+
+@patch("cve_env.tools.nvd_lookup.web_fetch")
+def test_osv_fallback_introduced_zero_never_reported_as_version(
+    mock_fetch: Any,
+) -> None:
+    """The ubiquitous 'all versions before X' OSV shape opens with
+    {'introduced': '0'} — reporting version '0' sends the agent probing
+    registries/tags for a junk version exactly when NVD is throttled.
+    Prefer last_affected, then a real introduced, then the '<fixed'
+    boundary."""
+    osv_payload = {
+        "id": "CVE-2099-00002",
+        "summary": "x",
+        "details": "y",
+        "affected": [
+            {
+                "package": {"ecosystem": "Maven", "name": "other"},
+                "ranges": [
+                    {"events": [{"introduced": "0"}, {"fixed": "1.2.3"}]}
+                ],
+            },
+            {
+                "package": {"ecosystem": "Maven", "name": "second"},
+                "ranges": [
+                    {"events": [{"introduced": "0"},
+                                {"last_affected": "2.9.9"}]}
+                ],
+            },
+        ],
+    }
+    nvd_fail = FetchResult(
+        ok=False, url="https://nvd/x", status=429,
+        reason="429", reason_class="rate_limited",
+    )
+    mock_fetch.side_effect = [nvd_fail, _fetch_ok(json.dumps(osv_payload))]
+    r = nvd_lookup("CVE-2099-00002")
+    assert r.ok is True
+    by_product = {c["product"]: c["version"] for c in r.cpes}
+    assert by_product["other"] == "<1.2.3"  # fix boundary, not '0'
+    assert by_product["second"] == "2.9.9"  # last_affected preferred
+    assert not any(c["version"] == "0" for c in r.cpes)
+
+
+@patch("cve_env.tools.nvd_lookup.web_fetch")
+def test_osv_fallback_real_introduced_version_kept(mock_fetch: Any) -> None:
+    """Companion direction: a concrete introduced version still reports."""
+    osv_payload = {
+        "id": "CVE-2099-00003",
+        "summary": "x",
+        "details": "y",
+        "affected": [
+            {
+                "package": {"ecosystem": "PyPI", "name": "pkg"},
+                "ranges": [
+                    {"events": [{"introduced": "3.1.0"},
+                                {"fixed": "3.2.0"}]}
+                ],
+            }
+        ],
+    }
+    nvd_fail = FetchResult(
+        ok=False, url="https://nvd/x", status=429,
+        reason="429", reason_class="rate_limited",
+    )
+    mock_fetch.side_effect = [nvd_fail, _fetch_ok(json.dumps(osv_payload))]
+    r = nvd_lookup("CVE-2099-00003")
+    assert any(
+        c["product"] == "pkg" and c["version"] == "3.1.0" for c in r.cpes
+    )

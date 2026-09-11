@@ -318,3 +318,26 @@ class TestScorecardSegregation:
         assert record_build_outcome("m1", "CVE-2018-7600", "success",
                                     scorecard=sc2)
         assert sc2.record_event.call_args.args[0] == DECISION_CLASS
+
+    def test_replay_unverified_fallthrough_tears_down(self, capsys):
+        """provision() can return ok with verification skipped (degenerate
+        recorded spec, empty verify plan) — the fallthrough to the agent
+        build must still tear the provisioned container down, or it leaks
+        with only the raptor-env.id label (invisible to cve-id cleanup)."""
+        from cve_env.cli import _attempt_replay
+        from cve_env.models import CveRecord
+        torn = {}
+        env = SimpleNamespace(
+            verified=lambda: False, verify_result=None,
+            provision_id="tok456",
+            teardown=lambda: torn.setdefault("yes", True))
+        outcome = SimpleNamespace(ok=True, environment=env,
+                                  reason="", detail="")
+        with patch("cve_env.infra.spec_record.find_replayable_spec",
+                   return_value=_spec()), \
+             patch("core.env.provision.provision", return_value=outcome):
+            result = _attempt_replay(
+                CveRecord(cve_id="DESC-aaaabbbbcccc"), None)
+        assert result is None  # still falls through to the agent build
+        assert torn.get("yes") is True
+        assert "falling through" in capsys.readouterr().err

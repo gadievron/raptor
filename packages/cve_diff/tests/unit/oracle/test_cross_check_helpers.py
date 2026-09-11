@@ -254,3 +254,46 @@ def test_gh_commit_url_compiled_once():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+class TestDottedRepoNames:
+    """Dotted repo names must survive both extraction routes — a
+    dot-excluding pattern either missed the commit URL entirely or
+    truncated 'socketio/engine.io' to the different repo
+    'socketio/engine', misgrading correct picks."""
+
+    def _write_osv(self, tmp_path, cve_id, payload):
+        import json as _json
+        (tmp_path / f"{cve_id}.osv.json").write_text(
+            _json.dumps(payload), encoding="utf-8",
+        )
+
+    def test_commit_url_with_dotted_repo(self, tmp_path):
+        sha = "a" * 40
+        self._write_osv(tmp_path, "CVE-2022-21676", {
+            "references": [
+                {"url": f"https://github.com/socketio/engine.io/commit/{sha}"},
+            ],
+        })
+        slug, got = cross_check._load_pick_from_osv_file(
+            tmp_path, "CVE-2022-21676",
+        )
+        assert slug == "socketio/engine.io"
+        assert got == sha
+
+    def test_ranges_repo_with_dotted_repo(self, tmp_path):
+        sha = "b" * 40
+        self._write_osv(tmp_path, "CVE-2022-21676", {
+            "affected": [{
+                "ranges": [{
+                    "type": "GIT",
+                    "repo": "https://github.com/socketio/engine.io",
+                    "events": [{"fixed": sha}],
+                }],
+            }],
+        })
+        slug, got = cross_check._load_pick_from_osv_file(
+            tmp_path, "CVE-2022-21676",
+        )
+        assert slug == "socketio/engine.io"
+        assert got == sha

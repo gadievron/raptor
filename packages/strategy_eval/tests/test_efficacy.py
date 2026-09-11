@@ -123,3 +123,26 @@ def test_load_corpus_reads_manifest_and_code(tmp_path):
     assert s.id == "ld_vuln" and s.strategy == "lifecycle_drift"
     assert s.variant == "vulnerable" and s.synthetic is True
     assert "get_dumpable" in s.code
+
+
+def test_grade_uses_final_verdict_line_not_any_mention():
+    """A reply that echoes or reasons about the VULNERABLE template
+    line but concludes SAFE must grade SAFE — the instructions demand
+    the reply END with exactly one verdict line, and the system
+    prompt itself contains both template lines."""
+    echoing_reply = (
+        "The two possible endings are:\n"
+        "  VERDICT: VULNERABLE   (the function contains a security bug)\n"
+        "  VERDICT: SAFE         (it does not)\n"
+        "After review, no bug found.\n"
+        "VERDICT: SAFE"
+    )
+    assert not grade(echoing_reply)
+
+    # The genuinely-vulnerable conclusion still grades VULNERABLE,
+    # even after reasoning that mentions SAFE.
+    concluding_vulnerable = (
+        "It could be VERDICT: SAFE at first glance, but the length "
+        "check is missing.\nVERDICT: VULNERABLE"
+    )
+    assert grade(concluding_vulnerable)

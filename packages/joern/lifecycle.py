@@ -40,7 +40,6 @@ import json
 import logging
 import os
 import signal
-import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -210,29 +209,20 @@ def _connect_existing(state: dict[str, Any]) -> JoernServer | None:
         )
         return None
 
-    srv = JoernServer.__new__(JoernServer)
-    srv._heap_mb = state.get("heap_mb")
-    srv._boot_timeout_s = 120
-    srv._query_timeout_s = state.get("query_timeout_s", 300)
-    srv._port = port
-    srv._proc = None
-    srv._base_url = f"http://127.0.0.1:{port}"
-    srv._cpg_loaded = False
-    srv._cpg_path = None
-    srv._last_post_error = ""
-    srv._restart_lock = threading.Lock()
-    # ``query()`` consults this event before every post; ``__new__``
-    # bypasses ``__init__``, so omitting it made EVERY query on a
-    # reused server raise AttributeError.
-    srv._restarting = threading.Event()
-    srv._relaunch_last_attempt = None
-    srv._workdir = None
-    srv._auth_user = auth_user
-    srv._auth_password = auth_password
-    srv._uds_path = socket_path
-    # Reuse handles never own the socket directory — the process that
-    # booted the server (or its supervisor) cleans it up.
-    srv._uds_dir = None
+    # Proper constructor path — the previous ``__new__`` + field-copy
+    # here silently drifted from ``__init__`` every time a field was
+    # added (``_restarting`` once, then ``_flow_semantics`` /
+    # ``_last_import_timeout``), each omission an AttributeError on
+    # some method of the reused handle. ``connect_existing`` runs
+    # ``__init__`` so new fields get their defaults automatically.
+    srv = JoernServer.connect_existing(
+        port=port,
+        auth_user=auth_user,
+        auth_password=auth_password,
+        heap_mb=state.get("heap_mb"),
+        query_timeout_s=state.get("query_timeout_s", 300),
+        socket_path=socket_path,
+    )
 
     if not _health_check(port, srv._auth_headers(), socket_path):
         logger.info("joern lifecycle: PID %d alive but server unhealthy", pid)

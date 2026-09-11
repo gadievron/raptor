@@ -23,12 +23,18 @@ Strategy ladder:
 2. **Fence** — locate the first markdown code fence (```````
    or ``~~~``, optionally with a language marker), extract the payload,
    parse.
-3. **Brace-span** — single linear scan locating the LAST top-level
+3. **Bracket-span** (``require_object=False`` callers only) — same
+   linear scan for the LARGEST top-level balanced ``[...]`` span
+   (largest, not last: prose citations like ``[2]`` strict-parse as
+   arrays), run BEFORE the brace span so a "prose + bare array"
+   response returns the whole array instead of the last object
+   inside it.
+4. **Brace-span** — single linear scan locating the LAST top-level
    balanced-brace ``{...}`` span in the text (see
    :func:`_extract_brace_span` for why last-wins beats largest-wins).
    Handles prose-before, prose-after, and the "model wrote a paragraph
    before the JSON" shape.
-4. **Quasi-JSON fixup** — after brace-span extraction, apply common
+5. **Quasi-JSON fixup** — after brace-span extraction, apply common
    post-hoc fixups: strip trailing commas, single-quote → double-quote,
    Python literals (``None`` / ``True`` / ``False``) → JSON. Each fixup
    is retried in isolation so a broken combination doesn't wedge the
@@ -119,9 +125,10 @@ class ExtractionDiagnostic:
     defaults so consumers can filter without special-casing.
     """
 
-    #: One of ``strict``, ``fence``, ``brace_span``, ``quasi_json_fixup``,
-    #: ``failed``. Names the winning branch — or ``failed`` when the
-    #: whole ladder came up empty.
+    #: One of ``strict``, ``fence``, ``bracket_span`` (top-level array,
+    #: ``require_object=False`` callers only), ``brace_span``,
+    #: ``quasi_json_fixup``, ``failed``. Names the winning branch — or
+    #: ``failed`` when the whole ladder came up empty.
     strategy: str
 
     #: Populated when ``strategy == 'fence'``. Empty string when the
@@ -129,9 +136,9 @@ class ExtractionDiagnostic:
     #: whatever the model wrote otherwise.
     fence_language: str = ""
 
-    #: Populated when ``strategy`` is ``'brace_span'`` or
-    #: ``'quasi_json_fixup'`` (the fixup path builds on the brace-span
-    #: extraction). Length of the prose before / after the JSON payload,
+    #: Populated when ``strategy`` is ``'bracket_span'``,
+    #: ``'brace_span'`` or ``'quasi_json_fixup'`` (the fixup path
+    #: builds on the brace-span extraction). Length of the prose before / after the JSON payload,
     #: counted in Unicode code points (``len(str)`` arithmetic — not
     #: UTF-8 bytes, despite the field names) — useful for observability
     #: (a rising trend suggests prompt drift).
@@ -219,6 +226,24 @@ def parse_llm_json(
                 fence_language=fence_lang or "",
             )
 
+    # Strategy 2b — balanced-bracket span (top-level arrays). Only for
+    # ``require_object=False`` callers, and BEFORE the brace span: a
+    # "prose + bare array" response has no top-level ``{...}``, so the
+    # brace walker would extract the last object INSIDE the array and
+    # silently drop every other element (the iris assumption-synthesis
+    # regression). For object-contract callers the array can never be
+    # accepted, so the strategy is skipped entirely.
+    if not require_object:
+        arr_body, arr_before, arr_after = _extract_bracket_span(text)
+        if arr_body is not None:
+            parsed, _ = _try_strict(arr_body)
+            if _accept(parsed):
+                return parsed, ExtractionDiagnostic(
+                    strategy="bracket_span",
+                    prose_before_bytes=arr_before,
+                    prose_after_bytes=arr_after,
+                )
+
     # Strategy 3 — balanced-brace span extraction.
     span_body, before, after = _extract_brace_span(text)
     if span_body is not None:
@@ -279,6 +304,12 @@ def _try_strict(text: str) -> tuple[Any, str | None]:
         return json.loads(text.strip()), None
     except (json.JSONDecodeError, ValueError) as e:
         return _MISSING, str(e)
+    except RecursionError:
+        # Python <= 3.13's stdlib parser is recursive: deeply-nested
+        # input raises RecursionError, not a decode error. This module
+        # documents a does-not-raise contract (failure = diagnostic),
+        # so translate instead of letting the bomb escape to callers.
+        return _MISSING, "input nested too deeply to parse"
 
 
 def _extract_fence(text: str) -> tuple[str | None, str | None]:
@@ -355,6 +386,45 @@ def _extract_brace_span(text: str) -> tuple[str | None, int, int]:
     interpret the final answer. Test coverage in ``TestBraceSpan`` /
     ``TestAdversarial`` locks the invariant.
     """
+    return _extract_delim_span(text, "{", "}")
+
+
+def _extract_bracket_span(text: str) -> tuple[str | None, int, int]:
+    """Find the LARGEST top-level balanced-bracket ``[...]`` span.
+
+    The array counterpart of :func:`_extract_brace_span`, used only
+    for ``require_object=False`` callers: a prompt that instructs
+    "output a JSON array" answered with prose + a bare array has no
+    top-level ``{...}`` — the brace walker would land on the last
+    object INSIDE the array and silently drop every other element.
+
+    LARGEST-wins here, deliberately diverging from the brace walker's
+    last-wins: prose around an array routinely carries small balanced
+    bracket spans — numeric citations (``[2]``, which strict-parses as
+    a real JSON array!) and markdown link text — and a trailing one
+    would beat the payload under last-wins. The self-correction shape
+    that motivated last-wins for objects ("corrected object emitted
+    last") has no common array analogue, while the payload array is
+    essentially always the largest bracket span in the response.
+    """
+    return _extract_delim_span(text, "[", "]", prefer="largest")
+
+
+def _extract_delim_span(
+    text: str, open_ch: str, close_ch: str, prefer: str = "last",
+) -> tuple[str | None, int, int]:
+    """Shared balanced-span walker for ``{...}`` / ``[...]``.
+
+    ``prefer`` selects which top-level span wins when several exist:
+    ``"last"`` (the brace walker's contract) or ``"largest"`` (the
+    bracket walker's — see the callers for the rationale each way).
+
+    Tracks nesting of ``open_ch``/``close_ch`` only — the OTHER
+    delimiter kind occurring inside the span (an array inside an
+    object, an object inside an array) neither opens nor closes it,
+    and the strict re-parse of the extracted span rejects any
+    mismatched pairing this laxness lets through.
+    """
     n = len(text)
     depth = 0
     in_string = False
@@ -378,16 +448,19 @@ def _extract_brace_span(text: str) -> tuple[str | None, int, int]:
         if c == '"':
             in_string = True
             continue
-        if c == "{":
+        if c == open_ch:
             if depth == 0:
                 span_start = i
             depth += 1
-        elif c == "}":
+        elif c == close_ch:
             if depth > 0:
                 depth -= 1
                 if depth == 0 and span_start >= 0:
-                    last_start = span_start
-                    last_end = i
+                    if (prefer == "last"
+                            or last_start < 0
+                            or i - span_start > last_end - last_start):
+                        last_start = span_start
+                        last_end = i
                     span_start = -1
 
     if last_start < 0:

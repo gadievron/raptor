@@ -880,6 +880,37 @@ def _classify_string_context(node, _lang: str) -> str:
 # 4. Dispatch table extraction
 # ---------------------------------------------------------------------------
 
+# Child types that begin a case BODY in the generic label fallback.
+_CASE_BODY_TYPES = frozenset({
+    "block", "statement_list", "consequence", "compound_statement",
+    "then", "body",
+})
+
+
+def _case_label_nodes(case_node: Any) -> list[Any]:
+    """Nodes forming a case's LABEL — never its body.
+
+    Grammar fields first (``pattern`` for Rust match arms, ``value``
+    for C-family case statements), then a generic fallback of named
+    children up to the first body-shaped child.  Scanning the whole
+    case subtree harvested body strings — an integer switch full of
+    ``log("connection lost")`` calls minted a string dispatch table
+    and bogus dead-branch reports downstream.
+    """
+    # Rust match_arm carries BOTH fields and ``value`` is the body, so
+    # ``pattern`` must win when present.
+    for field in ("pattern", "value"):
+        got = case_node.child_by_field_name(field)
+        if got is not None:
+            return [got]
+    label: list[Any] = []
+    for child in case_node.named_children:
+        if child.type in _CASE_BODY_TYPES or "statement" in child.type:
+            break
+        label.append(child)
+    return label
+
+
 def extract_dispatch_tables(
     file_path: str,
     source: str,
@@ -917,12 +948,23 @@ def extract_dispatch_tables(
                 if not _same_node(ancestor, node):
                     continue
 
-                for child in _walk_descendants(desc):
-                    if child.type in string_types:
-                        val = _strip_string_delimiters(_node_text(child, src), lang)
-                        if val:
-                            keys.append(val)
-                            break
+                # Only the case LABEL may contribute a key — a string
+                # in the case BODY is data, not a dispatch value.
+                found = False
+                for label_node in _case_label_nodes(desc):
+                    if found:
+                        break
+                    candidates = [label_node] if label_node.type in string_types \
+                        else _walk_descendants(label_node)
+                    for child in candidates:
+                        if child.type in string_types:
+                            val = _strip_string_delimiters(
+                                _node_text(child, src), lang,
+                            )
+                            if val:
+                                keys.append(val)
+                                found = True
+                                break
 
         if len(keys) >= 2:
             results.append(DispatchTable(

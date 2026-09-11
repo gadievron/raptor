@@ -674,7 +674,18 @@ def fetch_image_sbom(
                     layer_count_scanned=restored.layer_count_scanned,
                 )
 
-    image_manifest = parse_image_manifest(parsed)
+    try:
+        image_manifest = parse_image_manifest(parsed)
+    except ValueError as e:
+        # A malformed manifest (core.oci raises ValueError by
+        # contract) must degrade THIS image only — every other
+        # failure class in this function already warns + returns
+        # None per-image rather than aborting the whole FROM scan.
+        logger.warning(
+            "sca.dockerfile_from: manifest parse failed for %s: %s",
+            image, e,
+        )
+        return None
 
     # Aggregate package-state file content across layers. Later
     # layers override earlier ones (Docker overlay-fs semantics) —
@@ -1196,14 +1207,24 @@ def scan_image_sources(
         unique_images.append(ref.image)
     if unique_images:
         from concurrent.futures import ThreadPoolExecutor
-        def _fetch_one(image: str):
-            return image, fetch_image_sbom(
-                image, client=client,
-                platform_os=platform_os,
-                platform_arch=platform_arch,
-                digest_cache=None,
-                disk_cache=cache,
-            )
+        def _fetch_one(image: str) -> tuple[str, ImageSbom | None]:
+            # Contain per-image failures inside the worker: a raise
+            # here propagates through pool.map and would abort the
+            # whole batch, losing every OTHER image's SBOM too.
+            try:
+                return image, fetch_image_sbom(
+                    image, client=client,
+                    platform_os=platform_os,
+                    platform_arch=platform_arch,
+                    digest_cache=None,
+                    disk_cache=cache,
+                )
+            except ValueError as e:
+                logger.warning(
+                    "sca.dockerfile_from: SBOM fetch failed for %s: %s",
+                    image, e,
+                )
+                return image, None
         # Cap at 8 — most repos have far fewer unique images, and
         # bigger pools just queue more work onto the egress proxy.
         max_workers = min(8, max(1, len(unique_images)))

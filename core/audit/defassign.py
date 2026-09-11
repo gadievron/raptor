@@ -939,18 +939,29 @@ def _is_statement_shaped(tokens: list[Token]) -> bool:
 
 
 def _reduce_expression_expansion(
-    tokens: list[Token], variable: str,
+    tokens: list[Token], variable: str, serial: int,
 ) -> list[Token]:
     """Placeholder for an expression-shaped expansion: preserves the
-    evaluated reads of the claimed variable and nothing else."""
+    evaluated reads of the claimed variable and nothing else.
+
+    The placeholder value is an OPAQUE identifier, never a constant:
+    a constant would let the walker's polarity-sensitive folding
+    const-prune a macro-guarded branch away (``if (GUARD(x)) use(v)``
+    reducing to ``if ((0)) …`` erases a real use), turning an unknown
+    guard into a false proof.  An unknown identifier keeps the branch
+    UNKNOWN — both arms walked.  ``serial`` makes each reduction's
+    identifier distinct so two different macros can never mint a
+    correlated-condition pair the source does not have.
+    """
+    opaque = f"__defassign_opaque_{serial}"
     reads = _scan_expansion_for_variable(tokens, variable)
     if reads:
         return [
-            ("punct", "("), ("num", "0"), ("punct", ","),
+            ("punct", "("), ("ident", opaque), ("punct", ","),
             ("punct", "("), ("ident", variable), ("punct", ")"),
             ("punct", ")"),
         ]
-    return [("punct", "("), ("num", "0"), ("punct", ")")]
+    return [("punct", "("), ("ident", opaque), ("punct", ")")]
 
 
 @dataclass
@@ -1014,7 +1025,9 @@ def _process_function_tokens(
             tokens = tokens[:i] + one_level + tokens[after:]
         else:
             reductions += 1
-            placeholder = _reduce_expression_expansion(full, variable)
+            placeholder = _reduce_expression_expansion(
+                full, variable, reductions,
+            )
             tokens = tokens[:i] + placeholder + tokens[after:]
     return _ProcessedSource(
         tokens=tokens,
@@ -1501,6 +1514,27 @@ class _Walker:
                 nm = _declarator_name(c)
                 value = c.child_by_field_name("value")
                 is_var = nm is not None and _node_text(nm) == self.variable
+                # Declarator expressions evaluate at the declaration
+                # even WITH an initializer (pointer-to-VLA:
+                # ``int (*rows)[x] = init;`` reads x) — the non-init
+                # branch scans them but this branch only scanned the
+                # initializer, so such a read was invisible and the
+                # prover could certify "assigned before every use"
+                # over an uninitialized size read (missed reads are
+                # the unsound direction for this prover).
+                decl = c.child_by_field_name("declarator")
+                if decl is not None:
+                    for n in _walk_nodes(decl):
+                        if (
+                            n.type == "identifier"
+                            and (nm is None or n.id != nm.id)
+                            and _node_text(n) == self.variable
+                            and state
+                        ):
+                            self.violations.append(_Violation(
+                                contexts=state,
+                                use_text=_node_text(c)[:80],
+                            ))
                 if is_var:
                     if self.decl_seen:
                         raise ProofRefusal(

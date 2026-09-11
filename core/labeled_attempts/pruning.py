@@ -28,9 +28,10 @@ re-fire, so they don't accumulate the way sandbox records do.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 from core.json import load_json
 
@@ -42,6 +43,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = ["PruneReport", "prune_pool"]
+
+_log = logging.getLogger(__name__)
 
 
 # Default N — keeps 5 most recent records per dedup bucket. Per the
@@ -78,8 +81,18 @@ def _bucket_key(record: LabeledAttempt) -> tuple[str, str, str]:
 
 def _record_ts(record: LabeledAttempt) -> float:
     """ISO-8601 → POSIX timestamp. Records produced by the bridge are
-    always parseable (validated at construction)."""
-    return datetime.fromisoformat(record.timestamp).timestamp()
+    always parseable (validated at construction).
+
+    Naive timestamps are interpreted as UTC — the same rule
+    ``retrieval._record_age_days`` applies — so a bucket mixing naive
+    (legacy writer) and aware records orders the same on every host;
+    letting ``timestamp()`` apply the LOCAL zone to naive values would
+    skew them by the UTC offset and prune the wrong victim.
+    """
+    ts = datetime.fromisoformat(record.timestamp)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts.timestamp()
 
 
 def prune_pool(
@@ -118,7 +131,14 @@ def prune_pool(
                 continue
             try:
                 rec = LabeledAttempt.from_dict(blob)
-            except (ValueError, KeyError, TypeError):
+            except (ValueError, KeyError, TypeError, OSError, AttributeError):
+                # Same skip discipline as store._iter_records_in_dir:
+                # AttributeError covers valid JSON of the wrong shape
+                # (top-level array, non-dict sub-object) — one bad
+                # record must not abort the whole prune.
+                _log.debug(
+                    "skipping unreadable record %s", path, exc_info=True,
+                )
                 continue
             seen += 1
             buckets.setdefault(_bucket_key(rec), []).append(

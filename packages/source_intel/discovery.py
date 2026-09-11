@@ -58,6 +58,21 @@ _KIND_MARKERS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+#: Compiled identifier-boundary matchers per family marker. A marker
+#: only matches when not embedded in a longer identifier (so the
+#: ``nonnull`` marker does NOT match inside ``returns_nonnull``, but
+#: still matches ``__attribute__((nonnull(1)))`` where it is delimited
+#: by punctuation).
+_KIND_MARKER_RES: dict[str, tuple[re.Pattern[str], ...]] = {
+    family: tuple(
+        re.compile(
+            r"(?<![A-Za-z0-9_])" + re.escape(marker) + r"(?![A-Za-z0-9_])"
+        )
+        for marker in markers
+    )
+    for family, markers in _KIND_MARKERS.items()
+}
+
 
 #: Per-family alias-cap (highest-frequency aliases kept; rest discarded).
 #: Bounds the generated rule template / alias-scan size on dense kernels.
@@ -93,8 +108,10 @@ _DEFINE_RE = re.compile(
 
 # Word-boundary token capture for macro names so we can count usage
 # in source files without false-positive substring matches. Same
-# case-insensitive identifier rules as ``_DEFINE_RE``.
-_TOKEN_NAME_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]+\b")
+# identifier rules as ``_DEFINE_RE`` (>= 1 character — a two-char
+# minimum would silently drop single-character macros from recursive
+# expansion resolution, breaking alias chains routed through them).
+_TOKEN_NAME_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 
 
 @dataclass(frozen=True)
@@ -175,19 +192,29 @@ def discover_aliases(target: Path) -> DiscoveryResult:
 
     # Phase 2: classify each macro by family. A macro is in a family
     # iff its FULLY-RESOLVED expansion (recursive macro lookup up to
-    # MAX_RESOLUTION_DEPTH) contains a family marker.
+    # MAX_RESOLUTION_DEPTH) contains a family marker as a standalone
+    # token. Identifier-boundary matching, not substring: `nonnull`
+    # is a substring of `returns_nonnull`, and classifying a
+    # returns_nonnull alias into the nonnull(-args) family would tell
+    # downstream consumers the function's ARGUMENTS are annotated
+    # when only the return value is.
     family_to_aliases: dict[str, list[str]] = defaultdict(list)
     for name, expansion in macros.items():
         resolved = _resolve_expansion(expansion, macros, depth=0)
-        for family, markers in _KIND_MARKERS.items():
-            if any(marker in resolved for marker in markers):
+        for family, marker_res in _KIND_MARKER_RES.items():
+            if any(marker_re.search(resolved) for marker_re in marker_res):
                 family_to_aliases[family].append(name)
 
     # Phase 3: count usage of each candidate macro in source files.
+    # Counted across ALL scan roots, not just `target`: attribute
+    # macros defined in a sibling include/ tree are normally APPLIED
+    # there too (public API headers), so a target-only count would
+    # report zero usage and the zero-usage filter below would drop
+    # exactly the aliases the sibling-include walk exists to find.
     candidate_names: set[str] = set()
     for names in family_to_aliases.values():
         candidate_names.update(names)
-    usage_counts = _count_usage(target, candidate_names)
+    usage_counts = _count_usage(scan_roots, candidate_names)
 
     # Phase 4: sort within each family by usage frequency desc, cap.
     out: dict[str, tuple[str, ...]] = {}
@@ -207,7 +234,7 @@ def discover_aliases(target: Path) -> DiscoveryResult:
     return DiscoveryResult(
         aliases_by_family=out,
         headers_scanned=headers_seen,
-        sources_scanned=sum(1 for _ in _iter_source_files(target)),
+        sources_scanned=sum(1 for _ in _iter_source_files(scan_roots)),
     )
 
 
@@ -254,24 +281,36 @@ def _resolve_expansion(
     return _TOKEN_NAME_RE.sub(_replace_token, expansion)
 
 
-def _iter_source_files(target: Path):
-    """Yield source files under ``target`` whose extensions are in
-    ``_SOURCE_EXTS``, bounded by ``_MAX_FILES_SOURCE_SCAN``."""
+def _iter_source_files(scan_roots: list[Path]):
+    """Yield source files under every root in ``scan_roots`` whose
+    extensions are in ``_SOURCE_EXTS``, bounded by
+    ``_MAX_FILES_SOURCE_SCAN`` across all roots. Files are
+    de-duplicated by resolved path in case one root nests inside
+    another."""
     seen = 0
-    for entry in target.rglob("*"):
-        if seen >= _MAX_FILES_SOURCE_SCAN:
-            break
-        if not entry.is_file():
-            continue
-        if entry.suffix.lower() not in _SOURCE_EXTS:
-            continue
-        seen += 1
-        yield entry
+    yielded: set[Path] = set()
+    for root in scan_roots:
+        for entry in root.rglob("*"):
+            if seen >= _MAX_FILES_SOURCE_SCAN:
+                return
+            if not entry.is_file():
+                continue
+            if entry.suffix.lower() not in _SOURCE_EXTS:
+                continue
+            try:
+                resolved = entry.resolve()
+            except OSError:
+                continue
+            if resolved in yielded:
+                continue
+            yielded.add(resolved)
+            seen += 1
+            yield entry
 
 
-def _count_usage(target: Path, names: set[str]) -> dict[str, int]:
+def _count_usage(scan_roots: list[Path], names: set[str]) -> dict[str, int]:
     """Count word-boundary occurrences of each macro in source files
-    under ``target``. Returns a dict mapping name → count.
+    under the scan roots. Returns a dict mapping name → count.
 
     ``#define NAME …`` lines are NOT counted as usage — only real
     invocations of the macro count. This matters when scanning a
@@ -300,7 +339,7 @@ def _count_usage(target: Path, names: set[str]) -> dict[str, int]:
         r"^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)\b",
     )
 
-    for entry in _iter_source_files(target):
+    for entry in _iter_source_files(scan_roots):
         try:
             text = entry.read_text(encoding="utf-8", errors="replace")
         except OSError:

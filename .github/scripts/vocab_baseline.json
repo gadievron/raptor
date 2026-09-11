@@ -1,4 +1,9 @@
 {
+  "core/analysis/_reach_cache.py::_GRAMMAR_MODULES": {
+    "count": 15,
+    "kind": "literal",
+    "note": "closed toolchain-module taxonomy: the tree-sitter grammar modules the call-graph extractors probe (mirrors the _import_grammar call sites in core/inventory/call_graph.py); availability is folded into the cache fingerprint so extraction-quality changes invalidate cached indices \u2014 infrastructure module names, not a learned name vocabulary"
+  },
   "core/analysis/_reach_cache.py::_MANDATORY_INDEX_FIELDS": {
     "count": 15,
     "kind": "literal",
@@ -687,6 +692,11 @@
     "count": 10,
     "kind": "alternation"
   },
+  "core/audit/precondition_check.py::_NON_CALL_KEYWORDS": {
+    "count": 21,
+    "kind": "literal",
+    "note": "C/Python language-standard keywords and operators that parse as call-shaped tokens (if(, sizeof(, not(...)) \u2014 excluded from the leaf-function test so control flow does not count as a callee; language-standard vocabulary, not a learned name list (libc/POSIX-class allowance)"
+  },
   "core/audit/prefilter.py::_AUTH_KEYWORDS": {
     "count": 14,
     "kind": "literal"
@@ -985,6 +995,11 @@
     "count": 24,
     "kind": "literal"
   },
+  "core/concepts/spot_check.py::_FALLBACK_STOPWORDS": {
+    "count": 80,
+    "kind": "literal",
+    "note": "English stopwords gating the identifier-shaped fallback in literal spot-checks; natural-language function words, not a learned name vocabulary (nothing here is a project API or sink name)"
+  },
   "core/concepts/study.py::_RESPONSE_SCHEMA": {
     "count": 10,
     "kind": "literal"
@@ -1152,6 +1167,11 @@
     "count": 18,
     "kind": "literal"
   },
+  "core/inventory/extractors.py::_SLASH_COMMENT_LANGS": {
+    "count": 14,
+    "kind": "literal",
+    "note": "closed language taxonomy (which inventoried languages share the C // and /* */ comment family for the regex comment-count fallback), not a learned name vocabulary; same class as _TS_PROBE_LANGUAGES"
+  },
   "core/inventory/extractors.py::_TS_PROBE_LANGUAGES": {
     "count": 16,
     "kind": "literal"
@@ -1243,10 +1263,6 @@
     "count": 10,
     "kind": "literal"
   },
-  "core/llm/cc_probe.py::_SIGNATURE_ENV": {
-    "count": 14,
-    "kind": "literal"
-  },
   "core/llm/cc_proxy_hosts.py::_PROVIDER_ENV_KEYS": {
     "count": 10,
     "kind": "literal",
@@ -1256,6 +1272,11 @@
     "count": 10,
     "kind": "literal"
   },
+  "core/llm/coerce.py::_KNOWN_LANG_TAGS": {
+    "count": 38,
+    "kind": "literal",
+    "note": "closed fence-language taxonomy (which leading tokens count as a markdown code-fence language tag when stripping single-line fences), not a learned name vocabulary; same class as core/inventory/extractors.py::_SLASH_COMMENT_LANGS"
+  },
   "core/llm/dispatcher/auth.py::__init__": {
     "count": 19,
     "kind": "literal"
@@ -1263,6 +1284,11 @@
   "core/llm/dispatcher/auth.py::build_rules": {
     "count": 15,
     "kind": "literal"
+  },
+  "core/llm/providers.py::_TRANSPORT_EXC_MODULE_ROOTS": {
+    "count": 10,
+    "kind": "literal",
+    "note": "SDK/transport module-root class: the provider-SDK and HTTP-stack top-level module names whose exceptions may carry API status text (gates quota/rate-limit message sniffing to transport-typed errors so validation errors embedding model output never classify as quota); infrastructure package names, not a learned name vocabulary"
   },
   "core/llm/response_validation.py::_ANALYSIS_WEIGHTS": {
     "count": 16,
@@ -1615,6 +1641,11 @@
     "count": 10,
     "kind": "literal"
   },
+  "libexec/raptor-self-test::_LLM_ENV_VARS": {
+    "count": 10,
+    "kind": "literal",
+    "note": "env vars that make core.llm.detection report an available LLM - a security scrub list the tier-0 harness must strip from child environments, not a learned name vocabulary"
+  },
   "libexec/raptor-sage::dispatch": {
     "count": 12,
     "kind": "literal"
@@ -1677,10 +1708,6 @@
   },
   "libexec/raptor-study-prep::out_data": {
     "count": 10,
-    "kind": "literal"
-  },
-  "libexec/raptor-tune::_KEY_ORDER": {
-    "count": 13,
     "kind": "literal"
   },
   "libexec/raptor-understand::_do_hunt": {
@@ -2025,9 +2052,10 @@
     "count": 11,
     "kind": "literal"
   },
-  "packages/exploit_feasibility/schema.py::CONTEXT_SCHEMA": {
-    "count": 11,
-    "kind": "literal"
+  "packages/exploit_feasibility/schema.py::_DICT_SECTIONS": {
+    "count": 13,
+    "kind": "literal",
+    "note": "artifact structure keys: the typed dict sections of the save_exploit_context file the validator walks - section names of an on-disk artifact shape, not a learned API/sink name vocabulary"
   },
   "packages/exploit_feasibility/smt_onegadget.py::_X86_64_REGS": {
     "count": 17,
@@ -2094,9 +2122,19 @@
     "kind": "literal",
     "note": "env-build.json provenance record field names (serialization schema, not name vocabulary \u2014 same class as the enforcement-stats field-names entry)"
   },
+  "packages/fuzzing/orchestrator.py::_run_libfuzzer": {
+    "count": 10,
+    "kind": "literal",
+    "note": "libFuzzer campaign result-dict schema keys (mirrors the AFL path's report shape incl. the campaign_failed verdict and leak counts), not a learned name vocabulary"
+  },
   "packages/fuzzing/seed_corpus.py::SENSITIVE_SUBSTRINGS": {
     "count": 11,
     "kind": "literal"
+  },
+  "packages/fuzzing/seed_corpus.py::manifest": {
+    "count": 10,
+    "kind": "literal",
+    "note": "generated-corpus manifest schema keys (persistence format incl. the provenance stamp the destructive-reset gate checks), not a learned name vocabulary"
   },
   "packages/ghidra/model.py::to_dict": {
     "count": 13,
@@ -2241,10 +2279,6 @@
     "count": 15,
     "kind": "literal"
   },
-  "packages/sca/discovery.py::LOCKFILE_NAMES": {
-    "count": 12,
-    "kind": "literal"
-  },
   "packages/sca/discovery.py::MANIFEST_FILENAMES": {
     "count": 33,
     "kind": "literal"
@@ -2260,6 +2294,12 @@
   "packages/sca/ecosystems.py::KNOWN_ECOSYSTEMS": {
     "count": 10,
     "kind": "literal"
+  },
+  "packages/sca/findings.py::_UPSTREAM_BRANCH_TOKENS": {
+    "count": 11,
+    "kind": "literal",
+    "note": "Upstream BRANCH/CHANNEL terminology (master/main/trunk/develop/stable...) used to tell upstream branch-snapshot prerelease tags from org/fork suffixes in the fork-tag post-filter \u2014 cross-ecosystem VCS/release convention like the semver prerelease-channel allowance directly below it in this file's sibling (versions/semver.py::_PRERELEASE_KEYWORDS), not a target's learnable API vocabulary; new names are additions to community convention, not to any project surface.",
+    "reviewed": "2026-08-31"
   },
   "packages/sca/findings.py::_hygiene_finding_to_row": {
     "count": 13,

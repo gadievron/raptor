@@ -1,38 +1,44 @@
 // copy_to_user_uninit.cocci — Find stack-allocated structs that are
-// copied to userspace without full initialization (kernel info leak).
+// copied to userspace without any initialization (kernel info leak).
 //
-// The pattern: a local struct variable is declared, partially filled
-// via field assignment or a callee, then passed to copy_to_user /
-// put_user. If any field path skips initialization, padding or
-// unset fields leak kernel stack bytes to userspace.
+// The pattern: a local struct variable is declared and then passed to
+// copy_to_user with NO initialization of any kind in between — no
+// memset, no whole-struct assignment, no member assignment, and no
+// helper call taking its address (which may initialize it). Whatever
+// was on the stack leaks to userspace.
 //
-// Covers CWE-200 / CWE-908: copy_to_user of partially-initialized
-// stack struct. Classic kernel info leak vector.
+// Member-by-member assignment is treated as initialization: spatch
+// cannot enumerate a struct's fields to prove FULL coverage, so a
+// partially-assigned struct is undecidable here — flagging it would
+// mostly hit fully-assigned correct code. Padding-byte leaks through
+// assigned-but-not-memset structs are likewise out of reach. The rule
+// therefore reports only the zero-initialization shape, exactly once
+// per copy site.
+//
+// Covers CWE-200 / CWE-908: copy_to_user of an uninitialized stack
+// struct. Classic kernel info leak vector.
 // @role: detection
 
-// Stack struct copied to userspace after partial init
-@partial_init@
-identifier out;
+@uninit_copy@
+identifier out, memb;
+identifier helper;
 type T;
 position p_copy;
-expression dst, sz;
+expression dst, sz, V;
 @@
 
 T out;
 ... when != memset(&out, ...)
-    when != memset(&out, 0, ...)
-(
+    when != out = V
+    when != out.memb = V
+    when != out.memb[...] = V
+    when != helper(&out, ...)
   copy_to_user@p_copy(dst, &out, sz)
-|
-  copy_to_user@p_copy(dst, &out, sizeof(out))
-|
-  copy_to_user@p_copy(dst, &out, sizeof(T))
-)
 
 @script:python@
-p_copy << partial_init.p_copy;
-out << partial_init.out;
-T << partial_init.T;
+p_copy << uninit_copy.p_copy;
+out << uninit_copy.out;
+T << uninit_copy.T;
 @@
 
 import json, sys
@@ -40,32 +46,5 @@ for _p in p_copy:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
            "line_end": int(_p.line_end), "col_end": int(_p.column_end),
            "rule": "copy_to_user_uninit",
-           "message": "Stack struct '%s' (type %s) copied to userspace without full memset — potential info leak" % (out, T)}
-    sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
-
-// Stack struct array element copied without memset
-@partial_init_compat@
-identifier out;
-type T;
-position p_copy;
-expression dst, sz;
-@@
-
-T out;
-... when != memset(&out, ...)
-(
-  copy_to_user@p_copy(dst, &out, sz)
-)
-
-@script:python@
-p_copy << partial_init_compat.p_copy;
-out << partial_init_compat.out;
-@@
-
-import json, sys
-for _p in p_copy:
-    _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
-           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
-           "rule": "copy_to_user_uninit",
-           "message": "Stack variable '%s' copied to userspace — verify full initialization" % out}
+           "message": "Stack struct '%s' (type %s) copied to userspace with no initialization — kernel stack info leak" % (out, T)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")

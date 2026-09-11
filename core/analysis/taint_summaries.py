@@ -69,6 +69,15 @@ from core.analysis.python_module_callgraph import (
 _DIRECT_RETURN_CALLABLE = ""
 _DIRECT_RETURN_ARG = -1
 
+# Effect-chain arg position for taint that reaches a call through a
+# keyword argument or through a position made unknowable by ``*``
+# unpacking. Distinct from every real positional index (and from the
+# ``_DIRECT_RETURN_ARG`` sentinel) so a consumer keying on positions
+# can never mistake it for a concrete one; the callable name still
+# joins the chain, so Phase 14's all-chain-callables-must-be-catalog-
+# sanitizers rule stays in force for these atoms.
+_OPAQUE_ARG = -2
+
 
 @dataclass(frozen=True)
 class TaintSummary:
@@ -391,13 +400,23 @@ def _expr_taint(
     * ``Name`` — use the in-state of the bare symbol.
     * ``Attribute`` — base name's in-state (over-approximation;
       field-level distinctions aren't tracked).
-    * ``Call`` — recursive walk on each positional arg, then map
-      through the callee's summary if available (in-module) or
-      stamp the callable's effect on each tainted arg (external).
-      Positional ordering is taken from ``expr.args`` directly so
-      ``helper(b, a)`` maps callee param 0 → b, callee param 1 → a
-      (the legacy ``sorted(arg_names)`` convention was unreliable
-      when actual positions disagree with lexicographic order).
+    * ``Call`` — recursive walk on each arg (positional, keyword,
+      and ``*``-starred), then map through the callee's summary if
+      available (in-module) or stamp the callable's effect on each
+      tainted arg (external). Positional ordering is taken from
+      ``expr.args`` directly so ``helper(b, a)`` maps callee param
+      0 → b, callee param 1 → a (the legacy ``sorted(arg_names)``
+      convention was unreliable when actual positions disagree with
+      lexicographic order). Keyword args map to the callee param of
+      the same name when the summary is known; anything unmappable
+      (``*`` unpacking shifts every later position, a keyword with
+      no matching param) is stamped at :data:`_OPAQUE_ARG` so the
+      taint survives with the callable on its chain instead of
+      silently vanishing — a dropped atom reads as "param does not
+      flow", which the sanitizer-cut consumer can turn into a false
+      clean-wrapper binding that suppresses a real finding.
+    * ``JoinedStr`` / ``FormattedValue`` — union of the interpolated
+      expressions' taint (an f-string carries its inputs' taint).
     * ``BinOp`` / ``BoolOp`` / ``IfExp`` / ``UnaryOp`` —
       element-wise union (taint flows through arithmetic / boolean
       composition into the result).
@@ -418,20 +437,43 @@ def _expr_taint(
         return in_state_fn(cfg_node, base)
     if isinstance(expr, ast.Call):
         callable_name = _attribute_chain_str(expr.func) or ""
-        # Per-positional-arg taint states.
+        # ``g(*xs)`` makes every later positional index unknowable —
+        # taint still flows, but positions can't be trusted.
+        has_starred = any(isinstance(a, ast.Starred) for a in expr.args)
+        # Per-positional-arg taint states (a Starred contributes the
+        # taint of its unpacked iterable).
         arg_states: list[TaintState] = [
-            _expr_taint(a, cfg_node, in_state_fn, summaries)
+            _expr_taint(
+                a.value if isinstance(a, ast.Starred) else a,
+                cfg_node, in_state_fn, summaries,
+            )
             for a in expr.args
         ]
+        # Keyword args (``**expr`` expansion never reaches here — it
+        # marks the whole function ``summary_unknown`` upstream).
+        kw_states: list[tuple[str | None, TaintState]] = [
+            (kw.arg, _expr_taint(kw.value, cfg_node, in_state_fn, summaries))
+            for kw in expr.keywords
+        ]
         callee = summaries.get(callable_name)
-        if callee is not None and not callee.summary_unknown:
-            # In-module callee with a known summary. Map each
-            # return-contributing param to the matching positional arg.
+        if (callee is not None and not callee.summary_unknown
+                and not has_starred):
+            # In-module callee with a known summary. Positional args
+            # map by index; keyword args map to the callee param of
+            # the same name.
+            indexed: dict[int, TaintState] = dict(enumerate(arg_states))
+            opaque: list[TaintState] = []
+            for kw_name, kw_state in kw_states:
+                if kw_name is not None and kw_name in callee.params:
+                    idx = callee.params.index(kw_name)
+                    indexed[idx] = _merge_states(
+                        indexed.get(idx, _empty_state()), kw_state,
+                    )
+                else:
+                    opaque.append(kw_state)
             result = _empty_state()
             for pi_callee, c_callee, a_callee in callee.return_effects:
-                if pi_callee >= len(arg_states):
-                    continue
-                arg_state = arg_states[pi_callee]
+                arg_state = indexed.get(pi_callee, _empty_state())
                 if not arg_state:
                     continue
                 if c_callee == _DIRECT_RETURN_CALLABLE:
@@ -440,16 +482,49 @@ def _expr_taint(
                 else:
                     stamped = _add_effect(arg_state, c_callee, a_callee)
                     result = _merge_states(result, stamped)
+            # A keyword with no matching callee param: the summary
+            # can't say whether it reaches the return, so keep the
+            # taint alive with the callee on its chain (an in-module
+            # name is never a catalog sanitizer — the consumer
+            # refuses rather than suppresses).
+            for kw_state in opaque:
+                if kw_state:
+                    result = _merge_states(
+                        result,
+                        _add_effect(kw_state, callable_name, _OPAQUE_ARG),
+                    )
             return result
-        # External or unknown callee. Each tainted positional arg
-        # contributes via the call with its index stamped.
+        # External or unknown callee (or unknowable positions after
+        # ``*`` unpacking). Each tainted arg contributes via the call
+        # with its position stamped — opaque when unknowable.
         result = _empty_state()
         for arg_idx, arg_state in enumerate(arg_states):
             if not arg_state:
                 continue
-            stamped = _add_effect(arg_state, callable_name, arg_idx)
+            idx = _OPAQUE_ARG if has_starred else arg_idx
+            stamped = _add_effect(arg_state, callable_name, idx)
+            result = _merge_states(result, stamped)
+        for _kw_name, kw_state in kw_states:
+            if not kw_state:
+                continue
+            stamped = _add_effect(kw_state, callable_name, _OPAQUE_ARG)
             result = _merge_states(result, stamped)
         return result
+    if isinstance(expr, ast.JoinedStr):
+        # f-string: taint flows from every interpolated expression
+        # into the result. Returning empty here erased the flow — a
+        # wrapper ending in ``return escape(a) + f"<{b}>"`` read as
+        # "b does not taint return", minting a false clean-sanitizer
+        # binding for calls like ``helper(x, x)``.
+        out = _empty_state()
+        for v in expr.values:
+            if isinstance(v, ast.FormattedValue):
+                out = _merge_states(
+                    out, _expr_taint(v.value, cfg_node, in_state_fn, summaries),
+                )
+        return out
+    if isinstance(expr, ast.FormattedValue):
+        return _expr_taint(expr.value, cfg_node, in_state_fn, summaries)
     if isinstance(expr, ast.BinOp):
         return _merge_states(
             _expr_taint(expr.left, cfg_node, in_state_fn, summaries),
@@ -474,30 +549,78 @@ def _expr_taint(
 
 def _find_assignment_value_at(
     fn_ast: ast.AST, lineno: int, target_name: str,
-) -> ast.AST | None:
+) -> tuple[ast.AST, bool] | None:
     """Find an ``Assign`` / ``AugAssign`` / ``AnnAssign`` /
     ``NamedExpr`` at ``lineno`` whose target is ``target_name``, and
-    return the value expression. None if not found."""
+    return ``(value_expression, is_augmented)``. None if not found.
+
+    ``is_augmented`` distinguishes ``q += rhs`` from ``q = rhs``: an
+    augmented assignment READS the target too (``q = q ⊕ rhs``), so
+    the caller must union the target's own pre-assignment state with
+    the RHS taint. Treating the RHS as the whole story erased
+    established taint — ``q = tainted; q += "x"`` read q as clean
+    afterwards, and the missing flow could mint a false
+    clean-sanitizer binding downstream."""
     for node in ast.walk(fn_ast):
         if not hasattr(node, "lineno") or node.lineno != lineno:
             continue
         if isinstance(node, ast.Assign):
             for tgt in node.targets:
                 if isinstance(tgt, ast.Name) and tgt.id == target_name:
-                    return node.value
+                    return node.value, False
         elif isinstance(node, ast.AugAssign):
             if isinstance(node.target, ast.Name) and node.target.id == target_name:
-                return node.value
+                return node.value, True
         elif isinstance(node, ast.AnnAssign):
             if (isinstance(node.target, ast.Name)
                     and node.target.id == target_name
                     and node.value is not None):
-                return node.value
+                return node.value, False
         elif (isinstance(node, ast.NamedExpr)
                 and isinstance(node.target, ast.Name)
                 and node.target.id == target_name):
-            return node.value
+            return node.value, False
     return None
+
+
+def _build_assignment_value_map(
+    fn_ast: ast.AST,
+) -> dict[tuple[int, str], tuple[ast.AST, bool]]:
+    """One-shot ``(lineno, target_name) → (value_expr, is_augmented)``
+    map over the whole function AST.
+
+    Same node shapes and same first-match-in-``ast.walk``-order
+    semantics as :func:`_find_assignment_value_at` (``setdefault``
+    keeps the first hit), but built ONCE — the per-function taint
+    fixed-point queries an assignment per (node, symbol) per
+    iteration, and a full ``ast.walk`` per query made the loop
+    O(iterations × nodes × defs × AST-size).
+    """
+    out: dict[tuple[int, str], tuple[ast.AST, bool]] = {}
+    for node in ast.walk(fn_ast):
+        lineno = getattr(node, "lineno", None)
+        if lineno is None:
+            continue
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name):
+                    out.setdefault((lineno, tgt.id), (node.value, False))
+        elif isinstance(node, ast.AugAssign):
+            if isinstance(node.target, ast.Name):
+                out.setdefault(
+                    (lineno, node.target.id), (node.value, True),
+                )
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.value is not None:
+                out.setdefault(
+                    (lineno, node.target.id), (node.value, False),
+                )
+        elif (isinstance(node, ast.NamedExpr)
+                and isinstance(node.target, ast.Name)):
+            out.setdefault(
+                (lineno, node.target.id), (node.value, False),
+            )
+    return out
 
 
 def _find_return_value_at(
@@ -605,6 +728,11 @@ def _compute_one_summary(
     # computed by walking the AST of the defining expression — that
     # gives us positional arg-index accuracy that the CallSite's
     # ``arg_names`` frozenset doesn't preserve.
+    #
+    # The assignment/value map is precomputed ONCE (one AST walk) and
+    # the loop reads it per (node, symbol) — same lineno-map approach
+    # the post-fixed-point collection loop below already uses.
+    _assign_map = _build_assignment_value_map(fn_ast)
     max_inner = 4 * max(1, len(list(cfg.nodes())))
     for _ in range(max_inner):
         changed = False
@@ -612,11 +740,19 @@ def _compute_one_summary(
             if n is cfg.entry_node:
                 continue
             for sym in n.defs:
-                value_ast = _find_assignment_value_at(fn_ast, n.lineno, sym)
-                if value_ast is not None:
+                found = _assign_map.get((n.lineno, sym))
+                if found is not None:
+                    value_ast, is_augmented = found
                     new_state = _expr_taint(
                         value_ast, n, _in_state_for, summaries_so_far,
                     )
+                    if is_augmented:
+                        # ``q += rhs`` is ``q = q ⊕ rhs`` — the
+                        # target's pre-assignment state carries into
+                        # the result alongside the RHS taint.
+                        new_state = _merge_states(
+                            new_state, _in_state_for(n, sym),
+                        )
                 else:
                     # No explicit assignment AST found — fall back to
                     # merging the uses' states. Covers cases like

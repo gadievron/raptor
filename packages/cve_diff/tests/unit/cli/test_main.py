@@ -24,14 +24,22 @@ from cve_diff.pipeline import Pipeline
 
 
 @pytest.mark.parametrize("text,expected", [
-    ("DiscoveryError: CVE-X: agent surrendered (budget_cost_usd): ...", "budget_cost_usd"),
-    ("DiscoveryError: CVE-X: agent surrendered (budget_iterations): foo", "budget_iterations"),
-    ("DiscoveryError: CVE-X: agent surrendered (budget_tokens): bar", "budget_tokens"),
-    ("DiscoveryError: CVE-X: agent surrendered (budget_s): elapsed", "budget_s"),
+    # The helper matches str(exc) of the caught DiscoveryError, which
+    # starts with the CVE id — DiscoveryError has no custom __str__, so
+    # there is never a class-name prefix.
+    ("CVE-2024-1234: agent surrendered (budget_cost_usd): iterations=30",
+     "budget_cost_usd"),
+    ("CVE-2024-1234: agent surrendered (budget_iterations): foo",
+     "budget_iterations"),
+    ("CVE-2024-1234: agent surrendered (budget_s): elapsed", "budget_s"),
     # Non-budget surrenders should not match — we don't extend on those.
-    ("DiscoveryError: CVE-X: agent surrendered (no_evidence): ...", None),
-    ("DiscoveryError: CVE-X: agent surrendered (UnsupportedSource): ...", None),
-    ("DiscoveryError: CVE-X: agent surrendered (llm_error): ...", None),
+    ("CVE-2024-1234: agent surrendered (no_evidence): ...", None),
+    ("CVE-2024-1234: agent surrendered (UnsupportedSource): ...", None),
+    ("CVE-2024-1234: agent surrendered (llm_error): ...", None),
+    # A quoted marker phrase deeper in unrelated error text must not
+    # trigger the budget-extension prompt.
+    ("AnalysisError: advisory quotes 'CVE-1999-0001: agent surrendered "
+     "(budget_cost_usd): x' verbatim", None),
     # Other error classes should not match either.
     ("AcquisitionError: clone failed", None),
     ("", None),

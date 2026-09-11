@@ -883,5 +883,184 @@ class TestLlmPrioritiseEnvelope(unittest.TestCase):
         understand.llm.generate_structured.assert_not_called()
 
 
+def _make_understand_for(tmp_prefix: str, cleanup, slice_arch: str | None = None) -> BinaryUnderstand:
+    td = tempfile.mkdtemp(prefix=tmp_prefix)
+    cleanup(lambda: __import__('shutil').rmtree(td, ignore_errors=True))
+    tmp_path = Path(td) / "stub.elf"
+    tmp_path.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    with patch(
+        "packages.binary_analysis.radare2_understand.probe_capability",
+        return_value={"available": True, "r2_path": "/usr/bin/radare2",
+                      "r2_version": "5.0", "has_r2pipe": True,
+                      "has_r2ghidra": False, "decompiler": "pdc"},
+    ):
+        return BinaryUnderstand(tmp_path, llm=None, slice_arch=slice_arch)
+
+
+class TestR2OpenFlags(unittest.TestCase):
+    """slice_arch → r2 -a/-b flags. The 32-bit names the Mach-O slice
+    selector emits ('x86', 'arm') must map, or r2 silently analyses the
+    default slice while the manifest claims the requested one."""
+
+    def _flags(self, slice_arch):
+        understand = _make_understand_for(
+            "r2-flags-", self.addCleanup, slice_arch=slice_arch,
+        )
+        return understand._r2_open_flags()
+
+    def test_x86_32bit_slice_gets_flags(self):
+        self.assertEqual(self._flags("x86"), ["-2", "-a", "x86", "-b", "32"])
+
+    def test_arm_32bit_slice_gets_flags(self):
+        self.assertEqual(self._flags("arm"), ["-2", "-a", "arm", "-b", "32"])
+
+    def test_existing_64bit_names_unchanged(self):
+        self.assertEqual(self._flags("arm64"), ["-2", "-a", "arm", "-b", "64"])
+        self.assertEqual(self._flags("x86_64"), ["-2", "-a", "x86", "-b", "64"])
+        self.assertEqual(self._flags("i386"), ["-2", "-a", "x86", "-b", "32"])
+
+    def test_no_slice_arch_no_flags(self):
+        self.assertEqual(self._flags(None), ["-2"])
+
+
+class TestMalformedR2Json(unittest.TestCase):
+    """r2 output is hostile: valid-JSON-wrong-shape payloads must degrade
+    the affected section, never raise out of the extraction step."""
+
+    def _understand(self):
+        return _make_understand_for("r2-hostile-", self.addCleanup)
+
+    def test_extract_functions_dict_payload_degrades(self):
+        understand = self._understand()
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        r2 = MagicMock()
+        r2.cmd.return_value = json.dumps({"unexpected": "shape"})
+        understand._extract_functions(r2, ctx)  # must not raise
+        self.assertEqual(ctx.interesting_functions, [])
+
+    def test_extract_functions_skips_non_dict_elements(self):
+        understand = self._understand()
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        r2 = MagicMock()
+        r2.cmd.return_value = json.dumps([
+            42,
+            "junk",
+            {"name": "parse", "addr": 0x1000, "size": 64},
+        ])
+        understand._extract_functions(r2, ctx)
+        self.assertEqual(
+            [fn.name for fn in ctx.interesting_functions], ["parse"],
+        )
+
+    def test_extract_strings_skips_non_dict_elements(self):
+        understand = self._understand()
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        r2 = MagicMock()
+        r2.cmd.return_value = json.dumps(
+            [7, None, {"string": "a legit recovered string"}],
+        )
+        understand._extract_strings(r2, ctx, limit=10)
+        self.assertEqual(ctx.strings_sample, ["a legit recovered string"])
+
+    def test_tag_dangerous_callers_tolerates_malformed_refs(self):
+        understand = self._understand()
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        ctx.interesting_functions.append(
+            FunctionInfo(name="parse", address=0x1000, size=64),
+        )
+        r2 = MagicMock()
+        # axffj returns a dict on one call shape and junk elements on
+        # another r2 build — both must be skipped without raising.
+        r2.cmd.side_effect = [
+            json.dumps([13, {"type": "CALL", "name": "sym.imp.strcpy"}]),
+        ]
+        understand._tag_dangerous_callers(r2, ctx)
+        self.assertEqual(ctx.interesting_functions[0].calls_dangerous, ["strcpy"])
+
+    def test_tag_transitive_callers_tolerates_malformed_entries(self):
+        understand = self._understand()
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        ctx.interesting_functions.append(
+            FunctionInfo(name="parse", address=0x1000, size=64),
+        )
+        ctx.dangerous_sinks.append(
+            FunctionInfo(name="strcpy", address=0xdead, is_imported=True),
+        )
+        r2 = MagicMock()
+        callgraph = [
+            99,
+            {"name": "parse", "callrefs": {"not": "a list"}},
+            {"name": "parse", "callrefs": [{"name": "strcpy"}]},
+        ]
+        r2.cmd.return_value = json.dumps(callgraph)
+        understand._tag_transitive_callers(r2, ctx)  # must not raise
+        self.assertEqual(ctx.interesting_functions[0].transitive_distance, 1)
+
+
+class TestExportedMembership(unittest.TestCase):
+    def test_is_exported_flag_still_set(self):
+        """Membership moved from a per-function list scan to a set; the
+        flag semantics must be unchanged."""
+        understand = _make_understand_for("r2-exports-", self.addCleanup)
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        ctx.exports = ["exported_fn"]
+        r2 = MagicMock()
+        r2.cmd.return_value = json.dumps([
+            {"name": "exported_fn", "addr": 0x1000, "size": 64},
+            {"name": "private_fn", "addr": 0x2000, "size": 64},
+        ])
+        understand._extract_functions(r2, ctx)
+        flags = {fn.name: fn.is_exported for fn in ctx.interesting_functions}
+        self.assertEqual(flags, {"exported_fn": True, "private_fn": False})
+
+
+class TestTransitiveBfsBounded(unittest.TestCase):
+    def test_dense_cyclic_graph_completes_with_correct_depths(self):
+        """A complete call graph (everyone calls everyone) must finish
+        promptly: without (caller, sink) frontier dedup the frontier
+        grows as branching^depth and this graph takes minutes."""
+        import threading
+
+        understand = _make_understand_for("r2-dense-", self.addCleanup)
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        n = 40
+        names = [f"fn{i}" for i in range(n)]
+        for i, name in enumerate(names):
+            ctx.interesting_functions.append(
+                FunctionInfo(name=name, address=0x1000 + i * 0x100, size=64),
+            )
+        ctx.dangerous_sinks.append(
+            FunctionInfo(name="strcpy", address=0xdead, is_imported=True),
+        )
+        callgraph = []
+        for i, name in enumerate(names):
+            callees = [{"name": other} for other in names if other != name]
+            if i == 0:
+                callees.append({"name": "strcpy"})
+            callgraph.append({"name": name, "callrefs": callees})
+        r2 = MagicMock()
+        r2.cmd.return_value = json.dumps(callgraph)
+
+        done = threading.Event()
+
+        def run() -> None:
+            understand._tag_transitive_callers(r2, ctx)
+            done.set()
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        finished = done.wait(timeout=20)
+        self.assertTrue(
+            finished,
+            "transitive BFS did not finish within 20s on a dense graph "
+            "— frontier dedup regressed",
+        )
+        by_name = {fn.name: fn for fn in ctx.interesting_functions}
+        # fn0 calls the sink directly; everyone else reaches it via fn0.
+        self.assertEqual(by_name["fn0"].transitive_distance, 1)
+        for name in names[1:]:
+            self.assertEqual(by_name[name].transitive_distance, 2, name)
+
+
 if __name__ == "__main__":
     unittest.main()

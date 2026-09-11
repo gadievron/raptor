@@ -65,6 +65,15 @@ class TestReachabilityFromAnalysis:
 
 class TestBuildRaptorProperties:
 
+    def test_returns_verdict_props_tuple(self):
+        # Annotation-truth pin: the helper returns a (str, dict)
+        # 2-tuple; its signature promised a bare dict for a while.
+        result = _build_raptor_properties({})
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        assert isinstance(result[0], str)
+        assert isinstance(result[1], dict)
+
     def test_minimal(self):
         verdict, props = _build_raptor_properties({})
         assert verdict == "not_analyzed"

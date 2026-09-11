@@ -390,6 +390,47 @@ def test_corrupt_record_is_skipped(project_dir):
     assert [r.finding_id for r in records] == ["GOOD"]
 
 
+def test_unreadable_record_is_skipped(project_dir):
+    """A record file the process can't open (e.g. another user's 0000-
+    mode file in a shared pool) must be skipped like a corrupt one —
+    OSError killing the whole pool read would blank retrieval and
+    operator views over one bad file."""
+    import os
+    if os.geteuid() == 0:
+        pytest.skip("root bypasses file permission bits")
+    a = _make_attempt(finding_id="GOOD")
+    write(a, project_dir=project_dir)
+
+    locked_dir = project_pool_path(project_dir) / ("cd" * 12)
+    locked_dir.mkdir(parents=True)
+    locked = locked_dir / "sandbox-20260101T000000.000Z-bbbbbb.json"
+    locked.write_text("{}")
+    locked.chmod(0o000)
+    try:
+        records = list(
+            read_all(project_dir=project_dir, include_bundled=False),
+        )
+        assert [r.finding_id for r in records] == ["GOOD"]
+    finally:
+        locked.chmod(0o600)
+
+
+def test_wrong_shape_json_record_is_skipped(project_dir):
+    """Valid JSON of the wrong shape (top-level array) raises
+    AttributeError inside from_dict — must be skipped, not abort the
+    pool read."""
+    a = _make_attempt(finding_id="GOOD")
+    write(a, project_dir=project_dir)
+
+    bad_dir = project_pool_path(project_dir) / ("ef" * 12)
+    bad_dir.mkdir(parents=True)
+    (bad_dir / "sandbox-20260101T000000.000Z-cccccc.json").write_text(
+        '["not", "an", "object"]',
+    )
+    records = list(read_all(project_dir=project_dir, include_bundled=False))
+    assert [r.finding_id for r in records] == ["GOOD"]
+
+
 # --------------------------------------------------------------------------
 # Adversarial: concurrent writes (from session adversarial review 2026-06-03)
 # --------------------------------------------------------------------------

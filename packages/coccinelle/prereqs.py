@@ -37,19 +37,32 @@ def _shipped_prereqs_rules_dir() -> Path | None:
     return candidate if candidate.is_dir() else None
 
 
+# Pruned from the bounded source walk: VCS internals are never target
+# source, and .git alone routinely holds hundreds of loose object
+# files — enough to exhaust the file cap before any source dir is
+# reached (readdir order dependent).
+_VCS_DIR_NAMES: frozenset[str] = frozenset({".git", ".hg", ".svn"})
+
+
 def _has_c_cpp_source(repo_path: Path, max_files: int = 200) -> bool:
-    """Bounded heuristic: any C/C++ source under ``repo_path``?"""
+    """Bounded heuristic: any C/C++ source under ``repo_path``?
+
+    Walks with VCS directories pruned so their internals don't count
+    toward the cap — pre-fix ``rglob("*")`` enumerated ``.git/objects``
+    too, and any repo whose walk order fronted 200 non-source files
+    returned False even with C sources present.
+    """
     if not repo_path.is_dir():
         return False
     seen = 0
-    for entry in repo_path.rglob("*"):
-        if not entry.is_file():
-            continue
-        seen += 1
-        if entry.suffix.lower() in _C_CPP_EXTS:
-            return True
-        if seen >= max_files:
-            return False
+    for dirpath, dirnames, filenames in os.walk(repo_path):
+        dirnames[:] = [d for d in dirnames if d not in _VCS_DIR_NAMES]
+        for fname in filenames:
+            seen += 1
+            if os.path.splitext(fname)[1].lower() in _C_CPP_EXTS:
+                return True
+            if seen >= max_files:
+                return False
     return False
 
 

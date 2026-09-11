@@ -28,6 +28,7 @@ from typing import Any
 
 from packages.checker_synthesis.cwe_families import cwe_siblings
 
+from core.recall.matcher import canonical_cwe
 from core.recall.score import LABEL_CLASS
 
 UNCLASSIFIED = "unclassified"
@@ -95,14 +96,18 @@ def _read_source(entry: dict[str, Any],
 def _rules_for_cwe(cwe: str, produced: list[dict[str, Any]],
                    family: bool = True) -> list[str]:
     """Distinct rule ids whose produced findings match *cwe* (family)."""
-    wanted = {cwe}
+    wanted = {canonical_cwe(cwe)}
     if family:
         wanted |= set(cwe_siblings(cwe))
-    rules = {
-        str(f.get("rule_id"))
-        for f in produced
-        if f.get("rule_id") and str(f.get("cwe")) in wanted
-    }
+    rules = set()
+    for f in produced:
+        if not f.get("rule_id"):
+            continue
+        # Normalized findings from parse_sarif_findings carry the CWE
+        # under 'cwe_id'; report-shaped dicts use 'cwe'. Accept both.
+        got = canonical_cwe(f.get("cwe_id") or f.get("cwe"))
+        if got and got in wanted:
+            rules.add(str(f.get("rule_id")))
     return sorted(rules)
 
 

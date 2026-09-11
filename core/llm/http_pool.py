@@ -91,6 +91,22 @@ def _env_number(name: str, default: float) -> float:
     return value
 
 
+def _env_count(name: str, default: int) -> int:
+    """Parse a connection count (>= 1) from ``name``; fall back on
+    anything invalid. A fractional value below 1 (e.g. ``0.5``) passes
+    the strictly-positive check but truncates to 0 connections — a
+    pool that can never serve a request — so anything that truncates
+    below 1 falls back to the default like the other invalid shapes."""
+    count = int(_env_number(name, default))
+    if count < 1:
+        logger.warning(
+            "%s=%r truncates below 1 connection — using default %s",
+            name, os.environ.get(name), default,
+        )
+        return default
+    return count
+
+
 def http2_enabled() -> bool:
     """True when the operator opted in via ``RAPTOR_HTTP2`` AND the
     ``h2`` stack is installed.
@@ -187,11 +203,11 @@ def pool_limits() -> httpx.Limits:
     """
     return httpx.Limits(
         keepalive_expiry=_env_number(_KEEPALIVE_ENV, _DEFAULT_KEEPALIVE_S),
-        max_keepalive_connections=int(
-            _env_number(_MAX_KEEPALIVE_ENV, _DEFAULT_MAX_KEEPALIVE)
+        max_keepalive_connections=_env_count(
+            _MAX_KEEPALIVE_ENV, _DEFAULT_MAX_KEEPALIVE
         ),
-        max_connections=int(
-            _env_number(_MAX_CONNECTIONS_ENV, _DEFAULT_MAX_CONNECTIONS)
+        max_connections=_env_count(
+            _MAX_CONNECTIONS_ENV, _DEFAULT_MAX_CONNECTIONS
         ),
     )
 

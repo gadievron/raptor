@@ -238,6 +238,7 @@ def check_safe_teardown(
     # left to right, so lexicographic order = execution order — the
     # one-line ``kfree(d); cancel_work_sync(&d->work);`` PoC needs
     # column resolution.
+    async_pos: list[tuple[int, int]] = []
     free_pos: list[tuple[int, int]] = []
     barrier_pos: list[tuple[int, int]] = []   # waiting or RCU calls
     waiting = rcu = False
@@ -249,6 +250,7 @@ def check_safe_teardown(
             re.escape(m.group(1)) + r"_sync\s*\(", line,
         ):
             async_lines.append(i)
+            async_pos.append((i, m.start()))
         for fm in free_re.finditer(line):
             free_lines.append(i)
             free_pos.append((i, fm.start()))
@@ -267,15 +269,19 @@ def check_safe_teardown(
     self_handler = any(
         re.search(r"=\s*container_of\s*\(", line) for line in lines
     )
-    for a in async_lines:
-        later = [f for f in free_lines if f > a]
+    # Column-resolved like the barrier check below: a same-line
+    # ``del_timer(&d->timer); kfree(d);`` is async-cancel-then-free
+    # too — the line-only comparison certified it safe whenever a
+    # waiting barrier also appeared earlier.
+    for a in async_pos:
+        later = [f for f in free_pos if f > a]
         if later and not self_handler:
             return SafeTeardownResult(
                 safe=False,
                 reason=(
-                    f"async cancel at line {a + 1} precedes a free at "
-                    f"line {later[0] + 1} — the async-cancel-then-free "
-                    f"race shape"
+                    f"async cancel at line {a[0] + 1} precedes a free "
+                    f"at line {later[0][0] + 1} — the "
+                    f"async-cancel-then-free race shape"
                 ),
             )
     if self_handler and async_lines and free_lines:

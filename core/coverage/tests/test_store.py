@@ -292,3 +292,31 @@ def test_store_within_budget_loads(tmp_path):
     s.save()
     reloaded = CoverageStore(tmp_path / "coverage.json")
     assert reloaded.covered_lines("a.c") == [[0, 9]]
+
+
+def test_lock_refuses_planted_symlink(tmp_path, caplog):
+    """A symlink planted at coverage.json.lock (run dirs sit inside
+    sandbox write grants) must not be followed — O_NOFOLLOW refuses,
+    and the writer degrades to the no-lock path with a warning instead
+    of creating/flocking the attacker-chosen target."""
+    import logging
+
+    from core.coverage.store import coverage_store_lock
+
+    victim = tmp_path / "victim"
+    lock = tmp_path / "coverage.json.lock"
+    lock.symlink_to(victim)
+    entered = False
+    with caplog.at_level(logging.WARNING):
+        with coverage_store_lock(tmp_path / "coverage.json"):
+            entered = True
+    assert entered
+    assert not victim.exists()
+    assert any("refusing to open" in r.message for r in caplog.records)
+
+
+def test_lock_normal_path_still_locks(tmp_path):
+    from core.coverage.store import coverage_store_lock
+
+    with coverage_store_lock(tmp_path / "coverage.json"):
+        assert (tmp_path / "coverage.json.lock").exists()

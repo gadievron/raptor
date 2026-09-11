@@ -286,6 +286,77 @@ class TestFailClosedCorruptArchives(unittest.TestCase):
             with self.assertRaises(ArchiveError):
                 extract_to_dir(src, Path(td) / "out")
 
+    def test_corrupt_zip_raises_archive_error(self) -> None:
+        # Zip mirror of the tar case: detected as zip (magic intact),
+        # unreadable central directory — must REFUSE, not report an
+        # empty success that raptor's _sources cache would promote.
+        with TemporaryDirectory() as td:
+            src = Path(td) / "corrupt.zip"
+            src.write_bytes(b"PK\x03\x04" + b"\x00garbage" * 40)
+            with self.assertRaises(ArchiveError):
+                extract_to_dir(src, Path(td) / "out")
+
+    def test_over_entry_cap_zip_raises_limit_error(self) -> None:
+        with TemporaryDirectory() as td:
+            src = Path(td) / "many.zip"
+            _zip(src, {f"f{i}.txt": b"x" for i in range(20)})
+            with self.assertRaises(DecompressionLimitExceeded):
+                extract_to_dir(src, Path(td) / "out", max_files=5)
+
+    def test_corrupt_member_zip_raises_archive_error(self) -> None:
+        # Intact CD, corrupted member data (CRC mismatch): must REFUSE
+        # — pre-fix this extracted as a 0-file success that raptor's
+        # sha-keyed _sources cache promoted as a complete tree.
+        with TemporaryDirectory() as td:
+            src = Path(td) / "member-corrupt.zip"
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+                z.writestr("a.txt", b"A" * 100)
+            data = bytearray(buf.getvalue())
+            i = data.find(b"A" * 100)
+            data[i:i + 4] = b"XXXX"
+            src.write_bytes(bytes(data))
+            with self.assertRaises(ArchiveError):
+                extract_to_dir(src, Path(td) / "out")
+
+    def test_encrypted_member_zip_degrades_with_dropped_counted(self) -> None:
+        # Encryption is declared metadata: extraction succeeds for the
+        # rest, and the skip lands in the summary's ``dropped`` instead
+        # of reading as a clean success.
+        with TemporaryDirectory() as td:
+            src = Path(td) / "enc.zip"
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+                z.writestr("enc.txt", b"secret")
+                z.writestr("ok.txt", b"fine")
+            raw = bytearray(buf.getvalue())
+            pos = 0
+            while True:
+                pos = raw.find(b"PK\x01\x02", pos)
+                if pos < 0:
+                    break
+                name_len = int.from_bytes(raw[pos + 28:pos + 30], "little")
+                if bytes(raw[pos + 46:pos + 46 + name_len]) == b"enc.txt":
+                    raw[pos + 8] |= 0x01
+                pos += 4
+            src.write_bytes(bytes(raw))
+            out = Path(td) / "out"
+            stats = extract_to_dir(src, out)
+            self.assertEqual(stats["files"], 1)
+            self.assertEqual(stats["dropped"], 1)
+            self.assertEqual((out / "ok.txt").read_bytes(), b"fine")
+            self.assertFalse((out / "enc.txt").exists())
+
+    def test_valid_empty_zip_still_succeeds(self) -> None:
+        # Refusal is for unreadable/bomb-shaped input only — a
+        # well-formed zip with no files is an honest 0-file success.
+        with TemporaryDirectory() as td:
+            src = Path(td) / "empty.zip"
+            with zipfile.ZipFile(src, "w"):
+                pass
+            stats = extract_to_dir(src, Path(td) / "out")
+            self.assertEqual(stats["files"], 0)
+
     def test_summary_reports_dropped_members(self) -> None:
         with TemporaryDirectory() as td:
             src = Path(td) / "ok.tar"

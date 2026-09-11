@@ -215,6 +215,16 @@ if [ -z "$OUT" ]; then
     fi
     LIFECYCLE_OWNED=1
 else
+    # An explicit --project only takes effect through the lifecycle
+    # start, which a caller-supplied --out bypasses. Silently dropping
+    # the pin would violate the project contract (explicit pins are a
+    # hard error when they cannot take effect, never a fallback).
+    if [ -n "$PROJECT_FLAG" ]; then
+        echo "raptor-frida: --project cannot be combined with --out" \
+             "(the project pin is applied at lifecycle start, which" \
+             "--out bypasses)" >&2
+        exit 3
+    fi
     LIFECYCLE_OWNED=0
 fi
 

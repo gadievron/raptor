@@ -238,9 +238,36 @@ def _probe_one(
                 f"(404). Check the model id shape for this surface. "
                 f"{detail}"
             )
-        # Other 4xx (e.g. parameter deprecations) mean the request
-        # REACHED the model with valid auth — entitlement is fine.
+        # ValidationException is the SERVICE rejecting the request
+        # before any model is invoked — most commonly a typo'd /
+        # wrong-surface model identifier ("The provided model
+        # identifier is invalid"). That is exactly the failure class
+        # preflight exists to catch, so it must warn and must NOT be
+        # cached as ok. The discriminator is the error type: Bedrock
+        # stamps service-layer rejections with the
+        # ``x-amzn-ErrorType: ValidationException`` header (mirrored
+        # in the JSON body), while an entitled, reachable model's own
+        # parameter complaints on the mantle surface come back in
+        # Anthropic error format (``invalid_request_error``) without
+        # that marker.
         if 400 <= e.code < 500:
+            errortype = (
+                e.headers.get("x-amzn-errortype") or ""
+            ) if e.headers else ""
+            if ("ValidationException" in errortype
+                    or "ValidationException" in detail
+                    or "model identifier is invalid" in detail.lower()):
+                return (
+                    f"Bedrock preflight: {mc.model_name} "
+                    f"({mc.bedrock_api or 'mantle'}"
+                    f"{', ' + mc.aws_region if mc.aws_region else ''}) — "
+                    f"request rejected by the service (HTTP {e.code} "
+                    f"ValidationException) before reaching any model. "
+                    f"Check the model id shape for this surface. {detail}"
+                )
+            # Remaining 4xx (e.g. parameter deprecations reported in
+            # the model's own error format) mean the request REACHED
+            # the model with valid auth — entitlement is fine.
             logger.debug(
                 "bedrock preflight: %s reachable (HTTP %s: %s)",
                 mc.model_name, e.code, detail,

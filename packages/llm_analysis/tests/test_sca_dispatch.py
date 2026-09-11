@@ -261,3 +261,75 @@ class TestBuildSCAPrompts:
         system = next(m.content for m in bundle.messages if m.role == "system")
         assert "workaround" in system.lower()
         assert "alternative" in system.lower()
+
+
+class TestNoneSafeSCAPredicates:
+    """FINDING_RESULT_SCHEMA types vuln_type / rule_id as
+    ["string", "null"] and real producers emit None — the predicates
+    (and every prompt-builder copy of them) must treat a
+    present-but-None value as "not SCA", never crash."""
+
+    def test_is_sca_finding_tolerates_none_values(self):
+        assert not _is_sca_finding({"vuln_type": None})
+        assert not _is_sca_finding({"rule_id": None})
+        assert not _is_sca_finding({"vuln_type": None, "rule_id": None})
+
+    def test_is_sca_vuln_finding_tolerates_none_values(self):
+        from packages.llm_analysis.tasks import _is_sca_vuln_finding
+        assert not _is_sca_vuln_finding({"vuln_type": None, "rule_id": None})
+
+    def test_predicates_still_match_sca_shapes(self):
+        # Two-direction: real SCA tags keep matching.
+        from packages.llm_analysis.tasks import _is_sca_vuln_finding
+        assert _is_sca_finding({"vuln_type": "sca:hygiene"})
+        assert _is_sca_vuln_finding(
+            {"rule_id": "sca:vulnerable_dependency:pkg"},
+        )
+
+    def test_exploit_bundle_builder_tolerates_none(self):
+        from packages.llm_analysis.prompts.exploit import (
+            build_exploit_prompt_bundle_from_finding,
+        )
+        finding = {
+            "finding_id": "f1",
+            "vuln_type": None,
+            "rule_id": None,
+            "file_path": "src/a.c",
+            "start_line": 3,
+            "level": "error",
+            "analysis": {},
+            "code": "bad()",
+        }
+        bundle = build_exploit_prompt_bundle_from_finding(finding)
+        assert any(m.role == "user" for m in bundle.messages)
+
+    def test_patch_bundle_builder_tolerates_none(self):
+        from packages.llm_analysis.prompts.patch import (
+            build_patch_prompt_bundle_from_finding,
+        )
+        finding = {
+            "finding_id": "f1",
+            "vuln_type": None,
+            "rule_id": None,
+            "file_path": "src/a.c",
+            "start_line": 3,
+            "end_line": 4,
+            "level": "error",
+            "message": "m",
+            "analysis": {},
+            "code": "bad()",
+        }
+        bundle = build_patch_prompt_bundle_from_finding(finding)
+        assert any(m.role == "user" for m in bundle.messages)
+
+    def test_select_items_survives_none_vuln_type(self):
+        # ExploitTask.select_items runs unguarded in dispatch — one
+        # present-but-None field must not abort the exploit stage.
+        task = ExploitTask()
+        findings = [
+            {"finding_id": "f1", "vuln_type": None, "rule_id": None},
+            {"finding_id": "f2", "vuln_type": "sca:vulnerable_dependency",
+             "sca": {"reachability": "imported"}},
+        ]
+        selected = task.select_items(findings, {})
+        assert [f["finding_id"] for f in selected] == ["f2"]

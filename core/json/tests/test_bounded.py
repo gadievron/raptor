@@ -82,8 +82,10 @@ class TestLoadJsonBounded:
     def test_non_regular_file_refused(self, tmp_path: Path) -> None:
         fifo = tmp_path / "fifo.json"
         os.mkfifo(fifo)
-        # Must raise promptly on the stat, never open (a FIFO open
-        # for read blocks until a writer appears).
+        # Must raise promptly: the open uses O_NONBLOCK (a plain FIFO
+        # open for read blocks until a writer appears) and the S_ISREG
+        # gate fstat's the OPEN fd, so a name swapped to a FIFO after
+        # any earlier stat is still refused.
         with pytest.raises(ValueError, match="not a regular file"):
             load_json_bounded(fifo, max_bytes=1024)
 

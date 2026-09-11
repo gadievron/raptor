@@ -15,7 +15,7 @@ Analyzes security bugs from bug tracker reports with full root-cause tracing.
 
 ## What This Does
 
-1. Dispatches the fetch-only `crash-report-fetcher-agent` to retrieve the bug report and write a schema-gated `bug-report.json`
+1. Dispatches the fetch-only `crash-report-fetcher` agent to retrieve the bug report and write a schema-gated `bug-report.json`
 2. Validates the artifact (`libexec/raptor-validate-schema bug-report`)
 3. Clones the repository via the sandboxed helper (`libexec/raptor-clone-repo`)
 4. Downloads report attachments via `libexec/raptor-fetch-attachment`
@@ -54,11 +54,11 @@ The following tools must be installed:
 ## Workflow Details
 
 This command invokes the `crash-analysis-agent` (no network tools) which orchestrates:
-1. **crash-report-fetcher-agent**: Fetches the bug tracker page (WebFetch pinned to the operator URL's domain) and writes `bug-report.json`
-2. **crash-analyzer-agent**: Performs deep root-cause analysis using rr traces
-3. **crash-analyzer-checker-agent**: Validates the analysis rigorously
-4. **function-trace-generator-agent**: Creates function execution traces
-5. **coverage-analysis-generator-agent**: Generates code coverage data
+1. **crash-report-fetcher**: Fetches the bug tracker page (WebFetch pinned to the operator URL's domain) and writes `bug-report.json`
+2. **crash-analyzer**: Performs deep root-cause analysis using rr traces
+3. **crash-analysis-checker**: Validates the analysis rigorously
+4. **function-trace-generator**: Creates function execution traces
+5. **coverage-analyzer**: Generates code coverage data
 
 The analysis follows a hypothesis-validation loop - if the checker rejects a hypothesis, the analyzer is re-invoked with feedback until a valid root cause is confirmed.
 

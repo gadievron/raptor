@@ -115,9 +115,20 @@ class BruteForceProtectionCheck(Check):
         if len(responses) < 3:
             return []
 
-        # If all responses are 200 or the same non-lockout code, no rate limit detected
-        lockout_codes = {401, 403, 429, 423}
-        has_lockout = any(code in lockout_codes for code in responses[2:])
+        # 401 is the NORMAL invalid-credentials answer, never lockout
+        # evidence — treating it as such made every login endpoint that
+        # answers 401 per bad password structurally unflaggable.
+        # 429/423 are explicit throttle/lock statuses; 403 counts only
+        # when it APPEARS after repeated attempts (an escalation), not
+        # when the endpoint answers 403 from the first request.
+        hard_lockout_codes = {429, 423}
+        has_lockout = any(code in hard_lockout_codes for code in responses)
+        if not has_lockout and 403 not in responses[:2]:
+            has_lockout = any(code == 403 for code in responses[2:])
+        if all(code == 403 for code in responses):
+            # Constant 403 (CSRF rejection / WAF): the probes never
+            # reached credential validation, so no verdict either way.
+            return []
 
         # Also check for captcha/lockout text in last response
         try:
@@ -175,19 +186,41 @@ class DefaultCredentialsCheck(Check):
 
         for username, password in self._DEFAULTS:
             try:
+                pre_cookies = dict(client.get_cookies() or {})
                 resp = client.post(
                     login_path,
                     data={"username": username, "password": password},
                 )
-                # Successful login: redirected away from login page or no password field
                 from bs4 import BeautifulSoup
                 soup = BeautifulSoup(resp.content, "html.parser")
                 still_on_login = bool(soup.find("input", {"type": "password"}))
+                if still_on_login or resp.status_code not in (200, 302):
+                    continue
 
-                if not still_on_login and resp.status_code in (200, 302):
-                    return [self._result(
+                # "No password field on the final page" is not login
+                # proof (a failed login that redirects to any form-less
+                # page passes it). A critical claim needs positive
+                # session evidence: the server granted/changed a session
+                # cookie AND the login page no longer offers the form.
+                post_cookies = dict(client.get_cookies() or {})
+                session_granted = any(
+                    pre_cookies.get(name) != value
+                    for name, value in post_cookies.items()
+                )
+                if not session_granted:
+                    continue
+                verify = client.get(login_path)
+                verify_soup = BeautifulSoup(verify.content, "html.parser")
+                if verify_soup.find("input", {"type": "password"}):
+                    continue
+
+                return [self._result(
                         passed=False, url=target_url.rstrip("/") + login_path,
-                        evidence=f"Login succeeded with username='{username}' password='{password}'",
+                        evidence=(
+                            f"Login succeeded with username='{username}' "
+                            f"password='{password}' (session cookie granted; "
+                            "login form no longer offered)"
+                        ),
                         detail=(
                             f"Default credentials '{username}'/'{password}' were accepted. "
                             "This allows immediate, unauthenticated access to the application."

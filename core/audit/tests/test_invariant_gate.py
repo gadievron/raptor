@@ -194,3 +194,29 @@ class TestResolveHypothesis:
             hypotheses = []
 
         assert resolve_hypothesis(_O()) == "high mech"
+
+
+class TestScopeFailClosed:
+    """_in_scope gates the G2 no-tool-evidence waiver: an unverifiable
+    scope must DENY the waiver, never widen a scoped invariant to
+    global (the old ``except Exception: return True`` did exactly
+    that)."""
+
+    def test_scope_check_crash_denies_the_waiver(self, monkeypatch):
+        import core.concepts.audit_bridge as bridge
+
+        def boom(inv, file_path):
+            raise RuntimeError("scope machinery crashed")
+
+        monkeypatch.setattr(bridge, "_guard_in_scope", boom)
+        inv = _inv(files=["src/other.c"])
+        assert match_receipted_invariants(
+            HYP, "src/auth.py", _dm(inv),
+        ) == []
+
+    def test_healthy_scope_check_still_grants(self):
+        # Two-direction guard: fail-closed must not break the
+        # legitimate in-scope grant.
+        inv = _inv(files=["src/auth.py"])
+        matched = match_receipted_invariants(HYP, "src/auth.py", _dm(inv))
+        assert [m["id"] for m in matched] == ["INV-1"]

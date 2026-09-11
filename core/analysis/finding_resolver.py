@@ -148,7 +148,11 @@ class _ParsedFinding:
     sink_arg_hint: str | None = None
 
 
-def resolve_finding(finding: Mapping[str, Any]) -> Resolution:
+def resolve_finding(
+    finding: Mapping[str, Any],
+    *,
+    target_root: str | Path | None = None,
+) -> Resolution:
     """Resolve a finding (any supported format) to a
     :class:`ResolvedFinding` ready for ``evaluate_finding``, or
     :class:`ResolutionFailure` with the audit reason.
@@ -160,11 +164,19 @@ def resolve_finding(finding: Mapping[str, Any]) -> Resolution:
     * Semgrep finding: ``check_id`` + ``extra``
     * RAPTOR-native: ``cwe`` + ``file_path`` + ``source_line`` +
       ``sink_line``
+
+    ``target_root``, when provided, confines the finding's file path
+    to the scanned tree via :func:`core.paths.confine` (symlink-aware)
+    — a crafted record naming a path outside the root (absolute or
+    via symlink) becomes :class:`ResolutionFailure` instead of a read.
+    Callers with the scanned root in scope should pass it; ``None``
+    keeps the legacy contract (lexical ``..`` refusal only, absolute
+    paths pass through) for call sites that predate the parameter.
     """
     parsed = _parse_input_format(finding)
     if isinstance(parsed, ResolutionFailure):
         return parsed
-    return _resolve_from_parsed(parsed)
+    return _resolve_from_parsed(parsed, target_root=target_root)
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +362,10 @@ def _detect_language(file_path: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _read_finding_source(file: str) -> str | ResolutionFailure:
+def _read_finding_source(
+    file: str,
+    target_root: str | Path | None = None,
+) -> str | ResolutionFailure:
     """Containment-checked read of the source file named by a finding.
 
     The path comes verbatim from externally-produced analyser output
@@ -358,9 +373,15 @@ def _read_finding_source(file: str) -> str | ResolutionFailure:
     ``file_path``), so it is untrusted: a ``..`` segment would let a
     crafted record walk the resolver out of the scanned tree and read
     an arbitrary file (same defense as
-    ``core.annotations.storage``). Absolute paths stay allowed —
-    RAPTOR-native findings legitimately carry absolute paths into the
-    scanned repo.
+    ``core.annotations.storage``).
+
+    When *target_root* is provided, :func:`core.paths.confine` decides
+    containment (symlink-aware; absolute paths must resolve UNDER the
+    root, relative paths join it) — the full path-containment fix.
+    Without a root the resolver cannot know the scanned tree, so the
+    legacy contract holds: absolute paths pass through (RAPTOR-native
+    findings legitimately carry absolute paths into the scanned repo)
+    and only the lexical ``..`` refusal applies.
     """
     try:
         parts = Path(file).parts
@@ -370,19 +391,35 @@ def _read_finding_source(file: str) -> str | ResolutionFailure:
         return ResolutionFailure(
             reason=f"refusing file path with '..' segment: {file!r}",
         )
+    read_path = Path(file)
+    if target_root is not None:
+        from core.paths import confine
+
+        confined = confine(target_root, file)
+        if confined is None:
+            return ResolutionFailure(
+                reason=(
+                    f"refusing file path outside target root "
+                    f"{str(target_root)!r}: {file!r}"
+                ),
+            )
+        read_path = confined
     try:
-        return Path(file).read_text(encoding="utf-8")
+        return read_path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError, ValueError) as e:
         return ResolutionFailure(reason=f"cannot read {file}: {e}")
 
 
-def _resolve_from_parsed(parsed: _ParsedFinding) -> Resolution:
+def _resolve_from_parsed(
+    parsed: _ParsedFinding,
+    target_root: str | Path | None = None,
+) -> Resolution:
     if parsed.language == "python":
-        return _resolve_from_parsed_python(parsed)
+        return _resolve_from_parsed_python(parsed, target_root)
     if parsed.language in ("c", "cpp"):
-        return _resolve_from_parsed_cpp(parsed)
+        return _resolve_from_parsed_cpp(parsed, target_root)
     if parsed.language == "java":
-        return _resolve_from_parsed_java(parsed)
+        return _resolve_from_parsed_java(parsed, target_root)
     return ResolutionFailure(
         reason=(
             f"language={parsed.language!r} not yet supported — "
@@ -392,8 +429,11 @@ def _resolve_from_parsed(parsed: _ParsedFinding) -> Resolution:
     )
 
 
-def _resolve_from_parsed_python(parsed: _ParsedFinding) -> Resolution:
-    source_text = _read_finding_source(parsed.file)
+def _resolve_from_parsed_python(
+    parsed: _ParsedFinding,
+    target_root: str | Path | None = None,
+) -> Resolution:
+    source_text = _read_finding_source(parsed.file, target_root)
     if isinstance(source_text, ResolutionFailure):
         return source_text
     try:
@@ -507,7 +547,10 @@ def _inter_proc_bindings_python(
     )
 
 
-def _resolve_from_parsed_cpp(parsed: _ParsedFinding) -> Resolution:
+def _resolve_from_parsed_cpp(
+    parsed: _ParsedFinding,
+    target_root: str | Path | None = None,
+) -> Resolution:
     """C / C++ branch of the resolver — Phase 11.
 
     Uses tree-sitter (via ``build_cpp_intraproc_cfg``) to find the
@@ -523,7 +566,7 @@ def _resolve_from_parsed_cpp(parsed: _ParsedFinding) -> Resolution:
     node at the requested source / sink line. The legacy lexical
     fallback at ``smt_barrier.py:746`` / ``:940`` is the safety net.
     """
-    source_text = _read_finding_source(parsed.file)
+    source_text = _read_finding_source(parsed.file, target_root)
     if isinstance(source_text, ResolutionFailure):
         return source_text
 
@@ -862,7 +905,10 @@ def _pick_value_name(names, cfg) -> str:
     return (carrying or ranked)[0]
 
 
-def _resolve_from_parsed_java(parsed: _ParsedFinding) -> Resolution:
+def _resolve_from_parsed_java(
+    parsed: _ParsedFinding,
+    target_root: str | Path | None = None,
+) -> Resolution:
     """Java branch of the resolver.
 
     Uses the tree-sitter Java builder
@@ -884,7 +930,7 @@ def _resolve_from_parsed_java(parsed: _ParsedFinding) -> Resolution:
     # parsed_python) and C++ (_resolve_from_parsed_cpp) branches already
     # use; the Java branch previously read the untrusted finding path
     # directly, skipping the check (00092 residual).
-    source_text = _read_finding_source(parsed.file)
+    source_text = _read_finding_source(parsed.file, target_root)
     if isinstance(source_text, ResolutionFailure):
         return source_text
 

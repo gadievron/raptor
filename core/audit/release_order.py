@@ -474,10 +474,19 @@ def _adjudicate_function(
         source, function_name, language,
     )
     segment = "\n".join(segment_lines)
+    # Lexical receipts are earned against the sanitized view only
+    # (comments and string literals blanked, newlines preserved) —
+    # the sibling checkers' doctrine.  Raw-text matching let a block
+    # comment mentioning BIO_write mint a release site (a confirmed
+    # release-before-verify) and let commented-out finalizers bind
+    # vocabulary; both directions are hostile-repo steerable.
+    from .source_view import sanitized_view
+    view_segment = sanitized_view(segment, file_path, language=language)
+    view_lines = view_segment.splitlines()
 
     fin_vocab = _finalizer_vocabulary(domain_model)
     fin_re = _call_re(list(fin_vocab))
-    fin_match = fin_re.search(segment)
+    fin_match = fin_re.search(view_segment)
     if not fin_match:
         return _inconclusive(
             REASON_FINALIZER_UNRESOLVED,
@@ -488,7 +497,7 @@ def _adjudicate_function(
     finalizer = fin_match.group(1)
     fin_source, fin_prov = fin_vocab[finalizer]
     bindings, fin_line = _status_bindings(
-        segment_lines, span_start, finalizer,
+        view_lines, span_start, finalizer,
     )
 
     rel_vocab = _release_vocabulary(domain_model)
@@ -513,18 +522,19 @@ def _adjudicate_function(
     release_sites: list[dict[str, Any]] = []
     internal_sites: list[dict[str, Any]] = []
     alias_unresolved: dict[str, Any] | None = None
-    for idx, raw in enumerate(segment_lines):
-        code = raw.split("//", 1)[0]
+    for idx, code in enumerate(view_lines):
         m = rel_re.search(code)
         if not m:
             continue
         callee = m.group(1)
         dest = _first_arg_base(code, callee)
-        dest_class = _classify_destination(dest, segment_lines, params)
+        dest_class = _classify_destination(dest, view_lines, params)
         site = {
             "file": file_path,
             "line": span_start + idx,
-            "code": raw.strip()[:200],
+            # The receipt shows the operator the ORIGINAL line; only
+            # the matching ran on the sanitized view.
+            "code": segment_lines[idx].strip()[:200],
             "callee": callee,
             "destination": dest,
             "destination_class": dest_class,
@@ -581,7 +591,7 @@ def _adjudicate_function(
         for m in _BACKTICK_IDENT_RE.finditer(hypothesis or ""):
             name = m.group(1).rstrip("(")
             if name not in rel_vocab and re.search(
-                rf"\b{re.escape(name)}\s*\(", segment,
+                rf"\b{re.escape(name)}\s*\(", view_segment,
             ):
                 return _inconclusive(
                     REASON_RELEASE_IN_CALLEE,

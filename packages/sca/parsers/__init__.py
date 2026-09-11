@@ -274,6 +274,7 @@ from . import kubernetes          # noqa: E402,F401
 from . import nuget               # noqa: E402,F401
 from . import package_json        # noqa: E402,F401
 from . import package_lock_json   # noqa: E402,F401
+from . import pipfile             # noqa: E402,F401
 from . import pipfile_lock        # noqa: E402,F401
 from . import pnpm_lock           # noqa: E402,F401
 from . import poetry_lock         # noqa: E402,F401
@@ -281,6 +282,8 @@ from . import pom                 # noqa: E402,F401
 from . import precommit           # noqa: E402,F401
 from . import pyproject           # noqa: E402,F401
 from . import requirements        # noqa: E402,F401
+from . import setup_cfg           # noqa: E402,F401
+from . import setup_py            # noqa: E402,F401
 from . import uv_lock             # noqa: E402,F401
 from . import vcpkg               # noqa: E402,F401
 from . import yarn_lock           # noqa: E402,F401

@@ -265,6 +265,13 @@ def reset_token_cache() -> None:
 _CVE_REPO_RE = re.compile(r"^cve-\d{4}-\d+", re.IGNORECASE)
 _POC_BOUNDED_RE = re.compile(r"(?:^|[^a-z0-9])poc(?:[^a-z0-9]|$)", re.IGNORECASE)
 
+# GitHub's actual identifier charset. owner/repo are interpolated into the
+# API URL path, so a value carrying '/', '?', '#', '%' or whitespace would
+# rewrite the API route — routing the request at a repo the PoC-repo gate
+# never inspected and decoupling the sanitizer's path-keyed decision from
+# the resource actually fetched.
+_GITHUB_IDENT_RE = re.compile(r"[A-Za-z0-9._-]+")
+
 
 def _is_exploit_poc_repo(owner: str, repo: str) -> bool:
     """True iff ``owner/repo`` looks like a DEDICATED exploit-PoC repo
@@ -303,6 +310,15 @@ def github_fetch(
     if not owner or not repo:
         return GhFetchResult(
             ok=False, reason="owner and repo are required", reason_class="not_found"
+        )
+    if not _GITHUB_IDENT_RE.fullmatch(owner) or not _GITHUB_IDENT_RE.fullmatch(repo):
+        return GhFetchResult(
+            ok=False,
+            reason=(
+                f"owner/repo {owner!r}/{repo!r} contains characters outside "
+                "GitHub's identifier charset [A-Za-z0-9._-]"
+            ),
+            reason_class="not_found",
         )
     # Refuse dedicated exploit-PoC repos BEFORE any network call — keeps
     # exploit code out of context (refusal trigger) and out of the deliverable.

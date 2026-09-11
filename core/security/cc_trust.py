@@ -26,12 +26,16 @@ Files inspected:
     .claude/settings.json, .claude/settings.local.json, .mcp.json
 
 Dangerous fields (block):
-    settings:  apiKeyHelper, awsAuthHelper, awsAuthRefresh, gcpAuthRefresh
+    settings:  apiKeyHelper, awsAuthRefresh, awsCredentialExport,
+               gcpAuthRefresh, proxyAuthHelper, otelHeadersHelper
                hooks.<Event>[].hooks[].command (type == "command"), plus —
                fail-closed — any hook entry with an unrecognised type
+               and any hooks/matcher value of an unrecognised shape
                env.<KEY> for KEY in _DANGEROUS_ENV_VARS (LD_PRELOAD, EDITOR, ...)
-               env.RAPTOR_* / env.SAGE_* (attempts to forge our own
-               control env vars or repoint persistent memory)
+               env.<PREFIX>* for PREFIX in _DANGEROUS_ENV_PREFIXES
+               (RAPTOR_* / SAGE_* forge our own control env vars or
+               repoint persistent memory; CLAUDE_CODE_USE_* /
+               OTEL_EXPORTER_OTLP_* reroute model traffic / telemetry)
     .mcp.json: mcpServers.<name>.command (stdio servers)
                mcpServers.<name> with unknown transport
     structural: symlinks, oversized, malformed (all → block)
@@ -103,7 +107,12 @@ class FileScan:
 
 
 _CREDENTIAL_HELPER_KEYS = (
-    "apiKeyHelper", "awsAuthHelper", "awsAuthRefresh", "gcpAuthRefresh",
+    # Commands CC executes to obtain/refresh credentials. These are
+    # the keys CC actually honours: `awsAuthHelper` (an earlier guess)
+    # does not exist — the executed-script key is `awsCredentialExport`
+    # — and `proxyAuthHelper` produces proxy auth headers the same way.
+    "apiKeyHelper", "awsAuthRefresh", "awsCredentialExport",
+    "gcpAuthRefresh", "proxyAuthHelper",
     # otelHeadersHelper is a command CC executes to produce telemetry
     # headers — same command-execution primitive as the credential
     # helpers above (a repo-shipped script plus env OTEL_* arms it).
@@ -175,7 +184,25 @@ _COMPREHENSIVE_DANGEROUS_ENV_VARS = frozenset({
     # Kubernetes — `users[].user.exec` directive runs arbitrary
     # command for credential acquisition.
     "KUBECONFIG",
+    # Model-traffic redirect — CC honours these directly: BASE_URL
+    # repoints every API call at an attacker endpoint (prompt +
+    # source-code exfiltration, poisoned completions), AUTH_TOKEN
+    # substitutes attacker credentials, CUSTOM_HEADERS rides secrets
+    # or auth overrides onto every request. Strictly stronger
+    # primitives than the HTTP_PROXY family already blocked above.
+    "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_CUSTOM_HEADERS",
 })
+
+# Env-key PREFIXES flagged wholesale (compared case-folded, like the
+# name set above). RAPTOR_*/SAGE_* forge RAPTOR's own control env or
+# repoint persistent memory; CLAUDE_CODE_USE_* flips CC onto alternate
+# backends/transports (e.g. Bedrock/Vertex routing, where the endpoint
+# then comes from further attacker-set env); OTEL_EXPORTER_OTLP_*
+# redirects telemetry (and its auth headers) to an attacker collector.
+_DANGEROUS_ENV_PREFIXES = (
+    "RAPTOR_", "SAGE_", "CLAUDE_CODE_USE_", "OTEL_EXPORTER_OTLP_",
+)
 try:
     from core.config import RaptorConfig
     _DANGEROUS_ENV_VARS = (
@@ -317,7 +344,7 @@ def _load_json(path: Path, raw: bytes | None = None) -> tuple[dict | None, bool]
 def _scan_settings(path: Path, raw: bytes | None = None) -> FileScan | None:
     """Return FileScan with findings, or None if malformed/unreadable."""
     data, ok = _load_json(path, raw)
-    if not ok:
+    if not ok or data is None:
         return None
     fs = FileScan(path=path)
 
@@ -330,18 +357,42 @@ def _scan_settings(path: Path, raw: bytes | None = None) -> FileScan | None:
                 # keys/tokens inline and scan output is CI-log-retained.
                 fs.findings.append(Finding(key, _mask(value), True))
 
+        # Fail-closed on every unrecognised hooks shape: pre-fix, a
+        # non-list Event value, a non-dict matcher, or a matcher whose
+        # "hooks" wasn't a list was silently SKIPPED — so a dict-form
+        # `"PreToolUse": {"command": ...}` (or any shape a future CC
+        # accepts more leniently than this scanner) carried a command
+        # past the scan with zero findings.
         hooks = data.get("hooks")
+        if hooks is not None and not isinstance(hooks, dict):
+            fs.findings.append(Finding(
+                "hooks (unrecognised shape)",
+                _mask(repr(hooks)), True))
         if isinstance(hooks, dict):
             for event_name, matchers in hooks.items():
-                if not isinstance(matchers, list):
-                    continue
                 ev = _truncate(str(event_name), limit=40)
+                if not isinstance(matchers, list):
+                    fs.findings.append(Finding(
+                        f"{ev} hooks (unrecognised shape)",
+                        _mask(repr(matchers)), True))
+                    continue
                 for matcher in matchers:
-                    inner = matcher.get("hooks") if isinstance(matcher, dict) else None
+                    if not isinstance(matcher, dict):
+                        fs.findings.append(Finding(
+                            f"{ev} hook matcher (unrecognised shape)",
+                            _mask(repr(matcher)), True))
+                        continue
+                    inner = matcher.get("hooks")
                     if not isinstance(inner, list):
+                        fs.findings.append(Finding(
+                            f"{ev} hook matcher (unrecognised shape)",
+                            _mask(repr(matcher)), True))
                         continue
                     for entry in inner:
                         if not isinstance(entry, dict):
+                            fs.findings.append(Finding(
+                                f"{ev} hook (unrecognised shape)",
+                                _mask(repr(entry)), True))
                             continue
                         # Pre-fix: only `type == "command"` hooks were
                         # flagged. CC's hook spec is small today (just
@@ -356,7 +407,15 @@ def _scan_settings(path: Path, raw: bytes | None = None) -> FileScan | None:
                         hook_type = entry.get("type")
                         if hook_type == "command":
                             cmd = entry.get("command")
-                            value = _mask(cmd) if isinstance(cmd, str) and cmd else "(empty)"
+                            # Non-string commands are masked via repr —
+                            # still a blocking finding (a list-shaped
+                            # command is command execution too).
+                            if isinstance(cmd, str) and cmd:
+                                value = _mask(cmd)
+                            elif cmd:
+                                value = _mask(repr(cmd))
+                            else:
+                                value = "(empty)"
                             fs.findings.append(Finding(f"{ev} hook", value, True))
                         else:
                             # Unknown hook type — surface the type +
@@ -383,10 +442,17 @@ def _scan_settings(path: Path, raw: bytes | None = None) -> FileScan | None:
         status_line = data.get("statusLine")
         if status_line is not None:
             if isinstance(status_line, dict):
-                sl_cmd = status_line.get("command")
-                if isinstance(sl_cmd, str) and sl_cmd:
+                if "command" in status_line:
+                    # ANY command key blocks, whatever its value shape:
+                    # pre-fix a non-string command under an absent /
+                    # "static" type produced zero findings — an
+                    # unrecognised shape sailing through a scanner whose
+                    # contract is fail-closed.
+                    sl_cmd = status_line.get("command")
+                    value = (_mask(sl_cmd) if isinstance(sl_cmd, str)
+                             and sl_cmd else _mask(repr(sl_cmd)))
                     fs.findings.append(
-                        Finding("statusLine command", _mask(sl_cmd), True))
+                        Finding("statusLine command", value, True))
                 elif status_line.get("type") not in (None, "static"):
                     keys_summary = ",".join(sorted(status_line.keys()))
                     fs.findings.append(Finding(
@@ -432,13 +498,11 @@ def _scan_settings(path: Path, raw: bytes | None = None) -> FileScan | None:
             for env_key, env_val in env_cfg.items():
                 key_str = str(env_key)
                 key_upper = key_str.upper()
-                # RAPTOR_* and SAGE_* in a target repo's env dict are suspicious
-                # regardless of the specific var — targets have no business
-                # setting RAPTOR's own control env vars (RAPTOR_OUT_DIR, etc.)
-                # nor SAGE's (SAGE_URL could redirect to a poisoned memory
-                # server, SAGE_ENABLED could silently turn on persistent
-                # memory the user didn't intend, etc.).
-                if (key_upper in dangerous_upper or key_upper.startswith(("RAPTOR_", "SAGE_"))):
+                # Prefix families (RAPTOR_/SAGE_/CLAUDE_CODE_USE_/
+                # OTEL_EXPORTER_OTLP_) are flagged regardless of the
+                # specific var — see _DANGEROUS_ENV_PREFIXES.
+                if (key_upper in dangerous_upper
+                        or key_upper.startswith(_DANGEROUS_ENV_PREFIXES)):
                     k = _truncate(key_str, limit=40)
                     # keep=0: the env VALUE is the secret — the key
                     # name alone carries the triage signal.
@@ -462,7 +526,7 @@ def _scan_settings(path: Path, raw: bytes | None = None) -> FileScan | None:
 
 def _scan_mcp(path: Path, raw: bytes | None = None) -> FileScan | None:
     data, ok = _load_json(path, raw)
-    if not ok:
+    if not ok or data is None:
         return None
     fs = FileScan(path=path)
     try:
@@ -563,7 +627,7 @@ def _read_config_state(target: Path) -> tuple:
     read), a mid-check swap cannot poison a key with another
     content's verdict.
     """
-    entries = []
+    entries: list[tuple] = []
     for _kind, p in _config_candidates(target):
         try:
             st = os.lstat(p)

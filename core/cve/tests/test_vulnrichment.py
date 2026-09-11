@@ -349,6 +349,27 @@ class TestVulnrichmentClient:
         assert client.lookup("") is None
         assert http.gets == []
 
+    def test_unicode_digit_cve_returns_none(self, tmp_path: Path):
+        """Superscript "²" passes ``str.isdigit()`` but crashes
+        ``int()`` — the id must be refused up front, per the
+        "malformed → None" contract."""
+        http = FakeHttp()
+        client = VulnrichmentClient(http, JsonCache(root=tmp_path))
+        assert client.lookup("CVE-2024-1²3") is None
+        # Non-ASCII decimal digits (Unicode Nd) survive int() but are
+        # not valid CVE ids either — the ASCII regex refuses them.
+        assert client.lookup("CVE-2024-١٢٣٤") is None
+        assert http.gets == []
+
+    def test_path_degenerate_cve_returns_none(self, tmp_path: Path):
+        """Ids like ".." would otherwise reach the cache-key layer
+        and raise there, before the URL builder's own shape check."""
+        http = FakeHttp()
+        client = VulnrichmentClient(http, JsonCache(root=tmp_path))
+        assert client.lookup("..") is None
+        assert client.lookup("a//b") is None
+        assert http.gets == []
+
 
 # ---------------------------------------------------------------------------
 # SSVCDecision properties

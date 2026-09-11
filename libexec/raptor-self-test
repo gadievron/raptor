@@ -84,10 +84,17 @@ pin_raptor_dir_in_environ()
 
 # Env vars that make detect_llm_availability() report an LLM. Tier 0
 # children must see none of them so pipelines take their no-LLM paths.
+# RAPTOR_BEDROCK_MODEL / RAPTOR_BEDROCK_PROFILE are explicit Bedrock
+# opt-in signals (core.llm.detection counts them alongside the bearer
+# token). The models-config discovery path ($RAPTOR_CONFIG or the real
+# HOME's ~/.config/raptor/models.json — a keyed entry there also counts
+# as an external LLM) is neutralised separately in env_t0() by pointing
+# RAPTOR_CONFIG at an empty stub, which covers both spellings at once.
 _LLM_ENV_VARS = (
     "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
-    "MISTRAL_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "RAPTOR_LLM_SOCKET",
-    "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT",
+    "MISTRAL_API_KEY", "AWS_BEARER_TOKEN_BEDROCK",
+    "RAPTOR_BEDROCK_MODEL", "RAPTOR_BEDROCK_PROFILE",
+    "RAPTOR_LLM_SOCKET", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT",
 )
 
 _DEFAULT_CASE_TIMEOUT = 600
@@ -116,6 +123,15 @@ class Ctx:
             Path.home() / "codeql" / "codeql",
             Path("/usr/local/bin/codeql"),
         )
+        # Empty models config for tier-0 children: scrubbing the env
+        # keys is not enough — a models.json with an INLINE api key
+        # (found via $RAPTOR_CONFIG or the real HOME's
+        # ~/.config/raptor/) still makes detection report an external
+        # LLM and would route "no-LLM" cases onto paid calls. env_t0()
+        # points RAPTOR_CONFIG here so that discovery resolves to zero
+        # models regardless of the operator's real config.
+        self.empty_models_config = scratch / "empty-models-config.json"
+        self.empty_models_config.write_text('{"models": []}\n')
         self.fixture_bin: Path | None = None
         # Artifacts shared between chained cases (scan → sarif import, …).
         # Constraint: an artifact may only be read by cases in the SAME
@@ -138,6 +154,10 @@ class Ctx:
             k: v for k, v in os.environ.items() if k not in _LLM_ENV_VARS
         }
         env["_RAPTOR_TRUSTED"] = "1"
+        # Point models-config discovery at the empty stub: with the env
+        # keys scrubbed above, a keyed models.json is the remaining way
+        # a child could still resolve a paid external LLM.
+        env["RAPTOR_CONFIG"] = str(self.empty_models_config)
         if isolated_home:
             env["HOME"] = str(self.home)
             env["XDG_DATA_HOME"] = str(self.home / ".local" / "share")
@@ -676,13 +696,18 @@ def case_exploit_feasibility(ctx: Ctx) -> None:
 
 def case_project_lifecycle(ctx: Ctx) -> None:
     env = ctx.env_t0(isolated_home=True)
+    # Project data dirs default to <checkout>/out/projects/ — redirect
+    # them into scratch so create/delete never touch the operator's
+    # real out/ tree (the isolated HOME only covers the registry).
+    env["RAPTOR_OUT_DIR"] = str(ctx.out_dir("project-out"))
     pm = str(_RAPTOR_DIR / "libexec" / "raptor-project-manager")
     name = "selftest"
+    note_text = "self-test scratch project"
     steps = [
         ["create", name, "--target", str(ctx.fixture), "-d", "self-test"],
         ["use", name],
         ["status"],
-        ["set", "notes", "self-test scratch project"],
+        ["set", "notes", note_text],
         ["get", "notes"],
         ["unset", "notes"],
         ["trust", "config"],
@@ -692,7 +717,7 @@ def case_project_lifecycle(ctx: Ctx) -> None:
         ["list"],
         ["coverage"],
         ["findings"],
-        ["notes"],
+        ["notes", name],
         ["report"],
         ["correlate"],
         ["provenance"],
@@ -709,11 +734,26 @@ def case_project_lifecycle(ctx: Ctx) -> None:
             ["binary", "add", str(ctx.fixture_bin)],
             ["binary", "remove", str(ctx.fixture_bin)],
         ]
+    registry = ctx.home / ".raptor" / "projects"
     for step in steps:
-        ctx.run("project", [pm, *step], env=env, timeout=60, check=False)
-    # The isolated HOME guarantees non-destructiveness; assert the real
-    # registry was never touched by checking we only wrote under scratch.
-    assert (ctx.home / ".raptor").exists() or True
+        # Every subcommand must exit 0 here (verified against the CLI):
+        # check=True turns a tracebacking project manager into a case
+        # failure instead of a silent pass.
+        ctx.run("project", [pm, *step], env=env, timeout=60)
+        if step[0] == "create":
+            # The registry write must land under the isolated HOME —
+            # proof the scratch env, not the operator's, took the state.
+            assert (registry / f"{name}.json").is_file(), (
+                f"project entry missing from scratch registry {registry}"
+            )
+    # set → get round-trip crossed the process boundary: `get notes`
+    # must have printed the stored value back.
+    assert note_text in ctx.log_text("project"), (
+        "`get notes` did not echo the value `set notes` stored"
+    )
+    # rename + delete at the end must leave the scratch registry empty.
+    leftovers = sorted(p.name for p in registry.glob("*.json"))
+    assert not leftovers, f"project entries left after delete: {leftovers}"
 
 
 def case_run_lifecycle(ctx: Ctx) -> None:
@@ -735,8 +775,20 @@ def case_run_lifecycle(ctx: Ctx) -> None:
         rl, "start", "scan", "--target", str(ctx.fixture),
         "--out", str(out / "run2"),
     ], env=env, timeout=60)
-    ctx.run("lifecycle", [rl, "fail", str(out / "run2"), "self-test"],
-            env=env, timeout=60, check=False)
+    sentinel = [ln for ln in log.read_text().splitlines()
+                if ln.startswith("OUTPUT_DIR=")]
+    assert len(sentinel) >= 2, "run2 emitted no OUTPUT_DIR= sentinel"
+    run2_dir = sentinel[-1].split("=", 1)[1]
+    # The documented on-failure step gets the same rigor as complete:
+    # it must accept the dir start just handed out, exit 0, and record
+    # the failure in the run's status file.
+    ctx.run("lifecycle", [rl, "fail", run2_dir, "self-test"],
+            env=env, timeout=60)
+    status = json.loads((Path(run2_dir) / ".raptor-run.json").read_text())
+    assert status.get("status") == "failed", (
+        f"fail action did not record status=failed "
+        f"(got {status.get('status')!r})"
+    )
 
 
 def case_annotate(ctx: Ctx) -> None:
@@ -1021,7 +1073,7 @@ def case_tool_sandbox_matrix(ctx: Ctx) -> None:
     if not specs:
         raise Skip("no external tools present")
     env = ctx.env_t0()
-    results, failures, degraded = [], [], []
+    results, failures, degraded, skipped = [], [], [], []
     for sp in specs:
         name = sp["name"]
         if sp.get("builder") == "afl":
@@ -1044,22 +1096,45 @@ def case_tool_sandbox_matrix(ctx: Ctx) -> None:
             except (ValueError, IndexError):
                 verdict = {"rc": -1, "fallback": False,
                            "stderr_tail": (proc.stderr or "")[-300:]}
-        ok_rc = verdict.get("rc") in sp["expect_rc"]
-        fell = bool(verdict.get("fallback"))
-        line = f"{name}: rc={verdict.get('rc')} fallback={fell}"
+        status = _matrix_entry_status(verdict, sp["expect_rc"],
+                                      sp["strict_tier"])
+        if status == "skip":
+            line = f"{name}: skip ({verdict.get('skip')})"
+        else:
+            line = (f"{name}: rc={verdict.get('rc')} "
+                    f"fallback={bool(verdict.get('fallback'))}")
         results.append(line)
-        if not ok_rc or (fell and sp["strict_tier"]):
+        if status == "fail":
             failures.append(f"{line} :: {verdict.get('stderr_tail','')}")
-        elif fell:
+        elif status == "degraded":
             degraded.append(name)
+        elif status == "skip":
+            skipped.append(name)
     (ctx.logs / "tool-matrix.txt").write_text("\n".join(results) + "\n")
     if degraded:
         print(f"      tool-matrix degraded tiers: {', '.join(degraded)}")
+    if skipped:
+        # A skipped entry means the tool's sandbox shape was NOT
+        # exercised this run — say so where operators can see it.
+        print(f"      tool-matrix not exercised: {', '.join(skipped)}")
     if failures:
         raise AssertionError(
             f"{len(failures)} tool(s) broken under sandbox: "
             + " | ".join(failures[:3])
         )
+
+
+def _matrix_entry_status(verdict: dict, expect_rc: list,
+                         strict_tier: bool) -> str:
+    """Classify one matrix verdict: ``skip`` (tool never exercised —
+    reported, never mistaken for a clean pass), ``fail``, ``degraded``
+    (tolerated Landlock-only fallback), or ``pass``."""
+    if verdict.get("skip"):
+        return "skip"
+    fell = bool(verdict.get("fallback"))
+    if verdict.get("rc") not in expect_rc or (fell and strict_tier):
+        return "fail"
+    return "degraded" if fell else "pass"
 
 
 def _expand_matrix_kwargs(kwargs: dict) -> dict:
@@ -1084,8 +1159,13 @@ def _run_afl_matrix(ctx: Ctx, env: dict) -> dict:
         text=True, timeout=180, check=False,
     )
     if build.returncode != 0:
-        return {"rc": 0, "fallback": False,
-                "stderr_tail": "afl build failed; treated as skip"}
+        # A failed instrumented build means afl-showmap's sandbox shape
+        # was never exercised: an explicit skip verdict (surfaced in the
+        # results line and the case's stdout), never a synthetic rc=0
+        # that would read as a clean pass forever.
+        return {"rc": None, "fallback": False,
+                "skip": "afl instrumented build failed",
+                "stderr_tail": (build.stderr or "")[-300:]}
     seed = f"{work}/seed"
     with open(seed, "w") as fh:
         fh.write("hi")
@@ -1175,7 +1255,15 @@ def case_sca_render_gate(ctx: Ctx) -> None:
         "--fail-on-hygiene", "low",
     ], env=ctx.env_t0(), timeout=120, check=False)
     assert hi.returncode == 0, "gate tripped with no critical findings"
-    assert lo.returncode != 0, "gate failed to trip on medium findings"
+    # Exit 1 is the gate's documented trip code; any other nonzero
+    # (argparse's 2, a traceback path) is a crash that never evaluated
+    # the hygiene findings, so pin the code AND the trip summary line.
+    assert lo.returncode == 1, (
+        f"gate failed to trip on medium findings (rc={lo.returncode})"
+    )
+    assert "finding(s) above thresholds" in ctx.log_text("sca-render-gate"), (
+        "low-threshold gate exit lacked the threshold-failure summary"
+    )
 
 
 def case_sca_clean_cache(ctx: Ctx) -> None:
@@ -1793,23 +1881,35 @@ def case_flag_matrix(ctx: Ctx) -> None:
 
 def case_no_secret_leakage(ctx: Ctx) -> None:
     """Filesystem boundary: after every earlier pipeline run, none of
-    the hostile fixture's planted markers may appear anywhere under the
-    shared outputs tree — proves no pipeline copied hostile config
-    content into its artifacts. Must stay registered LAST in tier 0."""
+    the hostile fixture's planted markers may appear under the shared
+    outputs tree OR the captured-stdout logs tree. Logs matter: the
+    hostile fixture's consumers write their (masked) reports to child
+    stdout, which run() captures under ctx.logs — sweeping outputs
+    alone would never see a masking regression there. Must stay
+    registered LAST in tier 0."""
     markers = (b"sk-FAKE", b"s3cretFAKE", b"collector.invalid")
-    hits = []
-    for root, _dirs, files in os.walk(ctx.outs):
-        for fn in files:
-            p = Path(root) / fn
-            try:
-                if p.is_symlink() or p.stat().st_size > 50_000_000:
+    hits, unswept = [], []
+    for tree in (ctx.outs, ctx.logs):
+        for root, _dirs, files in os.walk(tree):
+            for fn in files:
+                p = Path(root) / fn
+                try:
+                    if p.is_symlink():
+                        continue
+                    if p.stat().st_size > 50_000_000:
+                        # Too big to read back; record it loudly below
+                        # instead of silently exempting it.
+                        unswept.append(str(p))
+                        continue
+                    data = p.read_bytes()
+                except OSError:
                     continue
-                data = p.read_bytes()
-            except OSError:
-                continue
-            for m in markers:
-                if m in data:
-                    hits.append(f"{p}: {m.decode()}")
+                for m in markers:
+                    if m in data:
+                        hits.append(f"{p}: {m.decode()}")
+    if unswept:
+        print(f"      no-secret-leakage: {len(unswept)} file(s) >50MB "
+              f"not swept: {', '.join(unswept[:3])}")
     assert not hits, (
         f"hostile fixture secrets leaked into outputs: {hits[:5]}"
     )
@@ -2070,7 +2170,11 @@ def main() -> int:
                     help="model for LLM cases (default: RAPTOR's own "
                          "resolution; env RAPTOR_SELFTEST_MODEL)")
     ap.add_argument("--max-llm-cost", type=float, default=2.0,
-                    help="total USD ceiling for tier-1 cases (default 2.0)")
+                    help="per-case USD ceiling for tier-1 cases: audit "
+                         "spends up to min(0.50, N), agentic up to "
+                         "min(1.00, N), and ask sends one tiny fixed "
+                         "prompt — worst-case TOTAL is the sum of those "
+                         "caps, not N (default 2.0)")
     ap.add_argument("--timeout", type=int, default=_DEFAULT_CASE_TIMEOUT,
                     help="default per-case timeout in seconds")
     ap.add_argument("--json", metavar="FILE",

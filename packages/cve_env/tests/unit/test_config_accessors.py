@@ -191,3 +191,36 @@ def test_stage_budget_valid_env_override(monkeypatch) -> None:
 
 
 
+
+
+def test_stage_budget_malformed_env_falls_through_to_toml(
+    monkeypatch,
+) -> None:
+    """Documented precedence is env → TOML → default; a malformed env
+    value must not skip an operator's configured TOML budget."""
+    import cve_env.config as cfg
+
+    monkeypatch.setenv("CVE_ENV_BUDGET_RESEARCH", "0,9")  # typo, not a float
+    monkeypatch.setattr(cfg, "_TOML_CONFIG", {"budget": {"research": 0.9}})
+    assert get_stage_budget("RESEARCH") == 0.9
+
+
+def test_stage_budget_valid_env_still_beats_toml(monkeypatch) -> None:
+    import cve_env.config as cfg
+
+    monkeypatch.setenv("CVE_ENV_BUDGET_RESEARCH", "1.5")
+    monkeypatch.setattr(cfg, "_TOML_CONFIG", {"budget": {"research": 0.9}})
+    assert get_stage_budget("RESEARCH") == 1.5
+
+
+def test_version_assertion_pattern_recognizes_dash_capital_v(
+) -> None:
+    """`cmd -V` is a canonical version probe; the old `\\b-V\\b` anchor
+    could never match it (no word boundary between space and '-'), so
+    `-V` proofs were demoted to verified_partial."""
+    from cve_env.config import VERSION_ASSERTION_CMD_PATTERN as pat
+
+    for cmd in ("python -V", "httpd -V", "ssh -V", "-V"):
+        assert pat.search(cmd), cmd
+    # Companion direction: '-V' embedded in a token stays unmatched.
+    assert not pat.search("echo no-Vhere")

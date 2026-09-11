@@ -9,6 +9,8 @@ wired); for 1.3 we just confirm the bundle producer/parser is faithful.
 from __future__ import annotations
 
 import secrets
+import json
+from pathlib import Path
 
 import pytest
 
@@ -36,6 +38,20 @@ from packages.zkpox import (
     with_timestamp,
 )
 
+from core.witness.store import WitnessStore  # noqa: E402
+from core.witness.types import (  # noqa: E402
+    Witness,
+    WitnessOutcome,
+    WitnessSource,
+    compute_bytes_hash,
+)
+from packages.zkpox.bundle import (  # noqa: E402
+    ZKPoXBundleError,
+    assemble_bundle,
+    render_bundle,
+    write_bundle,
+)
+
 
 def _fresh_envelope() -> Envelope:
     """Synthetic envelope with random bytes — no external tools called."""
@@ -44,8 +60,8 @@ def _fresh_envelope() -> Envelope:
         ct_K_age=secrets.token_bytes(232),
         ct_K_tlock=secrets.token_bytes(391),
     )
-
-
+  
+  
 def _fresh_bundle(*, with_researcher: bool = False) -> DisclosureBundle:
     env = _fresh_envelope()
     vendor_env = vendor_envelope_from(

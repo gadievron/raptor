@@ -30,7 +30,6 @@ field regardless of which evidence shape produced the record.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from collections import Counter
@@ -280,7 +279,13 @@ def from_labeled_attempt(la: LabeledAttempt) -> VerifiedOutcome | None:
                 "sink_class": cq.sink_class,
                 "after_count": cq.after_count,
                 "before_count": cq.before_count,
-                "is_sound": sound,
+                # The record's stored technical field, verbatim — the
+                # projection must not overwrite recorded evidence. The
+                # outcome-gated verdict rides under its own key so
+                # consumers can tell "technically sound but outcome-
+                # uncertain" from "not sound".
+                "is_sound": bool(cq.is_sound),
+                "outcome_sound": sound,
                 "database_path": cq.database_path,
             },
             cwe_id=la.cwe or None,
@@ -393,6 +398,13 @@ def from_witness(witness: Witness) -> VerifiedOutcome:
             evidence[k] = detail[k]
     if witness.target_binary_hash:
         evidence["target_binary_hash"] = witness.target_binary_hash
+    # Mechanical-provenance flag: set ONLY from the store's MAC
+    # verification of the manifest (never copied from
+    # ``outcome_detail``, which the record's author controls).
+    # Threat-status flips gate on it — see
+    # ``core.threat_model.link_verified_outcomes``.
+    if getattr(witness, "provenance_verified", False):
+        evidence["provenance_verified"] = True
     return VerifiedOutcome(
         finding_id=str(detail.get("finding_id") or ""),
         oracle=_witness_oracle(witness.source),
@@ -561,25 +573,31 @@ def collect_outcomes(
     # 3. Run-local VerifiedOutcome records — producers whose oracle
     # evidence doesn't fit the LabeledAttempt shapes (e.g. /cve-diff's
     # OSV+NVD fix-pointer consensus) append ``to_dict()`` lines to
-    # VERIFIED_OUTCOMES_FILENAME in their run dir. Best-effort: an
-    # unparseable line is skipped, never fatal.
+    # VERIFIED_OUTCOMES_FILENAME in their run dir. ``load_jsonl`` is
+    # the shared hardened trail reader with the same best-effort
+    # contract this loop always had: missing/unreadable/symlinked
+    # files load as empty, malformed lines are skipped, never fatal.
+    from core.json import load_jsonl
+
     for run_dir in _verified_outcome_dirs(output_dir, project_root):
         path = run_dir / VERIFIED_OUTCOMES_FILENAME
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            continue
-        for line in lines:
-            line = line.strip()
-            if not line:
+        for rec in load_jsonl(path):
+            if not isinstance(rec, dict):
                 continue
             try:
-                outcomes.append(VerifiedOutcome.from_dict(json.loads(line)))
+                vo = VerifiedOutcome.from_dict(rec)
             except Exception:
                 _log.debug(
-                    "skipping malformed verified-outcome line in %s",
+                    "skipping malformed verified-outcome record in %s",
                     path, exc_info=True,
                 )
+                continue
+            # The mechanical-provenance flag is minted by the witness
+            # path above from MAC verification; a run-local JSONL line
+            # is an unauthenticated disk artifact and must not be able
+            # to assert it into the threat model's flip gate.
+            vo.evidence.pop("provenance_verified", None)
+            outcomes.append(vo)
 
     return outcomes
 
@@ -617,6 +635,19 @@ class ScoredOutcome:
     reason: str
 
 
+def _cwe_key(raw: Any) -> str:
+    """Canonical CWE comparison key — the same normaliser the rest of
+    the package uses (``store._canon_cwe``, which retrieval's CWE match
+    builds on), so records stored with a non-canonical spelling
+    (``"cwe416"``) still score against a canonical finding
+    (``"CWE-416"``). Empty/None → ``""`` (never matches: the callers
+    require both sides truthy)."""
+    if not raw:
+        return ""
+    from .store import _canon_cwe
+    return _canon_cwe(str(raw))
+
+
 def _score_outcome(
     outcome: VerifiedOutcome, finding: dict[str, Any],
 ) -> tuple[int, str]:
@@ -624,14 +655,18 @@ def _score_outcome(
     finding_cwe = finding.get("cwe_id") or finding.get("cwe")
     finding_file = finding.get("file") or finding.get("file_path")
 
+    cwe_match = bool(
+        finding_cwe and outcome.cwe_id
+        and _cwe_key(outcome.cwe_id) == _cwe_key(finding_cwe)
+    )
+
     if finding_id and outcome.finding_id and outcome.finding_id == finding_id:
         return 10, "exact finding-id match"
-    if (finding_cwe and outcome.cwe_id == finding_cwe
-            and finding_file and outcome.file == finding_file):
+    if cwe_match and finding_file and outcome.file == finding_file:
         return 7, "cwe + file match"
     if finding_file and outcome.file == finding_file:
         return 4, "file match"
-    if finding_cwe and outcome.cwe_id == finding_cwe:
+    if cwe_match:
         return 2, "cwe match"
     return 0, "no structured signal"
 

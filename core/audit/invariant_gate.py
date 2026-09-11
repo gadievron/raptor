@@ -130,16 +130,24 @@ def _receipt_checked(inv: dict[str, Any]) -> bool:
 def _in_scope(inv: dict[str, Any], file_path: str) -> bool:
     """Scope the invariant to the outcome's file when scope evidence
     exists (fail open to global only when the invariant declares no
-    scope at all — the ``_guard_in_scope`` contract)."""
+    scope at all — the ``_guard_in_scope`` contract).
+
+    Errors fail CLOSED: this check gates the G2 no-tool-evidence
+    waiver, so an unverifiable scope must deny the waiver (the finding
+    demotes to suspicious — inconclusive), never widen a scoped
+    invariant to global.  The no-scope-declared fail-open lives inside
+    ``_guard_in_scope`` itself, where the invariant's (lack of) scope
+    evidence is actually inspected.
+    """
     try:
         from core.concepts.audit_bridge import _guard_in_scope
     except ImportError:
-        return True
+        return False
     try:
         return _guard_in_scope(inv, file_path or "")
     except Exception:
         logger.debug("invariant scope check failed", exc_info=True)
-        return True
+        return False
 
 
 def _anchor_identifiers(inv: dict[str, Any]) -> set[str]:

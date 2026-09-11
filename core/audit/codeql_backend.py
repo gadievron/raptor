@@ -52,6 +52,34 @@ def _admit_taint_file(path: Path, budget: dict[str, int]) -> bool:
     return True
 
 
+def _detect_db_language(stdout: str) -> str | None:
+    """Language of a database from ``codeql resolve database`` output.
+
+    The CLI prints JSON: the language lives in ``primaryLanguage``
+    (older CLIs) or the ``languages`` array (current CLIs).  The old
+    ``primaryLanguage:`` line scan never matched the JSON shape, so
+    detection always failed and the whole pre-sweep silently skipped.
+    YAML-style line output kept as a fallback for ancient CLIs.
+    """
+    import json as _json
+
+    try:
+        db_info = _json.loads(stdout or "{}")
+    except _json.JSONDecodeError:
+        db_info = None
+    if isinstance(db_info, dict):
+        language = db_info.get("primaryLanguage")
+        if isinstance(language, str) and language:
+            return language
+        langs = db_info.get("languages")
+        if isinstance(langs, list) and langs and isinstance(langs[0], str):
+            return langs[0]
+    for line in stdout.splitlines():
+        if line.startswith("primaryLanguage:"):
+            return line.split(":", 1)[1].strip()
+    return None
+
+
 def codeql_pre_sweep(
     codeql_db_path, out_dir, sarif_cache,
 ) -> None:
@@ -79,11 +107,7 @@ def codeql_pre_sweep(
             # the scanned repo).
             env=RaptorConfig.get_safe_env(),
         )
-        language = None
-        for line in info.stdout.splitlines():
-            if line.startswith("primaryLanguage:"):
-                language = line.split(":", 1)[1].strip()
-                break
+        language = _detect_db_language(info.stdout or "")
         if not language:
             logger.warning("codeql_pre_sweep: could not detect language")
             return

@@ -247,3 +247,55 @@ class TestJoernCallerOverride:
         server = _FakeJoernServer()
         set_joern_server(server)
         set_joern_server(None)
+
+
+def test_module_abort_record_without_line_does_not_suppress():
+    # A module_aborts record missing its line field must NOT suppress:
+    # defaulting the line to 0 made every function in the file read
+    # "below" the abort — a SOUND witness firing on malformed evidence.
+    inv = {"files": [{
+        "path": "go/m.go", "language": "go",
+        "module_aborts_on_load": {"summary": "func init(){panic}"},
+        "items": [{"name": "sink", "kind": "function", "line_start": 4}],
+    }]}
+    assert classify_reachability(
+        inv, "go/m.go", "sink", 4, "go.m") != "module_aborts"
+
+
+def test_module_abort_zero_line_record_does_not_suppress():
+    inv = {"files": [{
+        "path": "go/m.go", "language": "go",
+        "module_aborts_on_load": {"line": 0, "summary": "x"},
+        "items": [{"name": "sink", "kind": "function", "line_start": 4}],
+    }]}
+    assert classify_reachability(
+        inv, "go/m.go", "sink", 4, "go.m") != "module_aborts"
+
+
+def test_module_abort_lineless_query_resolves_item_span():
+    # Callers that don't know the function's line (line=0) still get
+    # the witness when the item's own line_start proves it binds below
+    # the abort — the witness used to be disabled for line-less
+    # queries entirely.
+    inv = {"files": [{
+        "path": "go/m.go", "language": "go",
+        "module_aborts_on_load": {"line": 2, "summary": "panic"},
+        "items": [{"name": "sink", "kind": "function", "line_start": 4}],
+    }]}
+    assert classify_reachability(
+        inv, "go/m.go", "sink", 0, "go.m") == "module_aborts"
+
+
+def test_module_abort_lineless_query_ambiguous_namesakes_declines():
+    # Two same-name items straddling the abort: with no line we can't
+    # know which one the caller means — refuse to suppress.
+    inv = {"files": [{
+        "path": "go/m.go", "language": "go",
+        "module_aborts_on_load": {"line": 5, "summary": "panic"},
+        "items": [
+            {"name": "dup", "kind": "function", "line_start": 2},
+            {"name": "dup", "kind": "function", "line_start": 8},
+        ],
+    }]}
+    assert classify_reachability(
+        inv, "go/m.go", "dup", 0, "go.m") != "module_aborts"

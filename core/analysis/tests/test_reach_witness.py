@@ -185,8 +185,10 @@ def test_select_item_by_line_closest_start_fallback():
     fallback: when no candidate's [line_start, line_end] range contains
     the query line (under-reported line_end), pick the item whose
     line_start is the closest one <= the line — not blindly the first
-    candidate. Query lines preceding every candidate keep the legacy
-    first-item tie-break; line=0 / single candidate are no-ops."""
+    candidate. Query lines preceding every candidate cannot
+    disambiguate and return ALL candidates (same as line=0) so the
+    dead-witness accessors keep their ALL-namesakes-dead requirement;
+    line=0 / single candidate are no-ops."""
     from core.analysis.reachability import _select_item_by_line
 
     a = {"name": "helper", "line_start": 10, "line_end": 20}
@@ -198,11 +200,51 @@ def test_select_item_by_line_closest_start_fallback():
     assert _select_item_by_line([a, b], 50) == [a]
     # Containment still beats the fallback.
     assert _select_item_by_line([a, b], 110) == [b]
-    # Query before every candidate: legacy first-item tie-break.
-    assert _select_item_by_line([a, b], 5) == [a]
+    # Query before every candidate: no disambiguation possible —
+    # ALL candidates come back, exactly like line=0.
+    assert _select_item_by_line([a, b], 5) == [a, b]
     # No line / single candidate: pass-through.
     assert _select_item_by_line([a, b], 0) == [a, b]
     assert _select_item_by_line([b], 150) == [b]
+
+
+def test_binary_oracle_absent_line_preceding_all_requires_all_absent():
+    """When the query line precedes every same-name candidate, the
+    line cannot disambiguate — the accessor must require EVERY
+    namesake to be absent (same rule as line=0). A first-candidate
+    tie-break would let a dead namesake hard-suppress a live function
+    whenever the finding line sits above the first definition."""
+    from core.analysis.reachability import binary_oracle_absent
+
+    def inv(live_classification):
+        return {"files": [{
+            "path": "lib.c", "language": "c",
+            "items": [
+                {"name": "helper", "kind": "function", "line_start": 10,
+                 "line_end": 20,
+                 "metadata": {"binary_oracle": {
+                     "classification": "absent",
+                     "binaries": [{"tier": "full"}]}}},
+                {"name": "helper", "kind": "function", "line_start": 50,
+                 "line_end": 60,
+                 "metadata": {"binary_oracle": {
+                     "classification": live_classification,
+                     "binaries": [{"tier": "full"}]}}},
+            ],
+        }]}
+
+    # Mixed dead/live namesakes, query line 3 precedes both: must NOT
+    # suppress on the dead namesake's verdict.
+    assert binary_oracle_absent(
+        inv("symbol_present"), "lib.c", "helper", 3) is False
+    # line=0 keeps the same answer (the rule this branch mirrors).
+    assert binary_oracle_absent(
+        inv("symbol_present"), "lib.c", "helper", 0) is False
+    # ALL namesakes absent: the witness fires on a preceding line.
+    assert binary_oracle_absent(
+        inv("absent"), "lib.c", "helper", 3) is True
+    assert binary_oracle_absent(
+        inv("absent"), "lib.c", "helper", 0) is True
 
 
 def test_binary_oracle_inlined_does_not_demote_function():

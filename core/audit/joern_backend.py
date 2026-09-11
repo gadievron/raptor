@@ -1040,7 +1040,12 @@ def sibling_run_dirs(
                     sibling_target = m.get("target_path") or m.get("target", "")
                     if sibling_target and Path(sibling_target).resolve() != Path(target_path).resolve():
                         continue
-                except OSError:
+                except (OSError, TypeError, ValueError):
+                    # A wrong-TYPED field (number/list/bool) in an
+                    # otherwise dict-shaped manifest raises TypeError
+                    # from Path() — as disqualifying as a wrong-shaped
+                    # manifest, never a discovery abort (the
+                    # import_sibling_joern_flows caller is unwrapped).
                     continue
             else:
                 continue

@@ -37,7 +37,7 @@ from typing import Any, TYPE_CHECKING
 
 from core.json import JsonCache, MISSING
 
-from ._negative_cache import log_fetch_failure
+from ._negative_cache import log_fetch_failure, should_negative_cache
 
 from ..versions.debian import compare as _debian_compare
 
@@ -116,7 +116,7 @@ class DebianClient:
             data = self._http.get_json(url)
         except Exception as e:                # noqa: BLE001
             log_fetch_failure(logger, "sca.registries.debian", name, e)
-            if self._cache is not None:
+            if self._cache is not None and should_negative_cache(e):
                 self._cache.put(cache_key, [], ttl_seconds=self._ttl)
             return []
 

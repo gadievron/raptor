@@ -1426,8 +1426,17 @@ def _run_go_check(
 
 # ── JS/TS legs: handler outcome + unawaited promises ────────────────
 
+# Prose that AFFIRMATIVELY claims a missing await.  A bare ``\bawait``
+# term is not in the set: catch-swallow hypotheses routinely mention
+# that the call IS awaited ("the awaited call's rejection is caught
+# and ignored"), and routing those to the unawaited leg let one word
+# mechanically refute a real fail-open.
 _UNAWAITED_HYPOTHESIS_RE = re.compile(
-    r"unawait|floating\s+promise|unhandled\s+rejection|\bawait",
+    r"unawait|floating\s+promise|dangling\s+promise"
+    r"|unhandled\s+(?:promise\s+)?rejection"
+    r"|fire[- ]and[- ]forget"
+    r"|(?:never|not)\s+awaited|missing\s+await|without\s+await"
+    r"|forg(?:e|o)ts?\s+to\s+await|forgotten\s+await",
     re.IGNORECASE,
 )
 
@@ -1791,10 +1800,30 @@ def _run_js_check(
     inventory: dict[str, Any] | None,
 ) -> FailOpenResult:
     if _UNAWAITED_HYPOTHESIS_RE.search(hypothesis):
-        return _run_js_unawaited_check(
+        result = _run_js_unawaited_check(
             source, file_path, function_name, hypothesis, language,
             role_context, inventory,
         )
+        if result.outcome != "refuted":
+            return result
+        # Code-shape gate on the refutation: every located site
+        # consumed the promise, so the code contradicts the unawaited
+        # reading of the prose.  The same hypothesis often ALSO
+        # describes a handler swallow — prose routing alone must not
+        # mechanically refute that half.  Keep the refutation only
+        # when the function has no handler to check; any handler-leg
+        # answer (either direction, or undecided) supersedes it.
+        handler_result = _run_js_handler_check(
+            source, file_path, function_name, language, role_context,
+            inventory,
+        )
+        if (
+            handler_result.outcome == "inconclusive"
+            and REASON_HYPOTHESIS_UNBINDABLE
+            in (handler_result.reason or "")
+        ):
+            return result
+        return handler_result
     return _run_js_handler_check(
         source, file_path, function_name, language, role_context,
         inventory,

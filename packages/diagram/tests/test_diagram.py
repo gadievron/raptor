@@ -1586,3 +1586,253 @@ class TestRenderer:
         (tmp_path / "context-map.json").write_text("{corrupt json", encoding="utf-8")
         out = render_directory(tmp_path)
         assert "Could not render" in out
+
+
+class TestAttackPathLabelHygiene:
+    def test_ampersand_in_name_not_double_escaped(self):
+        # The sanitizer is not idempotent ('&' -> '&amp;' -> '&amp;amp;');
+        # each raw part must be escaped exactly once.
+        out = generate_single({"name": "A & B", "steps": [], "proximity": 1}, 0)
+        assert "A &amp; B" in out
+        assert "&amp;amp;" not in out
+
+    def test_step_result_rendered(self):
+        # The step outcome is the value-level PoC evidence — it must
+        # appear in the diagram, not just the action.
+        out = generate_single({
+            "name": "p", "proximity": 5,
+            "steps": [{"step": 1, "action": "send 24 bytes",
+                       "result": "RIP=0x41414141"}],
+        }, 0)
+        assert "send 24 bytes" in out
+        assert "RIP=0x41414141" in out
+
+    def test_null_description_not_rendered_as_none(self):
+        out = generate_single({
+            "name": "p", "proximity": 5,
+            "steps": [{"description": None, "type": "call"}],
+        }, 0)
+        assert "None" not in out
+
+
+class TestAttackTreeIdSanitizationParity:
+    @staticmethod
+    def _tree(idfmt):
+        # root -> A,B where A and B have children (grouping eligible).
+        return {
+            "root": idfmt("root"),
+            "nodes": [
+                {"id": idfmt("root"), "goal": "compromise",
+                 "leads_to": f"{idfmt('A')},{idfmt('B')}"},
+                {"id": idfmt("A"), "goal": "a", "status": "confirmed",
+                 "leads_to": idfmt("A1")},
+                {"id": idfmt("A1"), "goal": "a1", "status": "confirmed"},
+                {"id": idfmt("B"), "goal": "b", "status": "exploring",
+                 "leads_to": idfmt("B1")},
+                {"id": idfmt("B1"), "goal": "b1", "status": "unexplored"},
+            ],
+        }
+
+    def test_dotted_ids_group_like_clean_ids(self):
+        # Grouping must not silently degrade to flat rendering when
+        # ids contain chars outside [A-Za-z0-9_-] — the leads_to
+        # membership test needs the same sanitization as the flat path.
+        clean = gen_attack_tree(self._tree(lambda s: s))
+        dotted = gen_attack_tree(self._tree(lambda s: f"FIND-001.{s}"))
+        assert "subgraph" in clean
+        assert "subgraph" in dotted
+
+    def test_enrichment_keys_sanitized_to_match_node_ids(self):
+        tree = {
+            "root": "root",
+            "nodes": [
+                {"id": "root", "goal": "g", "leads_to": "FIND 0001"},
+                {"id": "FIND 0001", "goal": "overflow",
+                 "status": "confirmed"},
+            ],
+        }
+        paths = [{"finding": "FIND 0001", "proximity": 8}]
+        out = gen_attack_tree(tree, attack_paths=paths)
+        # The space sanitizes to '_' on the node id AND the index key,
+        # so the proximity annotation still fires.
+        assert "proximity 8/10" in out
+
+    def test_dead_enrichment_join_is_surfaced(self):
+        tree = {
+            "root": "root",
+            "nodes": [
+                {"id": "root", "goal": "g", "leads_to": "N1"},
+                {"id": "N1", "goal": "n1", "status": "confirmed"},
+            ],
+        }
+        paths = [{"finding": "FIND-001", "proximity": 8}]
+        out = gen_attack_tree(tree, attack_paths=paths)
+        assert "matched no tree node id" in out
+
+
+class TestAttackTreeGroupedEdges:
+    _TREE = {
+        "root": "root",
+        "nodes": [
+            {"id": "root", "goal": "compromise", "leads_to": "A,B"},
+            {"id": "A", "goal": "a", "status": "confirmed", "leads_to": "A1"},
+            {"id": "A1", "goal": "a1", "status": "confirmed"},
+            {"id": "B", "goal": "b", "status": "exploring", "leads_to": "B1"},
+            {"id": "B1", "goal": "b1", "status": "unexplored"},
+        ],
+    }
+
+    def test_root_edges_drawn_exactly_once(self):
+        out = gen_attack_tree(self._TREE)
+        assert out.count("root --> A") == 1
+        assert out.count("root --> B") == 1
+
+    def test_cycle_edge_back_into_root_kept(self):
+        tree = json.loads(json.dumps(self._TREE))
+        tree["nodes"][2]["leads_to"] = "root"  # A1 -> root cycle
+        out = gen_attack_tree(tree)
+        assert "A1 --> root" in out
+
+    def test_orphan_node_declared_not_just_classed(self):
+        tree = json.loads(json.dumps(self._TREE))
+        tree["nodes"].append(
+            {"id": "ORPHAN", "goal": "island", "status": "confirmed"},
+        )
+        out = gen_attack_tree(tree)
+        assert "subgraph" in out  # still grouped mode
+        # Declared as a node, and only then referenced by a class line.
+        assert 'ORPHAN["' in out
+        assert any("ORPHAN" in ln for ln in out.splitlines()
+                   if ln.strip().startswith("class "))
+
+
+class TestContextMapScalarIdFields:
+    def test_scalar_reaches_from_does_not_explode_per_char(self):
+        data = {
+            "entry_points": [{"id": "EP-001", "path": "/api"}],
+            "boundary_details": [],
+            "sink_details": [{"id": "SINK-1", "operation": "exec",
+                              "reaches_from": "EP-001"}],
+            "unchecked_flows": [],
+        }
+        out = gen_context_map(data)
+        assert "EP-001 --> SINK-1" in out
+        # No per-character phantom nodes.
+        assert "\n    E --> SINK-1" not in out
+        assert "\n    P --> SINK-1" not in out
+
+    def test_scalar_covers_treated_as_single_id(self):
+        data = {
+            "entry_points": [{"id": "EP-001", "path": "/api"}],
+            "boundary_details": [{"id": "TB-001", "covers": "EP-001"}],
+            "sink_details": [],
+            "unchecked_flows": [],
+        }
+        out = gen_context_map(data)
+        assert "EP-001 --> TB-001" in out
+        assert "\n    E --> TB-001" not in out
+
+
+class TestContextMapCandidateFlows:
+    def test_non_blackbox_candidate_flow_not_drawn_from_undeclared_node(self):
+        data = {
+            "meta": {"analysis_mode": "source"},
+            "entry_points": [{"id": "EP-001", "path": "/api"}],
+            "sink_details": [{"id": "SINK-1", "operation": "system"}],
+            "interesting_functions": [{"id": "fn1", "name": "helper"}],
+            "candidate_flows": [{"source_function": "fn1", "sink": "SINK-1"}],
+        }
+        out = gen_context_map(data)
+        # fn1 was never declared (candidate nodes are blackbox-only),
+        # so no edge may reference it as a bare auto-created node.
+        assert "fn1 -." not in out
+
+    def test_default_relationship_label_not_doubled(self):
+        data = {
+            "meta": {"analysis_mode": "blackbox_binary"},
+            "entry_points": [],
+            "sink_details": [{"id": "SINK-1", "operation": "system"}],
+            "interesting_functions": [{"id": "fn1", "name": "helper"}],
+            "candidate_flows": [{"source_function": "fn1", "sink": "SINK-1"}],
+        }
+        out = gen_context_map(data)
+        assert "candidate candidate" not in out
+        assert '"candidate"' in out
+
+
+class TestFlowTraceBranchCap:
+    def test_branches_capped_with_marker(self):
+        data = {
+            "trace_id": "T1", "name": "t",
+            "steps": [{"step": 1, "call_site": "a.c:1"}],
+            "branches": [
+                {"branch_point": f"a.c:{i}", "condition": f"c{i}"}
+                for i in range(260)
+            ],
+        }
+        out = gen_flow_trace(data)
+        assert out.count("BR") <= 2 * 210  # bounded node/edge count
+        assert "additional branches not shown" in out
+
+    def test_small_branch_list_unaffected(self):
+        data = {
+            "trace_id": "T1", "name": "t",
+            "steps": [{"step": 1, "call_site": "a.c:1"}],
+            "branches": [{"branch_point": "a.c:1", "condition": "x > 0"}],
+        }
+        out = gen_flow_trace(data)
+        assert "additional branches not shown" not in out
+        assert "x &gt; 0" in out or "x > 0" in out
+
+
+class TestHypothesesStatusStyling:
+    def test_idless_hypothesis_gets_status_class(self):
+        out = gen_hypotheses([
+            {"claim": "x", "status": "confirmed", "predictions": []},
+        ])
+        class_lines = [ln for ln in out.splitlines()
+                       if ln.strip().startswith("class ")]
+        assert any("confirmed" in ln for ln in class_lines)
+
+    def test_duplicate_ids_all_classed(self):
+        out = gen_hypotheses([
+            {"id": "H-1", "claim": "a", "status": "confirmed",
+             "predictions": []},
+            {"id": "H-1", "claim": "b", "status": "disproven",
+             "predictions": []},
+        ])
+        class_lines = [ln for ln in out.splitlines()
+                       if ln.strip().startswith("class ")]
+        assert any("confirmed" in ln for ln in class_lines)
+        assert any("disproven" in ln for ln in class_lines)
+
+
+class TestRendererRobustness:
+    def test_non_dict_results_do_not_abort_render(self, tmp_path):
+        (tmp_path / "orchestrated_report.json").write_text(
+            json.dumps({"results": [1, 2, 3]}),
+        )
+        # Must not raise — degrade to no findings summary.
+        out = render_directory(tmp_path)
+        assert isinstance(out, str)
+
+    def test_load_optional_list_prefers_payload_key(self, tmp_path):
+        from ..renderer import _load_optional_list
+        p = tmp_path / "hypotheses.json"
+        p.write_text(json.dumps({
+            "meta": ["not", "the", "payload"],
+            "hypotheses": [{"id": "H-1"}],
+        }))
+        assert _load_optional_list(p) == [{"id": "H-1"}]
+
+    def test_load_optional_list_ambiguous_envelope_returns_none(self, tmp_path):
+        from ..renderer import _load_optional_list
+        p = tmp_path / "other.json"
+        p.write_text(json.dumps({"a": [1], "b": [2]}))
+        assert _load_optional_list(p) is None
+
+    def test_load_optional_list_single_list_envelope_still_works(self, tmp_path):
+        from ..renderer import _load_optional_list
+        p = tmp_path / "wrapped.json"
+        p.write_text(json.dumps({"items": [1, 2]}))
+        assert _load_optional_list(p) == [1, 2]

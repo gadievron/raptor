@@ -8,9 +8,14 @@
 // Covers CWE-416 / CWE-119: use-after-free via unsafe list deletion.
 // @role: verification
 
-@unsafe_del_fwd@
+// `exists`: the deletion only needs to happen on SOME path through the
+// loop body (the common shape is a conditional delete); forall-path
+// dots would require a delete on EVERY path and miss it. The trailing
+// break/return/goto guards keep delete-then-leave-the-loop shapes
+// silent — the invalidated cursor is only a bug if iteration continues.
+@unsafe_del_fwd exists@
 iterator name list_for_each_entry;
-identifier cursor, head, member;
+identifier cursor, head, member, lbl;
 position p_del;
 @@
 
@@ -32,7 +37,9 @@ list_for_each_entry(cursor, head, member)
 |
   hlist_del_init@p_del(&cursor->member)
 )
-  ...
+  ... when != break;
+      when != return ...;
+      when != goto lbl;
 }
 
 @script:python depends on unsafe_del_fwd@
@@ -48,9 +55,9 @@ for _p in p_del:
            "message": "list_del inside non-_safe iteration over '%s' — use-after-free on next iteration" % cursor}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
-@unsafe_del_rev@
+@unsafe_del_rev exists@
 iterator name list_for_each_entry_reverse;
-identifier cursor, head, member;
+identifier cursor, head, member, lbl;
 position p_del;
 @@
 
@@ -66,7 +73,9 @@ list_for_each_entry_reverse(cursor, head, member)
 |
   list_del_init@p_del(...)
 )
-  ...
+  ... when != break;
+      when != return ...;
+      when != goto lbl;
 }
 
 @script:python depends on unsafe_del_rev@
@@ -82,9 +91,9 @@ for _p in p_del:
            "message": "list_del inside non-_safe reverse iteration over '%s' — use-after-free on next iteration" % cursor}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
-@unsafe_del_hlist@
+@unsafe_del_hlist exists@
 iterator name hlist_for_each_entry;
-identifier cursor, head, member;
+identifier cursor, head, member, lbl;
 position p_del;
 @@
 
@@ -98,7 +107,9 @@ hlist_for_each_entry(cursor, head, member)
 |
   hlist_del_init@p_del(&cursor->member)
 )
-  ...
+  ... when != break;
+      when != return ...;
+      when != goto lbl;
 }
 
 @script:python depends on unsafe_del_hlist@

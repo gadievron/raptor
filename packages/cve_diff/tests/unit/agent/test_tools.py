@@ -534,7 +534,7 @@ def test_cgit_fetch_caps_body(monkeypatch) -> None:
 
     monkeypatch.setattr(tools_mod, "_forge_client", lambda: _StubClient())
     out = json.loads(tools_mod._cgit_fetch_impl(
-        "https://git.kernel.org", "y/z", "abc",
+        "https://git.kernel.org", "y/z", "abc1234",
     ))
     assert len(out["body"]) <= tools_mod._MAX_BYTES
 
@@ -608,3 +608,150 @@ def test_oracle_check_returns_likely_hallucination_with_expected_slugs(monkeypat
     assert out["is_pass"] is False
 
 
+
+
+# --- URL-shape gates on LLM-supplied tool arguments --------------------------
+# slug/base/head/host/sha are model-chosen after reading untrusted advisory
+# text; these must never restructure a token-carrying GitHub API URL or a
+# forge URL. Each rejection must happen BEFORE any HTTP call.
+
+def _no_http(monkeypatch) -> list:
+    calls: list = []
+
+    class _Boom:
+        def get_json(self, *a, **k):
+            calls.append(a)
+            raise AssertionError("network reached with unvalidated input")
+
+        def get_bytes(self, *a, **k):
+            calls.append(a)
+            raise AssertionError("network reached with unvalidated input")
+
+    monkeypatch.setattr(tools_mod, "_http_client", lambda: _Boom())
+    monkeypatch.setattr(tools_mod, "_forge_client", lambda: _Boom())
+    return calls
+
+
+def test_gh_list_commits_rejects_injected_slug(monkeypatch) -> None:
+    calls = _no_http(monkeypatch)
+    out = json.loads(tools_mod._gh_list_commits_by_path_impl(
+        "x/y?per_page=1&foo=", "src/a.c"))
+    assert "error" in out
+    out = json.loads(tools_mod._gh_list_commits_by_path_impl(
+        "x/y/../../../user", "src/a.c"))
+    assert "error" in out
+    assert calls == []
+
+
+def test_gh_compare_rejects_injected_refs(monkeypatch) -> None:
+    calls = _no_http(monkeypatch)
+    for base, head in (
+        ("abc1234?per_page=1", "def5678"),
+        ("abc1234", "def5678#x"),
+        ("..", "def5678"),
+        ("a..b", "def5678"),
+    ):
+        out = json.loads(tools_mod._gh_compare_impl("x/y", base, head))
+        assert "error" in out, (base, head)
+    assert calls == []
+
+
+def test_gh_compare_accepts_branch_and_tag_refs(monkeypatch) -> None:
+    seen: list[str] = []
+
+    class _Stub:
+        def get_json(self, url, **k):
+            seen.append(url)
+            return {"status": "ahead", "ahead_by": 1, "behind_by": 0, "files": []}
+
+    monkeypatch.setattr(tools_mod, "_http_client", lambda: _Stub())
+    monkeypatch.setattr(
+        "cve_diff.infra.github_client._bucket",
+        lambda: type("B", (), {"try_acquire": staticmethod(lambda: True)})(),
+    )
+    out = json.loads(tools_mod._gh_compare_impl("x/y", "release/1.2", "v1.2.3"))
+    assert "error" not in out
+    assert seen and "release/1.2...v1.2.3" in seen[0]
+
+
+def test_gitlab_commit_rejects_bad_host_and_sha(monkeypatch) -> None:
+    calls = _no_http(monkeypatch)
+    out = json.loads(tools_mod._gitlab_commit_impl(
+        "https://gitlab.com/evil/prefix", "a/b", "abc1234"))
+    assert "error" in out
+    out = json.loads(tools_mod._gitlab_commit_impl(
+        "https://gitlab.com", "a/b", "abc1234?stats=true"))
+    assert "error" in out
+    assert calls == []
+
+
+def test_cgit_fetch_rejects_injected_slug_and_sha(monkeypatch) -> None:
+    calls = _no_http(monkeypatch)
+    out = json.loads(tools_mod._cgit_fetch_impl(
+        "https://git.kernel.org", "../other-repo", "abc1234"))
+    assert "error" in out
+    out = json.loads(tools_mod._cgit_fetch_impl(
+        "https://git.kernel.org", "pub/scm/linux.git", "x&notes=1#"))
+    assert "error" in out
+    assert calls == []
+
+
+def test_cgit_fetch_accepts_multi_segment_repo_path(monkeypatch) -> None:
+    class _Stub:
+        def get_bytes(self, url, **k):
+            assert url == ("https://git.kernel.org/pub/scm/linux/kernel/"
+                           "git/stable/linux.git/commit/?id=abc1234")
+            return b"<html>commit abc1234</html>"
+
+    monkeypatch.setattr(tools_mod, "_forge_client", lambda: _Stub())
+    out = json.loads(tools_mod._cgit_fetch_impl(
+        "https://git.kernel.org",
+        "pub/scm/linux/kernel/git/stable/linux.git",
+        "abc1234",
+    ))
+    assert "error" not in out
+
+
+def test_gh_commit_detail_reports_canonical_sha(monkeypatch) -> None:
+    """The response must carry GitHub's canonical 40-char sha, not the
+    caller's (possibly abbreviated) input — the loop's verified-pair
+    evidence is built from this field."""
+    full = "fb4415d8aee6c10a4ce3328c42b9c2e4eb5bbafb"
+    monkeypatch.setattr(
+        "cve_diff.infra.github_client.get_commit",
+        lambda slug, sha: {"sha": full, "commit": {"message": "fix"},
+                           "parents": []},
+    )
+    monkeypatch.setattr(
+        "cve_diff.infra.github_client.get_commit_files",
+        lambda slug, sha: ["src/a.c"],
+    )
+    out = json.loads(tools_mod._gh_commit_detail_impl("curl/curl", full[:12]))
+    assert out["sha"] == full
+
+
+def test_deterministic_hints_keeps_dotted_repo_slug(monkeypatch) -> None:
+    """OSV GIT-range repo URLs with dotted repo names must produce the
+    full slug — a dot-excluding pattern truncated 'socketio/socket.io'
+    to the different repository 'socketio/socket'."""
+    sha = "a" * 40
+
+    class _Stub:
+        def get_json(self, url, **k):
+            return {
+                "references": [],
+                "affected": [{
+                    "ranges": [{
+                        "type": "GIT",
+                        "repo": "https://github.com/socketio/socket.io",
+                        "events": [{"fixed": sha}],
+                    }],
+                }],
+            }
+
+    monkeypatch.setattr(tools_mod, "_http_client", lambda: _Stub())
+    monkeypatch.setattr(tools_mod._nvd, "get_payload", lambda cve_id: None)
+    out = json.loads(tools_mod._deterministic_hints_impl("CVE-2024-1"))
+    assert out["hints"] == [{
+        "slug": "socketio/socket.io", "sha": sha, "source": "osv_affected_fixed",
+    }]

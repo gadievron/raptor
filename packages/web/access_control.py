@@ -165,7 +165,9 @@ def run_access_differential(
                 other.name == "anonymous"
                 and shape.status in (401, 403)
             ):
-                bypass = _try_forbidden_bypass(other, url, result)
+                bypass = _try_forbidden_bypass(
+                    other, url, result, original_status=shape.status,
+                )
                 if bypass is not None:
                     result.findings.append(bypass)
     return result
@@ -182,6 +184,7 @@ def _fetch(principal: Principal, url: str, result: AccessControlResult) -> _Shap
 
 def _try_forbidden_bypass(
     principal: Principal, url: str, result: AccessControlResult,
+    original_status: int | None = None,
 ) -> dict[str, Any] | None:
     """A forbidden resource opened by a rewrite primitive."""
     parsed = urlparse(url)
@@ -201,8 +204,25 @@ def _try_forbidden_bypass(
                 "primitive": name,
                 "bypass_url": candidate,
                 "other": principal.name,
-                "evidence": {"bypass_status": 200, "original_status": "401/403"},
+                "evidence": {
+                    "bypass_status": 200,
+                    "original_status": original_status,
+                },
             }
+    # Header-primitive leg: the probe fetches '/', so a 200 alone proves
+    # nothing (the homepage answers 200 to everyone). The differential
+    # is a plain '/' fetch WITHOUT the override header — only content
+    # that appears WITH the header and not without it can be attributed
+    # to the rewrite primitive.
+    result.requests_used += 1
+    try:
+        plain_root = principal.client.get("/")
+        plain_body = (
+            plain_root.text
+            if isinstance(getattr(plain_root, "text", None), str) else ""
+        )
+    except Exception:
+        plain_body = ""
     for name, headers in _HEADER_PRIMITIVES:
         sent = {
             key: value.replace("__PATH__", parsed.path)
@@ -214,7 +234,7 @@ def _try_forbidden_bypass(
         except Exception:
             continue
         if getattr(response, "status_code", None) == 200 and _looks_like(
-            response, parsed.path,
+            response, parsed.path, baseline_body=plain_body,
         ):
             return {
                 "kind": "forbidden_bypass",
@@ -222,13 +242,24 @@ def _try_forbidden_bypass(
                 "primitive": name,
                 "bypass_url": f"/ + {name}",
                 "other": principal.name,
-                "evidence": {"bypass_status": 200, "original_status": "401/403"},
+                "evidence": {
+                    "bypass_status": 200,
+                    "original_status": original_status,
+                },
             }
     return None
 
 
-def _looks_like(response: Any, path: str) -> bool:
-    """Weak containment check that the override actually routed to *path*."""
+def _looks_like(response: Any, path: str, baseline_body: str = "") -> bool:
+    """Whether the override response actually routed to *path*.
+
+    The last path segment must appear in the override response AND be
+    absent from the plain homepage: bare containment fired on any
+    homepage whose nav/footer contains common words like 'admin' or
+    'users' even when the server ignored the override header entirely.
+    """
     body = response.text if isinstance(getattr(response, "text", None), str) else ""
-    token = path.rstrip("/").rsplit("/", 1)[-1]
-    return bool(token) and token.lower() in body.lower()
+    token = path.rstrip("/").rsplit("/", 1)[-1].lower()
+    if not token or token not in body.lower():
+        return False
+    return token not in baseline_body.lower()

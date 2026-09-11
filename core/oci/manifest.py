@@ -119,15 +119,30 @@ def parse_image_manifest(parsed: dict) -> ImageManifest:
     layers_raw = parsed.get("layers") or []
     layers: list[LayerDescriptor] = []
     for layer in layers_raw:
+        # Loud on malformation, like the config-digest check above: a
+        # silently dropped layer yields a partial package inventory
+        # indistinguishable from a clean one — the evasion class
+        # core.oci.blob refuses for media types. Sizes are coerced
+        # (the index parser's posture); a non-numeric size falls back
+        # to 0, which downstream budget logic treats as "unknown"
+        # (floor budget), never as license to skip the layer.
         if not isinstance(layer, dict):
-            continue
+            msg = f"manifest layer entry is not an object: {layer!r}"
+            raise ValueError(msg)
         digest = layer.get("digest")
-        size = layer.get("size")
         ltype = layer.get("mediaType") or ""
-        if not isinstance(digest, str) or not isinstance(size, int):
-            continue
+        if not isinstance(digest, str) or not digest:
+            msg = "manifest layer missing digest — cannot fetch layer"
+            raise ValueError(msg)
+        size = layer.get("size")
+        if isinstance(size, bool) or not isinstance(size, (int, float, str)):
+            size = 0
+        try:
+            size = int(size)
+        except (ValueError, TypeError):
+            size = 0
         layers.append(LayerDescriptor(
-            digest=digest, size=int(size), media_type=ltype,
+            digest=digest, size=size, media_type=ltype,
         ))
     return ImageManifest(
         config_digest=config_digest,

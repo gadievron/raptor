@@ -213,8 +213,15 @@ class SandboxHandle(RuntimeHandle):
         timeout_seconds: float = 30.0,
         workdir: str = "",
     ) -> ExecOutcome:
+        from core.container.exec import MAX_TIMEOUT_SECONDS
         from core.sandbox import run as sandbox_run
 
+        # Same clamp as the docker tier (core.container.exec): a
+        # plan-authored timeout must mean the same thing on every
+        # runtime — unclamped here, the identical exec_check could
+        # pass on the sandbox tier and time out on docker.
+        timeout_seconds = max(1.0, min(float(timeout_seconds),
+                                       MAX_TIMEOUT_SECONDS))
         start = time.monotonic()
         argv = ["/bin/sh", "-c", command]
         try:

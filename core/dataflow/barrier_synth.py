@@ -1189,7 +1189,11 @@ def _build_prompt(
             # guess from the original source context.
             parts += [
                 "Concrete counterexample (the flow your guard didn't gate):",
-                refine_context.surviving_finding_summary,
+                # SARIF message text embeds target-repo expressions
+                # (variable names, snippets) — same trust class as the
+                # sink snippet above, so it gets the same treatment.
+                neutralize_tag_forgery(
+                    refine_context.surviving_finding_summary),
             ]
         parts += [
             "Prior attempt's QL was:",

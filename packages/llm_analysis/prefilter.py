@@ -175,7 +175,9 @@ def agentic_fp_analysis(reasoning: str) -> dict[str, Any]:
         "is_exploitable": False,
         "exploitability_score": 0.0,
         "confidence": "medium",
-        "severity_assessment": "info",
+        # Canonical SEVERITY_LEVELS value — "info" is not in the enum
+        # and rendered inconsistently beside full-analysis results.
+        "severity_assessment": "informational",
         "ruling": "false_positive",
         "reasoning": (
             f"Fast-tier prefilter classified as false positive: "
@@ -255,6 +257,46 @@ def prefilter_for_finding(
     return None
 
 
+def make_prefilter_fn(
+    client, pending_claims: dict[str, dict[str, Any]] | None = None,
+):
+    """Per-finding-memoized prefilter hook for ``dispatch_task``.
+
+    The dispatcher fans work out as (model x finding) pairs and calls
+    the prefilter hook once per PAIR, but the cheap FP check is
+    model-independent: without memoization an N-model run pays N
+    identical cheap-tier LLM calls per finding, races the
+    ``pending_claims`` writes from concurrent threads, and (on the
+    trusted short-circuit path) over-counts ``client.short_circuits``
+    N times. One cheap call per finding; every model's work item for
+    that finding reuses the verdict.
+
+    Thread-safe: a per-finding lock serialises the N model workers
+    for the SAME finding (exactly one cheap call), while different
+    findings still prefilter in parallel.
+    """
+    import threading
+
+    cache: dict[str, dict[str, Any] | None] = {}
+    locks: dict[str, threading.Lock] = {}
+    master = threading.Lock()
+
+    def prefilter_fn(item: dict[str, Any]) -> dict[str, Any] | None:
+        fid = str(
+            item.get("finding_id") or item.get("group_id") or "",
+        ) or f"@{id(item)}"
+        with master:
+            lock = locks.setdefault(fid, threading.Lock())
+        with lock:
+            if fid not in cache:
+                cache[fid] = prefilter_for_finding(
+                    client, item, pending_claims=pending_claims,
+                )
+            return cache[fid]
+
+    return prefilter_fn
+
+
 def record_prefilter_outcomes(
     client,
     pending_claims: dict[str, dict[str, Any]],
@@ -282,13 +324,22 @@ def record_prefilter_outcomes(
         claim = pending_claims.get(str(result.get("finding_id") or ""))
         if claim is None:
             continue
+        full_verdict = result.get("is_true_positive")
+        if full_verdict is None:
+            # The full analysis abstained (quality-degraded response
+            # with no verdict field). An abstention is not a
+            # disagreement — recording it as "incorrect" would erode
+            # fast-tier trust on zero evidence, the same
+            # abstention-as-vote miscount the correlation engine
+            # filters out of verdict counting.
+            continue
         try:
             record_prefilter_outcome(
                 scorecard,
                 decision_class=claim["decision_class"],
                 model=claim["model"],
                 cheap_says_fp=True,
-                full_says_fp=(result.get("is_true_positive") is False),
+                full_says_fp=(full_verdict is False),
                 cheap_reasoning=claim.get("cheap_reasoning", ""),
                 full_reasoning=str(result.get("reasoning") or ""),
             )
@@ -304,6 +355,7 @@ def record_prefilter_outcomes(
 __all__ = [
     "FP_PREFILTER_SCHEMA",
     "agentic_fp_analysis",
+    "make_prefilter_fn",
     "prefilter_for_finding",
     "record_prefilter_outcomes",
 ]

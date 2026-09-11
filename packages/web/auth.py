@@ -184,14 +184,37 @@ class FormAuthManager(AuthManager):
     def _verify_success(self, get_resp, post_resp) -> bool:
         if self.success_indicator:
             return self.success_indicator in post_resp.text
-        # Heuristic: redirected away from login page, or response no longer
-        # contains a password input field
+
+        # Without an operator indicator, "the response merely lacks a
+        # password input" is not proof: JSON error bodies, lockout /
+        # captcha interstitials, and form-less error pages all lack one,
+        # and declaring success there runs the whole scan
+        # unauthenticated while stamping findings authenticated.
+        if post_resp.status_code >= 400:
+            return False
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(post_resp.content, "html.parser")
-        has_password_field = bool(
-            soup.find("input", {"type": "password"})
-        )
-        return not has_password_field
+        if soup.find("input", {"type": "password"}):
+            return False
+
+        # Positive signal 1: an actual redirect landed us away from the
+        # login page (the dominant post/redirect/get success pattern).
+        # Requiring a real redirect (non-empty history) keeps a direct
+        # 200 from a differently-pathed form action from counting.
+        final_url = str(getattr(post_resp, "url", "") or "")
+        if final_url and getattr(post_resp, "history", None):
+            final_path = urlparse(final_url).path or "/"
+            login_path = urlparse(self.login_url).path or "/"
+            if final_path != login_path:
+                return True
+
+        # Positive signal 2: authenticated page furniture.
+        body = post_resp.text if isinstance(post_resp.text, str) else ""
+        lowered = body.lower()
+        if any(marker in lowered for marker in ("logout", "log out", "sign out")):
+            return True
+
+        return False
 
     def _detect_session_cookie(self, cookies: dict) -> str | None:
         known = ("session", "sessionid", "jsessionid", "phpsessid",

@@ -116,6 +116,15 @@ def _build_target_and_db(tmp_path: Path):
     db = codeql_dir / "python-db"
     db.mkdir()
     (db / "codeql-database.yml").write_text("primaryLanguage: python\n")
+    # Populate src.zip with the extracted sources: refuted verdicts are
+    # gated on the DB demonstrably covering the finding's file — a DB
+    # with no source archive can no longer refute anything.
+    import zipfile
+    with zipfile.ZipFile(db / "src.zip", "w") as zf:
+        zf.writestr("repo/src/real_dataflow.py", _REAL_DATAFLOW_SRC)
+        zf.writestr("repo/src/sanitized_no_dataflow.py", _SANITIZED_SRC)
+    from packages.llm_analysis.dataflow_validation import _db_indexed_files
+    _db_indexed_files.cache_clear()
 
     return repo, out_dir, db
 

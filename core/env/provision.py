@@ -24,6 +24,7 @@ import logging
 import shutil
 import tempfile
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -197,19 +198,64 @@ def provision(
     if created_work:
         keepalive_register(work)
 
-    def _fail(**kw: Any) -> ProvisionOutcome:
-        """Failure outcome + exact-scope cleanup. A launch that failed
-        AFTER ``docker run`` succeeded (e.g. ``no_host_port``) leaves a
+    def _cleanup() -> None:
+        """Exact-scope artifact cleanup. A launch that failed AFTER
+        ``docker run`` succeeded (e.g. ``no_host_port``) leaves a
         RUNNING container behind; every provision-labeled artifact is
-        removed here, along with the provisioner-owned work dir."""
+        removed here, along with the provisioner-owned work dir.
+        Idempotent — safe to run after a partial teardown."""
         remove_labeled_containers(OWNER_LABEL, provision_id)
         remove_labeled_networks(OWNER_LABEL, provision_id)
         remove_labeled_images(OWNER_LABEL, provision_id)
         if created_work:
             keepalive_unregister(work)
             shutil.rmtree(work, ignore_errors=True)
+
+    def _fail(**kw: Any) -> ProvisionOutcome:
+        """Failure outcome + exact-scope cleanup."""
+        _cleanup()
         return ProvisionOutcome(ok=False, **kw)
 
+    # Exceptions are not the contract (failures are data), but an
+    # unexpected one — e.g. a verify executor rejecting an LLM-authored
+    # plan's kwargs — must not leak the launched container, network,
+    # image, or keepalive-pinned work dir on its way out.
+    try:
+        return _provision_steps(
+            spec, runtime=runtime, verify=verify,
+            fail_on_verify=fail_on_verify, output_dir=output_dir,
+            hooks=hooks, kind=kind, net_mode=net_mode,
+            provision_id=provision_id, labels=labels,
+            created_work=created_work, work=work, fail=_fail,
+        )
+    except BaseException:
+        _cleanup()
+        raise
+
+
+def _provision_steps(
+    spec: EnvironmentSpec,
+    *,
+    runtime: str,
+    verify: bool,
+    fail_on_verify: bool,
+    output_dir: str | Path | None,
+    hooks: VerifyHooks | None,
+    kind: str,
+    net_mode: str,
+    provision_id: str,
+    labels: dict[str, str],
+    created_work: bool,
+    work: Path,
+    fail: Callable[..., ProvisionOutcome],
+) -> ProvisionOutcome:
+    """Steps 1-3 of :func:`provision` (build, launch, verify).
+
+    Split out so the caller can hold one exception guard around the
+    whole artifact-creating region; ``fail`` is the caller's
+    cleanup-and-return closure.
+    """
+    _fail = fail
     # 1. Materialize an image ref.
     if kind == "image":
         image_ref = spec.source.image_ref
@@ -316,12 +362,18 @@ def provision(
 
     # 3. Adjudicate the spec's verify plan.
     if verify and spec.verify_plan:
-        result = verify_plan(
-            handle,
-            spec.verify_plan,
-            version_literal=spec.version,
-            hooks=hooks or VerifyHooks(),
-        )
+        try:
+            result = verify_plan(
+                handle,
+                spec.verify_plan,
+                version_literal=spec.version,
+                hooks=hooks or VerifyHooks(),
+            )
+        except BaseException:
+            # The outer label-scoped guard cannot stop a SandboxHandle's
+            # sandboxed process — a live Environment tears itself down.
+            environment.teardown()
+            raise
         environment.verify_result = result
         if not result.get("passed") and fail_on_verify:
             environment.teardown()  # also removes the owned work dir

@@ -241,20 +241,37 @@ class OSVDiscoverer:
                 host, path = rest.split(":", 1)
                 url = f"https://{host}/{path}"
         # Validate the normalised URL shape. Reject if we can't parse
-        # it, if the host is missing or carries `@` (userinfo escape),
-        # `:` (port specifier passed through), or non-ASCII.
+        # it, if the URL carries control bytes, a fragment, userinfo,
+        # or an explicit port, or the host is missing / non-ASCII.
+        #
+        # Userinfo/port MUST be checked on ``netloc`` — ``hostname`` by
+        # definition never contains ``@`` or ``:`` (urlsplit strips
+        # userinfo and port before returning it), so a hostname-based
+        # check is dead code and shapes like
+        # ``https://github.com@evil.com/owner/repo`` sail through to
+        # confuse any substring-style github.com check downstream.
         from urllib.parse import urlsplit
+        if any(ord(c) <= 0x1F or ord(c) == 0x7F for c in url):
+            return ""
         try:
             parts = urlsplit(url)
         except ValueError:
             return ""
         if parts.scheme not in ("https", "http"):
             return ""
+        if "@" in (parts.netloc or ""):
+            return ""
+        try:
+            if parts.port is not None:
+                return ""
+        except ValueError:
+            # Non-numeric port specifier — malformed authority.
+            return ""
+        if parts.fragment:
+            return ""
         host = parts.hostname or ""
         if not host:
             return ""
         if not all(0x21 <= ord(c) <= 0x7e for c in host):
-            return ""
-        if any(c in host for c in "@:?#"):
             return ""
         return url

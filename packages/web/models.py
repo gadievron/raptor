@@ -48,6 +48,11 @@ class WebFinding:
     oracle_signal: str | None = None
     oracle: str = "web"
     reproducible: bool = False
+    # Phase 6v replay verdict folded onto the finding:
+    # "verified" / "refuted" / "inconclusive" / None (not replayed).
+    # A control-refuted finding keeps its detection-time record but
+    # must never be projected as an oracle-verified outcome.
+    verification_status: str | None = None
 
     def to_dict(self) -> dict:
         d = {k: v for k, v in self.__dict__.items() if v is not None}

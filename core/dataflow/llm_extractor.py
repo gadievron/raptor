@@ -333,7 +333,12 @@ def extract_from_content(
     line_count = content.count("\n") + 1
     candidates, errors = _parse_response(raw, file_path, line_count)
 
-    if cache is not None:
+    if cache is not None and not errors:
+        # Only error-free parses are cached. Cache hits return an empty
+        # error list, so caching an errored parse would permanently
+        # record a transient malformed response as "no validators in
+        # this file" and hide the failure from telemetry; leaving the
+        # entry out lets the next call re-extract instead.
         cache[cache_key] = candidates
 
     return candidates, errors

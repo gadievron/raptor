@@ -42,7 +42,6 @@ Privacy rules, deliberate and load-bearing:
 from __future__ import annotations
 
 import configparser
-import json
 import logging
 import os
 import re
@@ -103,6 +102,10 @@ def _credentials_path(env: Mapping[str, str]) -> Path:
     return _home(env) / ".aws" / "credentials"
 
 
+#: Byte budget for the models.json read (matches core.startup.init).
+_MAX_CONFIG_BYTES = 8 * 1024 * 1024
+
+
 def _bedrock_configured(env: Mapping[str, str]) -> bool:
     """True when the LLM models config declares a bedrock provider.
 
@@ -114,18 +117,15 @@ def _bedrock_configured(env: Mapping[str, str]) -> bool:
         Path(explicit).expanduser() if explicit
         else _home(env) / ".config" / "raptor" / "models.json"
     )
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return False
-    # models.json supports // line comments (see core.llm.detection).
-    body = "\n".join(
-        line for line in text.splitlines()
-        if not line.lstrip().startswith("//")
-    )
-    try:
-        data = json.loads(body)
-    except ValueError:
+    # The canonical comment-tolerant loader, not a private stripper:
+    # the hand-rolled full-line-only ``//`` filter choked on the
+    # inline ``//`` / ``#`` comments the core.llm dialect accepts,
+    # silently suppressing bedrock IMDS advisories; the loader also
+    # carries the regular-file + byte-budget refusals this direct
+    # read lacked (planted FIFO, oversize file).
+    from core.json import load_json_with_comments
+    data = load_json_with_comments(path, max_bytes=_MAX_CONFIG_BYTES)
+    if data is None:
         return False
     models = data.get("models") if isinstance(data, dict) else data
     if not isinstance(models, list):

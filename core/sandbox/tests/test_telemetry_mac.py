@@ -58,6 +58,87 @@ class TestKeyHandling:
         key.chmod(0o600)
         assert tmac.mint({"kind": "proxy-event", "host": "h"}) is None
 
+    def test_chunked_key_read_loads_full_key(self, tmp_path, monkeypatch):
+        """os.read may legally return fewer bytes than requested;
+        chunked delivery must not land a healthy key in the
+        wrong-length refusal (which would leave every artifact
+        unstamped and steer honest runs toward tampered)."""
+        raptor_dir = tmp_path / "xdg" / "raptor"
+        raptor_dir.mkdir(mode=0o700, parents=True)
+        key = raptor_dir / "telemetry-mac.key"
+        data = os.urandom(32)
+        key.write_bytes(data)
+        key.chmod(0o600)
+        real_read = os.read
+        monkeypatch.setattr(os, "read", lambda fd, n: real_read(fd, min(n, 5)))
+        assert tmac._read_existing_key(key) == data
+
+    def test_truncated_key_file_reads_exact_length(
+            self, tmp_path, monkeypatch):
+        # Two-direction guard: the loop reads to EOF, never pads — a
+        # torn 10-byte key still fails the caller's length check
+        # (fail-closed).
+        raptor_dir = tmp_path / "xdg" / "raptor"
+        raptor_dir.mkdir(mode=0o700, parents=True)
+        key = raptor_dir / "telemetry-mac.key"
+        key.write_bytes(os.urandom(10))
+        key.chmod(0o600)
+        real_read = os.read
+        monkeypatch.setattr(os, "read", lambda fd, n: real_read(fd, min(n, 5)))
+        got = tmac._read_existing_key(key)
+        assert isinstance(got, bytes)
+        assert len(got) == 10
+
+
+class TestKeyCreationRace:
+    """The O_EXCL creation-race loser can observe the winner's file
+    EMPTY or PARTIAL (the winner writes the key in a second step after
+    the exclusive create). Short reads must be RETRIED — pre-fix the
+    loser aborted with a wrong-length warning on the first iteration,
+    the run went unstamped, and an honest run triaged toward tampered.
+    Genuinely wrong-length STABLE content must still refuse."""
+
+    def _key_path(self, tmp_path):
+        raptor_dir = tmp_path / "xdg" / "raptor"
+        raptor_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        return raptor_dir / "telemetry-mac.key"
+
+    def test_loser_rides_out_winner_mid_write(self, tmp_path, monkeypatch):
+        key = self._key_path(tmp_path)
+        key.write_bytes(b"")  # winner created, not yet written
+        key.chmod(0o600)
+        winner_key = b"w" * 32
+
+        def finish_write(_seconds):
+            # The retry loop's sleep stands in for the winner
+            # finishing its write.
+            if key.read_bytes() != winner_key:
+                key.write_bytes(winner_key)
+
+        monkeypatch.setattr(tmac.time, "sleep", finish_write)
+        assert tmac._load_or_create_key() == winner_key
+
+    def test_stable_short_key_refused_after_retry_budget(
+            self, tmp_path, monkeypatch):
+        key = self._key_path(tmp_path)
+        key.write_bytes(b"k" * 7)  # stable wrong-length content
+        key.chmod(0o600)
+        sleeps: list = []
+        monkeypatch.setattr(tmac.time, "sleep", sleeps.append)
+        assert tmac._load_or_create_key() is None
+        assert sleeps, "short content must be retried before refusal"
+
+    def test_stable_overlength_key_refused_immediately(
+            self, tmp_path, monkeypatch):
+        # Over-length can never be a partial 32-byte write — no retry.
+        key = self._key_path(tmp_path)
+        key.write_bytes(b"k" * 64)
+        key.chmod(0o600)
+        sleeps: list = []
+        monkeypatch.setattr(tmac.time, "sleep", sleeps.append)
+        assert tmac._load_or_create_key() is None
+        assert sleeps == [], "over-length content must refuse without retry"
+
 
 class TestMintVerify:
     def test_roundtrip(self):

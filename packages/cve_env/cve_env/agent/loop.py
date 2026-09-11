@@ -112,7 +112,18 @@ def _classify_api_overload(final_text: str) -> str:
         return ""
     # Anchored pattern: final_text must start with the API-Overload wrapper.
     # The full canonical form is "API Error: Repeated 529 Overloaded errors. ..."
+    # (legacy CLI-wrapper shape, kept for replayed/back-compat outcomes).
     if final_text.startswith("API Error: Repeated 529 Overloaded errors"):
+        return "api_overload"
+    # Provider-native overload shapes: a raised provider exception or
+    # provider_error text carries the API error type ("overloaded_error")
+    # and/or the 529 status alongside the word. Requiring BOTH the number
+    # and the word (or the typed token) keeps unrelated "529 bytes" /
+    # "rate_limit_exceeded" strings out.
+    lowered = final_text[:2000].lower()
+    if "overloaded_error" in lowered or (
+        "529" in lowered and "overload" in lowered
+    ):
         return "api_overload"
     return ""
 
@@ -142,9 +153,11 @@ def _is_version_assertion_exec_check(check_entry: dict[str, Any]) -> bool:
 _SPECIFIC_VERSION_MARKER_RE = re.compile(r"\d+\.\d+")
 
 
-def _has_specific_version_marker(check_entry: dict[str, Any]) -> bool:
+def _has_specific_version_marker(
+    check_entry: dict[str, Any], cve_version: str = ""
+) -> bool:
     """True iff this exec_check's `expected_stdout_contains` is set AND
-    contains a specific version pattern (≥ major.minor digits).
+    pins a specific version.
 
     Pairs with `_is_version_assertion_exec_check`: that helper checks
     the COMMAND was version-discovery; this one checks the EXPECTED
@@ -156,6 +169,14 @@ def _has_specific_version_marker(check_entry: dict[str, Any]) -> bool:
     - `expected_stdout_contains: "8.5"` → True
     - `expected_stdout_contains: "Apache/2.4.49"` → True
     - missing / non-string → False (no marker at all)
+
+    When ``cve_version`` carries a concrete major.minor+ literal, the
+    marker must CONTAIN that literal — a bare ``\\d+.\\d+`` anywhere in
+    any passing exec_check would otherwise satisfy the gate (an
+    ``expected_stdout_contains="HTTP/1.1 200"`` liveness probe matches
+    "1.1"), letting a run with no pinned version grade as success. When
+    no usable version literal is known, the digits-shape check is the
+    best available signal and stays.
 
     The runtime gate (in `_classify_verify_outcome`) downgrades to
     `verified_partial` when at least one version-assertion exec_check
@@ -169,7 +190,12 @@ def _has_specific_version_marker(check_entry: dict[str, Any]) -> bool:
     expected = details.get("expected_stdout_contains")
     if not isinstance(expected, str):
         return False
-    return bool(_SPECIFIC_VERSION_MARKER_RE.search(expected))
+    if not _SPECIFIC_VERSION_MARKER_RE.search(expected):
+        return False
+    norm_version = (cve_version or "").strip().lstrip("vV")
+    if _SPECIFIC_VERSION_MARKER_RE.search(norm_version):
+        return norm_version in expected
+    return True
 
 
 @dataclass
@@ -882,6 +908,7 @@ def _track_tool_result(
     payload: dict[str, Any] | None,
     *,
     refusal_event_count: int,
+    cve_version: str = "",
 ) -> None:
     """Fold one tool result into the stream state (extracted from
     ``build``'s ``on_message`` verbatim; shared with the core agent
@@ -906,6 +933,18 @@ def _track_tool_result(
         tool_name == "docker_build"
         and isinstance(payload, dict)
         and payload.get("ok") is True
+    ):
+        state.docker_built_ok = True
+    # The fused auto-build (dockerfile_gen / source_build building the
+    # image in the same call) reports success NESTED under
+    # payload["build"] — it is the same "an image was built" fact, so
+    # every docker_built_ok consumer (refusal salvage, productive-turn
+    # cost extension, triage markers) must see it too.
+    if (
+        tool_name in ("dockerfile_gen", "source_build")
+        and isinstance(payload, dict)
+        and isinstance(payload.get("build"), dict)
+        and payload["build"].get("ok") is True
     ):
         state.docker_built_ok = True
     # A build/daemon tool result classified daemon_corruption =
@@ -938,8 +977,16 @@ def _track_tool_result(
     # Track "did we BUILD?" — used by the strict version-marker
     # gate. Set on result (not use) -- if SDK crashes between
     # use/result, the lenient marker check applies. Acceptable:
-    # crashed builds shouldn't get strict checking.
-    if tool_name in _BUILD_TOOLS:
+    # crashed builds shouldn't get strict checking. Only SUCCESSFUL
+    # build results latch it: a failed docker_build followed by a
+    # pivot to the image-pull path is an image-pulled run, and the
+    # registry tag is its version assertion — grading it under the
+    # build-path strict-marker rule would downgrade a valid success.
+    if (
+        tool_name in _BUILD_TOOLS
+        and isinstance(payload, dict)
+        and payload.get("ok") is True
+    ):
         state.has_built = True
     if tool_name == "verify":
         state.verify_attempted = True
@@ -974,8 +1021,9 @@ def _track_tool_result(
                 # orphan file-read version checks and downgrade
                 # success to verified_partial.
                 # _has_specific_version_marker still guards
-                # type==exec_check + a real \d+\.\d+ marker.
-                if _has_specific_version_marker(entry):
+                # type==exec_check + a real version marker (the CVE's
+                # own literal when known).
+                if _has_specific_version_marker(entry, cve_version):
                     state.passing_verify_has_specific_version_marker = (
                         True
                     )

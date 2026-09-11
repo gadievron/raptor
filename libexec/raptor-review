@@ -283,7 +283,7 @@ def _context_map_role(cm: dict | None, file: str, function: str) -> str | None:
 
 # ── Subcommands ──────────────────────────────────────────────────────
 
-def cmd_show(args):
+def cmd_show(args) -> None:
     """Show unified view for a file or function."""
     out_dir = _resolve_out_dir(args)
     project_dir = _project_dir_for(args)
@@ -291,10 +291,13 @@ def cmd_show(args):
     ann_dir = _annotations_dir(out_dir)
 
     entries = _load_journal_entries(out_dir)
-    if not entries:
-        index = _load_journal_index(project_dir)
-    else:
-        index = {}
+    # Always fold the project index: a function reviewed only in a
+    # PRIOR run has no entry in the current run's journal, and the
+    # per-key fallback below never fires if the index is only loaded
+    # when the run journal is entirely empty. Per-run entries still
+    # win per function — the index is the fallback, matching
+    # findings/history/edges.
+    index = _load_journal_index(project_dir)
 
     if args.function:
         _show_function(
@@ -459,7 +462,7 @@ def cmd_findings(args):
         print(f"  {_line(e.file)}:{_line(e.function, max_chars=80):<20} {cwe:<10} {_line(e.verdict, max_chars=40):<10} {model}  {ts_short}")
 
 
-def cmd_gaps(args):
+def cmd_gaps(args) -> None:
     """Show what needs review and why."""
     out_dir = _resolve_out_dir(args)
     if not out_dir:
@@ -472,11 +475,17 @@ def cmd_gaps(args):
         sys.exit(1)
 
     data = load_json(gaps_path, max_bytes=_MAX_ARTIFACT_BYTES)
-    if data is None:
+    # Run artifacts are attacker bytes (sandboxed code holds the run
+    # dir's write grant) — a non-object top level or a non-list
+    # "gaps" must take the read-failure path, not a traceback.
+    if not isinstance(data, dict):
         print("  Failed to read gaps.json.", file=sys.stderr)
         sys.exit(1)
 
     gaps = data.get("gaps", [])
+    if not isinstance(gaps, list):
+        gaps = []
+    gaps = [g for g in gaps if isinstance(g, dict)]
     edge_lines = _edge_gap_lines(out_dir)
     if not gaps and not edge_lines:
         print("  No gaps — all functions reviewed.")
@@ -500,7 +509,7 @@ def cmd_gaps(args):
         print(line)
 
 
-def _edge_gap_lines(out_dir) -> list:
+def _edge_gap_lines(out_dir: Path) -> list:
     """Edge-obligation gap state for --edges runs (absent file → no
     section). Tier-1 gaps rank ABOVE function gaps in urgency; they
     render as their own block. Tier-2 shows the folded-pending count."""
@@ -509,8 +518,12 @@ def _edge_gap_lines(out_dir) -> list:
     )
     if not isinstance(raw, dict):
         return []
-    tier1 = raw.get("tier1") or []
-    tier2 = raw.get("tier2") or []
+    # Tier lists are run-dir bytes too: keep only dict records so a
+    # planted scalar can't detonate the key lookups below.
+    t1 = raw.get("tier1")
+    t2 = raw.get("tier2")
+    tier1 = [r for r in t1 if isinstance(r, dict)] if isinstance(t1, list) else []
+    tier2 = [r for r in t2 if isinstance(r, dict)] if isinstance(t2, list) else []
     reviewed = set()
     verdicted_folds = set()
     try:
@@ -523,14 +536,17 @@ def _edge_gap_lines(out_dir) -> list:
                 if isinstance(ev, dict) and ev.get("callee"):
                     verdicted_folds.add(
                         (e.file, e.function, str(ev["callee"])))
+        # Inside the try: a record missing its caller/callee keys
+        # raises in edge_key — degrade the section like every other
+        # layer instead of an unhandled traceback.
+        unreviewed = [r for r in tier1 if edge_key(r) not in reviewed]
+        pending2 = [
+            r for r in tier2
+            if (r.get("caller_file"), r.get("caller"),
+                str(r.get("callee"))) not in verdicted_folds
+        ]
     except Exception:  # noqa: BLE001 — layers degrade gracefully
         return []
-    unreviewed = [r for r in tier1 if edge_key(r) not in reviewed]
-    pending2 = [
-        r for r in tier2
-        if (r.get("caller_file"), r.get("caller"),
-            str(r.get("callee"))) not in verdicted_folds
-    ]
     if not unreviewed and not pending2:
         return []
     lines = ["", f"  Edge obligations ({len(unreviewed)} tier-1 "
@@ -718,7 +734,58 @@ def cmd_stale(args):
         _stale_journal(args)
 
 
-def _stale_journal(args):
+def _stale_source_root(
+    args: argparse.Namespace, project_dir: Path,
+) -> Path | None:
+    """Resolve the SOURCE tree root that journal hashes anchor to.
+
+    Journal entries record ``file`` relative to the scanned source
+    tree, so staleness must re-hash against that tree. The project
+    dir itself is the OUTPUT dir — hashing there finds no source
+    files, every recomputed hash comes back None, and drifted
+    reviews silently read as fresh. Resolution: explicit
+    ``--target`` first, then the registry ``target`` of the project
+    whose ``output_dir`` this is, then the newest run's recorded
+    ``target_path``.
+    """
+    target = getattr(args, "target", None)
+    if target:
+        return Path(target)
+    try:
+        from core.startup import PROJECTS_DIR
+        resolved = project_dir.resolve()
+        for reg in sorted(PROJECTS_DIR.glob("*.json")):
+            data = load_json(reg, max_bytes=_MAX_META_BYTES)
+            if not isinstance(data, dict):
+                continue
+            out = data.get("output_dir")
+            tgt = data.get("target")
+            if out and tgt and Path(out).resolve() == resolved:
+                p = Path(tgt)
+                if p.is_dir():
+                    return p
+    except OSError:
+        pass
+    try:
+        runs = sorted(
+            [d for d in project_dir.iterdir()
+             if d.is_dir() and (d / ".raptor-run.json").is_file()],
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        for run in runs:
+            meta = load_json(run / ".raptor-run.json",
+                             max_bytes=_MAX_META_BYTES)
+            if isinstance(meta, dict) and meta.get("target_path"):
+                p = Path(str(meta["target_path"]))
+                if p.is_dir():
+                    return p
+    except OSError:
+        pass
+    return None
+
+
+def _stale_journal(args) -> None:
     """List journal entries whose source hash no longer matches the
     file on disk.
 
@@ -734,8 +801,18 @@ def _stale_journal(args):
     from core.audit.journal import load_index
     from core.audit.record import _compute_hash
 
-    target = getattr(args, "target", None)
-    target_path = Path(target) if target else project_dir
+    target_path = _stale_source_root(args, project_dir)
+    if target_path is None:
+        # Refuse loudly rather than hash against a wrong root: a
+        # silent "0 stale" against the output dir hides every
+        # drifted review.
+        print(
+            "  Cannot resolve the source tree for staleness hashing "
+            "(no registry target for this project). Pass --target "
+            "<repo-root>.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     try:
         entries = load_index(project_dir)
@@ -928,7 +1005,7 @@ def cmd_diff(args):
               f"{_line(entry.model or '', 24)}")
 
 
-def cmd_live(args):
+def cmd_live(args) -> None:
     """Tail-follow a running audit's journal; exits when the run
     reaches a terminal status."""
     import time
@@ -952,11 +1029,26 @@ def cmd_live(args):
             if journal.is_file():
                 with open(journal, encoding="utf-8") as fh:
                     fh.seek(pos)
-                    chunk = fh.read()
+                    # Bounded per poll: the journal sits in a run dir
+                    # whose write grant sandboxed code holds — an
+                    # unbounded read() was an OOM lever (same budget
+                    # as the other run-artifact readers here). A
+                    # legitimately large journal simply drains across
+                    # successive polls.
+                    chunk = fh.read(_MAX_ARTIFACT_BYTES)
                 # Only consume complete lines — a writer may be
                 # mid-append; the partial tail is re-read next poll.
                 if chunk and not chunk.endswith("\n"):
-                    chunk = chunk[:chunk.rfind("\n") + 1]
+                    cut = chunk.rfind("\n") + 1
+                    if cut == 0 and len(chunk) >= _MAX_ARTIFACT_BYTES:
+                        # A single line larger than the whole budget
+                        # can never complete — advance past what was
+                        # read so the tail never stalls on it (the
+                        # remainder parses as a skipped bad line).
+                        pos += len(chunk.encode("utf-8"))
+                        chunk = ""
+                    else:
+                        chunk = chunk[:cut]
                 pos += len(chunk.encode("utf-8"))
                 for line in chunk.splitlines():
                     line = line.strip()
@@ -1005,8 +1097,20 @@ def cmd_coverage(args):
     print(f"\n  {len(all_files)} file(s) with coverage data.")
 
 
-def cmd_compact(args):
-    """Compact the project journal index."""
+def cmd_compact(args) -> None:
+    """Compact the project journal index.
+
+    Re-homes rows whose on-disk key predates the current
+    ``index_key`` format (span suffix, producer segment). Row CONTENT
+    is untouched — fields are the source of truth, keys are opaque
+    handles — so the move is lossless; latest-ts wins when the new
+    home is already occupied, which merges stale legacy duplicates
+    away. A latest-per-function collapse would be destructive here:
+    the index deliberately keeps multi-model / multi-strategy
+    history, so eviction is never part of compaction. Unreadable
+    rows stay in place — compaction must never drop history it
+    cannot parse.
+    """
     project_dir = _project_dir_for(args)
     if not project_dir:
         print("  No active project.", file=sys.stderr)
@@ -1018,13 +1122,53 @@ def cmd_compact(args):
         print("  No journal index to compact.")
         return
 
-    data = load_json(index_path, max_bytes=_MAX_ARTIFACT_BYTES)
-    if data is None:
-        print("  Corrupt index.", file=sys.stderr)
-        sys.exit(1)
+    from core.coverage.journal import (
+        INDEX_SCHEMA_VERSION,
+        _entry_from_dict,
+        _flock,
+        now_iso,
+    )
+    from core.json import save_json
 
-    count = len(data.get("entries", {}))
-    print(f"  Index has {count} entries.")
+    # Same lock every index writer takes (merge_into_index) — a
+    # compaction racing a run-completion merge must not clobber it.
+    # Load INSIDE the lock so the rewrite is based on current bytes.
+    with _flock(index_path):
+        data = load_json(index_path, max_bytes=_MAX_ARTIFACT_BYTES)
+        if not isinstance(data, dict) or not isinstance(
+                data.get("entries", {}), dict):
+            print("  Corrupt index.", file=sys.stderr)
+            sys.exit(1)
+
+        entries = data.get("entries", {})
+        before = len(entries)
+        rehomed = 0
+        for old_key in list(entries.keys()):
+            try:
+                entry = _entry_from_dict(entries[old_key])
+            except (TypeError, KeyError, ValueError):
+                continue  # unreadable row: leave in place, never drop
+            new_key = entry.index_key
+            if new_key == old_key:
+                continue
+            existing = entries.get(new_key)
+            existing_ts = existing.get("ts", "") if isinstance(
+                existing, dict) else ""
+            if existing is None or entry.ts > existing_ts:
+                entries[new_key] = entries[old_key]
+            del entries[old_key]
+            rehomed += 1
+
+        if rehomed:
+            save_json(index_path, {
+                "schema_version": INDEX_SCHEMA_VERSION,
+                "updated_at": now_iso(),
+                "entries": entries,
+            })
+            print(f"  Compacted: {before} -> {len(entries)} entries "
+                  f"({rehomed} legacy key(s) re-homed).")
+        else:
+            print(f"  Index already compact ({before} entries).")
 
 
 # ── Argument parsing ─────────────────────────────────────────────────

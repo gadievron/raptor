@@ -376,3 +376,58 @@ def test_dep_rows_never_carry_the_project_license(tmp_path: Path) -> None:
     deps = parse(_write(tmp_path, _LICENSED_POM))
     assert deps
     assert all(d.declared_license is None for d in deps)
+
+
+# ---------------------------------------------------------------------------
+# Namespace variants + non-POM rejection
+# ---------------------------------------------------------------------------
+
+def test_https_namespace_pom_parses(tmp_path: Path) -> None:
+    # Mirrors and IDE templates declare the namespace with the TLS
+    # scheme; an exact-string strip of only the http form left every
+    # tag namespaced and the POM yielded zero deps silently.
+    body = """<?xml version="1.0"?>
+<project xmlns="https://maven.apache.org/POM/4.0.0">
+  <dependencies>
+    <dependency>
+      <groupId>g</groupId><artifactId>a</artifactId><version>1.0</version>
+    </dependency>
+  </dependencies>
+</project>
+"""
+    deps = parse(_write(tmp_path, body))
+    assert [(d.name, d.version) for d in deps] == [("g:a", "1.0")]
+
+
+def test_pom_410_namespace_parses(tmp_path: Path) -> None:
+    body = """<?xml version="1.0"?>
+<project xmlns="http://maven.apache.org/POM/4.1.0">
+  <dependencies>
+    <dependency>
+      <groupId>g</groupId><artifactId>a</artifactId><version>2.0</version>
+    </dependency>
+  </dependencies>
+</project>
+"""
+    deps = parse(_write(tmp_path, body))
+    assert [(d.name, d.version) for d in deps] == [("g:a", "2.0")]
+
+
+def test_non_pom_xml_rejected(tmp_path: Path, caplog) -> None:
+    # Other direction: arbitrary XML named pom.xml (root element is
+    # not <project>) must yield nothing, even if it embeds a
+    # coincidental <dependencies> shape.
+    import logging
+    body = """<?xml version="1.0"?>
+<catalog>
+  <dependencies>
+    <dependency>
+      <groupId>g</groupId><artifactId>a</artifactId><version>1.0</version>
+    </dependency>
+  </dependencies>
+</catalog>
+"""
+    with caplog.at_level(logging.WARNING):
+        deps = parse(_write(tmp_path, body))
+    assert deps == []
+    assert any("not a Maven POM" in r.getMessage() for r in caplog.records)

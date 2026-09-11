@@ -36,6 +36,7 @@ from typing import Any
 from core.cve import EpssClient, KevClient
 from core.cve.vulnrichment import VulnrichmentClient
 
+from ._atomic import atomic_write_text
 from .models import (
     Advisory,
     Confidence,
@@ -100,11 +101,12 @@ def build_vuln_findings(
     """
     out: list[VulnFinding] = []
 
-    # Pre-pass: dedup advisories that are aliases of the same CVE. OSV
-    # routinely returns ``GHSA-…`` AND ``PYSEC-…`` for one underlying
-    # CVE; emitting both produces visually-duplicate findings the
-    # operator has to triage twice.
-    deduped_results: dict[str, list[Advisory]] = {}
+    # Pre-pass: dedup advisories that alias the same vulnerability.
+    # OSV routinely returns ``GHSA-…`` AND ``PYSEC-…`` for one
+    # underlying CVE — and ``GHSA-…`` / ``RUSTSEC-…`` pairs that alias
+    # each other with no CVE at all; emitting both produces
+    # visually-duplicate findings the operator has to triage twice.
+    deduped_results: dict[str, list[list[Advisory]]] = {}
     for r in osv_results:
         deduped_results[r.dep_key] = _dedup_alias_advisories(r.advisories)
 
@@ -190,11 +192,79 @@ def _filter_fork_tag_false_positives(
     return out
 
 
-def _group_is_fork_tag_fp(dep, group, in_range_fn, ver_error):
-    """True when EVERY advisory in the group matches only via ranges
-    that our local in_range (with fork-tag detection) rejects."""
+# Upstream branch / channel names that show up as prerelease tokens on
+# branch-snapshot builds of the SAME project (``1.0.0-master``). These
+# are NOT fork indicators: a branch snapshot builds the upstream
+# codebase, so a server-confirmed vulnerability match must stay
+# reported. Only genuine org/fork tags (``0.4.3-succinct``,
+# ``1.0.0-fork.mycorp``) qualify for the false-positive prune below.
+_UPSTREAM_BRANCH_TOKENS = frozenset({
+    "master", "main", "trunk", "head", "default",
+    "develop", "development", "staging",
+    "stable", "latest", "release",
+})
+
+
+def _version_has_fork_tag(version: str | None) -> bool:
+    """Strict fork-tag classification for the post-filter.
+
+    True only when *version* carries a semver prerelease whose tokens
+    are an org/fork tag (per ``is_fork_tag``) AND none of them is a
+    known upstream branch/channel name. Without the branch check, any
+    digit-free prerelease qualified — so a vulnerable ``1.0.0-master``
+    pin (an upstream branch snapshot, not a fork) was silently pruned
+    even though the server confirmed the match.
+    """
+    if not version:
+        return False
+    from .versions.semver import is_fork_tag
+    from .versions.semver import parse as parse_semver
+    try:
+        pre = parse_semver(version)[3]
+    except ValueError:
+        return False
+    if not pre:
+        return False
+    if any(token.lower() in _UPSTREAM_BRANCH_TOKENS for token in pre):
+        return False
+    return is_fork_tag(pre)
+
+
+def _group_is_fork_tag_fp(
+    dep: Dependency,
+    group: list[Advisory],
+    in_range_fn: Any,
+    ver_error: type[Exception],
+) -> bool:
+    """True when the group's match is the fork-tag false-positive class.
+
+    Two conditions, both required:
+
+    1. The dep's installed version carries a genuine org/fork tag
+       (strict classification — see ``_version_has_fork_tag``).
+    2. EVERY advisory in the group matches only via SEMVER ranges that
+       our local ``in_range`` (with fork-tag detection) rejects.
+
+    Server-side matching already confirmed these groups; the prune
+    exists ONLY to align the live-API path with the offline-DB path on
+    the fork-tag prerelease class (``0.4.3-succinct`` matching a
+    ``fixed: 0.4.3`` range). Any other local disagreement keeps the
+    server's verdict — silently under-reporting a confirmed match is
+    the expensive direction.
+    """
+    if not _version_has_fork_tag(dep.version):
+        return False
     saw_semver_range = False
     for adv in group:
+        if not adv.affected:
+            # A member with no affected ranges can never be locally
+            # confirmed as the fork-tag FP class — its match rests on
+            # the server's verdict alone, so the group stays reported.
+            # Without this, one range-less member contributed nothing
+            # to the loop and an alias-merged sibling's rejected
+            # SEMVER ranges spoke for it, silently pruning a
+            # server-confirmed match.
+            return False
         for ar in adv.affected:
             if ar.type != "SEMVER":
                 return False
@@ -208,36 +278,87 @@ def _group_is_fork_tag_fp(dep, group, in_range_fn, ver_error):
 
 
 def _dedup_alias_advisories(advisories: list[Advisory]) -> list[list[Advisory]]:
-    """Group advisories pointing at the same underlying CVE.
+    """Group advisories aliasing the same underlying vulnerability.
 
-    Keys on the sorted tuple of ALL ``CVE-*`` aliases when any exist
-    (the canonical name set); falls back to the OSV id otherwise.
-    Records whose CVE-alias sets differ do NOT merge — emitting two
-    findings over-reports, which is the safe direction under a hostile
-    advisory feed.
+    Connectivity over the alias graph: each advisory's identifier set
+    is ``{osv_id} ∪ aliases`` (case-insensitive), and advisories whose
+    sets intersect merge — transitively, via union-find. A shared
+    ``CVE-*`` alias merges as before, and so does any other shared
+    identifier: Rust advisories routinely pair ``GHSA-…`` with
+    ``RUSTSEC-…`` and NO CVE at all (each names the other as its only
+    alias), which the previous CVE-alias grouping key split into two
+    findings the operator triaged twice. Advisories with fully
+    disjoint identifier sets never merge, even on the same package —
+    affecting the same dep is not an alias relationship.
 
     Every member of a group is KEPT (returned as a list), and the
-    assembly stage combines them conservatively: a merged group can
-    only add scrutiny, never remove it. Pre-fix, one survivor was
-    picked by osv-id prefix (GHSA-* first) and alone drove severity /
-    fix version / summary — so a crafted GHSA record sharing a real
-    CVE alias defanged the genuine finding (severity=none, understated
-    fix version, benign summary). See ``_group_representative`` and
-    ``_assemble_finding`` for the conservative combination rules.
+    assembly stage combines them conservatively: severity is the group
+    maximum, the fix version is the highest of each member's own
+    smallest-applicable fix, and the representative faces the operator
+    only if it achieves the group's maximum severity. A crafted alias
+    can therefore only ADD records to a group — it cannot lower the
+    merged severity or understate the fix, and it can become the
+    operator-facing representative only by itself matching the
+    group-max severity, in which case the genuine records still drive
+    severity / fix and remain visible verbatim in ``advisories``. Two
+    residual hostile-feed effects remain: consolidation (fabricated
+    aliases bridging two genuine advisories collapse them into ONE
+    finding — which still carries the max severity, the union of CVE
+    aliases so KEV / EPSS / SSVC enrichment sees every CVE, and every
+    member advisory) and face-hijack at equal severity (a crafted
+    record at the group-max severity can supply the summary the
+    operator reads first). Suppression matching defends the other
+    edge: ``advisory_id`` and ``finding_id`` suppressions apply to an
+    advisory-carrying finding only when the suppressed id (for
+    ``finding_id``, the embedded representative id) identifies EVERY
+    group member, so a crafted bridge cannot drag a genuine advisory
+    under an existing suppression. See
+    ``_group_representative`` and ``_assemble_finding`` for the
+    conservative combination rules.
+
+    Group membership is order-independent (connected components do
+    not depend on traversal order); group order and within-group order
+    preserve first-seen input order so output stays deterministic.
     """
-    by_key: dict[tuple | str, list[Advisory]] = {}
-    order: list[tuple | str] = []
-    for a in advisories:
-        cves = sorted({
-            x.upper() for x in a.aliases
-            if isinstance(x, str) and x.upper().startswith("CVE-")
-        })
-        key: tuple | str = tuple(cves) if cves else a.osv_id
-        if key not in by_key:
-            by_key[key] = []
-            order.append(key)
-        by_key[key].append(a)
-    return [by_key[k] for k in order]
+    parent = list(range(len(advisories)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i: int, j: int) -> None:
+        ri, rj = find(i), find(j)
+        if ri == rj:
+            return
+        # Lower index wins so a group's root is its first-seen member.
+        if rj < ri:
+            ri, rj = rj, ri
+        parent[rj] = ri
+
+    seen_by_id: dict[str, int] = {}
+    for i, a in enumerate(advisories):
+        idents = {
+            x.upper()
+            for x in (a.osv_id, *a.aliases)
+            if isinstance(x, str) and x
+        }
+        for ident in idents:
+            if ident in seen_by_id:
+                union(seen_by_id[ident], i)
+            else:
+                seen_by_id[ident] = i
+
+    groups: dict[int, list[Advisory]] = {}
+    order: list[int] = []
+    for i, a in enumerate(advisories):
+        root = find(i)
+        if root not in groups:
+            groups[root] = []
+            order.append(root)
+        groups[root].append(a)
+    return [groups[root] for root in order]
 
 
 def _group_representative(group: list[Advisory]) -> Advisory:
@@ -295,11 +416,10 @@ def _assemble_finding(
     alias can therefore add scrutiny but never defang the genuine
     record's severity, fix version, or summary.
     """
-    # Union of CVE aliases across the group, first-seen order. With
-    # the sorted-alias-tuple grouping key the members' CVE sets are
-    # identical, so this normally equals the representative's — kept
-    # as a union so KEV / EPSS / SSVC enrichment stays complete if the
-    # grouping key ever loosens.
+    # Union of CVE aliases across the group, first-seen order. The
+    # alias-graph grouping merges members whose CVE sets intersect
+    # without being identical, so the union (not the representative's
+    # own list) is what keeps KEV / EPSS / SSVC enrichment complete.
     cve_aliases: list[str] = []
     for a in group:
         for alias in a.aliases:
@@ -584,14 +704,10 @@ def write_findings_json(
     rows.extend(_scan_health_to_row(h) for h in scan_health)
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    try:
-        with tmp.open("w", encoding="utf-8") as fh:
-            _json.dump(rows, fh, indent=2, default=_json_default)
-    except Exception:
-        tmp.unlink(missing_ok=True)
-        raise
-    tmp.replace(path)
+    # Shared atomic-write primitive: random-suffix tempfile opened
+    # O_EXCL|O_NOFOLLOW then renamed — a predictable ``<name>.json.tmp``
+    # sibling is squattable / symlinkable in shared output dirs.
+    atomic_write_text(path, _json.dumps(rows, indent=2, default=_json_default))
     return len(rows)
 
 

@@ -65,6 +65,18 @@ _SIGNATURE_ENV = (
     "ANTHROPIC_BASE_URL",
     "AWS_PROFILE",
     "AWS_REGION",
+)
+
+# Proxy-route vars join the signature via the OPERATOR-level values
+# (``core.llm.egress.operator_proxy_env``), never live ``os.environ``:
+# the in-process egress layer rewrites HTTP(S)_PROXY to a loopback
+# pointer carrying a per-process EPHEMERAL port, so hashing the live
+# values gave every process a unique signature and structurally
+# defeated the 24h cache on proxied installs. The operator snapshot is
+# also the correct input — the probe child is spawned with
+# ``cc_subprocess_env()``, which restores exactly those operator
+# values, so they (not the loopback rewrite) govern its reachability.
+_SIGNATURE_PROXY_ENV = (
     "HTTP_PROXY",
     "HTTPS_PROXY",
     "NO_PROXY",
@@ -77,6 +89,7 @@ _SIGNATURE_ENV = (
 def _backend_signature(claude_bin: str) -> str:
     """Hash of everything that could change the resolved model."""
     from core.hash import sha256_string
+    from core.llm.egress import operator_proxy_env
     parts = [claude_bin]
     try:
         st = os.stat(claude_bin)
@@ -84,6 +97,10 @@ def _backend_signature(claude_bin: str) -> str:
     except OSError:
         parts.append("unstat-able")
     parts.extend(f"{var}={os.environ.get(var, '')}" for var in _SIGNATURE_ENV)
+    proxy_env = operator_proxy_env()
+    parts.extend(
+        f"{var}={proxy_env.get(var, '')}" for var in _SIGNATURE_PROXY_ENV
+    )
     settings = Path.home() / ".claude" / "settings.json"
     try:
         parts.append(f"settings:{settings.stat().st_mtime_ns}")
@@ -164,7 +181,7 @@ def probe_cc_session_model(
     """Run (or recall) the pre-flight probe.
 
     Returns the backend-resolved model id (e.g.
-    ``anthropic.claude-mythos-5``) on success, ``None`` when the CLI
+    ``anthropic.claude-fable-5``) on success, ``None`` when the CLI
     is missing, times out, exits non-zero, or produces no parseable
     envelope — i.e. ``None`` means "do not trust the claudecode
     transport on this install right now".

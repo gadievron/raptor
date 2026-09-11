@@ -368,3 +368,45 @@ def test_clip_eps_keeps_log_space_well_defined():
     by_model = {r.model: r for r in result.model_reliabilities}
     assert by_model["m1"].alpha > 0.5
     assert by_model["m1"].beta < 0.5
+
+
+# ---------------------------------------------------------------------------
+# Duplicate (finding, model) records
+# ---------------------------------------------------------------------------
+
+
+class TestDuplicateRecords:
+    """One model is one independent observation per finding: a
+    duplicated (finding, model) record keeps the FIRST verdict and is
+    counted as a collision — never silently last-writer-wins, never
+    double-weighted."""
+
+    def test_duplicate_keeps_first_verdict(self):
+        records = [
+            PanelRecord("F1", "dc", "m1", True),
+            PanelRecord("F1", "dc", "m1", False),  # collision: ignored
+            PanelRecord("F1", "dc", "m2", True),
+        ]
+        result = estimate(records, uniform_prior(), decision_class="dc")
+        assert result.duplicates_ignored == 1
+        fp = result.findings[0]
+        # m1's counted vote is the FIRST record (True); with both
+        # counted votes positive the posterior must lean positive.
+        assert fp.n_models == 2
+        assert fp.posterior > 0.5
+
+    def test_duplicate_not_double_counted_in_panel_size(self):
+        records = [
+            PanelRecord("F1", "dc", "m1", True),
+            PanelRecord("F1", "dc", "m1", True),
+        ]
+        result = estimate(records, uniform_prior(), decision_class="dc")
+        assert result.duplicates_ignored == 1
+        assert result.findings[0].n_models == 1
+
+    def test_distinct_models_report_no_collisions(self):
+        records = _unanimous_panel(2, 2, ["m1", "m2", "m3"])
+        result = estimate(records, uniform_prior(), decision_class="dc")
+        assert result.duplicates_ignored == 0
+        for fp in result.findings:
+            assert fp.n_models == 3

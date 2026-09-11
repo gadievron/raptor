@@ -16,6 +16,7 @@ from core.tar import TarOpenError
 from core.oci.blob import (
     DEFAULT_MAX_ENTRY_BYTES,
     UnsupportedLayerMediaType,
+    WantedEntryRefused,
     extract_files_from_layer,
 )
 from core.oci.client import OciRegistryClient, RegistryError
@@ -166,18 +167,33 @@ def test_leading_dot_slash_normalised():
 # ---------------------------------------------------------------------------
 
 
-def test_oversized_entry_skipped():
-    """A pathological / malicious layer with a 1 GB ``dpkg/status``
-    file shouldn't OOM raptor. ``max_entry_bytes`` caps individual
-    extracts; oversized entries are skipped silently."""
+def test_oversized_wanted_entry_is_loud():
+    """A pathological / malicious layer with an oversized
+    ``dpkg/status`` shouldn't OOM raptor — ``max_entry_bytes`` caps
+    individual extracts — but the refusal must be LOUD: a silent skip
+    produced a complete-looking, falsely-clean package inventory."""
     blob = _make_gzipped_tar({
         "var/lib/dpkg/status": b"x" * 1024,
     })
+    with pytest.raises(WantedEntryRefused):
+        extract_files_from_layer(
+            _stream(blob), {"var/lib/dpkg/status"},
+            max_entry_bytes=10,                 # 10 bytes — file is 1024
+        )
+
+
+def test_oversized_unwanted_entry_still_skipped_quietly():
+    """Only WANTED refused entries raise; an oversize file we never
+    asked for keeps the quiet skip (no false alarms on fat layers)."""
+    blob = _make_gzipped_tar({
+        "usr/share/huge.bin": b"x" * 1024,
+        "lib/apk/db/installed": b"pkgdata",
+    })
     out = extract_files_from_layer(
-        _stream(blob), {"var/lib/dpkg/status"},
-        max_entry_bytes=10,                     # 10 bytes — file is 1024
+        _stream(blob), {"lib/apk/db/installed"},
+        max_entry_bytes=512,
     )
-    assert out == {}                            # skipped
+    assert out == {"lib/apk/db/installed": b"pkgdata"}
 
 
 def test_default_max_entry_bytes_is_generous():

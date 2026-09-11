@@ -70,3 +70,61 @@ class TestMakeEvidence:
         d = rec.to_dict()
         assert d["tier"] == "heuristic"
         assert isinstance(d["data"], dict)
+
+class TestEvidenceIndexScopeNormalisation:
+    """Scope filtering mirrors core.audit.gaps._in_scope (the
+    authority): './' spellings strip, absolute paths rebase against
+    the checklist target_path, matching is separator-aware, and a
+    root entry means the whole tree. The raw startswith it replaces
+    made './ipc'-scoped runs silently evidence-blind."""
+
+    @staticmethod
+    def _checklist() -> dict:
+        return {
+            "target_path": "/repo",
+            "files": [
+                {"path": "ipc/channel.c",
+                 "items": [{"name": "recv_msg", "line_start": 1,
+                            "line_end": 9}]},
+                {"path": "ipcz/driver.c",
+                 "items": [{"name": "drive", "line_start": 1,
+                            "line_end": 9}]},
+                {"path": "ipc.c",
+                 "items": [{"name": "ipc_main", "line_start": 1,
+                            "line_end": 9}]},
+            ],
+        }
+
+    def _keys(self, scope):
+        from core.evidence import build_evidence_index
+        return set(build_evidence_index(
+            checklist=self._checklist(), scope=scope,
+        ))
+
+    def test_dot_slash_spelling_matches(self):
+        assert self._keys("./ipc") == {
+            "ipc/channel.c:recv_msg", "ipc.c:ipc_main",
+        }
+
+    def test_separator_aware_no_sibling_dir_bleed(self):
+        # "ipc" matches ipc/... and ipc.c, never ipcz/.
+        keys = self._keys("ipc")
+        assert "ipcz/driver.c:drive" not in keys
+        assert keys == {"ipc/channel.c:recv_msg", "ipc.c:ipc_main"}
+
+    def test_absolute_scope_under_target_rebases(self):
+        assert self._keys("/repo/ipc") == {
+            "ipc/channel.c:recv_msg", "ipc.c:ipc_main",
+        }
+
+    def test_absolute_scope_outside_target_refuses_loudly(self):
+        import pytest
+        with pytest.raises(ValueError, match="outside the target"):
+            self._keys("/elsewhere/ipc")
+
+    def test_root_entry_means_whole_tree(self):
+        for scope in (".", "./", ["."]):
+            assert len(self._keys(scope)) == 3, scope
+
+    def test_no_scope_unfiltered(self):
+        assert len(self._keys(None)) == 3

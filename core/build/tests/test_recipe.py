@@ -175,6 +175,28 @@ class TestCmakeRecipe:
         assert "cmake-build-debug" in recipe.steps[0].command
         assert "mkdir" not in recipe.steps[0].command
 
+    def test_nested_out_build_dir_points_cmake_at_source_root(
+        self, tmp_path,
+    ):
+        # ``out/build`` sits TWO levels below the source root, so
+        # ``cmake ..`` from inside it would aim at <target>/out —
+        # which has no CMakeLists.txt. The recipe must climb back
+        # to the real root.
+        (tmp_path / "CMakeLists.txt").write_text("")
+        (tmp_path / "out" / "build").mkdir(parents=True)
+        recipe = build_recipe(tmp_path, "cmake")
+        cmd = recipe.steps[0].command
+        assert "cd <target>/out/build" in cmd
+        assert "cmake ../.." in cmd
+
+    def test_single_level_build_dir_still_uses_dotdot(self, tmp_path):
+        (tmp_path / "CMakeLists.txt").write_text("")
+        (tmp_path / "build").mkdir()
+        recipe = build_recipe(tmp_path, "cmake")
+        cmd = recipe.steps[0].command
+        assert "cmake .. &&" in cmd
+        assert "cmake ../.." not in cmd
+
 
 class TestMakeRecipe:
     def test_plain_make_one_step(self, tmp_path):

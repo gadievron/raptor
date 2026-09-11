@@ -55,6 +55,74 @@ def _file_matches_globs(file_path: str, globs: list[str]) -> bool:
     return any(_fnmatch.fnmatch(file_path or "", g) for g in globs)
 
 
+def _finding_rel_path(finding: dict[str, Any]) -> str:
+    """Relative path of a finding across the key shapes in play.
+
+    The SARIF parser and the validated-findings importer both emit
+    ``file``; some upstream scanners / enrichment layers set
+    ``file_path`` instead. Glob filters must accept both — matching on
+    ``file_path`` alone silently no-ops every --prefer / --exclude-dir
+    filter for SARIF-loaded findings."""
+    return str(finding.get("file_path") or finding.get("file") or "")
+
+
+def _finding_coords(finding: dict[str, Any]) -> tuple[str, str, int]:
+    """Resolve ``(relative_path, function_name, line)`` for a finding
+    across the key shapes in play.
+
+    SARIF-parser and validated-import findings carry ``file`` +
+    ``startLine``; some upstream producers set ``file_path`` /
+    ``function`` / ``line`` / ``start_line`` directly; the inventory
+    enrichment stores the resolved function name under
+    ``metadata["name"]`` (the same binding order the guard-dominance
+    and fail-open chokepoints use). The pre-flight chokepoints and the
+    SAGE verdict loop must all read through this helper — reading only
+    ``finding["function"]`` / ``finding["line"]`` makes them silent
+    no-ops on pipeline findings.
+
+    Missing pieces resolve to ``""`` / ``0`` — callers gate on
+    truthiness.
+    """
+    meta = finding.get("metadata") or {}
+    rel = _finding_rel_path(finding)
+    fn = (
+        finding.get("function")
+        or meta.get("function_name")
+        or meta.get("name")
+        or ""
+    )
+    line_raw = finding.get("line")
+    if line_raw is None:
+        line_raw = finding.get("startLine")
+    if line_raw is None:
+        line_raw = finding.get("start_line")
+    try:
+        line = int(line_raw or 0)
+    except (TypeError, ValueError):
+        line = 0
+    return rel, str(fn), line
+
+
+def _suppressed_result_dict(
+    vuln: "VulnerabilityContext", status: str, skip_reason: str,
+) -> dict[str, Any]:
+    """Report record for a chokepoint-suppressed finding.
+
+    The pre-flight chokepoints are explicit disqualifiers, never
+    silent drops: a suppressed finding must still land in the report's
+    ``results`` list — carrying its synthesized analysis receipt
+    (harness_evidence / reachability verdict / guard-dominance or
+    fail-open receipt) plus an explicit skip status — so
+    ``analyzed`` / ``prepped`` / ``results`` counters agree, prep-mode
+    consumers see the per-finding disqualifier, and report readers
+    can tell WHY the LLM never ran.
+    """
+    from core.run.finding_status import set_status
+    record = vuln.to_dict()
+    set_status(record, status, skip_reason=skip_reason)
+    return record
+
+
 def apply_prefer_globs(
     findings: list[dict[str, Any]],
     prefer_globs: list[str] | None,
@@ -65,16 +133,17 @@ def apply_prefer_globs(
     tell from a diff which findings shifted positions on a re-run.
 
     No-op when ``prefer_globs`` is None/empty. Findings with no
-    ``file_path`` are treated as non-matching and end up in the
-    ``others`` bucket — the empty-string fnmatch against any non-empty
-    glob returns False, so they stay where they were.
+    path key (``file`` / ``file_path``) are treated as non-matching
+    and end up in the ``others`` bucket — the empty-string fnmatch
+    against any non-empty glob returns False, so they stay where
+    they were.
     """
     if not prefer_globs:
         return findings
     preferred: list[dict[str, Any]] = []
     others: list[dict[str, Any]] = []
     for f in findings:
-        if _file_matches_globs(f.get("file_path", ""), prefer_globs):
+        if _file_matches_globs(_finding_rel_path(f), prefer_globs):
             preferred.append(f)
         else:
             others.append(f)
@@ -139,14 +208,14 @@ def apply_exclude_dir_globs(
     findings: list[dict[str, Any]],
     exclude_globs: list[str] | None,
 ) -> list[dict[str, Any]]:
-    """Drop findings whose ``file_path`` matches any glob in
-    ``exclude_globs``. Order-preserving. Operator escape hatch for
-    cases the structural filters (binary-oracle, dataflow priority)
+    """Drop findings whose path (``file`` / ``file_path``) matches any
+    glob in ``exclude_globs``. Order-preserving. Operator escape hatch
+    for cases the structural filters (binary-oracle, dataflow priority)
     can't help with: vendored third-party code in the target tree,
     test fixtures, generated dirs.
 
     No-op when ``exclude_globs`` is None/empty. Findings with no
-    ``file_path`` are kept (defensively — operator excludes shouldn't
+    path key are kept (defensively — operator excludes shouldn't
     accidentally drop findings whose path metadata is malformed; if
     that happens the operator wants to see them, not have them
     silently filtered).
@@ -155,7 +224,7 @@ def apply_exclude_dir_globs(
         return findings
     return [
         f for f in findings
-        if not _file_matches_globs(f.get("file_path", ""), exclude_globs)
+        if not _file_matches_globs(_finding_rel_path(f), exclude_globs)
     ]
 
 
@@ -347,10 +416,16 @@ class VulnerabilityContext:
                 content = content[:_MAX_SOURCE_BYTES]
             lines = content.splitlines(keepends=True)
 
-            # Get the specific vulnerable lines
-            if self.start_line and self.end_line:
+            # Get the specific vulnerable lines. endLine is optional
+            # in SARIF (the parser coerces a missing value to None) —
+            # treat a missing end as end == start so the finding's
+            # actual location is shown, instead of falling into the
+            # no-line-numbers branch and presenting the first 100
+            # lines of the file as "the vulnerable code".
+            if self.start_line:
+                end_line = self.end_line or self.start_line
                 start_idx = max(0, self.start_line - 1)
-                end_idx = min(len(lines), self.end_line)
+                end_idx = min(len(lines), end_line)
                 self.full_code = "".join(lines[start_idx:end_idx])
 
                 # Get surrounding context (50 lines before and after)
@@ -685,7 +760,9 @@ class AutonomousSecurityAgentV2:
                  use_verified_exemplars: bool = True,
                  execute_exploits: bool = False,
                  execute_timeout: int = 5,
-                 execute_sanitizers: list | None = None) -> None:
+                 execute_sanitizers: list | None = None,
+                 deep_validate: bool = False,
+                 deep_validate_disabled: bool = False) -> None:
         self.repo_path = repo_path
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -750,6 +827,16 @@ class AutonomousSecurityAgentV2:
         self.execute_exploits = execute_exploits
         self.execute_timeout = execute_timeout
         self.execute_sanitizers = execute_sanitizers
+        # --deep-validate / --no-deep-validate for the SEQUENTIAL
+        # path. The orchestrated path threads the same flags into
+        # ``run_validation_pass``; here they gate the per-finding
+        # LLM-backed deep dataflow validation (``validate_dataflow``):
+        # ``deep_validate`` extends it to dataflow findings the
+        # analysis ruled non-exploitable (force-enable for all),
+        # ``deep_validate_disabled`` is the hard kill-switch and wins.
+        # The free Tier 1 pre-flight is unaffected in both directions.
+        self.deep_validate = bool(deep_validate)
+        self.deep_validate_disabled = bool(deep_validate_disabled)
         # P23 guard-dominance chokepoint: lazy warm-CPG Joern server.
         # ``_probed`` distinguishes "never tried" from "tried, cold
         # cache" so a run without a CPG pays the probe exactly once.
@@ -1295,8 +1382,13 @@ class AutonomousSecurityAgentV2:
                     "  Attack Scenario: %s...", scenario,
                 )
 
-            # Deep dataflow validation for high-confidence findings
-            if vuln.has_dataflow and vuln.exploitable:
+            # Deep dataflow validation for high-confidence findings.
+            # --deep-validate widens the gate to every dataflow
+            # finding regardless of the initial verdict; the block
+            # itself only ever downgrades (a validation that
+            # "confirms" a non-exploitable finding does not flip it
+            # to exploitable), so the widening is verdict-safe.
+            if vuln.has_dataflow and (vuln.exploitable or self.deep_validate):
                 # IRIS Tier 1 pre-flight — same pattern as the
                 # `generate_exploit` gate below. A free CodeQL refutation
                 # short-circuits the LLM-backed deep validation entirely.
@@ -1327,6 +1419,14 @@ class AutonomousSecurityAgentV2:
                         ),
                         "is_exploitable": False,
                     }
+                elif self.deep_validate_disabled:
+                    # Operator kill-switch: the free Tier 1 gate above
+                    # still ran, but the LLM-backed deep validation is
+                    # off for this run.
+                    logger.info(
+                        "⊘ Deep dataflow validation disabled "
+                        "(--no-deep-validate)"
+                    )
                 else:
                     logger.info("\n%s", "─" * 70)
                     logger.info("🔍 Performing DEEP DATAFLOW VALIDATION...")
@@ -2155,19 +2255,59 @@ class AutonomousSecurityAgentV2:
             patch_file.parent.mkdir(exist_ok=True, parents=True)
 
             from core.reporting.formatting import display_rule_id
-            rule_display = display_rule_id(vuln.rule_id)
+
+            # The artifact interpolates untrusted-SARIF identifiers
+            # (rule id, file path, level) and raw LLM output (analysis
+            # dump, patch body) into a markdown file an operator opens
+            # (and later LLM sessions may re-ingest). Sanitise on the
+            # way out — same posture as the validation report writer:
+            # single-line fields via sanitise_string (strips autofetch
+            # markup, defangs markdown), the analysis dump via
+            # sanitise_code inside a fence. The patch body keeps its
+            # own markdown layout (the LLM's ``` fences around the
+            # diff are part of the artifact's contract), so it gets
+            # the targeted treatment: autofetch-markup stripping (the
+            # documented exfil vector) + control/ANSI/BIDI byte
+            # escaping, with a size cap — but no markdown defang that
+            # would corrupt diff `---` separators or fence markers.
+            from core.security.log_sanitisation import escape_nonprintable
+            from core.security.prompt_envelope import (
+                _strip_autofetch_markup,
+            )
+            from core.security.prompt_output_sanitise import (
+                sanitise_code,
+                sanitise_string,
+            )
+            rule_display = sanitise_string(
+                display_rule_id(vuln.rule_id), max_chars=200,
+            )
+            file_display = sanitise_string(
+                str(vuln.file_path or ""), max_chars=300,
+            )
+            level_display = sanitise_string(
+                str(vuln.level or ""), max_chars=50,
+            )
+            analysis_display = sanitise_code(
+                dumps_display(vuln.analysis, indent=2), max_chars=20_000,
+            )
+            patch_display = escape_nonprintable(
+                _strip_autofetch_markup(patch_content),
+                preserve_newlines=True,
+            )[:100_000]
             patch_content_formatted = f"""# Security Patch for {rule_display}
 
-**File:** {vuln.file_path}
+**File:** {file_display}
 **Lines:** {vuln.start_line}-{vuln.end_line}
-**Severity:** {vuln.level}
+**Severity:** {level_display}
 {gate_block}
 ## Vulnerability Analysis
-{dumps_display(vuln.analysis, indent=2)}
+```json
+{analysis_display}
+```
 
 ## Patch
 
-{patch_content}
+{patch_display}
 
 ---
 *Generated by RAPTOR Autonomous Security Agent*
@@ -2488,7 +2628,7 @@ class AutonomousSecurityAgentV2:
             matched = sum(
                 1 for f in prioritized_findings
                 if _file_matches_globs(
-                    f.get("file_path", ""), effective_globs,
+                    _finding_rel_path(f), effective_globs,
                 )
             )
             if matched and not is_prep_only:
@@ -2614,6 +2754,10 @@ class AutonomousSecurityAgentV2:
 
         is_prep = isinstance(self.llm, ClaudeCodeProvider)
 
+        # Status stamps for chokepoint-suppressed findings retained in
+        # ``results`` (see ``_suppressed_result_dict``).
+        from core.run.finding_status import SKIPPED, SKIPPED_DEAD_CODE
+
         with HackerProgress(
             total=len(unique_findings),
             operation="Analyzing vulnerabilities",
@@ -2691,17 +2835,10 @@ class AutonomousSecurityAgentV2:
                         from core.inventory.fixture_detection import (
                             detect_fixture,
                         )
+                        _fx_rel, _fx_fn, _ = _finding_coords(finding)
                         verdict = detect_fixture(
-                            file_path=(
-                                finding.get("file_path")
-                                or finding.get("file") or ""
-                            ),
-                            function=(
-                                finding.get("function")
-                                or (finding.get("metadata") or {}).get(
-                                    "function_name", ""
-                                )
-                            ),
+                            file_path=_fx_rel,
+                            function=_fx_fn,
                             inventory=checklist,
                         )
                         finding["likely_test_harness"] = (
@@ -2757,6 +2894,9 @@ class AutonomousSecurityAgentV2:
                     fixture_skipped_llm_calls += 1
                     if emit_journal and self._emit_journal_entry(vuln, checklist):
                         journal_entries_emitted += 1
+                    results.append(_suppressed_result_dict(
+                        vuln, SKIPPED, "fixture_demotion",
+                    ))
                     continue  # skip LLM analyze + exploit + patch
 
                 # 0b. Reachability chokepoint — SOUND, corpus-earned
@@ -2778,12 +2918,7 @@ class AutonomousSecurityAgentV2:
                         from core.analysis.reach_chokepoint import (
                             check_suppress,
                         )
-                        rel = (finding.get("file_path")
-                               or finding.get("file") or "")
-                        fn = (finding.get("function")
-                              or (finding.get("metadata") or {}).get(
-                                  "function_name", ""))
-                        line_no = int(finding.get("line") or 0)
+                        rel, fn, line_no = _finding_coords(finding)
                         decision = check_suppress(
                             checklist=checklist,
                             file_path=rel, function_name=fn,
@@ -2830,6 +2965,12 @@ class AutonomousSecurityAgentV2:
                     reachability_skipped_llm_calls += 1
                     if emit_journal and self._emit_journal_entry(vuln, checklist):
                         journal_entries_emitted += 1
+                    results.append(_suppressed_result_dict(
+                        vuln, SKIPPED_DEAD_CODE,
+                        (vuln.analysis or {}).get(
+                            "reachability_verdict", "unreachable",
+                        ),
+                    ))
                     continue  # skip LLM analyze + exploit + patch
 
                 # 0c. SAGE prior-verdict suppression — if a prior run
@@ -2845,14 +2986,9 @@ class AutonomousSecurityAgentV2:
                         compute_finding_source_hash,
                         recall_prior_finding_verdict,
                     )
-                    _rel = (finding.get("file_path")
-                            or finding.get("file") or "")
-                    _fn = (finding.get("function")
-                           or (finding.get("metadata") or {}).get(
-                               "function_name", ""))
+                    _rel, _fn, _line = _finding_coords(finding)
                     _rule = (finding.get("rule_id")
                              or finding.get("check_id") or "")
-                    _line = int(finding.get("line") or 0)
                     # Per-finding operator opt-out — the same
                     # manual_override the sibling chokepoints honour
                     # (reachability suppression); previously only the
@@ -2910,6 +3046,9 @@ class AutonomousSecurityAgentV2:
                     sage_fp_skipped_llm_calls += 1
                     if emit_journal and self._emit_journal_entry(vuln, checklist):
                         journal_entries_emitted += 1
+                    results.append(_suppressed_result_dict(
+                        vuln, SKIPPED, "sage_prior_verdict",
+                    ))
                     continue  # skip LLM analyze + exploit + patch
 
                 # 0d. Guard-dominance chokepoint (P23) — for
@@ -2966,6 +3105,9 @@ class AutonomousSecurityAgentV2:
                     guard_dominance_skipped_llm_calls += 1
                     if emit_journal and self._emit_journal_entry(vuln, checklist):
                         journal_entries_emitted += 1
+                    results.append(_suppressed_result_dict(
+                        vuln, SKIPPED, "guard_dominance_refuted",
+                    ))
                     continue  # skip LLM analyze + exploit + patch
 
                 # 0e. Fail-open channel chokepoint — for findings whose
@@ -3042,6 +3184,9 @@ class AutonomousSecurityAgentV2:
                     fail_open_skipped_llm_calls += 1
                     if emit_journal and self._emit_journal_entry(vuln, checklist):
                         journal_entries_emitted += 1
+                    results.append(_suppressed_result_dict(
+                        vuln, SKIPPED, "fail_open_refuted",
+                    ))
                     continue  # skip LLM analyze + exploit + patch
 
                 # 1. Autonomous analysis (LLM-powered, or prep-only)
@@ -3126,14 +3271,9 @@ class AutonomousSecurityAgentV2:
                             compute_finding_source_hash,
                             store_finding_verdict,
                         )
-                        _rel = (finding.get("file_path")
-                                or finding.get("file") or "")
-                        _fn = (finding.get("function")
-                               or (finding.get("metadata") or {}).get(
-                                   "function_name", ""))
+                        _rel, _fn, _line = _finding_coords(finding)
                         _rule = (finding.get("rule_id")
                                  or finding.get("check_id") or "")
-                        _line = int(finding.get("line") or 0)
                         if _rel and _fn and _rule and _line > 0:
                             _src_hash = compute_finding_source_hash(
                                 Path(self.repo_path) / _rel, _line)
@@ -3243,6 +3383,13 @@ class AutonomousSecurityAgentV2:
             "exploits_generated": exploits_generated,
             "patches_generated": patches_generated,
             "dataflow_validated": dataflow_validated,
+            # Summary block for render_dataflow_validation_lines —
+            # the sequential path tracks only the per-finding deep-
+            # validation count (no tier split), surfaced as
+            # n_validated so the operator telemetry block in main()
+            # actually renders on sequential runs instead of always
+            # receiving an absent key.
+            "dataflow_validation": {"n_validated": dataflow_validated},
             "false_positives_caught": false_positives_found,
             "journal_entries_emitted": journal_entries_emitted,
             "variant_matches": variant_matches,
@@ -3380,16 +3527,81 @@ class AutonomousSecurityAgentV2:
         return report
 
 
+# Validation run-directory naming families. Only the legacy orchestrator
+# default-workdir fallback still mints the exploitability-validation-
+# prefix; live /validate runs go through core.run.output.get_output_dir,
+# which names standalone runs `validate_<target>_<ts>` (under out/) and
+# project runs `validate-<ts>` (under the project's output dir).
+_VALIDATION_RUN_PATTERNS = (
+    "exploitability-validation-*",  # legacy orchestrator layout
+    "validate_*",                   # modern standalone layout (out/)
+    "validate-*",                   # modern project run layout
+)
+
+
+def _validation_search_bases() -> list[Path]:
+    """Output bases that can hold /validate run directories.
+
+    Canonical RAPTOR out/ and the validation pipeline's ``.out``
+    conventions (the same base table as
+    ``packages.exploitation.bootstrap._get_search_bases``), plus
+    per-project output dirs (a project run lands in
+    ``<project.output_dir>/validate-<ts>``, one level below any
+    top-level base, so no top-level glob reaches it). Project-registry
+    read failures must not break discovery for projectless setups.
+    """
+    bases: list[Path] = []
+    seen: set[Path] = set()
+
+    def _add(candidate: Path) -> None:
+        if not candidate.is_dir():
+            return
+        resolved = candidate.resolve()
+        if resolved not in seen:
+            bases.append(candidate)
+            seen.add(resolved)
+
+    _add(RaptorConfig.get_out_dir())
+    _add(Path(".out").resolve())  # Lock to absolute path at call time
+    _add(Path.home() / ".out")
+
+    try:
+        from core.project.project import ProjectManager
+        for project in ProjectManager().list_projects():
+            project_out = getattr(project, "output_dir", "") or ""
+            if project_out:
+                _add(Path(project_out))
+    except Exception as e:  # noqa: BLE001 — registry unavailable ≠ fatal
+        logger.debug(
+            "Project registry unavailable for validation-run discovery: %s", e,
+        )
+
+    return bases
+
+
+def _mtime_or_zero(path: Path) -> float:
+    """Recency key for candidate artifacts. A racing cleanup that
+    unlinks a candidate between glob and stat must demote it, not
+    abort artifact discovery."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def find_validation_artifacts(workdir: Path | None = None) -> Path | None:
     """Search for validation artifacts from recent pipeline runs.
 
     Checks:
     - workdir/validation/findings.json (from /agentic)
-    - .out/exploitability-validation-*/findings.json (from /validate)
+    - findings.json inside validation run dirs across every output
+      base (from /validate) — the legacy ``exploitability-validation-*``
+      layout plus both modern run-lifecycle layouts (``validate_*``
+      standalone, ``validate-*`` under project output dirs).
 
     Returns the most recent findings.json path, or None.
     """
-    candidates = []
+    candidates: list[Path] = []
 
     # Check workdir/validation/ (from /agentic pipeline)
     if workdir:
@@ -3397,18 +3609,21 @@ def find_validation_artifacts(workdir: Path | None = None) -> Path | None:
         if agentic_findings.exists():
             candidates.append(agentic_findings)
 
-    # Check .out/exploitability-validation-*/ (from /validate)
-    out_dir = Path(".out").resolve()  # Lock to absolute path at call time
-    if out_dir.exists():
-        for d in sorted(out_dir.glob("exploitability-validation-*"), reverse=True):
-            findings_path = d / "findings.json"
-            if findings_path.exists():
-                candidates.append(findings_path)
-                break  # Most recent only
+    # Validation runs across all bases and naming families. Recency is
+    # decided by mtime below: a directory-name sort only orders
+    # correctly within ONE family (the timestamp sits after different
+    # prefixes), so the old take-first-by-name shortcut mis-picked as
+    # soon as a second family appeared.
+    for base in _validation_search_bases():
+        for pattern in _VALIDATION_RUN_PATTERNS:
+            for run_dir in base.glob(pattern):
+                findings_path = run_dir / "findings.json"
+                if run_dir.is_dir() and findings_path.exists():
+                    candidates.append(findings_path)
 
     if candidates:
         # Return most recently modified
-        return max(candidates, key=lambda p: p.stat().st_mtime)
+        return max(candidates, key=_mtime_or_zero)
     return None
 
 
@@ -3667,6 +3882,11 @@ def main() -> None:
         generate_exploits=not args.no_exploits,
         generate_patches=not args.no_patches,
         execute_exploits=execute_exploits,
+        # Sequential-path IRIS gate — the orchestrated path receives
+        # the same flags via orchestrate() below; without this the
+        # flags were silent no-ops on plain /analyze runs.
+        deep_validate=args.deep_validate,
+        deep_validate_disabled=args.no_deep_validate,
     )
 
     # Load checklist for metadata lookup

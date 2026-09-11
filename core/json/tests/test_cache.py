@@ -132,8 +132,53 @@ def test_unwritable_root_falls_back_to_no_op(tmp_path: Path) -> None:
 def test_atomic_write_does_not_leave_temp_files(tmp_path: Path) -> None:
     cache = JsonCache(root=tmp_path)
     cache.put("k", "v", ttl_seconds=60)
-    leftovers = [p for p in tmp_path.iterdir() if ".tmp." in p.name]
+    leftovers = [
+        p for p in tmp_path.iterdir()
+        if ".tmp." in p.name or p.name.endswith(".tmp")
+    ]
     assert leftovers == []
+
+
+def test_planted_symlink_at_legacy_tmp_name_not_followed(
+    tmp_path: Path,
+) -> None:
+    """A pre-planted symlink at the legacy predictable tempfile name
+    (``<key>.json.tmp.<pid>.<tid>``) must never be followed: the write
+    goes through core.atomic_fs (random-suffix temp, O_EXCL |
+    O_NOFOLLOW), so the victim file stays untouched and the entry
+    still lands."""
+    import threading
+
+    victim = tmp_path / "victim.txt"
+    victim.write_text("precious")
+    entry = tmp_path / "k.json"
+    legacy_tmp = entry.with_suffix(
+        f".tmp.{os.getpid()}.{threading.get_ident()}")
+    legacy_tmp.symlink_to(victim)
+
+    cache = JsonCache(root=tmp_path)
+    cache.put("k", "v", ttl_seconds=60)
+
+    assert victim.read_text() == "precious"
+    assert not entry.is_symlink()
+    assert cache.get("k", ttl_seconds=60) == "v"
+
+
+def test_keyed_subdir_turned_readonly_degrades_not_crashes(
+    tmp_path: Path,
+) -> None:
+    """A cache root that turns read-only AFTER construction must
+    degrade to no-cache (the documented contract), not raise from a
+    keyed-subdir put."""
+    if os.geteuid() == 0:
+        pytest.skip("root bypasses permission bits")
+    cache = JsonCache(root=tmp_path)
+    tmp_path.chmod(0o500)
+    try:
+        cache.put("vulns/GHSA-x", {"a": 1}, ttl_seconds=60)  # must not raise
+        assert cache.get("vulns/GHSA-x", ttl_seconds=60) is None
+    finally:
+        tmp_path.chmod(0o700)
 
 
 def test_keys_with_dotted_segments_do_not_collide(tmp_path: Path) -> None:

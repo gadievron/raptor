@@ -306,6 +306,64 @@ class TestJsChannelDispatch:
         )
         assert res.outcome == "refuted"
 
+    def test_catch_swallow_mentioning_awaited_not_misrouted(
+        self, tmp_path,
+    ):
+        # A catch-swallow hypothesis that mentions the call IS awaited
+        # must reach the handler leg — the bare word "await" used to
+        # route it to the unawaited leg, where the (correctly) awaited
+        # sites mechanically refuted a real fail-open.
+        src = """
+async function verifyToken(tok) {
+  if (!tok) throw new AuthError("no token");
+  return true;
+}
+async function login(req, res, next) {
+  try {
+    await verifyToken(req.token);
+  } catch (e) {
+  }
+  next();
+}
+"""
+        _write(tmp_path, "auth.js", src)
+        res = run_fail_open_check(
+            tmp_path, "auth.js", "login",
+            "verifyToken is awaited inside the try, but the empty "
+            "catch swallows its rejection and login fails open",
+        )
+        assert res.outcome == "confirmed"
+        assert res.rule_id.startswith(RULE_HANDLER_OUTCOME)
+
+    def test_unawaited_prose_with_awaited_code_defers_to_handler(
+        self, tmp_path,
+    ):
+        # Strong unawaited prose, but the code shape shows every site
+        # consumed AND a permissive handler swallowing the rejection:
+        # the handler leg's verdict supersedes the one-word routing —
+        # the refutation must not stand on prose alone.
+        src = """
+async function verifyToken(tok) {
+  if (!tok) throw new AuthError("no token");
+  return true;
+}
+async function login(req, res, next) {
+  try {
+    await verifyToken(req.token);
+  } catch (e) {
+  }
+  next();
+}
+"""
+        _write(tmp_path, "auth.js", src)
+        res = run_fail_open_check(
+            tmp_path, "auth.js", "login",
+            "the verifyToken promise rejection is unhandled — "
+            "floating promise, never awaited — and login fails open",
+        )
+        assert res.outcome == "confirmed"
+        assert res.rule_id.startswith(RULE_HANDLER_OUTCOME)
+
     def test_unawaited_sync_callee_is_async_unprovable(self, tmp_path):
         src = UNAWAITED_JS.replace("async function validateBody",
                                    "function validateBody")

@@ -401,13 +401,58 @@ class TestParseScalaList:
         assert result[0] == ["file.c", "main", "10"]
         assert result[1] == ["util.c", "helper", "20"]
 
-    def test_newline_fallback(self):
-        result = _parse_scala_list("foo\nbar\nbaz")
-        assert result == ["foo", "bar", "baz"]
+    def test_unrecognised_text_is_no_answer(self):
+        # The old newline fallback turned any unparseable echo into a
+        # non-empty garbage list — one element per line — and that
+        # "result" minted joern-backed confirmations from queries that
+        # returned nothing.  Unrecognised text must read as None.
+        assert _parse_scala_list("foo\nbar\nbaz") is None
 
     def test_whitespace_stripped(self):
         result = _parse_scala_list("  List( x , y , z )  ")
         assert result == ["x", "y", "z"]
+
+    def test_live_repl_empty_echo_reads_empty(self):
+        # Live server transport echoes the final expression as a
+        # binder line; an empty result must parse as [] — never as a
+        # one-element list holding the echo line itself.
+        assert _parse_scala_list("val res0: List[String] = List()") == []
+
+    def test_live_repl_echo_with_ansi(self):
+        raw = (
+            "\x1b[33mval res3\x1b[0m: \x1b[32mList[String]\x1b[0m"
+            ' = List("len", "buf")'
+        )
+        assert _parse_scala_list(raw) == ["len", "buf"]
+
+    def test_last_res_binder_wins_over_intermediates(self):
+        # The taint query declares intermediate binders (ctx/src/sink)
+        # that echo before the final expression; only the final
+        # res<N> echo is the answer.
+        raw = (
+            "val ctx: EngineContext = EngineContext(EngineConfig(2))\n"
+            "val src: Iterator[Method] = <iterator>\n"
+            "val res1: List[String] = List(a, b)"
+        )
+        assert _parse_scala_list(raw) == ["a", "b"]
+
+    def test_multiline_list_echo(self):
+        raw = (
+            'val res0: List[String] = List(\n'
+            '  "alpha",\n'
+            '  "beta"\n'
+            ')'
+        )
+        assert _parse_scala_list(raw) == ["alpha", "beta"]
+
+    def test_truncated_echo_is_no_answer(self):
+        # A width-truncated echo never closes the literal — that is a
+        # dropped answer, not an empty one and not a garbage element.
+        assert _parse_scala_list('val res0: List[String] = List("a', ) is None
+
+    def test_quoted_parens_do_not_end_literal(self):
+        result = _parse_scala_list('List("f(x)", "g(y)")')
+        assert result == ["f(x)", "g(y)"]
 
 
 # ── Safety contract compliance ──────────────────────────────────────────

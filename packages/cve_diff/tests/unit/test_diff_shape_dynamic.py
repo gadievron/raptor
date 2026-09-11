@@ -55,12 +55,29 @@ class TestLanguageDriven:
             == "packaging_only"
         )
 
-    def test_unknown_extension_is_not_source(self) -> None:
-        """An extension not in our intrinsic map can't validate as source."""
+    def test_unmapped_extension_falls_back_to_static(self) -> None:
+        """An extension outside the intrinsic map gives the dynamic layer
+        no signal either way — it must defer to the static classifier
+        (grammar / SQL / Fortran fixes are real source changes), never
+        force a non-source verdict that hard-fails the run."""
+        payloads = {"x/y": {"Yacc": 5000}}
+        assert (
+            shape_dynamic.classify(["src/grammar.y"], "x/y", _fetcher(payloads))
+            == shape_dynamic.static_shape.classify(["src/grammar.y"])
+        )
         payloads = {"x/y": {"Python": 12345}}
         assert (
             shape_dynamic.classify(["docs/spec.unknownext"], "x/y", _fetcher(payloads))
-            == "packaging_only"
+            == shape_dynamic.static_shape.classify(["docs/spec.unknownext"])
+        )
+
+    def test_header_only_fix_in_cpp_repo_is_source(self) -> None:
+        """GitHub reports header-heavy C++ repos as {"C++"} with no "C"
+        entry; a .h-only fix is still a source change."""
+        payloads = {"x/y": {"C++": 123456, "CMake": 1000}}
+        assert (
+            shape_dynamic.classify(["include/parser.h"], "x/y", _fetcher(payloads))
+            == "source"
         )
 
     def test_changelog_only_with_languages_is_notes_only(self) -> None:
@@ -118,10 +135,13 @@ class TestRegressionsParityWithStatic:
 
 class TestExtensionParsing:
     def test_no_extension_path(self) -> None:
+        # No extension = unmapped: the dynamic layer defers to the
+        # static classifier rather than forcing non-source.
+        assert shape_dynamic._ext("bin/run-me") == ""
         payloads = {"x/y": {"Shell": 100}}
         assert (
             shape_dynamic.classify(["bin/run-me"], "x/y", _fetcher(payloads))
-            == "packaging_only"
+            == shape_dynamic.static_shape.classify(["bin/run-me"])
         )
 
     def test_dotfile_no_extension(self) -> None:

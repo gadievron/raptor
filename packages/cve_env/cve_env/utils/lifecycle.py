@@ -5,8 +5,9 @@ Helpers are no-ops by default. They fire from ``cli.py:_cmd_build()``'s
 OR CLI flag (``--auto-*``) is set. See ``config.py`` for the env-var →
 constant mapping.
 
-Lockfile design: each ``cve-env build`` writes ``/tmp/cve-env-{pid}.lock``
-on entry and removes it on exit (via ``acquire_lock`` / ``release_lock``).
+Lockfile design: each ``cve-env build`` writes
+``<tempdir>/cve-env-locks-<uid>/cve-env-{pid}.lock`` on entry and removes
+it on exit (via ``acquire_lock`` / ``release_lock``).
 ``stop_colima_if_idle()`` consults the lock set; ``colima stop`` only fires
 when no OTHER active builds are present (own PID excluded; stale-PID locks
 are cleaned up opportunistically as a side-effect of the count).
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import stat
 import tempfile
 from pathlib import Path
 
@@ -24,28 +26,50 @@ from cve_env.utils.run import run_with_timeout
 
 logger = logging.getLogger(__name__)
 
-LOCK_DIR = Path(tempfile.gettempdir())
+# Locks live in a per-user 0o700 subdirectory, NOT directly in the shared
+# temp dir: the lock names are predictable (PID-scoped), so in a
+# world-writable directory a hostile local user could pre-plant symlinks
+# (redirecting any write through the name) or fake live-PID locks (to
+# suppress the idle auto-stop). The private directory removes the shared
+# namespace entirely; ownership is validated before use.
+LOCK_DIR = Path(tempfile.gettempdir()) / f"cve-env-locks-{os.getuid()}"
 LOCK_PREFIX = "cve-env-"
 LOCK_SUFFIX = ".lock"
+
+
+def _ensure_lock_dir() -> Path:
+    """Create/validate the private lock directory; raises if it exists
+    but is a symlink or owned by another user (a planted directory)."""
+    d = LOCK_DIR
+    d.mkdir(mode=0o700, exist_ok=True)
+    st = os.stat(d, follow_symlinks=False)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+        msg = f"lock dir {d} is not a directory owned by this user"
+        raise RuntimeError(msg)
+    return d
 
 
 def acquire_lock() -> Path:
     """Create a per-PID lockfile so concurrent builds can be detected.
     Caller must invoke :func:`release_lock` on the returned path before exit.
 
-    Uses exclusive-create mode (``"x"``) so two processes racing on the
-    same PID-scoped path do not silently clobber each other's lock.
-    ``FileExistsError`` (stale lock from a recycled PID) is tolerated
-    with a warning and an overwrite.
+    Exclusive no-follow create only. A stale lock from a recycled PID is
+    unlinked and re-created through the same ``O_EXCL | O_NOFOLLOW`` open
+    — never written through the existing name, which would follow a
+    planted symlink and overwrite whatever it points at.
     """
-    path = LOCK_DIR / f"{LOCK_PREFIX}{os.getpid()}{LOCK_SUFFIX}"
+    path = _ensure_lock_dir() / f"{LOCK_PREFIX}{os.getpid()}{LOCK_SUFFIX}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     try:
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-        os.write(fd, str(os.getpid()).encode())
-        os.close(fd)
+        fd = os.open(str(path), flags, 0o644)
     except FileExistsError:
-        logger.warning("stale lockfile %s already exists; overwriting", path)
-        path.write_text(str(os.getpid()))
+        logger.warning("stale lockfile %s already exists; replacing", path)
+        path.unlink(missing_ok=True)
+        fd = os.open(str(path), flags, 0o644)
+    try:
+        os.write(fd, str(os.getpid()).encode())
+    finally:
+        os.close(fd)
     return path
 
 
@@ -57,8 +81,9 @@ def release_lock(path: Path) -> None:
 def count_other_active_builds() -> int:
     """Count cve-env build processes other than this one.
 
-    Reads /tmp/cve-env-*.lock files. Stale locks (PIDs no longer alive)
-    are removed opportunistically — counting acts as a sweep.
+    Reads the private lock directory's ``cve-env-*.lock`` files. Stale
+    locks (PIDs no longer alive) are removed opportunistically —
+    counting acts as a sweep.
     """
     own_pid = os.getpid()
     count = 0

@@ -275,4 +275,8 @@ def _confidence(pin_style: PinStyle, version: str | None) -> Confidence:
     return Confidence("high", reason="package-lock.json resolved entry")
 
 
-register(filenames=["package-lock.json", "shrinkwrap.json"])(parse)
+# ``npm-shrinkwrap.json`` is byte-identical to package-lock.json in
+# format; npm has only ever emitted that name (the bare
+# ``shrinkwrap.json`` spelling previously registered here never
+# matched a real file).
+register(filenames=["package-lock.json", "npm-shrinkwrap.json"])(parse)

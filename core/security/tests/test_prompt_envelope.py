@@ -919,14 +919,49 @@ class TestSlotFallbackNameSanitised:
         )
         assert "file_path (trusted): src/a.c" in out
 
-    def test_line_start_via_carriage_return_not_escaped(self):
-        # `(?m)^` matches after `\n` only, not `\r`. We don't expect
-        # `\r`-only line endings in untrusted content (the upstream
-        # control-char escape converts `\r` → `\\x0d` for envelope
-        # callers); pin the current behaviour so a future change to
-        # support `\r` is intentional rather than accidental.
+    def test_line_start_via_carriage_return_now_escaped(self):
+        # `(?m)^` matches after `\n` only, not `\r` — so CR-only line
+        # endings bypassed the heading defence for DIRECT callers of
+        # neutralize_tag_forgery (the envelope pipeline escapes `\r`
+        # upstream). CRs are now normalised to `\n` at the top of the
+        # function; see TestCarriageReturnNeutralisation.
         out = neutralize_tag_forgery("a\r## b")
-        assert "\\##" not in out
+        assert "\\##" in out
+
+
+class TestCarriageReturnNeutralisation:
+    r"""CR line endings normalised inside neutralize_tag_forgery.
+
+    The heading and setext patterns are ``(?m)^``-anchored and
+    ``(?m)^`` matches after ``\n`` only, so ``text\r# H`` and
+    ``Fake\r\n===`` bypassed both defences for the ~15 direct callers.
+    The envelope pipeline was already safe — its control-char escape
+    turns raw ``\r`` into the literal ``\x0d`` before this runs — and
+    must not be double-processed.
+    """
+
+    def test_cr_only_heading_neutralised(self):
+        out = neutralize_tag_forgery("text\r# H")
+        assert "\\#" in out
+
+    def test_crlf_setext_underline_neutralised(self):
+        out = neutralize_tag_forgery("Fake\r\n===")
+        assert "=\u200b==" in out
+
+    def test_plain_lf_headings_unchanged_by_normalisation(self):
+        # Direction check: LF-only content renders identically with
+        # and without CR normalisation.
+        assert (neutralize_tag_forgery("x\n## y")
+                == neutralize_tag_forgery("x\r\n## y"))
+
+    def test_envelope_escaped_cr_not_double_processed(self):
+        # What the envelope pipeline feeds this function: \r already
+        # escaped to the literal chars '\x0d', leaving '#' mid-line —
+        # nothing left for the normalisation to touch.
+        from core.security.prompt_envelope import _escape_for_envelope
+        pre = _escape_for_envelope("a\r## b")
+        assert "\r" not in pre
+        assert neutralize_tag_forgery(pre) == pre
 
 
 # ---------------------------------------------------------------------------

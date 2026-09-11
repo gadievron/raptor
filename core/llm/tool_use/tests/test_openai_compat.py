@@ -421,6 +421,49 @@ def test_malformed_tool_arguments_become_empty_dict() -> None:
     assert out.content[0].input == {}
 
 
+@pytest.mark.parametrize("raw", ["null", "[]", '"str"', "[1,2]"])
+def test_non_dict_tool_arguments_become_empty_dict(raw: str) -> None:
+    """Valid JSON that isn't an object ('null', '[1,2]', '\"str\"')
+    parses cleanly but ``ToolCall.input`` is typed as a dict — a
+    non-dict would crash handler dispatch downstream. Treated exactly
+    like malformed JSON: empty input, call still surfaced."""
+    p, c = _provider_with_stub()
+    c.chat.completions.responses.append(_FakeResponse(
+        [_FakeChoice(
+            _FakeMessage(
+                tool_calls=[_FakeToolCall("call_1", "echo", raw)],
+            ),
+            finish_reason="tool_calls",
+        )],
+    ))
+    out = p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="x")])],
+        tools=[_echo_tool()],
+    )
+    assert isinstance(out.content[0], ToolCall)
+    assert out.content[0].input == {}
+
+
+def test_dict_tool_arguments_pass_through_unchanged() -> None:
+    """Well-formed object arguments are not disturbed by the
+    non-dict guard."""
+    p, c = _provider_with_stub()
+    c.chat.completions.responses.append(_FakeResponse(
+        [_FakeChoice(
+            _FakeMessage(
+                tool_calls=[_FakeToolCall("call_1", "echo", '{"x": "y"}')],
+            ),
+            finish_reason="tool_calls",
+        )],
+    ))
+    out = p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="x")])],
+        tools=[_echo_tool()],
+    )
+    assert isinstance(out.content[0], ToolCall)
+    assert out.content[0].input == {"x": "y"}
+
+
 # ---------------------------------------------------------------------------
 # Cost computation
 # ---------------------------------------------------------------------------

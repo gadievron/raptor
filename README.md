@@ -9,7 +9,7 @@
 ║             ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝    ╚═════╝ ╚═╝  ╚═╝            ║
 ║                                                                           ║
 ║             Autonomous Offensive/Defensive Research Framework             ║
-║             Based on Claude Code (v3.0.0)                                 ║
+║             Based on Claude Code (v3.1.0)                                 ║
 ║                                                                           ║
 ║             Gadi Evron, Daniel Cuthbert, Thomas Dullien (Halvar Flake)    ║
 ║             Michael Bargury, John Cartwright                              ║

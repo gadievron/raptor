@@ -38,7 +38,7 @@ def _pinned(*_a, **_k):
 
 class TestGenerateManifest:
     def test_tp_expected_fp_clean(self, clone):
-        with patch("core.recall.owasp_manifest.subprocess.run", _pinned):
+        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
             m = generate_manifest(clone)
         assert {e["id"] for e in m["expected"]} == {
             "BenchmarkTest00001", "BenchmarkTest00003",
@@ -52,19 +52,19 @@ class TestGenerateManifest:
         assert e["provenance"]["kind"] == "benchmark"
 
     def test_output_passes_manifest_validation(self, clone):
-        with patch("core.recall.owasp_manifest.subprocess.run", _pinned):
+        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
             m = generate_manifest(clone)
         parsed = parse_manifest(m)
         assert parsed.language == "java"
         assert parsed.profile == "scan-codeql"
 
     def test_cwe_filter(self, clone):
-        with patch("core.recall.owasp_manifest.subprocess.run", _pinned):
+        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
             m = generate_manifest(clone, cwes=[89])
         assert [e["id"] for e in m["expected"]] == ["BenchmarkTest00003"]
 
     def test_limit_deterministic(self, clone):
-        with patch("core.recall.owasp_manifest.subprocess.run", _pinned):
+        with patch("core.recall.pinned_clone.subprocess.run", _pinned):
             a = generate_manifest(clone, limit=1)
             b = generate_manifest(clone, limit=1)
         assert a["expected"] == b["expected"]
@@ -76,7 +76,7 @@ class TestGenerateManifest:
     def test_wrong_sha_refused(self, clone):
         wrong = SimpleNamespace(stdout="0" * 40 + "\n", stderr="",
                                 returncode=0)
-        with patch("core.recall.owasp_manifest.subprocess.run",
+        with patch("core.recall.pinned_clone.subprocess.run",
                    return_value=wrong), \
              pytest.raises(OwaspManifestError, match="pinned"):
             generate_manifest(clone)

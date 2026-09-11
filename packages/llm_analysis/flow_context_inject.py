@@ -21,6 +21,7 @@ prompt envelope.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -182,7 +183,18 @@ def _trace_matches(
     file_path: str,
     function: str,
 ) -> bool:
-    """Whether the finding's file/function appears on the traced path."""
+    """Whether the finding's file/function appears on the traced path.
+
+    A file-level hit alone is NOT enough when the finding names a
+    function: canonical /understand trace steps carry no "function"
+    key (only joern-derived steps do), so an unconditional same-file
+    acceptance would attach "this finding sits on the traced flow"
+    context to every unrelated helper in a traced file — biasing the
+    classifier toward reachability for functions the trace never
+    touched. The function must be mentioned in the step's own fields
+    (function / definition / description / call_site / tainted_var);
+    findings without a function name still match on file alone.
+    """
     if not file_path and not function:
         return False
     for step in trace.get("steps", []):
@@ -198,19 +210,22 @@ def _trace_matches(
         ):
             if not function:
                 return True
-            if function in str(step.get("function", "")) or _mentions(
-                function, defn, step.get("description", ""),
+            if _mentions(
+                function, step.get("function", ""), defn, call_site,
+                step.get("description", ""), step.get("tainted_var", ""),
             ):
-                return True
-            # Same file is a weaker match; accept when the function
-            # is unknown to the trace step schema.
-            if "function" not in step:
                 return True
     return False
 
 
 def _mentions(function: str, *texts: Any) -> bool:
-    return any(function in str(t or "") for t in texts)
+    """Identifier-boundary containment — a bare substring check would
+    let short function names ("on", "get") false-match unrelated
+    prose in step descriptions."""
+    if not function:
+        return False
+    pattern = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(function) + r"(?![A-Za-z0-9_])")
+    return any(pattern.search(str(t or "")) for t in texts)
 
 
 def _clip(text: Any, max_len: int = _MAX_FIELD_CHARS) -> str:

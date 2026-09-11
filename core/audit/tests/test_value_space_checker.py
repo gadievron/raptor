@@ -222,6 +222,59 @@ class TestCallGraphLinking:
         assert "y" in match.dead_branches
         assert match.confidence == "high"
 
+    def test_empty_call_graph_object_does_not_disable_pass(self):
+        # FileCallGraph with calls=[] is FALSY: the old
+        # ``getattr(...) or cg.get(...)`` fell through to ``.get`` on
+        # the object, and one call-free file raised AttributeError —
+        # silently disabling the whole value-space pass on virtually
+        # every real target.  The empty graph must be skipped and the
+        # other file's link must still land.
+        source = {
+            "empty.py": "def lonely():\n    return 1\n",
+            "mod.py": (
+                'def producer():\n'
+                '    return "x"\n'
+                '\n'
+                'def consumer(val):\n'
+                '    if val == "x":\n'
+                '        pass\n'
+                '    elif val == "y":\n'
+                '        pass\n'
+            ),
+        }
+        cg = {
+            "empty.py": FakeCallGraph(calls=[]),
+            "mod.py": FakeCallGraph(calls=[
+                FakeCall(caller="consumer", chain=["producer"]),
+            ]),
+        }
+        results = detect_value_space_mismatches(source, call_graphs=cg)
+        match = _find_mismatch(results, "producer", "consumer")
+        assert match is not None
+        assert "y" in match.dead_branches
+
+    def test_dict_shaped_call_graph_still_supported(self):
+        source = {
+            "mod.py": (
+                'def producer():\n'
+                '    return "x"\n'
+                '\n'
+                'def consumer(val):\n'
+                '    if val == "x":\n'
+                '        pass\n'
+                '    elif val == "y":\n'
+                '        pass\n'
+            ),
+        }
+        cg = {
+            "mod.py": {"calls": [
+                {"caller": "consumer", "chain": ["producer"]},
+            ]},
+        }
+        results = detect_value_space_mismatches(source, call_graphs=cg)
+        match = _find_mismatch(results, "producer", "consumer")
+        assert match is not None
+
     def test_call_graph_no_mismatch(self):
         source = {
             "mod.py": (

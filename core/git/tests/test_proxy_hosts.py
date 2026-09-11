@@ -93,14 +93,13 @@ def test_override_dedupes_and_strips_garbage(override_config):
     ]
 
 
-def test_empty_override_falls_back_to_default(override_config):
-    """``{"hosts": []}`` (or any all-garbage list) falls through to
-    the default rather than producing a deny-all allowlist —
-    operators wouldn't write that intentionally."""
+def test_empty_override_is_deny_all(override_config):
+    """``{"hosts": []}`` is an explicit operator statement: the
+    override REPLACES the default precisely so operators can ban
+    public clones — falling back to the permissive default here
+    would silently defeat that."""
     override_config({"hosts": []})
-    hosts = mod.proxy_hosts_for_git()
-    # Falls through to defaults.
-    assert _has_host(hosts, "github.com")
+    assert mod.proxy_hosts_for_git() == []
 
 
 def test_override_missing_hosts_key_falls_back(override_config):

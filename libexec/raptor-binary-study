@@ -167,7 +167,7 @@ def _decompile_batch(db, gpr: Path, names: list[str], batch: int) -> int:
     a note — a batch member must never abort the pass.
     """
     want = []
-    have = {f.name for f in db.functions if f.decompilation}
+    queued: set[int] = set()
     known: dict = {}
     ambiguous: set = set()
     junk = re.compile(r"[^A-Za-z0-9_.$@:<>~*&,()\[\]+-]")
@@ -189,7 +189,12 @@ def _decompile_batch(db, gpr: Path, names: list[str], batch: int) -> int:
             # would enrich; skip rather than mislabel
             skipped_ambiguous += 1
             continue
-        if f is not None and n not in have and not f.is_external:
+        # Test the resolved object, not the looked-up name: a sanitized
+        # alias never matches a raw-name set, and raw + sanitized
+        # spellings of one function must not double-spend the batch cap.
+        if (f is not None and not f.decompilation and not f.is_external
+                and id(f) not in queued):
+            queued.add(id(f))
             want.append(f)
         if len(want) >= batch:
             break

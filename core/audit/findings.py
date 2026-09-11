@@ -6,6 +6,7 @@ and /agentic, so they flow unchanged into /validate.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any, TYPE_CHECKING
 from pathlib import Path
@@ -20,6 +21,53 @@ logger = logging.getLogger(__name__)
 # findings.json is RAPTOR-written run output — the findings-class
 # budget used across the audit/validate bridges.
 _MAX_FINDINGS_BYTES = 64 * 1024 * 1024
+
+
+@contextlib.contextmanager
+def _findings_lock(out_dir: Path):
+    """Advisory cross-process lock for the findings.json
+    read-modify-write.
+
+    Parallel emitters (``raptor-audit record`` sub-agents sharing one
+    out_dir) both read N findings and both wrote N+1 — one finding was
+    lost and the len-derived ids collided. ``save_json``'s atomic
+    rename prevents torn files but not lost updates. Best-effort:
+    platforms without ``fcntl`` proceed unlocked (the previous
+    behaviour), never fail the emit.
+    """
+    lock_path = out_dir / "findings.json.lock"
+    fh = None
+    try:
+        import fcntl
+        fh = open(lock_path, "a+")  # noqa: SIM115 — held across yield
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    except Exception:
+        logger.debug("findings lock unavailable", exc_info=True)
+        if fh is not None:
+            with contextlib.suppress(OSError):
+                fh.close()
+            fh = None
+    try:
+        yield
+    finally:
+        if fh is not None:
+            with contextlib.suppress(OSError):
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            with contextlib.suppress(OSError):
+                fh.close()
+
+
+def _next_finding_id(existing: list[dict[str, Any]]) -> str:
+    """AUDIT-NNN above every existing numeric suffix — ``len()+1``
+    collided after any external deletion."""
+    top = 0
+    for f in existing:
+        fid = str(f.get("id", "") or "")
+        head, _, tail = fid.rpartition("-")
+        if head == "AUDIT" and tail.isdigit():
+            top = max(top, int(tail))
+    return f"AUDIT-{top + 1:03d}"
 
 
 def emit_finding(
@@ -52,30 +100,34 @@ def emit_finding(
     Returns:
         The finding dict.
     """
-    existing = load_findings(out_dir)
-    next_id = len(existing) + 1
-    finding = {
-        "id": f"AUDIT-{next_id:03d}",
-        "file": file_path,
-        "function": function_name,
-        "line": line,
-        "title": title,
-        "description": description,
-        "severity": severity,
-        "origin": "audit",
-    }
-    if cwe:
-        finding["cwe"] = cwe
-        finding["vuln_type"] = cwe
-    else:
-        finding["vuln_type"] = "novel"
+    # One locked read-modify-write: id derivation and the append must
+    # see the same snapshot, or two parallel emitters mint the same id
+    # and one finding is lost.
+    with _findings_lock(out_dir):
+        existing = load_findings(out_dir)
+        finding = {
+            "id": _next_finding_id(existing),
+            "file": file_path,
+            "function": function_name,
+            "line": line,
+            "title": title,
+            "description": description,
+            "severity": severity,
+            "origin": "audit",
+        }
+        if cwe:
+            finding["cwe"] = cwe
+            finding["vuln_type"] = cwe
+        else:
+            finding["vuln_type"] = "novel"
 
-    if tool_evidence:
-        finding["tool_evidence"] = tool_evidence
-    if hypothesis:
-        finding["hypothesis"] = hypothesis
+        if tool_evidence:
+            finding["tool_evidence"] = tool_evidence
+        if hypothesis:
+            finding["hypothesis"] = hypothesis
 
-    _append_finding(out_dir, finding)
+        existing.append(finding)
+        write_findings(existing, out_dir)
     return finding
 
 
@@ -95,7 +147,15 @@ def load_findings(out_dir: Path) -> list[dict[str, Any]]:
         return []
     if data is None:
         return []
-    return data if isinstance(data, list) else data.get("findings", [])
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        found = data.get("findings", [])
+        return found if isinstance(found, list) else []
+    # Valid-JSON scalar (int/str/bool): wrong shape degrades to []
+    # like corrupt content — the docstring's contract.
+    logger.warning("wrong-shaped findings.json at %s", path)
+    return []
 
 
 def write_findings(findings: list[dict[str, Any]], out_dir: Path) -> Path:
@@ -103,22 +163,3 @@ def write_findings(findings: list[dict[str, Any]], out_dir: Path) -> Path:
     path = out_dir / "findings.json"
     save_json(path, findings)
     return path
-
-
-def _append_findings_batch(
-    out_dir: Path, new_findings: list[dict[str, Any]],
-) -> None:
-    """Append multiple findings to findings.json in one read-modify-write.
-
-    Avoids O(N^2) I/O when appending N findings one at a time.
-    """
-    if not new_findings:
-        return
-    findings = load_findings(out_dir)
-    findings.extend(new_findings)
-    write_findings(findings, out_dir)
-
-
-def _append_finding(out_dir: Path, finding: dict[str, Any]) -> None:
-    """Append a finding to findings.json."""
-    _append_findings_batch(out_dir, [finding])

@@ -277,6 +277,7 @@ def validate(
             matches=tool_evidence.matches,
             success=tool_evidence.success,
             error=tool_evidence.error,
+            empty_matches_conclusive=tool_evidence.empty_matches_conclusive,
             # Root hash, not hash_hypothesis(hypothesis): after the
             # first refinement `hypothesis` is a replaced copy and its
             # hash would split the evidence lineage. See root_hash
@@ -349,12 +350,23 @@ def _build_generate_prompt(hypothesis: Hypothesis) -> str:
         if hypothesis.context else ""
     )
     safe_claim = _neutralize_forged_tags(hypothesis.claim)
-    function_line = f"Target function: {hypothesis.target_function}\n" if hypothesis.target_function else ""
-    cwe_line = f"CWE class: {hypothesis.cwe}\n" if hypothesis.cwe else ""
+    # target_function and cwe come from the same caller-supplied finding
+    # data as claim/context (SARIF results, target source symbols) — a
+    # function name carrying forged envelope tags must not reach the
+    # rule-generation prompt undefanged. Same treatment for the target
+    # path string.
+    function_line = (
+        f"Target function: {_neutralize_forged_tags(hypothesis.target_function)}\n"
+        if hypothesis.target_function else ""
+    )
+    cwe_line = (
+        f"CWE class: {_neutralize_forged_tags(hypothesis.cwe)}\n"
+        if hypothesis.cwe else ""
+    )
     context_line = f"\nContext:\n{safe_context}\n" if safe_context else ""
     return _GENERATE_RULE_PROMPT.format(
         claim=safe_claim,
-        target=str(hypothesis.target),
+        target=_neutralize_forged_tags(str(hypothesis.target)),
         function_line=function_line,
         cwe_line=cwe_line,
         context_line=context_line,
@@ -386,9 +398,13 @@ def _build_evaluate_prompt(hypothesis: Hypothesis, evidence: ToolEvidence) -> st
 
     return _EVALUATE_PROMPT.format(
         claim=_neutralize_forged_tags(hypothesis.claim),
-        target=str(hypothesis.target),
+        target=_neutralize_forged_tags(str(hypothesis.target)),
         tool=evidence.tool,
-        rule=evidence.rule,
+        # The rule text is LLM-generated from a turn whose input included
+        # untrusted target-derived content, and its prompt slot sits
+        # OUTSIDE the untrusted block — a second-order injection channel
+        # for forged envelope tags unless defanged here too.
+        rule=_neutralize_forged_tags(evidence.rule),
         summary=_neutralize_forged_tags(evidence.summary or "(no summary)"),
         success=evidence.success,
         matches_block=matches_block,
@@ -449,14 +465,15 @@ def _evaluate_with_refinement(
     ladder lives in `verdict.verdict_from`; we call it here rather than
     inlining so multi-adapter / iteration callers get the same rules
     without copy-paste. Also returns the raw eval data for
-    ``refined_rule`` extraction."""
-    if not evidence.success:
-        return (
-            "inconclusive",
-            f"Tool '{evidence.tool}' did not run successfully: {evidence.error}",
-            None,
-        )
+    ``refined_rule`` extraction.
 
+    Failed tool runs get the LLM evaluation pass too: the verdict is
+    mechanically floored at inconclusive (verdict_from returns
+    inconclusive whenever success=False, whatever the LLM claims), but
+    the eval data's refined_rule lets the loop retry — rule compile
+    errors are exactly the failure class a refinement round can fix,
+    and the error text is in the evaluate prompt for the LLM to work
+    from."""
     prompt = _build_evaluate_prompt(hypothesis, evidence)
     try:
         response = llm_client.generate_structured(
@@ -465,6 +482,12 @@ def _evaluate_with_refinement(
             task_type=task_type,
         )
     except Exception:
+        if not evidence.success:
+            return (
+                "inconclusive",
+                f"Tool '{evidence.tool}' did not run successfully: {evidence.error}",
+                None,
+            )
         if not evidence.matches:
             return "refuted", f"Tool ran cleanly with no matches: {evidence.summary}", None
         return "inconclusive", f"LLM evaluation failed; matches present: {evidence.summary}", None
@@ -479,5 +502,12 @@ def _evaluate_with_refinement(
         )
         claim = "inconclusive"
     verdict = verdict_from(evidence, claim)
-    reasoning = data.get("reasoning", "") or evidence.summary
+    reasoning = (
+        data.get("reasoning", "")
+        or evidence.summary
+        or (
+            f"Tool '{evidence.tool}' did not run successfully: {evidence.error}"
+            if not evidence.success else ""
+        )
+    )
     return verdict, reasoning, data

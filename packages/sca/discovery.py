@@ -100,15 +100,22 @@ MANIFEST_FILENAMES = {
     "Pipfile.lock": "PyPI",
     "poetry.lock": "PyPI",
     "uv.lock": "PyPI",
-    "setup.py": "PyPI",            # legacy; lower-priority parser
-    "setup.cfg": "PyPI",            # legacy
+    "setup.py": "PyPI",            # legacy; visibility stub only — the
+                                   # parser surfaces "deps declared but
+                                   # not statically extractable" via the
+                                   # parse-failure counter
+    "setup.cfg": "PyPI",            # legacy; declarative INI, parsed
 
     # Node.js
     "package.json": "npm",
     "package-lock.json": "npm",
     "yarn.lock": "npm",
     "pnpm-lock.yaml": "npm",
-    "shrinkwrap.json": "npm",
+    # npm's shrinkwrap file is named ``npm-shrinkwrap.json`` (the bare
+    # ``shrinkwrap.json`` spelling matched nothing on disk — npm has
+    # never emitted that filename, so those lockfiles were silently
+    # invisible to discovery).
+    "npm-shrinkwrap.json": "npm",
 
     # Rust (cargo.py)
     "Cargo.toml": "Cargo",
@@ -185,7 +192,7 @@ LOCKFILE_NAMES: set[str] = {
     "package-lock.json",
     "yarn.lock",
     "pnpm-lock.yaml",
-    "shrinkwrap.json",
+    "npm-shrinkwrap.json",
     "Pipfile.lock",
     "poetry.lock",
     "uv.lock",

@@ -370,6 +370,59 @@ class PinConsumerMigrationTest(_PinCase):
         bootstrap_process_pin(run)
         self.assertEqual(get_process_project(), "-")
 
+    def test_bootstrap_witness_disagreement_uses_witness(self):
+        # The run marker is child-writable; the ledger witness is not.
+        # A disagreement means the marker was rewritten — the witness
+        # wins the adoption AND the seal.
+        from core.run.pin import (
+            _frozen_pins,
+            bootstrap_process_pin,
+            get_process_project,
+        )
+        run = self._pinned_run("pinned")
+        with patch.object(sessions, "ledger_pin_witness",
+                          lambda run_dir, pid=None: (True, None,
+                                                     "session")):
+            bootstrap_process_pin(run)
+        self.assertEqual(get_process_project(), "-")
+        frozen = _frozen_pins.get(str(run.resolve()))
+        self.assertIsNotNone(frozen)
+        self.assertIsNone(frozen.project)
+
+    def test_bootstrap_unwitnessed_adoption_never_sealed(self):
+        # No witness (pre-witness run, sessionless): the adoption keeps
+        # compatibility, but an unwitnessed marker must never be
+        # laundered into trusted frozen state for the process lifetime.
+        from core.run.pin import (
+            _frozen_pins,
+            bootstrap_process_pin,
+            get_process_project,
+        )
+        run = self._pinned_run("pinned")
+        with patch.object(sessions, "ledger_pin_witness",
+                          lambda run_dir, pid=None: (False, None, None)):
+            bootstrap_process_pin(run)
+        self.assertEqual(get_process_project(), "pinned")
+        self.assertNotIn(str(run.resolve()), _frozen_pins)
+
+    def test_bootstrap_witnessed_agreement_sealed(self):
+        # Two-direction guard: a witnessed, agreeing marker still gets
+        # the freeze-cache seal (marker-rewrite immunity).
+        from core.run.pin import (
+            _frozen_pins,
+            bootstrap_process_pin,
+            get_process_project,
+        )
+        run = self._pinned_run("pinned")
+        with patch.object(sessions, "ledger_pin_witness",
+                          lambda run_dir, pid=None: (True, "pinned",
+                                                     "session")):
+            bootstrap_process_pin(run)
+        self.assertEqual(get_process_project(), "pinned")
+        frozen = _frozen_pins.get(str(run.resolve()))
+        self.assertIsNotNone(frozen)
+        self.assertEqual(frozen.project, "pinned")
+
 
 class PinFreezeCacheTest(_PinCase):
     """The process freeze cache seals the pin at start_run: a child

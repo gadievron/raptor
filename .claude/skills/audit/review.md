@@ -64,13 +64,16 @@ identifier func;
 * arr[E]
 ```
 
-**SMT check** — arithmetic/bounds feasibility:
+**SMT check** — arithmetic/bounds feasibility. Verb operands (`--operand`,
+`--index`, `--count`, ...) must be atomic (identifier or literal); compound
+expressions go in a repeatable `--guard` (standard parser, arithmetic OK) or
+in `raptor-smt-validate-path`'s free-form positional conditions:
 ```bash
-libexec/raptor-smt-check-overflow --var "len" --type int32 --op "len * elem_size" --bound "4294967295"
-libexec/raptor-smt-check-oob --buffer-size 1024 --index-expr "offset + len" --index-type int32
-libexec/raptor-smt-check-null-deref --pointer "result" --condition "func() returns NULL on error"
-libexec/raptor-smt-check-overflow-to-oob --var "len" --type int32 --op "len * stride" --buffer-size 4096
-libexec/raptor-smt-validate-path --conditions '["len > 0", "len < BUFSIZE", "offset + len > BUFSIZE"]'
+libexec/raptor-smt-check-overflow --op '*' --operand len --operand elem_size --profile uint32 --kind unsigned_wrap
+libexec/raptor-smt-check-oob --buffer-size 1024 --index idx --profile uint32 --guard 'idx == offset + len'
+libexec/raptor-smt-check-null-deref --ptr result --guard 'result == NULL'
+libexec/raptor-smt-check-overflow-to-oob --count len --element-size 16 --index i --profile uint32
+libexec/raptor-smt-validate-path --profile uint32 'len > 0' 'len < BUFSIZE' 'offset + len > BUFSIZE'
 ```
 
 **Compilation test** — build a minimal reproducer:

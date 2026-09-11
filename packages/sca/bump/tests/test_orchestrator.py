@@ -298,6 +298,37 @@ def test_render_report_shape_and_findings_in_table(tmp_path: Path) -> None:
     assert "recent_publish" in text
 
 
+def test_render_report_severity_title_case(tmp_path: Path) -> None:
+    """Human-readable output uses Title Case status values: the
+    severity tag next to a finding renders ``[Medium]`` to match the
+    adjacent Title-Case verdict, never the raw lowercase enum."""
+    (tmp_path / "Dockerfile").write_text(
+        "ARG SEMGREP_VERSION=1.50.0\n"
+    )
+    http = _StubHttp({
+        "https://api.github.com/repos/semgrep/semgrep/releases/latest":
+            {"tag_name": "v1.119.0"},
+    })
+    pypi = _StubPyPI({
+        "semgrep": {"releases": {
+            "1.119.0": [{"upload_time_iso_8601": "2026-05-10T00:00:00Z"}],
+        }},
+    })
+    now = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    report = run_bump(
+        tmp_path, http=http, pypi_client=pypi, now=now,
+    )
+    # recent_publish fires at medium severity.
+    assert report.results[0].bump_supply_chain_findings
+    text = render_report(report)
+    assert "[Medium]" in text
+    assert "[medium]" not in text
+    # The stored finding keeps the raw enum — only rendering changes.
+    assert report.results[0].bump_supply_chain_findings[0].severity == (
+        "medium"
+    )
+
+
 def test_render_report_no_candidates_message(tmp_path: Path) -> None:
     """Friendly message when there are no candidates."""
     http = _StubHttp({})
@@ -1344,6 +1375,266 @@ def test_render_report_surfaces_new_cves_inline(tmp_path: Path) -> None:
     )
     text = render_report(report)
     assert "new-CVE GHSA-new-bad" in text
+
+
+def test_vuln_delta_degraded_floors_verdict_at_review(tmp_path: Path) -> None:
+    """When the OSV lookup behind the new-CVE gate fails, the verdict
+    must not pass as Clean (which --apply would auto-write): it is
+    floored at Review with the degradation named in ``error``, and
+    the file stays untouched."""
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("ARG SEMGREP_VERSION=1.50.0\n")
+    http = _StubHttp({
+        "https://api.github.com/repos/semgrep/semgrep/releases/latest":
+            {"tag_name": "v1.119.0"},
+    })
+    pypi = _StubPyPI({
+        "semgrep": {"releases": {
+            "1.119.0": [{"upload_time_iso_8601": "2025-12-01T00:00:00Z"}],
+        }},
+    })
+
+    class _BrokenOsv:
+        def query_batch(self, deps):
+            raise RuntimeError("OSV unreachable")
+
+    now = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    report = run_bump(
+        tmp_path, http=http, pypi_client=pypi,
+        osv_client=_BrokenOsv(), now=now, apply=True,
+    )
+    r = report.results[0]
+    assert r.verdict == _VERDICT_REVIEW
+    assert r.error is not None and "vuln-delta unavailable" in r.error
+    # Review is never auto-applied.
+    assert r.rewrite_result is None
+    assert dockerfile.read_text() == "ARG SEMGREP_VERSION=1.50.0\n"
+
+
+def test_vuln_delta_transient_slot_failure_floors_verdict(
+    tmp_path: Path,
+) -> None:
+    """The real client signals transient lookup failure via its
+    telemetry counters (advisories come back empty!) — the
+    orchestrator must treat that exactly like a raised failure."""
+    (tmp_path / "Dockerfile").write_text("ARG SEMGREP_VERSION=1.50.0\n")
+    http = _StubHttp({
+        "https://api.github.com/repos/semgrep/semgrep/releases/latest":
+            {"tag_name": "v1.119.0"},
+    })
+    pypi = _StubPyPI({
+        "semgrep": {"releases": {
+            "1.119.0": [{"upload_time_iso_8601": "2025-12-01T00:00:00Z"}],
+        }},
+    })
+
+    class _TelemetryOsv:
+        """Every slot fails transiently: empty advisories + counters."""
+
+        def __init__(self):
+            self.failed_lookups = 0
+            self.failed_dep_keys = []
+
+        def query_batch(self, deps):
+            from packages.sca.osv import OsvResult
+            out = []
+            for d in deps:
+                self.failed_lookups += 1
+                self.failed_dep_keys.append(d.key())
+                out.append(OsvResult(d.key(), []))
+            return out
+
+    now = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    report = run_bump(
+        tmp_path, http=http, pypi_client=pypi,
+        osv_client=_TelemetryOsv(), now=now,
+    )
+    r = report.results[0]
+    assert r.verdict == _VERDICT_REVIEW
+    assert r.error is not None and "vuln-delta unavailable" in r.error
+
+
+# ---------------------------------------------------------------------------
+# ARG walker: version-shape gate + inline raptor-sca override
+# ---------------------------------------------------------------------------
+
+def test_arg_indirection_value_is_not_a_candidate(tmp_path: Path) -> None:
+    """``ARG X_VERSION=${BASE}`` / ``=latest`` are indirection, not
+    versions — --apply would overwrite the indirection with a literal
+    and the vuln delta would query OSV against garbage. The walker
+    gates on version shape like its sibling walkers."""
+    (tmp_path / "Dockerfile").write_text(
+        "ARG SEMGREP_VERSION=${BASE_SEMGREP}\n"
+        "ARG RUFF_VERSION=latest\n"
+    )
+    http = _StubHttp({
+        "https://api.github.com/repos/semgrep/semgrep/releases/latest":
+            {"tag_name": "v1.119.0"},
+        "https://api.github.com/repos/astral-sh/ruff/releases/latest":
+            {"tag_name": "v0.9.0"},
+    })
+    report = run_bump(tmp_path, http=http)
+    assert [c for c in report.candidates if c.kind == "arg"] == []
+
+
+def test_arg_version_shaped_value_still_a_candidate(tmp_path: Path) -> None:
+    """Direction two of the shape gate: a real version pin still
+    surfaces (the gate must not over-reject)."""
+    (tmp_path / "Dockerfile").write_text("ARG SEMGREP_VERSION=v1.50.0\n")
+    http = _StubHttp({
+        "https://api.github.com/repos/semgrep/semgrep/releases/latest":
+            {"tag_name": "v1.119.0"},
+    })
+    report = run_bump(tmp_path, http=http)
+    assert len([c for c in report.candidates if c.kind == "arg"]) == 1
+
+
+def test_arg_inline_skip_override_honoured(tmp_path: Path) -> None:
+    """``# raptor-sca: skip`` marks a vendored fork / deliberate pin.
+    The scan parser honours it; the bumper must too — otherwise
+    --apply rewrites the pin to the UPSTREAM's version."""
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(
+        "ARG SEMGREP_VERSION=1.50.0  # raptor-sca: skip\n"
+    )
+    http = _StubHttp({
+        "https://api.github.com/repos/semgrep/semgrep/releases/latest":
+            {"tag_name": "v1.119.0"},
+    })
+    report = run_bump(tmp_path, http=http, apply=True)
+    assert [c for c in report.candidates if c.kind == "arg"] == []
+    assert dockerfile.read_text() == (
+        "ARG SEMGREP_VERSION=1.50.0  # raptor-sca: skip\n"
+    )
+
+
+def test_arg_inline_remap_override_resolves_mapped_target(
+    tmp_path: Path,
+) -> None:
+    """``# raptor-sca: PyPI:my-fork`` — the pin refers to the mapped
+    package, so BOTH the upstream-latest lookup and the CVE delta
+    must run against the fork, never against the well-known package
+    the ARG name resembles."""
+    (tmp_path / "Dockerfile").write_text(
+        "ARG SEMGREP_VERSION=1.50.0  # raptor-sca: PyPI:my-semgrep-fork\n"
+    )
+    # No GitHub stub: the built-in upstream map (semgrep/semgrep)
+    # must NOT be consulted for a remapped ARG.
+    http = _CountingHttp({})
+    pypi = _stub_pypi_with_versions({
+        "my-semgrep-fork": ["1.50.0", "1.60.0"],
+    })
+    osv = _StubOsv({
+        ("PyPI", "my-semgrep-fork", "1.50.0"): [],
+        ("PyPI", "my-semgrep-fork", "1.60.0"):
+            [_adv("GHSA-fork-only", "critical")],
+    })
+    now = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    report = run_bump(
+        tmp_path, http=http, pypi_client=pypi, osv_client=osv, now=now,
+    )
+    cands = [c for c in report.candidates if c.kind == "arg"]
+    assert len(cands) == 1
+    c = cands[0]
+    assert c.target_version == "1.60.0"
+    assert c.upstream is not None
+    assert c.upstream.kind == "pypi_meta"
+    assert c.upstream.coordinate == "my-semgrep-fork"
+    assert not [u for u in http.calls if "api.github.com" in u], (
+        "remapped ARG must not consult the built-in upstream map"
+    )
+    # The vuln delta ran against the MAPPED package.
+    r = next(r for r in report.results if r.candidate is c)
+    assert [vf.advisories[0].osv_id for vf in r.bump_vuln_findings] == [
+        "GHSA-fork-only",
+    ]
+
+
+def test_arg_inline_remap_non_pypi_lands_in_skipped(tmp_path: Path) -> None:
+    """A remap to an ecosystem without a wired upstream-latest source
+    is surfaced in ``skipped`` — never bumped against the wrong
+    upstream, never silently dropped."""
+    (tmp_path / "Dockerfile").write_text(
+        "ARG SEMGREP_VERSION=1.50.0  # raptor-sca: npm:@vendor/fork\n"
+    )
+    http = _StubHttp({})
+    report = run_bump(tmp_path, http=http)
+    assert [c for c in report.candidates if c.kind == "arg"] == []
+    reasons = [s[2] for s in report.skipped if s[0] == "SEMGREP_VERSION"]
+    assert len(reasons) == 1
+    assert "npm:@vendor/fork" in reasons[0]
+
+
+def test_arg_without_override_unchanged(tmp_path: Path) -> None:
+    """Legit path untouched: a mapped ARG without any inline comment
+    still resolves through the built-in upstream map."""
+    (tmp_path / "Dockerfile").write_text("ARG SEMGREP_VERSION=1.50.0\n")
+    http = _StubHttp({
+        "https://api.github.com/repos/semgrep/semgrep/releases/latest":
+            {"tag_name": "v1.119.0"},
+    })
+    report = run_bump(tmp_path, http=http)
+    cands = [c for c in report.candidates if c.kind == "arg"]
+    assert len(cands) == 1
+    assert cands[0].target_version == "1.119.0"
+
+
+# ---------------------------------------------------------------------------
+# Single-walk discovery (behaviour-identical hoist)
+# ---------------------------------------------------------------------------
+
+def test_combined_finder_matches_split_finders(tmp_path: Path) -> None:
+    from packages.sca.bump.orchestrator import (
+        _find_dockerfiles,
+        _find_dockerfiles_and_workflows,
+        _find_gha_workflows,
+    )
+    (tmp_path / "Dockerfile").write_text("FROM x\n")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "api.Dockerfile").write_text("FROM y\n")
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "ci.yml").write_text("jobs: {}\n")
+    (wf / "notes.txt").write_text("not a workflow\n")
+    nested = tmp_path / "vendor" / ".github" / "workflows"
+    nested.mkdir(parents=True)
+    (nested / "release.yaml").write_text("jobs: {}\n")
+    (tmp_path / "compose.yml").write_text("services: {}\n")
+
+    dockerfiles, workflows = _find_dockerfiles_and_workflows(tmp_path)
+    assert dockerfiles == _find_dockerfiles(tmp_path)
+    assert workflows == _find_gha_workflows(tmp_path)
+
+
+def test_run_bump_walks_find_manifests_once(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Three manifest walkers share ONE ``find_manifests`` result —
+    with identical candidates to the per-walker walks they replace."""
+    import packages.sca.discovery as discovery_mod
+    (tmp_path / "compose.yml").write_text(
+        "services:\n  db:\n    image: postgres:15\n"
+    )
+    (tmp_path / "Dockerfile").write_text("FROM python:3.12\n")
+    calls = {"n": 0}
+    real = discovery_mod.find_manifests
+
+    def _counting(*a, **kw):
+        calls["n"] += 1
+        return real(*a, **kw)
+
+    monkeypatch.setattr(discovery_mod, "find_manifests", _counting)
+    http = _StubHttp({
+        "https://registry-1.docker.io/v2/library/postgres/tags/list?n=100":
+            {"name": "library/postgres", "tags": ["15", "16"]},
+        "https://registry-1.docker.io/v2/library/python/tags/list?n=100":
+            {"name": "library/python", "tags": ["3.12"]},
+    })
+    report = run_bump(tmp_path, http=http)
+    assert calls["n"] == 1
+    yaml_cands = [c for c in report.candidates if c.kind == "yaml_image"]
+    assert len(yaml_cands) == 1
+    assert yaml_cands[0].target_version == "16"
 
 
 # ---------------------------------------------------------------------------

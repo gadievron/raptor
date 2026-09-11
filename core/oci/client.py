@@ -127,21 +127,48 @@ def _reject_deep_nesting(
             stack.append((child, depth + 1))
 
 
-# Token-service realm allowlist per registry. Realm hosts beyond
-# the registry's own host or its documented auth subdomain are
-# rejected — closes the SSRF / credential-handover attack where a
-# malicious / compromised registry returns
-# ``WWW-Authenticate: Bearer realm="https://attacker.com/steal"``.
-# Keep this list tight; new entries require explicit knowledge of
-# the registry's token-service host.
-_REALM_HOST_ALLOWLIST: dict[str, frozenset[str]] = {
-    "docker.io":            frozenset({"auth.docker.io"}),
+# Extra token-service hosts per registry that are NOT in the
+# registry-family table (which lists egress hosts; gitlab.com issues
+# tokens for registry.gitlab.com without being an egress host of the
+# family; the Docker Hub aliases exist for callers that address the
+# API endpoint directly instead of the canonical name).
+_REALM_HOST_EXTRAS: dict[str, frozenset[str]] = {
+    "registry.gitlab.com":  frozenset({"gitlab.com"}),
     "registry-1.docker.io": frozenset({"auth.docker.io"}),
-    "ghcr.io":              frozenset({"ghcr.io"}),
-    "quay.io":              frozenset({"quay.io"}),
-    "gcr.io":               frozenset({"gcr.io"}),
-    "registry.gitlab.com":  frozenset({"gitlab.com", "registry.gitlab.com"}),
+    "index.docker.io":      frozenset({"auth.docker.io"}),
 }
+
+
+def _allowed_realm_hosts(registry: str) -> frozenset[str]:
+    """Realm hosts allowed for ``registry`` beyond its own host.
+
+    Derived from ``registry_hosts._REGISTRY_FAMILIES`` — the auth
+    endpoints already live there (Docker Hub's ``auth.docker.io``,
+    Elastic's ``docker-auth.elastic.co``) — plus the curated extras
+    above. Deriving instead of hand-mirroring keeps the realm gate
+    from drifting when a family is added: the May-2026 elastic family
+    addition never reached the old hand-maintained allowlist, so
+    every elastic token exchange fail-closed at this gate despite
+    egress allowing the auth host.
+
+    Deliberate trade-off: this widens acceptable realm hosts from the
+    hand-curated token endpoints to a family's full egress list (a
+    docker.io realm may now name its CDN hosts) — every family host
+    is operated by the same registry operator and already trusted for
+    the blobs themselves, and the drift-proofing is worth that
+    same-operator widening.
+    """
+    from .registry_hosts import _REGISTRY_FAMILIES
+    hosts: set[str] = set()
+    for predicate, family_hosts in _REGISTRY_FAMILIES:
+        if predicate(registry):
+            hosts.update(
+                h for h in family_hosts
+                if isinstance(h, str) and not h.startswith("*.")
+            )
+            break
+    hosts.update(_REALM_HOST_EXTRAS.get(registry, ()))
+    return frozenset(hosts)
 
 
 def _validate_realm(registry: str, realm: str) -> None:
@@ -149,7 +176,9 @@ def _validate_realm(registry: str, realm: str) -> None:
     URL whose host is the registry itself or on the per-registry
     token-service allowlist.
 
-    SSRF defence: see comment on ``_REALM_HOST_ALLOWLIST`` above.
+    SSRF defence: closes the credential-handover attack where a
+    malicious / compromised registry returns
+    ``WWW-Authenticate: Bearer realm="https://attacker.com/steal"``.
     """
     from urllib.parse import urlsplit
     parts = urlsplit(realm)
@@ -164,16 +193,23 @@ def _validate_realm(registry: str, realm: str) -> None:
             401, f"{registry} realm has no host: {realm!r}",
         )
     host = parts.hostname.lower()
-    # Case-fold ``registry`` for the allowlist lookup too. Pre-fix
-    # a future caller path that passed ``"Docker.io"`` (mixed-case
-    # reference output) would miss the ``"docker.io"`` allowlist
-    # key, the ``.get(..., frozenset())`` would return empty, and
-    # the realm host comparison would fall through to a false
-    # refusal. ``parse_image_ref`` is the canonical source today
-    # and lowercases internally, but the defensive case-fold here
-    # closes that surface for any future caller path.
-    allowed = _REALM_HOST_ALLOWLIST.get(registry.lower(), frozenset())
-    if host == registry.lower() or host in allowed:
+    # Case-fold ``registry`` for the lookup too — ``parse_image_ref``
+    # lowercases, but the defensive fold closes any future caller
+    # path that passes a mixed-case registry.
+    registry_lower = registry.lower()
+    # ``parts.hostname`` is port-stripped; compare against the
+    # registry's HOST, not the port-bearing authority string, or a
+    # self-hosted registry on a nonstandard port (``reg.example:5000``)
+    # can never satisfy realm==self and every bearer exchange
+    # fail-closes.
+    from .registry_hosts import _split_registry_host_port
+    try:
+        registry_host, _port, _bracketed = _split_registry_host_port(
+            registry_lower)
+    except ValueError:
+        registry_host = registry_lower
+    allowed = _allowed_realm_hosts(registry_lower)
+    if host == registry_host or host in allowed:
         return
     raise RegistryError(
         401,
@@ -450,10 +486,14 @@ class OciRegistryClient:
         and used with no content authentication at all.
         """
         requested_pin: str | None = None
-        if reference is not None and ":" in reference:
-            # Digest-shaped (tags cannot contain ':'). Refusing here
-            # also keeps a hostile index-supplied digest inert in the
-            # URL path below.
+        if reference is not None:
+            # The override is only ever an index-supplied digest (child
+            # manifest of a multi-arch pick) — enforce the digest shape
+            # on EVERY value, not just colon-bearing ones. A colon-less
+            # index entry previously fell through and was fetched as a
+            # mutable TAG with no pin cross-check while the caller
+            # believed it content-addressed — and dot-segments / query
+            # syntax rode into the authed URL path below.
             if not _DIGEST_RE.match(reference):
                 raise RegistryError(
                     0,
@@ -462,7 +502,7 @@ class OciRegistryClient:
                     f"a verifiable sha256 content address",
                 )
             requested_pin = reference
-        elif reference is None and ref.digest:
+        elif ref.digest:
             if not _DIGEST_RE.match(ref.digest):
                 raise RegistryError(
                     0,
@@ -683,10 +723,25 @@ class OciRegistryClient:
         # identity`` pins the raw-bytes contract in the HTTP backend
         # (no transport decompression), so a gzip-shaped blob is never
         # transparently mutated before hashing.
-        resp = self._authed_request(
-            "GET", ref.registry, url,
-            headers={"Accept-Encoding": "identity"}, stream=True,
-        )
+        # ``max_bytes`` override: the buffered request() default cap
+        # (50 MB) is far below real layer sizes, so a DIRECT-serving
+        # registry (self-hosted registry:2 / Harbor / GitLab — no CDN
+        # redirect) would hard-fail every >50 MB layer mid-buffer with
+        # an uncontracted exception type. The blob budget applies to
+        # both serving shapes; HttpError raised during the buffered
+        # fetch is translated to the module's contract below.
+        try:
+            resp = self._authed_request(
+                "GET", ref.registry, url,
+                headers={"Accept-Encoding": "identity"}, stream=True,
+                max_bytes=_MAX_BLOB_BYTES,
+            )
+        except HttpError as exc:
+            raise RegistryError(
+                getattr(exc, "status", 0) or 0,
+                f"blob GET failed for {digest} in "
+                f"{ref.to_canonical()}: {exc}",
+            ) from exc
         # Registries answer blob GETs with a redirect to a pre-signed
         # CDN URL (Docker Hub 307s every layer to its CDN; the
         # pre-signed query string IS the authorisation). core.http
@@ -740,11 +795,18 @@ class OciRegistryClient:
                 path = parsed.path + (
                     f"?{parsed.query}" if parsed.query else ""
                 )
-                resp = self._authed_request(
-                    "GET", ref.registry, path,
-                    headers={"Accept-Encoding": "identity"},
-                    stream=True,
-                )
+                try:
+                    resp = self._authed_request(
+                        "GET", ref.registry, path,
+                        headers={"Accept-Encoding": "identity"},
+                        stream=True, max_bytes=_MAX_BLOB_BYTES,
+                    )
+                except HttpError as exc:
+                    raise RegistryError(
+                        getattr(exc, "status", 0) or 0,
+                        f"blob GET failed for {digest} in "
+                        f"{ref.to_canonical()}: {exc}",
+                    ) from exc
                 continue
             # Off-origin CDN — terminal hop: clean request (no
             # registry credential; the pre-signed URL is the
@@ -826,6 +888,7 @@ class OciRegistryClient:
         *,
         headers: dict[str, str] | None = None,
         stream: bool = False,
+        max_bytes: int | None = None,
     ):
         """Issue ``METHOD https://<api-endpoint><url_path>`` with the
         appropriate auth header. The API endpoint is resolved via
@@ -872,9 +935,12 @@ class OciRegistryClient:
         # raise_on_status=False so the 401-with-WWW-Authenticate
         # challenge reaches the retry path below instead of being
         # converted to an exception by the backend.
+        request_kwargs: dict[str, Any] = {}
+        if max_bytes is not None:
+            request_kwargs["max_bytes"] = max_bytes
         resp = self.http.request(
             method, full_url, headers=req_headers, stream=stream,
-            raise_on_status=False,
+            raise_on_status=False, **request_kwargs,
         )
         if resp.status_code != 401:
             return resp
@@ -901,7 +967,7 @@ class OciRegistryClient:
             resp.close()
             return self.http.request(
                 method, full_url, headers=req_headers, stream=stream,
-                raise_on_status=False,
+                raise_on_status=False, **request_kwargs,
             )
 
         realm = params.get("realm", "")
@@ -934,9 +1000,26 @@ class OciRegistryClient:
         token = self._exchange_token(registry, realm, service, scope)
         req_headers["Authorization"] = f"Bearer {token}"
         resp.close()
+        retry = self.http.request(
+            method, full_url, headers=req_headers, stream=stream,
+            raise_on_status=False, **request_kwargs,
+        )
+        if retry.status_code != 401:
+            return retry
+        # Still 401: the token may have come from the cache under a
+        # triple OTHER than the one this request presented first
+        # (interleaved multi-repo scans rotate _last_challenge), so
+        # the eviction above never fired and _exchange_token handed
+        # back a stale cached token. One forced re-exchange closes
+        # that window; a second 401 after a fresh token is a real
+        # authorization failure and is returned to the caller.
+        retry.close()
+        self._tokens.pop(cache_key, None)
+        token = self._exchange_token(registry, realm, service, scope)
+        req_headers["Authorization"] = f"Bearer {token}"
         return self.http.request(
             method, full_url, headers=req_headers, stream=stream,
-            raise_on_status=False,
+            raise_on_status=False, **request_kwargs,
         )
 
     def _exchange_token(

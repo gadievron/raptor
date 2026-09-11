@@ -13,9 +13,15 @@ class TestToCoverageRecord:
     def test_empty_results(self):
         assert to_coverage_record([]) is None
 
-    def test_no_files_examined(self):
+    def test_no_files_but_rule_ran_still_records(self):
+        # A rule that ran (or failed to run) with nothing examined is
+        # still signal — matching core.coverage.record.build_from_cocci,
+        # which only skips when there are no files AND no rules.
         results = [SpatchResult(rule="r1")]
-        assert to_coverage_record(results) is None
+        record = to_coverage_record(results)
+        assert record is not None
+        assert record["files_examined"] == []
+        assert record["rules_applied"] == ["r1"]
 
     def test_basic_record(self):
         results = [
@@ -59,8 +65,10 @@ class TestToCoverageRecord:
             ),
         ]
         record = to_coverage_record(results)
+        # Path-bearing failure entries (rule name as path), matching
+        # build_from_cocci — consumers key and dedupe on "path".
         assert record["files_failed"] == [
-            {"rule": "r1", "reason": "parse error at line 5"}
+            {"rule": "r1", "path": "r1", "reason": "parse error at line 5"}
         ]
 
     def test_no_failures_key_when_clean(self):
@@ -68,4 +76,38 @@ class TestToCoverageRecord:
             SpatchResult(rule="r1", files_examined=["a.c"]),
         ]
         record = to_coverage_record(results)
+        assert "files_failed" not in record
+
+
+class TestTotalFailureRuns:
+    def test_total_failure_run_yields_record(self):
+        # Every rule failed to parse, nothing examined: the record must
+        # still exist (rules_applied + files_failed) — a None here made
+        # engine failure read as verified silence in /project coverage.
+        results = [
+            SpatchResult(rule="myrule", errors=["spatch parse error"], returncode=2),
+        ]
+        record = to_coverage_record(results)
+        assert record is not None
+        assert record["files_examined"] == []
+        assert record["rules_applied"] == ["myrule"]
+        assert record["files_failed"] == [
+            {"rule": "myrule", "path": "myrule", "reason": "spatch parse error"}
+        ]
+
+    def test_no_signal_at_all_still_none(self):
+        # Two-direction: with no files, no rule names, and no errors
+        # there is genuinely nothing to record.
+        results = [SpatchResult(rule="", errors=[], files_examined=[])]
+        assert to_coverage_record(results) is None
+
+    def test_empty_rule_failures_dropped(self):
+        # A failure with no rule name would emit an empty path —
+        # filtered, matching build_from_cocci.
+        results = [
+            SpatchResult(rule="", errors=["boom"]),
+            SpatchResult(rule="ok_rule", files_examined=["a.c"]),
+        ]
+        record = to_coverage_record(results)
+        assert record is not None
         assert "files_failed" not in record

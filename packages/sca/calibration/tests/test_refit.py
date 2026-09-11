@@ -54,11 +54,13 @@ def _make_finding(
     cvss: float = 7.5, ecosystem: str = "PyPI",
     name: str = "pkg", version: str = "1.0.0",
     reach_verdict: str = "imported",
+    direct: bool = True,
     transitive_depth: int = 0,
     exposure: float = 0.5,
 ) -> Dict:
-    """Build a finding dict matching the project_samples archive
-    shape — enough fields for compute_risk_estimate to re-score."""
+    """Build a finding dict matching the FLAT project_samples archive
+    shape (``_sanitise_findings``' emitted schema) — enough fields
+    for compute_risk_estimate to re-score."""
     return {
         "finding_id": f"sca:{ecosystem}:{name}:{cve}",
         "raptor_risk_estimate": score,
@@ -69,16 +71,12 @@ def _make_finding(
         "transitive_depth": transitive_depth,
         "ecosystem": ecosystem,
         "severity": "high",
-        "advisory": {"osv_id": cve, "aliases": [cve]},
-        "dependency": {
-            "ecosystem": ecosystem, "name": name, "version": version,
-            "declared_in": "./x", "scope": "main",
-            "is_lockfile": False, "pin_style": "exact",
-            "direct": True, "purl": f"pkg:{ecosystem}/{name}@{version}",
-            "parser_confidence": {
-                "level": "high", "reason": "t", "numeric": 0.95,
-            },
-        },
+        "advisory": {"id": cve, "aliases": [cve]},
+        "dep_name": name,
+        "dep_version": version,
+        "purl": f"pkg:{ecosystem}/{name}@{version}",
+        "direct": direct,
+        "parser_confidence": {"level": "high", "numeric": 0.95},
         "reachability": {
             "verdict": reach_verdict,
             "confidence": {
@@ -86,9 +84,7 @@ def _make_finding(
             },
             "evidence": [],
         },
-        "version_match_confidence": {
-            "level": "high", "reason": "t", "numeric": 0.95,
-        },
+        "version_match_confidence": {"level": "high", "numeric": 0.95},
     }
 
 
@@ -157,7 +153,7 @@ def test_load_findings_labels_exploited_correctly(tmp_path: Path):
     ])
     samples = _load_findings_with_labels(tmp_path)
     by_cve = {
-        s[0]["advisory"]["osv_id"]: s[1] for s in samples
+        s[0]["advisory"]["id"]: s[1] for s in samples
     }
     assert by_cve["CVE-2025-1"] == 1
     assert by_cve["CVE-2025-99"] == 0
@@ -189,8 +185,10 @@ def test_load_findings_skips_malformed_samples(tmp_path: Path):
 
 
 def test_top_20_precision_baseline_uses_archived_score():
-    """When overrides=None, the function reads the archived
-    raptor_risk_estimate and ranks by it."""
+    """With overrides=None the scores are recomputed from the
+    archived inputs under the CURRENT constants; identical inputs
+    produce identical scores, so all three fit in the top 20 and
+    the precision is just the label fraction."""
     samples = [
         (_make_finding(cve="CVE-1", score=90), 1),
         (_make_finding(cve="CVE-2", score=80), 1),
@@ -443,13 +441,11 @@ def test_search_metric_returns_top20_ndcg_rho_tuple():
     # All top-20 are exploited and there are >20 exploited overall,
     # so DCG@20 == IDCG@20 → NDCG = 1.0.
     assert ndcg == pytest.approx(1.0)
-    # ρ slot is a float. In this synthetic fixture the per-finding
-    # rebuild collapses every finding to the SAME default score
-    # (no CVSS / no signals → cvss_missing default), so
-    # ``_spearman_rho`` returns None (constant-x case) and the
-    # tuple's ρ position falls back to 0.0. The shape assertion
-    # is what this test pins; ρ-sensitivity is exercised by the
-    # ρ-aware-improvement-gate test below.
+    # ρ slot is a float. These minimal rows lack the risk-model
+    # input fields, so scoring falls back to each row's archived
+    # ``raptor_risk_estimate``. The shape assertion is what this
+    # test pins; ρ-sensitivity is exercised by the ρ-aware-
+    # improvement-gate test below.
     assert isinstance(rho, float)
 
 
@@ -529,3 +525,153 @@ def test_ecosystem_filter_drops_other_ecos(tmp_path: Path):
         ecosystem_filter="Cargo",
     )
     assert report_none.sample_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Archive-schema rescoring — writer/reader coherence
+# ---------------------------------------------------------------------------
+
+
+def test_rescore_reproduces_score_from_real_archive_row(tmp_path: Path):
+    """End-to-end writer→reader coherence: a VulnFinding scored by
+    the production formula, rendered to a findings.json row and
+    archived by ``_sanitise_findings``, must rescore (overrides=None,
+    unchanged constants) to exactly the archived estimate. Pre-fix
+    the reader consumed fields the writer never emitted (a nested
+    ``dependency`` dict, top-level exposure/depth), so every archived
+    finding was rebuilt from defaults instead."""
+    from packages.sca.calibration.project_samples import (
+        _sanitise_findings,
+    )
+    from packages.sca.calibration.refit import _rescore_finding
+    from packages.sca.findings import _vuln_finding_to_row
+    from packages.sca.models import (
+        Confidence, Dependency, PinStyle, Reachability, VulnFinding,
+    )
+    from packages.sca.risk import compute_risk_estimate
+
+    clone_root = tmp_path / "clone"
+    dep = Dependency(
+        ecosystem="PyPI", name="pkg", version="1.0.0",
+        declared_in=clone_root / "requirements.txt", scope="main",
+        is_lockfile=True, pin_style=PinStyle.EXACT,
+        direct=False,                       # transitive — depth decay fires
+        purl="pkg:pypi/pkg@1.0.0",
+        parser_confidence=Confidence(level="medium"),
+    )
+    vf = VulnFinding(
+        finding_id="sca:PyPI:pkg:CVE-2024-1", dependency=dep,
+        advisories=[], in_kev=False, epss=0.2, fixed_version=None,
+        reachability=Reachability(
+            verdict="not_evaluated", confidence=Confidence(level="medium"),
+        ),
+        version_match_confidence=Confidence(level="low"),
+        cvss_score=6.1, cvss_vector=None, severity="medium",
+        exposure_factor=0.25, transitive_depth=2,
+    )
+    vf.raptor_risk_estimate, vf.risk_components = compute_risk_estimate(
+        vf, dep,
+    )
+    row = _vuln_finding_to_row(vf)
+    archived = _sanitise_findings([row], clone_root)
+    assert len(archived) == 1
+    rescored = _rescore_finding(archived[0], None)
+    assert rescored == pytest.approx(vf.raptor_risk_estimate)
+
+
+def test_rescore_old_schema_row_uses_archived_score_not_defaults():
+    """A row that predates the archived risk-model inputs falls back
+    to its archived ``raptor_risk_estimate`` explicitly — including
+    under overrides. Rebuilding it from silent defaults would score
+    it very differently (this row computes near 100 from KEV + CVSS
+    9.8 defaults) for every candidate."""
+    from packages.sca.calibration.refit import _rescore_finding
+    old_row = {
+        "raptor_risk_estimate": 42.5,
+        "cvss_score": 9.8,
+        "in_kev": True,
+        "ecosystem": "PyPI",
+        "advisory": {"id": "CVE-2020-1", "aliases": []},
+        # Old archives carried none of: direct, parser_confidence,
+        # version_match_confidence, exposure_factor, transitive_depth.
+    }
+    assert _rescore_finding(old_row, None) == 42.5
+    assert _rescore_finding(old_row, {"_KEV_MULTIPLIER": 2.0}) == 42.5
+
+
+def test_rescore_row_without_any_score_returns_none():
+    from packages.sca.calibration.refit import _rescore_finding
+    assert _rescore_finding({"advisory": {}}, None) is None
+
+
+def test_depth_and_exposure_constants_tunable_from_archive():
+    """The depth-decay and exposure constants must actually move
+    rescored values for archived transitive / low-exposure findings.
+    Pre-fix the rebuild defaulted direct=True / exposure 0.0, so
+    ``_DEPTH_DECAY_BASE`` and ``_EXPO_*`` candidates always tied
+    baseline and were untunable."""
+    from packages.sca.calibration.refit import _rescore_finding
+    row = _make_finding(
+        cve="CVE-2024-2", cvss=5.0, epss=0.3,
+        direct=False, transitive_depth=2, exposure=0.8,
+    )
+    base = _rescore_finding(row, None)
+    assert base is not None and 0.0 < base < 100.0
+    depth_moved = _rescore_finding(row, {"_DEPTH_DECAY_BASE": 0.35})
+    expo_moved = _rescore_finding(row, {"_EXPO_RANGE_MULTIPLIER": 0.25})
+    assert depth_moved != pytest.approx(base)
+    assert expo_moved != pytest.approx(base)
+
+
+# ---------------------------------------------------------------------------
+# Shared ground-truth / CVE extraction (single implementation)
+# ---------------------------------------------------------------------------
+
+
+def test_ground_truth_and_cve_extraction_shared_with_validate():
+    """Refit must not carry drift-prone mirror copies: the signal-
+    file list and the alias-extraction rules live in validate.py
+    only, and refit binds the very same objects."""
+    from packages.sca.calibration import refit, validate
+    assert refit._load_ground_truth is validate._load_ground_truth
+    assert refit._extract_cve_ids is validate._extract_cve_ids
+
+
+def test_refit_ground_truth_matches_validate_on_fixture(tmp_path: Path):
+    from packages.sca.calibration import refit, validate
+    (tmp_path / "vulnrichment_signals.json").write_text(json.dumps({
+        "signals": {"CVE-2025-77": {"ssvc": "poc"}},
+    }))
+    got = refit._load_ground_truth(tmp_path)
+    assert got == validate._load_ground_truth(tmp_path)
+    assert got == {"CVE-2025-77"}
+
+
+# ---------------------------------------------------------------------------
+# Primary advisory id key ("id", with legacy "osv_id" fallback)
+# ---------------------------------------------------------------------------
+
+
+def test_cve_primary_id_without_alias_gets_exploited_label(tmp_path: Path):
+    """findings.py archives the primary OSV id under ``id`` — a
+    CVE-primary record with no CVE alias must still earn its
+    exploited label (pre-fix the readers looked for ``osv_id``
+    only, a key the writer never emits)."""
+    _write_signals(tmp_path, ["CVE-2023-1234"])
+    f = _make_finding(cve="CVE-2023-1234")
+    f["advisory"] = {"id": "CVE-2023-1234", "aliases": []}
+    _write_sample(tmp_path, "PyPI", "p", [f])
+    samples = _load_findings_with_labels(tmp_path)
+    assert len(samples) == 1
+    assert samples[0][1] == 1
+
+
+def test_cve_legacy_osv_id_key_still_labelled(tmp_path: Path):
+    """Older sample rows / fixtures used ``osv_id`` — kept as a
+    fallback so old corpora don't silently lose their labels."""
+    _write_signals(tmp_path, ["CVE-2020-9999"])
+    f = _make_finding(cve="CVE-2020-9999")
+    f["advisory"] = {"osv_id": "CVE-2020-9999", "aliases": []}
+    _write_sample(tmp_path, "PyPI", "p", [f])
+    samples = _load_findings_with_labels(tmp_path)
+    assert samples[0][1] == 1

@@ -264,3 +264,25 @@ def test_run_consensus_combines_both_methods(monkeypatch) -> None:
     assert r.attempted_count == 2
     assert r.consensus_slug == "acme/widget"
     assert r.consensus_sha.startswith("deadbeef")
+
+
+def test_matches_pipeline_pick_short_pick_against_full_consensus() -> None:
+    """Symmetric prefix: a 7-char pick of the SAME commit as the 40-char
+    consensus must match (asymmetric startswith false-negatived it)."""
+    full = "a" * 40
+    report = ConsensusReport(
+        cve_id="CVE-X",
+        methods=(
+            MethodResult(name="osv", found=True, slug="curl/curl", sha=full),
+            MethodResult(name="nvd", found=True, slug="curl/curl", sha=full),
+        ),
+        consensus_slug="curl/curl",
+        consensus_sha=full,
+        agreement_count=2,
+    )
+    assert report.matches_pipeline_pick("curl/curl", full[:7]) is True
+    assert report.matches_pipeline_pick("curl/curl", full) is True
+    # A different commit sharing no 12-char prefix still mismatches.
+    assert report.matches_pipeline_pick("curl/curl", "b" * 40) is False
+    # Degenerate short values never match.
+    assert report.matches_pipeline_pick("curl/curl", "a" * 4) is False

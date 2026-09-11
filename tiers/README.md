@@ -28,6 +28,7 @@ tiers/
     ├── fuzzing_strategist.md
     ├── patch_engineer.md
     ├── penetration_tester.md
+    ├── web_researcher.md
     └── README.md
 ```
 

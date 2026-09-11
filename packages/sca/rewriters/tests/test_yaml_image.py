@@ -224,3 +224,74 @@ def test_registry_dispatch_gha_workflow_not_routed(tmp_path: Path) -> None:
     if results:
         assert not results[0].applied
     assert "image: python:3.11" in wf.read_text()
+
+
+# ---------------------------------------------------------------------------
+# Repeated identical pins — every old-value occurrence is bumped
+# ---------------------------------------------------------------------------
+
+def test_two_services_on_same_image_both_bumped(tmp_path: Path) -> None:
+    """Two compose services pinned to the same vulnerable image must
+    BOTH be bumped. A first-match ``count=1`` substitution used to
+    bump one and leave its twin vulnerable while reporting applied."""
+    f = tmp_path / "docker-compose.yml"
+    f.write_text(
+        "services:\n"
+        "  db:\n"
+        "    image: postgres:16.1\n"
+        "  db-replica:\n"
+        "    image: postgres:16.1\n"
+    )
+    edits = [RewriteEdit(
+        locator="docker.io/library/postgres",
+        old_value="16.1", new_value="16.4",
+    )]
+    results = rewrite_yaml_image(f, edits)
+    assert results[0].applied
+    text = f.read_text()
+    assert text.count("image: postgres:16.4") == 2
+    assert "16.1" not in text
+
+
+def test_fully_bumped_file_reports_no_change(tmp_path: Path) -> None:
+    """Every occurrence already at the target → no_change (idempotent
+    re-run after the multi-occurrence bump)."""
+    f = tmp_path / "docker-compose.yml"
+    f.write_text(
+        "services:\n"
+        "  db:\n"
+        "    image: postgres:16.4\n"
+        "  db-replica:\n"
+        "    image: postgres:16.4\n"
+    )
+    edits = [RewriteEdit(
+        locator="docker.io/library/postgres",
+        old_value="16.1", new_value="16.4",
+    )]
+    results = rewrite_yaml_image(f, edits)
+    assert not results[0].applied
+    assert results[0].reason == "no_change"
+
+
+def test_mixed_old_and_new_occurrences_bumps_the_stragglers(
+    tmp_path: Path,
+) -> None:
+    """One service already bumped, one still vulnerable: the straggler
+    is bumped and the run reports applied."""
+    f = tmp_path / "docker-compose.yml"
+    f.write_text(
+        "services:\n"
+        "  db:\n"
+        "    image: postgres:16.4\n"
+        "  db-replica:\n"
+        "    image: postgres:16.1\n"
+    )
+    edits = [RewriteEdit(
+        locator="docker.io/library/postgres",
+        old_value="16.1", new_value="16.4",
+    )]
+    results = rewrite_yaml_image(f, edits)
+    assert results[0].applied
+    text = f.read_text()
+    assert text.count("image: postgres:16.4") == 2
+    assert "16.1" not in text

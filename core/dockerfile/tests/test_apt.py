@@ -542,3 +542,27 @@ def test_unbalanced_quotes_falls_back_gracefully():
     # The fallback splitter still recovers ``curl`` even though the
     # rest of the line is malformed.
     assert "curl" in _names(pkgs)
+
+
+# ── BuildKit RUN flags and shell redirections ──────────────────────────
+
+
+def test_buildkit_mount_flag_does_not_hide_installs():
+    insts = parse_dockerfile(
+        "FROM debian:11\n"
+        "RUN --mount=type=cache,target=/var/cache/apt "
+        "apt-get install -y curl\n"
+    )
+    pkgs = extract_apt_packages(insts)
+    assert [p.name for p in pkgs] == ["curl"]
+
+
+def test_redirection_tokens_are_not_packages():
+    insts = parse_dockerfile(
+        "FROM debian:11\n"
+        "RUN apt-get install -y curl > /var/log/apt.log 2>&1\n"
+        "RUN apt-get install -y wget >> /out\n"
+        "RUN apt-get install -y jq 2>/dev/null\n"
+    )
+    pkgs = extract_apt_packages(insts)
+    assert sorted(p.name for p in pkgs) == ["curl", "jq", "wget"]

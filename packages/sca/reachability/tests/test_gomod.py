@@ -145,6 +145,49 @@ def test_grep_symbols_multiple_files(tmp_path: Path) -> None:
     assert set(found) == {"Alpha", "Beta"}
 
 
+def test_scan_block_paren_in_trailing_comment(tmp_path: Path) -> None:
+    """A ')' inside a trailing comment must not terminate the import
+    block — imports after the comment line still count."""
+    go_file = tmp_path / "main.go"
+    go_file.write_text(
+        'package main\n\n'
+        'import (\n'
+        '\t"fmt" // formatting (stdlib)\n'
+        '\t"github.com/foo/bar"\n'
+        ')\n',
+        encoding="utf-8",
+    )
+    scan = scan_imports(tmp_path)
+    assert "fmt" in scan
+    assert "github.com/foo/bar" in scan
+    r = resolve_dep("github.com/foo/bar", scan, target=tmp_path)
+    assert r.verdict == "imported"
+    # Genuinely absent dep still resolves not_reachable.
+    r2 = resolve_dep("github.com/other/thing", scan, target=tmp_path)
+    assert r2.verdict == "not_reachable"
+
+
+def test_scan_block_same_line_and_comment_close(tmp_path: Path) -> None:
+    """Single-line blocks and a commented close line both parse."""
+    go_file = tmp_path / "main.go"
+    go_file.write_text(
+        'package main\n\n'
+        'import ( "single/line" )\n\n'
+        'import (\n'
+        '\talias "github.com/foo/bar"\n'
+        '\t// removed "github.com/gone/dep" (kept for reference)\n'
+        '\t"github.com/baz/qux"\n'
+        ') // end of imports\n',
+        encoding="utf-8",
+    )
+    scan = scan_imports(tmp_path)
+    assert "single/line" in scan
+    assert "github.com/foo/bar" in scan
+    assert "github.com/baz/qux" in scan
+    # The commented-out import must not be collected.
+    assert "github.com/gone/dep" not in scan
+
+
 def test_resolve_dep_advisory_symbols_in_test_only(tmp_path: Path) -> None:
     """Advisory symbols in test-only files should not upgrade to likely_called."""
     test_file = tmp_path / "main_test.go"

@@ -165,3 +165,33 @@ def test_finding_to_variant_leaves_foreign_path_unchanged() -> None:
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_malformed_manifest_surfaces_inconclusive_not_clean(tmp_path: Path) -> None:
+    """A repo whose only manifest fails to parse must NOT report []
+    ('no findings') — that is indistinguishable from a clean scan and
+    gives false assurance on exactly the LLM-generated manifests this
+    mode targets."""
+    (tmp_path / "package.json").write_text("{ this is not json", encoding="utf-8")
+    out = mod.slopsquat_hunt_dispatch(None, "x", str(tmp_path))
+    assert len(out) == 1
+    assert "error" in out[0]
+    assert "failed to parse" in out[0]["error"]
+
+
+def test_parse_failure_alongside_findings_still_returns_findings(
+    tmp_path: Path,
+) -> None:
+    """Partial degradation: one malformed manifest must not suppress
+    findings parsed from the healthy one."""
+    (tmp_path / "package.json").write_text(
+        json.dumps({"dependencies": {"react": "^18.0.0",
+                                     "react-helper": "^1.0.0"}}),
+        encoding="utf-8",
+    )
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "package.json").write_text("{ broken", encoding="utf-8")
+    out = mod.slopsquat_hunt_dispatch(None, "x", str(tmp_path))
+    assert out and all("error" not in v for v in out)
+    assert out[0]["function"] == "npm:react-helper"

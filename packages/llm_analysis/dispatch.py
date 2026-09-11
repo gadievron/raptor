@@ -50,18 +50,46 @@ class _ModelCircuitOpen(Exception):
     """
 
 
+class _ErrorDictResult(Exception):
+    """A dispatch_fn returned a DispatchResult whose payload is an
+    error envelope (``{"error": ...}``) instead of raising.
+
+    Non-raising dispatch paths (the CC subprocess adapter, external
+    clients that wrap failures) report every failure this way. The
+    drain loop raises this internally so those failures flow through
+    the SAME except-branch as raised exceptions — per-model
+    circuit breaker, auth abort, error classification, and failure
+    telemetry all fire. Without the re-route, a persistently dead
+    transport masquerades as an endless stream of successes: the
+    consecutive-failure counter is RESET on each error envelope and
+    the run burns one full timeout per finding with no early stop.
+
+    Carries the model name the dispatch path attributed the failure
+    to (``""`` when the path didn't know).
+    """
+
+    def __init__(self, message: str, model_name: str = "") -> None:
+        super().__init__(message)
+        self.model_name = model_name
+
+
 class DispatchResult:
     """Normalised result from any dispatch path (external LLM or CC)."""
 
     def __init__(self, result: dict[str, Any], cost: float = 0.0,
                  tokens: int = 0, model: str = "", duration: float = 0.0,
-                 quality: float = 1.0, resolved_model: str | None = None) -> None:
+                 quality: float = 1.0, resolved_model: str | None = None,
+                 thinking_tokens: int = 0) -> None:
         self.result = result
         self.cost = cost
         self.tokens = tokens
         self.model = model
         self.duration = duration
         self.quality = quality
+        # Provider-reported thinking-token usage (0 when the provider
+        # doesn't surface it). Funnelled into CostTracker.add_cost so
+        # the run summary's thinking-token telemetry can fire.
+        self.thinking_tokens = thinking_tokens
         # Provider-served snapshot behind the (possibly floating) `model`
         # alias, when the SDK exposed one. Carried into the per-finding result
         # dict so consensus/judge can record scorecard reliability against the
@@ -258,6 +286,10 @@ def dispatch_task(
         total_calls = len(selected) * len(models)
         skip = cost_tracker.should_skip_phase(
             total_calls, model_name, task.budget_cutoff, task.name,
+            # No named models ⇒ the CC subprocess path. Estimating CC
+            # calls at the external-LLM default (~$0.03) under-gates
+            # ~7x against the documented ~$0.20/finding observed rate.
+            is_cc=not named_models,
         )
         if skip:
             print(f"\n  {task.name}: skipped ({len(selected)} items) — "
@@ -398,6 +430,25 @@ def _dispatch_inner(
 
             try:
                 dispatch_result = future.result()
+                payload = getattr(dispatch_result, "result", None)
+                if isinstance(payload, dict) and payload.get("error"):
+                    # Error envelope from a non-raising dispatch path —
+                    # book any cost the failed call still burned (a CC
+                    # timeout can bill before dying), then route the
+                    # failure through the except-branch below so the
+                    # circuit breaker / auth abort / telemetry see it.
+                    _err_cost = getattr(dispatch_result, "cost", 0) or 0
+                    _err_tokens = getattr(dispatch_result, "tokens", 0) or 0
+                    _err_model = getattr(dispatch_result, "model", "") or ""
+                    if _err_cost > 0 or _err_tokens > 0:
+                        cost_tracker.add_cost(
+                            _err_model or "unknown", _err_cost,
+                            tokens=_err_tokens,
+                        )
+                        running_cost += _err_cost
+                    raise _ErrorDictResult(
+                        str(payload.get("error")), model_name=_err_model,
+                    )
                 processed = task.process_result(item, dispatch_result)
                 processed["finding_id"] = item_id
                 processed["_quality"] = getattr(dispatch_result, "quality", 1.0)
@@ -467,8 +518,14 @@ def _dispatch_inner(
                 # cleanly.
                 model_name = processed.get("analysed_by", "unknown")
                 item_tokens = getattr(dispatch_result, "tokens", 0) or 0
-                if item_cost > 0 or item_tokens > 0:
-                    cost_tracker.add_cost(model_name, item_cost, tokens=item_tokens)
+                item_thinking = getattr(
+                    dispatch_result, "thinking_tokens", 0,
+                ) or 0
+                if item_cost > 0 or item_tokens > 0 or item_thinking > 0:
+                    cost_tracker.add_cost(
+                        model_name, item_cost, tokens=item_tokens,
+                        thinking_tokens=item_thinking,
+                    )
 
                 # Progress line
                 display = task.get_item_display(item)
@@ -529,6 +586,11 @@ def _dispatch_inner(
                 err_str = str(e)
                 error_type = _classify_error(err_str)
                 model_name = model.model_name if model is not None else "?"
+                if isinstance(e, _ErrorDictResult) and e.model_name:
+                    # The error envelope carried its own attribution
+                    # (e.g. "claude-code") — better than the "?" bucket
+                    # the CC path (model=None) would otherwise land in.
+                    model_name = e.model_name
                 results.append({"finding_id": item_id, "error": err_str,
                                 "error_type": error_type,
                                 "analysed_by": model_name})

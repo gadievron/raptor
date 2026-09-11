@@ -24,17 +24,35 @@ identifier G, S, M;
 position p;
 @@
 
+// Both declaration orders qualify as safe: C89 style declares every
+// local at the top of the function (pointer often before the target
+// variable), so requiring LOCAL-before-pointer order would leave the
+// C89 shape outside the safe set and report it as an escape.
   FUNC(...)
   {
     ... when any
+(
     T LOCAL;
     ... when any
-(
     T2 *G;
     ... when any
     G = &LOCAL@p;
 |
+    T2 *G;
+    ... when any
+    T LOCAL;
+    ... when any
+    G = &LOCAL@p;
+|
+    T LOCAL;
+    ... when any
     T2 S;
+    ... when any
+    S.M = &LOCAL@p;
+|
+    T2 S;
+    ... when any
+    T LOCAL;
     ... when any
     S.M = &LOCAL@p;
 )

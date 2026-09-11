@@ -160,10 +160,24 @@ def main() -> int:
                 enrich_context_map_with_sites,
             )
             from packages.source_intel import analyze
+            from packages.source_intel.progress import RuleProgressPrinter
             # The shared inventory doubles as source_intel's pre-built
             # checklist (enclosing-function lookups + truthful skip
             # reasons) — saves another tree parse.
-            si = analyze(Path(target_path), checklist=inventory)
+            # Progress goes to stderr (stdout stays reserved for the
+            # result line): one line per cocci rule as it starts plus
+            # a 30s idle heartbeat — a large C target used to sit
+            # >300s with zero output here.
+            print(
+                f"raptor-enrich-context-map: running source_intel "
+                f"(cocci) on {target_path} ...",
+                file=sys.stderr, flush=True,
+            )
+            with RuleProgressPrinter(sys.stderr, label="cocci") as prog:
+                si = analyze(
+                    Path(target_path), checklist=inventory,
+                    progress=prog.on_rule,
+                )
             counts = enrich_context_map_with_sites(
                 context_map, si, repo_root=target_path,
             )
@@ -191,14 +205,20 @@ def main() -> int:
                     extra_sinks = iris_sinks
             except Exception as e:  # noqa: BLE001
                 logger.debug("IRIS sink fetch failed: %s", e)
-            # ``extra_sinks`` support depends on the substrate revision;
-            # pass it only when the signature accepts it so the whole
-            # sink stage doesn't die on a TypeError (which the handler
-            # below would eat).
+            # ``extra_sinks`` / ``run_dir`` support depends on the
+            # substrate revision; pass them only when the signature
+            # accepts them so the whole sink stage doesn't die on a
+            # TypeError (which the handler below would eat).
             import inspect
+            sink_params = inspect.signature(
+                enrich_with_sink_discovery).parameters
             sink_kwargs = {}
-            if "extra_sinks" in inspect.signature(
-                    enrich_with_sink_discovery).parameters:
+            if "run_dir" in sink_params:
+                # Audit-discovered sinks (discovered-sinks.json in the
+                # run dir / project siblings) merge only when the
+                # substrate knows the run dir.
+                sink_kwargs["run_dir"] = understand_dir
+            if "extra_sinks" in sink_params:
                 sink_kwargs["extra_sinks"] = extra_sinks
             elif extra_sinks:
                 logger.warning(

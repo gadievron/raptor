@@ -1,7 +1,9 @@
 """Language detection by file extension (plus content refinement)."""
 
 import functools
+import os
 import re
+import stat
 from pathlib import Path
 
 LANGUAGE_MAP = {
@@ -9,6 +11,7 @@ LANGUAGE_MAP = {
     '.js': 'javascript',
     '.jsx': 'javascript',
     '.mjs': 'javascript',
+    '.cjs': 'javascript',
     '.ts': 'typescript',
     '.tsx': 'tsx',
     '.c': 'c',
@@ -58,8 +61,13 @@ RECORD_ONLY_EXTENSIONS = frozenset({'.y', '.l', '.inl', '.sol'})
 @functools.lru_cache(maxsize=64)
 def detect_language(filepath: str) -> str | None:
     """Detect language from file extension."""
-    ext = Path(filepath).suffix.lower()
-    return LANGUAGE_MAP.get(ext)
+    suffix = Path(filepath).suffix
+    # GNU convention: uppercase ``.C`` is C++ source (lowercase ``.c``
+    # is C). Checked case-sensitively BEFORE the lowercasing fold, or
+    # such files route to the C grammar and lose every class method.
+    if suffix == '.C':
+        return 'cpp'
+    return LANGUAGE_MAP.get(suffix.lower())
 
 
 # Interpreter basename → inventory language, for extensionless scripts
@@ -91,11 +99,24 @@ def detect_language_from_shebang(filepath: str) -> str | None:
     uninventoried exactly as before). Version-suffixed interpreters
     (``python3.12``) resolve by stripping trailing ``.``/digit runs.
     """
+    # O_NONBLOCK: a plain ``open()`` of a reader-less FIFO blocks
+    # FOREVER, and this probe runs on every extensionless directory
+    # entry in the main process — one stray pipe/device node in the
+    # target tree wedged the whole inventory build. Non-blocking open
+    # + fstat lets us reject anything that isn't a regular file before
+    # reading. O_NOFOLLOW mirrors the walk's no-symlink policy.
     try:
-        with open(filepath, 'rb') as f:
-            head = f.read(_SHEBANG_PROBE_BYTES)
+        fd = os.open(filepath, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     except OSError:
         return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        head = os.read(fd, _SHEBANG_PROBE_BYTES)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
     if not head.startswith(b'#!'):
         return None
     line = head[2:].split(b'\n', 1)[0].decode('latin-1').strip()

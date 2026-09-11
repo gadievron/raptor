@@ -61,17 +61,27 @@ from .safe_member import (
 logger = logging.getLogger(__name__)
 
 
+class ZipOpenError(zipfile.BadZipFile):
+    """Raised when the source is not a readable zip archive (corrupt,
+    truncated, or wrong format). Subclasses ``zipfile.BadZipFile`` so
+    callers that already guard whole-archive failures keep working;
+    the alternative — returning an empty dict — silently converted
+    corrupt attacker-influenced input into a "successfully empty"
+    result downstream consumers treated as complete (mirrors
+    :class:`core.tar.TarOpenError`)."""
+
+
 class ZipEntryCountExceeded(Exception):
     """Raised when a zip's EOCD pre-flight flags a bomb shape — the
     declared entry count exceeds ``max_entry_count``, or the declared
     central-directory size fails the :func:`core.zip.eocd.
     bomb_shaped_reason` cross-check against that count.
 
-    Surfaces from :func:`extract_files_from_zip` when the caller opts
-    into a hard failure on bomb-shaped archives (default behaviour is
-    graceful — return ``{}``). Consumers that want to surface the
-    rejection to the operator (e.g. :mod:`core.project.export`) catch
-    this and translate to their domain-specific error type.
+    Always raised (mirrors :class:`core.tar.TarEntryCountExceeded`) —
+    a silently-empty return for an over-cap archive is indistinguishable
+    from a genuinely empty one, which downstream consumers treated as a
+    complete extraction. Consumers that want a domain-specific error
+    (project import, CodeQL DB unpack) catch and translate.
     """
 
 
@@ -96,8 +106,8 @@ def extract_files_from_zip(
     max_entry_count: int = DEFAULT_MAX_ENTRIES,
     allow_absolute_paths: bool = False,
     expected_count: int | None = None,
-    raise_on_entry_count: bool = False,
     max_total_bytes: int | None = None,
+    on_skipped: Callable[[zipfile.ZipInfo, str], None] | None = None,
 ) -> dict[str, bytes]:
     """Walk ``source`` (a zip archive) and return selected members
     as a ``{key: bytes}`` dict.
@@ -133,11 +143,26 @@ def extract_files_from_zip(
     Default ``DEFAULT_MAX_ENTRIES`` (10 000) is generous for every
     real consumer; set to a very large number to disable.
 
-    ``raise_on_entry_count``: by default an over-cap archive is
-    treated as "couldn't read" — returns ``{}`` like any other
-    parse failure. Consumers that want to surface the rejection
-    explicitly (project import, CodeQL DB unpack) pass ``True``
-    to get :class:`ZipEntryCountExceeded`.
+    FAIL CLOSED: an unreadable archive raises :class:`ZipOpenError`
+    and an over-cap / bomb-shaped one raises
+    :class:`ZipEntryCountExceeded` — never an empty "success" dict,
+    which downstream consumers cannot distinguish from a genuinely
+    empty selection (mirrors the :mod:`core.tar` twin). The same
+    applies PER MEMBER: an intact central directory over corrupt
+    member data (CRC mismatch, mid-file truncation) raises
+    :class:`ZipOpenError` instead of silently omitting the member —
+    otherwise the whole-archive refusal is bypassable with a crafted
+    intact-CD archive (the tar twin refuses the same class via its
+    mid-stream ReadError).
+
+    ``on_skipped``: when provided, called as ``on_skipped(info,
+    reason)`` for each member the SAFETY filter rejects (oversize,
+    traversal, compression bomb, ...) and for encrypted members
+    (``reason == "encrypted"`` — the one read-failure shape that
+    degrades rather than refuses: encryption is declared metadata,
+    not corruption). Without it those skips are debug logs only —
+    invisible to callers whose summaries must count them. Exceptions
+    it raises abort the walk and propagate (mirrors the tar twin).
     """
     found: dict[str, bytes] = {}
 
@@ -158,10 +183,7 @@ def extract_files_from_zip(
             if summary is not None else None
         )
         if reason is not None:
-            if raise_on_entry_count:
-                raise ZipEntryCountExceeded(reason)
-            logger.debug("core.zip.extract: %s", reason)
-            return found
+            raise ZipEntryCountExceeded(reason)
 
     fileobj = _normalise_source(source)
     try:
@@ -170,12 +192,10 @@ def extract_files_from_zip(
         # ``BadZipFile`` covers malformed central directory and
         # missing end-of-central-directory record. ``OSError``
         # covers truncated streams that surface from the underlying
-        # IO rather than zipfile itself.
-        logger.debug(
-            "core.zip.extract: not a valid zip archive (%s); skipping",
-            e,
-        )
-        return found
+        # IO rather than zipfile itself. FAIL CLOSED: a corrupt
+        # archive must surface as an error, not as a successfully-
+        # empty result.
+        raise ZipOpenError(f"not a readable zip archive: {e}") from e
 
     try:
         total_bytes = 0
@@ -191,10 +211,7 @@ def extract_files_from_zip(
                     f"zip has more than {max_entry_count} entries — "
                     f"refusing as bomb-shape"
                 )
-                if raise_on_entry_count:
-                    raise ZipEntryCountExceeded(msg)
-                logger.debug("core.zip.extract: %s", msg)
-                break
+                raise ZipEntryCountExceeded(msg)
             if info.is_dir():
                 continue
             reason = safe_member_reason(
@@ -208,6 +225,8 @@ def extract_files_from_zip(
                     "core.zip.extract: skipping unsafe entry %s (%s)",
                     info.filename, reason.value,
                 )
+                if on_skipped is not None:
+                    on_skipped(info, reason.value)
                 continue
             key = selector(info)
             if key is None:
@@ -218,16 +237,29 @@ def extract_files_from_zip(
                 # to defend against over-read separately.
                 with zf.open(info) as f:
                     data = f.read()
-            except (zipfile.BadZipFile, OSError, RuntimeError) as e:
-                # ``RuntimeError`` covers password-protected entries
-                # in older Python versions; ``BadZipFile`` covers
-                # per-member CRC / structure failures that didn't
-                # surface during the central-directory parse.
+            except RuntimeError as e:
+                # Password-protected entry (no ``pwd`` supplied).
+                # Declared metadata, not corruption — degrade by
+                # skipping, but surface the skip so caller summaries
+                # can count it instead of reporting a clean success.
                 logger.debug(
-                    "core.zip.extract: failed to read %s (%s); skipping",
+                    "core.zip.extract: skipping encrypted entry %s (%s)",
                     info.filename, e,
                 )
+                if on_skipped is not None:
+                    on_skipped(info, "encrypted")
                 continue
+            except (zipfile.BadZipFile, OSError) as e:
+                # Per-member CRC / structure failure or truncated
+                # data behind an INTACT central directory. FAIL
+                # CLOSED: silently omitting the member converts a
+                # corrupt attacker-influenced archive into a
+                # "successfully partial/empty" result — the exact
+                # bypass of the whole-archive refusal above (the tar
+                # twin raises mid-stream ReadError for this class).
+                raise ZipOpenError(
+                    f"corrupt member {info.filename!r}: {e}",
+                ) from e
             # Aggregate-size cap: bound the SUM of materialised bytes, not just
             # per-member/count. Always raises (never silently truncates).
             if max_total_bytes is not None:
@@ -262,5 +294,7 @@ def _normalise_source(
 
 __all__ = [
     "ZipEntryCountExceeded",
+    "ZipOpenError",
+    "ZipTotalBytesExceeded",
     "extract_files_from_zip",
 ]

@@ -158,7 +158,13 @@ def _collapse_continuations(text: str) -> list[tuple[int, str, bool]]:
 # GitHub Actions template expressions: ``${{ matrix.x }}``, ``${{ env.Y }}``,
 # ``${{ secrets.Z }}``. Never literal install targets — stripped before
 # tokenising so they don't surface as phantom packages.
-_GHA_EXPR_RE = re.compile(r"\$\{\{.*?\}\}")
+#
+# The body is a counted repeat of "any non-``}`` char, or a ``}`` not
+# followed by another ``}``" instead of a lazy dot-star: an unclosed
+# ``${{`` no longer rescans to end-of-line from every opener
+# (measured quadratic), and the 400-char bound keeps each attempt
+# O(1) — real workflow expressions are a fraction of that.
+_GHA_EXPR_RE = re.compile(r"\$\{\{(?:[^}]|\}(?!\})){0,400}\}\}")
 
 
 def _scan_shell_lines(
@@ -526,13 +532,22 @@ def parse_gha_workflow(path: Path) -> list[Dependency]:
 # GHA `uses:` extraction
 # ---------------------------------------------------------------------------
 
-# Match ``uses: owner/repo@ref`` and ``uses: owner/repo/sub@ref``.
+# Match ``uses: owner/repo@ref`` and ``uses: owner/repo/sub@ref``,
+# with or without YAML quoting (``uses: "actions/checkout@v4"`` is
+# legal and common — the unquoted-only pattern silently skipped it).
 # Skip ``uses: ./local-action`` (no @ref), ``docker://image@digest``
 # (different threat model — Dockerfile FROM scanner covers it).
+#
+# The leading gap is ``\s*(?:-\s*)?`` — same language as the previous
+# ``\s*-?\s*`` but the whitespace runs are separated by a mandatory
+# ``-``, so a long all-space line no longer explores O(n^2) splits
+# (same fix as the gemfile/nuget parsers).
 _GHA_USES_RE = re.compile(
     r"""
-    ^\s*-?\s*uses\s*:\s*
+    ^\s*(?:-\s*)?uses\s*:\s*
+    (?P<q>["']?)
     (?P<spec>[A-Za-z0-9_./-]+@[A-Za-z0-9_./-]+)
+    (?P=q)
     \s*(?:\#.*)?$
     """,
     re.VERBOSE,
@@ -682,8 +697,14 @@ def _extract_commented_run_blocks(
     return out
 
 
-_GHA_RUN_OPEN_RE = re.compile(r"^(\s*)(?:-\s+)?run:\s*(\S.*?)?\s*$")
-_GHA_RUN_BLOCK_OPEN_RE = re.compile(r"^(\s*)(?:-\s+)?run:\s*[|>][+-]?\s*$")
+# Both patterns are matched against the RIGHT-STRIPPED line: the old
+# inline form ended ``(\S.*?)?\s*$`` where the lazy body and the
+# trailing ``\s*`` both matched spaces, so a body followed by a long
+# space run backtracked quadratically (measured; same class as the
+# gemfile/nuget fixes). With trailing whitespace gone, a greedy body
+# capture is equivalent and linear.
+_GHA_RUN_OPEN_RE = re.compile(r"^(\s*)(?:-\s+)?run:\s*(\S.*)?$")
+_GHA_RUN_BLOCK_OPEN_RE = re.compile(r"^(\s*)(?:-\s+)?run:\s*([|>][+-]?)$")
 
 
 def _extract_gha_run_blocks(text: str) -> list[tuple[int, str, bool]]:
@@ -697,7 +718,9 @@ def _extract_gha_run_blocks(text: str) -> list[tuple[int, str, bool]]:
     raw = text.splitlines()
     i = 0
     while i < len(raw):
-        line = raw[i]
+        # rstrip is part of the regex contract — see the pattern
+        # definitions above.
+        line = raw[i].rstrip()
         block_m = _GHA_RUN_BLOCK_OPEN_RE.match(line)
         if block_m:
             base_indent = len(block_m.group(1))
@@ -745,8 +768,12 @@ def _safe_read(path: Path) -> str | None:
     # otherwise OOM the parser before the sandbox memory limit
     # kicks in. Returns None + logs a warning on bound violation;
     # the caller already treats None as "skip this file".
+    # ``follow_symlinks=False`` matches every sibling parser: these
+    # paths come from the target repo, and a symlinked
+    # Dockerfile/script pointing outside the tree must be refused,
+    # not read.
     from .._safe_read import read_bounded
-    return read_bounded(path)
+    return read_bounded(path, follow_symlinks=False)
 
 
 def _load_jsonc(text: str) -> dict:

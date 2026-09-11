@@ -722,9 +722,6 @@ _shipped_rules_dir = _shipped_rules_root
 # =====================================================================
 
 
-_API_PACK_MARKER = "// @api-packs:"
-
-
 def _materialize_rules_dir(axis_dir: Path) -> tuple[Path, Any]:
     """Render ``@api-packs`` slots for an axis, when any rule carries one.
 
@@ -738,16 +735,30 @@ def _materialize_rules_dir(axis_dir: Path) -> tuple[Path, Any]:
     is a comment) rather than skipping the axis.
     """
     rule_paths = sorted(axis_dir.glob("*.cocci"))
+    try:
+        # Marker detection delegates to the renderer's single
+        # authoritative predicate: a local substring gate previously
+        # diverged from the renderer's regex, so regex-valid markers
+        # were silently never routed to render_text.
+        from engine.coccinelle.api_pack_renderer import (
+            has_api_pack_marker,
+            render_text,
+        )
+    except Exception:  # sidecar renderer must never kill the axis
+        logger.warning(
+            "api-pack renderer unavailable; axis %s runs unrendered",
+            axis_dir, exc_info=True,
+        )
+        return axis_dir, None
     slotted: dict[Path, str] = {}
     for rule_path in rule_paths:
         try:
             text = rule_path.read_text(encoding="utf-8")
         except OSError:
             continue
-        if _API_PACK_MARKER not in text:
+        if not has_api_pack_marker(text):
             continue
         try:
-            from engine.coccinelle.api_pack_renderer import render_text
             rendered = render_text(rule_path)
         except Exception:  # sidecar renderer must never kill the axis
             logger.warning(

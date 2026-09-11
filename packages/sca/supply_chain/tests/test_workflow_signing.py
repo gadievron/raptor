@@ -105,95 +105,109 @@ def gpg_signing_key(tmp_path: Path):
         "%commit\n"
     )
     try:
-        subprocess.run(
-            ["gpg", "--batch", "--pinentry-mode=loopback",
-             "--gen-key"],
-            input=batch, text=True, env=env,
-            check=True, capture_output=True, timeout=60,
-        )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        yield None
-        return
-    listed = subprocess.run(
-        ["gpg", "--list-secret-keys", "--with-colons"],
-        capture_output=True, text=True, env=env, check=True,
-    )
-    keyid: str | None = None
-    fpr: str | None = None
-    for line in listed.stdout.splitlines():
-        if line.startswith("sec:"):
-            cols = line.split(":")
-            if len(cols) > 4 and cols[4]:
-                keyid = cols[4]
-        elif line.startswith("fpr:") and fpr is None:
-            cols = line.split(":")
-            if len(cols) > 9 and cols[9]:
-                fpr = cols[9]
-    if keyid is None:
-        yield None
-        return
-
-    # Trust the key ultimately so git's --format=%G? returns "G"
-    # (verified) rather than "U" (untrusted-but-valid). Without
-    # this step ed25519 signing succeeds but git reports the
-    # signature as untrusted, which our detector's _SIGNED_STATUSES
-    # set DOES include — but cleaner to test against the
-    # canonical "fully verified" status.
-    if fpr is not None:
-        subprocess.run(
-            ["gpg", "--batch", "--yes",
-             "--command-fd", "0", "--edit-key", fpr],
-            input="trust\n5\ny\nquit\n",
-            text=True, env=env, capture_output=True, check=False,
-        )
-
-    # End-to-end smoke: build a throwaway commit + verify %G? returns
-    # a signed-ish status. If we can't actually produce a verifiable
-    # signature here, skip the test rather than fail with confusing
-    # "all commits read as N" assertion errors downstream.
-    smoke_repo = tmp_path / "gpg-smoke"
-    smoke_repo.mkdir()
-    try:
-        subprocess.run(
-            ["git", "-C", str(smoke_repo), "init",
-             "--initial-branch=main"],
-            check=True, capture_output=True,
-        )
-        subprocess.run(
-            ["git", "-C", str(smoke_repo), "config",
-             "user.email", "signer@test.invalid"],
-            check=True, capture_output=True,
-        )
-        subprocess.run(
-            ["git", "-C", str(smoke_repo), "config",
-             "user.name", "Test Signer"],
-            check=True, capture_output=True,
-        )
-        (smoke_repo / "f").write_text("x")
-        subprocess.run(
-            ["git", "-C", str(smoke_repo), "add", "f"],
-            check=True, capture_output=True,
-        )
-        subprocess.run(
-            ["git", "-C", str(smoke_repo),
-             "-c", f"user.signingkey={keyid}",
-             "-c", "gpg.program=gpg",
-             "commit", "-S", "-m", "smoke"],
-            env=env, check=True, capture_output=True, text=True,
-        )
-        verify = subprocess.run(
-            ["git", "-C", str(smoke_repo), "log",
-             "--format=%G?", "-n", "1"],
-            env=env, check=True, capture_output=True, text=True,
-        )
-        if verify.stdout.strip() not in ("G", "U"):
+        try:
+            subprocess.run(
+                ["gpg", "--batch", "--pinentry-mode=loopback",
+                 "--gen-key"],
+                input=batch, text=True, env=env,
+                check=True, capture_output=True, timeout=60,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             yield None
             return
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        yield None
-        return
+        listed = subprocess.run(
+            ["gpg", "--list-secret-keys", "--with-colons"],
+            capture_output=True, text=True, env=env, check=True,
+        )
+        keyid: str | None = None
+        fpr: str | None = None
+        for line in listed.stdout.splitlines():
+            if line.startswith("sec:"):
+                cols = line.split(":")
+                if len(cols) > 4 and cols[4]:
+                    keyid = cols[4]
+            elif line.startswith("fpr:") and fpr is None:
+                cols = line.split(":")
+                if len(cols) > 9 and cols[9]:
+                    fpr = cols[9]
+        if keyid is None:
+            yield None
+            return
 
-    yield (keyid, str(gnupghome))
+        # Trust the key ultimately so git's --format=%G? returns "G"
+        # (verified) rather than "U" (untrusted-but-valid). Without
+        # this step ed25519 signing succeeds but git reports the
+        # signature as untrusted, which our detector's _SIGNED_STATUSES
+        # set DOES include — but cleaner to test against the
+        # canonical "fully verified" status.
+        if fpr is not None:
+            subprocess.run(
+                ["gpg", "--batch", "--yes",
+                 "--command-fd", "0", "--edit-key", fpr],
+                input="trust\n5\ny\nquit\n",
+                text=True, env=env, capture_output=True, check=False,
+            )
+
+        # End-to-end smoke: build a throwaway commit + verify %G? returns
+        # a signed-ish status. If we can't actually produce a verifiable
+        # signature here, skip the test rather than fail with confusing
+        # "all commits read as N" assertion errors downstream.
+        smoke_repo = tmp_path / "gpg-smoke"
+        smoke_repo.mkdir()
+        try:
+            subprocess.run(
+                ["git", "-C", str(smoke_repo), "init",
+                 "--initial-branch=main"],
+                check=True, capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(smoke_repo), "config",
+                 "user.email", "signer@test.invalid"],
+                check=True, capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(smoke_repo), "config",
+                 "user.name", "Test Signer"],
+                check=True, capture_output=True,
+            )
+            (smoke_repo / "f").write_text("x")
+            subprocess.run(
+                ["git", "-C", str(smoke_repo), "add", "f"],
+                check=True, capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(smoke_repo),
+                 "-c", f"user.signingkey={keyid}",
+                 "-c", "gpg.program=gpg",
+                 "commit", "-S", "-m", "smoke"],
+                env=env, check=True, capture_output=True, text=True,
+            )
+            verify = subprocess.run(
+                ["git", "-C", str(smoke_repo), "log",
+                 "--format=%G?", "-n", "1"],
+                env=env, check=True, capture_output=True, text=True,
+            )
+            if verify.stdout.strip() not in ("G", "U"):
+                yield None
+                return
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            yield None
+            return
+
+        yield (keyid, str(gnupghome))
+    finally:
+        # The first gpg use in a homedir spawns a gpg-agent daemon that
+        # later invocations reuse; without an explicit kill it reparents
+        # to init and outlives the test run, so tear it down on every
+        # exit path (the yield-None skip branches included).
+        try:
+            subprocess.run(
+                ["gpgconf", "--kill", "gpg-agent"],
+                env=env, check=False, capture_output=True,
+                timeout=15,
+            )
+        except OSError:
+            pass
 
 
 def _commit_workflow_signed(

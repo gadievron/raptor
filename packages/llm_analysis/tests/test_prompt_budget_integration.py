@@ -445,12 +445,22 @@ class TestPriorityMapCompleteness:
             "dataflow-sink-code", "scanner-message",
             "function-context", "ast-view",
             "surrounding-context", "verified-exemplars",
-            "sage-historical-context",
         ]
         for kind in known:
             assert kind in _ANALYSIS_BLOCK_PRIORITIES, (
                 f"{kind} missing from _ANALYSIS_BLOCK_PRIORITIES"
             )
+
+    def test_sage_kinds_covered_by_shed_first_prefix(self):
+        # SAGE recall block kinds are pipeline-specific
+        # ("sage-crash-pattern-recall", "sage-web-payload-recall", ...)
+        # so the map covers them via a prefix rule, not exact kinds —
+        # an exact entry for a kind no emitter produces would silently
+        # leave real SAGE blocks at the default priority.
+        from packages.llm_analysis.prompts.analysis import (
+            _ANALYSIS_BLOCK_PRIORITY_PREFIXES,
+        )
+        assert ("sage-", 3) in _ANALYSIS_BLOCK_PRIORITY_PREFIXES
 
     def test_priority_zero_for_critical_kinds(self):
         for kind in ("vulnerable-code", "scanner-message"):

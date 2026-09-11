@@ -237,6 +237,55 @@ def test_generated_manifests_route_paths_through_portable_form(tmp_path):
         {k: v for k, v in copied.items() if k != "out_dir"})
 
 
+def test_rerun_resets_own_generated_output(tmp_path):
+    # Same out_dir re-run: kind dirs proven ours by the previous
+    # manifest are cleared so stale seeds do not survive.
+    source = tmp_path / "project"
+    source.mkdir()
+    (source / "config.json").write_text("{}\n", encoding="utf-8")
+    out = tmp_path / "seeds"
+
+    first = prepare_seed_corpus(SeedCorpusOptions(source_dir=source, out_dir=out))
+    assert first["seed_count"] == 1
+    stale = out / "json" / "stale-leftover.json"
+    stale.write_text("stale\n", encoding="utf-8")
+
+    second = prepare_seed_corpus(SeedCorpusOptions(source_dir=source, out_dir=out))
+    assert second["seed_count"] == 1
+    assert not stale.exists()
+
+
+def test_reset_refuses_foreign_kind_directory(tmp_path):
+    # 'json', 'text', 'binary'... are ordinary directory names — an
+    # operator's data dir containing one must never be rmtree'd.
+    source = tmp_path / "project"
+    source.mkdir()
+    (source / "config.json").write_text("{}\n", encoding="utf-8")
+    out = tmp_path / "operator-data"
+    (out / "json").mkdir(parents=True)
+    precious = out / "json" / "records.json"
+    precious.write_text("do not delete\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="refusing to reset"):
+        prepare_seed_corpus(SeedCorpusOptions(source_dir=source, out_dir=out))
+    assert precious.read_text(encoding="utf-8") == "do not delete\n"
+
+
+def test_reset_refuses_foreign_manifest(tmp_path):
+    # A manifest.json we did not write would be silently overwritten.
+    source = tmp_path / "project"
+    source.mkdir()
+    (source / "config.json").write_text("{}\n", encoding="utf-8")
+    out = tmp_path / "other-tool-out"
+    out.mkdir()
+    foreign = out / "manifest.json"
+    foreign.write_text('{"source": "someone-else"}\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="refusing to reset"):
+        prepare_seed_corpus(SeedCorpusOptions(source_dir=source, out_dir=out))
+    assert "someone-else" in foreign.read_text(encoding="utf-8")
+
+
 def test_prepare_builtin_seed_corpus_resets_only_raptor_generated_files(tmp_path):
     out = tmp_path / "builtin"
     out.mkdir()

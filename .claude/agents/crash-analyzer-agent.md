@@ -74,7 +74,7 @@ relevant_code_here();
 
 **RR Verification:**
 ```bash
-rr replay rr-trace/program-0
+rr replay rr-trace
 break file.c:123
 commands
   printf "variable=%p\n", variable

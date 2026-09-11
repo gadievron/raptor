@@ -442,8 +442,22 @@ class BuildDetector:
             current = self.repo_path.resolve(strict=False)
         except OSError:
             return found
+        # World-writable temp roots. <temp-root>/include is never a
+        # legitimate ancestor include dir: ANY local user could
+        # pre-create it and shadow system headers in every
+        # synthesised compile (a target extracted directly under
+        # /tmp would walk up to /tmp itself). An include/ inside an
+        # operator-owned subtree of the temp dir (/tmp/proj/include)
+        # stays eligible — only the shared roots are blocked.
+        import tempfile
+        tmp_roots = {
+            "/tmp", "/var/tmp",
+            os.path.realpath(tempfile.gettempdir()),
+        }
         for _ in range(max_depth):
             current = current.parent
+            if str(current) in tmp_roots:
+                continue
             if not current.is_dir():
                 break
             if not os.access(current, os.X_OK):
@@ -462,9 +476,15 @@ class BuildDetector:
                 # plausible. Reject anything that resolves to a
                 # system path like /etc, /proc, /sys, /dev — these
                 # could not legitimately be the "include/" dir of
-                # the operator's source target.
+                # the operator's source target. Also re-apply the
+                # temp-root block on the RESOLVED path so a symlink
+                # (include -> /tmp/include) can't smuggle a shared
+                # temp root's include dir back in.
                 blocked = ("/etc", "/proc", "/sys", "/dev", "/boot")
-                if any(str(inc_resolved).startswith(b) for b in blocked):
+                if (
+                    any(str(inc_resolved).startswith(b) for b in blocked)
+                    or str(inc_resolved.parent) in tmp_roots
+                ):
                     logger.debug(
                         "Skipping ancestor include candidate %s "
                         "(resolves to a system path)",
@@ -837,7 +857,24 @@ class BuildDetector:
     # Use `\A...\Z` for unambiguous string-boundary anchors:
     # `\Z` doesn't accept the trailing newline, so the
     # injection-shaped flag is correctly rejected.
-    _SAFE_FLAG_TOKEN = re.compile(r'\A-?[A-Za-z0-9._/+=-]+\Z')
+    #
+    # Space is in the character class: a flag reaches the compiler
+    # as ONE argv element via subprocess list args (no shell), so an
+    # embedded space is data, not a token separator. Auto-detected
+    # include dirs like "-Ithird party/inc" depend on this. Shell
+    # metacharacters ($, backticks, quotes, ;, |, newline …) remain
+    # rejected.
+    _SAFE_FLAG_TOKEN = re.compile(r'\A-?[A-Za-z0-9._/+= -]+\Z')
+
+    # Flags whose value arrives as a SEPARATE argv token. Only these
+    # get split (on the first space); everything else stays one argv
+    # token even when it contains spaces — whitespace-splitting every
+    # flag mangled spaced include paths ("-Ithird party/inc" became
+    # "-Ithird" plus a bogus positional "party/inc", both of which
+    # passed validation individually).
+    _PAIR_FLAG_NAMES: ClassVar[frozenset[str]] = frozenset(
+        {"-include", "-sourcepath", "-cp", "-classpath"}
+    )
 
     # Flag-NAME allowlist for synthesised builds. The metacharacter
     # check alone let any flag name through — the CC prompt promises
@@ -862,17 +899,21 @@ class BuildDetector:
     def _validate_flags(self, flags: list) -> list:
         """Validate and normalise compiler flags.
 
-        Accepts both single tokens ("-DFOO") and space-separated pairs
-        ("-include header.h"). Splits pairs into individual tokens.
+        Accepts single tokens ("-DFOO", "-Idir with spaces" — one
+        argv element, space is data) and known pair flags
+        ("-include header.h" — split into their two argv tokens).
         Two gates, both required: no shell/Make metacharacters
         (character level) AND a known flag name (_SAFE_FLAG_NAME).
         """
-        safe = []
+        safe: list = []
         for flag in flags:
-            if not isinstance(flag, str):
+            if not isinstance(flag, str) or not flag.strip():
                 continue
-            # Split space-separated flags like "-include header.h"
-            tokens = flag.split()
+            first, _sep, rest = flag.partition(" ")
+            if first in self._PAIR_FLAG_NAMES and rest.strip():
+                tokens = [first, rest.strip()]
+            else:
+                tokens = [flag]
             if not all(self._SAFE_FLAG_TOKEN.match(t) for t in tokens):
                 logger.warning("Rejected unsafe compiler flag: %s", flag)
                 continue
@@ -977,11 +1018,14 @@ class BuildDetector:
         cleanup = [script_path, build_dir]
 
         # cleanup_paths is only returned to the caller on SUCCESS (via the
-        # BuildSystem at the bottom of this method). If _write_build_script
-        # or the first _dry_run raises, the caller never sees cleanup_paths
-        # and both the script stub AND the build dir leak UNDER self.repo_path
-        # (= pollutes the target repo). Guard with try/except that walks the
-        # cleanup list on failure before re-raising.
+        # BuildSystem at the bottom of this method). If ANYTHING between
+        # here and that return raises — a _write_build_script (heuristic
+        # or CC-retry rewrite), a _dry_run re-raising SandboxSetupError —
+        # the caller never sees cleanup_paths and both the script stub AND
+        # the build dir leak UNDER self.repo_path (= pollutes the target
+        # repo; the next scan inventories RAPTOR's own build script as
+        # project source). Guard the WHOLE synthesis with try/except that
+        # walks the cleanup list on failure before re-raising.
         def _cleanup_on_failure() -> None:
             for p in cleanup:
                 try:
@@ -999,67 +1043,67 @@ class BuildDetector:
                 script_path, build_dir,
                 source_files, compiler, include_flags, define_flags,
             )
-        except BaseException:
-            _cleanup_on_failure()
-            raise
-        logger.info("Synthesised build script for %s: %s", language, script_path)
-        logger.info("  Source files: %d", len(source_files))
+            logger.info("Synthesised build script for %s: %s", language, script_path)
+            logger.info("  Source files: %d", len(source_files))
 
-        failures = self._dry_run(script_path, language=language)
-        build_type = "synthesised"
-        confidence = 0.7
+            failures = self._dry_run(script_path, language=language)
+            build_type = "synthesised"
+            confidence = 0.7
 
-        # `failures is None` → dry-run never ran (script crashed,
-        # sandbox-launch failed, timeout). We can't measure
-        # whether the heuristic flags work, so don't attempt a
-        # CC-suggest retry (the second dry-run would fail the same
-        # way and waste budget).
-        if failures is None:
-            logger.warning(
-                "  Dry-run didn't execute — using heuristic flags without measurement",
-            )
-        elif failures:
-            heuristic_ok = len(source_files) - len(failures)
-            logger.info("  Dry-run: %d/%d compiled, %d failed", heuristic_ok, len(source_files), len(failures))
-
-            cc_flags = self._cc_suggest_flags(failures, language)
-            if cc_flags:
-                self._write_build_script(
-                    script_path, build_dir, source_files, compiler,
-                    include_flags + cc_flags.get("includes", []),
-                    define_flags + cc_flags.get("defines", []),
+            # `failures is None` → dry-run never ran (script crashed,
+            # sandbox-launch failed, timeout). We can't measure
+            # whether the heuristic flags work, so don't attempt a
+            # CC-suggest retry (the second dry-run would fail the same
+            # way and waste budget).
+            if failures is None:
+                logger.warning(
+                    "  Dry-run didn't execute — using heuristic flags without measurement",
                 )
-                cc_failures = self._dry_run(script_path, language=language)
-                if cc_failures is None:
-                    logger.info("  CC retry didn't run — keeping heuristic")
-                    # The script on disk currently contains the UNMEASURED
-                    # CC flags — restore the heuristic script so the build
-                    # command matches what the log just promised.
+            elif failures:
+                heuristic_ok = len(source_files) - len(failures)
+                logger.info("  Dry-run: %d/%d compiled, %d failed", heuristic_ok, len(source_files), len(failures))
+
+                cc_flags = self._cc_suggest_flags(failures, language)
+                if cc_flags:
                     self._write_build_script(
-                        script_path, build_dir,
-                        source_files, compiler, include_flags, define_flags,
+                        script_path, build_dir, source_files, compiler,
+                        include_flags + cc_flags.get("includes", []),
+                        define_flags + cc_flags.get("defines", []),
                     )
-                else:
-                    cc_ok = len(source_files) - len(cc_failures)
-                    if cc_ok > heuristic_ok:
-                        logger.info("  CC improved: %d → %d compiled", heuristic_ok, cc_ok)
-                        build_type = "synthesised-cc"
-                        # Keep the CC-flag script already on disk — it just
-                        # measured better. Pre-fix this branch fell through
-                        # to an unconditional heuristic rewrite, discarding
-                        # the improvement while build_type still claimed
-                        # "synthesised-cc".
-                    else:
-                        logger.info("  CC didn't improve, using heuristic")
+                    cc_failures = self._dry_run(script_path, language=language)
+                    if cc_failures is None:
+                        logger.info("  CC retry didn't run — keeping heuristic")
+                        # The script on disk currently contains the UNMEASURED
+                        # CC flags — restore the heuristic script so the build
+                        # command matches what the log just promised.
                         self._write_build_script(
                             script_path, build_dir,
                             source_files, compiler, include_flags, define_flags,
                         )
+                    else:
+                        cc_ok = len(source_files) - len(cc_failures)
+                        if cc_ok > heuristic_ok:
+                            logger.info("  CC improved: %d → %d compiled", heuristic_ok, cc_ok)
+                            build_type = "synthesised-cc"
+                            # Keep the CC-flag script already on disk — it just
+                            # measured better. Pre-fix this branch fell through
+                            # to an unconditional heuristic rewrite, discarding
+                            # the improvement while build_type still claimed
+                            # "synthesised-cc".
+                        else:
+                            logger.info("  CC didn't improve, using heuristic")
+                            self._write_build_script(
+                                script_path, build_dir,
+                                source_files, compiler, include_flags, define_flags,
+                            )
+                        confidence = 0.5
+                else:
                     confidence = 0.5
             else:
-                confidence = 0.5
-        else:
-            logger.info("  Dry-run: all files compiled successfully")
+                logger.info("  Dry-run: all files compiled successfully")
+        except BaseException:
+            _cleanup_on_failure()
+            raise
 
         return BuildSystem(
             type=build_type, command=build_cmd,

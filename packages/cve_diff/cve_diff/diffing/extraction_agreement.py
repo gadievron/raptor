@@ -176,13 +176,19 @@ def _summarize_n(bundles_named: list[tuple[str, DiffBundle]]) -> dict:
     if all(v == "disagree" for v in pairwise.values()):
         return {"verdict": "disagree", "sources": sources, "pairwise": pairwise}
 
-    # Majority: there's some pair that agrees, with a clear odd-one-out.
-    # An outlier is a source that disagrees with every other source.
+    # Majority: requires (a) at least one pair that actually AGREES and
+    # (b) a clear odd-one-out that disagrees with every other source.
+    # The agree-pair requirement is what keeps the label honest — with
+    # pairwise {partial, disagree, disagree} no two sources matched, and
+    # minting "majority_agree" would overstate extraction integrity
+    # exactly when sources conflict (that shape falls through to
+    # "partial" below).
+    has_agree_pair = any(v == "agree" for v in pairwise.values())
     outliers = [
         n for n in names
         if disagree_count[n] == len(names) - 1
     ]
-    if outliers:
+    if outliers and has_agree_pair:
         return {
             "verdict": "majority_agree",
             "sources": sources,

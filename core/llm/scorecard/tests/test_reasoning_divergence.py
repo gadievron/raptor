@@ -293,3 +293,45 @@ class TestThresholdTunability:
     def test_default_threshold_constant(self):
         # Pin the default so changes are conscious.
         assert DEFAULT_DIVERGENCE_THRESHOLD == 0.80
+
+
+class TestFilteredModelsNotScored:
+    """The divergence metric drops short/empty reasonings before
+    measuring; a model filtered out of the metric contributed nothing
+    to the outlier decision, so it must not earn correct/incorrect."""
+
+    def test_short_reasoning_model_gets_no_event(self, scorecard):
+        panel = dict(_DIVERGENT_PANEL)
+        panel["model-d"] = "too short"  # below the metric's char floor
+        n = record_reasoning_divergence(
+            scorecard,
+            correlation=_correlation(signals={"f1": "high"}),
+            results_by_id={"f1": {"rule_id": "r"}},
+            per_finding_results={"f1": _records(panel)},
+        )
+        # Only the three measured models are scored.
+        assert n == 3
+        assert _stat(
+            scorecard, "agentic:r", "model-d",
+            EventType.REASONING_DIVERGENCE,
+        ) == (0, 0)
+        measured_totals = [
+            sum(_stat(scorecard, "agentic:r", m,
+                      EventType.REASONING_DIVERGENCE))
+            for m in ("model-a", "model-b", "model-c")
+        ]
+        assert measured_totals == [1, 1, 1]
+
+    def test_full_panel_still_scores_every_member(self, scorecard):
+        n = record_reasoning_divergence(
+            scorecard,
+            correlation=_correlation(signals={"f1": "high"}),
+            results_by_id={"f1": {"rule_id": "r"}},
+            per_finding_results={"f1": _records(_DIVERGENT_PANEL)},
+        )
+        assert n == 3
+        for m in ("model-a", "model-b", "model-c"):
+            assert sum(_stat(
+                scorecard, "agentic:r", m,
+                EventType.REASONING_DIVERGENCE,
+            )) == 1

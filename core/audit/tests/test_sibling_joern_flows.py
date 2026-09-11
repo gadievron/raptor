@@ -161,8 +161,9 @@ class TestMalformedSiblingArtifacts:
         with caplog.at_level(logging.WARNING, logger="core.json.utils"):
             assert import_sibling_joern_flows(out_dir) is None
         # The skip must come from the size gate, not a failed parse of
-        # a fully-buffered file.
-        assert "refusing oversize" in caplog.text
+        # a fully-buffered file.  load_json's stat-gate refusal names
+        # the byte budget; a JSON parse failure never does.
+        assert "exceeds max_bytes" in caplog.text
 
         good = _mk_run(
             project, "newer",

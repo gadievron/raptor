@@ -24,6 +24,7 @@ _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+from packages.coccinelle import prereqs  # noqa: E402
 from packages.coccinelle.models import SpatchMatch, SpatchResult  # noqa: E402
 from packages.coccinelle.prereqs import (  # noqa: E402
     PrereqFacts,
@@ -299,3 +300,43 @@ def test_e2e_real_spatch_orphan_static_helper(tmp_path):
         "helper_orphan has no caller in fixture — orphan-static-helper "
         "detection broke (rule corpus drift?)"
     )
+
+
+# ---------------------------------------------------------------------------
+# _has_c_cpp_source bounded walk
+# ---------------------------------------------------------------------------
+
+
+def test_has_c_cpp_source_ignores_vcs_internals(tmp_path):
+    """.git internals must not consume the file cap: a repo with
+    hundreds of loose objects and one real C file was read as
+    'no C source' pre-fix, silently skipping all prereq evidence."""
+    objects = tmp_path / ".git" / "objects"
+    objects.mkdir(parents=True)
+    for i in range(300):
+        (objects / f"obj{i:03d}").write_text("x")
+    native = tmp_path / "src" / "native"
+    native.mkdir(parents=True)
+    (native / "addon.c").write_text("int f(void) { return 0; }\n")
+    assert prereqs._has_c_cpp_source(tmp_path) is True
+
+
+def test_has_c_cpp_source_false_without_c(tmp_path):
+    (tmp_path / "app.js").write_text("x\n")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref\n")
+    assert prereqs._has_c_cpp_source(tmp_path) is False
+
+
+def test_has_c_cpp_source_cap_still_bounds_walk(tmp_path):
+    """Two-direction: the cap still applies to non-VCS files — a huge
+    source-free tree returns False without unbounded work."""
+    # Distractors at the walk root: os.walk processes a directory's
+    # files before descending, so these deterministically hit the cap
+    # before the subdirectory's C file is reached.
+    for i in range(250):
+        (tmp_path / f"d{i:03d}.md").write_text("x")
+    deep = tmp_path / "zz" / "deep"
+    deep.mkdir(parents=True)
+    (deep / "late.c").write_text("int f(void);\n")
+    assert prereqs._has_c_cpp_source(tmp_path, max_files=200) is False

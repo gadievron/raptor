@@ -142,17 +142,22 @@ class CommentDelta:
     text_new: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
+        # Comment texts and function names come from the analysed
+        # project — scrub and bound them at the JSON emission layer
+        # like every other name (operators `jq` these files straight
+        # to a terminal; comments are also unbounded in size).
+        from .match import _clip
         d: Dict[str, Any] = {
             "address": self.address,
             "kind": self.kind,
             "action": self.action,
         }
         if self.function:
-            d["function"] = self.function
+            d["function"] = _clip(self.function)
         if self.text_old is not None:
-            d["text_old"] = self.text_old
+            d["text_old"] = _clip(self.text_old, 512)
         if self.text_new is not None:
-            d["text_new"] = self.text_new
+            d["text_new"] = _clip(self.text_new, 512)
         return d
 
 
@@ -291,7 +296,12 @@ class REDiff:
             ],
             "changed": [c.to_dict() for c in self.changed],
             "comment_deltas": [d.to_dict() for d in self.comment_deltas],
-            "import_deltas": self.import_deltas,
+            # import names are attacker-derived symbol names — same
+            # scrub/clip chokepoint as function names above
+            "import_deltas": {
+                action: [_clip(name) for name in names]
+                for action, names in self.import_deltas.items()
+            },
             "stats": {
                 "added_count": len(self.added),
                 "removed_count": len(self.removed),

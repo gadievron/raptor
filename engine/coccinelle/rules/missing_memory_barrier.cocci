@@ -14,21 +14,56 @@
 // Covers CWE-362 / CWE-667: race condition from missing synchronisation.
 // @role: detection
 
-// Store to ptr->fldA then load from ptr->fldB without barrier
+// Store to ptr->fldA then load from ptr->fldB without barrier.
+//
+// The second endpoint must be a genuine READ context (assignment
+// right-hand side, condition, call argument, return value). A bare
+// `ptr->fldB` expression endpoint also matches the left-hand side of
+// an assignment, so plain consecutive field initialisation
+// (`p->a = 1; p->b = 2;` — two stores, no load) fired the rule.
+//
+// smp_store_mb / smp_store_release / smp_load_acquire take
+// arguments, so they need their own `(...)` guard — the shared
+// empty-parens alternation only matches zero-argument calls — and
+// the call-argument endpoint excludes the barrier/ordered-accessor
+// helpers so an ordered access is never itself reported as the
+// unordered load. The unstarred leading disjuncts are exception
+// branches (earlier alternatives shadow later ones for the same
+// code): a read wrapped in READ_ONCE / smp_load_acquire is ordered
+// and must not match the starred endpoints below.
 @missing_barrier@
 expression ptr;
-expression E;
+expression E, E2;
 identifier fldA, fldB;
+identifier callee != {smp_store_mb, smp_store_release, smp_load_acquire,
+                      WRITE_ONCE, READ_ONCE, smp_wmb, smp_rmb, smp_mb,
+                      barrier};
+statement S;
 position p_load;
 @@
 
 ptr->fldA = E;
-... when != \(smp_wmb\|smp_rmb\|smp_mb\|smp_store_mb\|barrier\)()
+... when != \(smp_wmb\|smp_rmb\|smp_mb\|barrier\)()
+    when != \(smp_store_mb\|smp_store_release\|smp_load_acquire\)(...)
     when != WRITE_ONCE(...)
     when != READ_ONCE(...)
     when != \(spin_lock\|spin_unlock\|mutex_lock\|mutex_unlock\|spin_lock_irq\|spin_unlock_irq\|spin_lock_bh\|spin_unlock_bh\)(...)
     when != return ...;
-* ptr->fldB@p_load
+(
+  E2 = <+... \(READ_ONCE\|smp_load_acquire\)(...) ...+>;
+|
+  if (<+... \(READ_ONCE\|smp_load_acquire\)(...) ...+>) S
+|
+  return <+... \(READ_ONCE\|smp_load_acquire\)(...) ...+>;
+|
+* E2 = <+... ptr->fldB@p_load ...+>;
+|
+* if (<+... ptr->fldB@p_load ...+>) S
+|
+* callee(..., <+... ptr->fldB@p_load ...+>, ...);
+|
+* return <+... ptr->fldB@p_load ...+>;
+)
 
 @script:python@
 p_load << missing_barrier.p_load;

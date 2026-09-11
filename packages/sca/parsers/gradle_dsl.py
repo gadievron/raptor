@@ -25,8 +25,13 @@ Confidence is ``medium`` because:
   - Conditional ``if`` / ``when`` branches mean we may emit deps that
     aren't actually included (or miss ones that are).
 
-We do not parse ``settings.gradle`` (workspace declaration), ``init.gradle``
-(global), or plugin-block dep declarations. Those are out of scope.
+``settings.gradle(.kts)`` (workspace declaration) routes through the
+same parser: discovery classifies it as a Maven manifest, and any
+dependency-configuration declarations it carries (rare, but legal in
+``buildscript`` blocks) match the same regexes. A settings script
+with none simply yields zero rows — parsed, not silently dropped.
+``init.gradle`` (global) and plugin-block dep declarations remain
+out of scope.
 """
 
 from __future__ import annotations
@@ -81,9 +86,15 @@ _CONFIG_TO_SCOPE = {
 # We match the config keyword anywhere a word-boundary precedes it (not
 # just line-start) so single-line forms like
 # ``dependencies { implementation 'g:a:v' }`` parse too.
+#
+# The keyword/paren gap is ``\s*(?:\(\s*)?`` in every pattern below —
+# same accepted language as the previous ``\s*\(?\s*`` but the two
+# whitespace runs are separated by a mandatory ``(``, so a hostile
+# keyword followed by a long space run no longer explores O(n^2)
+# split points (same fix as the gemfile/nuget parsers).
 _SINGLE_STRING_RE = re.compile(
     r"""\b(?P<config>[a-zA-Z]+)
-        \s*\(?\s*
+        \s*(?:\(\s*)?
         (?P<quote>['"])
         (?P<coord>[A-Za-z0-9_.\-]+:[A-Za-z0-9_.\-]+(?::[^'"]+)?)
         (?P=quote)
@@ -94,7 +105,7 @@ _SINGLE_STRING_RE = re.compile(
 # Form 2 (named-args, Groovy):
 #   implementation group: 'g', name: 'a', version: '1.2.3'
 _NAMED_ARGS_RE = re.compile(
-    r"""\b(?P<config>[a-zA-Z]+)\s*\(?\s*
+    r"""\b(?P<config>[a-zA-Z]+)\s*(?:\(\s*)?
         group\s*:\s*(?P<gq>['"])(?P<group>[^'"]+)(?P=gq)\s*,\s*
         name\s*:\s*(?P<nq>['"])(?P<name>[^'"]+)(?P=nq)\s*
         (?:,\s*version\s*:\s*(?P<vq>['"])(?P<version>[^'"]+)(?P=vq)\s*)?
@@ -113,19 +124,25 @@ _NAMED_ARGS_RE = re.compile(
 # is handled separately — plugin coords don't go through the
 # dependency-config path.
 _CATALOG_ACCESSOR_RE = re.compile(
-    r"""\b(?P<config>[a-zA-Z]+)\s*\(?\s*
+    r"""\b(?P<config>[a-zA-Z]+)\s*(?:\(\s*)?
         libs\.(?P<accessor>[A-Za-z0-9_.]+)
     """,
     re.VERBOSE,
 )
 _PLUGIN_ACCESSOR_RE = re.compile(
-    r"""\balias\s*\(?\s*libs\.plugins\.(?P<accessor>[A-Za-z0-9_.]+)
+    r"""\balias\s*(?:\(\s*)?libs\.plugins\.(?P<accessor>[A-Za-z0-9_.]+)
     """,
     re.VERBOSE,
 )
 
 
-@register(filenames=["build.gradle", "build.gradle.kts"])
+@register(filenames=[
+    "build.gradle", "build.gradle.kts",
+    # Settings scripts are classified by discovery; routing them here
+    # means they're actually parsed (usually yielding zero rows)
+    # instead of silently dropped with no parser at dispatch.
+    "settings.gradle", "settings.gradle.kts",
+])
 def parse(path: Path) -> list[Dependency]:
     """Parse a Gradle build script and emit one Dependency per
     recognised dependency declaration."""

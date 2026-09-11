@@ -171,14 +171,39 @@ def main(argv: Sequence[str]) -> int:
     # reference.
     http = _sca_default_http(target=target, offline=args.offline)
     cache_root = Path(args.cache_root) if args.cache_root else SCA_CACHE_ROOT
-    cache = None if args.no_cache else JsonCache(root=cache_root)
-    pypi_client = PyPIClient(http, cache, offline=args.offline)
-    npm_client = NpmClient(http, cache, offline=args.offline)
+    # ``--no-cache`` never passes ``cache=None`` into the feed clients:
+    # OsvClient / KevClient / EpssClient require a real JsonCache and
+    # would crash on first use — the crash used to be swallowed by the
+    # vuln-delta's broad failure handling, silently disabling the
+    # new-CVE gate for every --no-cache run (``--apply`` could land
+    # KEV-listed bumps as Clean). Mirror the scan pipeline instead:
+    # always construct the cache and zero the TTLs, which forces a
+    # refetch while keeping same-run state reusable.
+    cache = JsonCache(root=cache_root)
+    client_ttl = 0 if args.no_cache else 24 * 3600
+    pypi_client = PyPIClient(
+        http, cache, ttl_seconds=client_ttl, offline=args.offline,
+    )
+    npm_client = NpmClient(
+        http, cache, ttl_seconds=client_ttl, offline=args.offline,
+    )
     # OSV vuln-delta gate: if the bump introduces new CVEs the
     # current pin doesn't carry, the verdict escalates.
-    osv_client = OsvClient(http, cache, offline=args.offline)
-    kev_client = KevClient(http, cache, offline=args.offline)
-    epss_client = EpssClient(http, cache, offline=args.offline)
+    osv_client = OsvClient(
+        http, cache, offline=args.offline,
+        query_ttl=client_ttl, vuln_ttl=client_ttl,
+    )
+    kev_client = KevClient(
+        http, cache, offline=args.offline, ttl_seconds=client_ttl,
+    )
+    epss_client = EpssClient(
+        http, cache, offline=args.offline, ttl_seconds=client_ttl,
+    )
+    # The upstream-latest lookups (GitHub releases / OCI tags / Helm
+    # index) accept a None cache and take their TTL from the callee,
+    # so --no-cache keeps its documented "bypass upstream-latest
+    # lookups' cache" meaning by simply not handing them one.
+    upstream_cache = None if args.no_cache else cache
 
     try:
         report = run_bump(
@@ -190,7 +215,7 @@ def main(argv: Sequence[str]) -> int:
             kev_client=kev_client,
             epss_client=epss_client,
             apply=args.apply,
-            cache=cache,
+            cache=upstream_cache,
             github_token=github_token,
             trust_repo=trust_repo,
             exclude=args.exclude,
@@ -249,7 +274,10 @@ def _report_to_dict(report) -> dict:
                 "file": str(r.candidate.file),
                 "current_version": r.candidate.current_version,
                 "target_version": r.candidate.target_version,
-                "verdict": r.verdict_label,
+                # JSON output uses snake_case status values
+                # (``clean`` / ``review`` / ``block``); the Title-Case
+                # labels stay in the human-readable renderings only.
+                "verdict": r.verdict_label.lower(),
                 "applied": (
                     r.rewrite_result.applied
                     if r.rewrite_result is not None else False

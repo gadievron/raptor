@@ -146,3 +146,36 @@ class TestWrongOwner(_KeyDirCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestShortReadDelivery(_KeyDirCase):
+    def test_chunked_read_loads_full_key(self) -> None:
+        """os.read may legally return fewer bytes than requested;
+        chunked delivery must not land a healthy key in the
+        wrong-length refusal (which demotes every row to hint-only)."""
+        data = self._make_key(0o600)
+        real_read = os.read
+        with patch(
+            "core.sage.rowmac.os.read",
+            side_effect=lambda fd, n: real_read(fd, min(n, 5)),
+        ):
+            self.assertEqual(
+                rowmac._read_existing_key(self.key_path), data,
+            )
+
+    def test_truncated_key_reads_exact_length(self) -> None:
+        # Two-direction guard: the loop reads to EOF, never pads — a
+        # torn 10-byte key still fails the caller's length check.
+        self.key_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.key_path.write_bytes(os.urandom(10))
+        self.key_path.chmod(0o600)
+        real_read = os.read
+        with patch(
+            "core.sage.rowmac.os.read",
+            side_effect=lambda fd, n: real_read(fd, min(n, 5)),
+        ):
+            got = rowmac._read_existing_key(self.key_path)
+        self.assertIsInstance(got, bytes)
+        self.assertEqual(len(got), 10)
+        with self.assertRaises(RuntimeError):
+            rowmac.mint(_FIELDS)

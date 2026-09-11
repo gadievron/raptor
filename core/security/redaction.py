@@ -124,6 +124,55 @@ _SECRET_FIELD_SUFFIXES = (
     "_password", "-password", "_passwd", "-passwd", "_pwd", "-pwd",
 )
 
+# Free-text KEY=value / key: value assignment shape. The NAME decides
+# (is_secret_field_name in the callback) — the regex itself is generic
+# so the name list stays in one place. Bounds keep false positives in
+# check: word-boundary'd name (≤64 chars, optional matching quotes),
+# short assignment run, and a ≥8-char value floor (below that the
+# "value" is usually prose: "password: use a strong one"). Values are
+# non-whitespace runs excluding quotes/angle-brackets so quoted values
+# redact inside their quotes and HTML/XML contexts don't over-consume.
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?<![\w.-])"
+    r"([\"']?)"                 # optional opening quote on the name
+    r"([A-Za-z_][\w.-]{0,63})"  # field name
+    r"\1"                       # matching closing quote
+    r"(\s{0,8}[=:]\s{0,8})"     # assignment / mapping separator
+    r"([\"']?)"                 # optional opening quote on the value
+    # Value: length floor limits FPs; parens excluded so a value
+    # already redacted inside a prose-wrapped URL ("(...token=x)")
+    # doesn't swallow the closing wrapper. Comma/semicolon excluded so
+    # a JSON/JS-object member ('{"access_token": 12345678901, "next":
+    # true}') redacts the value without swallowing the separator and
+    # dragging the next member into the replacement. A secret
+    # containing a paren/comma/semicolon redacts up to it — partial
+    # (and below the 8-char floor, not at all), but this pass is the
+    # net under the URL/vendor passes, not the primary.
+    r"([^\s\"'<>(),;]{8,256})"
+)
+
+# Bare URL query/fragment pair (`?key=`, `&key=`, `#key=`). Catches
+# credentials in URL FRAGMENTS of URLs the main regex could not parse
+# whole — most importantly the remainder of a URL split by the 8 KB
+# match cap below, where the tail (`...&access_token=x`) is no longer
+# scheme-anchored. The [?&#] lead keeps it out of ordinary prose.
+_URL_PAIR_RE = re.compile(
+    r"([?&#][A-Za-z0-9_.~%-]{1,64})=([^\s\"'<>&()]{1,4096})"
+)
+
+
+def _redact_assignment(match: re.Match[str]) -> str:
+    if not is_secret_field_name(match.group(2)):
+        return match.group(0)
+    return (f"{match.group(1)}{match.group(2)}{match.group(1)}"
+            f"{match.group(3)}{match.group(4)}[REDACTED]")
+
+
+def _redact_url_pair(match: re.Match[str]) -> str:
+    if not is_secret_field_name(match.group(1)[1:]):
+        return match.group(0)
+    return f"{match.group(1)}=[REDACTED]"
+
 
 def is_secret_field_name(name: object) -> bool:
     """Return whether a field/parameter name conventionally carries a secret value."""
@@ -135,6 +184,22 @@ def is_secret_field_name(name: object) -> bool:
 
 def _redact_url(match: re.Match[str]) -> str:
     raw_url = match.group(0)
+    # Prose-paren trim: parens are legitimate URL characters
+    # (wikipedia-style paths, tracking params), so the URL regex keeps
+    # them — excluding them truncated the match at the first '(' and
+    # let everything after it, query-string credentials included,
+    # escape redaction entirely. The cost is markdown-style wrapping
+    # ("(https://e/?token=x)"): peel trailing ')' beyond the count of
+    # '(' inside the match and re-append them verbatim, so balanced
+    # parens stay part of the URL and wrappers stay outside it.
+    trailing = ""
+    while raw_url.endswith(")") and raw_url.count("(") < raw_url.count(")"):
+        raw_url = raw_url[:-1]
+        trailing = ")" + trailing
+    return _redact_url_inner(raw_url) + trailing
+
+
+def _redact_url_inner(raw_url: str) -> str:
     try:
         parsed = urlsplit(raw_url)
     except ValueError:
@@ -215,29 +280,35 @@ def redact_secrets(value: object, *, reveal_secrets: bool = False) -> str:
         return text
 
     # Redact URLs first so query-string context is preserved without leaking values.
-    # URL token cap: PATH_MAX is 4096; HTTP/2 Authority + Path
-    # rarely exceeds 8 KB before proxies start rejecting. A
-    # 100 KB single URL is essentially never legitimate; cap at
-    # 8 KB so a pathological log line containing a megabyte-long
-    # quoted "URL" doesn't pin the regex engine on this scan.
-    # Pre-fix the unbounded `[^\s'"<>]+` would happily consume
-    # any length of non-whitespace, and `re.sub` has no cap on
-    # match length — operator-supplied logs containing such a
-    # string took O(n) per redact_secrets() call, multiplied
-    # across every record processed by reporters.
-    # `()` added to exclusions so URLs in prose (`see https://example.com/`
-    # at end of sentence, or `(https://example.com/?token=abc)`)
-    # don't have the trailing punctuation captured as URL chars
-    # — `_redact_url`'s urlsplit then includes the `)` in the
-    # path/query and the redacted output preserves the malformed
-    # tail visible in logs.
+    # URL token cap — kept at 8 KB in BOTH directions on purpose:
+    #   * not lower: PATH_MAX is 4096 and HTTP/2 Authority + Path
+    #     rarely exceeds 8 KB before proxies start rejecting, so a
+    #     smaller cap would split real presigned URLs mid-query;
+    #   * not higher/unbounded: pre-cap, the unbounded `[^...]+`
+    #     consumed any length of non-whitespace and `re.sub` has no
+    #     match-length cap — a megabyte-long quoted "URL" in an
+    #     operator-supplied log pinned the regex engine per
+    #     redact_secrets() call, multiplied across every record.
+    # A URL LONGER than the cap is split at 8 KB: the head is parsed
+    # and redacted as a URL; the tail is no longer scheme-anchored, so
+    # the _URL_PAIR_RE pass below re-scans the whole text for bare
+    # `[?&#]key=value` pairs (plus the assignment pass) — a credential
+    # beyond the cap is still caught at pair granularity. Residual: a
+    # value the cap splits mid-token leaks its tail fragment.
+    #
+    # Parens are INCLUDED in the URL charset — they are legal and
+    # common in real URL paths/queries, and excluding them truncated
+    # the match at the first '(' so query credentials after it escaped
+    # entirely. Prose wrapping ("(https://e?token=x)") is handled by
+    # the unbalanced-trailing-paren trim in _redact_url.
     text = re.sub(
         # Any RFC-3986 scheme, not just http(s): connection strings
         # (postgres://, mongodb+srv://, redis://, amqp://, ftp://, ...)
         # carry credentials in the SAME userinfo/query positions and
         # slipped through the http-only pattern verbatim.
-        r"\b[a-zA-Z][a-zA-Z0-9+.-]{0,31}://[^\s'\"<>()]{1,8192}",
+        r"\b[a-zA-Z][a-zA-Z0-9+.-]{0,31}://[^\s'\"<>]{1,8192}",
         _redact_url, text)
+    text = _URL_PAIR_RE.sub(_redact_url_pair, text)
 
     # Redact common authorization header schemes from logs and finding metadata.
     text = re.sub(
@@ -261,6 +332,15 @@ def redact_secrets(value: object, *, reveal_secrets: bool = False) -> str:
     # disjoint by prefix.
     for pattern, replacement in _VENDOR_SECRET_PATTERNS:
         text = pattern.sub(replacement, text)
+
+    # Free-text assignment shapes (`GITLAB_TOKEN=...`, `db_password:
+    # ...`, `"api_key": "..."`). Same name convention the URL
+    # query-parameter redaction has always used (is_secret_field_name)
+    # — pre-fix the mechanism was wired ONLY to URLs, so the identical
+    # secret in a config-style line passed through verbatim. Runs last:
+    # earlier passes may already have replaced the value ([REDACTED] is
+    # idempotent under this pattern).
+    text = _SECRET_ASSIGNMENT_RE.sub(_redact_assignment, text)
     return text
 
 
@@ -282,26 +362,16 @@ def redact_url_secrets_only(value: object, *, reveal_secrets: bool = False) -> s
     text = str(value)
     if reveal_secrets:
         return text
-    # URL token cap: PATH_MAX is 4096; HTTP/2 Authority + Path
-    # rarely exceeds 8 KB before proxies start rejecting. A
-    # 100 KB single URL is essentially never legitimate; cap at
-    # 8 KB so a pathological log line containing a megabyte-long
-    # quoted "URL" doesn't pin the regex engine on this scan.
-    # Pre-fix the unbounded `[^\s'"<>]+` would happily consume
-    # any length of non-whitespace, and `re.sub` has no cap on
-    # match length — operator-supplied logs containing such a
-    # string took O(n) per redact_secrets() call, multiplied
-    # across every record processed by reporters.
-    # `()` added to exclusions so URLs in prose (`see https://example.com/`
-    # at end of sentence, or `(https://example.com/?token=abc)`)
-    # don't have the trailing punctuation captured as URL chars
-    # — `_redact_url`'s urlsplit then includes the `)` in the
-    # path/query and the redacted output preserves the malformed
-    # tail visible in logs.
-    return re.sub(
+    # URL token cap + paren handling: same trade-off and same split
+    # recovery as redact_secrets — see the comment there. This
+    # FP-averse variant adds only the `[?&#]key=value` pair pass
+    # (URL-shaped by construction), never the free-text assignment
+    # pass, so path components like `Bearer abc.dat` stay untouched.
+    text = re.sub(
         # Any RFC-3986 scheme, not just http(s): connection strings
         # (postgres://, mongodb+srv://, redis://, amqp://, ftp://, ...)
         # carry credentials in the SAME userinfo/query positions and
         # slipped through the http-only pattern verbatim.
-        r"\b[a-zA-Z][a-zA-Z0-9+.-]{0,31}://[^\s'\"<>()]{1,8192}",
+        r"\b[a-zA-Z][a-zA-Z0-9+.-]{0,31}://[^\s'\"<>]{1,8192}",
         _redact_url, text)
+    return _URL_PAIR_RE.sub(_redact_url_pair, text)

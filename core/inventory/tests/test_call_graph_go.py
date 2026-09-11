@@ -550,3 +550,27 @@ def test_go_argument_identifiers_round_trips_via_dict():
     g2 = FileCallGraph.from_dict(d)
     call = next(c for c in g2.calls if c.chain[-1] == "HandleFunc")
     assert call.argument_identifiers == ["handler"]
+
+
+def test_go_prefixed_repo_binds_declared_package_name():
+    """go-<name> repos declare their package WITHOUT the prefix
+    (go-multierror → package multierror); without that alias every
+    direct call into such a package failed to resolve."""
+    g = extract_call_graph_go(
+        'package main\n'
+        'import "github.com/hashicorp/go-multierror"\n'
+        'func f(e error) { multierror.Append(e, nil) }\n'
+    )
+    assert g.imports.get("multierror") == "github.com/hashicorp/go-multierror"
+    # The literal and collapsed forms coexist with it.
+    assert "go-multierror" in g.imports
+    assert "gomultierror" in g.imports
+
+
+def test_go_prefixed_versioned_module_binds_stripped_form():
+    g = extract_call_graph_go(
+        'package main\n'
+        'import "github.com/foo/go-bar-utils/v2"\n'
+        'func f() { barutils.Do() }\n'
+    )
+    assert g.imports.get("barutils") == "github.com/foo/go-bar-utils/v2"

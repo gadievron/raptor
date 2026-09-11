@@ -131,3 +131,61 @@ def test_fuzz_record_reaches_store_as_runtime(tmp_path):
     # runtime category, runtime-tested depth — never counts as LLM review
     from core.coverage.registry import classify
     assert classify("fuzz") == ("runtime", "runtime-tested")
+
+
+def test_system_header_not_mapped_onto_target_file_by_basename(tmp_path):
+    """A gcov section for /usr/include/zlib.h must NOT flip the
+    target's src/zlib.h runtime-covered just because the basename is
+    unique in the inventory — the basename fallback is for relative
+    paths; absolute out-of-tree paths only match via a component-
+    aligned suffix (which /usr/include/... never satisfies)."""
+    from core.coverage.importer import mark_runtime
+
+    checklist = {"files": [
+        {"path": "src/zlib.h", "lines": 20, "items": [
+            {"name": "inflate", "kind": "function",
+             "line_start": 10, "line_end": 12}]},
+    ]}
+    s = _store(tmp_path)
+    s.import_inventory_meta(checklist)
+    n = mark_runtime(
+        s, {"/usr/include/zlib.h": [10, 11, 12]}, checklist, "gcov")
+    assert n == 0
+    assert s.who_checked("src/zlib.h", 10) == []
+    assert s.function_covered("src/zlib.h", 10, 12) is False
+
+
+def test_in_tree_absolute_path_still_matches_by_suffix(tmp_path):
+    """Equality direction: absolute paths INTO the tree keep matching
+    (component-aligned suffix), so real gcov output is unaffected."""
+    from core.coverage.importer import mark_runtime
+
+    checklist = {"files": [
+        {"path": "src/zlib.h", "lines": 20, "items": [
+            {"name": "inflate", "kind": "function",
+             "line_start": 10, "line_end": 12}]},
+    ]}
+    s = _store(tmp_path)
+    s.import_inventory_meta(checklist)
+    n = mark_runtime(
+        s, {"/home/user/proj/src/zlib.h": [10, 11]}, checklist, "gcov")
+    assert n == 1
+    assert s.who_checked("src/zlib.h", 10) == ["gcov"]
+
+
+def test_gcov_multi_source_sections_attributed_per_file(tmp_path):
+    """One .gcov artifact can carry MULTIPLE Source: sections; each
+    section's executed lines must go to ITS file, not all to the last
+    one (which both overstated the last file's coverage and dropped
+    the first file's)."""
+    from core.coverage.parsers.gcov import parse_gcov
+
+    g = tmp_path / "combined.gcov"
+    g.write_text(
+        "        -:    0:Source:first.c\n"
+        "        7:   10:covered();\n"
+        "        -:    0:Source:second.c\n"
+        "    #####:   10:never();\n"
+        "        3:   20:covered();\n")
+    out = parse_gcov(g)
+    assert out == {"first.c": {10}, "second.c": {20}}

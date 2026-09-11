@@ -78,6 +78,7 @@ def _commit(
     author_email: str = "test@example.com",
     author_date: str = "2026-06-01T12:00:00+00:00",
     commit_date: str = "2026-06-01T12:00:00+00:00",
+    message: str | None = None,
 ) -> str:
     """Create a single commit with explicit author + commit dates;
     return its full SHA."""
@@ -95,7 +96,7 @@ def _commit(
     env["GIT_COMMITTER_DATE"] = commit_date
     subprocess.run(
         ["git", "-C", str(tmp_path), "commit",
-         "-q", "-m", f"chore: update {filename}"],
+         "-q", "-m", message or f"chore: update {filename}"],
         check=True, capture_output=True, env=env,
     )
     proc = subprocess.run(
@@ -364,3 +365,72 @@ def test_downgraded_finding_is_clearly_labelled(tmp_path: Path) -> None:
     assert scf_impersonation.severity == "high"
     assert scf_impersonation.evidence["claim_shape"] == "impersonation"
     assert scf_impersonation.detail != scf_canonical.detail
+
+
+# ---------------------------------------------------------------------------
+# Record framing — control characters in commit subjects
+# ---------------------------------------------------------------------------
+
+def test_form_feed_in_subject_does_not_drop_the_commit(
+    tmp_path: Path,
+) -> None:
+    """Git preserves a form-feed inside a subject line (``%s``).
+    Splitting the raw log stream on the form-feed record marker used
+    to shear such a record in two — both fragments then failed the
+    field-count check and the commit silently vanished from the
+    forgery analysis, i.e. a forger could exempt their commit by
+    putting ``\\f`` in the subject.  The NUL-token parser must keep
+    it."""
+    _init_repo(tmp_path)
+    _commit(
+        tmp_path,
+        filename="package.json",
+        content='{"name": "x", "dependencies": {"a": "1.0.0"}}',
+        author_name="dependabot[bot]",
+        author_email="attacker@evil.example",
+        author_date="2026-01-01T12:00:00+00:00",
+        commit_date="2026-06-01T12:00:00+00:00",
+        message="chore: bump a\fhidden tail",
+    )
+    findings = commit_provenance.scan_target(tmp_path)
+    assert len(findings) == 1, (
+        "forged-provenance commit with a form-feed in its subject "
+        "must still be analysed"
+    )
+    assert findings[0].hit.subject == "chore: bump a\fhidden tail"
+    assert findings[0].hit.paths_touched == ["package.json"]
+
+
+def test_normal_commits_still_parse_alongside_form_feed_subject(
+    tmp_path: Path,
+) -> None:
+    """Mixed history: a normal commit before and after the
+    form-feed-subject commit.  All three rows must come back from
+    the log parser with intact fields and per-commit path lists."""
+    _init_repo(tmp_path)
+    _commit(
+        tmp_path, filename="package.json",
+        content='{"name": "x"}',
+        message="chore: initial manifest",
+    )
+    _commit(
+        tmp_path, filename="package.json",
+        content='{"name": "x", "version": "2"}',
+        message="weird\fsubject",
+    )
+    _commit(
+        tmp_path, filename="package.json",
+        content='{"name": "x", "version": "3"}',
+        message="chore: routine bump",
+    )
+    rows = commit_provenance._git_log_provenance(
+        tmp_path.resolve(), ["package.json"], 100,
+    )
+    subjects = [r["subject"] for r in rows]
+    assert subjects == [
+        "chore: routine bump", "weird\fsubject", "chore: initial manifest",
+    ]
+    for row in rows:
+        assert row["paths_touched"] == ["package.json"]
+        assert len(row["sha"]) == 40
+        assert row["author_email"] == "test@example.com"

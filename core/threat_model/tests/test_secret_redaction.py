@@ -240,3 +240,55 @@ def test_improvised_secret_value_keys_dropped_but_label_keys_kept(tmp_path):
     })
     dumped = json.dumps(model.to_dict())
     assert "hunter2short" not in dumped
+
+
+def test_label_glued_hex_and_single_case_secrets_redacted():
+    from core.threat_model import _redact_free_text
+    # Hex glued to a label survives no more (search, not fullmatch)...
+    glued = "key_" + "3f2a" * 10
+    assert "3f2a" not in _redact_free_text(glued)
+    # ...and long separator-free single-case blobs with digits go too.
+    upper_secret = "QK7" + "ZR4TXW" * 4
+    assert upper_secret not in _redact_free_text(f"token {upper_secret}")
+
+
+def test_identifier_labels_survive_redaction():
+    from core.threat_model import _redact_free_text
+    # Two-direction guard: separator-carrying identifiers are labels,
+    # not secret material — file:line triage depends on them.
+    for label in ("SHA256_DIGEST_LENGTH", "MASTER_PASSWORD_SETTING",
+                  "config.v2.some_key_name", "getApiKeyFromEnvOrFile"):
+        assert label in _redact_free_text(f"see {label} usage"), label
+
+
+def test_context_map_ingestion_clips_oversized_fields(tmp_path):
+    from core.threat_model import _MAX_STRING_BYTES, from_context_map
+    project = SimpleNamespace(name="p", target="/t", output_dir=str(tmp_path))
+    huge = "B" * 100_000
+    model = from_context_map(project, {
+        "entry_points": [{"id": "EP-1", "name": "POST /x"}],
+        "sinks": [{"id": "S-1", "name": "exec"}],
+        "unchecked_flows": [{
+            "entry_point": "EP-1", "sink": "S-1",
+            "missing_boundary": huge, "severity": "high",
+        }],
+    })
+    flow = model.data_flows[0]
+    assert len(flow["boundary"]) <= _MAX_STRING_BYTES + 16
+    assert huge not in json.dumps(model.to_dict())
+
+
+def test_from_dict_caps_nested_dict_fields():
+    from core.threat_model import _MAX_STRING_BYTES, ThreatModel
+    huge = "C" * 100_000
+    model = ThreatModel.from_dict({
+        "project_name": "p", "target": "/t",
+        "threats": [{
+            "id": "T-1", "title": "t",
+            "metadata": {"nested": {"blob": huge}},
+            "listy": [{"inner": huge}],
+        }],
+    })
+    dumped = json.dumps(model.to_dict())
+    assert huge not in dumped
+    assert len(dumped) < 3 * _MAX_STRING_BYTES + 4096

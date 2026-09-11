@@ -538,13 +538,195 @@ class TestRefuteByKnownReturnType:
         r = _refute_by_known_return_type(outcome, _Config())
         assert r is None
 
-    def test_pure_integer_wraparound_refuted(self):
-        """Pure integer wraparound with no buffer claim → refuted."""
+    def test_pure_value_overflow_refuted(self):
+        """Raw-value overflow claim, no wrap-capable op → refuted."""
+        outcome = _Outcome(
+            hypothesis=(
+                "ntohs() return value causes arithmetic overflow when "
+                "stored in the int loop counter"
+            ),
+        )
+        r = _refute_by_known_return_type(outcome, _Config())
+        assert r is not None
+        assert r.gate == "input_bound_t0"
+
+    def test_multiplication_not_refuted(self):
+        """Product of two in-range uint16_t values exceeds signed int,
+        so a multiplication overflow claim on a bounded source must
+        stay inconclusive."""
         outcome = _Outcome(
             hypothesis=(
                 "ntohs() value causes arithmetic overflow when "
                 "multiplied in loop counter increment"
             ),
+        )
+        r = _refute_by_known_return_type(outcome, _Config())
+        assert r is None
+
+    def test_subtraction_wrap_not_refuted(self):
+        """Unsigned subtraction of a bounded value wraps below zero,
+        so a CWE-190-phrased wraparound claim naming subtraction must
+        stay inconclusive."""
+        outcome = _Outcome(
+            hypothesis=(
+                "integer wraparound: hdr_len is subtracted from the "
+                "ntohs() payload length in size_t arithmetic"
+            ),
+            review_result={"cwe": "CWE-190"},
+        )
+        r = _refute_by_known_return_type(outcome, _Config())
+        assert r is None
+
+    def test_code_shape_subtraction_not_refuted(self):
+        """A code-shaped subtraction (``len - 2``) in the hypothesis
+        also stands the gate down."""
+        outcome = _Outcome(
+            hypothesis=(
+                "integer overflow: len = ntohs(pkt->len); "
+                "payload = len - 2 wraps when len < 2"
+            ),
+        )
+        r = _refute_by_known_return_type(outcome, _Config())
+        assert r is None
+
+    def test_left_shift_not_refuted(self):
+        """Left-shifting a bounded value can exceed signed int."""
+        outcome = _Outcome(
+            hypothesis=(
+                "integer overflow: ntohs() value is left-shifted by 16 "
+                "to build the record length"
+            ),
+        )
+        r = _refute_by_known_return_type(outcome, _Config())
+        assert r is None
+
+    def test_addition_wrap_not_refuted(self):
+        """Two in-range values summed exceed a narrower store — the
+        bound precludes nothing about the sum."""
+        for hyp in (
+            "integer overflow: alloc = ntohs(hdr) + 64 wraps",
+            "integer overflow: total = len1 + len2 stored into the "
+            "uint16_t field, wraps modulo 65536",
+            "the two ntohs() lengths are added and the sum overflows",
+        ):
+            outcome = _Outcome(
+                hypothesis=hyp, review_result={"cwe": "CWE-190"},
+            )
+            assert _refute_by_known_return_type(outcome, _Config()) \
+                is None, hyp
+
+    def test_unspaced_operator_shapes_not_refuted(self):
+        """Code shapes without spaces around the operator must bail
+        exactly like the spaced forms."""
+        for hyp in (
+            "integer overflow: idx = ntohs(a)-1 wraps when a is zero",
+            "integer overflow: malloc(nmemb*12) wraps the size_t "
+            "computation with the ntohs() count",
+        ):
+            outcome = _Outcome(
+                hypothesis=hyp, review_result={"cwe": "CWE-190"},
+            )
+            assert _refute_by_known_return_type(outcome, _Config()) \
+                is None, hyp
+
+    def test_prose_paraphrases_not_refuted(self):
+        """Paraphrased multiplication/shift claims must bail too."""
+        for hyp in (
+            "integer overflow: the ntohs() count times the element "
+            "size overflows the allocation",
+            "integer overflow: the ntohs() length is scaled by "
+            "sizeof(entry) and wraps",
+            "integer overflow: the ntohs() value is shifted to the "
+            "left by 8 and exceeds int",
+        ):
+            outcome = _Outcome(
+                hypothesis=hyp, review_result={"cwe": "CWE-190"},
+            )
+            assert _refute_by_known_return_type(outcome, _Config()) \
+                is None, hyp
+
+    def test_truncation_and_cast_narrowing_not_refuted(self):
+        """Truncation is outside the gate's premise (needs the
+        destination type) — narrowing claims must never proof-refute."""
+        for hyp in (
+            "integer wraparound: the ntohs() length is truncated when "
+            "assigned to the uint8_t hdr_len, wrapping the value",
+            "integer wraparound: the ntohs() value is cast to uint8_t, "
+            "wrapping",
+        ):
+            outcome = _Outcome(
+                hypothesis=hyp, review_result={"cwe": "CWE-190"},
+            )
+            assert _refute_by_known_return_type(outcome, _Config()) \
+                is None, hyp
+
+    def test_identifier_adjacent_unspaced_ops_not_refuted(self):
+        """Verifier hypotheses quote C verbatim: unspaced
+        identifier-adjacent arithmetic (``len-2``, ``seq+1``, ``n-1``)
+        is the same unsigned-wrap class and must stand the gate down.
+        (A letter-lookbehind protecting CWE-190-style tokens re-opened
+        exactly these — the token families are now stripped from the
+        probe by KNOWLEDGE instead, so the operator shapes stay
+        generic.)"""
+        for hyp in (
+            "payload = len-2 wraps around to a huge value; len comes "
+            "from ntohs(pkt->len)",
+            "hdr->seq = seq+1 wraps; seq comes from ntohs(hdr->seq)",
+            "ntohs yields n and the loop uses n-1 as the copy count, "
+            "wrapping when n is 0",
+        ):
+            outcome = _Outcome(
+                hypothesis=hyp, review_result={"cwe": "CWE-190"},
+            )
+            assert _refute_by_known_return_type(outcome, _Config()) \
+                is None, hyp
+
+    def test_arithmetic_operand_with_unit_word_not_refuted(self):
+        """The width-prose strip must not eat the SUBTRAHEND of real
+        arithmetic: deleting the whole "n-1 bytes" phrase left "n- "
+        and the wrap claim refuted proof-grade.  The digit-preserving
+        pass keeps the operand, so the operator shape still bails."""
+        for hyp in (
+            "the handler writes n-1 bytes where n is the ntohs() "
+            "length, and the count wraps when n is 0",
+            "copies len - 2 bytes; wraps when the ntohs() length "
+            "is under 2",
+        ):
+            outcome = _Outcome(
+                hypothesis=hyp, review_result={"cwe": "CWE-190"},
+            )
+            assert _refute_by_known_return_type(outcome, _Config()) \
+                is None, hyp
+
+    def test_width_prose_alone_still_refuted(self):
+        """Non-vacuity control: "16-bit"/"2-byte" width prose is NOT a
+        wrap-capable operation — a raw-value claim mentioning it keeps
+        the refutation (unit word stripped, digit stranded op-free)."""
+        for hyp in (
+            "integer overflow: the 16-bit ntohs() return value "
+            "overflows the int loop counter",
+            "integer overflow: the 2-byte ntohs() result overflows "
+            "the plain int counter",
+        ):
+            outcome = _Outcome(
+                hypothesis=hyp, review_result={"cwe": "CWE-190"},
+            )
+            r = _refute_by_known_return_type(outcome, _Config())
+            assert r is not None, hyp
+            assert r.gate == "input_bound_t0"
+
+    def test_identifier_tokens_alone_still_refuted(self):
+        """Non-vacuity control: known hyphen-digit token families
+        (CWE/CVE/hash ids — multi-part numeric tails included) are not
+        arithmetic; a raw-value claim citing them keeps the
+        refutation."""
+        outcome = _Outcome(
+            hypothesis=(
+                "CVE-2024-12345 / CWE-190: the ntohs() return value "
+                "itself overflows the int loop counter (sha-256 of "
+                "the packet is unrelated)"
+            ),
+            review_result={"cwe": "CWE-190"},
         )
         r = _refute_by_known_return_type(outcome, _Config())
         assert r is not None
@@ -587,15 +769,17 @@ class TestRefuteByKnownReturnType:
         assert r is not None
         assert r.gate == "input_bound_t0"
 
-    def test_ntohs_underflow_still_refuted(self):
-        """ntohs() cannot return a negative value (min 0), so the
-        CWE-191 refutation stays for it."""
+    def test_ntohs_underflow_not_refuted(self):
+        """ntohs() cannot return a negative value (min 0), but its
+        value subtracted from something smaller still wraps in
+        unsigned arithmetic — CWE-191 is never refuted by an
+        upper-bound-only table."""
         outcome = _Outcome(
             hypothesis="integer underflow from ntohs() return value",
             review_result={"cwe": "CWE-191"},
         )
         r = _refute_by_known_return_type(outcome, _Config())
-        assert r is not None
+        assert r is None
 
 
 # ===================================================================

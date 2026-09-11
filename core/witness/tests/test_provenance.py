@@ -340,3 +340,78 @@ class TestVersionedRunBinding:
         assert prov.verify_witness_execution_graded(f, run) == (
             prov.GRADE_BASENAME
         )
+
+
+# ---------------------------------------------------------------------------
+# Key loader: short-read tolerance
+# ---------------------------------------------------------------------------
+
+
+def test_chunked_key_read_loads_full_key(tmp_path, monkeypatch) -> None:
+    """os.read may legally return fewer bytes than requested; chunked
+    delivery must not land a healthy key in the wrong-length refusal
+    (which would strip provenance from every witness record)."""
+    key_file = tmp_path / "witness-mac.key"
+    data = os.urandom(32)
+    key_file.write_bytes(data)
+    key_file.chmod(0o600)
+    real_read = os.read
+    monkeypatch.setattr(os, "read", lambda fd, n: real_read(fd, min(n, 5)))
+    assert prov._read_existing_key(key_file) == data
+
+
+def test_truncated_key_file_reads_exact_length(tmp_path, monkeypatch) -> None:
+    # Two-direction guard: the loop reads to EOF, never pads — a torn
+    # 10-byte key still fails the caller's length check (fail-closed).
+    key_file = tmp_path / "witness-mac.key"
+    key_file.write_bytes(os.urandom(10))
+    key_file.chmod(0o600)
+    real_read = os.read
+    monkeypatch.setattr(os, "read", lambda fd, n: real_read(fd, min(n, 5)))
+    got = prov._read_existing_key(key_file)
+    assert isinstance(got, bytes)
+    assert len(got) == 10
+
+
+class TestWitnessManifestMAC:
+    """Content-MAC for WitnessStore manifests — the substrate
+    collect_outcomes projects into threat-status flips."""
+
+    def _manifest(self):
+        return {
+            "bytes_hash": "ab" * 32,
+            "bytes_len": 4,
+            "source": "fuzz",
+            "observed_outcome": "exit_signal",
+            "outcome_detail": {"finding_id": "THR-0001"},
+            "timestamp": "2026-01-01T00:00:00+00:00",
+        }
+
+    def test_stamp_verify_round_trip(self, tmp_path):
+        manifest = self._manifest()
+        prov.stamp_witness_manifest(manifest)
+        assert manifest.get(prov.PROVENANCE_KEY)
+        assert prov.verify_witness_manifest(manifest)
+
+    def test_any_content_tamper_fails(self, tmp_path):
+        # Whole-record coverage: rewriting ANY field under a surviving
+        # token must fail — including the threat-naming finding_id.
+        manifest = self._manifest()
+        prov.stamp_witness_manifest(manifest)
+        tampered = dict(manifest)
+        tampered["outcome_detail"] = {"finding_id": "THR-0002"}
+        assert not prov.verify_witness_manifest(tampered)
+
+    def test_unstamped_manifest_is_unverified(self, tmp_path):
+        # Two-direction guard: legacy / attacker-staged manifests
+        # without a token demote, never error.
+        assert not prov.verify_witness_manifest(self._manifest())
+
+    def test_foreign_key_token_fails(self, tmp_path, monkeypatch):
+        # A record minted under ANOTHER install's key (or a guessed
+        # token) must not verify here.
+        manifest = self._manifest()
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "other-xdg"))
+        prov.stamp_witness_manifest(manifest)
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "this-xdg"))
+        assert not prov.verify_witness_manifest(manifest)

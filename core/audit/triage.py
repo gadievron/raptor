@@ -135,6 +135,25 @@ def classify_function(
     """
     reasons: list[str] = []
 
+    # A prior /validate run CONFIRMED a defect in this function: the
+    # strongest possible review signal. The mechanical skip evidence
+    # ("no sink path", binary-absent, a prefilter skip_llm verdict) is
+    # precisely what a confirmed detection-evasion defect looks like
+    # from the outside (observed live: an audit-mask selection function
+    # with a validated audit evasion bug was skipped as "no sink path,
+    # no dangerous callees, small"). This rung must precede EVERY
+    # mechanical skip — including the prefilter early-return, which
+    # used to sit above it and made the floor dead. Never skip or
+    # glance it — full review.
+    if validate_confirmed:
+        reasons.append("validate-confirmed defect — full review forced")
+        return TriageResult(
+            bucket=TriageBucket.INVESTIGATE,
+            reasons=tuple(reasons),
+            token_budget=TOKEN_BUDGETS[TriageBucket.INVESTIGATE],
+            priority_score=priority_score,
+        )
+
     if prefilter and prefilter.skip_llm:
         reasons.append(f"prefilter skip: {prefilter.skip_reason}")
         return TriageResult(
@@ -145,22 +164,6 @@ def classify_function(
         )
 
     stack_buffer_writer = writes_fixed_stack_buffer(source)
-
-    # A prior /validate run CONFIRMED a defect in this function: the
-    # strongest possible review signal. The mechanical skip evidence
-    # ("no sink path", binary-absent) is precisely what a confirmed
-    # detection-evasion defect looks like from the outside (observed
-    # live: an audit-mask selection function with a validated audit
-    # evasion bug was skipped as "no sink path, no dangerous callees,
-    # small"). Never skip or glance it — full review.
-    if validate_confirmed:
-        reasons.append("validate-confirmed defect — full review forced")
-        return TriageResult(
-            bucket=TriageBucket.INVESTIGATE,
-            reasons=tuple(reasons),
-            token_budget=TOKEN_BUDGETS[TriageBucket.INVESTIGATE],
-            priority_score=priority_score,
-        )
 
     # A function registered as a callback / dispatch-table handler is
     # never "callerless": its callers are invisible to the static call
@@ -207,14 +210,12 @@ def classify_function(
             priority_score=priority_score,
         )
 
-    if binary_absent and sink_unreachable and not is_entry_point:
-        reasons.append("binary absent + no sink path")
-        return TriageResult(
-            bucket=TriageBucket.SKIP,
-            reasons=tuple(reasons),
-            token_budget=TOKEN_BUDGETS[TriageBucket.SKIP],
-            priority_score=priority_score,
-        )
+    # (No binary_absent+sink_unreachable rule here: after the rule
+    # above returns, the only remaining binary_absent population is
+    # sinks and trust boundaries — exactly the classes the exemption
+    # comment protects. A rule for that residue silently defeated the
+    # exemption, and without the is_callback_target guard it skipped
+    # callback-dispatched sinks the static graph cannot see.)
 
     # Vendored/generated tier (see core.audit.vendored_detector for
     # the trust model). Boundary-adjacent functions never skip:

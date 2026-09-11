@@ -44,6 +44,16 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 
+# Hard-SET (never setdefault): children of this tree must import this
+# tree even when the launching shell exported RAPTOR_DIR for another
+# checkout (see core.config.pin_raptor_dir). This script spawns the
+# deepest child tree of the e2e set (gcc build, LLM client, sandbox
+# supervisor + exploit), so an unpinned RAPTOR_DIR would make those
+# children validate another checkout's code.
+from core.config import pin_raptor_dir_in_environ  # noqa: E402
+
+pin_raptor_dir_in_environ()
+
 from core.build.toolchain import has_libasan as _has_libasan  # noqa: E402
 
 

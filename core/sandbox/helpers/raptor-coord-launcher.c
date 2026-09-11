@@ -15,7 +15,12 @@
  *   2. SCRIPT PIN: realpath(argv[2]) must equal
  *      realpath(dirname(readlink(/proc/self/exe)) + "/../netns_coordinator.py").
  *      Exact match, no allowlist — this launcher only ever executes its
- *      own checkout's coordinator script.
+ *      own checkout's coordinator script. The pin location itself is
+ *      defended: the coordinator's directory (the launcher directory's
+ *      parent) must pass the same trusted-path check as the launcher
+ *      directory, and the pinned path must not be a symlink (a link
+ *      there would let realpath retarget the pin at another
+ *      trusted-owned coordinator, steering the derived import root).
  *   3. INTERPRETER TRUSTED-PATH: realpath(argv[1]) must be a regular
  *      file owned by uid 0 (root) or by the launcher binary's own owner
  *      (the operator who granted the capability), and must not be
@@ -34,8 +39,10 @@
  *      operator-owned venv python with zero configuration (including
  *      umask-002 checkouts), and refuses any other local user's binary
  *      (they cannot create files owned by root or the operator). The
- *      same ownership/mode check applies to the pinned script and to
- *      the launcher's own directory.
+ *      same ownership/mode check applies to the pinned script, to
+ *      the launcher's own directory, and to the coordinator script's
+ *      directory (the launcher directory's parent, where the pin
+ *      actually resolves).
  *   4. INVOKER IDENTITY: the invoking real AND effective uid must both
  *      be the trusted owner uid (the launcher binary's own owner — the
  *      operator who granted the capability / LSM profile), or root.
@@ -319,8 +326,7 @@ int validate_exec_target(int argc, char **argv, const char *self_exe,
     }
     uid_t trusted_uid = self_st.st_uid;
 
-    /* The launcher's own directory must not be writable by others —
-     * otherwise the pinned script path next to it could be swapped. */
+    /* The launcher's own directory must not be writable by others. */
     char dir[PATH_MAX];
     strncpy(dir, self_real, sizeof dir - 1);
     dir[sizeof dir - 1] = '\0';
@@ -340,14 +346,62 @@ int validate_exec_target(int argc, char **argv, const char *self_exe,
         return -1;
     }
 
+    /* The pinned coordinator script does NOT live next to the
+     * launcher — it lives in the launcher directory's PARENT
+     * (core/sandbox/ vs core/sandbox/helpers/). The launcher-directory
+     * check above therefore says nothing about the pin location:
+     * trust-check the parent directory too, so an untrusted party
+     * cannot swap the file the pin resolves. `dir` is canonical
+     * (derived from realpath(self_exe)), so the parent is its lexical
+     * prefix. */
+    char parent[PATH_MAX];
+    strncpy(parent, dir, sizeof parent - 1);
+    parent[sizeof parent - 1] = '\0';
+    char *pslash = strrchr(parent, '/');
+    if (pslash == NULL) {
+        snprintf(err, errsz, "trusted-path: launcher directory %s has "
+                 "no parent component", dir);
+        return -1;
+    }
+    if (pslash == parent) {
+        parent[1] = '\0';   /* launcher directory sits in "/" */
+    } else {
+        *pslash = '\0';
+    }
+    if (check_trusted_path(parent, trusted_uid, 1,
+                           "coordinator script directory", err,
+                           errsz) != 0) {
+        return -1;
+    }
+
     /* SCRIPT PIN: the only script this launcher executes is the
-     * coordinator one directory above its own location. */
+     * coordinator in the trusted parent directory just checked. */
     char expected[PATH_MAX + 64];
     int n = snprintf(expected, sizeof expected,
-                     "%s/../netns_coordinator.py", dir);
+                     "%s/netns_coordinator.py", parent);
     if (n <= 0 || n >= (int)sizeof expected) {
         snprintf(err, errsz, "script pin: pinned path construction "
                  "overflowed");
+        return -1;
+    }
+    /* A symlink at the pinned path would make realpath() silently
+     * retarget the pin at whatever canonical file the planter chose —
+     * any trusted-owned file whose path passes the later checks (e.g.
+     * ANOTHER checkout's coordinator), steering the import root the
+     * capability-granted launcher hands to Python. The pin means THIS
+     * checkout's file; a link at the pin location is never a
+     * legitimate layout, so refuse it outright. */
+    struct stat pin_st;
+    if (lstat(expected, &pin_st) != 0) {
+        snprintf(err, errsz, "script pin: cannot lstat the pinned "
+                 "coordinator script %s: %s", expected, strerror(errno));
+        return -1;
+    }
+    if (S_ISLNK(pin_st.st_mode)) {
+        snprintf(err, errsz,
+                 "script pin: pinned coordinator script %s is a symlink "
+                 "— refusing to resolve a link at the pin location",
+                 expected);
         return -1;
     }
     char expected_real[PATH_MAX];

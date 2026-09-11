@@ -26,7 +26,11 @@ import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from packages.source_intel.analyze import SCHEMA_VERSION, SourceIntelResult
+from packages.source_intel.analyze import (
+    SCHEMA_VERSION,
+    SourceIntelResult,
+    _shipped_rules_root,
+)
 
 
 @dataclass
@@ -34,9 +38,12 @@ class SourceIntelCache:
     """In-memory cache mapping (target, rules_hash) → result.
 
     Process-local; thread-safe under the GIL for our usage (analyze is
-    a long-running spatch invocation but the cache get/put is atomic
-    dict ops). Not durable — restart loses cached entries. Persistence
-    to disk is deferred per ``project_source_intel_kickoff.md``.
+    a long-running spatch invocation; the entry store/lookup is an
+    atomic dict op, though key DERIVATION walks and hashes the target
+    tree — stat-cheap on repeat lookups via the tree-hash memo, a
+    content-hash walk when the tree changed). Not durable — restart
+    loses cached entries. Persistence to disk is deferred per
+    ``project_source_intel_kickoff.md``.
     """
 
     _entries: dict[tuple[str, str], SourceIntelResult] = field(default_factory=dict)
@@ -60,6 +67,34 @@ class SourceIntelCache:
         key = self._key_for(target, rules_dir)
         self._entries[key] = result
 
+    # Key-carrying API: derive the key ONCE and reuse it for both the
+    # lookup and the store. get()/put() each re-derive the key from
+    # the live tree, so a get → analyze → put sequence spanning a
+    # minutes-long analyze() would, if the tree drifted mid-analyze,
+    # store a result computed over the OLD tree under the NEW tree's
+    # hash — and serve it as fresh thereafter. Carrying the key pins
+    # the stored entry to the tree state the lookup actually saw.
+
+    def key_for(
+        self,
+        target: Path,
+        rules_dir: Path | None = None,
+    ) -> tuple[str, str]:
+        """Derive the cache key for (target, rules_dir) as of now."""
+        return self._key_for(target, rules_dir)
+
+    def get_by_key(
+        self, key: tuple[str, str],
+    ) -> SourceIntelResult | None:
+        """Lookup under a key from :meth:`key_for`. None on miss."""
+        return self._entries.get(key)
+
+    def put_by_key(
+        self, key: tuple[str, str], result: SourceIntelResult,
+    ) -> None:
+        """Store ``result`` under a key from :meth:`key_for`."""
+        self._entries[key] = result
+
     def invalidate(self) -> None:
         """Clear all entries — used on schema-version bumps or when
         the caller knows the rule set or target has changed mid-run."""
@@ -73,7 +108,7 @@ class SourceIntelCache:
         target: Path,
         rules_dir: Path | None,
     ) -> tuple[str, str]:
-        target_hash = _hash_target_tree(Path(target))
+        target_hash = _hash_target_tree_cached(Path(target))
         rules_hash = _hash_rules_dir(
             Path(rules_dir) if rules_dir else None
         )
@@ -90,8 +125,11 @@ class SourceIntelCache:
 # =====================================================================
 
 
+# Extension set matches the consumers that key staleness off these
+# walks (adapter's pointer-reference scan includes .hxx, so the
+# signature must observe .hxx edits too).
 _C_CPP_EXTS: tuple[str, ...] = (
-    ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh",
+    ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx",
 )
 
 # Content-hash budget for `_hash_target_tree`. Every matching file's
@@ -180,6 +218,44 @@ def compute_target_signature(target: Path) -> str:
     return h.hexdigest()
 
 
+# Content-hash memo for `_hash_target_tree`: (path → (stat signature,
+# tree hash)). Key derivation content-hashes up to _CONTENT_HASH_CAP
+# files, and consumers (llm_bridge collector, corpus adapter) derive a
+# key PER FINDING against the same tree — orders of magnitude more
+# expensive than the stat-only signature check. The stat signature
+# observes every file's (mtime_ns, size) plus build markers, so any
+# edit recomputes the content hash. Sentinel signatures are never
+# memoised. Whole-dict reset on overflow keeps this trivial.
+_TREE_HASH_MEMO: dict[str, tuple[str, str]] = {}
+_TREE_HASH_MEMO_CAP = 64
+
+_SIG_SENTINELS = ("missing", "stat-error")
+
+
+def _hash_target_tree_cached(target: Path) -> str:
+    """Stat-signature-memoised :func:`_hash_target_tree`."""
+    sig = compute_target_signature(target)
+    if sig in _SIG_SENTINELS:
+        return _hash_target_tree(target)
+    key = str(target)
+    hit = _TREE_HASH_MEMO.get(key)
+    if hit is not None and hit[0] == sig:
+        return hit[1]
+    value = _hash_target_tree(target)
+    if len(_TREE_HASH_MEMO) >= _TREE_HASH_MEMO_CAP:
+        _TREE_HASH_MEMO.clear()
+    _TREE_HASH_MEMO[key] = (sig, value)
+    return value
+
+
+def clear_key_memo() -> None:
+    """Drop the key-derivation memos — explicit reset for
+    orchestrators. Signature-based auto-invalidation already covers
+    file edits."""
+    _TREE_HASH_MEMO.clear()
+    _RULES_HASH_MEMO.clear()
+
+
 def _hash_target_tree(target: Path) -> str:
     """SHA-256 of every C/C++ source file under target, by sorted path.
 
@@ -248,26 +324,57 @@ def _hash_rules_dir(rules_dir: Path | None) -> str:
     the key — a pack edit must invalidate cached results exactly like a
     rule edit.
 
-    Returns ``"default"`` when rules_dir is None — the caller will use
-    the shipped rules directory, which is hashed via this function on
-    a real path at analyze time.
+    ``rules_dir=None`` means "the shipped rules directory" — analyze()
+    resolves it the same way — so the shipped dir is what gets hashed:
+    an edit / regeneration of the shipped rule corpus must invalidate
+    cached results exactly like an explicit-dir edit would. Only when
+    the shipped root is absent (minimal install) does the key fall
+    back to the ``"default-rules"`` sentinel.
     """
     if rules_dir is None:
-        return "default-rules"
+        rules_dir = _shipped_rules_root()
+        if rules_dir is None:
+            return "default-rules"
     if not rules_dir.exists():
         return "missing-rules"
 
-    h = hashlib.sha256()
     files = sorted(
         [*rules_dir.rglob("*.cocci"), *rules_dir.rglob("*.json")],
         key=str,
     )
+
+    # Stat-validated memo: the rule corpus is hashed per key
+    # derivation (i.e. per finding for the default-resolver
+    # consumers), so avoid re-reading every rule file when nothing
+    # changed. The stat line covers file set + (mtime_ns, size).
+    sig_h = hashlib.sha256()
+    for path in files:
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        sig_h.update(str(path).encode("utf-8", "replace"))
+        sig_h.update(f"\x00{st.st_mtime_ns}:{st.st_size}\x00".encode("ascii"))
+    sig = sig_h.hexdigest()
+    memo_key = str(rules_dir)
+    hit = _RULES_HASH_MEMO.get(memo_key)
+    if hit is not None and hit[0] == sig:
+        return hit[1]
+
+    h = hashlib.sha256()
     for path in files:
         h.update(str(path.relative_to(rules_dir)).encode("utf-8"))
         h.update(b"\x00")
         h.update(_file_hash(path).encode("utf-8"))
         h.update(b"\x00")
-    return h.hexdigest()
+    value = h.hexdigest()
+    if len(_RULES_HASH_MEMO) >= _TREE_HASH_MEMO_CAP:
+        _RULES_HASH_MEMO.clear()
+    _RULES_HASH_MEMO[memo_key] = (sig, value)
+    return value
+
+
+_RULES_HASH_MEMO: dict[str, tuple[str, str]] = {}
 
 
 def _file_hash(path: Path) -> str:

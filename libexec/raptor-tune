@@ -9,7 +9,6 @@ Usage:
   raptor-tune balanced       Rewrite tuning.json with conservative values
   raptor-tune default        Rewrite tuning.json to shipped defaults
 """
-import json
 import sys
 from pathlib import Path
 
@@ -31,7 +30,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 
 from core.json import load_json_with_comments  # noqa: E402
-from core.tuning import load_tuning, _DEFAULTS, _KEY_COMMENTS, _detect_available_cpus  # noqa: E402
+from core.tuning import (  # noqa: E402
+    _DEFAULTS,
+    _detect_available_cpus,
+    _rewrite_tuning,
+    load_tuning,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _TUNING_PATH = _REPO_ROOT / "tuning.json"
@@ -114,38 +118,22 @@ _PROFILES = {
     "default": (_default_values, "shipped defaults"),
 }
 
-_COMMENTS = _KEY_COMMENTS
-
-_KEY_ORDER = [
-    "codeql_enabled",
-    "codeql_ram_mb",
-    "codeql_threads",
-    "codeql_max_disk_cache_mb",
-    "joern_enabled",
-    "joern_heap_mb",
-    "joern_cpg_timeout_s",
-    "joern_query_timeout_s",
-    "max_semgrep_workers",
-    "max_codeql_workers",
-    "max_fuzz_parallel",
-    "max_inventory_workers",
-    "max_json_memo_mb",
-]
-
-
 def _write_tuning(values: dict) -> None:
-    """Write tuning.json with inline aligned comments."""
-    entries = []
-    for i, key in enumerate(_KEY_ORDER):
-        val_str = json.dumps(values[key])
-        comma = "," if i < len(_KEY_ORDER) - 1 else ""
-        entries.append((f'  "{key}": {val_str}{comma}', _COMMENTS[key]))
-    col = max(len(e) for e, _ in entries) + 2
-    lines = ["{"]
-    for entry, comment in entries:
-        lines.append(f"{entry:<{col}}// {comment}")
-    lines.append("}")
-    _TUNING_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    """Rewrite tuning.json for a preset via core.tuning's canonical writer.
+
+    Layer the preset values over the CURRENT file contents so valid
+    operator-set keys the presets don't produce (the passthrough keys
+    such as max_llm_workers / throttle_cooldown_s) survive the rewrite
+    — a retune must not silently delete unrelated operator config.
+    Delegating to core.tuning's writer also gets its key order,
+    comments, and atomic tmp+rename for free, so this CLI can never
+    drift from the substrate's own rewrite behaviour or leave a torn
+    file for a concurrent load_tuning() to read.
+    """
+    existing = load_json_with_comments(_TUNING_PATH)
+    merged = dict(existing) if isinstance(existing, dict) else {}
+    merged.update(values)
+    _rewrite_tuning(merged, _TUNING_PATH)
 
 
 def _show() -> None:
@@ -209,7 +197,9 @@ def main() -> int:
     print(f"tuning.json updated: {description}")
     print()
 
-    for key in _KEY_ORDER:
+    # _DEFAULTS iterates in its declaration order — the same order the
+    # canonical writer emits, so the echo matches the file.
+    for key in _DEFAULTS:
         val = values[key]
         print(f"  {key:25s} {val}")
 

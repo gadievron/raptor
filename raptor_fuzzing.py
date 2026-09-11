@@ -14,13 +14,15 @@ This is very much a work-in-progress!
 """
 
 import argparse
-import os
 import sys
 import time
 from pathlib import Path
 
-# Add to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Add the repo root to sys.path. resolve() first: invoked through a
+# symlink (or relatively on interpreters that don't absolutise
+# __file__), the unresolved parent points at the wrong tree and
+# core/packages imports resolve against it.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core.hash import sha256_file
 from core.json import save_json
@@ -44,7 +46,10 @@ from packages.autonomous import (
 )
 from packages.binary_analysis import CrashAnalyser
 from packages.fuzzing import AFLRunner, CrashCollector
-from packages.llm_analysis.crash_agent import CrashAnalysisAgent
+from packages.llm_analysis.crash_agent import (
+    CrashAnalysisAgent,
+    exploit_artifact_path,
+)
 
 logger = get_logger()
 
@@ -76,6 +81,53 @@ def _clamp_parallel(requested: int) -> int:
     return requested
 
 
+def _sage_afl_prior_enabled() -> bool:
+    """Whether SAGE-derived AFL++ flag injection is enabled.
+
+    Routed through the canonical boolean-toggle parser so the opt-out
+    accepts every documented falsy spelling ("off" included, plus a
+    warning on typos) — a hand-rolled falsy tuple here silently
+    treated RAPTOR_SAGE_AFL_PRIOR=off as enabled.
+    """
+    from core.config import env_flag
+    return env_flag("RAPTOR_SAGE_AFL_PRIOR", True)
+
+
+# Documented CLI flags only the legacy AFL++ path consumes. The
+# orchestrator's execute() has no equivalents, and the orchestrator is
+# often AUTO-selected (directory target, or AFL++ missing on the host)
+# — an operator's explicit flags must never vanish silently.
+_LEGACY_ONLY_FLAG_ATTRS = (
+    ("--parallel", "parallel"),
+    ("--timeout", "timeout"),
+    ("--input-mode", "input_mode"),
+    ("--max-crashes", "max_crashes"),
+    ("--rank-crashes", "rank_crashes"),
+    ("--autonomous", "autonomous"),
+    ("--goal", "goal"),
+    ("--memory-file", "memory_file"),
+    ("--check-sanitizers", "check_sanitizers"),
+    ("--recompile-guide", "recompile_guide"),
+    ("--use-showmap", "use_showmap"),
+)
+
+
+def _orchestrator_ignored_flags(
+    args: argparse.Namespace, parser: argparse.ArgumentParser,
+) -> list[str]:
+    """The legacy-only flags this invocation set to non-default values.
+
+    Compared against the parser's own defaults so the list names
+    exactly what the operator asked for and the orchestrator path is
+    about to ignore.
+    """
+    ignored = []
+    for flag, attr in _LEGACY_ONLY_FLAG_ATTRS:
+        if getattr(args, attr, None) != parser.get_default(attr):
+            ignored.append(flag)
+    return ignored
+
+
 def _resolve_dict_path(args: argparse.Namespace, out_dir):
     """Resolve the AFL/libFuzzer dictionary for this run.
 
@@ -93,6 +145,23 @@ def _resolve_dict_path(args: argparse.Namespace, out_dir):
     except Exception as e:  # noqa: BLE001 — discovery is best-effort
         logger.debug("audit dictionary discovery failed: %s", e)
         return None
+
+
+def _load_generated_exploit(agent_out_dir: Path, crash_id: str) -> str | None:
+    """Re-read the exploit PoC the crash agent just generated.
+
+    The path comes from the writer's own canonical helper
+    (``crash_agent.exploit_artifact_path``): the agent sanitises the
+    AFL crash id (raw ids contain ``:`` and ``,``) and writes
+    ``<safe_id>_exploit.cpp`` under ``<agent out_dir>/exploits/``.
+    Joining the raw id with a ``.c`` suffix here named a file the
+    writer never produced, so validate-and-refine silently never ran.
+    Returns the exploit source, or None when no artifact exists.
+    """
+    exploit_file = exploit_artifact_path(agent_out_dir, crash_id)
+    if not exploit_file.exists():
+        return None
+    return exploit_file.read_text(encoding="utf-8")
 
 
 def main() -> None:
@@ -501,6 +570,23 @@ Examples:
         from core.llm.factory import get_client
         from packages.fuzzing import FuzzingOrchestrator
 
+        # Say what this path cannot honour BEFORE any work happens:
+        # the orchestrator has no equivalents for the legacy-only
+        # flags, and it may have been auto-selected — the operator's
+        # explicit settings must not be dropped without a word.
+        _ignored = _orchestrator_ignored_flags(args, ap)
+        if _ignored:
+            print(
+                "⚠️  orchestrator path does not support: "
+                + ", ".join(_ignored)
+                + " — ignored on this run. Pass --legacy to use the "
+                "AFL++ path that honours them.",
+                file=sys.stderr,
+            )
+            logger.warning(
+                "orchestrator path ignoring flags: %s", ", ".join(_ignored)
+            )
+
         llm = None
         try:
             llm = get_client()
@@ -628,11 +714,7 @@ Examples:
         logger.debug("SAGE fuzzing strategy recall skipped: %s", e)
 
     sage_afl_flags: list = []
-    if os.environ.get("RAPTOR_SAGE_AFL_PRIOR", "1").strip().lower() not in (
-        "0",
-        "false",
-        "no",
-    ):
+    if _sage_afl_prior_enabled():
         prior = pick_strongest_recall_row(sage_strategy_rows, min_confidence=0.85)
         sage_afl_flags = infer_afl_fuzz_flags_from_sage_recall_row(prior)
         if sage_afl_flags:
@@ -800,6 +882,40 @@ Examples:
                 # dict, so only the atomic write itself can
                 # legitimately fail.
                 pass
+            # A 0-crash campaign is a real outcome: without recording
+            # it, cross-run strategy memory can never learn that a
+            # strategy found nothing (indistinguishable from never
+            # tried) and re-applies the same fruitless prior next run.
+            # Best-effort — recording must not turn a clean 0-crash
+            # exit into a failure.
+            try:
+                if args.autonomous and memory:
+                    memory.record_campaign({
+                        "binary_name": binary_path.name,
+                        "binary_hash": binary_hash,
+                        "duration": args.duration,
+                        "total_crashes": 0,
+                        "exploitable_crashes": 0,
+                        "exploits_generated": 0,
+                    })
+                    memory.record_strategy_success(
+                        strategy_name="default",
+                        binary_hash=binary_hash,
+                        crashes_found=0,
+                        exploitable_crashes=0,
+                    )
+                store_fuzzing_strategy_outcome(
+                    repo_path=str(binary_path.parent),
+                    binary_fingerprint=binary_hash,
+                    strategy_id="default",
+                    duration_s=args.duration,
+                    execs=0,
+                    unique_crashes=0,
+                    hangs=0,
+                    exploitable_crashes=0,
+                )
+            except Exception as e:  # noqa: BLE001 — memory is additive only
+                logger.debug("zero-crash outcome recording skipped: %s", e)
             sys.exit(0)
 
     except SandboxSetupError as e:
@@ -976,10 +1092,6 @@ Examples:
         for crash in crash_pool:
             if attempted >= args.max_crashes:
                 break
-            idx = attempted + 1
-            print(f"\n{'█' * 70}")
-            print(f"CRASH {idx}/{min(len(crash_pool), args.max_crashes)}")
-            print(f"{'█' * 70}")
 
             # Get crash context with GDB
             crash_context = crash_analyser.analyse_crash(
@@ -987,7 +1099,10 @@ Examples:
                 input_file=crash.input_file,
                 signal=crash.signal or "unknown",
             )
-            # Deduplicate by stack hash
+            # Deduplicate by stack hash BEFORE the banner: the counter
+            # only advances for analysed crashes, so printing the
+            # banner first gave a skipped duplicate and the next real
+            # crash the same "CRASH i/N" index.
             if crash_context.stack_hash and crash_context.stack_hash in seen_stack_hashes:
                 logger.info("Skipping duplicate crash (stack hash: %s)", crash_context.stack_hash)
                 print("⊘ Duplicate crash - same stack trace as previous crash")
@@ -997,6 +1112,9 @@ Examples:
             if crash_context.stack_hash:
                 seen_stack_hashes.add(crash_context.stack_hash)
             attempted += 1
+            print(f"\n{'█' * 70}")
+            print(f"CRASH {attempted}/{min(len(crash_pool), args.max_crashes)}")
+            print(f"{'█' * 70}")
 
             # Classify crash type
             crash_context.crash_type = crash_analyser.classify_crash_type(crash_context)
@@ -1056,11 +1174,13 @@ Examples:
                     if args.autonomous and exploit_validator and multi_turn:
                         logger.info("Validating and refining exploit...")
 
-                        # Get the generated exploit code
-                        exploit_file = out_dir / "analysis" / "exploits" / f"{crash.crash_id}_exploit.c"
-                        if exploit_file.exists():
-                            exploit_code = exploit_file.read_text(encoding="utf-8")
-
+                        # Get the generated exploit code from the
+                        # writer's canonical location (see
+                        # _load_generated_exploit).
+                        exploit_code = _load_generated_exploit(
+                            out_dir / "analysis", crash.crash_id,
+                        )
+                        if exploit_code is not None:
                             # Validate and iteratively refine
                             success, refined_code, _refined_binary = exploit_validator.validate_and_refine(
                                 exploit_code=exploit_code,

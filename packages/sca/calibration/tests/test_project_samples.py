@@ -51,6 +51,19 @@ def _fake_findings(sample_root: Path):
                 "reachability": {"verdict": "imported"},
                 "raptor_risk_estimate": 0.65,
                 "risk_components": {"calibration_status": "unverified"},
+                "direct": False,
+                "exposure_factor": 0.25,
+                "transitive_depth": 2,
+                # ``reason`` free text can embed clone paths — the
+                # sanitiser must scrub it (path-strip test checks).
+                "parser_confidence": {
+                    "level": "medium", "numeric": 0.7,
+                    "reason": f"heuristic parse of {sample_root}/setup.py",
+                },
+                "version_match_confidence": {
+                    "level": "low", "numeric": 0.3,
+                    "reason": "range match",
+                },
             },
         },
         {
@@ -107,6 +120,25 @@ def test_sanitise_preserves_validation_relevant_fields(tmp_path):
     assert f["dep_version"] == "4.2.0"
     assert f["purl"] == "pkg:pypi/django@4.2.0"
     assert f["advisory"] == {"osv_id": "GHSA-x"}
+
+
+def test_sanitise_archives_risk_model_inputs(tmp_path):
+    """The archive must carry the inputs the refitter rebuilds
+    scores from — direct flag, exposure, transitive depth, and the
+    parser / version-match confidence numerics. Confidence blocks
+    are scrubbed to level + numeric (free-text ``reason`` can embed
+    clone paths and the risk formula never reads it)."""
+    sample_root = tmp_path / "sample"
+    out = _sanitise_findings(_fake_findings(sample_root), sample_root)
+    f = out[0]
+    assert f["direct"] is False
+    assert f["exposure_factor"] == 0.25
+    assert f["transitive_depth"] == 2
+    assert f["parser_confidence"] == {"level": "medium", "numeric": 0.7}
+    assert f["version_match_confidence"] == {"level": "low", "numeric": 0.3}
+    assert "reason" not in json.dumps(
+        [f["parser_confidence"], f["version_match_confidence"]],
+    )
 
 
 def test_sanitise_empty_input(tmp_path):

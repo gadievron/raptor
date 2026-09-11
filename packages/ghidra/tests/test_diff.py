@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from packages.ghidra.diff import diff_databases, FunctionChange
 from packages.ghidra.model import (
@@ -265,6 +261,60 @@ class TestREDiffSerialization:
         db = _make_db([_make_func("f", 0x1000, 100)])
         diff = diff_databases(db, db)
         assert "No differences found" in diff.summary()
+
+
+class TestJsonEmissionScrub:
+    """Comment texts, comment function names, and import names come
+    from the analysed project; the JSON artifact is `jq`'d straight to
+    operator terminals, so the emission layer must scrub controls/bidi
+    and bound lengths — same chokepoint as function names."""
+
+    HOSTILE = "\x1b[2K\x1b]0;PWNED\x07evil‮gnp.txt"
+
+    def _diff_with_hostile_comment(self):
+        old = _make_db(comments=[
+            REComment(address=0x1000, function=self.HOSTILE, kind="plate",
+                      text="benign old", source_tool="ghidra"),
+        ])
+        new = _make_db(
+            comments=[
+                REComment(address=0x1000, function=self.HOSTILE,
+                          kind="plate", text=self.HOSTILE + "x" * 5000,
+                          source_tool="ghidra"),
+            ],
+            imports=[{"name": "evil\x1b[2K" + "‮"}],
+        )
+        return diff_databases(old, new)
+
+    def test_comment_deltas_scrubbed_and_bounded(self):
+        d = self._diff_with_hostile_comment().to_dict()
+        (delta,) = d["comment_deltas"]
+        for value in (delta["function"], delta["text_old"],
+                      delta["text_new"]):
+            assert "\x1b" not in value
+            assert "‮" not in value
+        # texts bounded like signatures (512 + ellipsis)
+        assert len(delta["text_new"]) <= 513
+        # the whole serialised artifact carries no raw ESC
+        assert "\\u001b" not in json.dumps(d)
+
+    def test_import_deltas_scrubbed(self):
+        d = self._diff_with_hostile_comment().to_dict()
+        (name,) = d["import_deltas"]["added"]
+        assert "\x1b" not in name
+        assert "‮" not in name
+        assert "evil" in name
+
+    def test_benign_comment_text_passes_through(self):
+        old = _make_db(comments=[])
+        new = _make_db(comments=[
+            REComment(address=0x2000, function="parse_hdr", kind="eol",
+                      text="length check added", source_tool="ghidra"),
+        ])
+        d = diff_databases(old, new).to_dict()
+        (delta,) = d["comment_deltas"]
+        assert delta["function"] == "parse_hdr"
+        assert delta["text_new"] == "length check added"
 
 
 class TestFunctionChange:

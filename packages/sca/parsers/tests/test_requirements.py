@@ -181,3 +181,37 @@ def test_empty_requirement_value_no_crash(tmp_path: Path) -> None:
     body = "--requirement=\ndjango==4.2.7\n"
     deps = parse(_write(tmp_path, body))
     assert [d.name for d in deps] == ["django"]
+
+
+# ---------------------------------------------------------------------------
+# Per-requirement options
+# ---------------------------------------------------------------------------
+
+def test_non_hash_per_requirement_option_stripped(tmp_path: Path) -> None:
+    # pip accepts per-requirement options after the spec; PEP 508
+    # doesn't, so an unstripped option made Requirement() raise and
+    # the dep was silently dropped.
+    body = (
+        'django==4.2.7 --global-option="--no-ext"\n'
+        "uvloop==0.19.0 --config-settings key=value\n"
+    )
+    deps = parse(_write(tmp_path, body))
+    assert [(d.name, d.version) for d in deps] == [
+        ("django", "4.2.7"), ("uvloop", "0.19.0"),
+    ]
+
+
+def test_hash_option_still_stripped(tmp_path: Path) -> None:
+    # Existing behaviour preserved: --hash directives don't leak into
+    # the spec.
+    body = "flask==3.0.0 --hash=sha256:" + "a" * 64 + "\n"
+    [d] = parse(_write(tmp_path, body))
+    assert (d.name, d.version) == ("flask", "3.0.0")
+
+
+def test_standalone_option_lines_still_skipped(tmp_path: Path) -> None:
+    # Other direction: whole-line pip options are still options, not
+    # deps.
+    body = "--index-url https://pypi.org/simple\nrequests==2.31.0\n"
+    deps = parse(_write(tmp_path, body))
+    assert [(d.name, d.version) for d in deps] == [("requests", "2.31.0")]

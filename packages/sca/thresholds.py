@@ -105,12 +105,22 @@ def evaluate(
                 if cfg.fail_on_capability_drift:
                     fails.append(f"[capability-drift] {desc}")
                 if cfg.max_added_capability_buckets is not None:
-                    # Defensive: a hand-edited findings.json or a
-                    # third-party emitter may produce a non-dict
-                    # evidence field or a non-list ``added_buckets``.
-                    # Treat anything we can't count as zero added
-                    # buckets rather than crash the build gate.
-                    ev = row.get("evidence", {})
+                    # The findings row builder nests evidence under
+                    # the row's ``sca`` block; a top-level
+                    # ``evidence`` (hand-edited / third-party
+                    # findings.json) is accepted as fallback. Reading
+                    # only the top level made this gate vacuous — it
+                    # never saw the buckets, so it never failed.
+                    # Defensive: either source may also carry a
+                    # non-dict evidence field or a non-list
+                    # ``added_buckets``. Treat anything we can't
+                    # count as zero added buckets rather than crash
+                    # the build gate.
+                    sca_block = row.get("sca")
+                    ev = (sca_block.get("evidence")
+                          if isinstance(sca_block, dict) else None)
+                    if not isinstance(ev, dict):
+                        ev = row.get("evidence")
                     if not isinstance(ev, dict):
                         ev = {}
                     raw_added = ev.get("added_buckets")

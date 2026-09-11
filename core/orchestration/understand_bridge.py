@@ -266,8 +266,16 @@ def _rank_candidates(
     scored: list[tuple[int, int, Path, set[str]]] = []
     for d in candidates:
         u_checklist = load_json(d / "checklist.json", max_bytes=64 * 1024 * 1024)
-        if not u_checklist:
-            # No checklist — treat as fully stale (can't verify any file)
+        if not isinstance(u_checklist, dict) or not u_checklist:
+            # No checklist — or a non-object one (an array-shaped
+            # checklist.json pre-fix crashed _extract_hashes and took
+            # down three-tier discovery for every later run). Treat as
+            # fully stale (can't verify any file).
+            if u_checklist is not None and not isinstance(u_checklist, dict):
+                logger.warning(
+                    "understand_bridge: %s/checklist.json is not a JSON "
+                    "object — treating candidate as fully stale", d.name,
+                )
             scored.append((1, _safe_mtime_ns(d), d, set()))
             continue
         u_hashes = _extract_hashes(u_checklist)
@@ -305,7 +313,7 @@ def _extract_hashes(checklist: dict[str, Any]) -> dict[str, str]:
     `.get`.
     """
     out: dict[str, str] = {}
-    for f in checklist.get("files", []):
+    for f in _list_at(checklist, "files"):
         if not isinstance(f, dict):
             continue
         path = f.get("path")
@@ -447,7 +455,14 @@ def _search_understand_dirs(
         if target_resolved:
             from core.json import load_json
             checklist = load_json(d / "checklist.json", max_bytes=64 * 1024 * 1024)
-            if not checklist:
+            # Non-dict shapes (array-shaped checklist.json) skip the
+            # candidate with a warning instead of crashing discovery.
+            if not isinstance(checklist, dict) or not checklist:
+                if checklist is not None and not isinstance(checklist, dict):
+                    logger.warning(
+                        "understand_bridge: %s/checklist.json is not a "
+                        "JSON object — candidate skipped", d.name,
+                    )
                 continue
             d_target = str(checklist.get("target_path", "") or "")
             if not d_target:
@@ -722,7 +737,12 @@ def _augment_library_surface(context_map: dict[str, Any],
     # here because we only reach this for a library/hybrid target.
     from core.analysis.reachability import _item_is_entry
     header_api_raw = checklist.get("header_api")
-    header_api = frozenset(header_api_raw) if header_api_raw else None
+    # frozenset() over a non-iterable (int) crashed pre-fix, and a
+    # STRING would silently become a set of characters — require the
+    # collection shapes the inventory writer actually emits.
+    header_api = (frozenset(header_api_raw)
+                  if isinstance(header_api_raw, (list, tuple, set, frozenset))
+                  and header_api_raw else None)
     added = 0
     for fi in _list_at(checklist, "files"):
         if not isinstance(fi, dict):
@@ -1088,7 +1108,7 @@ def enrich_checklist(checklist: dict[str, Any], context_map: dict[str, Any],
     # Walk checklist and mark matching functions. A function inherits
     # file-level reasons (entries written without a name) plus any
     # reasons keyed to its specific function name.
-    for file_info in checklist.get("files", []):
+    for file_info in _list_at(checklist, "files"):
         if not isinstance(file_info, dict):
             continue
         path = file_info.get("path", "")
@@ -1369,12 +1389,12 @@ def _filter_context_map(context_map: dict[str, Any], stale_files: set[str]) -> i
     # complained about them, no need to repeat).
     kept_ep_ids = {
         ep.get("id")
-        for ep in context_map.get("entry_points", [])
+        for ep in _list_at(context_map, "entry_points")
         if isinstance(ep, dict) and ep.get("id")
     }
     kept_sink_ids = {
         s.get("id")
-        for s in context_map.get("sink_details", [])
+        for s in _list_at(context_map, "sink_details")
         if isinstance(s, dict) and s.get("id")
     }
 
@@ -1448,15 +1468,23 @@ def _merge_attack_surface(
     # Populate or merge attack-surface.json from context-map data.
     surface_path = validate_dir / "attack-surface.json"
 
-    # Extract the three required keys from the context map
-    new_sources = context_map.get("sources", [])
-    new_sinks = context_map.get("sinks", [])
-    new_boundaries = context_map.get("trust_boundaries", [])
+    # Extract the three required keys from the context map. _list_at
+    # everywhere: _load_context_map coerces the three required keys to
+    # lists, but boundary_details is unguarded there, and LLM-shaped
+    # scalar values must skip, not crash the import.
+    new_sources = _list_at(context_map, "sources")
+    new_sinks = _list_at(context_map, "sinks")
+    new_boundaries = _list_at(context_map, "trust_boundaries")
 
     # Annotate trust boundaries with gap information from boundary_details
     gap_count = 0
-    all_boundary_details = context_map.get("boundary_details", [])
+    all_boundary_details = _list_at(context_map, "boundary_details")
     for boundary in new_boundaries:
+        # LLM output routinely renders trust_boundaries as a list of
+        # STRINGS — a non-dict entry crashed _boundary_matches (and the
+        # gaps assignment) pre-fix. Skip; the merge below keys dicts.
+        if not isinstance(boundary, dict):
+            continue
         for bd in all_boundary_details:
             if not isinstance(bd, dict):
                 continue
@@ -1471,18 +1499,20 @@ def _merge_attack_surface(
         _raw_surf = load_json(surface_path)
         existing = _raw_surf if isinstance(_raw_surf, dict) else {}
         merged_sources = _merge_list_by_key(
-            existing.get("sources", []), new_sources, key="entry"
+            _list_at(existing, "sources"), new_sources, key="entry"
         )
         merged_sinks = _merge_list_by_key(
-            existing.get("sinks", []), new_sinks, key="location"
+            _list_at(existing, "sinks"), new_sinks, key="location"
         )
         merged_boundaries = _merge_list_by_key(
-            existing.get("trust_boundaries", []), new_boundaries, key="boundary"
+            _list_at(existing, "trust_boundaries"), new_boundaries,
+            key="boundary"
         )
         # Only rewrite if the merge added something
-        changed = (len(merged_sources) != len(existing.get("sources") or [])
-                   or len(merged_sinks) != len(existing.get("sinks") or [])
-                   or len(merged_boundaries) != len(existing.get("trust_boundaries") or []))
+        changed = (len(merged_sources) != len(_list_at(existing, "sources"))
+                   or len(merged_sinks) != len(_list_at(existing, "sinks"))
+                   or len(merged_boundaries) != len(
+                       _list_at(existing, "trust_boundaries")))
     else:
         merged_sources = new_sources
         merged_sinks = new_sinks
@@ -1491,7 +1521,9 @@ def _merge_attack_surface(
 
     taint_confirmed = 0
     for src in merged_sources:
-        if src.get("has_taint_flow"):
+        # sources can carry LLM-shaped string entries — skip, don't
+        # crash the count (same guard as _merge_list_by_key applies).
+        if isinstance(src, dict) and src.get("has_taint_flow"):
             taint_confirmed += 1
 
     if changed:
@@ -1520,7 +1552,7 @@ def _merge_attack_surface(
         # spot map for any sibling process.
         save_json(surface_path, attack_surface, mode=0o600)
 
-    unchecked_count = len(context_map.get("unchecked_flows") or [])
+    unchecked_count = len(_list_at(context_map, "unchecked_flows"))
     return {
         "sources": len(merged_sources),
         "sinks": len(merged_sinks),
@@ -1535,10 +1567,15 @@ def _trace_references_stale(trace: dict[str, Any], stale_files: set[str]) -> boo
     """Check if a flow trace references any stale file via its steps."""
     import re
 
-    for step in trace.get("steps", []):
-        # Direct file field — exact match
+    for step in _list_at(trace, "steps"):
+        # Non-dict steps (LLM-shaped string steps) can't reference a
+        # file by field; skip rather than AttributeError on .get.
+        if not isinstance(step, dict):
+            continue
+        # Direct file field — exact match. Non-string values are
+        # unhashable (set membership crashed pre-fix) — skip them.
         f = step.get("file", "")
-        if f and f in stale_files:
+        if isinstance(f, str) and f and f in stale_files:
             return True
         # Embedded in action/result strings — extract filenames via regex.
         # Pre-fix the pattern was `[\w./+-]+\.\w+(?=:\d)` without
@@ -1559,7 +1596,9 @@ def _trace_references_stale(trace: dict[str, Any], stale_files: set[str]) -> boo
         # `{1,32}` for the extension) + `re.ASCII` for parity.
         for field in ("action", "result"):
             val = step.get(field, "")
-            if val:
+            # re.findall requires a string — an LLM-shaped list/dict
+            # value crashed the staleness check pre-fix.
+            if isinstance(val, str) and val:
                 for match in re.findall(r'[\w./+-]{1,1024}\.\w{1,32}(?=:\d)', val, flags=re.ASCII):
                     if match in stale_files:
                         return True
@@ -1622,8 +1661,11 @@ def _import_flow_traces(
                     paths_path.name, exc,
                 )
 
-    # Track which IDs are already present to avoid duplicates
-    existing_ids = {p.get("id") for p in existing_paths if p.get("id")}
+    # Track which IDs are already present to avoid duplicates. Non-dict
+    # elements (a hand-edited attack-paths.json holding strings) are
+    # skipped — .get on them crashed the whole import pre-fix.
+    existing_ids = {p.get("id") for p in existing_paths
+                    if isinstance(p, dict) and p.get("id")}
 
     imported = 0
     skipped_stale = 0
@@ -1635,6 +1677,11 @@ def _import_flow_traces(
             continue
 
         path_id = trace.get("id", trace_file.stem)
+        if not isinstance(path_id, str) or not path_id:
+            # An LLM-shaped non-string id (dict/list) is unhashable —
+            # the membership check below crashed pre-fix. Fall back to
+            # the filename stem, which is always a usable id.
+            path_id = trace_file.stem
         if path_id in existing_ids:
             logger.debug("understand_bridge: skipping already-imported trace %s",
                          escape_nonprintable(str(path_id)))
@@ -1694,7 +1741,9 @@ def _import_unchecked_flow_conditions(
         loaded = load_json(paths_path)
         if isinstance(loaded, list):
             existing_paths = loaded
-    existing_ids = {p.get("id") for p in existing_paths if p.get("id")}
+    # Non-dict elements skipped — same guard as _import_flow_traces.
+    existing_ids = {p.get("id") for p in existing_paths
+                    if isinstance(p, dict) and p.get("id")}
 
     # Legacy compat: earlier bridge versions derived IDs from the
     # flow's INDEX (map-flow-000, ...). Index IDs collide across
@@ -1786,8 +1835,13 @@ def _sanitise_and_stamp_paths(paths: list) -> None:
 def _trace_to_attack_path(trace: dict[str, Any], trace_file: Path) -> dict[str, Any]:
     #Convert a flow-trace dict into an attack-paths entry.
 
+    # Same non-string-id fallback as the import loop's dedup key, so
+    # the persisted id and the dedup id can never diverge.
+    path_id = trace.get("id", trace_file.stem)
+    if not isinstance(path_id, str) or not path_id:
+        path_id = trace_file.stem
     path = {
-        "id": trace.get("id", trace_file.stem),
+        "id": path_id,
         "name": trace.get("name", f"Imported trace: {trace_file.stem}"),
         # finding may not exist yet (trace ran before /validate) — leave blank
         "finding": trace.get("finding", ""),
@@ -1807,9 +1861,12 @@ def _trace_to_attack_path(trace: dict[str, Any], trace_file: Path) -> dict[str, 
     if attacker_control:
         path["attacker_control"] = attacker_control
 
-    # If the trace summary has a verdict, record it as a note for Stage B
-    summary = trace.get("summary") or {}
-    if summary.get("verdict"):
+    # If the trace summary has a verdict, record it as a note for Stage B.
+    # LLM-shaped traces render summary as a plain STRING often enough —
+    # .get on it crashed the whole import pre-fix; skip-with-nothing is
+    # the file's established degradation for malformed optional fields.
+    summary = trace.get("summary")
+    if isinstance(summary, dict) and summary.get("verdict"):
         path["trace_verdict"] = summary["verdict"]
 
     # Forward SMT path-feasibility hints when present and well-formed.  Both
@@ -1932,8 +1989,14 @@ def _boundary_matches(boundary: dict[str, Any], detail: dict[str, Any]) -> bool:
     sequence — preserves the legitimate match cases the
     substring path was trying to capture.
     """
-    boundary_name = boundary.get("boundary", "").lower().strip()
-    detail_id = detail.get("id", "").lower().strip()
+    # An LLM-shaped non-string field (nested dict, list) must read as
+    # no-match, not AttributeError on .lower().
+    raw_name = boundary.get("boundary", "")
+    raw_id = detail.get("id", "")
+    if not isinstance(raw_name, str) or not isinstance(raw_id, str):
+        return False
+    boundary_name = raw_name.lower().strip()
+    detail_id = raw_id.lower().strip()
 
     if not boundary_name or not detail_id:
         return False

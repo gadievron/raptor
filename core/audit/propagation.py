@@ -367,9 +367,27 @@ def try_codeql_resolve(
     except ImportError:
         return None
 
+    # The taint query needs a NAMED source function — the generator
+    # validates both endpoints and refuses empty names, so a claim
+    # with no source can never produce a verdict (constructing one
+    # anyway burned a guaranteed-exception round trip per constraint,
+    # keeping this resolver permanently dark). The only in-model
+    # source name is the function the constraint was last lifted
+    # from: propagation_chain[0] (the report format reads
+    # ``current <- chain[0] <- chain[1] ...``). Without a chain the
+    # resolver is inapplicable — fall through to the next tier.
+    if not constraint.propagation_chain:
+        logger.debug(
+            "codeql resolver inapplicable for %s:%s — no propagation "
+            "chain to derive a source function from",
+            constraint.file, constraint.function,
+        )
+        return None
+    source_function = constraint.propagation_chain[0]
+
     claim = DataflowClaim(
         source_file="",
-        source_function="",
+        source_function=source_function,
         sink_file=constraint.file,
         sink_function=constraint.function,
         source_type="remote",
@@ -380,8 +398,11 @@ def try_codeql_resolve(
     try:
         result = validate_dataflow_claim(
             claim,
-            db_path=db_path,
-            codeql_bin=config.codeql_bin,
+            # ``db`` (Path): the validator stats the path; the raw
+            # config value may be a str, which used to die on
+            # ``.exists()`` inside the except below.
+            db_path=db,
+            codeql_bin=config.codeql_bin or "codeql",
         )
         if result.confirmed is True:
             return PropagationResult(
@@ -390,13 +411,13 @@ def try_codeql_resolve(
                 resolution="confirmed",
                 resolver_used="codeql",
             )
-        if result.confirmed is False:
-            return PropagationResult(
-                constraint=constraint,
-                resolved=True,
-                resolution="refuted",
-                resolver_used="codeql",
-            )
+        # confirmed is False or None: no refutation authority. A
+        # "refuted" resolution CLOSES the constraint, but the query's
+        # source model (calls to / parameters of one derived source
+        # function) is incomplete — globals, file reads, and other
+        # callers are invisible to it — so a negative here proves the
+        # flow's absence only for that slice. Fall through to the
+        # next resolver instead of closing on partial evidence.
     except Exception:
         logger.debug("CodeQL resolve failed", exc_info=True)
 
@@ -865,8 +886,12 @@ def propagate_one_hop(
     heuristic scoring for LLM review scheduling.
     """
     if config.binary_verdicts:
-        key = f"{constraint.file}:{constraint.function}"
-        verdict = config.binary_verdicts.get(key)
+        # Bare function name: the producer (binary_oracle
+        # extract_verdicts) keys the map ``{function: verdict}``, and
+        # every other consumer (orchestrator dead-code gate, absent-
+        # promotion demoter) reads it bare — a ``file:function`` key
+        # here could never hit, so the binary-oracle resolver was dead.
+        verdict = config.binary_verdicts.get(constraint.function)
         if verdict == "absent":
             return PropagationResult(
                 constraint=constraint,

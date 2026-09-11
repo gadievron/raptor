@@ -10,7 +10,7 @@
 #   APT_MIRROR when set, replaces the apt sources with this mirror
 #              (for build environments that cannot reach the default
 #              archives; read from the caller's environment)
-FROM ubuntu:24.04
+FROM ubuntu:26.10
 ARG http_proxy
 ARG https_proxy
 ARG APT_MIRROR=

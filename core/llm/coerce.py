@@ -49,7 +49,22 @@ _logger = logging.getLogger(__name__)
 
 _MISSING = object()
 
-_LEADING_LANG_TAG_RE = re.compile(r"^[A-Za-z]+\s*")
+# Single-line fenced blocks (```tag code```) carry no newline to
+# separate the language tag from the body, so the tag can only be
+# identified heuristically. Requiring trailing whitespace alone is not
+# enough — '```isBarrier(x)```' has no tag, and any leading identifier
+# followed by a space would be eaten. A leading token is stripped only
+# when it is BOTH whitespace-delimited AND a known language tag, so
+# code that happens to start with an identifier survives intact.
+_LEADING_LANG_TAG_RE = re.compile(r"^([A-Za-z+#][A-Za-z0-9+#.-]*)\s+")
+
+_KNOWN_LANG_TAGS = frozenset({
+    "bash", "c", "c++", "cpp", "cs", "csharp", "codeql", "diff", "go",
+    "html", "java", "javascript", "js", "json", "kotlin", "markdown",
+    "md", "objectivec", "perl", "php", "python", "py", "ql", "r",
+    "ruby", "rust", "scala", "sh", "shell", "sql", "swift", "text",
+    "ts", "txt", "typescript", "xml", "yaml", "yml", "zsh",
+})
 
 
 def _default_log(value: object, default: object) -> None:
@@ -151,8 +166,13 @@ def extract_fenced_code(text: str) -> str:
         # Drop the fence line (optional language tag).
         block = block.split("\n", 1)[1]
     else:
-        # Single-line block — strip a leading language tag.
-        block = _LEADING_LANG_TAG_RE.sub("", block)
+        # Single-line block — strip a leading language tag, but only a
+        # whitespace-delimited KNOWN tag (see _LEADING_LANG_TAG_RE):
+        # '```python print(1)```' drops the tag, '```isBarrier(x)```'
+        # keeps its leading identifier.
+        match = _LEADING_LANG_TAG_RE.match(block)
+        if match and match.group(1).lower() in _KNOWN_LANG_TAGS:
+            block = block[match.end():]
     return block.strip().rstrip("`").strip()
 
 

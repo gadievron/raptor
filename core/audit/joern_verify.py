@@ -414,27 +414,29 @@ def build_flow_query(
     ``JOERN_FLOW:`` lines (the server's parser turns those into
     :class:`packages.joern.models.TaintFlow` objects for us).
     """
+    from packages.joern.runner import SCALA_JSON_ESC_DEF
+
     fn = _escape(function_name)
     src = _escape(source_id)
     sink = _escape(sink_call)
     meth = f'cpg.method.nameExact("{fn}")'
+    # jsonEsc (the shared Scala helper) escapes every value that lands
+    # in a JSON-string position; .take(200) truncates the RAW string
+    # BEFORE escaping — escape-then-truncate can bisect an injected \"
+    # and leave a dangling backslash.
     flow_print = (
         '  raptorFlows.foreach { flow =>\n'
         '    val steps = flow.elements.map { e =>\n'
         '      val ln = e.lineNumber.getOrElse(0)\n'
-        '      val cd = e.code.take(200).replace("\\\\", "\\\\\\\\")'
-        '.replace("\\"", "\\\\\\"").replace("\\n", " ")'
-        '.replace("\\r", "")\n'
+        '      val cd = jsonEsc(e.code.take(200))\n'
         '      val (fnName, fl) = e match {\n'
         '        case n: CfgNode =>\n'
         '          (Try(n.method.name).getOrElse(""), '
         'Try(n.method.filename).getOrElse(""))\n'
         '        case _ => ("", "")\n'
         '      }\n'
-        '      val fnEsc = fnName.replace("\\\\", "\\\\\\\\")'
-        '.replace("\\"", "\\\\\\"").replace("\\n", " ")\n'
-        '      val flEsc = fl.replace("\\\\", "\\\\\\\\")'
-        '.replace("\\"", "\\\\\\"").replace("\\n", " ")\n'
+        '      val fnEsc = jsonEsc(fnName)\n'
+        '      val flEsc = jsonEsc(fl)\n'
         '      s"""{"line":$ln,"code":"$cd",'
         '"function":"$fnEsc","file":"$flEsc"}"""\n'
         '    }.mkString(",")\n'
@@ -447,6 +449,7 @@ def build_flow_query(
         'import io.shiftleft.semanticcpg.language._\n'
         'import io.shiftleft.codepropertygraph.generated.nodes.CfgNode\n'
         'import scala.util.Try\n'
+        f'{SCALA_JSON_ESC_DEF}\n'
         'implicit val raptorCtx: EngineContext = EngineContext('
         f'config = EngineConfig(maxCallDepth = {int(max_call_depth)}))\n'
         f'val raptorFn = {meth}.l\n'

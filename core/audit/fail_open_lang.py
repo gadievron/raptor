@@ -217,7 +217,12 @@ def _return_value_class(node: ast.Return) -> tuple[str, str]:
         logger.debug("ast.unparse failed on return value", exc_info=True)
         text = "<expr>"
     if isinstance(node.value, ast.Constant):
-        if node.value.value is True:
+        # Truthiness IS the classification for a boolean-ish security
+        # contract: `return "admin"` / `return 1` grant exactly like
+        # `return True`.  Only-True-is-permissive read every other
+        # truthy constant as fail-closed and refuted textbook
+        # fail-open handlers on it.
+        if node.value.value:
             return OUTCOME_RETURN_PERMISSIVE, text
         return OUTCOME_FAIL_CLOSED, text
     if isinstance(node.value, (ast.List, ast.Dict, ast.Tuple)):

@@ -437,3 +437,58 @@ def test_frida_unavailable_raises(monkeypatch, tmp_path: Path):
     )
     with pytest.raises(runner.FridaUnavailable):
         runner.run(cfg)
+
+
+def test_capture_window_not_eroded_by_slow_setup(tmp_path: Path):
+    """The observation deadline is anchored where capture begins:
+    attach/spawn and script-load latency must extend the run, never be
+    deducted from the requested duration (a slow init would otherwise
+    collapse the effective window to near zero while metadata reported
+    a full-length run)."""
+    import time as _time
+
+    device = FakeDevice("local")
+    fake = _fake_frida(device)
+    cfg = runner.RunConfig(
+        target=runner.parse_target("1234"),
+        out_dir=tmp_path,
+        script_source="// noop",
+        script_origin="file:noop.js",
+        duration_sec=0.3,
+    )
+
+    original_load = FakeScript.load
+    def slow_load(self):
+        _time.sleep(0.4)  # longer than the whole requested window
+        original_load(self)
+    FakeScript.load = slow_load
+    try:
+        start = _time.monotonic()
+        result = runner.run(cfg, frida_mod_override=fake)
+        elapsed = _time.monotonic() - start
+    finally:
+        FakeScript.load = original_load
+
+    assert result.ok is True
+    # setup + a full-length capture window, not setup alone.
+    assert elapsed >= 0.65
+    assert result.setup_sec >= 0.35
+    meta = json.loads((tmp_path / "metadata.json").read_text())
+    assert meta["setup_sec"] == result.setup_sec
+    assert meta["duration_actual_sec"] >= meta["setup_sec"] + 0.25
+
+
+def test_fast_setup_reports_small_setup_sec(tmp_path: Path):
+    device = FakeDevice("local")
+    fake = _fake_frida(device)
+    cfg = runner.RunConfig(
+        target=runner.parse_target("1234"),
+        out_dir=tmp_path,
+        script_source="// noop",
+        script_origin="file:noop.js",
+        duration_sec=0.05,
+    )
+    result = runner.run(cfg, frida_mod_override=fake)
+    assert result.ok is True
+    assert result.setup_sec < 0.5
+    assert result.duration_actual_sec >= 0.05

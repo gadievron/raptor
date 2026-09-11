@@ -110,9 +110,22 @@ def main() -> int:
         )
         return 1
 
+    # IRIS promoted taint-spec sinks merge only via the extra_sinks
+    # kwarg — nothing inside enrich_with_sink_discovery fetches them
+    # itself, so fetch them here. Best-effort: IRIS is optional and
+    # its absence must not fail sink discovery.
+    extra_sinks = None
+    try:
+        from core.iris.api import get_project_sinks
+        iris_sinks = get_project_sinks(out_dir=understand_dir)
+        if iris_sinks:
+            extra_sinks = iris_sinks
+    except Exception:  # noqa: BLE001 — best-effort
+        pass
+
     enriched = enrich_with_sink_discovery(
         context_map, Path(target_path), max_depth=args.max_depth,
-        run_dir=understand_dir,
+        run_dir=understand_dir, extra_sinks=extra_sinks,
     )
     if enriched:
         enforce_context_map_budget(context_map)

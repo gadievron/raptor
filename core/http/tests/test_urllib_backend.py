@@ -801,6 +801,25 @@ class TestRequest:
         with pytest.raises(HttpError, match="not valid JSON"):
             resp.json()
 
+    def test_response_json_tolerates_bom(self):
+        """BOM-prefixed valid JSON bodies parse — core.json.loads
+        names HTTP bodies as an intended source and strips the BOM."""
+        client, _ = _client_with_mock_pool(
+            _stub_response(b'\xef\xbb\xbf{"x": 1}'),
+        )
+        resp = client.request("GET", "https://example.com/api")
+        assert resp.json() == {"x": 1}
+
+    def test_response_json_rejects_non_finite(self):
+        """NaN/Infinity constants are refused as HttpError instead of
+        flowing unguarded into consumers."""
+        client, _ = _client_with_mock_pool(
+            _stub_response(b'{"a": NaN}'),
+        )
+        resp = client.request("GET", "https://example.com/api")
+        with pytest.raises(HttpError, match="not valid JSON"):
+            resp.json()
+
     def test_arbitrary_methods_accepted(self):
         """request() supports DELETE/PUT/PATCH/HEAD without explicit
         helper methods. Verify the method string is forwarded."""
@@ -1632,3 +1651,96 @@ class TestBoundedDrainOnAbort:
         assert resp.bytes_drained == 2048
         assert not resp.closed
         assert resp.released
+
+
+# ---------------------------------------------------------------------------
+# HttpError contract hardening: port accessor, raise_on_status=False for
+# transient statuses, stream-path exception translation
+# ---------------------------------------------------------------------------
+
+class TestInvalidPortTranslation:
+
+    def test_out_of_range_port_raises_http_error(self):
+        client, _pool = _client_with_mock_pool(_stub_response(b"{}"))
+        with pytest.raises(HttpError, match="invalid port"):
+            client.get_json("https://example.com:99999/api")
+
+
+class TestRaiseOnStatusFalseTransient:
+
+    def test_final_503_response_returned_not_raised(self):
+        resp = _stub_response(b"try later", status=503, reason="Unavailable")
+        client, _pool = _client_with_mock_pool(resp)
+        out = client.request(
+            "GET", "https://example.com/x",
+            retries=0, raise_on_status=False,
+        )
+        assert isinstance(out, Response)
+        assert out.status == 503
+        assert out.body == b"try later"
+
+    def test_final_429_response_returned_not_raised(self):
+        resp = _stub_response(
+            b"slow down", status=429, reason="Too Many Requests",
+            extra_headers={"Retry-After": "1"},
+        )
+        client, _pool = _client_with_mock_pool(resp)
+        out = client.request(
+            "GET", "https://example.com/x",
+            retries=0, raise_on_status=False,
+        )
+        assert out.status == 429
+
+    def test_transient_still_retries_before_returning(self):
+        bad = _stub_response(b"nope", status=503, reason="Unavailable")
+        good = _stub_response(b'{"ok": 1}')
+        client, pool = _client_with_mock_pool([bad, good])
+        with patch("time.sleep"):
+            out = client.request(
+                "GET", "https://example.com/x",
+                retries=1, raise_on_status=False,
+            )
+        assert out.status == 200
+        assert pool.request.call_count == 2
+
+    def test_default_raise_on_status_unchanged(self):
+        resp = _stub_response(b"nope", status=503, reason="Unavailable")
+        client, _pool = _client_with_mock_pool(resp)
+        with pytest.raises(HttpError):
+            client.request("GET", "https://example.com/x", retries=0)
+
+
+class TestStreamExceptionTranslation:
+
+    def test_request_failure_translates_to_http_error(self):
+        import urllib3.exceptions as u3e
+
+        pool = MagicMock()
+        pool.request.side_effect = u3e.ProtocolError("connection reset")
+        client = UrllibClient(_http=pool)
+        it = client.stream_bytes("https://example.com/blob", retries=0)
+        with pytest.raises(HttpError, match="stream request failed"):
+            list(it)
+
+    def test_mid_stream_failure_translates_to_http_error(self):
+        import urllib3.exceptions as u3e
+
+        def _chunks(chunk_size, decode_content=True):
+            yield b"first"
+            raise u3e.ProtocolError("connection reset mid-body")
+
+        resp = MagicMock()
+        resp.status = 200
+        resp.headers = {}
+        resp.stream = _chunks
+        resp.read = lambda *a, **kw: b""
+        resp.release_conn = MagicMock()
+        resp.geturl = lambda: ""
+        client = UrllibClient(_http=MagicMock(
+            request=MagicMock(return_value=resp)))
+        it = client.stream_bytes("https://example.com/blob", retries=0)
+        collected = []
+        with pytest.raises(HttpError, match="aborted mid-body"):
+            for chunk in it:
+                collected.append(chunk)
+        assert collected == [b"first"]

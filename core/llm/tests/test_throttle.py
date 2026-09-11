@@ -313,6 +313,119 @@ class TestAsyncAcquire:
         assert completed[0] == 4
 
 
+class TestAcquireLivelockAndMixedWakeups:
+    @staticmethod
+    def _run_bounded(scenario_coro_factory, timeout_s: float = 10.0) -> list:
+        """Run an async scenario on a daemon thread and join with a
+        deadline. The livelock under test starves the event loop
+        itself (a coroutine that never yields), so an in-loop
+        ``wait_for`` timer would never fire — the outer join is the
+        only bound that survives a regression."""
+        result: list = []
+
+        def runner():
+            asyncio.run(scenario_coro_factory(result))
+
+        th = threading.Thread(target=runner, daemon=True)
+        th.start()
+        th.join(timeout=timeout_s)
+        return result
+
+    def test_429_halving_below_in_flight_does_not_livelock(self):
+        """Holder in flight + 429 halving effective to in-flight level
+        + a new acquire: the waiter must park (yielding the loop) so
+        the holder's sleep completes and its release wakes the waiter.
+        Pre-fix the waiter busy-spun on the still-set event and the
+        loop never ran the holder again."""
+        async def scenario(result):
+            t = AdaptiveThrottle(2, cooldown_s=60.0, auto_register=False)
+            started = asyncio.Event()
+
+            async def holder():
+                async with t.acquire():
+                    # 429 arrives while this slot is held: 2 → 1,
+                    # in_flight (1) is now at the new effective level.
+                    t.signal_rate_limit()
+                    started.set()
+                    await asyncio.sleep(0.05)
+
+            async def waiter():
+                await started.wait()
+                async with t.acquire():
+                    pass
+
+            await asyncio.gather(holder(), waiter())
+            result.append("ok")
+
+        result = self._run_bounded(scenario)
+        assert result == ["ok"], (
+            "async acquire() livelocked after a 429 halved effective "
+            "concurrency below in-flight"
+        )
+
+    def test_sync_release_wakes_parked_async_waiter(self):
+        """Mixed sync/async use: a slot freed by ``acquire_sync``'s
+        release must wake an async ``acquire()`` waiter parked on the
+        event (the sync release previously only notified the
+        threading.Condition)."""
+        async def scenario(result):
+            t = AdaptiveThrottle(1, cooldown_s=60.0, auto_register=False)
+            loop = asyncio.get_running_loop()
+            holding = threading.Event()
+            release = threading.Event()
+
+            def sync_holder():
+                with t.acquire_sync():
+                    holding.set()
+                    release.wait(timeout=5.0)
+
+            th = threading.Thread(target=sync_holder, daemon=True)
+            th.start()
+            await loop.run_in_executor(None, holding.wait, 5.0)
+
+            async def waiter():
+                async with t.acquire():
+                    pass
+
+            task = asyncio.ensure_future(waiter())
+            # Let the waiter reach its parked state before releasing.
+            await asyncio.sleep(0.05)
+            assert not task.done()
+            release.set()
+            await asyncio.wait_for(task, timeout=5.0)
+            th.join(timeout=5.0)
+            result.append("ok")
+
+        result = self._run_bounded(scenario)
+        assert result == ["ok"], (
+            "async waiter was not woken by a sync release"
+        )
+
+    def test_async_release_still_wakes_async_waiter(self):
+        """Lost-wakeup regression guard for the clear-before-park
+        restructure: a waiter that parks because the slot check failed
+        must still be woken by a plain async release."""
+        async def scenario(result):
+            t = AdaptiveThrottle(1, cooldown_s=60.0, auto_register=False)
+            order: list[str] = []
+
+            async def holder():
+                async with t.acquire():
+                    order.append("holder")
+                    await asyncio.sleep(0.05)
+
+            async def waiter():
+                await asyncio.sleep(0.01)  # ensure holder owns the slot
+                async with t.acquire():
+                    order.append("waiter")
+
+            await asyncio.gather(holder(), waiter())
+            result.append(order)
+
+        result = self._run_bounded(scenario)
+        assert result == [["holder", "waiter"]]
+
+
 class TestBroadcastRegistry:
     def test_auto_register(self):
         initial = len(_active_throttles)

@@ -52,9 +52,8 @@ except ImportError:                       # pragma: no cover — env-dependent
 
 ECOSYSTEM = "Maven"
 
-# Maven POM 4.0.0 namespace. Some POMs omit it; we strip namespaces from
-# tag names so a single XPath works for both.
-_POM_NS = "http://maven.apache.org/POM/4.0.0"
+# POMs may carry a namespace (http/https × 4.0.0/4.1.0) or none;
+# ``_strip_namespaces`` flattens every variant so a single XPath works.
 
 _PROPERTY_RE = re.compile(r"\$\{([^}]+)\}")
 
@@ -196,6 +195,18 @@ def _load_root(path: Path):
         return None
 
     _strip_namespaces(root)
+    # A POM's document element is always <project> (any namespace,
+    # stripped above). Rejecting other roots keeps arbitrary XML that
+    # happens to be named pom.xml from being mined for coincidental
+    # <dependencies> shapes now that namespace stripping is
+    # namespace-agnostic.
+    if root.tag != "project":
+        logger.warning(
+            "sca.parsers.pom: XML parse failed for %s: root element "
+            "%r is not <project> — not a Maven POM",
+            path, root.tag,
+        )
+        return None
     return root
 
 
@@ -293,15 +304,22 @@ def _extract_license(root) -> str | None:
 
 
 def _strip_namespaces(root) -> None:
-    """Drop the POM 4.0.0 namespace prefix from every element tag in-place.
+    """Drop any XML namespace prefix from every element tag in-place.
 
-    Handling both namespaced and namespace-less POMs at every XPath site
+    Handling namespaced and namespace-less POMs at every XPath site
     is noisy; flattening once at the top is cheaper and easier to read.
+
+    Namespace-agnostic on purpose: real POMs declare the namespace as
+    ``http://maven.apache.org/POM/4.0.0``, ``https://...`` (mirrors and
+    IDE templates emit the TLS spelling), or the 4.1.0 revision. An
+    exact-string strip of only the http/4.0.0 form left every other
+    variant fully namespaced, so all XPath lookups missed and the POM
+    yielded zero deps with no warning. The root-tag check in
+    ``_load_root`` keeps non-POM XML rejected.
     """
-    prefix = "{" + _POM_NS + "}"
     for el in root.iter():
-        if isinstance(el.tag, str) and el.tag.startswith(prefix):
-            el.tag = el.tag[len(prefix):]
+        if isinstance(el.tag, str) and el.tag.startswith("{"):
+            el.tag = el.tag.split("}", 1)[-1]
 
 
 def _collect_properties(root) -> dict[str, str]:

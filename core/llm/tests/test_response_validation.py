@@ -146,6 +146,23 @@ class TestCoerceValue:
         assert _coerce_value("false", "boolean") == (False, True)
         assert _coerce_value("no", "boolean") == (False, True)
 
+    def test_boolean_from_padded_string(self):
+        # Whitespace/case noise must not flip the verdict to False.
+        assert _coerce_value("true ", "boolean") == (True, True)
+        assert _coerce_value(" TRUE", "boolean") == (True, True)
+        assert _coerce_value(" false ", "boolean") == (False, True)
+        assert _coerce_value("No", "boolean") == (False, True)
+
+    def test_boolean_unrecognised_string_fails_coercion(self):
+        # Garbage text is a FAILED coercion (None), never a silent
+        # False — is_exploitable must not be decided by noise.
+        assert _coerce_value("maybe", "boolean") == (None, True)
+        assert _coerce_value("", "boolean") == (None, True)
+
+    def test_boolean_from_container_fails_coercion(self):
+        assert _coerce_value(["true"], "boolean") == (None, True)
+        assert _coerce_value({"v": True}, "boolean") == (None, True)
+
     def test_boolean_from_int(self):
         assert _coerce_value(1, "boolean") == (True, True)
         assert _coerce_value(0, "boolean") == (False, True)
@@ -187,14 +204,19 @@ class TestCoerceValue:
     def test_array_from_string(self):
         assert _coerce_value("item", "array") == (["item"], True)
 
-    def test_array_from_other(self):
-        assert _coerce_value(42, "array") == ([], True)
+    def test_array_from_other_fails_coercion(self):
+        # No faithful array reading — a silent [] substitute discarded
+        # the value at near-full credit; must fail instead.
+        assert _coerce_value(42, "array") == (None, True)
+        assert _coerce_value({"a": 1}, "array") == (None, True)
 
     def test_object_native(self):
         assert _coerce_value({"a": 1}, "object") == ({"a": 1}, False)
 
-    def test_object_from_other(self):
-        assert _coerce_value("nope", "object") == ({}, True)
+    def test_object_from_other_fails_coercion(self):
+        # Same wholesale-discard hazard as the array branch.
+        assert _coerce_value("nope", "object") == (None, True)
+        assert _coerce_value([1, 2], "object") == (None, True)
 
     def test_unknown_type_passthrough(self):
         assert _coerce_value("val", "custom") == ("val", False)
@@ -622,6 +644,86 @@ class TestEdgeCases:
         result = validate_structured_response(raw, schema)
         assert result.fields["name"].status == "ok"
         assert result.data["name"] is None
+
+
+# ---------------------------------------------------------------------------
+# Domain-rejected values are nulled (module contract: "nulls bad ones")
+# ---------------------------------------------------------------------------
+
+class TestDomainRejectedValuesNulled:
+    def test_out_of_range_score_nulled_not_kept(self):
+        # A score of 8 on the 0-1 scale must not flow into triage.
+        schema = {"exploitability_score": "float (0.0-1.0)"}
+        result = validate_structured_response(
+            {"exploitability_score": 8}, schema)
+        assert result.data["exploitability_score"] is None
+        assert "exploitability_score" in result.incomplete
+
+    def test_in_range_score_kept(self):
+        schema = {"exploitability_score": "float (0.0-1.0)"}
+        result = validate_structured_response(
+            {"exploitability_score": 0.5}, schema)
+        assert result.data["exploitability_score"] == 0.5
+        assert result.incomplete == []
+
+    def test_coerced_then_rejected_nulled_and_flagged(self):
+        # String "8" coerces to 8.0 then fails the 0-1 validator:
+        # status keeps the coercion attribution, but the value is
+        # nulled and the field flagged for the corrective retry.
+        schema = {"exploitability_score": "float (0.0-1.0)"}
+        result = validate_structured_response(
+            {"exploitability_score": "8"}, schema)
+        assert result.data["exploitability_score"] is None
+        assert result.fields["exploitability_score"].status == "coerced"
+        assert "exploitability_score" in result.incomplete
+
+    def test_invalid_vuln_type_nulled(self):
+        schema = {"vuln_type": "string - vulnerability category"}
+        result = validate_structured_response(
+            {"vuln_type": "totally_fake_vuln"}, schema)
+        assert result.data["vuln_type"] is None
+        assert "vuln_type" in result.incomplete
+
+
+# ---------------------------------------------------------------------------
+# Failed coercions surface as invalid + incomplete (full-flow twins of the
+# _coerce_value unit tests above)
+# ---------------------------------------------------------------------------
+
+class TestFailedCoercionFlow:
+    def test_padded_true_string_is_true(self):
+        schema = {"is_exploitable": "boolean"}
+        result = validate_structured_response(
+            {"is_exploitable": "true "}, schema)
+        assert result.data["is_exploitable"] is True
+        assert result.fields["is_exploitable"].status == "coerced"
+
+    def test_garbage_boolean_string_flagged_not_false(self):
+        schema = {"is_exploitable": "boolean"}
+        result = validate_structured_response(
+            {"is_exploitable": "unclear"}, schema)
+        assert result.data["is_exploitable"] is None
+        assert result.fields["is_exploitable"].status == "invalid"
+        assert "is_exploitable" in result.incomplete
+
+    def test_array_type_mismatch_flagged_not_emptied(self):
+        schema = {"prerequisites": "array of strings"}
+        result = validate_structured_response(
+            {"prerequisites": {"oops": 1}}, schema)
+        assert result.data["prerequisites"] is None
+        assert result.fields["prerequisites"].status == "invalid"
+        assert "prerequisites" in result.incomplete
+
+    def test_array_valid_and_string_wrap_still_pass(self):
+        schema = {"prerequisites": "array of strings"}
+        ok = validate_structured_response(
+            {"prerequisites": ["a", "b"]}, schema)
+        assert ok.data["prerequisites"] == ["a", "b"]
+        assert ok.incomplete == []
+        wrapped = validate_structured_response(
+            {"prerequisites": "single"}, schema)
+        assert wrapped.data["prerequisites"] == ["single"]
+        assert "prerequisites" in wrapped.coerced
 
 
 # ---------------------------------------------------------------------------

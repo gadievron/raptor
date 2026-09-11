@@ -480,3 +480,34 @@ class TestRequeuePendingStudy:
         )
         cfg = OrchestratorConfig(target_path=tmp_path, out_dir=None)
         assert _requeue_pending_study(cfg, StudyQueue()) == 0
+
+
+class TestEnqueueStudiedGuard:
+    """enqueue must not re-arm the suppression gate for a concept
+    already studied — a re-asked studied concept previously parked in
+    _pending_concepts forever and livelocked the executor's hold."""
+
+    def test_re_enqueued_studied_concept_drains(self):
+        q = StudyQueue()
+        q.enqueue(StudyRequest("what is sk_buff?", "a.c", "fn"))
+        q.dequeue_batch(max_items=10, timeout=0.1)
+        q.mark_studied({"sk_buff"})
+        q.enqueue(StudyRequest("what is sk_buff?", "b.c", "fn2"))
+        assert q.pending_concepts() == frozenset(), (
+            "studied concept must not re-enter the pending set"
+        )
+        # The item is dropped, not queued for a wasted batch.
+        assert q.dequeue_batch(max_items=10, timeout=0.05) == []
+
+    def test_unstudied_concept_still_enqueues(self):
+        q = StudyQueue()
+        q.mark_studied({"sk_buff"})
+        q.enqueue(StudyRequest("what is tcp_sock?", "a.c", "fn"))
+        assert "tcp_sock" in q.pending_concepts()
+        assert len(q.dequeue_batch(max_items=10, timeout=0.1)) == 1
+
+    def test_conceptless_question_still_enqueues(self):
+        q = StudyQueue()
+        q.mark_studied({"sk_buff"})
+        q.enqueue(StudyRequest("explain the locking hierarchy", "a.c", "fn"))
+        assert len(q.dequeue_batch(max_items=10, timeout=0.1)) == 1

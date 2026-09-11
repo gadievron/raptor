@@ -101,15 +101,30 @@ class NvdClient:
                 payload = None if hit == _NVD_CACHE_MISSING else hit
                 self._cache[cve_id] = payload
                 return payload
-        payload = self._fetch_with_retry(cve_id)
+        payload, definitive = self._fetch_with_retry(cve_id)
         if self.cache_enabled:
-            self._cache[cve_id] = payload
-            if self._disk is not None:
-                value = payload if payload is not None else _NVD_CACHE_MISSING
-                self._disk.put(f"nvd/{cve_id}", value, ttl_seconds=_CACHE_TTL)
+            if payload is not None or definitive:
+                self._cache[cve_id] = payload
+                if self._disk is not None:
+                    value = payload if payload is not None else _NVD_CACHE_MISSING
+                    self._disk.put(f"nvd/{cve_id}", value, ttl_seconds=_CACHE_TTL)
+            else:
+                # Transient failure (quota exhaustion, outage, network
+                # error): remember only in-process so one batch doesn't
+                # hammer a downed NVD, but never write the 7-day disk
+                # sentinel — that would misreport the CVE as nonexistent
+                # to every later run sharing the cache until TTL expiry.
+                self._cache[cve_id] = None
         return payload
 
-    def _fetch_with_retry(self, cve_id: str) -> dict[str, Any] | None:
+    def _fetch_with_retry(self, cve_id: str) -> tuple[dict[str, Any] | None, bool]:
+        """Fetch *cve_id*; return ``(payload, definitive)``.
+
+        ``definitive`` is True when a ``None`` payload means "NVD says
+        this does not exist" (4xx resource-missing classes) rather than
+        "the lookup failed" (rate limit, outage, network error, mangled
+        body) — only definitive misses may be negative-cached.
+        """
         # API key validation. Pre-fix any non-empty NVD_API_KEY
         # was sent verbatim — placeholders (`"must-set-this-please"`,
         # `"YOUR_KEY_HERE"`, copy-paste with leading whitespace
@@ -171,12 +186,16 @@ class NvdClient:
                 retry_result=lambda r: 500 <= r.status < 600,
                 delay_override=_honour_retry_after,
             )
-        except HttpError:
-            return None
+        except HttpError as exc:
+            # 400/404/410 are the server's answer ("no such resource") —
+            # definitive. Anything else (429 retry exhaustion, 403
+            # auth/quota, 5xx, status-less network errors) is transient.
+            return None, (exc.status or 0) in (400, 404, 410)
         if resp.status != 200:
-            return None
+            return None, False
         try:
-            # Response.json raises HttpError on a non-JSON body.
-            return resp.json()
+            # Response.json raises HttpError on a non-JSON body — a
+            # proxy error page, not an NVD answer: transient.
+            return resp.json(), True
         except HttpError:
-            return None
+            return None, False

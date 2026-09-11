@@ -1743,3 +1743,171 @@ def test_published_run_ports_scopes_to_this_runs_containers() -> None:
         assert verify_mod._published_run_ports("") == frozenset()
     finally:
         reset_failed_attempts()
+
+
+def test_published_run_ports_rejects_short_prefix_ids() -> None:
+    """The probed container id is agent-supplied: a 1-char value must not
+    prefix-match every sibling container (that would pull a foreign run's
+    published ports into this run's allowlist). Only exact ids or
+    docker-style prefixes of >= 12 chars match."""
+    from types import SimpleNamespace
+
+    from cve_env.tools import verify as verify_mod
+    from cve_env.tools.docker_run import reset_failed_attempts
+
+    reset_failed_attempts()
+    sibling = "a" * 64
+    ok = SimpleNamespace(
+        returncode=0, timed_out=False, stderr="",
+        stdout=f"{sibling[:12]}\t127.0.0.1:6379->6379/tcp\n",
+    )
+    try:
+        with patch("cve_env.utils.run.run_with_timeout", return_value=ok):
+            # 1-char id: previously matched via short_id.startswith("a").
+            assert verify_mod._published_run_ports("a") == frozenset()
+            # 11 chars: still below the docker truncated-id length.
+            assert verify_mod._published_run_ports("a" * 11) == frozenset()
+            # 12-char docker-style prefix of the full id: matches.
+            assert verify_mod._published_run_ports(sibling[:12]) == frozenset(
+                {6379}
+            )
+            # Full id: matches.
+            assert verify_mod._published_run_ports(sibling) == frozenset(
+                {6379}
+            )
+    finally:
+        reset_failed_attempts()
+
+
+def test_verify_rejects_non_loopback_endpoint_host() -> None:
+    """host_ip is agent-supplied; for a plan that probes the endpoint, a
+    private-LAN address would aim probe payloads at unrelated internal
+    services. Loopback only — rejected before anything dispatches."""
+    out = verify(
+        container_id="cid",
+        host_ip="10.0.0.5",
+        host_port=6379,
+        plan=[
+            {"type": "container_status"},
+            {"type": "http_check", "path": "/"},
+        ],
+    )
+    assert out["passed"] is False
+    assert "loopback" in out["reason"]
+    assert out["results"] == []
+
+
+@patch("cve_env.tools.verify.check_container_status")
+def test_verify_exec_only_plan_ignores_stale_endpoint(mock_status: Any) -> None:
+    """Companion direction: a plan with no endpoint-consuming checks never
+    touches host_ip/host_port, so a stale value must not fail it."""
+    mock_status.return_value = {
+        "passed": True, "details": {}, "type": "container_status",
+    }
+    out = verify(
+        container_id="cid",
+        host_ip="10.0.0.5",  # stale/bogus, but unused by this plan
+        host_port=9999,
+        plan=[{"type": "container_status"}],
+    )
+    assert out["passed"] is True
+
+
+@patch("core.env.verify._http_exchange")
+@patch("cve_env.tools.verify.check_container_status")
+def test_verify_accepts_loopback_endpoint_host(
+    mock_status: Any, mock_req: Any
+) -> None:
+    """Companion direction: 127.0.0.1 endpoints keep working."""
+    mock_status.return_value = {
+        "passed": True, "details": {}, "type": "container_status",
+    }
+    mock_req.return_value = _mk_resp(status=200, body=b"ok")
+    out = verify(
+        container_id="cid",
+        host_ip="127.0.0.1",
+        host_port=8080,
+        plan=[
+            {"type": "container_status"},
+            {"type": "http_check", "path": "/"},
+            {"type": "http_check", "path": "/about"},
+        ],
+    )
+    assert out["passed"] is True
+
+
+@patch("cve_env.tools.verify._endpoint_run_ports",
+       return_value=frozenset({8080}))
+def test_verify_rejects_endpoint_port_not_published_by_this_run(
+    _mock_ports: Any,
+) -> None:
+    """When this run's containers publish host ports, the endpoint port
+    must be one of them — otherwise a plan could aim payloads at a
+    sibling run's loopback sidecar, and the engine's per-step allowlist
+    (which always contains the endpoint port) would wave it through."""
+    out = verify(
+        container_id="a" * 64,
+        host_ip="127.0.0.1",
+        host_port=6379,
+        plan=[
+            {"type": "container_status"},
+            {"type": "http_check", "path": "/"},
+        ],
+    )
+    assert out["passed"] is False
+    assert "host_port 6379" in out["reason"]
+    assert out["results"] == []
+
+
+@patch("core.env.verify._http_exchange")
+@patch("cve_env.tools.verify.check_container_status")
+@patch("cve_env.tools.verify._endpoint_run_ports",
+       return_value=frozenset({8080}))
+def test_verify_accepts_endpoint_port_published_by_this_run(
+    _mock_ports: Any, mock_status: Any, mock_req: Any
+) -> None:
+    mock_status.return_value = {
+        "passed": True, "details": {}, "type": "container_status",
+    }
+    mock_req.return_value = _mk_resp(status=200, body=b"ok")
+    out = verify(
+        container_id="a" * 64,
+        host_ip="127.0.0.1",
+        host_port=8080,
+        plan=[
+            {"type": "container_status"},
+            {"type": "http_check", "path": "/"},
+            {"type": "http_check", "path": "/about"},
+        ],
+    )
+    assert out["passed"] is True
+
+
+def test_endpoint_run_ports_counts_any_bind_address() -> None:
+    """Compose stacks commonly publish on 0.0.0.0 (reachable via
+    loopback) — the ENDPOINT view must count those, while the per-step
+    tcp allowlist stays loopback-only."""
+    from types import SimpleNamespace
+
+    from cve_env.tools import verify as verify_mod
+    from cve_env.tools.docker_run import reset_failed_attempts
+
+    reset_failed_attempts()
+    ours = "a" * 64
+    ok = SimpleNamespace(
+        returncode=0, timed_out=False, stderr="",
+        stdout=(
+            f"{ours[:12]}\t0.0.0.0:8080->80/tcp, :::8080->80/tcp, "
+            f"127.0.0.1:6379->6379/tcp\n"
+        ),
+    )
+    try:
+        with patch("cve_env.utils.run.run_with_timeout", return_value=ok):
+            assert verify_mod._endpoint_run_ports(ours) == frozenset(
+                {8080, 6379}
+            )
+            assert verify_mod._published_run_ports(ours) == frozenset(
+                {6379}
+            )
+    finally:
+        reset_failed_attempts()

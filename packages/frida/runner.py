@@ -133,6 +133,11 @@ class RunResult:
     error: str | None = None
     events_captured: int = 0
     duration_actual_sec: float = 0.0
+    # Attach/spawn + script-load latency preceding the capture window.
+    # Separated out so duration_actual_sec ≈ setup_sec + capture window
+    # and an events-poor run caused by slow init is distinguishable
+    # from a genuinely quiet target.
+    setup_sec: float = 0.0
     resolved_pid: int | None = None
     device_id: str | None = None
     host_info: HostInfo | None = None
@@ -626,7 +631,16 @@ def run(cfg: RunConfig,
         except ValueError:
             signal_installed = False
         try:
-            deadline = started + cfg.duration_sec
+            # Anchor the observation window HERE, where capture
+            # actually begins: device resolution, attach/spawn and the
+            # bounded (up to 30s) script load all happen earlier, and
+            # that setup latency must not be silently deducted from
+            # the requested duration — a slow init would otherwise
+            # collapse the effective window to near zero while the
+            # metadata still reported a full-length run.
+            capture_started = time.monotonic()
+            result.setup_sec = round(capture_started - started, 3)
+            deadline = capture_started + cfg.duration_sec
             last_flush = time.monotonic()
             # Fast cadence for the first two seconds: the immediate
             # post-resume flush races the target's threads becoming
@@ -724,6 +738,7 @@ def _write_metadata(cfg: RunConfig, result: RunResult) -> None:
         "script_origin": cfg.script_origin,
         "duration_requested_sec": cfg.duration_sec,
         "duration_actual_sec": result.duration_actual_sec,
+        "setup_sec": result.setup_sec,
         "events_captured": result.events_captured,
         "device": {
             "id": result.device_id,

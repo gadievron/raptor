@@ -438,9 +438,41 @@ def _name_index(functions: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
 
 def _parse_joern_peers(raw_output: str) -> list[tuple[str, str, list[str]]]:
-    """Parse JOERN_PEERS: lines into (caller, file, [callees])."""
+    """Parse JOERN_PEERS: records into (caller, file, [callees]).
+
+    Primary format: one ``JOERN_PEERS:{json}`` record per line
+    (``{"caller": ..., "file": ..., "callees": [...]}``), parsed
+    transport-tolerantly via :func:`parse_marker_records` so records
+    carried only in the server transport's value echo still decode.
+    The legacy pipe-delimited ``JOERN_PEERS:caller|file|c1,c2`` shape
+    is kept as a fallback for old transcripts; its unescaped
+    delimiters make it a lossy carrier, so JSON records win when any
+    are present.
+    """
+    from core.analysis._joern_lines import parse_marker_records
+
+    records, _decode_errors = parse_marker_records(
+        raw_output or "", "JOERN_PEERS:",
+    )
     results: list[tuple[str, str, list[str]]] = []
-    for line in raw_output.splitlines():
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        caller = rec.get("caller")
+        caller_file = rec.get("file")
+        raw_callees = rec.get("callees")
+        if not isinstance(caller, str) or not isinstance(raw_callees, list):
+            continue
+        callees = [c for c in raw_callees if isinstance(c, str) and c]
+        if len(callees) >= 2:
+            results.append((
+                caller,
+                caller_file if isinstance(caller_file, str) else "",
+                callees,
+            ))
+    if results:
+        return results
+    for line in (raw_output or "").splitlines():
         m = _JOERN_PEERS_RE.match(line.strip())
         if m:
             caller = m.group(1)
@@ -451,11 +483,24 @@ def _parse_joern_peers(raw_output: str) -> list[tuple[str, str, list[str]]]:
     return results
 
 
+# Dual-emit doctrine (same as the reachability-gates queries): records
+# are println'd for the subprocess transport AND returned as the final
+# expression so the server transport (/query-sync drops println,
+# echo-frames the final expression) still carries them. The previous
+# println-only form was dead on the server transport. jsonEsc guards
+# every interpolated value — caller/file/callee names come from the
+# SCANNED repo, and the old raw pipe/comma delimiters let a hostile
+# name forge or destroy records. The embedded jsonEsc line is byte-
+# identical to ``packages.joern.runner.SCALA_JSON_ESC_DEF`` (drift-
+# guarded by a test; not imported here to keep this module free of
+# the joern package at import time).
 _CO_CALLEE_QUERY = """\
 import io.shiftleft.semanticcpg.language._
 import scala.util.Try
 
-cpg.method.internal
+def jsonEsc(v: String): String = v.replace("\\\\", "\\\\\\\\").replace("\\"", "\\\\\\"").replace("\\r", "").replace("\\n", " ").flatMap(c => if (c.toInt < 0x20 || c.toInt == 0x85 || c.toInt == 0x2028 || c.toInt == 0x2029) " " else c.toString)
+
+val peerLines = cpg.method.internal
   .filter(_.call.size > 1)
   .map { caller =>
     val callees = Try(
@@ -465,11 +510,16 @@ cpg.method.internal
         .name.dedup.l
     ).getOrElse(List.empty[String])
     if (callees.size >= 2) {
-      val f = caller.filename.replace("\\\\", "\\\\\\\\").replace("\\"", "\\\\\\"")
-      s"JOERN_PEERS:${caller.name}|${f}|${callees.mkString(",")}"
+      val f = jsonEsc(caller.filename)
+      val n = jsonEsc(caller.name)
+      val cs = callees.map(c => "\\"" + jsonEsc(c) + "\\"").mkString(",")
+      s"JOERN_PEERS:{\\"caller\\":\\"$n\\",\\"file\\":\\"$f\\",\\"callees\\":[$cs]}"
     } else ""
   }
-  .filter(_.nonEmpty).l.foreach(println)
+  .filter(_.nonEmpty).l
+
+peerLines.foreach(println)
+peerLines.mkString("\\n")
 """
 
 

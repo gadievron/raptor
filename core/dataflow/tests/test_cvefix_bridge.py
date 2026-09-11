@@ -396,6 +396,13 @@ def test_synthesize_one_build_mode_from_status(monkeypatch, tmp_path: Path):
     cvefix_bridge.synthesize_one(_pair(lang="Python"), work_dir=tmp_path / "w3",
                                  proposer=lambda *a: "", status="ok")
     assert seen["mode"] is None                        # source lang
+    # Autobuild-only language: no buildless extractor exists, the DB
+    # create executes the repo's build — mode must be declared
+    # autobuild so _build_db takes its fail-closed sandboxed route
+    # (mode=None would run the untrusted build unsandboxed).
+    cvefix_bridge.synthesize_one(_pair(lang="Go", fix="fg"), work_dir=tmp_path / "w4",
+                                 proposer=lambda *a: "", status="ok")
+    assert seen["mode"] == "autobuild"
 
 
 def test_synthesize_one_happy_path_returns_sound_query(monkeypatch, tmp_path: Path):

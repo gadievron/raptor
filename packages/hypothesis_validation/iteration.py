@@ -19,7 +19,10 @@ ruled on. The guard itself checks `resolved_fraction` (resolved items
 over total items): the runner passes cumulative evidence per step, so
 an absolute count can only grow while the fraction rises exactly when
 a round contributes conclusive evidence. Strict progress means the
-fraction must go up between steps. The metric is deliberately coarse
+fraction must go up between steps — except at saturation (both
+fractions 1.0), where every round is already conclusive and the
+iteration budget, not this guard, bounds the loop (see
+``must_progress``). The metric is deliberately coarse
 for now; a future revision can swap it for a real entropy measure once
 the evidence schema stabilises.
 """
@@ -94,14 +97,23 @@ def must_progress(prev: IterationStep, curr: IterationStep) -> None:
     Two conditions, both required:
       1. The hypothesis itself must change (no rerunning the same claim
          and calling it a refinement).
-      2. The resolved fraction of the evidence must strictly increase.
-         Pre-fix this compared absolute ``uncertainty`` counts — but
-         the runner passes cumulative evidence (each round's step is a
-         superset of the previous round's), so the unresolved count
-         could never go down and the guard stalled every loop at round
-         two regardless of real progress. The fraction is stable under
-         superset growth: it rises iff the new round's evidence is
-         more conclusive than the running average.
+      2. The resolved fraction of the evidence must strictly increase,
+         except at saturation (see below). Pre-fix this compared
+         absolute ``uncertainty`` counts — but the runner passes
+         cumulative evidence (each round's step is a superset of the
+         previous round's), so the unresolved count could never go
+         down and the guard stalled every loop at round two regardless
+         of real progress. The fraction is stable under superset
+         growth: it rises iff the new round's evidence is more
+         conclusive than the running average.
+
+    Saturation exception: when both fractions are 1.0, every round so
+    far — including the fresh one — contributed conclusive evidence, so
+    there is no uncertainty left to decrease and no self-critique spiral
+    to guard against. Treating equal-at-1.0 as a stall would cap the
+    refinement of matches-present-but-LLM-inconclusive hypotheses at two
+    tool runs regardless of ``max_iterations``; the iteration budget is
+    the loop's terminator in that regime.
 
     Raises IterationStalled with a specific reason on either failure.
     The caller is responsible for halting the loop on the exception;
@@ -112,6 +124,8 @@ def must_progress(prev: IterationStep, curr: IterationStep) -> None:
         raise IterationStalled(msg)
     prev_f = resolved_fraction(prev)
     curr_f = resolved_fraction(curr)
+    if prev_f == 1.0 and curr_f == 1.0:
+        return
     if curr_f <= prev_f:
         msg = (
             f"uncertainty did not strictly decrease "

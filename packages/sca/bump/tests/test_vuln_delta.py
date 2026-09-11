@@ -9,8 +9,12 @@ from __future__ import annotations
 
 from typing import Dict, List
 
+import pytest
 
-from packages.sca.bump.vuln_delta import evaluate_bump_vulns
+from packages.sca.bump.vuln_delta import (
+    VulnDeltaDegraded,
+    evaluate_bump_vulns,
+)
 from packages.sca.models import (
     AffectedRange, Advisory, CVSSScore,
 )
@@ -130,17 +134,120 @@ def test_mixed_set_emits_only_the_new() -> None:
     assert findings[0].advisories[0].osv_id == "GHSA-target-B"
 
 
-def test_osv_query_failure_returns_empty_no_raise() -> None:
-    """OSV-side failure (network / 5xx / timeout) returns []
-    without raising. Vuln-delta is enrichment, not load-bearing —
-    the bumper still has the supply-chain verdict path."""
+def test_osv_query_failure_raises_degraded() -> None:
+    """OSV-side failure (network / 5xx / timeout) raises
+    VulnDeltaDegraded rather than returning []. An empty delta is
+    indistinguishable from a genuinely-clean bump, so a swallowed
+    failure would fail OPEN — the new-CVE gate silently disabled
+    while --apply lands the bump as Clean. The orchestrator maps
+    the exception to a Review-floored verdict."""
     class _BrokenOsv:
         def query_batch(self, deps):
             raise RuntimeError("OSV unreachable")
+    with pytest.raises(VulnDeltaDegraded):
+        evaluate_bump_vulns(
+            ecosystem="PyPI", name="foo",
+            current_version="1.0", target_version="2.0",
+            osv_client=_BrokenOsv(),
+        )
+
+
+class _DegradedOsv:
+    """Stub with the real client's transient-failure telemetry:
+    ``failed_slots`` names which query slots (by version) return no
+    advisories AND advance ``failed_lookups`` / ``failed_dep_keys``."""
+
+    def __init__(self, failed_versions, advisories_for=None):
+        self._failed_versions = set(failed_versions)
+        self._adv = advisories_for or {}
+        self.failed_lookups = 0
+        self.failed_dep_keys: list = []
+
+    def query_batch(self, deps):
+        results = []
+        for dep in deps:
+            if dep.version in self._failed_versions:
+                self.failed_lookups += 1
+                self.failed_dep_keys.append(dep.key())
+                results.append(OsvResult(dep.key(), []))
+                continue
+            results.append(OsvResult(
+                dep.key(),
+                self._adv.get((dep.ecosystem, dep.name, dep.version), []),
+            ))
+        return results
+
+
+def test_failed_target_slot_raises_degraded_not_clean() -> None:
+    """Transient failure on the TARGET slot: the empty advisories
+    list is a failure artifact, not a clean bill — silently
+    diffing it would report zero new CVEs (fail-open auto-apply)."""
+    osv = _DegradedOsv(
+        failed_versions={"2.0"},
+        advisories_for={("PyPI", "foo", "1.0"): []},
+    )
+    with pytest.raises(VulnDeltaDegraded) as exc_info:
+        evaluate_bump_vulns(
+            ecosystem="PyPI", name="foo",
+            current_version="1.0", target_version="2.0",
+            osv_client=osv,
+        )
+    assert "target" in str(exc_info.value)
+
+
+def test_failed_current_slot_raises_degraded_not_false_findings() -> None:
+    """Transient failure on the CURRENT slot: every target advisory
+    would look 'newly introduced' (all-false new-CVE findings)."""
+    osv = _DegradedOsv(
+        failed_versions={"1.0"},
+        advisories_for={
+            ("PyPI", "foo", "2.0"): [_adv("GHSA-preexisting", "high")],
+        },
+    )
+    with pytest.raises(VulnDeltaDegraded) as exc_info:
+        evaluate_bump_vulns(
+            ecosystem="PyPI", name="foo",
+            current_version="1.0", target_version="2.0",
+            osv_client=osv,
+        )
+    assert "current" in str(exc_info.value)
+
+
+def test_healthy_lookups_with_telemetry_attributes_still_compute_delta() -> None:
+    """Legit path unchanged: a client CARRYING the telemetry
+    attributes that doesn't fail computes the delta normally —
+    the degradation check only fires when the counters advance."""
+    osv = _DegradedOsv(
+        failed_versions=set(),
+        advisories_for={
+            ("PyPI", "foo", "1.0"): [],
+            ("PyPI", "foo", "2.0"): [_adv("GHSA-new-bad", "critical")],
+        },
+    )
     findings = evaluate_bump_vulns(
         ecosystem="PyPI", name="foo",
         current_version="1.0", target_version="2.0",
-        osv_client=_BrokenOsv(),
+        osv_client=osv,
+    )
+    assert len(findings) == 1
+    assert findings[0].advisories[0].osv_id == "GHSA-new-bad"
+
+
+def test_preexisting_failed_lookups_do_not_flag_this_call() -> None:
+    """The telemetry is cumulative across the client's lifetime;
+    failures from EARLIER calls must not mark this call degraded."""
+    osv = _DegradedOsv(
+        failed_versions=set(),
+        advisories_for={("PyPI", "foo", "1.0"): [],
+                        ("PyPI", "foo", "2.0"): []},
+    )
+    # Simulate earlier-call telemetry.
+    osv.failed_lookups = 7
+    osv.failed_dep_keys = ["npm:other@1.0"]
+    findings = evaluate_bump_vulns(
+        ecosystem="PyPI", name="foo",
+        current_version="1.0", target_version="2.0",
+        osv_client=osv,
     )
     assert findings == []
 

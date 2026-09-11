@@ -31,11 +31,12 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
+import urllib.parse
 import zipfile
 from dataclasses import dataclass
 from io import BytesIO
 
-from core.zip import extract_files_from_zip
+from core.zip import ZipEntryCountExceeded, ZipOpenError, extract_files_from_zip
 from .osv import _canonical_name, parse_osv_record
 from .versions import VersionError, in_range as _in_range
 from typing import TYPE_CHECKING
@@ -61,6 +62,13 @@ _DOWNLOAD_CAP = 200 * 1024 * 1024
 
 # OSV's bucket spells some ecosystems differently from how our
 # Dependency.ecosystem field does. Map our value → bucket folder.
+# Release-suffixed distro ecosystems ("Debian:11", "Alpine:v3.18",
+# "Ubuntu:22.04") are normalised to their base name before this
+# lookup (see ``_storage_ecosystem``) — OSV publishes a combined
+# base-name dump for each distro that covers every release stream.
+# ``None`` = deliberately no OSV coverage (silent skip); a MISSING
+# key = an ecosystem this map hasn't been taught about, which logs a
+# visible warning instead of silently returning zero advisories.
 _BUCKET_NAME = {
     "PyPI": "PyPI",
     "npm": "npm",
@@ -72,9 +80,29 @@ _BUCKET_NAME = {
     "Packagist": "Packagist",
     "Debian": "Debian",
     "Alpine": "Alpine",
+    "Ubuntu": "Ubuntu",
+    "Red Hat": "Red Hat",
+    "GitHub Actions": "GitHub Actions",
+    "ConanCenter": "ConanCenter",
     # No OSV coverage:
     "Homebrew": None,
+    "vcpkg": None,       # OSV has no vcpkg ecosystem (C/C++ deps go
+                         # through the online OSS-Fuzz fallback only)
+    "GitHub": None,      # .gitmodules / FetchContent rows — no OSV
+                         # index; online path uses the OSS-Fuzz fallback
 }
+
+
+def _storage_ecosystem(ecosystem: str) -> str:
+    """DB / bucket key for an ecosystem string.
+
+    Distro ecosystems arrive release-suffixed on image-derived rows
+    ("Alpine:v3.18"); advisories are ingested from the distro's base
+    bucket and stored under the base name. Release narrowing happens
+    at match time against each record's per-block ecosystem.
+    """
+    from .ecosystems import distro_base
+    return distro_base(ecosystem) or ecosystem
 
 
 @dataclass
@@ -113,8 +141,14 @@ class OsvOfflineDB:
         """
         self._init_db()
         out: list[_IngestStats] = []
-        for eco in sorted(set(ecosystems)):
-            bucket = _BUCKET_NAME.get(eco)
+        for eco in sorted({_storage_ecosystem(e) for e in ecosystems}):
+            if eco not in _BUCKET_NAME:
+                logger.warning(
+                    "sca.osv_offline: unsupported ecosystem %r — no "
+                    "known OSV bucket mapping; offline advisories "
+                    "unavailable for its deps", eco)
+                continue
+            bucket = _BUCKET_NAME[eco]
             if bucket is None:
                 logger.debug(
                     "sca.osv_offline: no OSV bucket for ecosystem %r", eco)
@@ -198,12 +232,16 @@ class OsvOfflineDB:
 
     def _lookup_rows(self, ecosystem: str, name: str) -> list[str]:
         assert self._conn is not None
+        # Rows are stored under the base (release-suffix-free)
+        # ecosystem; a "Alpine:v3.18" query reads the "Alpine" rows
+        # and release narrowing happens in the version-match step.
+        storage_eco = _storage_ecosystem(ecosystem)
         # Per-ecosystem name canonicalisation for matching.
-        canon = _canonical_name(ecosystem, name)
+        canon = _canonical_name(storage_eco, name)
         cur = self._conn.execute(
             "SELECT json FROM advisories "
             "WHERE ecosystem = ? AND package = ?",
-            (ecosystem, canon),
+            (storage_eco, canon),
         )
         return [row[0] for row in cur.fetchall()]
 
@@ -216,7 +254,9 @@ class OsvOfflineDB:
                 ecosystem,
             )
             return None
-        url = _OSV_DUMP_URL.format(eco=bucket)
+        # Bucket folder names can contain spaces ("GitHub Actions",
+        # "Red Hat") — percent-encode the path segment.
+        url = _OSV_DUMP_URL.format(eco=urllib.parse.quote(bucket, safe=""))
         t0 = time.monotonic()
         try:
             blob = self._http.get_bytes(url, max_bytes=_DOWNLOAD_CAP)
@@ -241,8 +281,6 @@ class OsvOfflineDB:
         # the operator-visible ``skipped`` metric meaningful, we
         # separately count ``.json`` entries in the archive and
         # attribute the (expected - returned) delta to safety drops.
-        # An IOError opening the zip falls through to the substrate
-        # returning {}, which triggers the "no advisories" branch.
         expected_json_entries = 0
         try:
             with zipfile.ZipFile(BytesIO(blob)) as _zf_count:
@@ -253,16 +291,33 @@ class OsvOfflineDB:
             logger.warning(
                 "sca.osv_offline: invalid zip for %s: %s", ecosystem, e)
             return None
-        files = extract_files_from_zip(
-            blob,
-            selector=lambda info: (
-                info.filename if info.filename.endswith(".json") else None
-            ),
-        )
-        if not files and expected_json_entries == 0:
+        # FAIL CLOSED on the substrate's typed refusals (corrupt zip,
+        # over-entry-cap / bomb shape): abort ingest BEFORE the
+        # DELETE below so a refused download can never wipe an
+        # ecosystem's advisories and stamp a fresh ingest_meta —
+        # existing cached advisories stay live until a good download
+        # ingests.
+        try:
+            files = extract_files_from_zip(
+                blob,
+                selector=lambda info: (
+                    info.filename if info.filename.endswith(".json") else None
+                ),
+            )
+        except (ZipOpenError, ZipEntryCountExceeded) as e:
+            logger.warning(
+                "sca.osv_offline: refusing zip for %s (%s); "
+                "keeping existing advisories", ecosystem, e)
+            return None
+        if not files:
+            # Covers both a genuinely advisory-free archive
+            # (expected == 0) and every-entry-dropped-by-safety
+            # (expected > 0): either way there is nothing to ingest,
+            # so keep the existing advisories instead of wiping.
             logger.warning(
                 "sca.osv_offline: no advisories extracted for %s "
-                "(zip empty / invalid / over entry cap)", ecosystem,
+                "(%d .json entries in archive); keeping existing "
+                "advisories", ecosystem, expected_json_entries,
             )
             return None
         skipped += expected_json_entries - len(files)
@@ -324,15 +379,20 @@ class OsvOfflineDB:
                 continue
             # OSV uses the bucket-spelling for ecosystem (e.g.,
             # ``crates.io``); normalise back to our canonical Cargo
-            # / etc. when we have a reverse mapping.
-            our_eco = _our_ecosystem(blk_eco)
-            if our_eco != ecosystem and our_eco not in (None, ecosystem):
-                # Multi-ecosystem advisory — we'd index it under the
+            # / etc. when we have a reverse mapping. Distro blocks
+            # carry release-suffixed ecosystems ("Debian:11",
+            # "Alpine:v3.18") — compare on the base identifier, or a
+            # distro bucket ingests ZERO advisories. Rows are stored
+            # under the base name; per-release narrowing happens at
+            # query time in ``_record_matches_version``, which sees
+            # the block-level ecosystem in the stored JSON.
+            our_eco = _our_ecosystem(blk_eco.split(":", 1)[0])
+            if our_eco != ecosystem:
+                # Multi-ecosystem advisory — we index it under the
                 # bucket we're currently ingesting only.
                 continue
-            target_eco = ecosystem
-            canon = _canonical_name(target_eco, blk_name)
-            rows.append((osv_id, target_eco, canon, raw_json))
+            canon = _canonical_name(ecosystem, blk_name)
+            rows.append((osv_id, ecosystem, canon, raw_json))
         if not rows:
             return 0
         assert self._conn is not None
@@ -362,7 +422,18 @@ def _record_matches_version(
     name: str | None = None,
 ) -> bool:
     """True if ``version`` falls inside any of the record's affected
-    ranges for this ecosystem (and package ``name`` when given)."""
+    ranges for this ecosystem (and package ``name`` when given).
+
+    Ecosystem comparison is on the base identifier — OSV suffixes
+    release streams onto distro ecosystems ("Debian:11"), mirroring
+    the online client's handling. When BOTH the query ecosystem and
+    the affected block carry a release suffix, the suffixes must
+    match (a "Debian:11"-only advisory does not apply to a
+    "Debian:12" dep); when either side is release-agnostic, the base
+    match suffices — the recall-safe reading.
+    """
+    query_base, _, query_release = ecosystem.partition(":")
+    query_base = _our_ecosystem(query_base)
     affected = record.get("affected") or []
     for blk in affected:
         if not isinstance(blk, dict):
@@ -370,22 +441,35 @@ def _record_matches_version(
         pkg = blk.get("package") or {}
         if not isinstance(pkg, dict):
             continue
-        blk_eco = _our_ecosystem(pkg.get("ecosystem", ""))
-        if blk_eco != ecosystem:
+        blk_eco_raw = pkg.get("ecosystem")
+        if not isinstance(blk_eco_raw, str):
+            continue
+        blk_base, _, blk_release = blk_eco_raw.partition(":")
+        if _our_ecosystem(blk_base) != query_base:
+            continue
+        if query_release and blk_release and blk_release != query_release:
             continue
         if name is not None:
             blk_name = pkg.get("name")
             if isinstance(blk_name, str):
-                if _canonical_name(ecosystem, blk_name) != _canonical_name(ecosystem, name):
+                if _canonical_name(query_base, blk_name) != _canonical_name(query_base, name):
                     continue
         for rng in blk.get("ranges") or []:
             if not isinstance(rng, dict):
+                continue
+            if rng.get("type") == "GIT":
+                # GIT range events are commit SHAs — not version-
+                # comparable (feeding them through a version
+                # comparator yields arbitrary verdicts; some
+                # comparators accept hex strings without raising).
+                # Only ECOSYSTEM / SEMVER ranges carry orderable
+                # versions; mirrors the online client's skip.
                 continue
             events = rng.get("events") or []
             if not isinstance(events, list):
                 continue
             try:
-                if _in_range(ecosystem, version, events):
+                if _in_range(query_base, version, events):
                     return True
             except VersionError:
                 continue

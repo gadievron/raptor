@@ -116,7 +116,6 @@ def main() -> int:
             )
             return 1
         client = get_client(config=LLMConfig(primary_model=mc, fallback_models=[]))
-        _ensure_llm_dispatcher(client, "raptor-study-run")
     else:
         client = get_client()
 
@@ -127,6 +126,11 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+
+    # Both client paths need the route bootstrap: the default config
+    # can resolve to a dispatcher-only (Bedrock-routed) primary model
+    # just as easily as an explicit --model pin.
+    _ensure_llm_dispatcher(client, "raptor-study-run")
 
     _progress("start", f"Reading {study_list}")
     model = run_study(

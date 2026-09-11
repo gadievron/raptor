@@ -216,17 +216,42 @@ def test_index_file_returns_blocks(tmp_path):
     assert blocks[0].directive == "ifdef"
 
 
-def test_index_file_caches_across_calls(tmp_path):
-    """Multiple lookups against the same file path hit the cache —
-    we verify by mutating file contents and confirming the cached
-    parse persists until ``clear_cache``."""
+def test_index_file_caches_unchanged_and_invalidates_on_edit(tmp_path):
+    """The cache key includes the file's stat identity: repeated
+    lookups on an UNCHANGED file are served from cache, while an
+    edited file re-parses automatically — no ``clear_cache`` needed.
+    A path-only key would keep serving pre-edit conditional blocks
+    to fresh analyze() runs in long-lived processes."""
+    from packages.source_intel.conditional import _index_file_stat
+
     f = tmp_path / "x.c"
     f.write_text("#ifdef A\nint x;\n#endif\n")
-    first = _index_file(str(f))
-    # Mutate file under the cache.
-    f.write_text("#ifdef B\nint y;\n#endif\n")
-    cached = _index_file(str(f))
-    assert cached == first  # same tuple (cached)
     clear_cache()
+    first = _index_file(str(f))
+    assert first[0].condition == "A"
+    hits_before = _index_file_stat.cache_info().hits
+    again = _index_file(str(f))
+    assert again == first
+    assert _index_file_stat.cache_info().hits == hits_before + 1
+
+    # Mutate the file: the stat identity changes, so the lookup must
+    # re-parse and surface the NEW condition without an explicit
+    # cache clear.
+    import os
+    f.write_text("#ifdef B\nint y;\n#endif\n")
+    os.utime(f, ns=(1, 1))  # force a distinct stat identity even on
+    #                         coarse-mtime filesystems
     refreshed = _index_file(str(f))
     assert refreshed[0].condition == "B"
+
+
+def test_clear_cache_still_drops_entries(tmp_path):
+    """``clear_cache`` remains the explicit whole-cache reset."""
+    from packages.source_intel.conditional import _index_file_stat
+
+    f = tmp_path / "x.c"
+    f.write_text("#ifdef A\nint x;\n#endif\n")
+    _index_file(str(f))
+    assert _index_file_stat.cache_info().currsize >= 1
+    clear_cache()
+    assert _index_file_stat.cache_info().currsize == 0

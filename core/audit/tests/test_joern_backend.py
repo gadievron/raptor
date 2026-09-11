@@ -173,3 +173,31 @@ class TestCurrentContentHash:
 
         imported = import_sibling_joern_flows(out_dir, target_path=target)
         assert imported == _FLOWS
+
+
+class TestSiblingRunDirsWrongTypedManifest:
+    def test_non_string_target_path_skips_not_raises(self, tmp_path):
+        # target_path: 123 is valid JSON in a dict-shaped manifest —
+        # Path(123) raised TypeError past the OSError-only handler and
+        # aborted discovery at the unwrapped orchestrator call site.
+        import json
+
+        from core.audit.joern_backend import sibling_run_dirs
+
+        parent = tmp_path / "out"
+        target = tmp_path / "src"
+        target.mkdir()
+        me = parent / "run-me"
+        good = parent / "run-good"
+        bad = parent / "run-bad"
+        for d in (me, good, bad):
+            d.mkdir(parents=True)
+        (good / ".raptor-run.json").write_text(
+            json.dumps({"target_path": str(target)}),
+        )
+        (bad / ".raptor-run.json").write_text(
+            json.dumps({"target_path": 123}),
+        )
+        dirs = sibling_run_dirs(me, target_path=target)
+        assert good in dirs
+        assert bad not in dirs

@@ -373,3 +373,157 @@ def test_blocked_scheme_classifies_not_found() -> None:
 def test_loopback_url_classifies_not_found() -> None:
     r: FetchResult = web_fetch(url="http://127.0.0.1/x")
     assert r.reason_class == "not_found"
+
+
+# ── caller-side redirect following ────────────────────────────────────────
+
+
+def test_fetch_follows_redirect_to_final_body() -> None:
+    """The pinned transport never follows redirects; web_fetch's own hop
+    loop must, re-running the SSRF guards per hop, so a renamed GitHub
+    repo's 301 lands on the moved content instead of a permanent
+    not_found."""
+    fake = _FakeClient([
+        _resp(status=301, headers={"location": "https://example.com/moved"},
+              body=b""),
+        _resp(status=200, body=b"moved content",
+              url="https://example.com/moved"),
+    ])
+    r = _fetch(fake)
+    assert r.ok is True
+    assert r.status == 200
+    assert r.body == "moved content"
+    assert fake.calls[1]["url"] == "https://example.com/moved"
+
+
+def test_fetch_redirect_relative_location_resolved() -> None:
+    fake = _FakeClient([
+        _resp(status=302, headers={"location": "/other"}, body=b""),
+        _resp(status=200, body=b"ok", url="https://example.com/other"),
+    ])
+    r = _fetch(fake)
+    assert r.ok is True
+    assert fake.calls[1]["url"] == "https://example.com/other"
+
+
+def test_fetch_redirect_hop_to_private_target_rejected() -> None:
+    """Each hop re-enters the guard chain — a redirect into loopback or
+    private space is refused before any request for that hop is made."""
+    fake = _FakeClient([
+        _resp(status=302,
+              headers={"location": "http://127.0.0.1:8080/internal"},
+              body=b""),
+    ])
+    r = _fetch(fake)
+    assert r.ok is False
+    assert "SSRF" in r.reason or "local/private" in r.reason
+    assert len(fake.calls) == 1  # the private hop was never requested
+
+
+def test_fetch_redirect_without_location_reports_redirect_not_not_found() -> None:
+    fake = _FakeClient([_resp(status=301, body=b"")])
+    r = _fetch(fake)
+    assert r.ok is False
+    assert "redirect" in r.reason
+    assert r.reason_class != "not_found"
+
+
+def test_fetch_redirect_loop_bounded() -> None:
+    hops = [
+        _resp(status=302, headers={"location": f"https://example.com/{i}"},
+              body=b"")
+        for i in range(10)
+    ]
+    fake = _FakeClient(hops)
+    r = _fetch(fake)
+    assert r.ok is False
+    assert "redirect limit" in r.reason
+    assert len(fake.calls) == wf._MAX_REDIRECTS + 1
+
+
+# ── oversize-response status honesty ──────────────────────────────────────
+
+
+def test_fetch_oversize_error_page_reports_real_status() -> None:
+    """A >max_bytes 429 page must not fabricate ok=True/200 — consumers'
+    rate-limit budgets and cooldowns key on the status. The status is
+    recovered via a HEAD probe when the size-cap abort didn't carry it."""
+    fake = _FakeClient(
+        [SizeLimitExceeded("body exceeded 8 bytes"),
+         _resp(status=429, body=b"")],  # the HEAD status probe
+    )
+    r = _fetch(fake, max_bytes=8)
+    assert r.ok is False
+    assert r.status == 429
+    assert r.reason_class == "rate_limited"
+    assert r.truncated is True
+    assert fake.calls[1]["method"] == "HEAD"
+
+
+def test_fetch_oversize_2xx_still_returns_truncated_body() -> None:
+    """Companion direction: an oversize 200 keeps the recovered body."""
+    fake = _FakeClient(
+        [SizeLimitExceeded("body exceeded 8 bytes"),
+         _resp(status=200, body=b"")],  # HEAD probe confirms 2xx
+        stream_chunks=[b"12345678", b"OVERFLOW"],
+        stream_exc=SizeLimitExceeded("cap"),
+    )
+    r = _fetch(fake, max_bytes=8)
+    assert r.ok is True
+    assert r.truncated is True
+    assert r.body == "12345678"
+
+
+# ── DNS pin: the request connects to the vetted addresses ─────────────────
+
+
+def test_request_resolution_is_pinned_to_vetted_addresses() -> None:
+    """The guard's getaddrinfo answer must be the one the transport
+    connects to. Without the pin, a low-TTL attacker DNS can answer a
+    public IP at check time and a private one at connect time — the
+    classic resolve/connect TOCTOU."""
+    answers = [list(PUBLIC_ADDRINFO)]  # first (guard) resolve: public
+
+    def flip_resolver(host, port, *a, **kw):  # noqa: ANN001, ANN002, ANN003
+        # every resolve after the guard's answers private (rebinding)
+        return answers.pop(0) if answers else list(PRIVATE_ADDRINFO)
+
+    seen_during_request: list[Any] = []
+
+    class PinProbingClient:
+        def request(self, method, url, **kw):  # noqa: ANN001, ANN003
+            # What a transport-level re-resolve would connect to NOW.
+            seen_during_request.append(
+                socket.getaddrinfo("example.com", 443)
+            )
+            return Response(
+                status=200,
+                headers={"content-type": "text/plain"},
+                body=b"ok",
+                url=url,
+            )
+
+    # The pin wrapper is installed at module import; only its passthrough
+    # target is faked here, so no real DNS is ever consulted.
+    with (
+        patch.object(wf, "_client", lambda: PinProbingClient()),
+        patch.object(wf, "_original_getaddrinfo", side_effect=flip_resolver),
+    ):
+        r = web_fetch(url="https://example.com/x")
+        # Outside the request, the (rebinding) resolver is visible
+        # again — the pin is scoped to the fetch, not process-wide.
+        after_fetch = socket.getaddrinfo("example.com", 443)
+
+    assert r.ok is True  # clean-vetting hostname still fetches
+    assert seen_during_request == [list(PUBLIC_ADDRINFO)]  # pinned answer
+    assert after_fetch == list(PRIVATE_ADDRINFO)
+
+
+def test_rebinding_hostname_blocked_at_guard_time_still_blocked() -> None:
+    """Companion direction: a hostname whose FIRST resolve is already
+    private never reaches the transport at all."""
+    fake = _FakeClient([_resp()])
+    r = _fetch(fake, addrinfo=PRIVATE_ADDRINFO)
+    assert r.ok is False
+    assert "SSRF" in r.reason
+    assert not fake.calls

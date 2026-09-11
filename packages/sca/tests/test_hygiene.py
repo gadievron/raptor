@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from packages.sca.hygiene import evaluate
+from packages.sca.hygiene import check_lockfile_missing, evaluate
 from packages.sca.models import (
     Confidence,
     Dependency,
@@ -290,3 +290,31 @@ def test_manifest_role_helper_handles_common_filenames():
     assert _manifest_role(Path("requirements-extras.txt")) == "optional"
     # Bare requirements-*.txt that's not main/dev/test → optional.
     assert _manifest_role(Path("requirements-prod.txt")) == "optional"
+
+
+def test_lockfile_missing_silenced_by_npm_shrinkwrap_sibling(
+    tmp_path: Path,
+) -> None:
+    """npm's shrinkwrap lockfile is named ``npm-shrinkwrap.json`` — its
+    physical presence beside package.json must satisfy the expectation."""
+    pkg = tmp_path / "package.json"
+    pkg.write_text("{}")
+    (tmp_path / "npm-shrinkwrap.json").write_text("{}")
+    findings = check_lockfile_missing(
+        [_manifest(pkg, "npm")], [_dep("lodash", path=pkg)],
+    )
+    assert all(f.kind != "lockfile_missing" for f in findings)
+
+
+def test_lockfile_missing_not_silenced_by_bare_shrinkwrap_name(
+    tmp_path: Path,
+) -> None:
+    """A bare ``shrinkwrap.json`` is not an npm toolchain file and must
+    NOT satisfy the lockfile expectation."""
+    pkg = tmp_path / "package.json"
+    pkg.write_text("{}")
+    (tmp_path / "shrinkwrap.json").write_text("{}")
+    findings = check_lockfile_missing(
+        [_manifest(pkg, "npm")], [_dep("lodash", path=pkg)],
+    )
+    assert any(f.kind == "lockfile_missing" for f in findings)

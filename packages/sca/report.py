@@ -224,7 +224,13 @@ def _render_license_section(findings) -> str:
     lines = ["## License findings\n"]
     for f in findings:
         dep = f.dependency
-        spdx = f.spdx or "(none)"
+        # Registry-sourced SPDX strings are untrusted (see module
+        # header): defang control bytes / autofetch markup and
+        # neutralise backticks so the value can't escape its code
+        # span in the rendered report.
+        spdx = sanitise_string(
+            f.spdx or "(none)", max_chars=120,
+        ).replace("`", "'")
         kind_label = {
             "license_denied": "Denied",
             "license_warned": "Warned",
@@ -232,11 +238,15 @@ def _render_license_section(findings) -> str:
             "license_incompatible": "Incompatible",
         }.get(f.kind, f.kind)
         lines.append(
-            f"### {kind_label} — {dep.ecosystem}:{dep.name}"
-            f"@{dep.version or '*'}"
+            f"### {kind_label} — "
+            f"{dep.ecosystem}:{escape_nonprintable(dep.name)}"
+            f"@{escape_nonprintable(dep.version or '*')}"
         )
         lines.append(f"- License: `{spdx}`")
-        lines.append(f"- Severity: **{f.severity}**")
+        lines.append(
+            f"- Severity: "
+            f"**{_SEV_LABEL.get(f.severity, f.severity.title())}**"
+        )
         lines.append(
             f"- Detail: {sanitise_string(f.detail, max_chars=_DETAIL_MAX_CHARS)}"
         )
@@ -327,7 +337,14 @@ def _render_summary(
         "| Severity | Count |",
         "|---|---|",
     ]
-    rows.extend(f"| {_SEV_LABEL[sev]} | {severity_counts[sev]} |" for sev in ("critical", "high", "medium", "low", "info") if severity_counts.get(sev))
+    # Include "none" (CVSS 0.0) — its findings ARE counted above, so
+    # omitting the row rendered a header-only table for all-none
+    # inputs. Matches the HTML report and the re-render path.
+    rows.extend(
+        f"| {_SEV_LABEL[sev]} | {severity_counts[sev]} |"
+        for sev in ("critical", "high", "medium", "low", "info", "none")
+        if severity_counts.get(sev)
+    )
     if not any(severity_counts.values()):
         rows.append("| (none) | 0 |")
 
@@ -684,7 +701,12 @@ def _render_one_vuln(
                        f"{scope_part}; pin: {dep.pin_style.value}")
 
         reach_reason = f.reachability.confidence.reason
-        reach_line = (f"- Reachability: {f.reachability.verdict} "
+        # Human-facing label (matches the summary table); raw
+        # snake_case verdicts stay in findings.json for tooling.
+        reach_label = REACHABILITY_LABELS.get(
+            f.reachability.verdict, f.reachability.verdict,
+        )
+        reach_line = (f"- Reachability: {reach_label} "
                        f"(confidence {f.reachability.confidence.level}"
                        + (f" — {escape_nonprintable(reach_reason)}"
                           if reach_reason else "")

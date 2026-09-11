@@ -115,6 +115,51 @@ class TestImportValidateEvidence:
         result = import_validate_evidence(tmp_path, tmp_path / "target")
         assert not result.has_content
 
+    def test_bare_list_findings_json_imports(self, tmp_path):
+        # Resumed /validate dirs write findings.json as a BARE LIST.
+        # `.get` on it raised AttributeError, the caller swallowed it
+        # at debug, and every /validate verdict silently vanished.
+        (tmp_path / "findings.json").write_text(json.dumps([
+            {
+                "id": "FIND-001",
+                "function": "parse_header",
+                "file": "src/http.c",
+                "feasibility": {
+                    "verdict": "likely_exploitable",
+                    "chain_breaks": [],
+                },
+                "final_status": "exploitable",
+            },
+            "stray-string-entry",
+        ]))
+        result = import_validate_evidence(tmp_path, tmp_path / "target")
+        assert result.has_content
+        assert len(result.feasibility_verdicts) == 1
+
+    def test_malformed_field_shapes_read_absent_not_abort(
+        self, tmp_path,
+    ):
+        # LLM-written fields with the wrong type must read as absent
+        # evidence for that field, never abort the import.
+        (tmp_path / "findings.json").write_text(json.dumps({
+            "findings": [{
+                "id": "FIND-001",
+                "function": "parse_header",
+                "file": "src/http.c",
+                "feasibility": "likely",          # not a dict
+                "evidence_chain": "not-a-list",   # not a list
+                "ruling": {"status": "confirmed"},
+            }],
+            "metadata": "not-a-dict",
+        }))
+        result = import_validate_evidence(tmp_path, tmp_path / "target")
+        assert result.feasibility_verdicts == []
+        assert result.runtime_evidence == []
+        assert result.mitigation_profile is None
+        # The confirmed ruling still lands as history.
+        assert len(result.verdict_history) == 1
+        assert result.verdict_history[0]["verdict"] == "confirmed"
+
     def test_project_sibling(self, tmp_path):
         target = tmp_path / "src"
         target.mkdir()

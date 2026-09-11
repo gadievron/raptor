@@ -324,6 +324,33 @@ def test_rule_catches_lambda_fstring(tmp_path):
     assert vs[0].attr == "message"
 
 
+def test_rule_catches_method_call_wrapper(tmp_path):
+    """A bare method-call wrapper must NOT exempt the attribute —
+    pre-fix ``f"{finding.message.strip()}"`` returned no violation
+    (any ``.strip()``/``.upper()`` fully bypassed the lint, and the
+    sanitiser allowlist was dead code)."""
+    from core.security.prompt_envelope_audit import audit_file
+    src = tmp_path / "t.py"
+    src.write_text(
+        "def f(finding):\n"
+        "    return f'Analyse: {finding.message.strip()}'\n"
+    )
+    vs = audit_file(src)
+    assert any(v.attr == "message" for v in vs)
+
+
+def test_rule_skips_sanitised_then_method_call(tmp_path):
+    """Direction check: a KNOWN sanitiser terminates the walk, so
+    ``neutralize_tag_forgery(x.message).strip()`` stays exempt."""
+    from core.security.prompt_envelope_audit import audit_file
+    src = tmp_path / "t.py"
+    src.write_text(
+        "def f(finding):\n"
+        "    return f'{neutralize_tag_forgery(finding.message).strip()}'\n"
+    )
+    assert audit_file(src) == []
+
+
 def test_rule_catches_walrus_attr(tmp_path):
     """Walrus operator inside an interpolation — `_attr_name` now
     walks through `NamedExpr.value` to surface the attribute access.

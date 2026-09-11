@@ -233,6 +233,58 @@ def test_uncalled_method_downgrades(tmp_path):
     assert out[deps[0].key()].verdict == "not_function_reachable"
 
 
+def test_not_evaluated_base_downgrade_capped_at_medium(tmp_path):
+    """A ``not_evaluated`` base means zero import-level evidence and
+    the static import map is blind to instance-method dispatch (the
+    dominant Java call shape) — the downgrade must not claim high
+    confidence."""
+    target = _project(
+        tmp_path,
+        'package x;\n'
+        'import com.fasterxml.jackson.databind.ObjectMapper;\n'
+        'class Main { void m() { ObjectMapper.readTree("x"); } }\n',
+    )
+    deps = [_dep()]
+    out: Dict[str, Reachability] = {deps[0].key(): _not_evaluated()}
+    refine_maven_verdicts(
+        deps, out,
+        target=target,
+        maven_symbol_map={
+            deps[0].key(): [
+                "com.fasterxml.jackson.databind.ObjectMapper.readValue",
+            ],
+        },
+    )
+    r = out[deps[0].key()]
+    assert r.verdict == "not_function_reachable"
+    assert r.confidence.level == "medium"
+
+
+def test_imported_base_downgrade_keeps_high_confidence(tmp_path):
+    """An ``imported``-gated dep has positive import evidence — the
+    downgrade keeps its high confidence."""
+    target = _project(
+        tmp_path,
+        'package x;\n'
+        'import com.fasterxml.jackson.databind.ObjectMapper;\n'
+        'class Main { void m() { ObjectMapper.readTree("x"); } }\n',
+    )
+    deps = [_dep()]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_maven_verdicts(
+        deps, out,
+        target=target,
+        maven_symbol_map={
+            deps[0].key(): [
+                "com.fasterxml.jackson.databind.ObjectMapper.readValue",
+            ],
+        },
+    )
+    r = out[deps[0].key()]
+    assert r.verdict == "not_function_reachable"
+    assert r.confidence.level == "high"
+
+
 def test_imported_starting_verdict_also_promoted(tmp_path):
     """If a future Maven module-level scanner sets ``imported``, the
     function-level tier still fires from that gate."""

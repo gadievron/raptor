@@ -77,16 +77,21 @@ def parse(path: Path) -> list[Dependency]:
     deps: list[Dependency] = []
 
     # --- PEP 621 ---------------------------------------------------------
+    # Dependency arrays are only iterated when they really are lists.
+    # A malformed ``dependencies = "foo==1.0"`` (string, not array)
+    # would otherwise be iterated CHARACTER-WISE, and single letters
+    # are valid PEP 508 names — the parse emitted one phantom dep per
+    # character.
     project = data.get("project")
     if isinstance(project, dict):
-        for spec in project.get("dependencies", []) or []:
+        for spec in _str_items(project.get("dependencies")):
             d = _from_pep508(spec, path, scope="main")
             if d is not None:
                 deps.append(d)
         opt = project.get("optional-dependencies") or {}
         if isinstance(opt, dict):
             for items in opt.values():
-                for spec in items or []:
+                for spec in _str_items(items):
                     d = _from_pep508(spec, path, scope="optional")
                     if d is not None:
                         deps.append(d)
@@ -126,7 +131,7 @@ def parse(path: Path) -> list[Dependency]:
         pdm_dev = pdm.get("dev-dependencies") or {}
         if isinstance(pdm_dev, dict):
             for items in pdm_dev.values():
-                for spec in items or []:
+                for spec in _str_items(items):
                     d = _from_pep508(spec, path, scope="dev")
                     if d is not None:
                         deps.append(d)
@@ -134,12 +139,18 @@ def parse(path: Path) -> list[Dependency]:
     # --- build-system.requires ------------------------------------------
     build_system = data.get("build-system")
     if isinstance(build_system, dict):
-        for spec in build_system.get("requires", []) or []:
+        for spec in _str_items(build_system.get("requires")):
             d = _from_pep508(spec, path, scope="build")
             if d is not None:
                 deps.append(d)
 
     return deps
+
+
+def _str_items(value: Any) -> list[str]:
+    """Return the list when ``value`` is a list, else ``[]`` — never
+    iterate a scalar (a string would iterate char-wise)."""
+    return value if isinstance(value, list) else []
 
 
 def extract_project_license(path: Path) -> str | None:
@@ -320,20 +331,17 @@ def _from_poetry(
 
 
 def _classify_specifier(req: Requirement) -> tuple[PinStyle, str | None]:
-    items = list(req.specifier)
-    if req.url:
-        return PinStyle.UNKNOWN, None
-    if not items:
-        return PinStyle.WILDCARD, None
-    if len(items) == 1:
-        only = items[0]
-        op, ver = only.operator, only.version
-        if op in ("==", "==="):
-            return PinStyle.EXACT, ver
-        if op == "~=":
-            return PinStyle.TILDE, ver
-        return PinStyle.RANGE, ver
-    return PinStyle.RANGE, None
+    """Delegate to the requirements.txt parser's specifier logic.
+
+    Shared on purpose: a local copy had drifted — an ``==`` clause
+    among multiple specifiers (``foo>=1,==1.5,<2`` pins exactly 1.5)
+    was classified RANGE with no version, and a single ``!=`` / ``>``
+    / ``<`` clause recorded its operand as the installed version even
+    though the spec EXCLUDES it. One implementation for both surfaces
+    means they cannot drift again.
+    """
+    from .requirements import _classify_specifier as _shared
+    return _shared(req.specifier, req.url)
 
 
 def _classify_poetry_string(spec: str) -> tuple[PinStyle, str | None]:

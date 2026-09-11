@@ -1122,6 +1122,38 @@ class TestBugFixes:
 
         assert pipeline_rank == corpus_rank
 
+    def test_corpus_merge_replica_uses_named_rank_floor(self):
+        """run_corpus's merge replica must gate on _SUSPICIOUS_RANK,
+        not a rank literal: when STATUS_RANK was renumbered (dark
+        inserted below suspicious) a hardcoded ``>= 3`` silently came
+        to mean "dark", so the replica skipped the evidence gate for
+        (dark, suspicious) pairs the pipeline gates. The table-identity
+        test above cannot catch a stale literal."""
+        import inspect
+
+        from core.audit.corpus import run_corpus
+        from core.audit.corpus.run_corpus import _SUSPICIOUS_RANK
+        from core.audit.pipeline import (
+            _SUSPICIOUS_RANK as pipeline_floor,
+        )
+
+        assert _SUSPICIOUS_RANK == pipeline_floor
+        import re as _re
+
+        src = inspect.getsource(run_corpus._run_ensemble_audit)
+        assert "_SUSPICIOUS_RANK" in src
+        assert not _re.search(r"_rank >=\s*\d", src)
+
+    def test_dark_suspicious_pair_is_evidence_gated(self):
+        """Semantic pin of the drifted pair: with the current table a
+        (dark, suspicious) merge must run the evidence gate — an
+        evidence-less suspicious does NOT beat dark (conservative
+        merge), exactly what a dark-valued rank floor skipped."""
+        sec = _MockOutcome(status="dark")
+        bf = _MockOutcome(status="suspicious", evidence_tool="")
+        merged = _merge_outcomes([sec], [bf])
+        assert merged[0].status == "dark"
+
 
 # ── P2: CWE dispatch wiring ──────────────────────────────────────
 
@@ -1700,3 +1732,158 @@ class TestDisproofSignedness:
         )
         assert r.disproved is None
         assert "signed subtraction" in r.reasoning
+
+
+# ── STATUS_RANK "dark" entry ─────────────────────────────────
+
+
+class TestStatusRankDark:
+    """"dark" (claims present, no tool channel) is a live journal
+    status; unranked it collapsed to the error rank and a clean
+    sibling silently flattened the unresolved signal."""
+
+    def test_dark_is_ranked_between_dormant_and_suspicious(self):
+        from core.audit.pipeline import STATUS_RANK
+
+        assert (
+            STATUS_RANK["dormant"]
+            < STATUS_RANK["dark"]
+            < STATUS_RANK["suspicious"]
+        )
+
+    def test_dark_survives_merge_against_clean(self):
+        sec = _MockOutcome(status="dark")
+        bf = _MockOutcome(status="clean")
+        merged = _merge_outcomes([sec], [bf])
+        assert merged[0].status == "dark"
+
+    def test_dark_does_not_outrank_tool_backed_finding(self):
+        # Two-direction guard: ranking dark must not promote it over a
+        # verified finding — the fix fails toward inconclusive, never
+        # toward a stronger verdict.
+        sec = _MockOutcome(status="dark")
+        bf = _MockOutcome(status="finding", evidence_tool="semgrep:x")
+        merged = _merge_outcomes([sec], [bf])
+        assert merged[0].status == "finding"
+
+    def test_error_still_loses_to_clean(self):
+        sec = _MockOutcome(status="error")
+        bf = _MockOutcome(status="clean")
+        merged = _merge_outcomes([sec], [bf])
+        assert merged[0].status == "clean"
+
+
+# ── evidence-combine provenance order ────────────────────────
+
+
+class TestMergeEvidenceOrder:
+    def test_conservative_merge_keeps_winner_evidence_first(self):
+        # Conservative path (neither side has VERIFICATION evidence —
+        # joern:live is detection-role): the llm-claimed "suspicious"
+        # loses to the detection-backed clean. The surviving clean's
+        # receipt must lead — the old branch prefixed the DISCARDED
+        # side, so startswith classifiers read the loser's provenance.
+        sec = _MockOutcome(
+            status="clean", evidence_tool="joern:live",
+        )
+        bf = _MockOutcome(
+            status="suspicious", evidence_tool="llm-claimed:guess",
+        )
+        merged = _merge_outcomes([sec], [bf])
+        assert merged[0].status == "clean"
+        assert merged[0].evidence_tool.startswith("joern:live")
+
+    def test_no_malformed_plus_prefix_when_loser_has_no_evidence(self):
+        sec = _MockOutcome(status="clean", evidence_tool="joern:live")
+        bf = _MockOutcome(status="suspicious", evidence_tool="")
+        merged = _merge_outcomes([sec], [bf])
+        assert merged[0].status == "clean"
+        assert merged[0].evidence_tool == "joern:live"
+
+    def test_max_path_still_combines_winner_first(self):
+        sec = _MockOutcome(status="suspicious", evidence_tool="smt:sat")
+        bf = _MockOutcome(status="finding", evidence_tool="semgrep:y")
+        merged = _merge_outcomes([sec], [bf])
+        assert merged[0].status == "finding"
+        assert merged[0].evidence_tool == "semgrep:y+smt:sat"
+
+
+# ── dampening log goes through the hardened append ───────────
+
+
+class TestDampeningLogHardenedAppend:
+    def test_symlinked_trail_path_is_refused(self, tmp_path):
+        import os
+
+        from core.audit.pipeline import (
+            DAMPENING_LOG,
+            dampen_pileup_pre_export,
+        )
+
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        victim = tmp_path / "victim"
+        victim.write_text("")
+        os.symlink(victim, out_dir / DAMPENING_LOG)
+
+        # Four evidence-free same-file findings with distinct
+        # hypotheses trigger the file-level cap -> records to write.
+        outcomes = [
+            _MockOutcome(
+                function=f"f{i}", status="finding",
+                hypothesis=(
+                    f"completely distinct hypothesis number {i} about "
+                    + " ".join(f"token{i}{j}" for j in range(8))
+                ),
+            )
+            for i in range(4)
+        ]
+        result = type("R", (), {"outcomes": outcomes})()
+        config = type("C", (), {"out_dir": str(out_dir)})()
+        dampen_pileup_pre_export(result, config)  # must not raise
+        assert victim.read_text() == ""  # append not redirected
+
+
+# ── multi-model ensemble builds per-model chains ─────────────
+
+
+class TestEnsembleMultiModelPanel:
+    def test_review_fns_by_model_populated(self, monkeypatch):
+        import core.audit.pipeline as pl
+
+        made = []
+
+        def fake_make_review_fn(client, **kwargs):
+            made.append(kwargs.get("model_name"))
+            def fn(ctx, config):
+                return _MockOutcome()
+            return fn
+
+        captured = {}
+
+        def fake_run_orchestrator(config, review_fn, **kwargs):
+            captured["config"] = config
+            return type(
+                "R", (), {"outcomes": [], "total_duration_s": 0.0},
+            )()
+
+        monkeypatch.setattr(
+            "core.audit.llm_review.make_review_fn", fake_make_review_fn,
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator.run_orchestrator",
+            fake_run_orchestrator,
+        )
+        monkeypatch.setattr(
+            pl, "_make_llm_client",
+            lambda opts: (object(), ["model-a", "model-b"], "model-a"),
+        )
+
+        opts = pl.AuditPipelineOpts()
+        pl.run_ensemble_pipeline(opts)
+
+        fns = captured["config"].review_fns_by_model
+        assert set(fns) == {"model-a", "model-b"}
+        # Each panel member got its own sec+bf chain pinned to ITS
+        # model (primary chain + 2 per panel member).
+        assert made.count("model-b") == 2

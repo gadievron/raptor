@@ -40,6 +40,11 @@ log = logging.getLogger(__name__)
 OSV_BASE_URL = "https://api.osv.dev/v1"
 DEFAULT_TTL_SECONDS = 24 * 3600
 
+# querybatch pages are 1000 ids each; 20 pages = 20k advisories for a
+# single (package, version) query. Beyond that the slot is demoted to
+# the None error sentinel — refusing is honest, truncating is not.
+_MAX_QUERY_PAGES = 20
+
 
 class OsvClient:
     """Thin client over the OSV.dev v1 API. Construct one per run."""
@@ -117,13 +122,70 @@ class OsvClient:
             return [None for _ in queries]
 
         out: list[list[str] | None] = []
-        for slot in results:
+        pending: list[tuple[int, str]] = []  # (query index, next_page_token)
+        for i, slot in enumerate(results):
             if not isinstance(slot, dict):
-                out.append([])
+                # Malformed slot = "the lookup did not happen", per the
+                # slot contract above — never an authoritative empty
+                # answer that callers would cache as "no advisories".
+                out.append(None)
                 continue
-            ids: list[str] = [v["id"] for v in slot.get("vulns") or [] if isinstance(v, dict) and isinstance(v.get("id"), str)]
-            out.append(ids)
+            out.append(self._slot_ids(slot))
+            token = slot.get("next_page_token")
+            if isinstance(token, str) and token:
+                pending.append((i, token))
+
+        # Per-slot pagination: OSV truncates large answers and hands
+        # back a next_page_token per slot. A page-1-only ID list is not
+        # authoritative — returning it as complete silently hides every
+        # advisory beyond the first page — so follow continuations, and
+        # demote a slot to None (lookup failed) when its continuation
+        # fails or exceeds the page cap.
+        pages_followed = 0
+        while pending:
+            if pages_followed >= _MAX_QUERY_PAGES:
+                for i, _token in pending:
+                    out[i] = None
+                break
+            pages_followed += 1
+            cont_queries = [
+                {**dict(queries[i]), "page_token": token}
+                for i, token in pending
+            ]
+            try:
+                data = self._http.post_json(
+                    f"{OSV_BASE_URL}/querybatch", {"queries": cont_queries},
+                )
+            except HttpError as exc:
+                log.warning("osv: querybatch continuation failed: %s", exc)
+                data = None
+            cont_results = data.get("results") if isinstance(data, dict) else None
+            if not isinstance(cont_results, list) or len(cont_results) != len(pending):
+                for i, _token in pending:
+                    out[i] = None
+                break
+            next_pending: list[tuple[int, str]] = []
+            for (i, _token), slot in zip(pending, cont_results):
+                if not isinstance(slot, dict):
+                    out[i] = None
+                    continue
+                ids = out[i]
+                if isinstance(ids, list):
+                    ids.extend(self._slot_ids(slot))
+                token = slot.get("next_page_token")
+                if isinstance(token, str) and token:
+                    next_pending.append((i, token))
+            pending = next_pending
         return out
+
+    @staticmethod
+    def _slot_ids(slot: dict[str, Any]) -> list[str]:
+        """Extract string vuln IDs from one querybatch result slot."""
+        return [
+            v["id"]
+            for v in slot.get("vulns") or []
+            if isinstance(v, dict) and isinstance(v.get("id"), str)
+        ]
 
     # ------------------------------------------------------------------
     # Internals

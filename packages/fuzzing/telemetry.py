@@ -29,6 +29,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Minimum seconds between exec_stat events persisted to the JSONL
+# trail. AFL updates arrive once a minute (unthrottled in practice);
+# libFuzzer updates arrive per stderr line — the throttle bounds a
+# long campaign's trail to a few lines per minute either way.
+_EXEC_STAT_DISK_INTERVAL_S = 10.0
+
 
 # ---------------------------------------------------------------------------
 # Event types -- the schema for what a fuzzer can emit
@@ -216,6 +222,11 @@ class FuzzingTelemetry:
         }
         self._announced_first_path = False
         self._plateau_announced = False
+        # Wall-clock (time.time()) timestamp of the last exec_stat
+        # event persisted to the JSONL trail (0.0 = none yet, so the
+        # first one always lands). A backwards clock jump only delays
+        # one persistence by the interval.
+        self._last_exec_stat_disk = 0.0
 
     def __del__(self) -> None:
         if self._events_fp:
@@ -324,17 +335,29 @@ class FuzzingTelemetry:
                     payload={"seconds": int(since_last)},
                 ))
 
-            # Lightweight stat event
+            # Lightweight stat event. Persist a bounded progression to
+            # the JSONL trail: the module contract promises the
+            # executions/coverage progression on disk for post-mortem
+            # analysis, but libFuzzer callers invoke update_stats per
+            # stderr line — throttle disk writes to one exec_stat per
+            # interval instead of all-or-nothing.
+            now = time.time()
+            persist = (
+                now - self._last_exec_stat_disk
+                >= _EXEC_STAT_DISK_INTERVAL_S
+            )
+            if persist:
+                self._last_exec_stat_disk = now
             self._emit(FuzzEvent(
                 kind="exec_stat",
-                timestamp=time.time(),
+                timestamp=now,
                 payload={
                     "total_executions": self.stats.total_executions,
                     "executions_per_second": self.stats.executions_per_second,
                     "paths_found": self.stats.paths_found,
                     "corpus_size": self.stats.corpus_size,
                 },
-            ), force_disk=False)
+            ), force_disk=persist)
 
             self._reporter.render(self.stats)
 

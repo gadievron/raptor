@@ -82,13 +82,25 @@ def _checklist_sources(
     """Read the checklist's source files (bounded) for the extractors."""
     from core.audit.gaps import load_checklist
 
+    from core.paths import confine
+
     checklist = load_checklist(Path(out_dir))
     sources: dict[str, str] = {}
     for file_info in checklist.get("files", [])[:MAX_FILES]:
         rel = file_info.get("path", "")
         if not rel:
             continue
-        full = Path(target_path) / rel
+        # checklist paths are LLM-writable: containment-check the join
+        # (absolute values discard the base under ``/`` semantics,
+        # ``../`` values escape it) so a crafted entry cannot pull
+        # arbitrary host files into fuzz-dictionary token extraction.
+        full = confine(Path(target_path), rel)
+        if full is None:
+            logger.warning(
+                "fuzz-handoff: checklist path escapes target root, "
+                "skipping: %r", rel,
+            )
+            continue
         try:
             if not full.is_file() or full.stat().st_size > MAX_FILE_BYTES:
                 continue

@@ -10,11 +10,20 @@
 // a string after the copy.
 // @role: verification
 
+// First disjunction branch is an unstarred exception: a copy sized
+// strlen(src)+1 includes the terminator by construction, so the later
+// string use is safe. For snprintf, DST only counts as a string USE
+// from the third argument on — as the first argument it is the
+// DESTINATION being overwritten, not read (F/SZ pin the dest and
+// size slots).
 @strncpy_then_string_use@
-expression DST, SRC, N;
+expression DST, SRC, N, F, SZ;
 position p_copy, p_use;
 @@
 
+(
+  strncpy(DST, SRC, strlen(SRC) + 1);
+|
   strncpy@p_copy(DST, SRC, N);
   ... when != DST[...] = '\0'
       when != DST[...] = 0
@@ -34,9 +43,10 @@ position p_copy, p_use;
 |
 * fprintf(..., DST, ...)@p_use
 |
-* snprintf(..., DST, ...)@p_use
+* snprintf(F, SZ, ..., DST, ...)@p_use
 |
 * syslog(..., DST, ...)@p_use
+)
 )
 
 @script:python strncpy_nul_report depends on strncpy_then_string_use@

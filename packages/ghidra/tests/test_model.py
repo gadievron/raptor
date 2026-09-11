@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from packages.ghidra.model import (
     REComment,
     REDatabase,
     REFunction,
+    RESegment,
     REType,
     REXref,
 )
@@ -277,3 +274,90 @@ class TestREDatabaseMerge:
         merged = a.merge(b)
         assert merged.source_tool == "ghidra"
         assert len(merged.functions) == 0
+
+    @staticmethod
+    def _rebase_pair() -> tuple[REDatabase, REDatabase]:
+        """Primary based at 0x100000, secondary at 0x0 — three shared
+        non-auto names earn a rebase delta of 0x100000."""
+        primary = _make_db("ghidra", funcs=[
+            REFunction(name="anchor%d" % i, address=0x101000 + i * 0x100,
+                       size=64, source_tool="ghidra")
+            for i in range(3)
+        ])
+        secondary = _make_db("r2", funcs=[
+            REFunction(name="anchor%d" % i, address=0x1000 + i * 0x100,
+                       size=64, source_tool="r2")
+            for i in range(3)
+        ])
+        secondary.xrefs = [
+            REXref(from_addr=0x1010, to_addr=0x2000, kind="call",
+                   source_tool="r2"),
+        ]
+        secondary.comments = [
+            REComment(address=0x1010, function=None, kind="eol",
+                      text="note", source_tool="r2"),
+        ]
+        secondary.imports = [{"name": "read", "address": 0x4000}]
+        secondary.exports = [{"name": "handler", "address": 0x4100}]
+        secondary.strings = [{"value": "s3cr3t", "address": 0x3000}]
+        secondary.bookmarks = [{"address": 0x5000, "category": "Analysis",
+                                "comment": "check"}]
+        secondary.segments = [
+            RESegment(name=".text", start=0x1000, end=0x1fff,
+                      permissions="r-x"),
+        ]
+        return primary, secondary
+
+    def test_merge_rebases_every_address_record(self):
+        """A secondary-engine xref/comment/string/import/bookmark left
+        in its own address space dangles (or lands inside an unrelated
+        function) in the merged database — every address-carrying
+        record must move by the same delta as the functions."""
+        primary, secondary = self._rebase_pair()
+        merged = primary.merge(secondary)
+
+        # functions rebased (pre-existing behaviour)
+        assert merged.function_by_address(0x101000) is not None
+        # xrefs follow
+        assert [(x.from_addr, x.to_addr) for x in merged.xrefs] == [
+            (0x101010, 0x102000)]
+        # and the from-address now resolves inside the rebased anchor
+        assert merged.function_containing_address(0x101010).name == "anchor0"
+        assert [c.address for c in merged.comments] == [0x101010]
+        assert merged.imports[0]["address"] == 0x104000
+        assert merged.exports[0]["address"] == 0x104100
+        assert merged.strings[0]["address"] == 0x103000
+        assert merged.bookmarks[0]["address"] == 0x105000
+        # segments come from the secondary here (primary has none)
+        assert (merged.segments[0].start, merged.segments[0].end) == (
+            0x101000, 0x101fff)
+        # the secondary database itself is never mutated
+        assert secondary.xrefs[0].from_addr == 0x1010
+        assert secondary.imports[0]["address"] == 0x4000
+        assert secondary.bookmarks[0]["address"] == 0x5000
+
+    def test_merge_zero_delta_leaves_addresses_alone(self):
+        """Same address space on both sides → no rebase evidence, and
+        no record moves."""
+        primary, secondary = self._rebase_pair()
+        for i, f in enumerate(secondary.functions):
+            f.address = 0x101000 + i * 0x100
+        merged = primary.merge(secondary)
+        assert [(x.from_addr, x.to_addr) for x in merged.xrefs] == [
+            (0x1010, 0x2000)]
+        assert [c.address for c in merged.comments] == [0x1010]
+        assert merged.imports[0]["address"] == 0x4000
+        assert merged.strings[0]["address"] == 0x3000
+        assert merged.bookmarks[0]["address"] == 0x5000
+
+    def test_merge_rebase_tolerates_junk_addresses(self):
+        """Free-form dict records without a usable int address pass
+        through the rebase untouched instead of raising."""
+        primary, secondary = self._rebase_pair()
+        secondary.imports = [{"name": "no_addr"}]
+        secondary.strings = [{"value": "s", "address": "junk"}]
+        secondary.bookmarks = [{"address": True, "comment": "bool"}]
+        merged = primary.merge(secondary)
+        assert merged.imports[0] == {"name": "no_addr"}
+        assert merged.strings[0]["address"] == "junk"
+        assert merged.bookmarks[0]["address"] is True

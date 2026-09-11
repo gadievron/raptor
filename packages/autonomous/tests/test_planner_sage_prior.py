@@ -3,6 +3,7 @@
 
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -136,3 +137,69 @@ class TestDecisionHistorySerialisation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDecisionTreeOrdering(unittest.TestCase):
+    """The stop rule (long dead campaign) must not be shadowed by the
+    coverage-stall rule: a dead campaign always has stalled coverage,
+    so the stall rule alone would keep it alive forever."""
+
+    @staticmethod
+    def _dead_campaign_state() -> FuzzingState:
+        now = time.time()
+        return FuzzingState(
+            start_time=now - 7200,          # 2h elapsed
+            current_time=now,
+            total_crashes=0,
+            crashes_last_minute=0,
+            coverage_plateau_duration=1000,  # coverage stalled too
+        )
+
+    def test_dead_campaign_stops_despite_stalled_coverage(self):
+        from packages.autonomous.planner import Action
+        planner = FuzzingPlanner(memory=None)
+        action = planner.decide_next_action(self._dead_campaign_state())
+        self.assertEqual(action, Action.STOP_FUZZING)
+
+    def test_stalled_but_crashing_campaign_changes_mutator(self):
+        from packages.autonomous.planner import Action
+        now = time.time()
+        state = FuzzingState(
+            start_time=now - 7200,
+            current_time=now,
+            total_crashes=3,                 # progress exists
+            crashes_last_minute=0,
+            coverage_plateau_duration=1000,
+        )
+        planner = FuzzingPlanner(memory=None)
+        self.assertEqual(
+            planner.decide_next_action(state), Action.CHANGE_MUTATOR,
+        )
+
+    def test_zero_target_duration_means_stop_now(self):
+        now = time.time()
+        state = FuzzingState(
+            start_time=now - 10,
+            current_time=now,
+            total_crashes=0,
+            crashes_last_minute=0,
+        )
+        planner = FuzzingPlanner(memory=None)
+        # 0 is a set duration that has already elapsed, not "unset".
+        self.assertFalse(planner.should_continue_fuzzing(state, target_duration=0))
+        self.assertTrue(planner.should_continue_fuzzing(state, target_duration=None))
+
+    def test_decision_history_bounded_with_true_total(self):
+        planner = FuzzingPlanner(memory=None)
+        now = time.time()
+        state = FuzzingState(start_time=now - 1, current_time=now,
+                             crashes_last_minute=1)
+        for _ in range(planner._DECISION_HISTORY_MAX + 5):
+            planner.decide_next_action(state)
+        summary = planner.get_decision_summary()
+        self.assertEqual(
+            summary["total_decisions"], planner._DECISION_HISTORY_MAX + 5,
+        )
+        self.assertEqual(
+            len(summary["decisions"]), planner._DECISION_HISTORY_MAX,
+        )

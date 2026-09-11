@@ -268,6 +268,184 @@ def test_with_expression_evaluates_base_license():
     assert findings and findings[0].kind == "license_denied"
 
 
+def test_parenthesised_or_of_denied_licenses_is_denied():
+    """``(AGPL-3.0-only OR SSPL-1.0)`` is valid SPDX-2.0 and both
+    choices sit in the default deny list. The pre-fix flat splitter
+    produced fragments (``(AGPL-3.0-only`` / ``SSPL-1.0)``) that
+    missed the deny set's exact match and fell through to
+    default-allow — a silent deny-list bypass steerable by the
+    upstream package author."""
+    findings = evaluate(
+        [_dep(license="(AGPL-3.0-only OR SSPL-1.0)")], DEFAULT_POLICY,
+    )
+    assert findings and findings[0].kind == "license_denied"
+
+
+def test_parenthesised_single_denied_id_is_denied():
+    findings = evaluate([_dep(license="(AGPL-3.0-only)")], DEFAULT_POLICY)
+    assert findings and findings[0].kind == "license_denied"
+
+
+def test_parenthesised_permissive_or_still_passes():
+    """Benign direction: parenthesised dual-licensing of permissive
+    ids must keep emitting no finding."""
+    assert evaluate([_dep(license="(MIT OR Apache-2.0)")],
+                    DEFAULT_POLICY) == []
+
+
+def test_nested_compound_expression_evaluates_all_parts():
+    """``(MIT OR BSD-3-Clause) AND AGPL-3.0-only``: AND propagates the
+    denied right operand even though the parenthesised OR passes."""
+    assert evaluate(
+        [_dep(license="(MIT OR BSD-3-Clause) AND Apache-2.0")],
+        DEFAULT_POLICY,
+    ) == []
+    findings = evaluate(
+        [_dep(license="(MIT OR BSD-3-Clause) AND AGPL-3.0-only")],
+        DEFAULT_POLICY,
+    )
+    assert findings and findings[0].kind == "license_denied"
+
+
+@pytest.mark.parametrize("expr", [
+    "((AGPL-3.0-only",          # unbalanced open
+    "AGPL-3.0-only))",          # unbalanced close
+    "MIT )( Apache-2.0",        # balanced count, invalid nesting
+    "( OR MIT)",                # empty operand
+    "()",                       # empty expression
+])
+def test_unparseable_expression_takes_on_unknown_action(expr):
+    """An expression the evaluator cannot decompose is an UNKNOWN
+    license posture — it must take the operator's on_unknown action,
+    never the default-allow leaf."""
+    findings = evaluate([_dep(license=expr)], DEFAULT_POLICY)
+    assert findings and findings[0].kind == "license_unknown"
+    # on_unknown="deny" escalates; on_unknown="allow" is the
+    # operator explicitly accepting unknowns.
+    deny_policy = LicensePolicy(on_unknown="deny")
+    findings = evaluate([_dep(license=expr)], deny_policy)
+    assert findings and findings[0].severity == "high"
+    allow_policy = LicensePolicy(on_unknown="allow")
+    assert evaluate([_dep(license=expr)], allow_policy) == []
+
+
+def test_deeply_wrapped_single_id_still_classifies():
+    """Redundant-but-balanced wrapping is well-formed SPDX — it must
+    evaluate to the inner id, not to unknown."""
+    assert evaluate([_dep(license="(((MIT)))")], DEFAULT_POLICY) == []
+    findings = evaluate([_dep(license="(((AGPL-3.0-only)))")],
+                        DEFAULT_POLICY)
+    assert findings and findings[0].kind == "license_denied"
+
+
+def test_oversized_expression_fails_closed_fast():
+    """The paren-peel step rescans the string once per stripped layer
+    (quadratic worst case), so an unbounded registry-controlled
+    expression is a CPU sink — a 120 KB all-paren wrap costs minutes
+    without the length ceiling. Oversized input must short-circuit to
+    license_unknown well before any parsing."""
+    import time
+
+    expr = "(" * 60000 + "MIT" + ")" * 60000  # ~120 KB hostile wrap
+    start = time.monotonic()
+    findings = evaluate([_dep(license=expr)], DEFAULT_POLICY)
+    elapsed = time.monotonic() - start
+    assert findings and findings[0].kind == "license_unknown"
+    # Sub-millisecond in practice; generous bound for loaded CI hosts.
+    assert elapsed < 5.0, f"oversized expression took {elapsed:.1f}s"
+
+
+def test_large_but_capped_expression_still_classifies():
+    """Benign direction of the length ceiling: a many-choice OR chain
+    just under the cap keeps classifying normally."""
+    choices = ["MIT", "Apache-2.0", "BSD-3-Clause"] * 100
+    expr = " OR ".join(choices)          # ~3.7 KB, under the ceiling
+    assert len(expr) <= 4096
+    assert evaluate([_dep(license=expr)], DEFAULT_POLICY) == []
+    denied = " OR ".join(["AGPL-3.0-only", "SSPL-1.0"] * 130)
+    assert len(denied) <= 4096
+    findings = evaluate([_dep(license=denied)], DEFAULT_POLICY)
+    assert findings and findings[0].kind == "license_denied"
+
+
+def test_pathological_operator_nesting_hits_ceiling():
+    """Hostile registry metadata can nest operators arbitrarily deep;
+    past the ceiling the evaluator reports unknown rather than
+    recursing without bound."""
+    expr = "MIT"
+    for _ in range(15):
+        expr = f"({expr} AND MIT)"
+    findings = evaluate([_dep(license=expr)], DEFAULT_POLICY)
+    assert findings and findings[0].kind == "license_unknown"
+
+
+# ---------------------------------------------------------------------------
+# _quote_seg — URL path segment hygiene
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("segment", [".", "..", ""])
+def test_quote_seg_rejects_dot_and_empty_segments(segment):
+    """``urllib.parse.quote`` never encodes ``.`` (always-safe set),
+    so a coordinate of ``..`` survived encoding verbatim and traversed
+    the composed registry path server-side. Dot/empty segments must
+    raise instead."""
+    from packages.sca.license import _quote_seg
+    with pytest.raises(ValueError, match="dot segment"):
+        _quote_seg(segment)
+
+
+def test_quote_seg_rejects_dot_components_when_slash_safe():
+    from packages.sca.license import _quote_seg
+    with pytest.raises(ValueError, match="dot segment"):
+        _quote_seg("vendor/../package", safe="/")
+
+
+def test_quote_seg_keeps_dotted_names_and_versions():
+    """Benign direction: dots WITHIN a segment (versions, reverse-DNS
+    ids) are untouched."""
+    from packages.sca.license import _quote_seg
+    assert _quote_seg("1.2.3") == "1.2.3"
+    assert _quote_seg("com.example") == "com.example"
+    assert _quote_seg("vendor/package", safe="/") == "vendor/package"
+
+
+def test_fetch_maven_license_skips_traversal_coordinates():
+    """A hostile ``..`` artifact/version must never reach the HTTP
+    client — the fetch degrades to None (→ license_unknown policy
+    handling), and no URL is composed."""
+    from packages.sca.license import _fetch_maven_license
+
+    class _Http:
+        def __init__(self):
+            self.urls = []
+
+        def get_bytes(self, url, **kw):
+            self.urls.append(url)
+            raise AssertionError("HTTP must not be reached")
+
+    http = _Http()
+    with pytest.raises(ValueError, match="dot segment"):
+        _fetch_maven_license("com.example:..", "..", http=http, cache=None)
+    assert http.urls == []
+
+
+def test_enrich_one_skips_dep_with_traversal_coordinates(monkeypatch):
+    """End-to-end through enrich_licenses: the ValueError is caught,
+    the dep is skipped (not enriched), and no request fires."""
+    class _Http:
+        def get_bytes(self, url, **kw):
+            raise AssertionError("HTTP must not be reached")
+
+        def get_json(self, url, **kw):
+            raise AssertionError("HTTP must not be reached")
+
+    d = _dep(name="com.example:..", version="..", ecosystem="Maven",
+             license=None)
+    assert enrich_licenses([d], http=_Http(), cache=None) == 0
+    assert d.declared_license is None
+
+
 # ---------------------------------------------------------------------------
 # load_policy
 # ---------------------------------------------------------------------------

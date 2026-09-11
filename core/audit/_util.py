@@ -333,6 +333,7 @@ def envelope_prompt(
     model_id: str = "",
     transparent_payload: bool = False,
     no_base64_payload: bool = False,
+    datamark_payload: bool = False,
 ) -> tuple[str, str]:
     """Build a ``(user, system)`` message pair via the prompt envelope.
 
@@ -359,8 +360,16 @@ def envelope_prompt(
     conjunction, so only the two known-bad classes opt out; general
     classes keep the proven base64 configuration.
 
+    ``datamark_payload=True`` FORCES datamarked-plaintext rendering:
+    base64 off, datamarking ON regardless of the model profile. For
+    call sites whose payload was admitted on the strength of the
+    sentinel interleaving (the injection-preflight escape ladder) —
+    ``no_base64_payload`` alone inherits the profile's datamarking
+    flag, which is False for CONSERVATIVE/unknown models, and would
+    silently ship the flagged source in the clear.
+
     ``no_base64_payload=True`` clears ONLY the base64 layer, keeping
-    datamarking and every structural defence. Middle rendering for
+    the profile's datamarking setting and every structural defence. Middle rendering for
     VERDICT-shaped call classes whose base64 form is hard-refused:
     measured on a live batch-glance workload against Claude via
     Bedrock, the base64 rendering was refused 14/14 (whole batch and
@@ -390,6 +399,12 @@ def envelope_prompt(
     if transparent_payload and (profile.base64_code or profile.datamarking):
         profile = dataclasses.replace(
             profile, base64_code=False, datamarking=False,
+        )
+    elif datamark_payload and (
+        profile.base64_code or not profile.datamarking
+    ):
+        profile = dataclasses.replace(
+            profile, base64_code=False, datamarking=True,
         )
     elif no_base64_payload and profile.base64_code:
         profile = dataclasses.replace(profile, base64_code=False)

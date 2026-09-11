@@ -39,6 +39,42 @@ def _make_finding(**overrides):
     return base
 
 
+def _df_step(file, line, label, snippet=""):
+    """One step in the parser's INTERNAL dataflow shape."""
+    return {
+        "file": file, "line": line, "column": 0,
+        "label": label, "snippet": snippet,
+    }
+
+
+def _internal_dataflow(alternatives=0):
+    """dataflow_path exactly as parse_sarif_findings produces it —
+    the internal dict, not a SARIF-shaped list."""
+    def _path():
+        return {
+            "source": _df_step("a.c", 1, "source"),
+            "sink": _df_step("c.c", 9, "sink", snippet="run(x)"),
+            "steps": [_df_step("b.c", 5, "propagate")],
+            "total_steps": 3,
+        }
+    primary = _path()
+    primary["alternative_paths"] = [_path() for _ in range(alternatives)]
+    return primary
+
+
+def _sarif_tf_location(uri, line, label):
+    """One SARIF threadFlow location for producer-side fixtures."""
+    return {
+        "location": {
+            "message": {"text": label},
+            "physicalLocation": {
+                "artifactLocation": {"uri": uri},
+                "region": {"startLine": line},
+            },
+        }
+    }
+
+
 def _source_tree(tmp_path):
     """Create a minimal source tree and return its root."""
     (tmp_path / "src").mkdir()
@@ -832,14 +868,119 @@ class TestFindingsToSarif:
         assert "fingerprints" not in result
 
     def test_dataflow_path_emitted_as_codeflows(self):
+        # Producer-shaped fixture: parse_sarif_findings stores dataflow
+        # as the INTERNAL {source, sink, steps, ...} dict, never as a
+        # ready-made SARIF list. The emitter must convert it back to
+        # the spec's array-of-codeFlow shape.
+        f = _make_finding(
+            file="a.c", startLine=1, tool="T",
+            has_dataflow=True,
+            dataflow_path=_internal_dataflow(),
+        )
+        sarif = findings_to_sarif([f])
+        result = sarif["runs"][0]["results"][0]
+        flows = result["codeFlows"]
+        assert isinstance(flows, list)
+        assert len(flows) == 1
+        locations = flows[0]["threadFlows"][0]["locations"]
+        assert len(locations) == 3
+        first = locations[0]["location"]["physicalLocation"]
+        assert first["artifactLocation"]["uri"] == "a.c"
+        assert first["region"]["startLine"] == 1
+        assert locations[0]["location"]["message"]["text"] == "source"
+        last = locations[-1]["location"]["physicalLocation"]
+        assert last["artifactLocation"]["uri"] == "c.c"
+        assert last["region"]["snippet"]["text"] == "run(x)"
+
+    def test_alternative_paths_emit_extra_codeflows(self):
+        f = _make_finding(
+            file="a.c", startLine=1, tool="T",
+            has_dataflow=True,
+            dataflow_path=_internal_dataflow(alternatives=1),
+        )
+        sarif = findings_to_sarif([f])
+        flows = sarif["runs"][0]["results"][0]["codeFlows"]
+        assert len(flows) == 2
+
+    def test_sarif_shaped_list_dataflow_passes_through(self):
+        # Hand-built findings that never went through the parser may
+        # already carry SARIF-shaped codeFlows; those stay verbatim.
         flow = [{"threadFlows": [{"locations": []}]}]
         f = _make_finding(
             file="a.c", startLine=1, tool="T",
             has_dataflow=True, dataflow_path=flow,
         )
         sarif = findings_to_sarif([f])
-        result = sarif["runs"][0]["results"][0]
-        assert result["codeFlows"] == flow
+        assert sarif["runs"][0]["results"][0]["codeFlows"] == flow
+
+    def test_single_location_path_omits_codeflows(self):
+        # A degenerate path (< 2 locations) cannot round-trip through
+        # the parser, so no codeFlows member is emitted at all —
+        # better absent than schema-invalid.
+        f = _make_finding(
+            file="a.c", startLine=1, tool="T",
+            has_dataflow=True,
+            dataflow_path={
+                "source": _df_step("a.c", 1, "source"),
+                "sink": None,
+                "steps": [],
+                "total_steps": 1,
+                "alternative_paths": [],
+            },
+        )
+        sarif = findings_to_sarif([f])
+        assert "codeFlows" not in sarif["runs"][0]["results"][0]
+
+    def test_dataflow_round_trips_through_disk(self, tmp_path):
+        # produce → import (parse) → emit → re-parse: has_dataflow and
+        # the path content must survive the disk hop. Pre-fix the
+        # emitter wrote the internal dict verbatim and re-parse lost
+        # the dataflow (has_dataflow True → False).
+        produced = {
+            "version": "2.1.0",
+            "runs": [{
+                "tool": {"driver": {"name": "Ext"}},
+                "results": [{
+                    "ruleId": "R-1",
+                    "message": {"text": "tainted flow"},
+                    "locations": [{
+                        "physicalLocation": {
+                            "artifactLocation": {"uri": "a.c"},
+                            "region": {"startLine": 3},
+                        }
+                    }],
+                    "codeFlows": [{
+                        "threadFlows": [{
+                            "locations": [
+                                _sarif_tf_location("a.c", 3, "user input"),
+                                _sarif_tf_location("b.c", 7, "propagate"),
+                                _sarif_tf_location("c.c", 9, "dangerous sink"),
+                            ]
+                        }]
+                    }],
+                }],
+            }],
+        }
+        first = tmp_path / "produced.sarif"
+        first.write_text(json.dumps(produced))
+
+        from core.sarif.parser import parse_sarif_findings
+        findings = parse_sarif_findings(first)
+        assert len(findings) == 1
+        assert findings[0]["has_dataflow"] is True
+        original_path = findings[0]["dataflow_path"]
+
+        second = tmp_path / "normalized.sarif"
+        second.write_text(json.dumps(findings_to_sarif(findings)))
+
+        reparsed = parse_sarif_findings(second)
+        assert len(reparsed) == 1
+        assert reparsed[0]["has_dataflow"] is True
+        rt = reparsed[0]["dataflow_path"]
+        assert rt["source"] == original_path["source"]
+        assert rt["sink"] == original_path["sink"]
+        assert rt["steps"] == original_path["steps"]
+        assert rt["total_steps"] == original_path["total_steps"]
 
     def test_no_dataflow_omits_codeflows(self):
         f = _make_finding(
@@ -976,3 +1117,39 @@ class TestScaTaggingInNormalize:
         sca_f = [f for f in result.findings if f["finding_id"] == "sca-1"][0]
         assert "source_type" not in code_f
         assert sca_f["source_type"] == "dependency"
+
+
+class TestUntrustedTreeHardening:
+    """The scanned tree and the imported SARIF are both untrusted —
+    the file index and snippet synthesis must stay bounded."""
+
+    def test_deep_tree_does_not_recurse(self, tmp_path):
+        # ~1200 nesting levels blow a recursive walk's Python stack;
+        # the iterative index must survive and still find the file.
+        # One mkdir per level: pathlib's parents=True is itself
+        # recursive and cannot build a 1200-deep tree in one call.
+        deep = tmp_path
+        for _ in range(1200):
+            deep = deep / "d"
+            deep.mkdir()
+        (deep / "leaf.c").write_text("int x;\n")
+        from core.sarif.import_normalizer import _build_file_index
+        index = _build_file_index(tmp_path)
+        assert "leaf.c" in index
+
+    def test_oversized_source_skips_snippet(self, tmp_path):
+        from core.sarif.import_normalizer import (
+            _SNIPPET_SOURCE_MAX_BYTES,
+            _synthesize_snippet,
+        )
+        big = tmp_path / "big.c"
+        with big.open("wb") as f:
+            f.seek(_SNIPPET_SOURCE_MAX_BYTES)
+            f.write(b"x")
+        assert _synthesize_snippet(tmp_path, "big.c", 1, 1) == ""
+
+    def test_normal_source_still_synthesizes(self, tmp_path):
+        from core.sarif.import_normalizer import _synthesize_snippet
+        (tmp_path / "ok.c").write_text("line1\nline2\nline3\n")
+        snippet = _synthesize_snippet(tmp_path, "ok.c", 2, 2)
+        assert "line2" in snippet

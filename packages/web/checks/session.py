@@ -4,10 +4,66 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import re
+
 from packages.web.checks.base import Check, CheckCategory, registry
 
 if TYPE_CHECKING:
     pass
+
+# A folded Set-Cookie header joins cookies with ", " — but Expires
+# attributes also contain ", " ("Expires=Wed, 21 Oct ..."). Split only
+# at commas followed by a cookie-name token and '=': the day-name/date
+# fragments after an Expires comma never look like "name=".
+_FOLDED_COOKIE_SPLIT_RE = re.compile(r",\s*(?=[^;,\s=]+=)")
+
+
+def _set_cookie_headers(response) -> list[str]:
+    """Every Set-Cookie header of *response*, one entry per cookie.
+
+    requests' CaseInsensitiveDict folds repeated Set-Cookie headers into
+    one comma-joined string and has no get_all, so evaluating the folded
+    string as a single cookie lets one well-flagged cookie mask every
+    unflagged sibling. Prefer the underlying urllib3 header multidict
+    (which preserves the individual headers), then fall back to
+    unfolding the joined string.
+    """
+    raw = getattr(response, "raw", None)
+    raw_headers = getattr(raw, "headers", None)
+    if raw_headers is not None:
+        for attr in ("get_all", "getlist"):
+            getter = getattr(raw_headers, attr, None)
+            if callable(getter):
+                try:
+                    values = getter("Set-Cookie")
+                except TypeError:
+                    continue
+                return [str(v) for v in (values or []) if v]
+    folded = ""
+    headers = getattr(response, "headers", None)
+    if headers is not None:
+        folded = headers.get("Set-Cookie", "") or ""
+    if not folded:
+        return []
+    return [part for part in _FOLDED_COOKIE_SPLIT_RE.split(folded) if part]
+
+
+def _cookie_name(header_value: str) -> str:
+    return header_value.split("=", 1)[0].strip()
+
+
+def _cookie_attributes(header_value: str) -> list[str]:
+    """Lowercased attribute tokens AFTER the name=value pair.
+
+    Flag checks must inspect attributes only: substring tests over the
+    whole header let a cookie NAME or value containing "secure" satisfy
+    the Secure-flag check.
+    """
+    return [
+        part.strip().lower()
+        for part in header_value.split(";")[1:]
+        if part.strip()
+    ]
 
 
 @registry.register(CheckCategory.SESSION, "V3.4.1", "Session cookie missing Secure flag")
@@ -20,11 +76,12 @@ class SecureCookieFlagCheck(Check):
             return []
 
         findings = []
-        for header_value in resp.headers.get_all("Set-Cookie") if hasattr(resp.headers, "get_all") else [resp.headers.get("Set-Cookie", "")]:
+        for header_value in _set_cookie_headers(resp):
             if not header_value:
                 continue
-            name = header_value.split("=")[0].strip()
-            if urlparse(target_url).scheme == "https" and "secure" not in header_value.lower():
+            name = _cookie_name(header_value)
+            attributes = _cookie_attributes(header_value)
+            if urlparse(target_url).scheme == "https" and "secure" not in attributes:
                 findings.append(self._result(
                     passed=False, url=target_url,
                     evidence=f"Set-Cookie: {header_value[:200]}",
@@ -48,10 +105,9 @@ class HttpOnlyCookieFlagCheck(Check):
             return []
 
         findings = []
-        raw_cookies = resp.headers.get("Set-Cookie", "")
-        for header_value in ([raw_cookies] if raw_cookies else []):
-            name = header_value.split("=")[0].strip()
-            if "httponly" not in header_value.lower():
+        for header_value in _set_cookie_headers(resp):
+            name = _cookie_name(header_value)
+            if "httponly" not in _cookie_attributes(header_value):
                 findings.append(self._result(
                     passed=False, url=target_url,
                     evidence=f"Set-Cookie: {header_value[:200]}",
@@ -74,44 +130,42 @@ class SameSiteCookieCheck(Check):
         except Exception:
             return []
 
-        raw = resp.headers.get("Set-Cookie", "")
-        if not raw:
-            return []
+        findings = []
+        for raw in _set_cookie_headers(resp):
+            name = _cookie_name(raw)
+            attributes = _cookie_attributes(raw)
+            has_samesite = any(a.startswith("samesite") for a in attributes)
+            none_without_secure = (
+                "samesite=none" in attributes and "secure" not in attributes
+            )
 
-        name = raw.split("=")[0].strip()
-        has_samesite = "samesite" in raw.lower()
-        none_without_secure = (
-            "samesite=none" in raw.lower() and "secure" not in raw.lower()
-        )
-
-        if not has_samesite:
-            return [self._result(
-                passed=False, url=target_url,
-                evidence=f"Set-Cookie: {raw[:200]}",
-                detail=(
-                    f"Cookie '{name}' has no SameSite attribute. Without SameSite, the cookie is "
-                    "sent on cross-site requests, making CSRF attacks easier even on modern browsers."
-                ),
-                recommendation=(
-                    f"Add 'SameSite=Lax' (or 'Strict' where cross-site navigation is not needed) "
-                    f"to the '{name}' cookie."
-                ),
-                severity="medium", asvs_ref="ASVS 5.0 V3.4.3",
-            )]
-
-        if none_without_secure:
-            return [self._result(
-                passed=False, url=target_url,
-                evidence=f"Set-Cookie: {raw[:200]}",
-                detail=(
-                    f"Cookie '{name}' has SameSite=None but is missing the Secure flag. "
-                    "Browsers reject SameSite=None cookies without Secure in modern browsers, "
-                    "and serving them over HTTP is a misconfiguration."
-                ),
-                recommendation="SameSite=None requires the Secure flag. Add 'Secure' to this cookie.",
-                severity="medium", asvs_ref="ASVS 5.0 V3.4.3",
-            )]
-        return []
+            if not has_samesite:
+                findings.append(self._result(
+                    passed=False, url=target_url,
+                    evidence=f"Set-Cookie: {raw[:200]}",
+                    detail=(
+                        f"Cookie '{name}' has no SameSite attribute. Without SameSite, the cookie is "
+                        "sent on cross-site requests, making CSRF attacks easier even on modern browsers."
+                    ),
+                    recommendation=(
+                        f"Add 'SameSite=Lax' (or 'Strict' where cross-site navigation is not needed) "
+                        f"to the '{name}' cookie."
+                    ),
+                    severity="medium", asvs_ref="ASVS 5.0 V3.4.3",
+                ))
+            elif none_without_secure:
+                findings.append(self._result(
+                    passed=False, url=target_url,
+                    evidence=f"Set-Cookie: {raw[:200]}",
+                    detail=(
+                        f"Cookie '{name}' has SameSite=None but is missing the Secure flag. "
+                        "Browsers reject SameSite=None cookies without Secure in modern browsers, "
+                        "and serving them over HTTP is a misconfiguration."
+                    ),
+                    recommendation="SameSite=None requires the Secure flag. Add 'Secure' to this cookie.",
+                    severity="medium", asvs_ref="ASVS 5.0 V3.4.3",
+                ))
+        return findings
 
 
 @registry.register(CheckCategory.SESSION, "V3.3.1", "Session fixation possible",

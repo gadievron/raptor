@@ -166,7 +166,12 @@ def _validate_file(workdir, filename, validator_func):
         print(f"  {filename}: OK (cached)")
         return True, []
     data = load_json(Path(workdir) / filename)
-    if not data:
+    if data is None:
+        # load_json returns None only when the file is absent or
+        # unreadable. An EMPTY container ([] / {}) is a legitimate
+        # on-disk state this same helper writes (e.g. hypotheses.json
+        # as [] when nothing fast-pathed) — it must reach the
+        # validator, not be reported as missing.
         print(f"  {filename}: not found", file=sys.stderr)
         return False, ["missing"]
     valid, errors = validator_func(data)
@@ -229,6 +234,108 @@ def _normalise_finding_ids(container):
         next_n += 1
         renamed += 1
     return renamed
+
+
+def _coerce_findings_container(
+    data: object, target_path: str | None = None,
+) -> tuple[dict | None, str | None]:
+    """Coerce a ``--findings`` payload into the findings.json container.
+
+    Imports arrive in three shapes:
+
+      * the canonical container ``{"findings": [...]}`` — passed
+        through untouched (extra top-level keys preserved);
+      * a bare list of finding dicts — some exporters emit the list
+        without the container wrapper;
+      * the ``/understand --hunt`` variants.json container
+        (``{"variants": [...], ...}``) — its own skill documents
+        "Pass variants.json to /validate --findings". Variants carry
+        the finding core fields (file/function/line/vuln_type) plus a
+        ``taint_status`` triage; ``false_positive`` variants are
+        retained in variants.json for audit trail only and are
+        documented as excluded from validation scope, so they are
+        dropped at this import chokepoint. ``VAR-*`` ids are foreign
+        and get renamed by :func:`_normalise_finding_ids` downstream
+        (original kept as ``source_id``).
+
+    Returns ``(container, note)`` where ``note`` is a human-readable
+    conversion description (``None`` for the canonical shape), or
+    ``(None, None)`` when the payload has no recognisable findings or
+    variants — the caller decides how loudly to degrade.
+
+    *target_path* seeds the synthesised container's ``target_path``
+    (stage 1's verdict store reads it) — canonical containers keep
+    their own.
+    """
+    if isinstance(data, dict) and isinstance(data.get("findings"), list):
+        return data, None
+    if isinstance(data, list):
+        container = create_empty_findings("A", target_path)
+        container["findings"] = [f for f in data if isinstance(f, dict)]
+        return container, (
+            f"bare finding list wrapped into a container "
+            f"({len(container['findings'])} finding(s))"
+        )
+    if isinstance(data, dict) and isinstance(data.get("variants"), list):
+        findings = []
+        skipped_fp = 0
+        for v in data["variants"]:
+            if not isinstance(v, dict):
+                continue
+            if v.get("taint_status") == "false_positive":
+                skipped_fp += 1
+                continue
+            f = dict(v)
+            # Variants normally carry a schema-valid status
+            # ("not_disproven"); default it when absent so the stage-B
+            # entry gate doesn't drop the import on a missing field.
+            f.setdefault("status", "not_disproven")
+            findings.append(f)
+        container = create_empty_findings("A", target_path)
+        container["findings"] = findings
+        note = (f"variants.json container: {len(findings)} variant(s) "
+                f"imported as findings")
+        if skipped_fp:
+            note += f", {skipped_fp} false_positive variant(s) excluded"
+        return container, note
+    return None, None
+
+
+def _import_findings_file(
+    findings_path: str | Path, dest: Path, target: str | None = None,
+) -> None:
+    """Import a ``--findings`` file as *dest* (findings.json).
+
+    Loads the source file, coerces recognised shapes into the
+    canonical container (see :func:`_coerce_findings_container`),
+    normalises foreign finding ids, and persists via the provenance-
+    stamping artifact writer. An unrecognisable payload preserves the
+    legacy behaviour: the file is copied verbatim (so the operator can
+    inspect exactly what was imported) and the count reports 0.
+    """
+    import shutil
+
+    src = Path(findings_path)
+    container, shape_note = _coerce_findings_container(
+        load_json(src), target_path=target)
+    if container is None:
+        shutil.copy2(src, dest)
+        print(f"  ⚠️  {src.name}: no recognisable findings/variants "
+              f"shape — copied verbatim", file=sys.stderr)
+        print(f"Pre-existing findings: 0 from {src.name}")
+        return
+    if shape_note:
+        print(f"  Import shape: {shape_note}")
+    # Normalise foreign ids at the import chokepoint so the container
+    # satisfies its own schema before any stage prep validates it.
+    renamed = _normalise_finding_ids(container)
+    if renamed:
+        print(f"  Normalised {renamed} foreign finding "
+              f"id(s) to FIND-<n> (originals kept as "
+              f"source_id)")
+    _save_artifact(dest, container)
+    print(f"Pre-existing findings: {len(container['findings'])} "
+          f"from {src.name}")
 
 
 def _findings(workdir):
@@ -306,7 +413,12 @@ def _apply_stage_file(workdir, stage_letter):
             print(f"  ✗ findings.json not found — cannot apply stage-{stage_letter.lower()}.json", file=sys.stderr)
             return False
 
-        by_id = {f["id"]: f for f in container.get("findings", [])}
+        # findings.json is LLM-authored and schema validation is
+        # advisory — a finding may lack an "id". Skip such entries
+        # rather than crash the merge (they simply can't receive
+        # per-id updates).
+        by_id = {f["id"]: f for f in container.get("findings", [])
+                 if isinstance(f, dict) and f.get("id")}
         applied = 0
 
         if "updates" in staged and isinstance(staged["updates"], dict):
@@ -664,6 +776,9 @@ def prepare_B(workdir, target=None):
 
 
     data = _findings(workdir)
+    if not data:
+        print("✗ findings.json not found — cannot run stage B", file=sys.stderr)
+        sys.exit(1)
     findings = data.get("findings", [])
 
     # --- Normalise vuln_types (LLM aliases → canonical) ---
@@ -671,7 +786,7 @@ def prepare_B(workdir, target=None):
         vt = finding.get("vuln_type", "")
         normalised = normalise_vuln_type(vt)
         if normalised != vt:
-            print(f"  Normalised: {finding['id']} vuln_type '{vt}' -> '{normalised}'")
+            print(f"  Normalised: {finding.get('id', '?')} vuln_type '{vt}' -> '{normalised}'")
             finding["vuln_type"] = normalised
 
     # --- Dedup flag ---
@@ -682,12 +797,17 @@ def prepare_B(workdir, target=None):
             same_func = (f1.get("file") == f2.get("file")
                          and f1.get("function") == f2.get("function")
                          and f1.get("vuln_type") == f2.get("vuln_type"))
+            # "line" is LLM-authored (advisory schema) and may arrive
+            # as a string — only compare proximity between real ints.
+            l1, l2 = f1.get("line", 0), f2.get("line", 0)
             nearby = (f1.get("file") == f2.get("file")
                       and f1.get("vuln_type") == f2.get("vuln_type")
-                      and abs(f1.get("line", 0) - f2.get("line", 0)) <= 5)
-            if same_func or nearby:
+                      and isinstance(l1, int) and isinstance(l2, int)
+                      and abs(l1 - l2) <= 5)
+            # An id-less f1 can't be referenced as the duplicate anchor.
+            if (same_func or nearby) and f1.get("id"):
                 f2["dedup_flag"] = f"potential_dup:{f1['id']}"
-                print(f"  Dedup flag: {f2['id']} may duplicate {f1['id']}")
+                print(f"  Dedup flag: {f2.get('id', '?')} may duplicate {f1['id']}")
 
     # --- Carry-forward check (Stage A) ---
     for finding in findings:
@@ -777,8 +897,15 @@ def prepare_B(workdir, target=None):
     # --- Fast-path for poc_success findings ---
     hypotheses = load_json(Path(workdir) / "hypotheses.json") or []
     attack_paths = load_json(Path(workdir) / "attack-paths.json") or []
-    existing_hyp_ids = {h.get("id") for h in hypotheses}
-    existing_path_ids = {p.get("id") for p in attack_paths}
+    # id → owning finding id. Owner maps (rather than plain id sets)
+    # keep the fast-path idempotent across re-runs — an entry already
+    # owned by THIS finding is skipped, one owned by a DIFFERENT
+    # finding forces a fresh id. Updated after every append so two
+    # findings in the same pass can never share an id.
+    hyp_owner = {h.get("id"): h.get("finding")
+                 for h in hypotheses if isinstance(h, dict)}
+    path_owner = {p.get("id"): p.get("finding")
+                  for p in attack_paths if isinstance(p, dict)}
 
     fast_count = 0
     full_count = 0
@@ -796,11 +923,25 @@ def prepare_B(workdir, target=None):
                 and sa.get("confidence") == "high"
                 and poc.get("result") and poc["result"] != "ran without error"):
 
-            # Mechanical fast-path: create audit trail entries
+            # Mechanical fast-path: create audit trail entries.
+            # The numeric suffix alone is ambiguous across id families
+            # (FIND-3 and SARIF-3 both yield '3') — bump to a dotted
+            # suffix until both derived ids are free or already owned
+            # by this finding, so no two findings share H<n>/AP-<n>.
+            bump = 0
+            while True:
+                cand = num if bump == 0 else f"{num}.{bump}"
+                h_cand, p_cand = f"H{cand}", f"AP-{cand}"
+                h_clash = h_cand in hyp_owner and hyp_owner[h_cand] != fid
+                p_clash = p_cand in path_owner and path_owner[p_cand] != fid
+                if not h_clash and not p_clash:
+                    num = cand
+                    break
+                bump += 1
             hyp_id = f"H{num}"
             path_id = f"AP-{num}"
 
-            if hyp_id not in existing_hyp_ids:
+            if hyp_id not in hyp_owner:
                 hypotheses.append({
                     "id": hyp_id,
                     "finding": fid,
@@ -813,8 +954,9 @@ def prepare_B(workdir, target=None):
                     }],
                     "status": "confirmed",
                 })
+                hyp_owner[hyp_id] = fid
 
-            if path_id not in existing_path_ids:
+            if path_id not in path_owner:
                 attack_paths.append({
                     "id": path_id,
                     "name": f"PoC-confirmed: {finding.get('vuln_type', '')}",
@@ -825,6 +967,7 @@ def prepare_B(workdir, target=None):
                     "blockers": [],
                     "status": "confirmed",
                 })
+                path_owner[path_id] = fid
 
             finding["stage_b_summary"] = {
                 "hypothesis_id": hyp_id,
@@ -937,6 +1080,9 @@ def prepare_C(workdir, target=None):
 
     # --- Carry-forward check (Stage B) ---
     findings_data = _findings(workdir)
+    if not findings_data:
+        print("✗ findings.json not found — cannot run stage C", file=sys.stderr)
+        sys.exit(1)
     for finding in _active(findings_data):
         sb = finding.get("stage_b_summary")
         if not sb:
@@ -946,6 +1092,9 @@ def prepare_C(workdir, target=None):
 
     # --- Pre-check findings against inventory ---
     checklist = load_json(Path(workdir) / "checklist.json")
+    if not checklist:
+        print("✗ checklist.json not found — cannot run stage C", file=sys.stderr)
+        sys.exit(1)
     inv_files = {}
     for f in checklist.get("files", []):
         inv_files[f["path"]] = f
@@ -964,7 +1113,10 @@ def prepare_C(workdir, target=None):
         if inv is None:
             finding["checklist_verified"] = False
             print(f"  C0 FAIL: {finding['id']} — file '{fpath}' not in inventory", file=sys.stderr)
-        elif fline > inv.get("lines", 0):
+        # "line" is LLM-authored (advisory schema): a non-int value
+        # can't be range-checked, so it just skips this comparison
+        # instead of raising a str/int TypeError.
+        elif isinstance(fline, int) and fline > inv.get("lines", 0):
             finding["checklist_verified"] = False
             print(f"  C0 FAIL: {finding['id']} — line {fline} > file length {inv['lines']}", file=sys.stderr)
         else:
@@ -1886,7 +2038,12 @@ def _run_witness_execution(workdir, target, data, dynamic=None):
     if not eligible:
         return
 
-    if not resolve_dynamic_validation(dynamic):
+    # target_path pins the project 'dynamic' marker's one-target rule
+    # to the run's actual --target (same as the sink-watch and
+    # symbolic-replay gates in this stage) — the marker must not grant
+    # or refuse based on the launcher cwd fallback when the run
+    # analyses a different tree.
+    if not resolve_dynamic_validation(dynamic, target_path=target):
         print(
             f"  Witness execution: {len(eligible)} eligible finding(s) "
             "skipped — dynamic execution not granted (pass --dynamic or "
@@ -1926,6 +2083,9 @@ def prepare_E(workdir, target=None, dynamic=None, build=None,
 
 
     data = _findings(workdir)
+    if not data:
+        print("✗ findings.json not found — cannot run stage E", file=sys.stderr)
+        sys.exit(1)
 
     # --- Schema validation ---
     _validate_file(workdir, "findings.json", validate_findings)
@@ -2068,6 +2228,9 @@ def prepare_F(workdir, target=None):
         print("  (Stage E skipped — merged stage-d.json directly)")
 
     data = _findings(workdir)
+    if not data:
+        print("✗ findings.json not found — cannot run stage F", file=sys.stderr)
+        sys.exit(1)
 
     # --- Evidence-tier chokepoint (witness/verdict provenance) ---
     # The stage files merged above are LLM-authored: a forged
@@ -2475,28 +2638,6 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Resolve + persist the sanitizer-cut mode so the per-stage
-    # subprocesses reload it (review #4, PR #794). Persist only when the
-    # operator passed a flag; otherwise the env fallback stays active.
-    #
-    # Edge case (review #7, PR #794): configure(export_env=True) mutates
-    # this process's env BEFORE persist() writes the file. If a later
-    # stage-0 step crashes between the two, the env is left set but no
-    # config file exists. The pipeline path is safe — the run is marked
-    # failed and stages A-F/1 won't run — so this only bites an operator
-    # who then drives a stage BY HAND in the same shell: load_persisted()
-    # finds no file, returns None, and the gate falls back to the leftover
-    # env. Re-running stage 0 (or a fresh shell) clears it. Not worth a
-    # guard for the hand-driven case; documented so it isn't a surprise.
-    if sanitizer_cut_mode is not None or sanitizer_cut_parity_log is not None:
-        from core.dataflow import sanitizer_cut_config
-        sanitizer_cut_config.configure(
-            sanitizer_cut_mode or "off",
-            parity_log=sanitizer_cut_parity_log,
-            run_dir=str(out_dir), export_env=True,
-        )
-        sanitizer_cut_config.persist(str(out_dir))
-
     # Wrap the rest of stage-0 prep in try/except so a failure
     # AFTER `start_run` (which created the run dir + lifecycle
     # marker) flips the run to "failed" instead of leaving an
@@ -2526,6 +2667,31 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
 
     from core.run.metadata import fail_run
     try:
+        # Resolve + persist the sanitizer-cut mode so the per-stage
+        # subprocesses reload it (review #4, PR #794). Persist only when
+        # the operator passed a flag; otherwise the env fallback stays
+        # active. Runs INSIDE this guard: configure() rejects an invalid
+        # mode string with ValueError, and any failure after start_run
+        # must flip the run to 'failed' instead of stranding it 'running'.
+        #
+        # Edge case (review #7, PR #794): configure(export_env=True) mutates
+        # this process's env BEFORE persist() writes the file. If a later
+        # stage-0 step crashes between the two, the env is left set but no
+        # config file exists. The pipeline path is safe — the run is marked
+        # failed and stages A-F/1 won't run — so this only bites an operator
+        # who then drives a stage BY HAND in the same shell: load_persisted()
+        # finds no file, returns None, and the gate falls back to the leftover
+        # env. Re-running stage 0 (or a fresh shell) clears it. Not worth a
+        # guard for the hand-driven case; documented so it isn't a surprise.
+        if sanitizer_cut_mode is not None or sanitizer_cut_parity_log is not None:
+            from core.dataflow import sanitizer_cut_config
+            sanitizer_cut_config.configure(
+                sanitizer_cut_mode or "off",
+                parity_log=sanitizer_cut_parity_log,
+                run_dir=str(out_dir), export_env=True,
+            )
+            sanitizer_cut_config.persist(str(out_dir))
+
         # Snapshot understand hashes before the rebuild overwrites checklist.json.
         # In the shared --out case (tier 1), the understand run's checklist is in
         # the same directory.  build_checklist will overwrite it with current hashes,
@@ -2541,22 +2707,8 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
         (out_dir / "build").mkdir(exist_ok=True)
 
         if findings_path:
-            import shutil
-            dest = out_dir / "findings.json"
-            shutil.copy2(findings_path, dest)
-            pre_findings = load_json(dest)
-            n = len(pre_findings.get("findings", [])) if pre_findings else 0
-            if pre_findings:
-                # Normalise foreign ids at the import chokepoint so
-                # the container satisfies its own schema before any
-                # stage prep validates it.
-                renamed = _normalise_finding_ids(pre_findings)
-                if renamed:
-                    _save_artifact(dest, pre_findings)
-                    print(f"  Normalised {renamed} foreign finding "
-                          f"id(s) to FIND-<n> (originals kept as "
-                          f"source_id)")
-            print(f"Pre-existing findings: {n} from {Path(findings_path).name}")
+            _import_findings_file(findings_path, out_dir / "findings.json",
+                                  target=target)
 
         if not no_bridge:
             _bridge_understand_output(out_dir, checklist, target,

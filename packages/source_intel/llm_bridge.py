@@ -156,13 +156,20 @@ def make_source_intel_collector(
                 else repo_path
             )
 
+            # Derive the cache key once and reuse it for the store —
+            # analyze() can run for minutes, and re-deriving the key
+            # at put time would file a result computed over the
+            # pre-drift tree under the post-drift hash, serving it
+            # as fresh for the process lifetime.
             result = None
+            cache_key = None
             if cache is not None:
-                result = cache.get(scan_target)
+                cache_key = cache.key_for(scan_target)
+                result = cache.get_by_key(cache_key)
             if result is None:
                 result = _analyze_mod.analyze(scan_target)
                 if cache is not None:
-                    cache.put(scan_target, None, result)
+                    cache.put_by_key(cache_key, result)
 
             # Cheap exit: skipped run with no salvageable observations.
             if result.is_skipped and not result.attributes and not result.aborts:

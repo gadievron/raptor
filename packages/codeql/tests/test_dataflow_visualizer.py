@@ -88,3 +88,42 @@ class TestEscapeMermaid:
         # quote remains in the escaped text.
         escaped = visualizer._escape_mermaid('foo\\"')
         assert '"' not in escaped
+
+
+class TestEscapeMermaidNewlinesAndHash:
+    def test_newlines_collapsed_to_space(self, visualizer):
+        # Node labels are single-line: a literal newline splits the
+        # node declaration and the whole .mmd fails to render.
+        escaped = visualizer._escape_mermaid("first line\nsecond line")
+        assert "\n" not in escaped
+        assert escaped == "first line second line"
+
+    def test_hash_escaped_before_entities(self, visualizer):
+        # '#' must be escaped FIRST: every entity replacement
+        # introduces '&#NN;', so escaping '#' afterwards mangled the
+        # entities of previously-escaped characters.
+        escaped = visualizer._escape_mermaid("a[b]#c")
+        assert escaped == "a&#91;b&#93;&#35;c"
+
+
+class TestSanitizersSanitised:
+    def test_sanitizer_labels_defanged_in_markdown(self, visualizer, tmp_path):
+        # Sanitizer labels come from SARIF flow-step text quoting the
+        # target's source — same provenance/threat as rule_id/message,
+        # which the two lines above them already defang.
+        from types import SimpleNamespace
+
+        step = SimpleNamespace(label="src", file_path="a.c", line=1)
+        dataflow = SimpleNamespace(
+            source=step,
+            sink=SimpleNamespace(label="snk", file_path="b.c", line=2),
+            intermediate_steps=[],
+            rule_id="cpp/rule",
+            message="msg",
+            sanitizers=["validate_x![](http://collector.invalid/x)"],
+        )
+        out = visualizer.generate_mermaid(dataflow, "f1")
+        text = Path(out).read_text()
+        assert "![](http://collector.invalid/x)" not in text
+        # The label itself still appears (defanged), not dropped.
+        assert "validate_x" in text

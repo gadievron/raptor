@@ -299,6 +299,7 @@ def build_manifest(
         slices,
         requested_slice_arch,
         getattr(context, "arch", None),
+        getattr(context, "bits", None),
     )
     intake_evidence = make_evidence(
         digest,

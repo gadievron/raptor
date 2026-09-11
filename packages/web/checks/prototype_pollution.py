@@ -19,10 +19,33 @@ if TYPE_CHECKING:
 _SENTINEL = "raptor_pp_probe_value_8472"
 
 
+def _clean_request_shows(client, needle: str) -> bool:
+    """Whether *needle* appears on a CLEAN request that never sent it.
+
+    Prototype pollution persists process-wide, so a genuinely polluted
+    property surfaces on unrelated requests. Echo does not: a page that
+    merely reflects the probe body/query shows the sentinel only on the
+    probe response. This is the behavioral oracle that separates the
+    two — sentinel-in-probe-response alone is just parameter echo.
+    """
+    try:
+        resp = client.get("/")
+        body = resp.text if isinstance(resp.text, str) else ""
+        return needle in body
+    except Exception:
+        return False
+
+
 @registry.register(CheckCategory.INJECTION, "V5.3.1", "Server-side prototype pollution")
 class ServerSidePrototypePollutionCheck(Check):
     risk = "active"
     def run(self, client, target_url, session=None, discovery=None):
+        # Baseline guard: if the sentinel is already on the page before
+        # any probe (a previous run's stored content), the oracle below
+        # cannot attribute it to this probe — bail out.
+        if _clean_request_shows(client, _SENTINEL):
+            return []
+
         # Try __proto__ injection in JSON POST body
         api_paths = ["/api", "/api/v1", "/api/v2"]
         if discovery:
@@ -44,8 +67,10 @@ class ServerSidePrototypePollutionCheck(Check):
                 )
                 body = resp.text if isinstance(resp.text, str) else ""
 
-                # If the sentinel appears in the response, the object was polluted
-                if _SENTINEL in body:
+                # Sentinel in the probe response could be a mere echo of
+                # the rejected payload (validation errors); pollution is
+                # confirmed only when a clean request also shows it.
+                if _SENTINEL in body and _clean_request_shows(client, _SENTINEL):
                     return [self._result(
                         passed=False, url=target_url.rstrip("/") + path,
                         evidence=(
@@ -73,18 +98,25 @@ class ServerSidePrototypePollutionCheck(Check):
 
         # Also probe via query string (some frameworks merge query params into objects)
         try:
-            resp = client.get(
+            client.get(
                 "/",
                 params={
                     f"__proto__[{_SENTINEL}]": "polluted",
                     f"constructor[prototype][{_SENTINEL}2]": "polluted",
                 },
             )
-            body = resp.text if isinstance(resp.text, str) else ""
-            if _SENTINEL in body or "polluted" in body:
+            # Reflection of the probe VALUE ('polluted') or sentinel key
+            # in the probed response is plain parameter echo (search
+            # pages, validation errors). Only a clean follow-up request
+            # showing the sentinel demonstrates the prototype was
+            # actually polluted.
+            if _clean_request_shows(client, _SENTINEL):
                 return [self._result(
                     passed=False, url=target_url,
-                    evidence=f"Query string __proto__ injection reflected sentinel in response",
+                    evidence=(
+                        "Query string __proto__ injection: sentinel visible "
+                        "on a subsequent clean request"
+                    ),
                     detail=(
                         "Prototype pollution via query string: the application merges query "
                         "parameters into objects without filtering prototype-chain properties."

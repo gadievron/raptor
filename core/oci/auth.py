@@ -2,12 +2,16 @@
 
 Three sources, tried in order:
 
-  1. **Anonymous bearer token** — for public images. The registry's
-     ``WWW-Authenticate`` header on a 401 response carries a
-     ``realm`` / ``service`` / ``scope`` triple; we request a token
-     from that realm without credentials. Works for everything on
-     ``docker.io/library/*``, public ``ghcr.io``, ``public.ecr.aws``,
-     ``quay.io`` (mostly).
+  1. **Anonymous bearer token** — for public images when NO
+     credentials are configured. The registry's ``WWW-Authenticate``
+     header on a 401 response carries a ``realm`` / ``service`` /
+     ``scope`` triple; we request a token from that realm without
+     credentials. Works for everything on ``docker.io/library/*``,
+     public ``ghcr.io``, ``public.ecr.aws``, ``quay.io`` (mostly).
+     When credentials ARE configured for the registry, the token
+     exchange sends them from the first attempt (they are needed for
+     private scopes and harmless for public ones); the realm has
+     already passed the HTTPS + allowlist gate at that point.
 
   2. **``~/.docker/config.json`` inline ``auths``** — the standard
      artefact ``docker login`` produces. We read ONLY the inline
@@ -27,10 +31,10 @@ Three sources, tried in order:
      additionally require ``RAPTOR_OCI_<HOST_UPPER>_HOST`` set to
      the exact hostname — see :func:`_from_env`.
 
-The chain is consulted lazily: anonymous gets tried first because
-it's free (no credential lookup); registry credentials are looked
-up only when the anonymous token attempt fails or when the auth
-challenge specifies a non-anonymous service.
+The chain is consulted lazily: the first REQUEST goes out without
+auth (the challenge triple is only discoverable from the 401);
+credentials are looked up when the challenge arrives, and used on
+the token exchange whenever they are configured.
 """
 
 from __future__ import annotations
@@ -39,7 +43,7 @@ import base64
 import logging
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.json import load_json
@@ -53,13 +57,12 @@ class BasicCredentials:
 
     The token-exchange flow takes these and posts them to the
     registry's auth realm, getting back a short-lived bearer token.
-    Storing them as a separate dataclass (rather than a tuple) keeps
-    the ``__repr__`` from accidentally leaking the password into
-    logs — the default dataclass repr includes both fields, but
-    callers are reminded by the type name to be careful.
+    ``password`` is excluded from the dataclass ``repr`` so an
+    accidental ``repr()`` / f-string / exception interpolation of a
+    credentials object never lands the secret in logs.
     """
     username: str
-    password: str
+    password: str = field(repr=False)
 
     def to_basic_header(self) -> str:
         """Render as the ``Authorization: Basic ...`` header value
@@ -272,6 +275,33 @@ _WWW_AUTH_PARAM_RE = re.compile(
 )
 
 
+# Challenge boundaries within a (possibly folded) WWW-Authenticate
+# value. Registries that offer BOTH Bearer and Basic (Nexus,
+# Artifactory) either send two headers — which core.http folds into
+# one newline-joined value — or one comma-joined value (RFC 7235
+# permits multiple challenges per header). The scheme names are the
+# ones registries actually emit; a scheme token inside a QUOTED param
+# value would falsely split, which no real realm URL contains.
+_CHALLENGE_BOUNDARY_RE = re.compile(
+    r"(?:^|[\n,]\s*)(?P<scheme>Bearer|Basic|Digest|Negotiate)(?=\s|$)",
+    re.IGNORECASE,
+)
+
+
+def split_www_authenticate_challenges(header: str) -> list[tuple[str, str]]:
+    """Split a ``WWW-Authenticate`` value into ``(scheme,
+    params_str)`` pairs — one per challenge. Handles newline-folded
+    duplicate headers (core.http joins them) and comma-joined
+    multi-challenge values."""
+    matches = list(_CHALLENGE_BOUNDARY_RE.finditer(header))
+    out: list[tuple[str, str]] = []
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(header)
+        params_str = header[m.end():end].strip().strip(",").strip()
+        out.append((m.group("scheme"), params_str))
+    return out
+
+
 def parse_www_authenticate(header: str) -> tuple[str, dict]:
     """Parse a ``WWW-Authenticate`` header value into
     ``(scheme, params)``.
@@ -289,13 +319,26 @@ def parse_www_authenticate(header: str) -> tuple[str, dict]:
     token shapes per RFC 7235. Returns ``("", {})`` for unparseable
     input — the caller falls back to anonymous-no-realm-known
     behaviour, which surfaces clearly later.
+
+    Multi-challenge values (dual ``Bearer`` + ``Basic``, sent by
+    Nexus / Artifactory as two headers that core.http newline-joins,
+    or comma-joined in one header) parse to the BEARER challenge's
+    params only — merging both challenges' params corrupted the
+    realm/service triple in either order. When no Bearer challenge
+    is present the first challenge wins.
     """
     if not header:
         return "", {}
-    # Split scheme from params on first space.
-    parts = header.strip().split(None, 1)
-    scheme = parts[0]
-    params_str = parts[1] if len(parts) > 1 else ""
+    challenges = split_www_authenticate_challenges(header)
+    if not challenges:
+        # No recognised scheme name — fall back to first-token-as-
+        # scheme so unknown schemes still surface to the caller.
+        parts = header.strip().split(None, 1)
+        challenges = [(parts[0], parts[1] if len(parts) > 1 else "")]
+    scheme, params_str = next(
+        (c for c in challenges if c[0].lower() == "bearer"),
+        challenges[0],
+    )
     params: dict = {}
     for m in _WWW_AUTH_PARAM_RE.finditer(params_str):
         value = m.group("qval")
@@ -309,4 +352,5 @@ __all__ = [
     "BasicCredentials",
     "lookup_credentials",
     "parse_www_authenticate",
+    "split_www_authenticate_challenges",
 ]

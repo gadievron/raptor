@@ -15,9 +15,21 @@ name: SCA stress sweep
 #
 # Runs on:
 #   - manual dispatch (workflow_dispatch) — operator triggers
-#     when investigating
+#     when investigating. The refresh-baseline input (boolean,
+#     default false) is the operator-investigated signal: after
+#     fail-level drift (rc=2) has been investigated and adjudicated
+#     as legitimate, a dispatch with refresh-baseline=true captures
+#     the new baseline and opens the same reviewable refresh PR the
+#     warn path uses — REFUSED whenever any scan errored (timeout,
+#     clone failure, driver exception), the driver itself crashed
+#     in a post-sweep phase, or the sweep is incomplete; a baseline
+#     is never captured from a broken run. Decision
+#     logic: decide_baseline_refresh in
+#     packages/sca/calibration/stress.py.
 #   - weekly cron (Monday 04:00 UTC) — catches drift from
-#     external service shifts (registry data, OSV updates)
+#     external service shifts (registry data, OSV updates). Cron
+#     runs never see the input: rc=2 stays red until an operator
+#     investigates.
 #
 # Network: hits OSV / KEV / EPSS / multiple package registries
 # / OCI registries. Per-host circuit breaker bounds 429 cascades
@@ -25,7 +37,15 @@ name: SCA stress sweep
 # caches.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      refresh-baseline:
+        description: >-
+          Operator has investigated fail-level drift and adjudicated
+          it as legitimate — capture a new baseline even at rc=2 and
+          open the refresh PR. Refused when any scan errored.
+        type: boolean
+        default: false
   schedule:
     - cron: '0 4 * * 1'
 
@@ -45,12 +65,25 @@ jobs:
     runs-on: ubuntu-latest
     # Base-image layer scanning joined the sweep (blob redirects +
     # distro matching), and CI runners start cold every week — the
-    # 51-project sweep now runs ~30 min wallclock, and the previous
+    # 51-project sweep runs ~30 min wallclock, and an earlier
     # 30-minute budget canceled a run AFTER the summary printed but
     # before the step could exit (losing the rc output and skipping
-    # the baseline-refresh step). 60 leaves the same relative
-    # headroom the old budget gave the pre-image-scanning sweep.
-    timeout-minutes: 60
+    # the baseline-refresh step). The end-of-sweep timeout-retry
+    # pass adds up to one per-scan budget (clone 300s + scan 600s =
+    # 15 min) per timed-out project, sequentially — a warm-cache
+    # success is ~1 min, only a retry that ALSO times out burns the
+    # full 15. Arithmetic: 30 min sweep + two full-budget failed
+    # retries (30 min) = 60 min worst case; 90 keeps headroom over
+    # that (also covering the elapsed re-measure phase's up-to-3
+    # warm re-scans, ~1 min each). More simultaneous full-budget
+    # retry failures than two means systemic registry distress —
+    # rc=2 either way, and the SIGTERM post-mortem still prints
+    # the partial summary.
+    # Trade-off both ways: lower re-risks canceling a healthy run
+    # after its summary but before the refresh step (the past
+    # incident); higher delays noticing a genuinely hung run and
+    # burns runner minutes on it.
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -96,6 +129,10 @@ jobs:
           # once died mid-flight leaving a block-buffered tail (and
           # its post-mortem) unwritten.
           PYTHONUNBUFFERED: '1'
+          # Boolean workflow_dispatch input ('true'/'false'); empty
+          # on cron/push. Passed via env, never interpolated into
+          # the script body.
+          REFRESH_BASELINE: ${{ inputs.refresh-baseline }}
         # Drives the full sweep via run_sweep_and_report — the
         # never-summary-less driver: per-scan failures (including
         # endpoint distress: 429 storms, circuit-breaker fail-fast,
@@ -109,7 +146,14 @@ jobs:
         # When only warns are present (rc=1), the baseline-refresh
         # step below writes the updated baseline and opens a PR —
         # upstream CVE churn shouldn't block the workflow.
-        # Only rc=2 (fail) is a real regression and fails the job.
+        # Only rc=2 (fail) is a real regression and fails the job —
+        # UNLESS this is a manual dispatch with refresh-baseline=true
+        # (the operator-investigated signal) and every fail is drift
+        # rather than a scan error: then the baseline is captured,
+        # the refresh PR is the green outcome, and the job passes.
+        # decide_baseline_refresh gates that capture — any errored
+        # scan, driver-phase crash, or incomplete sweep refuses the
+        # refresh and keeps the red behaviour.
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -119,6 +163,7 @@ jobs:
           from packages.sca.calibration.project_samples import PROJECT_SAMPLES
           from packages.sca.calibration.stress import (
               configure_sweep_logging,
+              decide_baseline_refresh,
               run_sweep_and_report, write_baseline,
           )
 
@@ -140,12 +185,17 @@ jobs:
               rendered_lines.append(str(line))
               print(line, flush=True)
 
+          # Caller-owned sink: a post-sweep phase crash returns rc=2
+          # with a complete, error-free results list — only this sink
+          # tells the refresh gate that rc=2 was earned by the crash.
+          driver_failures: list[str] = []
           rc, results = run_sweep_and_report(
               PROJECT_SAMPLES, baseline,
               git_clone_timeout=300,
               sca_timeout=600,
               max_workers=4,
               out=_out,
+              driver_failure_sink=driver_failures,
           )
           rendered = "\n".join(rendered_lines)
 
@@ -156,31 +206,75 @@ jobs:
                   f.write(rendered)
                   f.write("\n```\n")
 
+          # Baseline capture is gated by decide_baseline_refresh:
+          # warns only (rc=1) → write the refreshed baseline so the
+          # next step can commit it. rc=2 → NOT updated (operator
+          # must investigate) UNLESS this dispatch carries the
+          # refresh-baseline=true adjudication AND every fail is
+          # drift — any errored scan, driver-phase crash, or
+          # incomplete sweep refuses.
+          operator_refresh = (
+              os.environ.get("REFRESH_BASELINE", "") == "true"
+          )
+          decision = decide_baseline_refresh(
+              rc, results,
+              operator_refresh=operator_refresh,
+              expected_count=len(PROJECT_SAMPLES),
+              driver_failures=driver_failures,
+          )
+          if decision.allowed:
+              commit_sha = os.environ.get("GITHUB_SHA", "unknown")
+              write_baseline(results, baseline, captured_with_commit=commit_sha)
+              print(f"\nBaseline refreshed at {baseline} ({decision.reason})")
+          elif operator_refresh:
+              # The operator asked for a refresh and didn't get one —
+              # say why, in the log AND the step summary.
+              print(f"\n{decision.reason}", flush=True)
+              if summary_path:
+                  # Fenced: the reason can embed scan-error text from
+                  # untrusted repos — same treatment as the sweep table.
+                  with open(summary_path, "a") as f:
+                      f.write("\n**Baseline refresh:**\n\n```\n")
+                      f.write(decision.reason)
+                      f.write("\n```\n")
+
           out = os.environ.get("GITHUB_OUTPUT", "")
           if out:
               with open(out, "a") as f:
                   f.write(f"rc={rc}\n")
+                  if rc == 2 and decision.allowed:
+                      f.write("forced_refresh=1\n")
 
-          # When only warns (rc=1): write the refreshed baseline so
-          # the next step can commit it. When rc=2 the baseline is
-          # NOT updated — the operator must investigate.
-          if rc == 1:
-              commit_sha = os.environ.get("GITHUB_SHA", "unknown")
-              write_baseline(results, baseline, captured_with_commit=commit_sha)
-              print(f"\nBaseline refreshed at {baseline} (warn-only drift)")
-
-          # rc=2 → fail the step (real regression)
+          # rc=2 → fail the step (real regression), unless the
+          #   operator-dispatched refresh captured the baseline —
+          #   the refresh PR is then the (green) outcome
           # rc=1 → exit 0 (warn-only drift handled by baseline PR)
           # rc=0 → exit 0 (no drift)
-          sys.exit(2 if rc == 2 else 0)
+          #
+          # os._exit, not sys.exit: interpreter shutdown JOINS every
+          # still-running worker thread (timeout-abandoned scans and
+          # their OSV/enrichment pools are abandoned by design, and
+          # any leaked pool manager thread joins its processes) — a
+          # slow or wedged orphan then holds this step "running" long
+          # after the summary printed, until the job timeout reaps
+          # it. Everything durable is already on disk: the
+          # GITHUB_STEP_SUMMARY / GITHUB_OUTPUT writes above closed
+          # their files, the baseline write (when allowed) completed,
+          # and stdout/stderr are flushed here.
+          sys.stdout.flush()
+          sys.stderr.flush()
+          os._exit(2 if rc == 2 and not decision.allowed else 0)
           PY
 
       - name: Open baseline-refresh PR
-        # Only when the sweep had warn-only drift (rc=1) and the
-        # baseline file was updated by the sweep step above.
-        if: steps.sweep.outputs.rc == '1'
+        # When the sweep had warn-only drift (rc=1), or an operator
+        # dispatch with refresh-baseline=true captured a baseline at
+        # fail-level drift (forced_refresh=1). Either way the refresh
+        # arrives as a reviewable PR, never a direct push.
+        if: steps.sweep.outputs.rc == '1' || steps.sweep.outputs.forced_refresh == '1'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCED_REFRESH: ${{ steps.sweep.outputs.forced_refresh }}
         run: |
           set -euo pipefail
           BASELINE="packages/sca/data/calibration/stress_baseline.json"
@@ -195,11 +289,20 @@ jobs:
           gh auth setup-git
           git checkout -B "$BRANCH"
           git add "$BASELINE"
-          git commit -m "chore(sca): refresh stress-sweep baseline
+          if [[ "${FORCED_REFRESH:-}" == "1" ]]; then
+            COMMIT_MSG="chore(sca): refresh stress-sweep baseline
+
+          Fail-level drift investigated and adjudicated as legitimate by
+          the operator who dispatched this run with refresh-baseline=true.
+          Auto-generated by .github/workflows/sca-stress-sweep.yml."
+          else
+            COMMIT_MSG="chore(sca): refresh stress-sweep baseline
 
           Upstream data drift (new CVEs, registry changes) shifted
           per-project vuln_findings counts past the warn threshold.
           Auto-generated by .github/workflows/sca-stress-sweep.yml."
+          fi
+          git commit -m "$COMMIT_MSG"
 
           # Replay the baseline commit onto current main before opening
           # the PR — a branch cut from the dispatch-time checkout can be
@@ -216,7 +319,25 @@ jobs:
           fi
           git push --force-with-lease origin "$BRANCH"
 
-          BODY=$(cat <<'EOF'
+          if [[ "${FORCED_REFRESH:-}" == "1" ]]; then
+            BODY=$(cat <<'EOF'
+          ## Stress-sweep baseline refresh (operator-adjudicated)
+
+          Fail-level drift was investigated and adjudicated as legitimate by
+          the operator who dispatched this run with `refresh-baseline: true`.
+          This PR updates `packages/sca/data/calibration/stress_baseline.json`
+          to accept the new counts as the expected baseline.
+
+          **Review checklist:**
+          - [ ] Diff shows only `vuln_findings` / `deps_analysed` / `eco_breakdown` changes — no structural edits
+          - [ ] The adjudication is traceable (issue / landed change that explains the fail-level drift)
+          - [ ] No scan errors were present (the sweep refuses to capture a baseline from a broken run)
+
+          Auto-generated by `.github/workflows/sca-stress-sweep.yml`.
+          EOF
+          )
+          else
+            BODY=$(cat <<'EOF'
           ## Stress-sweep baseline refresh
 
           Upstream data drift (new CVEs published, registry metadata changes)
@@ -232,6 +353,7 @@ jobs:
           Auto-generated by `.github/workflows/sca-stress-sweep.yml`.
           EOF
           )
+          fi
 
           pr_num=$(gh pr list \
             --repo "$GITHUB_REPOSITORY" \

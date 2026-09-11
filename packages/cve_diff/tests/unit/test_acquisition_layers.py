@@ -346,3 +346,78 @@ def test_clean_dest_accepts_real_tempdir(tmp_path):
     assert target.exists()
     _clean_dest(target)
     assert not target.exists()
+
+
+# --- clone/fetch timeout falls through the cascade --------------------------
+# core.git documents subprocess.TimeoutExpired propagating unchanged from
+# clone_repository / fetch_commit; each layer must convert it into a
+# LayerReport failure so the cascade continues (and the pipeline sees
+# AcquisitionError, which it handles), instead of a raw exception
+# aborting the whole run.
+
+def _timeout(*_a, **_k):
+    raise subprocess.TimeoutExpired(cmd=["git"], timeout=1)
+
+
+def test_targeted_fetch_timeout_is_layer_failure(tmp_path, monkeypatch):
+    import cve_diff.acquisition.layers as layers_mod
+    monkeypatch.setattr(layers_mod, "fetch_commit", _timeout)
+    ref = RepoRef(
+        repository_url="https://github.com/acme/widget",
+        fix_commit=CommitSha("a" * 40),
+        introduced=None,
+        canonical_score=100,
+    )
+    report = TargetedFetchLayer().acquire(ref, tmp_path / "d1")
+    assert report.ok is False
+    assert "timed out" in report.detail
+
+
+def test_shallow_clone_timeout_is_layer_failure(tmp_path, monkeypatch):
+    import cve_diff.acquisition.layers as layers_mod
+    monkeypatch.setattr(layers_mod, "clone_repository", _timeout)
+    ref = RepoRef(
+        repository_url="https://github.com/acme/widget",
+        fix_commit=CommitSha("a" * 40),
+        introduced=None,
+        canonical_score=100,
+    )
+    report = ShallowCloneLayer().acquire(ref, tmp_path / "d2")
+    assert report.ok is False
+    assert "timed out" in report.detail
+
+
+def test_full_clone_timeout_is_layer_failure(tmp_path, monkeypatch):
+    import cve_diff.acquisition.layers as layers_mod
+    monkeypatch.setattr(layers_mod, "clone_repository", _timeout)
+    monkeypatch.setattr(
+        "cve_diff.infra.github_client.get_repo", lambda slug: None,
+    )
+    ref = RepoRef(
+        repository_url="https://github.com/acme/widget",
+        fix_commit=CommitSha("a" * 40),
+        introduced=None,
+        canonical_score=100,
+    )
+    report = FullCloneLayer().acquire(ref, tmp_path / "d3")
+    assert report.ok is False
+    assert "timed out" in report.detail
+
+
+def test_cascade_survives_timeouts_and_raises_acquisition_error(tmp_path, monkeypatch):
+    import cve_diff.acquisition.layers as layers_mod
+    monkeypatch.setattr(layers_mod, "fetch_commit", _timeout)
+    monkeypatch.setattr(layers_mod, "clone_repository", _timeout)
+    monkeypatch.setattr(
+        "cve_diff.infra.github_client.get_repo", lambda slug: None,
+    )
+    ref = RepoRef(
+        repository_url="https://github.com/acme/widget",
+        fix_commit=CommitSha("a" * 40),
+        introduced=None,
+        canonical_score=100,
+    )
+    acquirer = CascadingRepoAcquirer()
+    with pytest.raises(AcquisitionError):
+        acquirer.acquire(ref, tmp_path / "d4")
+    assert len(acquirer.reports) == 3

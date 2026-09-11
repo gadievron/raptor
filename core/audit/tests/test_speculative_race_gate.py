@@ -198,3 +198,79 @@ class TestSpeculativeRaceDemotion:
         # The first sentence has "not" but it's not near a protection phrase.
         # The second sentence has a real protection phrase with no negation.
         assert result.status == "clean"
+
+
+class TestRaceEvidenceAllowlist:
+    """Confirm-channel stamps and '+'-joined multi-stamps must count
+    as tool evidence; evidence-free race hypotheses still demote."""
+
+    def test_lock_region_confirmed_deadlock_survives(self):
+        o = _outcome(
+            hypothesis="deadlock when the callback re-enters ctx->lock",
+            evidence_tool="lock_region:callback_under_lock",
+        )
+        result = _apply_speculative_race_demotion(o)
+        assert result.status == "finding"
+
+    def test_non_concurrency_receipt_does_not_shield_race(self):
+        """A consistency receipt (return-check census) confirms a
+        non-concurrency property — it must not rescue a race
+        hypothesis it says nothing about. Same for fail_open."""
+        o = _outcome(
+            hypothesis="data race on shared refcount",
+            evidence_tool="consistency:return_check",
+        )
+        result = _apply_speculative_race_demotion(o)
+        assert result.status == "suspicious"
+
+    def test_fail_open_receipt_does_not_shield_race(self):
+        o = _outcome(
+            hypothesis="toctou window while the handler fails open",
+            evidence_tool="fail_open:handler_outcome",
+        )
+        result = _apply_speculative_race_demotion(o)
+        assert result.status == "suspicious"
+
+    def test_llm_claimed_never_rescues(self):
+        """LLM-provided evidence values are namespaced llm-claimed:*
+        before they reach evidence_tool; a claimed lock_region stamp
+        must not match the mechanical-channel allowlist."""
+        o = _outcome(
+            hypothesis="deadlock when the callback re-enters ctx->lock",
+            evidence_tool="llm-claimed:lock_region:callback_under_lock",
+        )
+        result = _apply_speculative_race_demotion(o)
+        assert result.status == "suspicious"
+
+    def test_multi_stamp_second_component_counts(self):
+        """'+'-joined stamps: a confirming component anywhere in the
+        join must keep the finding (startswith on the whole string
+        only saw the first component)."""
+        o = _outcome(
+            hypothesis="race condition in lock handling",
+            evidence_tool="precondition:x+smt:race-feasibility",
+        )
+        result = _apply_speculative_race_demotion(o)
+        assert result.status == "finding"
+
+    def test_critique_stamp_counts(self):
+        o = _outcome(
+            hypothesis="concurrent access to shared map",
+            evidence_tool="critique:prefilter:toctou-filesystem",
+        )
+        result = _apply_speculative_race_demotion(o)
+        assert result.status == "finding"
+
+    def test_evidence_free_race_still_demotes(self):
+        o = _outcome(hypothesis="race condition between open and unlink")
+        result = _apply_speculative_race_demotion(o)
+        assert result.status == "suspicious"
+
+    def test_unlisted_evidence_still_demotes(self):
+        """A stamp outside every confirm channel is not race evidence."""
+        o = _outcome(
+            hypothesis="race condition on the flag",
+            evidence_tool="mechanical:guard_sufficiency",
+        )
+        result = _apply_speculative_race_demotion(o)
+        assert result.status == "suspicious"

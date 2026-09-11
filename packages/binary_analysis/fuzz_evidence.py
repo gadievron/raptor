@@ -55,13 +55,22 @@ class FuzzEvidenceBundle:
 
 
 def _resolve_crashes_dir(fuzz_dir: Path, summary: dict[str, Any]) -> Path | None:
+    recorded = summary.get("crashes_dir")
+    if recorded:
+        # A relative recorded path is relative to the fuzz run dir, not
+        # the process CWD (same anchoring as the summary 'target' below).
+        recorded_path = Path(recorded)
+        if not recorded_path.is_absolute():
+            recorded_path = fuzz_dir / recorded_path
+    else:
+        recorded_path = None
     for candidate in (
-        summary.get("crashes_dir"),
+        recorded_path,
         fuzz_dir / "afl" / "main" / "crashes",
         fuzz_dir / "libfuzzer" / "crashes",
     ):
-        if candidate and Path(candidate).is_dir():
-            return Path(candidate)
+        if candidate is not None and candidate.is_dir():
+            return candidate
     return None
 
 

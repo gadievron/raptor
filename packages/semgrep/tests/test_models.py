@@ -315,3 +315,79 @@ class TestOutputBudget:
         out = parse_json_output(payload)
         assert out["files_examined"] == []
         assert out["semgrep_version"] == ""
+
+
+class TestParseSarifMalformedResults:
+    def test_non_dict_results_skipped(self):
+        # Non-dict entries in runs[].results previously converted to
+        # phantom SemgrepFinding(file='', line=0) records that inflated
+        # finding_count downstream.
+        import json
+        sarif = json.dumps({
+            "runs": [{
+                "results": [
+                    "bogus",
+                    None,
+                    {
+                        "ruleId": "r1",
+                        "locations": [{
+                            "physicalLocation": {
+                                "artifactLocation": {"uri": "a.py"},
+                                "region": {"startLine": 3},
+                            },
+                        }],
+                    },
+                ],
+            }],
+        })
+        findings = parse_sarif(sarif)
+        assert len(findings) == 1
+        assert findings[0].file == "a.py"
+        assert findings[0].line == 3
+
+    def test_empty_dict_result_skipped(self):
+        import json
+        sarif = json.dumps({"runs": [{"results": [{}]}]})
+        assert parse_sarif(sarif) == []
+
+
+class TestRegionCoercion:
+    def test_bad_field_does_not_discard_rest(self):
+        # Per-field coercion: startColumn: null must not wipe out the
+        # parseable endLine/endColumn that follow it.
+        result = {
+            "ruleId": "r1",
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": "a.py"},
+                    "region": {
+                        "startLine": "12",
+                        "startColumn": None,
+                        "endLine": 30,
+                        "endColumn": "7",
+                    },
+                },
+            }],
+        }
+        f = SemgrepFinding.from_sarif_result(result)
+        assert f.line == 12
+        assert f.column == 0  # unparseable -> 0
+        assert f.line_end == 30
+        assert f.column_end == 7
+
+    def test_all_fields_valid_unchanged(self):
+        # Two-direction: fully valid regions still parse as before.
+        result = {
+            "ruleId": "r1",
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": "a.py"},
+                    "region": {
+                        "startLine": 1, "startColumn": 2,
+                        "endLine": 3, "endColumn": 4,
+                    },
+                },
+            }],
+        }
+        f = SemgrepFinding.from_sarif_result(result)
+        assert (f.line, f.column, f.line_end, f.column_end) == (1, 2, 3, 4)

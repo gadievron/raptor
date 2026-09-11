@@ -93,3 +93,59 @@ def test_bitmap_matches_interval_semantics_for_function_queries(tmp_path):
     assert s.function_covered("a.c", 2, 2, category="runtime") is False
     # [1,9] = 9 lines; odd lines 1,3,5,7,9 covered = 5/9 ≈ 56%.
     assert s.who_checked_function("a.c", 1, 9) == {"gcov": "partial (56%)"}
+
+
+def test_wide_span_never_materialises_a_set(tmp_path):
+    """Address-magnitude / forged spans must stay intervals: expanding
+    a multi-million-value range into a Python set is the memory
+    detonation the journal-parse clamp only guards ONE input against
+    (checklist ranges + persisted stores reach mark() unclamped)."""
+    from core.coverage.store import _BITMAP_MAX_LINES
+
+    s = CoverageStore(tmp_path / "coverage.json")
+    # Fragment the contribution past the interval threshold first so
+    # the bitmap conversion WOULD fire, then include one wide span.
+    for i in range(_BITMAP_THRESHOLD + 5):
+        s.mark("binary:app", i * 10, i * 10 + 1, "bin")
+    s.mark("binary:app", 10_000_000, 10_000_000 + _BITMAP_MAX_LINES * 5, "bin")
+    value = s._files["binary:app"]["tools"]["bin"]
+    assert not isinstance(value, set)
+    # Queries stay correct over the interval representation.
+    assert s.who_checked("binary:app", 10_000_050) == ["bin"]
+
+
+def test_wide_span_onto_existing_bitmap_demotes_to_intervals(tmp_path):
+    from core.coverage.store import _BITMAP_MAX_LINES
+
+    s = CoverageStore(tmp_path / "coverage.json")
+    # Build a genuine bitmap first (sparse small marks).
+    for i in range(_BITMAP_THRESHOLD + 5):
+        s.mark("a.c", i * 10, i * 10, "gcov")
+    assert isinstance(s._files["a.c"]["tools"]["gcov"], set)
+    # A forged huge span must demote, not .update(range(...)) itself in.
+    s.mark("a.c", 1, _BITMAP_MAX_LINES * 10, "gcov")
+    value = s._files["a.c"]["tools"]["gcov"]
+    assert not isinstance(value, set)
+    assert s.who_checked("a.c", _BITMAP_MAX_LINES * 5) == ["gcov"]
+
+
+def test_dense_small_spans_still_convert_to_bitmap(tmp_path):
+    """Equality direction for the magnitude gate: fragmented but
+    small-magnitude contributions keep the set fast-path."""
+    s = CoverageStore(tmp_path / "coverage.json")
+    for i in range(_BITMAP_THRESHOLD + 5):
+        s.mark("a.c", i * 10, i * 10 + 1, "gcov")
+    assert isinstance(s._files["a.c"]["tools"]["gcov"], set)
+
+
+def test_overlap_query_over_huge_range_is_bounded(tmp_path):
+    """who_checked_function over an address-magnitude range against a
+    set contribution must iterate the SET, not range(lo, hi) — this
+    completing quickly (rather than iterating 10^12 values) is the
+    assertion."""
+    s = CoverageStore(tmp_path / "coverage.json")
+    for i in range(_BITMAP_THRESHOLD + 5):
+        s.mark("a.c", i * 10, i * 10, "gcov")
+    assert isinstance(s._files["a.c"]["tools"]["gcov"], set)
+    out = s.tool_coverage_of_range("a.c", 0, 10**12)
+    assert out["gcov"] == _BITMAP_THRESHOLD + 5

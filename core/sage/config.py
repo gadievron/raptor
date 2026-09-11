@@ -4,6 +4,8 @@ import logging
 import os
 from dataclasses import dataclass, field
 
+from core.config import env_flag as _env_flag
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 30.0
@@ -80,7 +82,11 @@ class SageConfig:
     """
 
     enabled: bool = field(
-        default_factory=lambda: os.getenv("SAGE_ENABLED", "false").lower() in ("true", "1", "yes")
+        # core.config.env_flag rather than a hand-rolled parse: the
+        # hand-rolled version silently disabled SAGE on "on"/"ON" and
+        # on whitespace-padded values; env_flag accepts the canonical
+        # spellings (case-insensitive, stripped) and warns on typos.
+        default_factory=lambda: _env_flag("SAGE_ENABLED", default=False)
     )
     url: str = field(
         default_factory=lambda: os.getenv("SAGE_URL", "http://localhost:8090")

@@ -117,14 +117,21 @@ def volatile_target_reason(target: str | None) -> str | None:
     left ``/tmp`` as the active default target, and only an interactive
     ask caught it):
 
+    * an empty/whitespace target string — ``Path("").resolve()`` is
+      the CWD (always the RAPTOR repo dir for these callers), the
+      exact fallback the default-target doctrine forbids;
     * the system temp root itself (``/tmp``, ``/var/tmp``,
       ``tempfile.gettempdir()``) — subdirectories are legitimate
-      checkouts and do NOT flag;
+      checkouts and do NOT flag; matched on the resolved path AND the
+      lexical normalisation, so a symlink alias of the temp root
+      cannot slip past the equality check;
     * a nonexistent path;
     * an empty directory.
     """
-    if not target:
+    if target is None:
         return None
+    if not str(target).strip():
+        return "is empty"
     if _URL_SCHEME_RE.match(target):
         # A URL project target is fine for /web but is not a
         # filesystem default for code-scanning commands.
@@ -136,7 +143,7 @@ def volatile_target_reason(target: str | None) -> str | None:
     temp_roots = {Path("/tmp"), Path("/var/tmp")}
     with contextlib.suppress(OSError, ValueError):
         temp_roots.add(Path(tempfile.gettempdir()).resolve())
-    if resolved in temp_roots:
+    if resolved in temp_roots or Path(os.path.normpath(target)) in temp_roots:
         return "is the system temp directory"
     if not resolved.exists():
         return "does not exist"

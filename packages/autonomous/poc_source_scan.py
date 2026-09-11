@@ -67,17 +67,29 @@ class SourceScanViolation:
 # block comments containing real ``#include`` directives are vanishingly
 # rare in PoC source and aren't worth a full C tokenizer.
 
-# Use ``[ \t]*`` rather than ``\s*`` for leading and intra-directive
+# Use ``[ \t\f\v]*`` rather than ``\s*`` for leading and intra-directive
 # whitespace: ``\s`` includes ``\n`` and lets the regex engine anchor a
 # match on a blank line preceding the directive, which throws the
 # reported line number off by however many blank lines came before.
+# Formfeed and vertical tab must be INCLUDED though — gcc treats both
+# as horizontal whitespace before/inside a directive, so ``\f#include``
+# is live to the preprocessor and must not slip past the scan.
+#
+# The directive introducer is ``(?:#|%:)``: ``%:`` is the standard C
+# digraph for ``#`` and gcc processes ``%:include "/etc/passwd"``
+# exactly like the plain spelling.
+_WS = r'[ \t\f\v]'
+_HASH = r'(?:#|%:)'
 _DIRECTIVE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("#include",
-     re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"]+)[>"]', re.MULTILINE)),
+     re.compile(rf'^{_WS}*{_HASH}{_WS}*include{_WS}*[<"]([^>"]+)[>"]', re.MULTILINE)),
     ("#embed",
-     re.compile(r'^[ \t]*#[ \t]*embed[ \t]*[<"]([^>"]+)[>"]', re.MULTILINE)),
+     re.compile(rf'^{_WS}*{_HASH}{_WS}*embed{_WS}*[<"]([^>"]+)[>"]', re.MULTILINE)),
     ("#pragma GCC dependency",
-     re.compile(r'^[ \t]*#[ \t]*pragma[ \t]+GCC[ \t]+dependency[ \t]+"([^"]+)"', re.MULTILINE)),
+     re.compile(
+         rf'^{_WS}*{_HASH}{_WS}*pragma{_WS}+GCC{_WS}+dependency{_WS}+"([^"]+)"',
+         re.MULTILINE,
+     )),
     ("__has_include",
      re.compile(r'__has_include\s*\(\s*[<"]([^>"]+)[>"]\s*\)')),
     # ``.incbin "..."`` appears inside ``__asm__("...")`` blocks where the

@@ -585,3 +585,26 @@ class TestWorkspaceRootStampedOnDeps:
         })
         deps = parse(root / "packages/foo/package.json")
         assert deps[0].workspace_root == root.resolve()
+
+
+def test_strip_descriptor_scoped_parent_unscoped_child():
+    # ``@scope/parent/child`` pins CHILD within the scoped parent's
+    # tree; the whole key used to come back verbatim (a garbage
+    # registry lookup).
+    assert _strip_descriptor("@scope/parent/child") == "child"
+
+
+def test_strip_descriptor_deep_chain_takes_last_package():
+    assert _strip_descriptor("a/b/c") == "c"
+
+
+def test_strip_descriptor_scoped_parent_scoped_child():
+    assert _strip_descriptor("@p/x/@s/y") == "@s/y"
+
+
+def test_strip_descriptor_glob_segment_skipped():
+    assert _strip_descriptor("a/**/loader-utils") == "loader-utils"
+
+
+def test_strip_descriptor_chain_child_with_selector():
+    assert _strip_descriptor("@scope/parent/child@npm:^1.0") == "child"

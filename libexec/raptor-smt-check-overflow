@@ -9,8 +9,11 @@ Usage:
                             [--guard 'condition' ...]
 
 Each ``--operand`` is one operand of the suspect arithmetic op.  Operands
-must be atomic — single identifiers (``count``) or numeric literals
-(``16``, ``0x10``).  Compound forms like ``sizeof(record)`` are rejected
+must be atomic — single identifiers (``count``), numeric literals
+(``16``, ``0x10``), or balanced function-call shapes (``sizeof(record)``,
+``strlen(input)``).  Call shapes become unconstrained free variables, so
+a ``feasible=true`` verdict involving one is a hint, not proof.  Compound
+arithmetic (``a + b``), pointer deref, and struct access are rejected
 with a clear error; pass the numeric value or use raptor-smt-validate-path
 directly for free-form predicates.
 
@@ -40,7 +43,6 @@ parser involved for the verb's own predicate), so the verb cannot fail
 at parse time on its own predicate — only on caller-supplied guards.
 """
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -83,6 +85,9 @@ def main() -> int:
                    help="Wrap pattern (default: unsigned_wrap)")
     p.add_argument("--guard", action="append", default=[],
                    help="Visible source-level guard (repeat for each)")
+    # Accept --source and --function for compatibility with sweep runner
+    p.add_argument("--source", default=None, help=argparse.SUPPRESS)
+    p.add_argument("--function", default=None, help=argparse.SUPPRESS)
     args = p.parse_args()
 
     try:

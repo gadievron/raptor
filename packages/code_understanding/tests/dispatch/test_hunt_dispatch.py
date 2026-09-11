@@ -511,6 +511,38 @@ class TestErrorPaths:
         files = {v["file"] for v in result}
         assert files == {"x.c", "ok.c"}
 
+    def test_unhashable_line_values_filtered(self, repo, fake_model_config):
+        """A list/dict line value must be dropped at the boundary: it
+        would end up inside a merge dict key and crash the entire
+        run_multi_model call, discarding every model's results. Digit
+        strings normalise to int so dedup keys agree across models."""
+        from packages.code_understanding.dispatch.hunt_dispatch import (
+            default_hunt_dispatch,
+        )
+
+        turns = [
+            FakeTurn(tool_calls=[("submit_variants", {
+                "variants": [
+                    {"file": "x.c", "line": 1},       # valid
+                    {"file": "y.c", "line": [42]},    # unhashable — filtered
+                    {"file": "z.c", "line": {"n": 1}},  # unhashable — filtered
+                    {"file": "s.c", "line": "42"},    # digit string — coerced
+                    {"file": "w.c", "line": "4a"},    # non-numeric — filtered
+                    {"file": "b.c", "line": True},    # bool — filtered
+                ],
+            })]),
+        ]
+
+        with _patch_provider(turns):
+            result = default_hunt_dispatch(
+                fake_model_config, "any", str(repo),
+            )
+        assert {(v["file"], v["line"]) for v in result} == {
+            ("x.c", 1), ("s.c", 42),
+        }
+        # Every surviving line is an int — safe as a dedup-key member.
+        assert all(isinstance(v["line"], int) for v in result)
+
     def test_provider_exception_caught(self, repo, fake_model_config):
         """If the provider itself raises (e.g. transport error), surface as error entry."""
         from packages.code_understanding.dispatch.hunt_dispatch import (
@@ -531,6 +563,33 @@ class TestErrorPaths:
         assert len(result) == 1
         assert "error" in result[0]
         assert "RuntimeError" in result[0]["error"]
+
+    def test_loop_exception_reports_budget_cap_to_cost_collector(
+        self, repo, fake_model_config,
+    ):
+        """Spend before a mid-loop failure is unobservable; the
+        dispatch must report the cap (fail-safe) rather than $0, so
+        the aggregate budget gate cannot let later models overspend."""
+        from packages.code_understanding.dispatch.hunt_dispatch import (
+            default_hunt_dispatch,
+        )
+
+        class ExplodingProvider(FakeProvider):
+            def turn(self, messages, tools, **kwargs):
+                raise RuntimeError("mid-loop boom")
+
+        collected: list[float] = []
+        with patch(
+            "packages.code_understanding.dispatch.hunt_dispatch.create_provider",
+            return_value=ExplodingProvider([]),
+        ):
+            result = default_hunt_dispatch(
+                fake_model_config, "any", str(repo),
+                max_cost_usd=1.25,
+                cost_collector=collected.append,
+            )
+        assert "error" in result[0]
+        assert collected == [1.25]
 
 
 class TestDirectCallerValidation:

@@ -93,6 +93,26 @@ class TestProject(unittest.TestCase):
             self.assertEqual(len(dirs), 1)
             self.assertEqual(dirs[0].name, "scan-20260401")
 
+    def test_annotations_dir_never_a_run(self):
+        # The /annotate prose store lives at <output_dir>/annotations:
+        # pre-fix run enumeration classified it as an unknown run, so
+        # get_run_dirs_by_type stamped machine metadata INSIDE the
+        # human notes and /project clean planned it for deletion.
+        with TemporaryDirectory() as d:
+            ann = Path(d) / "annotations"
+            ann.mkdir()
+            (ann / "src").mkdir()
+            (Path(d) / "scan-20260401").mkdir()
+            p = Project(name="test", target=self.target_code, output_dir=d)
+            self.assertEqual(
+                [r.name for r in p.get_run_dirs(sweep=False)],
+                ["scan-20260401"])
+            groups = p.get_run_dirs_by_type()
+            for dirs in groups.values():
+                self.assertNotIn(ann, dirs)
+            # No machine metadata stamped inside the notes tree.
+            self.assertFalse((ann / ".raptor-run.json").exists())
+
     def test_sweep_marks_stale_running_as_failed(self):
         """sweep_stale_runs marks 'running' dirs with dead session_pid as failed."""
         from core.json import load_json, save_json

@@ -429,3 +429,90 @@ def test_record_outcomes_never_raises_without_scorecard(llm):
                         "cheap_reasoning": ""}},
         [{"finding_id": "f1", "is_true_positive": False}],
     ) == 0
+
+
+# ---------------------------------------------------------------------------
+# Memoized dispatch hook (make_prefilter_fn)
+# ---------------------------------------------------------------------------
+
+
+def test_make_prefilter_fn_one_cheap_call_per_finding(llm):
+    """Dispatch fans out (model x finding) pairs; the cheap FP check
+    is model-independent, so N models re-invoking the hook for the
+    SAME finding must reuse one verdict — not pay N cheap-tier calls
+    and race the pending-claims writes."""
+    from packages.llm_analysis.prefilter import make_prefilter_fn
+
+    client, prov = llm
+    prov.responder = lambda p, s, sp: (
+        {"verdict": "clear_fp", "reasoning": "hardcoded value"}, "raw",
+    )
+    pending: dict[str, dict] = {}
+    hook = make_prefilter_fn(client, pending_claims=pending)
+
+    item = _finding()
+    first = hook(item)
+    second = hook(item)   # second model's work item, same finding
+    third = hook(item)
+
+    assert prov.call_count == 1
+    assert first is second is third
+    # Fall-through claim stashed exactly once.
+    assert list(pending) == ["f1"]
+
+
+def test_make_prefilter_fn_distinct_findings_independent(llm):
+    from packages.llm_analysis.prefilter import make_prefilter_fn
+
+    client, prov = llm
+    prov.responder = lambda p, s, sp: (
+        {"verdict": "needs_analysis", "reasoning": ""}, "raw",
+    )
+    hook = make_prefilter_fn(client, pending_claims={})
+
+    a = _finding()
+    b = dict(_finding(), finding_id="f2")
+    assert hook(a) is None
+    assert hook(b) is None
+    assert prov.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Severity vocabulary + abstention adjudication
+# ---------------------------------------------------------------------------
+
+
+def test_short_circuit_severity_is_canonical_enum_value():
+    from core.schema_constants import SEVERITY_LEVELS
+    analysis = agentic_fp_analysis("clearly hardcoded")
+    assert analysis["severity_assessment"] in SEVERITY_LEVELS
+
+
+def test_abstaining_full_analysis_not_recorded_as_disagreement(llm):
+    """A full-analysis result with a missing / None is_true_positive
+    is an abstention — recording it as 'incorrect' would erode
+    fast-tier trust on zero evidence."""
+    client, prov = llm
+    claims = {
+        "f1": {"decision_class": "agentic:py/sql-injection",
+               "model": "haiku-stub", "cheap_reasoning": "r"},
+        "f2": {"decision_class": "agentic:py/sql-injection",
+               "model": "haiku-stub", "cheap_reasoning": "r"},
+    }
+    results = [
+        {"finding_id": "f1"},                       # missing verdict
+        {"finding_id": "f2", "is_true_positive": None},  # explicit null
+    ]
+    assert record_prefilter_outcomes(client, claims, results) == 0
+
+
+def test_real_verdicts_still_adjudicated(llm):
+    # Two-direction: definite verdicts keep recording.
+    client, prov = llm
+    claims = {
+        "f1": {"decision_class": "agentic:py/sql-injection",
+               "model": "haiku-stub", "cheap_reasoning": "r"},
+    }
+    results = [{"finding_id": "f1", "is_true_positive": False,
+                "reasoning": "fp"}]
+    assert record_prefilter_outcomes(client, claims, results) == 1

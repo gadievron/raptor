@@ -7,10 +7,15 @@ Usage:
   raptor-smt-check-oob --buffer-size SIZE --index INDEX
                        [--profile NAME] [--guard 'condition' ...]
 
-``SIZE`` and ``INDEX`` are identifier or expression strings naming the
-buffer length and the index used at the access site.  Compound
-expressions are accepted (``--index 'offset + length'``) — the parser
-handles arithmetic.
+``SIZE`` and ``INDEX`` name the buffer length and the index used at the
+access site.  Each must be atomic: a single identifier (``count``), a
+numeric literal (``16``, ``0x10``), or a balanced function-call shape
+(``strlen(input)`` — treated as an unconstrained free variable, so a
+``feasible=true`` verdict involving one is a hint, not proof).  Compound
+arithmetic (``--index 'offset + length'``) is rejected with a clear
+error; introduce a helper variable in ``--guard``
+(``--guard 'idx == offset + length'``) and pass ``--index idx``, or use
+raptor-smt-validate-path directly.
 
 ``--profile`` defaults to ``uint64`` since most modern bounds are
 ``size_t``-shaped.  Override when the index is ``int`` or narrower.
@@ -29,7 +34,6 @@ Notes:
   escapes need a signed profile AND an explicit guard expression.
 """
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -67,6 +71,9 @@ def main() -> int:
                    help="Bitvector profile name (default: uint64)")
     p.add_argument("--guard", action="append", default=[],
                    help="Visible bounds-check / path condition (repeat)")
+    # Accept --source and --function for compatibility with sweep runner
+    p.add_argument("--source", default=None, help=argparse.SUPPRESS)
+    p.add_argument("--function", default=None, help=argparse.SUPPRESS)
     args = p.parse_args()
 
     try:

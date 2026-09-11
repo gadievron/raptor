@@ -350,3 +350,64 @@ class TestLibexecScriptWrite:
         assert code == 0
         data = json.loads(cm_path.read_text(encoding="utf-8"))
         assert "mitigation_context" not in data["sinks"][0]
+
+
+class TestNoOverclaimFromMissingData:
+    """'Verified available' must be earned from evidence, never
+    asserted from an empty/absent protections dict or an unknown CWE
+    class — a fabricated got_overwrite:true drove sinks to
+    priority_hint 'high' with no data behind it."""
+
+    def test_empty_protections_yields_unknown_not_available(self):
+        result = {"protections": {}, "glibc_n_disabled": None}
+        avail = _availability_for_cwe("CWE-476", result)
+        assert avail["got_overwrite"] is None
+        assert avail["fini_array"] is None
+        assert _priority_hint(avail, None) != "high"
+
+    def test_missing_protections_key_yields_unknown(self):
+        avail = _availability_for_cwe("CWE-134", {"glibc_n_disabled": None})
+        assert avail["got_overwrite"] is None
+        assert avail["fini_array"] is None
+
+    def test_partial_relro_evidence_still_marks_available(self):
+        # Two-direction: real evidence of partial RELRO still earns
+        # the True verdict.
+        result = _fake_result(protections={"full_relro": False})
+        avail = _availability_for_cwe("CWE-134", result)
+        assert avail["got_overwrite"] is True
+        assert avail["fini_array"] is True
+
+    def test_unknown_cwe_family_stays_sparse(self):
+        # The documented contract: CWEs outside the known families get
+        # a fully conditional availability set — no claims either way.
+        result = _fake_result(protections={"full_relro": False},
+                              glibc_n_disabled=False)
+        for cwe in ("UNKNOWN", "CWE-79", ""):
+            avail = _availability_for_cwe(cwe, result)
+            assert all(v is None for v in avail.values()), cwe
+            assert _priority_hint(avail, None) == "medium"
+
+    def test_known_cwe_family_still_gets_opinions(self):
+        result = _fake_result(protections={"full_relro": True})
+        avail = _availability_for_cwe("CWE-787", result)
+        assert avail["got_overwrite"] is False
+
+    def test_absent_impact_not_fabricated(self, tmp_path):
+        binary = tmp_path / "bin"
+        binary.write_bytes(b"\x7fELF")
+        result = {"verdict": "difficult", "protections": {}}
+        blob = build_mitigation_context(
+            result, sink_cwe="CWE-476", binary_path=binary,
+        )
+        assert blob["verdict_for_downstream"]["impact"] is None
+
+    def test_present_impact_passes_through(self, tmp_path):
+        binary = tmp_path / "bin"
+        binary.write_bytes(b"\x7fELF")
+        result = {"verdict": "difficult", "protections": {},
+                  "impact": "info_leak"}
+        blob = build_mitigation_context(
+            result, sink_cwe="CWE-476", binary_path=binary,
+        )
+        assert blob["verdict_for_downstream"]["impact"] == "info_leak"

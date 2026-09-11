@@ -189,6 +189,7 @@ def extract_files_from_tar(
     max_total_bytes: int | None = None,
     max_entry_count: int | None = 50_000,
     sink: Callable[[str, bytes], None] | None = None,
+    on_skipped: Callable[[tarfile.TarInfo, str], None] | None = None,
 ) -> dict[str, bytes]:
     """Walk ``source`` (a tar archive) and return selected members
     as a ``{key: bytes}`` dict.
@@ -200,6 +201,14 @@ def extract_files_from_tar(
     For consumers that write members straight to disk this bounds
     peak memory to one member instead of the whole selection.
     Exceptions raised by the sink abort the walk and propagate.
+
+    ``on_skipped``: when provided, called as ``on_skipped(member,
+    reason)`` for each member the SAFETY filter rejects (oversize,
+    unsafe link, ...). Without it a rejected member is a debug log
+    only — indistinguishable, to the caller, from the member being
+    absent; consumers whose selection must be loud-on-refusal (OCI
+    package-state extraction) raise from the callback. Exceptions
+    it raises abort the walk and propagate.
 
     ``selector(member)`` returns the dict key for members to keep,
     or ``None`` to skip. Members are first checked by
@@ -283,6 +292,8 @@ def extract_files_from_tar(
                     "core.tar.extract: skipping unsafe entry %s (%s)",
                     member.name, reason.value,
                 )
+                if on_skipped is not None:
+                    on_skipped(member, reason.value)
                 continue
             key = selector(member)
             if key is None:

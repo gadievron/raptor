@@ -21,19 +21,19 @@ pytestmark = pytest.mark.usefixtures("cc_spawn_machinery_enabled")
 
 class TestExtractModel:
     def test_single_model(self):
-        env = {"modelUsage": {"anthropic.claude-mythos-5": {
+        env = {"modelUsage": {"anthropic.claude-fable-5": {
             "outputTokens": 5}}}
         assert extract_model_from_envelope(env) == (
-            "anthropic.claude-mythos-5"
+            "anthropic.claude-fable-5"
         )
 
     def test_main_model_wins_over_helper(self):
         env = {"modelUsage": {
             "claude-haiku-4-5": {"outputTokens": 3},
-            "anthropic.claude-mythos-5": {"outputTokens": 812},
+            "anthropic.claude-fable-5": {"outputTokens": 812},
         }}
         assert extract_model_from_envelope(env) == (
-            "anthropic.claude-mythos-5"
+            "anthropic.claude-fable-5"
         )
 
     def test_missing_usage(self):
@@ -92,16 +92,16 @@ class TestProbe:
     def test_success_returns_model_and_caches(self, monkeypatch):
         envelope = json.dumps({
             "type": "result", "is_error": False,
-            "modelUsage": {"anthropic.claude-mythos-5": {
+            "modelUsage": {"anthropic.claude-fable-5": {
                 "outputTokens": 4}},
         })
         calls = self._fake_run(monkeypatch, stdout=envelope)
         got = probe_cc_session_model("/usr/bin/true")
-        assert got == "anthropic.claude-mythos-5"
+        assert got == "anthropic.claude-fable-5"
         assert len(calls) == 1
         # Second call served from cache — no new subprocess.
         got2 = probe_cc_session_model("/usr/bin/true")
-        assert got2 == "anthropic.claude-mythos-5"
+        assert got2 == "anthropic.claude-fable-5"
         assert len(calls) == 1
 
     def test_nonzero_exit_returns_none(self, monkeypatch):
@@ -159,6 +159,43 @@ class TestProbe:
         monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1")
         assert probe_cc_session_model("/usr/bin/true") == "model-a"
         assert len(calls) == 2  # cache miss on proxy change
+
+    def test_signature_stable_across_egress_loopback_rewrite(
+        self, monkeypatch, tmp_path,
+    ):
+        """enable_llm_egress rewrites HTTP(S)_PROXY in os.environ to a
+        loopback pointer with a per-process EPHEMERAL port. That
+        rewrite must NOT vary the probe signature — the probe child is
+        handed the operator route (cc_subprocess_env), and hashing the
+        live loopback pointer gave every process a unique signature,
+        structurally defeating the 24h cache on proxied installs."""
+        from core.llm import egress
+        monkeypatch.setenv("HOME", str(tmp_path))  # pin settings.json
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:3128")
+        sig_before = cc_probe._backend_signature("/usr/bin/true")
+        # Simulate the egress enable transition: operator snapshot
+        # taken, live env rewritten to the process-local chokepoint.
+        monkeypatch.setattr(
+            egress, "_original_proxy_env",
+            {"HTTPS_PROXY": "http://proxy.corp:3128"},
+        )
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:54321")
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:54321")
+        monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1")
+        assert cc_probe._backend_signature("/usr/bin/true") == sig_before
+
+    def test_signature_changes_when_operator_proxy_changes(
+        self, monkeypatch, tmp_path,
+    ):
+        """Direction two: a GENUINE operator proxy change (no egress
+        rewrite in play) must still invalidate the signature — the
+        cached verdict must not outlive the route it was probed
+        under."""
+        monkeypatch.setenv("HOME", str(tmp_path))  # pin settings.json
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy-a:3128")
+        sig_a = cc_probe._backend_signature("/usr/bin/true")
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy-b:3128")
+        assert cc_probe._backend_signature("/usr/bin/true") != sig_a
 
 
 class TestCachedRead:

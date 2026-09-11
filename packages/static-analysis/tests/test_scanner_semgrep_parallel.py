@@ -559,23 +559,23 @@ class TestSemgrepDroppedFiles:
 # ---------------------------------------------------------------------------
 
 
-class _FailingSock:
-    def settimeout(self, _t):
-        pass
-
-    def connect(self, _addr):
-        raise OSError("unreachable")
-
+class _ProbeSock:
     def close(self):
         pass
 
 
-class _ConnectingSock(_FailingSock):
-    def connect(self, _addr):
-        return None
+def _failing_probe(_addr, timeout=None):
+    raise OSError("unreachable")
+
+
+def _connecting_probe(_addr, timeout=None):
+    return _ProbeSock()
 
 
 class TestDropUnreachableRegistryPacks:
+    # The probe uses socket.create_connection (family-agnostic —
+    # an AF_INET-only socket misclassified IPv6-only hosts as
+    # airgapped), so that is the seam the tests patch.
     CONFIGS = [
         ("semgrep_security_audit", "p/security-audit"),
         ("semgrep_secrets", "p/secrets"),
@@ -590,7 +590,7 @@ class TestDropUnreachableRegistryPacks:
 
     def test_unreachable_drops_records_and_prints(self, capsys, monkeypatch):
         monkeypatch.setattr(
-            "socket.socket", lambda *a, **k: _FailingSock(),
+            "socket.create_connection", _failing_probe,
         )
         kept = _scanner_mod._drop_unreachable_registry_packs(
             list(self.CONFIGS),
@@ -605,7 +605,7 @@ class TestDropUnreachableRegistryPacks:
 
     def test_drops_accumulate_without_duplicates(self, monkeypatch):
         monkeypatch.setattr(
-            "socket.socket", lambda *a, **k: _FailingSock(),
+            "socket.create_connection", _failing_probe,
         )
         _scanner_mod._drop_unreachable_registry_packs(list(self.CONFIGS))
         _scanner_mod._drop_unreachable_registry_packs(list(self.CONFIGS))
@@ -615,7 +615,7 @@ class TestDropUnreachableRegistryPacks:
 
     def test_reachable_keeps_everything_quietly(self, capsys, monkeypatch):
         monkeypatch.setattr(
-            "socket.socket", lambda *a, **k: _ConnectingSock(),
+            "socket.create_connection", _connecting_probe,
         )
         kept = _scanner_mod._drop_unreachable_registry_packs(
             list(self.CONFIGS),
@@ -628,7 +628,7 @@ class TestDropUnreachableRegistryPacks:
         def _boom(*_a, **_k):
             raise AssertionError("probe must not run for local configs")
 
-        monkeypatch.setattr("socket.socket", _boom)
+        monkeypatch.setattr("socket.create_connection", _boom)
         local = [("category_crypto", "/repo/rules/crypto")]
         assert _scanner_mod._drop_unreachable_registry_packs(
             list(local),
@@ -661,3 +661,96 @@ class TestSingleFileRulesEntry:
         )
         called_names = [c.args[0] for c in mock_single.call_args_list]
         assert "category_ssrf" in called_names
+
+
+# ---------------------------------------------------------------------------
+# _append_extra_configs — shared --extra-config dedup / collision rename
+# ---------------------------------------------------------------------------
+
+
+class TestAppendExtraConfigs:
+    def test_appends_with_extra_prefix(self):
+        configs = [("category_crypto", "/repo/rules/crypto")]
+        _scanner_mod._append_extra_configs(configs, ["/a/rules.yml"])
+        assert ("extra_rules.yml", "/a/rules.yml") in configs
+
+    def test_duplicate_path_dropped(self):
+        configs: list = []
+        _scanner_mod._append_extra_configs(
+            configs, ["/a/rules.yml", "/a/rules.yml"],
+        )
+        assert len(configs) == 1
+
+    def test_basename_collision_renamed(self):
+        configs: list = []
+        _scanner_mod._append_extra_configs(
+            configs, ["/a/rules.yml", "/b/rules.yml"],
+        )
+        names = [n for n, _ in configs]
+        assert len(configs) == 2
+        assert len(set(names)) == 2  # distinct pack names
+
+    def test_none_is_noop(self):
+        configs = [("category_crypto", "/repo/rules/crypto")]
+        _scanner_mod._append_extra_configs(configs, None)
+        assert configs == [("category_crypto", "/repo/rules/crypto")]
+
+
+# ---------------------------------------------------------------------------
+# _CodeQLStageTag — must be attached to the 'raptor' logger
+# ---------------------------------------------------------------------------
+
+
+class TestCodeQLStageTag:
+    def _emit_from_codeql_thread(self, attach_to):
+        """Log one record via the 'raptor' logger from a
+        codeql-stage-named thread with the filter on *attach_to*;
+        return the captured message."""
+        import logging
+        import threading
+
+        raptor_logger = logging.getLogger("raptor")
+        records: list = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record):
+                records.append(record.getMessage())
+
+        cap = _Capture()
+        tag = _scanner_mod._CodeQLStageTag()
+        raptor_logger.addHandler(cap)
+        attach_to.addFilter(tag)
+        try:
+            t = threading.Thread(
+                target=lambda: raptor_logger.warning("db build step"),
+                name="codeql-stage_0",
+            )
+            t.start()
+            t.join()
+        finally:
+            attach_to.removeFilter(tag)
+            raptor_logger.removeHandler(cap)
+        assert len(records) == 1
+        return records[0]
+
+    def test_raptor_logger_attach_tags_codeql_thread(self):
+        # The wiring main() uses: filter on the 'raptor' logger.
+        import logging
+        msg = self._emit_from_codeql_thread(logging.getLogger("raptor"))
+        assert msg.startswith("[codeql] ")
+
+    def test_root_logger_attach_never_fired(self):
+        # The pre-fix wiring: 'raptor' has propagate=False and
+        # logger-level filters are not consulted cross-logger, so a
+        # root-attached filter never tags anything. Documents WHY the
+        # attach point matters.
+        import logging
+        msg = self._emit_from_codeql_thread(logging.getLogger())
+        assert not msg.startswith("[codeql] ")
+
+    def test_main_wires_filter_to_raptor_logger(self):
+        # Regression pin on the attach point itself.
+        src = _SCANNER_PATH.read_text(encoding="utf-8")
+        assert 'logging.getLogger("raptor").addFilter(_stage_tag)' in src
+        assert 'logging.getLogger("raptor").removeFilter(_stage_tag)' in src
+        assert "logging.getLogger().addFilter(_stage_tag)" not in src

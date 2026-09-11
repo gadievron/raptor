@@ -35,6 +35,7 @@ by reading the latest record in the directory.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import secrets
 from datetime import datetime
@@ -47,6 +48,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+_log = logging.getLogger(__name__)
 
 __all__ = [
     "bundled_corpus_path",
@@ -246,9 +249,16 @@ def _iter_records_in_dir(root: Path) -> Iterable[LabeledAttempt]:
                     record_file, strict=True, max_bytes=8 * 1024 * 1024,
                 )
                 yield LabeledAttempt.from_dict(data)
-            except (ValueError, KeyError, TypeError):
-                # Skip corrupt / outdated records rather than fail the
-                # whole read. Retrieval is best-effort.
+            except (ValueError, KeyError, TypeError, OSError, AttributeError):
+                # Skip corrupt / outdated / unreadable records rather
+                # than fail the whole read. OSError covers e.g. a
+                # permission-denied file in a shared pool; AttributeError
+                # covers valid JSON of the wrong shape (top-level array,
+                # non-dict sub-object). Retrieval is best-effort.
+                _log.debug(
+                    "skipping unreadable record %s", record_file,
+                    exc_info=True,
+                )
                 continue
 
 

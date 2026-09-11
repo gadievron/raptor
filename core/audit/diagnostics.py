@@ -34,8 +34,23 @@ def read_function_source(
     is returned — callers that attribute pattern matches to a
     specific function MUST pass the span, or a match anywhere in the
     file binds to whatever symbol the caller happens to hold.
+
+    ``file_path`` comes from run artefacts (checklists, findings —
+    LLM-writable), so the join is containment-checked: an absolute
+    path discards ``target_path`` entirely under ``/`` semantics and
+    ``../`` segments escape the root (CWE-22).  Reads outside the
+    target refuse with the function's normal empty-string degradation.
     """
-    full = target_path / file_path
+    try:
+        full = (target_path / file_path).resolve()
+        if not full.is_relative_to(Path(target_path).resolve()):
+            logger.warning(
+                "read_function_source: refusing path outside target "
+                "root: %r", file_path,
+            )
+            return ""
+    except (OSError, ValueError):
+        return ""
     if not full.is_file():
         return ""
     try:

@@ -16,6 +16,16 @@ from __future__ import annotations
 import re
 
 
+# Digit-run cap for numeric components. Real versions top out well
+# under 20 digits (Go pseudo-version timestamps are 14); anything
+# longer is hostile or garbage. Bounding here keeps ``int()`` off
+# arbitrarily long digit strings — str→int conversion is quadratic in
+# the digit count, and on interpreters with an int-digit limit the
+# conversion raises ``ValueError`` from deep inside otherwise
+# non-raising helpers. An over-long run is a parse failure for that
+# single version, never a process-wide cost.
+_MAX_COMPONENT_DIGITS = 32
+
 # v-prefixed (Go), or plain semver, with optional pre-release and build.
 # Accepts short forms (1, 1.2, 1.2.3); missing components default to 0.
 # Strict semver requires three components but real-world advisory data
@@ -24,9 +34,9 @@ _SEMVER_RE = re.compile(
     r"""
     ^
     v?                                # tolerate leading v (Go)
-    (?P<major>\d+)
-    (?:\.(?P<minor>\d+))?
-    (?:\.(?P<patch>\d+))?
+    (?P<major>\d{1,32})
+    (?:\.(?P<minor>\d{1,32}))?
+    (?:\.(?P<patch>\d{1,32}))?
     (?:-(?P<pre>[0-9A-Za-z.-]+))?     # pre-release
     (?:\+(?P<build>[0-9A-Za-z.-]+))?  # build metadata (ignored for ordering)
     $
@@ -93,10 +103,18 @@ def _compare_identifier(a: str, b: str) -> int:
     a_num = a.isdigit()
     b_num = b.isdigit()
     if a_num and b_num:
-        ai, bi = int(a), int(b)
-        if ai == bi:
+        # Compare digit strings without ``int()``: identifiers come
+        # from unvalidated pre-release text, so a hostile version can
+        # carry an arbitrarily long digit run — str→int conversion is
+        # quadratic in the digit count (and raises past the
+        # interpreter's int-digit limit). Leading-zero strip + length
+        # + lexicographic gives the same numeric ordering in O(n).
+        as_, bs = a.lstrip("0"), b.lstrip("0")
+        if len(as_) != len(bs):
+            return -1 if len(as_) < len(bs) else 1
+        if as_ == bs:
             return 0
-        return -1 if ai < bi else 1
+        return -1 if as_ < bs else 1
     if a_num and not b_num:
         return -1
     if b_num and not a_num:
@@ -158,6 +176,13 @@ def _loose_components(operand: str) -> tuple[int, int, int, int] | None:
         if part in ("x", "X", "*", ""):
             break
         if not part.isdigit():
+            return None
+        if len(part) > _MAX_COMPONENT_DIGITS:
+            # Hostile / garbage digit run. ``int()`` on it is
+            # quadratic CPU and can raise past the interpreter's
+            # int-digit limit — an exception here escapes ``bounds()``
+            # and takes the caller's whole manifest down with it.
+            # Treat as unparseable: this one spec records no bound.
             return None
         nums.append(int(part))
     if not nums:

@@ -31,6 +31,17 @@ if TYPE_CHECKING:
 
 _AUDIT_FILENAME = "audit-llm-dispatcher.jsonl"
 
+
+def audit_path_for_run_dir(run_dir: Path) -> Path:
+    """The canonical L5 audit-log path inside *run_dir*.
+
+    The single spelling every dispatcher-construction site shares
+    (``dispatcher_for_run`` below, ``raptor.py``'s launcher, the
+    in-process self-serve route) — so runs land one audit trail name
+    regardless of which seam built the dispatcher.
+    """
+    return Path(run_dir) / _AUDIT_FILENAME
+
 # Worker-token TTL for the in-process self-serve route. The default
 # worker TTL (8 h) bounds a SPAWNED worker that could outlive its
 # intended span while the credential-holding parent keeps running.
@@ -78,7 +89,7 @@ def dispatcher_for_run(
     if not run_dir.exists():
         msg = f"run_dir does not exist: {run_dir}"
         raise FileNotFoundError(msg)
-    audit_path = run_dir / _AUDIT_FILENAME
+    audit_path = audit_path_for_run_dir(run_dir)
     run_id = run_dir.name
     # Use only the kwargs the caller actually set, so the dispatcher
     # keeps its module-level defaults for the rest.
@@ -123,6 +134,7 @@ def llm_dispatcher_in_run(
 
 def ensure_inprocess_dispatcher_env(
     label: str = "inprocess",
+    run_dir: Path | None = None,
 ) -> LLMDispatcher | None:
     """Start a dispatcher and export its route into THIS process's env
     (``RAPTOR_LLM_SOCKET`` + ``RAPTOR_LLM_TOKEN_FD``) so same-process
@@ -134,6 +146,12 @@ def ensure_inprocess_dispatcher_env(
     inject the route, yet dispatcher-only providers (Bedrock: workers
     never hold AWS credentials) still need one.  No-op returning
     ``None`` when a route already exists.
+
+    ``run_dir``: when the caller has a run output directory, the
+    dispatcher's L5 audit log lands at
+    :func:`audit_path_for_run_dir`; without one (ad-hoc CLIs have no
+    run) the audit stays in-memory only — deliberately, there is
+    nowhere durable that outlives the invocation to write it.
 
     The returned dispatcher is the caller's to ``shutdown()``; an
     ``atexit`` hook is registered as defence-in-depth, same contract
@@ -155,6 +173,8 @@ def ensure_inprocess_dispatcher_env(
         # Only when the operator hasn't pinned a TTL — an explicit
         # constructor arg would otherwise shadow the env override.
         kwargs["token_ttl_s"] = _INPROCESS_TOKEN_TTL_S
+    if run_dir is not None and Path(run_dir).is_dir():
+        kwargs["audit_path"] = audit_path_for_run_dir(run_dir)
     d = LLMDispatcher(
         run_id=f"inproc-{uuid.uuid4().hex[:8]}", creds=creds, **kwargs,
     )
@@ -173,6 +193,7 @@ def ensure_route_for_model_configs(
     model_configs,
     *,
     label: str = "inprocess",
+    run_dir: Path | None = None,
 ) -> LLMDispatcher | None:
     """Self-serve an in-process dispatcher when any resolved model is
     dispatcher-only (Bedrock) and no route exists yet.
@@ -190,7 +211,8 @@ def ensure_route_for_model_configs(
 
     ``model_configs`` is any iterable of :class:`ModelConfig`-shaped
     objects (``None`` entries tolerated).  Ownership contract matches
-    :func:`ensure_inprocess_dispatcher_env`.
+    :func:`ensure_inprocess_dispatcher_env`, including the ``run_dir``
+    audit-log placement.
     """
     if os.environ.get("RAPTOR_LLM_SOCKET"):
         return None
@@ -199,4 +221,4 @@ def ensure_route_for_model_configs(
         for mc in model_configs
     ):
         return None
-    return ensure_inprocess_dispatcher_env(label=label)
+    return ensure_inprocess_dispatcher_env(label=label, run_dir=run_dir)

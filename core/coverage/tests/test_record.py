@@ -757,3 +757,28 @@ class TestBuildFromJournal(unittest.TestCase):
         from core.coverage.record import build_from_journal
         with TemporaryDirectory() as tmp:
             assert build_from_journal(Path(tmp)) is None
+
+
+class TestBuildFromFindingsShapeGuards:
+    """findings.json is LLM-written — shape drift must degrade, not
+    crash the validation-helper coverage step."""
+
+    def test_non_list_findings_value_returns_none(self, tmp_path):
+        import json as _json
+
+        p = tmp_path / "findings.json"
+        p.write_text(_json.dumps({"findings": "not-a-list"}))
+        assert build_from_findings(p) is None
+
+    def test_non_dict_finding_items_skipped(self, tmp_path):
+        import json as _json
+
+        p = tmp_path / "findings.json"
+        p.write_text(_json.dumps({"findings": [
+            "junk", 42, {"file": 3, "function": ["x"]},
+            {"file": "src/a.c", "function": "f"},
+        ]}))
+        rec = build_from_findings(p)
+        assert rec is not None
+        assert rec["functions_analysed"] == [
+            {"file": "src/a.c", "function": "f"}]

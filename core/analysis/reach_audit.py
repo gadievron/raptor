@@ -78,7 +78,22 @@ class _ClassifyCtx:
 
 def _stage_module_aborts(ctx: _ClassifyCtx, R) -> str | None:
     abort = R.module_aborts_on_load(ctx.inventory, ctx.file_path)
-    if abort and ctx.line and ctx.line > int(abort.get("line") or 0):
+    if not abort:
+        return None
+    abort_line = abort.get("line")
+    if not isinstance(abort_line, int) or abort_line <= 0:
+        # A record without a usable line can't prove the function
+        # binds BELOW the abort. Defaulting the missing line to 0
+        # made every function in the file read below it — a SOUND
+        # witness hard-suppressing on malformed evidence.
+        logger.warning(
+            "module_aborts record for %s lacks a line; witness skipped",
+            ctx.file_path,
+        )
+        return None
+    line = ctx.line or _item_line_start(
+        ctx.inventory, ctx.file_path, ctx.name)
+    if line and line > abort_line:
         return "module_aborts"
     return None
 
@@ -195,7 +210,13 @@ def _stage_one_hop(ctx: _ClassifyCtx, R) -> str | None:
 
 
 def _joern_has_callers(function_name: str) -> bool:
-    """Check whether Joern finds callers that tree-sitter missed."""
+    """Check whether Joern finds callers that tree-sitter missed.
+
+    Advisory PROMOTE channel only: it can rescue a graph-derived
+    not_called, never demote.  The tri-state ``None`` (consultation
+    unavailable) therefore maps to False — no rescue, the graph
+    verdict stands, same as a run without a Joern lane.
+    """
     if _joern_server is None:
         return False
     try:
@@ -249,24 +270,48 @@ PRECEDENCE = (
 )
 
 
+def _candidate_items(
+    inventory: dict[str, object], file_path: str, name: str,
+) -> list:
+    """Same-name items for ``(file_path, name)`` via the shared
+    reachability inverse index — hash-lookup-fast instead of the
+    O(N_files) linear scan every ``classify_reachability`` call was
+    paying twice (class-name lookup + accessors) on 30k-file
+    inventories."""
+    from core.analysis.reachability import _get_bo_item_index
+    by_name = _get_bo_item_index(inventory).get(
+        file_path.replace("\\", "/"))
+    if not by_name:
+        return []
+    return by_name.get(name) or []
+
+
+def _item_line_start(
+    inventory: dict[str, object], file_path: str, name: str,
+) -> int:
+    """``line_start`` of the (single) matching item, or 0. Used when a
+    caller passed ``line == 0`` — resolving the item's own span keeps
+    line-conditioned witnesses (module_aborts) usable for line-less
+    queries. Ambiguous names (several same-name items) return 0: we
+    can't know which one the caller means."""
+    items = _candidate_items(inventory, file_path, name)
+    if len(items) != 1:
+        return 0
+    try:
+        return int(items[0].get("line_start") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _lookup_class_name(
     inventory: dict[str, object], file_path: str, name: str, line: int,
 ) -> str | None:
     """The enclosing class of the ``(file_path, name)`` item, if any — used to
-    build a method's class-qualified name for the 1-hop check. Scans the target
-    file's items only (matching the other (inventory, file_path) accessors)."""
-    files = inventory.get("files") or []
-    if not isinstance(files, list):
-        return None
-    for f in files:
-        if not isinstance(f, dict) or f.get("path") != file_path:
+    build a method's class-qualified name for the 1-hop check."""
+    for it in _candidate_items(inventory, file_path, name):
+        if line and int(it.get("line_start") or 0) != line:
             continue
-        for it in f.get("items") or []:
-            if it.get("name") != name:
-                continue
-            if line and int(it.get("line_start") or 0) != line:
-                continue
-            return (it.get("metadata") or {}).get("class_name")
+        return (it.get("metadata") or {}).get("class_name")
     return None
 
 

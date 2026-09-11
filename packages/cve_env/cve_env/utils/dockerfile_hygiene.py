@@ -104,13 +104,27 @@ def sanitize_dockerfile(text: str) -> str:
             if "=" not in body:
                 line = f"{_EMPTY_LABEL_MARKER}{line}"
             elif "\\\\" in line:
-                line = re.sub(r"\\{2,}", "\\\\", line)
+                # Raw string: the replacement must be TWO backslashes
+                # (one escaped backslash). A non-raw "\\\\" decodes to a
+                # single backslash in the re template, which turned a
+                # legal escaped-backslash pair into a quote-escape and
+                # corrupted valid LABEL lines.
+                line = re.sub(r"\\{2,}", r"\\\\", line)
         out_lines.append(line)
     return "\n".join(out_lines)
 
 
-def _check_from_line(stripped: str, from_images: list[str]) -> list[str]:
-    """Validate a FROM line; append discovered image to ``from_images``."""
+def _check_from_line(
+    stripped: str,
+    from_images: list[str],
+    stage_aliases: frozenset[str] = frozenset(),
+) -> list[str]:
+    """Validate a FROM line; append discovered image to ``from_images``.
+
+    ``stage_aliases`` holds the ``AS <name>`` stage names declared by the
+    Dockerfile's FROM lines — a tagless ``FROM <alias>`` in a multi-stage
+    build references a stage, not a registry image.
+    """
     issues: list[str] = []
     parts = stripped.split()
     idx = 1
@@ -129,11 +143,36 @@ def _check_from_line(stripped: str, from_images: list[str]) -> list[str]:
         # Otherwise ``nginx:latest@sha256:<digest>`` has ``@`` so a
         # condition like ``"@" not in image`` would be False and no tag
         # would be checked at all — defense bypassable.
+        had_digest = bool(_SHA256_DIGEST_SUFFIX_RE.search(image))
         ref_for_tag = _SHA256_DIGEST_SUFFIX_RE.sub("", image)
         tag = ref_for_tag.rsplit(":", 1)[1] if ":" in ref_for_tag else ""
         if tag.lower() in FORBIDDEN_VERSION_TAGS:
             issues.append(f"P14: FROM forbidden tag ({tag!r}) in {image}")
+        elif (
+            not tag
+            and not had_digest
+            and image.lower() != "scratch"
+            and image.lower() not in stage_aliases
+        ):
+            # A tagless, undigested FROM floats on :latest at build time —
+            # the same drift the explicit-tag reject exists to stop.
+            issues.append(
+                f"P14: FROM {image} has no tag or digest (implicit :latest)"
+            )
     return issues
+
+
+def _collect_stage_aliases(logical_lines: list[str]) -> frozenset[str]:
+    """Stage names declared via ``FROM <image> AS <name>`` (lowercased)."""
+    aliases: set[str] = set()
+    for raw in logical_lines:
+        parts = raw.strip().split()
+        if len(parts) >= 4 and parts[0].upper() == "FROM":
+            for i in range(1, len(parts) - 1):
+                if parts[i].upper() == "AS":
+                    aliases.add(parts[i + 1].lower())
+                    break
+    return frozenset(aliases)
 
 
 def _check_run_line(stripped: str) -> list[str]:
@@ -144,6 +183,34 @@ def _check_run_line(stripped: str) -> list[str]:
 
 
 def _check_copy_line(stripped: str) -> list[str]:
+    directive, _, rest = stripped.partition(" ")
+    rest = rest.strip()
+    # Skip leading flags (--from=..., --chown=...) to find the argument form.
+    args = rest
+    while args.startswith("--"):
+        args = args.partition(" ")[2].lstrip()
+    if args.startswith("["):
+        # Exec (JSON-array) form: ``COPY ["src","dst"]``. Whitespace
+        # tokenization miscounts it when there's no space after the
+        # comma, so parse the array instead.
+        try:
+            arr = json.loads(args)
+        except json.JSONDecodeError:
+            return [f"{directive} JSON form is malformed: {stripped!r}"]
+        if (
+            not isinstance(arr, list)
+            or len(arr) < 2
+            or not all(isinstance(x, str) for x in arr)
+        ):
+            return [f"{directive} needs source and destination: {stripped!r}"]
+        if directive.upper() == "ADD":
+            return [
+                f"ADD fetches a remote URL ({src}); prefer COPY + "
+                "explicit download (curl/wget) for auditability"
+                for src in arr[:-1]
+                if src.startswith(("http://", "https://", "ftp://"))
+            ]
+        return []
     parts = stripped.split()
     if len(parts) < 3:
         return [f"{parts[0]} needs source and destination: {stripped!r}"]
@@ -211,12 +278,16 @@ def validate_dockerfile_semantics(text: str) -> list[str]:
     """
     issues: list[str] = []
     from_images: list[str] = []
+    logical_lines = _merge_continuation_lines(text)
+    stage_aliases = _collect_stage_aliases(logical_lines)
 
-    for raw in _merge_continuation_lines(text):
+    for raw in logical_lines:
         stripped = raw.strip()
         up = stripped.upper()
         if up.startswith("FROM "):
-            issues.extend(_check_from_line(stripped, from_images))
+            issues.extend(
+                _check_from_line(stripped, from_images, stage_aliases)
+            )
         elif up == "RUN" or up.startswith("RUN "):
             issues.extend(_check_run_line(stripped))
         elif up.startswith(("COPY ", "ADD ")):

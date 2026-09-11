@@ -31,6 +31,7 @@ import logging
 import subprocess
 
 from . import ResolverResult, _check_tool, _run
+from ._safe_io import read_regular_bytes
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -131,8 +132,10 @@ class GradleResolver:
             )
         # Prefer an explicit gradle.lockfile when the project opted
         # into dependency locking; otherwise the dep-tree output is
-        # the closest lockfile-equivalent artefact we have.
-        lockfile = _read_if_exists(project_dir / "gradle.lockfile")
+        # the closest lockfile-equivalent artefact we have. The path
+        # lives in the scanned (hostile) directory — lstat-gated,
+        # bounded read only (no symlink follow, no FIFO open).
+        lockfile = read_regular_bytes(project_dir / "gradle.lockfile")
         if not lockfile:
             lockfile = proc.stdout.encode("utf-8") if proc.stdout else None
         return ResolverResult(
@@ -152,13 +155,6 @@ def _resolve_gradle_cmd(project_dir: Path) -> list[str]:
     if _has_wrapper(project_dir):
         return ["./gradlew"]
     return ["gradle"]
-
-
-def _read_if_exists(p: Path) -> bytes | None:
-    try:
-        return p.read_bytes()
-    except OSError:
-        return None
 
 
 __all__ = ["GradleResolver"]

@@ -102,6 +102,15 @@ _SOURCE_INTEL_CWES = frozenset({
 _SI_RESULT_CACHE: dict[str, tuple[str, Any | None]] = {}
 _SI_LOCK = threading.RLock()
 
+# Per-repo build-flags memo, keyed like the result cache and stamped
+# with the same target signature. ``extract_flags`` re-reads and
+# re-parses compile_commands.json in full on every call (a file that
+# can run 100+ MB on kernel-scale targets), and this module used to
+# invoke it once per memory-corruption finding across the analysis /
+# exploit / patch prompt paths — N findings paid N full parses for a
+# value that only changes when the tree does.
+_SI_FLAGS_CACHE: dict[str, tuple[str, Any | None]] = {}
+
 def prepare_source_intel(
     repo_path: Path, *, checklist: dict[str, Any] | None = None,
 ) -> None:
@@ -260,12 +269,7 @@ def evidence_blocks_for_finding(
         or finding.get("function")
         or ""
     )
-    flags = None
-    if _extract_flags is not None:
-        try:
-            flags = _extract_flags(Path(repo_key))
-        except Exception:  # noqa: BLE001
-            flags = None
+    flags = _flags_for_repo(repo_key, current_sig)
 
     try:
         lines = _derive_evidence_strings(
@@ -304,6 +308,31 @@ def evidence_blocks_for_finding(
     )
 
 
+def _flags_for_repo(repo_key: str, current_sig: str) -> Any | None:
+    """Memoised ``extract_flags`` — one compile_commands.json parse per
+    (repo, tree-state) instead of one per finding.
+
+    Stamped with the caller's freshly computed target signature; a
+    tree edit changes the signature and forces a re-extract, matching
+    the result cache's invalidation semantics. ``None`` (extraction
+    unavailable or failed) is cached too so a broken
+    compile_commands.json isn't re-parsed per finding either.
+    """
+    with _SI_LOCK:
+        cached = _SI_FLAGS_CACHE.get(repo_key)
+        if cached is not None and cached[0] == current_sig:
+            return cached[1]
+    flags = None
+    if _extract_flags is not None:
+        try:
+            flags = _extract_flags(Path(repo_key))
+        except Exception:  # noqa: BLE001
+            flags = None
+    with _SI_LOCK:
+        _SI_FLAGS_CACHE[repo_key] = (current_sig, flags)
+    return flags
+
+
 def clear_si_result_cache() -> None:
     """Drop every cached source_intel result.
 
@@ -315,6 +344,7 @@ def clear_si_result_cache() -> None:
     """
     with _SI_LOCK:
         _SI_RESULT_CACHE.clear()
+        _SI_FLAGS_CACHE.clear()
 
 
 # Back-compat alias. Existing test code imports this name; the

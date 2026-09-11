@@ -682,3 +682,76 @@ class TestRustRefTypeDetection:
         src = "fn process(buf: &[u8]) -> () {}\n"
         results = extract_type_constraints(src, "test.rs", "process")
         assert all(r["param"] != "buf" for r in results)
+
+
+class TestExtractPythonTypesRobustness:
+    def test_indented_method_snippet_parses(self):
+        from core.audit.mechanical_gates import _extract_python_types
+
+        src = (
+            "    def handle(self, n: int, s: str) -> None:\n"
+            "        return None\n"
+        )
+        results = _extract_python_types(src, "handle")
+        # str carries no constraint note; the int param proves the
+        # dedent recovered the method (the old path returned []).
+        assert {r["param"] for r in results} == {"n"}
+
+    def test_same_named_functions_refuse(self):
+        # Two same-named defs: the first one's parameter types were
+        # emitted as constraints for the WRONG function — a false
+        # steering hint. Ambiguity now yields no constraint.
+        from core.audit.mechanical_gates import _extract_python_types
+
+        src = (
+            "class A:\n"
+            "    def handle(self, n: int):\n"
+            "        pass\n"
+            "class B:\n"
+            "    def handle(self, s: str):\n"
+            "        pass\n"
+        )
+        assert _extract_python_types(src, "handle") == []
+
+    def test_unique_function_still_extracts(self):
+        from core.audit.mechanical_gates import _extract_python_types
+
+        src = "def f(n: int):\n    pass\n"
+        results = _extract_python_types(src, "f")
+        assert results and results[0]["param"] == "n"
+
+
+class TestNormaliseCallSiteStrings:
+    def test_hash_inside_string_does_not_truncate(self):
+        from core.audit.mechanical_gates import _normalise_call_site
+
+        a = _normalise_call_site('f("a #b", x)')
+        b = _normalise_call_site('f("a #c", y)')
+        assert a != b
+        assert '"a #b"' in a
+
+    def test_real_comment_still_stripped(self):
+        from core.audit.mechanical_gates import _normalise_call_site
+
+        assert _normalise_call_site(
+            "f(x)  # trailing comment",
+        ) == _normalise_call_site("f(y)")
+
+
+class TestModuleConstantInvalidation:
+    def test_non_literal_rebinding_invalidates(self):
+        import ast as _ast
+
+        from core.audit.mechanical_gates import _collect_module_constants
+
+        tree = _ast.parse("CMD = 'ls'\nCMD = input()\n")
+        assert "CMD" not in _collect_module_constants(tree)
+
+    def test_stable_literal_still_collected(self):
+        import ast as _ast
+
+        from core.audit.mechanical_gates import _collect_module_constants
+
+        tree = _ast.parse("CMD = 'ls'\nOTHER = 3\n")
+        constants = _collect_module_constants(tree)
+        assert constants == {"CMD": "ls", "OTHER": 3}

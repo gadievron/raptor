@@ -478,3 +478,16 @@ jobs:
     assert "aarch64" in arches, (
         f"missed aarch64 from build-push-action override; arches={arches}"
     )
+
+
+def test_is_dockerfile_accepts_capital_d_suffix_variant() -> None:
+    """``<variant>.Dockerfile`` is a name shape the other Dockerfile
+    consumers in this package accept — the platform-matrix discovery
+    pass must recognise it too, alongside the existing forms."""
+    from packages.sca.platform_matrix.matrix import _is_dockerfile
+
+    assert _is_dockerfile(Path("base.Dockerfile"))
+    assert _is_dockerfile(Path("Dockerfile"))
+    assert _is_dockerfile(Path("Dockerfile.slim"))
+    assert _is_dockerfile(Path("app.dockerfile"))
+    assert not _is_dockerfile(Path("dockerfile_notes.md"))

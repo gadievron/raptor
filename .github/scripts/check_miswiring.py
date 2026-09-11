@@ -337,9 +337,10 @@ def parse_module(path: Path, root: Path):
 
         def visit_ImportFrom(self, node) -> None:
             if node.level:      # relative import: resolve against file path
+                # parts[:-level] is correct for both plain modules and
+                # __init__.py: with_suffix("") already strips the
+                # filename component that distinguishes them.
                 base_parts = rel.with_suffix("").parts[:-node.level]
-                if rel.name == "__init__.py":
-                    base_parts = rel.with_suffix("").parts[:-(node.level)]
                 mod = ".".join(base_parts + tuple((node.module or "").split(".")
                                                   if node.module else ()))
             else:
@@ -473,9 +474,70 @@ SAFE_DECORATORS = {
 # value*, not the fixture function, so its signature does not apply.
 
 
+def _assigned_attribute_names(idx: RepoIndex) -> set:
+    """Repo-wide set of attribute names that are ever ASSIGNED.
+
+    Collected shapes:
+      * ``obj.attr = ...`` / ``obj.attr += ...`` / annotated form
+        (any base object, not just self/cls — instance attributes are
+        routinely attached from factory/setup code in other modules)
+      * ``setattr(obj, "attr", ...)`` with a literal name
+      * class-body bindings (``attr = callable`` / ``attr: T``) —
+        class attributes may hold callables
+
+    Consumed by the missing_method suppression: ``self.X()`` where X
+    resolves to no method is only flagged when X is never assigned as
+    an attribute anywhere. Repo-wide (not per-module) on purpose —
+    a false missing_method finding in the daily gate costs more than
+    a suppressed true positive.
+    """
+    names: set = set()
+    for mod in idx.module_list:
+        for n in ast.walk(mod.tree):
+            if isinstance(n, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+                targets = n.targets if isinstance(n, ast.Assign) else [n.target]
+                for t in targets:
+                    if isinstance(t, (ast.Tuple, ast.List)):
+                        for elt in t.elts:
+                            if isinstance(elt, ast.Attribute):
+                                names.add(elt.attr)
+                    elif isinstance(t, ast.Attribute):
+                        names.add(t.attr)
+            elif (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                    and n.func.id == "setattr" and len(n.args) >= 2
+                    and isinstance(n.args[1], ast.Constant)
+                    and isinstance(n.args[1].value, str)):
+                names.add(n.args[1].value)
+            elif isinstance(n, ast.ClassDef):
+                for stmt in n.body:
+                    if isinstance(stmt, ast.Assign):
+                        for t in stmt.targets:
+                            if isinstance(t, ast.Name):
+                                names.add(t.id)
+                    elif (isinstance(stmt, ast.AnnAssign)
+                            and isinstance(stmt.target, ast.Name)):
+                        names.add(stmt.target.id)
+                    elif isinstance(stmt, (ast.ClassDef, ast.FunctionDef,
+                                           ast.AsyncFunctionDef)):
+                        # Nested classes (and methods of NESTED classes,
+                        # which ClassInfo.methods does not model) are
+                        # class attributes too — `self._Session(self)`
+                        # on a class-body `class _Session:` is valid.
+                        # This branch visits EVERY ClassDef, so it also
+                        # admits the method names of all top-level classes
+                        # repo-wide into the suppression set: `self.X()`
+                        # is suppressed when X is a method of ANY class,
+                        # not just this one. Deliberately conservative —
+                        # a false missing_method finding in the daily
+                        # gate costs more than a suppressed true one.
+                        names.add(stmt.name)
+    return names
+
+
 def check_calls(idx: RepoIndex):
     findings = []
     sup = Counter()
+    assigned_attrs = _assigned_attribute_names(idx)
 
     def resolve_name_target(mod: Module, name: str):
         """Resolve a bare name in `mod` to (kind, obj, bound)."""
@@ -572,6 +634,7 @@ def check_calls(idx: RepoIndex):
         class Encl(ast.NodeVisitor):
             def __init__(self, out) -> None:
                 self.stack = []
+                self.funcs = []
                 self.out = out
 
             def visit_ClassDef(self, node) -> None:
@@ -579,10 +642,35 @@ def check_calls(idx: RepoIndex):
                 self.generic_visit(node)
                 self.stack.pop()
 
+            def _visit_func(self, node) -> None:
+                self.funcs.append(node)
+                self.generic_visit(node)
+                self.funcs.pop()
+
+            visit_FunctionDef = _visit_func
+            visit_AsyncFunctionDef = _visit_func
+
             def visit_Call(self, node) -> None:
-                self.out[id(node)] = (
-                    self.stack[-1] if len(self.stack) == 1 else None
-                )
+                # `self`/`cls` binds to the NEAREST enclosing function
+                # that declares it as first parameter; only resolve
+                # against the class when that function is the direct
+                # method (outermost function level). A nested
+                # `def do_POST(self)` closure attached to some other
+                # class must not have its `self` calls resolved
+                # against the lexically-enclosing class.
+                cname = None
+                if len(self.stack) == 1 and self.funcs:
+                    owner = None
+                    for fn in reversed(self.funcs):
+                        args = fn.args
+                        first = [a.arg for a in
+                                 args.posonlyargs + args.args][:1]
+                        if first in (["self"], ["cls"]):
+                            owner = fn
+                            break
+                    if owner is not None and owner is self.funcs[0]:
+                        cname = self.stack[-1]
+                self.out[id(node)] = cname
                 self.generic_visit(node)
 
         Encl(encl).visit(mod.tree)
@@ -622,8 +710,16 @@ def check_calls(idx: RepoIndex):
                             continue
                         if got == "missing":
                             # could be an attribute holding a callable; only
-                            # flag if no instance attr of that name assigned
-                            if f"self.{f.attr}" in mod.src or f"cls.{f.attr}" in mod.src.replace(f"cls.{f.attr}(", "", 1):
+                            # flag if no attribute of that name is assigned
+                            # anywhere in the repo and the class chain has
+                            # no __getattr__ hook. (Pre-fix this searched
+                            # for the SUBSTRING f"self.{attr}" in the module
+                            # source — the call site itself contains it, so
+                            # every self-call was suppressed and the
+                            # detector was vacuous for its dominant shape.)
+                            if (f.attr in assigned_attrs
+                                    or find_method(mod.classes[cname],
+                                                   "__getattr__") != "missing"):
                                 sup["self_attr_callable"] += 1
                                 continue
                             findings.append({
@@ -824,9 +920,6 @@ def find_dead(idx: RepoIndex):
             if "negative_controls" in mod.path.parts:
                 sup["negative_control_corpus"] += 1     # deliberate dead code
                 continue
-            if "tests" in mod.path.parts or "test" == mod.path.parts[-2:-1]:
-                # helper defs inside test dirs: only flag module-level funcs
-                pass
             if any(h in (d or "") for d in fd.decorators
                    for h in REGISTRATION_DECORATOR_HINTS):
                 sup["registration_decorator"] += 1

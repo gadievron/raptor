@@ -443,3 +443,47 @@ repos:
     addl = {d.name: d for d in deps if d.source_kind == "precommit_additional"}
     assert addl["pydantic"].source_extra["hook_id"] == "mypy"
     assert addl["types-PyYAML"].source_extra["hook_id"] == "mypy-strict"
+
+
+# ---------------------------------------------------------------------------
+# additional_dependencies '@'-separated version specs
+# ---------------------------------------------------------------------------
+
+def _addl_config(spec: str) -> str:
+    return (
+        "repos:\n"
+        "  - repo: https://github.com/pre-commit/mirrors-eslint\n"
+        "    rev: v8.0.0\n"
+        "    hooks:\n"
+        "      - id: eslint\n"
+        "        additional_dependencies:\n"
+        f'          - "{spec}"\n'
+    )
+
+
+def test_addl_at_caret_range_classified_caret(tmp_path: Path) -> None:
+    # ``pkg@^1.0`` used to fall through every range check (the ``@``
+    # separator was left attached) and came out EXACT with the caret
+    # embedded in the version string.
+    p = tmp_path / ".pre-commit-config.yaml"
+    p.write_text(_addl_config("eslint-plugin-x@^8.0.0"), encoding="utf-8")
+    d = next(d for d in parse(p) if d.name == "eslint-plugin-x")
+    assert d.pin_style is PinStyle.CARET
+    assert d.version == "8.0.0"
+
+
+def test_addl_at_tilde_range_classified_tilde(tmp_path: Path) -> None:
+    p = tmp_path / ".pre-commit-config.yaml"
+    p.write_text(_addl_config("prettier@~2.0"), encoding="utf-8")
+    d = next(d for d in parse(p) if d.name == "prettier")
+    assert d.pin_style is PinStyle.TILDE
+    assert d.version == "2.0"
+
+
+def test_addl_at_bare_version_stays_exact(tmp_path: Path) -> None:
+    # Other direction: ``pkg@1.2.3`` is a plain pin and stays EXACT.
+    p = tmp_path / ".pre-commit-config.yaml"
+    p.write_text(_addl_config("eslint-config-x@8.57.0"), encoding="utf-8")
+    d = next(d for d in parse(p) if d.name == "eslint-config-x")
+    assert d.pin_style is PinStyle.EXACT
+    assert d.version == "8.57.0"

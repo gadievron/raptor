@@ -152,6 +152,28 @@ def _post(d: LLMDispatcher, token: str) -> bytes:
     return received
 
 
+def _parse_sse(raw: bytes) -> list[tuple[str, bytes]]:
+    """Minimal SSE parser (field/blank-line dispatch, per the spec's
+    event-stream grammar): returns ``(event_type, joined_data)`` per
+    dispatched event block. Byte-substring assertions would pass even
+    when a frame is glued onto a partial line where no real SSE
+    consumer sees a typed event — parse like a consumer instead."""
+    events: list[tuple[str, bytes]] = []
+    for block in raw.replace(b"\r\n", b"\n").split(b"\n\n"):
+        etype = "message"
+        data_lines: list[bytes] = []
+        for line in block.split(b"\n"):
+            if line.startswith(b"event:"):
+                etype = line[len(b"event:"):].strip().decode(
+                    "utf-8", "replace",
+                )
+            elif line.startswith(b"data:"):
+                data_lines.append(line[len(b"data:"):].strip())
+        if data_lines:
+            events.append((etype, b"\n".join(data_lines)))
+    return events
+
+
 def _wait_relay_abort(d: LLMDispatcher, timeout: float = 5.0) -> bool:
     """True when a request.error audit row names RelayLimitExceeded."""
     deadline = time.time() + timeout
@@ -208,10 +230,20 @@ class TestRelayLimits:
             assert received
             assert b"HTTP/1.0" not in received
             assert b"HTTP/1.1" not in received
-            # Terminal typed error event, at the tail of the stream.
-            assert b"event: error" in received[-512:]
-            assert b"relay cap" in received[-512:]
             assert received.endswith(b"\n\n")
+            # Terminal typed error event — PARSED as SSE, so the
+            # frame's leading blank line provably isolates it from
+            # whatever partial event the abort interrupted (a raw
+            # byte-substring check passed even when the frame was
+            # glued onto a half-written ``data:`` line and no SSE
+            # consumer ever saw a typed event).
+            events = _parse_sse(received)
+            assert events, "no parseable SSE events received"
+            etype, data = events[-1]
+            assert etype == "error"
+            payload = json.loads(data)
+            assert payload["error"]["type"] == "relay_aborted"
+            assert "relay cap" in payload["error"]["message"]
             # Audit row still records the abort.
             assert _wait_relay_abort(d)
         finally:

@@ -563,3 +563,82 @@ class TestProvenanceWrappers:
         assert not is_tool_evidence(
             sanitize_llm_evidence_tool("clean-refuted:smt"),
         )
+
+
+class TestLiveProducerNamespaces:
+    """Producer namespaces the firewall was missing: genuine pipeline
+    stamps (never reachable from raw model output — sanitization
+    namespaces those under llm-claimed:) must grade as tool evidence
+    instead of tripping the chokepoint demotion + CRITICAL alarm."""
+
+    def test_live_producer_stamps_qualify(self):
+        for stamp in (
+            "lifecycle",                        # _proactive_validate
+            "api_boundary:caller-contract",     # api_boundary.RULE_ID
+            "integer_truncation:trunc-assign",  # binary-context sweeps
+            "proto_length:len-mismatch",
+            "struct_field:field-oob",
+            "validate:observed_runtime",        # validate_bridge
+            "validate:replayed_crash",
+            "validate:confirmed-history",       # findings_export receipt
+            "insufficient_guard_smt:witness",   # condition-SMT detectors
+            "signed_mismatch_smt:witness",
+        ):
+            assert is_tool_evidence(stamp), stamp
+
+    def test_llm_claimed_variants_still_rejected(self):
+        for stamp in (
+            "llm-claimed:lifecycle",
+            "llm-claimed:validate:observed_runtime",
+            "llm-claimed:insufficient_guard_smt:witness",
+        ):
+            assert not is_tool_evidence(stamp), stamp
+
+
+class TestCompositePolicy:
+    """'+'-composite judgment: known parts decide; model-authored
+    parts poison; unknown pipeline producers are ignored."""
+
+    def test_all_known_namespaces_accepted(self):
+        assert is_tool_evidence("smt:path-feasible+lifecycle")
+        assert is_tool_evidence(
+            "api_boundary:caller-contract+integer_truncation:t1",
+        )
+
+    def test_mixed_unknown_part_judged_by_known_parts(self):
+        # A producer namespace this table hasn't learned yet must not
+        # veto the real receipt next to it (the CRITICAL-alarm-on-
+        # legitimate-runs shape).
+        assert is_tool_evidence("semgrep+future_producer:rule-1")
+        assert is_tool_evidence("future_producer:rule-1+joern:flow")
+        # ...but unknown parts alone still prove nothing.
+        assert not is_tool_evidence("future_producer:rule-1")
+
+    def test_llm_claimed_part_poisons_whole_composite(self):
+        # sanitize prefixes the FULL raw model string, so the model
+        # wrote "foo+semgrep" — the semgrep part is claim, not receipt.
+        assert not is_tool_evidence("llm-claimed:foo+semgrep")
+        assert not is_tool_evidence("semgrep+llm-claimed:foo")
+        assert not is_tool_evidence("llm-claimed:foo+dynamic:crash")
+
+    def test_miscased_tool_name_poisons(self):
+        # Pipeline stamps are lowercase by construction; a miscased
+        # spelling is model-authored text.
+        assert not is_tool_evidence("Semgrep+joern")
+        assert not is_tool_evidence("joern+CodeQL:rule")
+
+    def test_aggregation_shape_two_detection_namespaces_qualifies(self):
+        # The Bayesian aggregation lane stamps "+".join(confirmed)
+        # after >=2 independent detection channels cross the posterior
+        # threshold — the chokepoint must accept its own receipt.
+        assert is_tool_evidence(
+            "consistency:return-check-majority"
+            "+fail_open:handler-outcome-naming",
+        )
+        assert not is_tool_evidence("consistency:return-check-majority")
+        # Two variants of ONE namespace are correlated, not
+        # independent — never the aggregation shape.
+        assert not is_tool_evidence(
+            "consistency:return-check-majority"
+            "+consistency:flag-mode-majority",
+        )

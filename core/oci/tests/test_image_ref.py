@@ -252,3 +252,50 @@ def test_sha256_digest_case_canonicalised():
     refusing (registries emit lowercase)."""
     ref = parse_image_ref("python@SHA256:" + "A" * 64)
     assert ref.digest == "sha256:" + "a" * 64
+
+
+# ── registry canonicalisation (case + Docker Hub aliases) ─────────────
+
+
+def test_mixed_case_registry_lowercased():
+    ref = parse_image_ref("Docker.IO/library/python:3.11")
+    assert ref.registry == "docker.io"
+    assert ref.repository == "library/python"
+
+
+def test_docker_hub_aliases_collapse():
+    for alias in ("index.docker.io/library/nginx",
+                  "registry-1.docker.io/library/nginx"):
+        ref = parse_image_ref(alias)
+        assert ref.registry == "docker.io", alias
+    # Single-segment alias refs also gain the library/ namespace.
+    assert parse_image_ref("index.docker.io/nginx").repository == \
+        "library/nginx"
+
+
+# ── repository / tag grammar (authed-URL steering defence) ─────────────
+
+
+@pytest.mark.parametrize("hostile", [
+    "evil.example/api/../../v2/other:x",
+    "evil.example/repo?a=1",
+    "evil.example/repo#frag",
+    "evil.example/a b/c",
+    "evil.example/UPPER/case",
+])
+def test_hostile_repository_shapes_refused(hostile):
+    with pytest.raises(ValueError, match="repository"):
+        parse_image_ref(hostile)
+
+
+def test_hostile_tag_shapes_refused():
+    for hostile in ("repo:.dot", "repo:" + "t" * 129, "repo:ta?g"):
+        with pytest.raises(ValueError, match="tag|repository"):
+            parse_image_ref(f"evil.example/{hostile}")
+
+
+def test_ordinary_repositories_and_tags_still_parse():
+    ref = parse_image_ref(
+        "ghcr.io/some-org/my.app__component:v1.2.3-rc.1")
+    assert ref.repository == "some-org/my.app__component"
+    assert ref.tag == "v1.2.3-rc.1"

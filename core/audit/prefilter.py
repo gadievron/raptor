@@ -687,11 +687,16 @@ _AUTH_KEYWORDS = frozenset({
     "access_control", "acl", "rbac",
 })
 
+# All entries LOWERCASE: every consumer matches against a lowercased
+# view (``callee_name.lower()``, ``source.lower()``), so an uppercase
+# entry (the OpenSSL prefixes were spelled ``EVP_``/``SSL_``…) can
+# never match — the exclusion silently died and SSL_/EVP_-touching
+# functions were hard-suppressed pre-LLM as sink-unreachable clean.
 _CRYPTO_APIS = frozenset({
     "encrypt", "decrypt", "hash", "hmac", "sign", "verify",
     "digest", "cipher", "aes", "rsa", "sha", "md5",
     "pbkdf2", "scrypt", "bcrypt", "argon2",
-    "EVP_", "RAND_", "SSL_", "TLS_",
+    "evp_", "rand_", "ssl_", "tls_",
 })
 
 _CONCURRENCY_OPS = frozenset({

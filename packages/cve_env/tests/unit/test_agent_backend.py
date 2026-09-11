@@ -355,3 +355,74 @@ def test_core_cost_cap_stops_unproductive_run_as_budget(
                          max_cost_usd=1.0)
     assert out.status == "budget_exhausted"
     assert out.stop_reason == "budget_exceeded"
+
+
+def test_core_build_audit_rows_carry_turn_cost(tmp_path) -> None:
+    """The per-CVE audit JSONL owns the full agentic payload — summing its
+    cost_usd column must recover the run's per-turn costs (they used to be
+    consumed only into stage_costs, leaving every row at 0.0)."""
+    responses = [
+        TurnResponse(
+            content=[
+                TextBlock(text="giving up"),
+                ToolCall(id="t1", name="give_up",
+                         input={"reason": "no_image", "detail": "d"}),
+            ],
+            stop_reason=StopReason.NEEDS_TOOL_CALL,
+            input_tokens=100, output_tokens=50,
+        ),
+    ]
+    out = _run_core(responses, tmp_path)
+    audit = tmp_path / "test-run" / "CVE-2018-7600.jsonl"
+    rows = [json.loads(line) for line in audit.read_text().splitlines()]
+    assert sum(r.get("cost_usd", 0.0) for r in rows) > 0
+    assert sum(r.get("cost_usd", 0.0) for r in rows) == pytest.approx(
+        out.total_cost_usd
+    )
+    assert sum(r.get("input_tokens", 0) for r in rows) == 100
+    assert sum(r.get("output_tokens", 0) for r in rows) == 50
+
+
+def test_core_build_writes_refusal_forensics_log(tmp_path) -> None:
+    """A run that hits refusal-pattern text must land its forensic entries
+    in refusals-log.md with the post-hoc fields populated — the events were
+    previously counted into Outcome.refusals but the log itself was never
+    appended."""
+    responses = [
+        TurnResponse(
+            content=[
+                TextBlock(text="I cannot assist with this request."),
+                ToolCall(id="t1", name="give_up",
+                         input={"reason": "no_image", "detail": "d"}),
+            ],
+            stop_reason=StopReason.NEEDS_TOOL_CALL,
+            input_tokens=100, output_tokens=50,
+        ),
+    ]
+    log_path = tmp_path / "refusals-log.md"
+    with patch("cve_env.agent.refusals.default_log_path",
+               return_value=log_path):
+        out = _run_core(responses, tmp_path)
+    assert out.refusals >= 1
+    assert log_path.is_file()
+    text = log_path.read_text()
+    assert "CVE-2018-7600" in text
+
+
+def test_core_build_no_refusals_no_log(tmp_path) -> None:
+    """Companion direction: clean runs write no refusal log."""
+    responses = [
+        TurnResponse(
+            content=[
+                ToolCall(id="t1", name="give_up",
+                         input={"reason": "no_image", "detail": "d"}),
+            ],
+            stop_reason=StopReason.NEEDS_TOOL_CALL,
+            input_tokens=100, output_tokens=50,
+        ),
+    ]
+    log_path = tmp_path / "refusals-log.md"
+    with patch("cve_env.agent.refusals.default_log_path",
+               return_value=log_path):
+        _run_core(responses, tmp_path)
+    assert not log_path.exists()

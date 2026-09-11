@@ -416,3 +416,187 @@ def test_tcp_probe_allowed_tcp_ports_extends_allowlist() -> None:
     )
     assert out["passed"], out
     assert seen and seen[0]["host_port"] == 6379
+
+
+# ── LLM-authored plan kwargs: failed check, never TypeError ────────────
+
+
+def test_unknown_kwargs_become_failed_check_not_typeerror() -> None:
+    def fixed_sig(*, command: str = "true") -> dict[str, Any]:
+        return {"type": "exec_check", "passed": True, "details": {}}
+
+    out = ev.verify_plan(
+        plan=[{"type": "exec_check", "bogus_key": 1}],
+        executors={
+            "container_status": lambda: {
+                "type": "container_status", "passed": True, "details": {}},
+            "exec_check": fixed_sig,
+        },
+        endpoint=("127.0.0.1", 8080),
+    )
+    assert not out["passed"]
+    assert "invalid step arguments" in out["reason"]
+
+
+def test_known_kwargs_still_dispatch() -> None:
+    seen: list[str] = []
+
+    def fixed_sig(*, command: str = "true") -> dict[str, Any]:
+        seen.append(command)
+        return {"type": "exec_check", "passed": True, "details": {}}
+
+    out = ev.verify_plan(
+        plan=[{"type": "exec_check", "command": "id"}],
+        executors={
+            "container_status": lambda: {
+                "type": "container_status", "passed": True, "details": {}},
+            "exec_check": fixed_sig,
+        },
+        endpoint=("127.0.0.1", 8080),
+    )
+    assert out["passed"] and seen == ["id"]
+
+
+# ── GET + form_encoded=false must not silently drop the payload ────────
+
+
+def test_get_without_form_encoding_fails_closed() -> None:
+    out = ev.check_http_request(
+        host_ip="127.0.0.1", host_port=8080, method="GET",
+        request_body="payload", form_encoded=False,
+        expected_response_contains="marker",
+    )
+    assert not out["passed"]
+    assert "cannot carry request_body" in out["reason"]
+
+
+def test_get_with_form_encoding_builds_query(monkeypatch) -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_exchange(**kw: Any) -> tuple[int, bytes]:
+        seen.update(kw)
+        return 200, b"marker"
+
+    monkeypatch.setattr(ev, "_http_exchange", fake_exchange)
+    out = ev.check_http_request(
+        host_ip="127.0.0.1", host_port=8080, method="GET",
+        request_body="payload", form_encoded=True, field_name="q",
+        expected_response_contains="marker",
+    )
+    assert out["passed"], out
+    assert "q=payload" in seen["path"]
+
+
+# ── expected_status coercion (quoted digits) ───────────────────────────
+
+
+def test_expected_status_digit_strings_coerced(monkeypatch) -> None:
+    monkeypatch.setattr(ev, "_http_exchange",
+                        lambda **kw: (200, b"hello"))
+    out = ev.check_http(host_ip="127.0.0.1", host_port=8080,
+                        expected_status=["200"])
+    assert out["passed"], out
+
+
+def test_expected_status_garbage_fails_with_reason(monkeypatch) -> None:
+    monkeypatch.setattr(ev, "_http_exchange",
+                        lambda **kw: (200, b"hello"))
+    out = ev.check_http(host_ip="127.0.0.1", host_port=8080,
+                        expected_status=["OK"])
+    assert not out["passed"]
+    assert "expected_status" in out["reason"]
+
+
+# ── metadata-IP spellings ──────────────────────────────────────────────
+
+
+def test_ipv4_mapped_metadata_spelling_refused() -> None:
+    for spelling in ("::ffff:169.254.169.254", "::FFFF:169.254.169.254",
+                     "fd00:0ec2:0000::0254"):
+        reason = ev.assert_local_host_ip(spelling)
+        assert reason is not None and "metadata" in reason, spelling
+
+
+def test_ordinary_private_addresses_still_allowed() -> None:
+    for spelling in ("10.0.0.5", "172.19.0.7", "::1", "127.0.0.1"):
+        assert ev.assert_local_host_ip(spelling) is None, spelling
+
+
+# ── ReDoS guard breadth ────────────────────────────────────────────────
+
+
+def test_quantified_alternation_and_nested_bounds_go_literal() -> None:
+    # Bomb-shaped patterns are matched LITERALLY: on a log that does
+    # not contain the literal text, the check fails fast instead of
+    # burning CPU in catastrophic backtracking.
+    h = FakeHandle(logs="x" * 2000 + "!")
+    for pattern in (r"(a|a)+$", r"(x{1,30}){1,30}y", r"(x+)+y"):
+        out = ev.check_logs(handle=h, expected_patterns=[pattern])
+        assert not out["passed"], pattern
+
+
+def test_plain_regex_and_unquantified_groups_still_match() -> None:
+    h = FakeHandle(logs="server ERROR started on port 8080")
+    out = ev.check_logs(
+        handle=h,
+        expected_patterns=[r"port \d+", r"(ERROR|FATAL)", "started"],
+    )
+    assert out["passed"], out
+
+
+# ── TCP response accumulation ──────────────────────────────────────────
+
+
+class _SegmentedSock:
+    """Fake socket returning one small segment per recv()."""
+
+    def __init__(self, segments: list[bytes]) -> None:
+        self._segments = list(segments)
+
+    def settimeout(self, _t: float) -> None:
+        pass
+
+    def recv(self, _n: int) -> bytes:
+        if not self._segments:
+            return b""
+        return self._segments.pop(0)
+
+
+class _SilentSock:
+    def settimeout(self, _t: float) -> None:
+        pass
+
+    def recv(self, _n: int) -> bytes:
+        raise TimeoutError("no data")
+
+
+def test_recv_response_accumulates_multi_segment_banner() -> None:
+    sock = _SegmentedSock([b"SSH-2.0-", b"OpenSSH_9.6", b"\r\n"])
+    out = ev._recv_response(sock, 4096, 5.0, b"OpenSSH")
+    assert b"SSH-2.0-OpenSSH" in out
+
+
+def test_recv_response_timeout_with_no_bytes_raises() -> None:
+    import pytest
+    with pytest.raises(TimeoutError):
+        ev._recv_response(_SilentSock(), 4096, 0.05, b"marker")
+
+
+def test_deep_executor_typeerror_labelled_executor_error() -> None:
+    # A TypeError from code that RAN is a bug, not a plan error —
+    # still fail-closed, but the label must not blame the plan.
+    def buggy(**kw: Any) -> dict[str, Any]:
+        return {"n": len(None)}  # type: ignore[arg-type]
+
+    out = ev.verify_plan(
+        plan=[{"type": "exec_check", "command": "id"}],
+        executors={
+            "container_status": lambda: {
+                "type": "container_status", "passed": True, "details": {}},
+            "exec_check": buggy,
+        },
+        endpoint=("127.0.0.1", 8080),
+    )
+    assert not out["passed"]
+    assert "executor error" in out["reason"]
+    assert "invalid step arguments" not in out["reason"]

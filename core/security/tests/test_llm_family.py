@@ -36,6 +36,17 @@ def test_bare_model_id_leaves_unknown_prefixes_alone():
     assert bare_model_id("foo/bar-1") == "foo/bar-1"
 
 
+def test_bare_model_id_peels_every_family_of_provider_stem():
+    # Heads ``family_of`` resolves as provider-qualified must also be
+    # peeled here — otherwise an operator ``--model google/gemini-…``
+    # never matches its models.json entry even though family detection
+    # accepts the spelling.
+    assert bare_model_id("google/gemini-2.5-pro") == "gemini-2.5-pro"
+    assert bare_model_id("meta-llama/Llama-3-8B") == "Llama-3-8B"
+    assert bare_model_id("mistralai/Mistral-7B") == "Mistral-7B"
+    assert bare_model_id("together/meta-llama/Llama-3-8B") == "Llama-3-8B"
+
+
 # --- family_of ---
 
 def test_anthropic_models_resolve_to_anthropic():
@@ -169,14 +180,17 @@ def test_select_preserves_caller_ordering():
     assert pick == "openai/o3-mini"
 
 
-def test_select_works_when_producer_is_unknown_family():
-    """If the producer is unknown-family, any known-family candidate is
-    cross-family by our same_family() rule."""
+def test_select_refuses_unknown_family_producer():
+    """An unknown-family PRODUCER cannot prove any candidate is
+    cross-family — ``custom-model-xyz`` may be a rebadged Claude, and
+    handing back ``claude-opus-4-7`` as an "independent" checker would
+    void the cross-family invariant. Unprovable = no checker, symmetric
+    with the unknown-candidate skip."""
     pick = select_cross_family_checker(
         "custom-model-xyz",
         ["claude-opus-4-7"],
     )
-    assert pick == "claude-opus-4-7"
+    assert pick is None
 
 
 def test_select_skips_unknown_producer_against_unknown_candidate():

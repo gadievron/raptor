@@ -278,3 +278,56 @@ class TestBraceMatching:
     def test_line_comment_with_newline_unchanged(self):
         content = "{ x(); // brace in comment }\n}"
         assert _find_brace_end(content, 0) == len(content)
+
+
+class TestRustLifetimes:
+    def test_lifetime_does_not_open_a_string(self):
+        # An apostrophe-as-string-opener made &'static swallow the
+        # closing brace and corrupt the body extents.
+        src = "{ let label: &'static str = \"tag\"; x() }"
+        assert _find_brace_end(src, 0, rust_lifetimes=True) == len(src)
+
+    def test_char_literal_with_brace_still_masked(self):
+        # Direction check: a real char literal containing a brace
+        # must still hide it from depth counting.
+        src = "{ let c = '}'; x() }"
+        assert _find_brace_end(src, 0, rust_lifetimes=True) == len(src)
+
+    def test_escaped_char_literal_masked(self):
+        src = "{ let c = '\\''; if a { b() } }"
+        assert _find_brace_end(src, 0, rust_lifetimes=True) == len(src)
+
+    def test_default_mode_keeps_apostrophe_strings(self):
+        # Non-Rust callers (Java/JS/Go char and string syntax) keep
+        # the original apostrophe handling.
+        src = "{ x = '}' }"
+        assert _find_brace_end(src, 0) == len(src)
+
+    def test_function_after_lifetime_heavy_body_still_extracted(self):
+        src = """\
+fn first(x: &str) -> &'static str {
+    let label: &'static str = "tag";
+    Command::new(x);
+}
+
+fn second(y: &str) {
+    fs::write(y, "data");
+}
+"""
+        results = extract_rust_summaries(src, "lt.rs")
+        assert "first" in results
+        assert "second" in results
+        assert any(
+            "fs::write" in r.sink_call
+            for r in results["second"].taint_rules
+        )
+
+
+class TestRustMutPrefix:
+    def test_mut_is_stripped_as_a_token(self):
+        assert _parse_rust_params("mut data: Vec<u8>") == ["data"]
+
+    def test_identifier_starting_with_mut_is_not_truncated(self):
+        # removeprefix("mut") turned "mutation" into "ation".
+        assert _parse_rust_params("mutation: u32") == ["mutation"]
+        assert _parse_rust_params("mutex: &Mutex<()>") == ["mutex"]

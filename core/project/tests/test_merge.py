@@ -393,6 +393,41 @@ class TestMergeRuns(unittest.TestCase):
             merge_runs([a], out)
             self.assertTrue(out.exists())
 
+    def test_imported_marker_restamped_on_merged_output(self):
+        """A merged output folding ANY imported (unsigned-archive)
+        source carries the marker itself — the merge CLI deletes the
+        sources afterwards, so without the re-stamp the imported
+        origin demotion is laundered away permanently."""
+        from core.project.findings_utils import (
+            IMPORTED_RUN_MARKER_FILE,
+            run_is_imported,
+        )
+        with TemporaryDirectory() as d:
+            a = self._make_run(d, "a", [{"id": "F-001", "file": "a.c", "function": "main", "line": 10}])
+            b = self._make_run(d, "b", [{"id": "F-002", "file": "b.c", "function": "foo", "line": 20}])
+            (b / IMPORTED_RUN_MARKER_FILE).write_text(
+                json.dumps({"imported": True}))
+            out = Path(d) / "merged"
+            merge_runs([a, b], out)
+            self.assertTrue(run_is_imported(out))
+            marker = json.loads(
+                (out / IMPORTED_RUN_MARKER_FILE).read_text())
+            self.assertEqual(marker["merged_from_imported"], ["b"])
+
+    def test_no_marker_when_all_sources_local(self):
+        # Two-direction guard: purely local merges must NOT be demoted
+        # to imported standing.
+        from core.project.findings_utils import (
+            IMPORTED_RUN_MARKER_FILE,
+            run_is_imported,
+        )
+        with TemporaryDirectory() as d:
+            a = self._make_run(d, "a", [{"id": "F-001", "file": "a.c", "function": "main", "line": 10}])
+            out = Path(d) / "merged"
+            merge_runs([a], out)
+            self.assertFalse(run_is_imported(out))
+            self.assertFalse((out / IMPORTED_RUN_MARKER_FILE).exists())
+
     def test_symlinked_artefacts_not_dereferenced(self):
         """Run dirs are agent-writable — a symlink pointing outside the
         run dir must not be dereferenced into a regular-file copy of
@@ -496,6 +531,40 @@ class TestSarifMerge(unittest.TestCase):
             b = self._make_run(d, "b", [{"id": "F-002", "file": "b.c", "function": "foo", "line": 20}], sarif=self._MINIMAL_SARIF)
             out = Path(d) / "merged"
             merge_runs([a, b], out)
+            self.assertTrue((out / "merged.sarif").exists())
+
+    def test_symlinked_sarif_skipped(self):
+        """A symlinked *.sarif (run dirs are agent-writable) must not
+        pull out-of-run content into merged.sarif — same policy as the
+        artefact legs."""
+        with TemporaryDirectory() as d:
+            outside = Path(d) / "outside.sarif"
+            outside.write_text(json.dumps(self._MINIMAL_SARIF))
+            a = self._make_run(
+                d, "a",
+                [{"id": "F-001", "file": "a.c", "function": "main", "line": 10}],
+            )
+            (a / "planted.sarif").symlink_to(outside)
+            out = Path(d) / "merged"
+            stats = merge_runs([a], out)
+            self.assertEqual(stats["sarif_files_merged"], 0)
+            self.assertFalse((out / "merged.sarif").exists())
+
+    def test_regular_sarif_still_merged_next_to_symlink(self):
+        """Two-direction guard: the symlink skip must not drop the
+        legitimate regular-file SARIF beside it."""
+        with TemporaryDirectory() as d:
+            outside = Path(d) / "outside.sarif"
+            outside.write_text(json.dumps(self._MINIMAL_SARIF))
+            a = self._make_run(
+                d, "a",
+                [{"id": "F-001", "file": "a.c", "function": "main", "line": 10}],
+                sarif=self._MINIMAL_SARIF,
+            )
+            (a / "planted.sarif").symlink_to(outside)
+            out = Path(d) / "merged"
+            stats = merge_runs([a], out)
+            self.assertEqual(stats["sarif_files_merged"], 1)
             self.assertTrue((out / "merged.sarif").exists())
 
     def test_sca_subdir_sarif_included(self):

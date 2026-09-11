@@ -139,6 +139,26 @@ def norm_hash(text: str, filename: str) -> str:
 # Single-span hash (backward-compatible signature)
 # -------------------------------------------------------------------
 
+def _split_lines(text: str) -> list[str]:
+    r"""Split source text into lines by ``\n`` ONLY.
+
+    ``str.splitlines`` also breaks on ``\f``, ``\v``, ``\x85``,
+    ``\u2028``... — but every line-number consumer around staleness
+    (editors, annotations' ``--lines``, inventory ranges) counts
+    ``\n``. A file rewritten with a ``\f`` where a ``\n`` used to be
+    changed line content invisibly: splitlines still saw the same
+    line list shape, the modified span hashed "current", and every
+    downstream line number silently desynced. ``\r\n`` is already
+    normalised to ``\n`` by ``read_text``'s universal newlines; a
+    single trailing empty element (text ending in ``\n``) is dropped
+    so line counts match editor numbering.
+    """
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def hash_span(file_path: Path, start_line: int, end_line: int) -> str:
     """Hash a single source span.  Returns SHA-256[:12] or ``""``."""
     if start_line <= 0 or end_line < start_line:
@@ -147,7 +167,7 @@ def hash_span(file_path: Path, start_line: int, end_line: int) -> str:
         text = file_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
-    return _hash_from_lines(text.splitlines(), start_line, end_line)
+    return _hash_from_lines(_split_lines(text), start_line, end_line)
 
 
 # -------------------------------------------------------------------
@@ -167,7 +187,7 @@ def hash_spans(
         text = file_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return [""] * len(spans)
-    lines = text.splitlines()
+    lines = _split_lines(text)
     return [_hash_from_lines(lines, s, e) for s, e in spans]
 
 
@@ -182,7 +202,7 @@ def hash_spans_text(
 
     Invalid ranges produce ``""`` for that span.
     """
-    lines = text.splitlines()
+    lines = _split_lines(text)
     return [_hash_from_lines(lines, s, e) for s, e in spans]
 
 
@@ -220,7 +240,10 @@ def check_batch(
         if root_prefix:
             try:
                 resolved = str(item.file.resolve())
-            except OSError:
+            except (OSError, RuntimeError, ValueError):
+                # Same tolerance set as core.paths.confine: ValueError
+                # covers embedded-NUL paths (hostile CheckItems),
+                # RuntimeError covers symlink loops on older Pythons.
                 resolved = ""
             if not resolved.startswith(root_prefix):
                 results[idx] = SpanResult(
@@ -328,7 +351,7 @@ def _check_file_batch(
             )
         return
 
-    lines = text.splitlines()
+    lines = _split_lines(text)
     filename = file_path.name
 
     for idx, item in entries:

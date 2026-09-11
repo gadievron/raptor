@@ -89,15 +89,25 @@ def build_provenance_map(
 def format_provenance_for_context(
     provenance: list[dict[str, str]],
 ) -> str:
-    """Format provenance annotations for LLM context injection."""
+    """Format provenance annotations for LLM context injection.
+
+    ep_id/ep_name/ep_type come from the LLM-written context-map, so
+    each is rendered through ``defend_prompt_field`` (newline flatten
+    + tag/heading neutralise) — this block speaks in instruction
+    position ("Do not flag..."), the worst place to let a crafted
+    entry-point name mint new instructions.
+    """
     if not provenance:
         return ""
+    from core.audit.prompt_defence import defend_prompt_field as _dpf
+
     trusted = [p for p in provenance if p["trust"] == "trusted"]
     untrusted = [p for p in provenance if p["trust"] != "trusted"]
 
     if not untrusted:
         ep_list = ", ".join(
-            f"{p['ep_id']} {p['ep_name']} ({p['ep_type']})"
+            f"{_dpf(p['ep_id'], 80)} {_dpf(p['ep_name'], 120)} "
+            f"({_dpf(p['ep_type'], 40)})"
             for p in trusted[:5]
         )
         return (
@@ -110,11 +120,17 @@ def format_provenance_for_context(
 
     lines = ["INPUT PROVENANCE (mechanical):"]
     if untrusted:
-        lines.extend(f"- UNTRUSTED: reachable from {p['ep_id']} "
-                f"{p['ep_name']} ({p['ep_type']})" for p in untrusted[:5])
+        lines.extend(
+            f"- UNTRUSTED: reachable from {_dpf(p['ep_id'], 80)} "
+            f"{_dpf(p['ep_name'], 120)} ({_dpf(p['ep_type'], 40)})"
+            for p in untrusted[:5]
+        )
     if trusted:
-        lines.extend(f"- trusted: also reachable from {p['ep_id']} "
-                f"{p['ep_name']} ({p['ep_type']})" for p in trusted[:3])
+        lines.extend(
+            f"- trusted: also reachable from {_dpf(p['ep_id'], 80)} "
+            f"{_dpf(p['ep_name'], 120)} ({_dpf(p['ep_type'], 40)})"
+            for p in trusted[:3]
+        )
     return "\n".join(lines)
 
 
@@ -364,7 +380,13 @@ def detect_constant_dangerous_calls(
 
 
 def _collect_module_constants(tree: ast.Module) -> dict[str, Any]:
-    """Collect module-level constant assignments (NAME = literal)."""
+    """Collect module-level constant assignments (NAME = literal).
+
+    A later NON-literal rebinding (``CMD = input()``) invalidates the
+    name: keeping the first literal let detect_constant_dangerous_calls
+    report a tainted call as all-constant ("definitively not
+    attacker-controllable") — a false-suppression hint.
+    """
     constants: dict[str, Any] = {}
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.Assign) and len(node.targets) == 1:
@@ -372,6 +394,18 @@ def _collect_module_constants(tree: ast.Module) -> dict[str, Any]:
             if isinstance(target, ast.Name) and target.id.isupper():
                 if isinstance(node.value, ast.Constant):
                     constants[target.id] = node.value.value
+                else:
+                    constants.pop(target.id, None)
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            target = node.target
+            if isinstance(target, ast.Name):
+                value = getattr(node, "value", None)
+                if isinstance(value, ast.Constant) and isinstance(
+                    node, ast.AnnAssign,
+                ) and target.id.isupper():
+                    constants[target.id] = value.value
+                else:
+                    constants.pop(target.id, None)
     return constants
 
 
@@ -495,8 +529,17 @@ def _normalise_call_site(site: str) -> str:
     shapes hash together.
     """
     text = re.sub(r"^\s*\d+\s+", "", site, flags=re.MULTILINE)
-    text = re.sub(r"#.*$", "", text, flags=re.MULTILINE)
-    text = re.sub(r'("(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')', r"\1", text)
+    # Strip comments only OUTSIDE string literals: a '#' inside a
+    # string arg used to truncate the call-site (losing the closing
+    # quote), so f("a #b", x) and f("a #c", y) collided in
+    # dedup_callers and a differently-argumented caller vanished from
+    # the review prompt.
+    text = re.sub(
+        r'("(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')|#.*$',
+        lambda m: m.group(1) or "",
+        text,
+        flags=re.MULTILINE,
+    )
     text = re.sub(
         r'(?<!["\'])(?<!\w)([a-zA-Z_]\w*)(?=\s*[,\)\]\s])',
         "_",
@@ -623,30 +666,45 @@ def _extract_python_types(source: str, function_name: str) -> list[dict[str, str
     try:
         tree = ast.parse(source)
     except SyntaxError:
+        # Class-method snippets arrive with their original indentation
+        # and fail ast.parse (IndentationError) — dedent recovers the
+        # enrichment instead of silently dropping every method.
+        import textwrap
+        try:
+            tree = ast.parse(textwrap.dedent(source))
+        except SyntaxError:
+            return []
+    # Ambiguity refuses: with two same-named defs (methods on two
+    # classes) the first one's parameter types were emitted as TYPE
+    # CONSTRAINTS ("structurally impossible attack vectors") for the
+    # wrong function — a false steering hint. No constraint beats a
+    # wrong one.
+    matches = [
+        node for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == function_name
+    ]
+    if len(matches) != 1:
         return []
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name != function_name:
-                continue
-            results: list[dict[str, str]] = []
-            for arg in node.args.args + node.args.posonlyargs + node.args.kwonlyargs:
-                if arg.arg in {"self", "cls"}:
-                    continue
-                ann = arg.annotation
-                if ann is None:
-                    continue
-                type_name = _ast_type_name(ann)
-                if not type_name:
-                    continue
-                note = _constraint_note_for_type(type_name)
-                if note:
-                    results.append({
-                        "param": arg.arg,
-                        "type": type_name,
-                        "constraint_note": note,
-                    })
-            return results
-    return []
+    node = matches[0]
+    results: list[dict[str, str]] = []
+    for arg in node.args.args + node.args.posonlyargs + node.args.kwonlyargs:
+        if arg.arg in {"self", "cls"}:
+            continue
+        ann = arg.annotation
+        if ann is None:
+            continue
+        type_name = _ast_type_name(ann)
+        if not type_name:
+            continue
+        note = _constraint_note_for_type(type_name)
+        if note:
+            results.append({
+                "param": arg.arg,
+                "type": type_name,
+                "constraint_note": note,
+            })
+    return results
 
 
 def _ast_type_name(node: ast.AST) -> str:

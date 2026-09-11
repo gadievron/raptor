@@ -121,11 +121,23 @@ def test_xss_requires_unescaped_reflection():
     )
     assert fuzzer._analyze_response(escaped_only, payload, "xss") is None
 
+    # Dual echo (raw in one place, escaped in another) still contains a
+    # verbatim unescaped occurrence — exploitable reflected XSS, so the
+    # oracle must confirm rather than veto it.
     both = _response(
         200,
         f"raw {payload} and escaped &lt;script&gt;alert(1)&lt;/script&gt;",
     )
-    assert fuzzer._analyze_response(both, payload, "xss") is None
+    both_confirmation = fuzzer._analyze_response(both, payload, "xss")
+    assert both_confirmation is not None
+    assert both_confirmation["signal"] == "xss_reflected_unescaped"
+
+    # Attribute-context payloads without angle brackets escape to
+    # themselves; a verbatim reflection is still unescaped reflection.
+    attr_payload = "\" onmouseover=alert(1) x=\""
+    attr_reflected = _response(200, f"<input value={attr_payload}>")
+    attr_confirmation = fuzzer._analyze_response(attr_reflected, attr_payload, "xss")
+    assert attr_confirmation is not None
 
     raw_only = _response(200, f"hello {payload} world")
     confirmation = fuzzer._analyze_response(raw_only, payload, "xss")
@@ -176,7 +188,7 @@ def test_fuzz_parameter_stops_after_first_confirmed_hit_per_class(monkeypatch):
     fuzzer = WebFuzzer(client)
     tested: list[str] = []
 
-    def fake_test(url, param, payload, vuln_type, method="GET"):
+    def fake_test(url, param, payload, vuln_type, method="GET", **kwargs):
         tested.append(payload)
         return {"payload": payload, "vulnerability_type": vuln_type}
 

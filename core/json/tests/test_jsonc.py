@@ -35,6 +35,18 @@ def test_plain_json_round_trips():
     assert load_jsonc(json.dumps(obj)) == obj
 
 
+def test_non_finite_constants_rejected():
+    # core.json policy: third-party manifests must not smuggle
+    # non-finite floats into downstream arithmetic.
+    for bad in ('{"x": Infinity}', '{"x": -Infinity}', '{"x": NaN}'):
+        with pytest.raises(ValueError):
+            load_jsonc(bad)
+
+
+def test_finite_floats_still_parse():
+    assert load_jsonc('{"x": 1.5, /* c */ }') == {"x": 1.5}
+
+
 def test_malformed_raises_like_json_loads():
     with pytest.raises(ValueError):   # JSONDecodeError is a ValueError
         load_jsonc("{not valid")

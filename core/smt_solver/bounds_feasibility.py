@@ -67,6 +67,7 @@ def check_bounds_infeasible(
         return None
 
     try:
+        from core.smt_solver.config import BV_C_INT64, BV_C_UINT64
         from core.smt_solver.path_feasibility import (
             PathCondition,
             check_path_feasibility,
@@ -90,11 +91,26 @@ def check_bounds_infeasible(
         # (see docstring). Inconclusive, never "provably impossible".
         return None
 
-    try:
-        result = check_path_feasibility(conditions, timeout_ms=timeout_ms)
-        if result.feasible is False:
-            return True
-        return False if result.feasible is True else None
-    except Exception:
-        logger.debug("SMT bounds check failed", exc_info=True)
-        return None
+    # Signedness honesty: the guard text carries no C type information,
+    # and the two encodings disagree on exactly the guards that matter —
+    # ``len < 0`` (the standard signed sanity check before memcpy) is
+    # UNSAT as ULT(len, 0) under an unsigned profile, which would mint an
+    # "overflow provably impossible" receipt for a live overflow. So the
+    # guard is evaluated under BOTH the unsigned and the signed 64-bit
+    # profile and a verdict is only reported when the two agree;
+    # disagreement (or either leg inconclusive) is None, never UNSAT.
+    verdicts: list[bool | None] = []
+    for profile in (BV_C_UINT64, BV_C_INT64):
+        try:
+            result = check_path_feasibility(
+                conditions, profile=profile, timeout_ms=timeout_ms,
+            )
+        except Exception:
+            logger.debug("SMT bounds check failed", exc_info=True)
+            return None
+        verdicts.append(result.feasible)
+    if all(v is False for v in verdicts):
+        return True
+    if all(v is True for v in verdicts):
+        return False
+    return None

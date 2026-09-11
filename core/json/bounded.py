@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import stat as _stat
 from pathlib import Path
 from typing import Any
@@ -87,23 +88,44 @@ def load_json_bounded(path: str | Path, *, max_bytes: int) -> Any:
             non-finite constant.
     """
     p = Path(path)
-    st = p.stat()
-    if not _stat.S_ISREG(st.st_mode):
-        msg = (
-            f"refusing to read {p}: not a regular file "
-            f"(mode=0o{st.st_mode:o})"
-        )
-        logger.warning("%s", msg)
-        raise ValueError(msg)
-    if st.st_size > max_bytes:
-        msg = (
-            f"JSON file {p} is {st.st_size} bytes — exceeds the "
-            f"{max_bytes}-byte budget; refusing to read"
-        )
-        logger.warning("%s", msg)
-        raise JsonBudgetExceededError(msg)
-    with p.open("rb") as fh:
-        raw = fh.read(max_bytes + 1)
+    # Open FIRST, then fstat the OPEN fd — a stat-by-name followed by
+    # a separate open-by-name left a swap window where a regular file
+    # replaced by a FIFO between the two calls re-enabled the exact
+    # plantable-hang the S_ISREG gate refuses (the open on the FIFO
+    # blocks forever). O_NONBLOCK makes a FIFO/device open return
+    # immediately instead of blocking (it has no effect on regular-
+    # file reads), and the fstat then sees the true inode.
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    fd = os.open(str(p), flags)
+    try:
+        st = os.fstat(fd)
+        if not _stat.S_ISREG(st.st_mode):
+            msg = (
+                f"refusing to read {p}: not a regular file "
+                f"(mode=0o{st.st_mode:o})"
+            )
+            logger.warning("%s", msg)
+            raise ValueError(msg)
+        if st.st_size > max_bytes:
+            msg = (
+                f"JSON file {p} is {st.st_size} bytes — exceeds the "
+                f"{max_bytes}-byte budget; refusing to read"
+            )
+            logger.warning("%s", msg)
+            raise JsonBudgetExceededError(msg)
+        with os.fdopen(fd, "rb") as fh:
+            fd = -1  # fdopen owns it now
+            raw = fh.read(max_bytes + 1)
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
     if len(raw) > max_bytes:
         msg = (
             f"JSON file {p} grew past the {max_bytes}-byte budget "

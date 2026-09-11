@@ -182,18 +182,40 @@ def main():
         # callers treat OUTPUT_DIR= as "the run started, write here",
         # so a gate refusal (exit 1, run marked failed) must not hand
         # them a directory to write into.
-        if args.max_cost_usd is not None and target_path:
-            try:
-                from raptor import _preflight_cost_gate
-                if _preflight_cost_gate(
-                    str(target_path), args.max_cost_usd, out_dir,
-                    estimate_stream=sys.stderr,
-                ):
-                    sys.exit(1)
-            except SystemExit:
-                raise
-            except Exception as e:  # noqa: BLE001
-                sys.stderr.write(f"  (estimate skipped: {e})\n")
+        if args.max_cost_usd is not None:
+            # No explicit target on the command line usually means the
+            # run's target came from the active project — resolve the
+            # same default so the operator's declared budget cap still
+            # applies instead of being dropped because of HOW the
+            # target was supplied.
+            gate_target = target_path
+            if not gate_target:
+                try:
+                    from core.run.output import resolve_default_target
+                    gate_target = resolve_default_target()
+                except Exception:  # noqa: BLE001
+                    gate_target = None
+            if gate_target:
+                try:
+                    from raptor import _preflight_cost_gate
+                    if _preflight_cost_gate(
+                        str(gate_target), args.max_cost_usd, out_dir,
+                        estimate_stream=sys.stderr,
+                    ):
+                        sys.exit(1)
+                except SystemExit:
+                    raise
+                except Exception as e:  # noqa: BLE001
+                    sys.stderr.write(f"  (estimate skipped: {e})\n")
+            else:
+                # An operator-declared cap must never vanish silently:
+                # say the pre-flight estimate could not run. The
+                # runtime cost cap still enforces during execution.
+                sys.stderr.write(
+                    "WARNING: --max-cost-usd was set but no target path "
+                    "could be resolved; pre-flight cost estimate skipped "
+                    "(the runtime cap still enforces during execution)\n"
+                )
 
         print(f"OUTPUT_DIR={out_dir}")
 

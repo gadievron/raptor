@@ -167,9 +167,30 @@ class ExternalValidatorRunner:
         if not targets:
             return results
 
-        results.extend(
-            self._nuclei_batch(binary_path, templates_dir, targets)
-        )
+        # Per-group batching for the local-network-access restriction:
+        # -lna is a per-invocation flag, so ONE private-addressed target
+        # in a mixed batch used to drop the RFC1918 pivot restriction
+        # for every public target too. Private and public targets now
+        # run as separate invocations, each with the right flag.
+        private_targets = {
+            url: tags for url, tags in targets.items()
+            if self._is_private_host(url)
+        }
+        public_targets = {
+            url: tags for url, tags in targets.items()
+            if url not in private_targets
+        }
+        split = bool(private_targets and public_targets)
+        if public_targets:
+            results.extend(self._nuclei_batch(
+                binary_path, templates_dir, public_targets,
+                restrict_local=True, label="public" if split else "",
+            ))
+        if private_targets:
+            results.extend(self._nuclei_batch(
+                binary_path, templates_dir, private_targets,
+                restrict_local=False, label="private" if split else "",
+            ))
         return results
 
     def _nuclei_batch(
@@ -177,21 +198,26 @@ class ExternalValidatorRunner:
         binary_path: str,
         templates_dir: Path,
         targets: dict[str, set[str]],
+        *,
+        restrict_local: bool = True,
+        label: str = "",
     ) -> list[dict[str, Any]]:
         """One sandboxed nuclei invocation over all authorized targets."""
         config = self.nuclei_config
         run_dir = self.out_dir / "external-validators"
         run_dir.mkdir(parents=True, exist_ok=True)
+        suffix = f"-{label}" if label else ""
 
         # Targets and credential headers ride 0600 files, never argv
         # (same /proc-cmdline channel the ffuf -config TOML closes).
         targets_file = self._write_private(
-            run_dir / "nuclei-targets.txt", "\n".join(targets) + "\n"
+            run_dir / f"nuclei-targets{suffix}.txt", "\n".join(targets) + "\n"
         )
         headers_file: Path | None = None
         if config.headers:
             headers_file = self._write_private(
-                run_dir / "nuclei-headers.txt", "\n".join(config.headers) + "\n"
+                run_dir / f"nuclei-headers{suffix}.txt",
+                "\n".join(config.headers) + "\n",
             )
 
         tags = sorted({tag for tagset in targets.values() for tag in tagset if tag})
@@ -219,13 +245,16 @@ class ExternalValidatorRunner:
             cmd.extend(["-tags", ",".join(tags)])
         if headers_file is not None:
             cmd.extend(["-H", str(headers_file)])
+        responses_dir: Path | None = None
         if config.store_responses:
             # Full request/response transcripts: the
             # evidence-or-it-didn't-happen artifact class.
-            cmd.extend(["-sresp", "-srd", str(run_dir / "nuclei-responses")])
-        if not any(self._is_private_host(url) for url in targets):
-            # Keep templates from pivoting into RFC1918 space — but only
-            # when the TARGET itself is not private (lab scans).
+            responses_dir = run_dir / f"nuclei-responses{suffix}"
+            cmd.extend(["-sresp", "-srd", str(responses_dir)])
+        if restrict_local:
+            # Keep templates from pivoting into RFC1918 space — only
+            # for batches whose targets are not themselves private
+            # (lab scans run in the no-restriction batch).
             cmd.append("-lna")
 
         proxy_hosts = sorted({
@@ -268,8 +297,16 @@ class ExternalValidatorRunner:
         finally:
             if headers_file is not None and not self.reveal_secrets:
                 headers_file.unlink(missing_ok=True)
+            # The stored transcripts dump the FULL sent request — the
+            # -H credential headers included — at default permissions.
+            # Every other channel is redacted under reveal_secrets=False
+            # (headers file 0600+unlinked, stdout/stderr redacted);
+            # leaving the operator's bearer token cleartext in shared
+            # scan artifacts would make that guarantee theater.
+            if responses_dir is not None and not self.reveal_secrets:
+                self._scrub_response_store(responses_dir)
 
-        output_file = run_dir / "nuclei-results.jsonl"
+        output_file = run_dir / f"nuclei-results{suffix}.jsonl"
         output_file.write_text(self._redact(stdout), encoding="utf-8")
 
         matches_by_target: dict[str, list[dict[str, Any]]] = {u: [] for u in targets}
@@ -342,15 +379,77 @@ class ExternalValidatorRunner:
             handle.write(content)
         return path
 
+    # Transcript files are small (one request/response pair); anything
+    # bigger is left unredacted-but-restricted rather than read whole.
+    _MAX_SCRUB_BYTES = 8 * 1024 * 1024
+
+    def _scrub_response_store(self, responses_dir: Path) -> None:
+        """Redact credential material inside stored transcripts at rest
+        and drop their permissions to 0600 (dirs 0700)."""
+        if not responses_dir.is_dir():
+            return
+        try:
+            entries = sorted(responses_dir.rglob("*"))
+        except OSError:
+            logger.debug("could not walk nuclei response store", exc_info=True)
+            return
+        try:
+            responses_dir.chmod(0o700)
+        except OSError:
+            logger.debug("could not restrict response store dir", exc_info=True)
+        for entry in entries:
+            try:
+                if entry.is_dir():
+                    entry.chmod(0o700)
+                    continue
+                if not entry.is_file():
+                    continue
+                entry.chmod(0o600)
+                if entry.stat().st_size > self._MAX_SCRUB_BYTES:
+                    continue
+                text = entry.read_text(encoding="utf-8", errors="replace")
+                redacted = redact_secrets(text)
+                if redacted != text:
+                    entry.write_text(redacted, encoding="utf-8")
+            except OSError:
+                logger.debug(
+                    "could not scrub transcript %s", entry, exc_info=True,
+                )
+
     @staticmethod
     def _is_private_host(url: str) -> bool:
+        """Whether the target addresses private/internal space.
+
+        Hostname-addressed internal targets ('http://intranet.example:8080')
+        must classify by what they RESOLVE to: treating every DNS name
+        as public passed -lna, nuclei refused the RFC1918 connections,
+        and every template run reported a clean-looking 'no_match'
+        without ever touching the target.
+        """
         host = urlparse(url).hostname or ""
-        if host in ("localhost",):
+        if not host:
+            return False
+        if host == "localhost" or host.endswith(
+            (".localhost", ".local", ".internal", ".home.arpa")
+        ):
             return True
         try:
             return not ipaddress.ip_address(host).is_global
         except ValueError:
+            pass
+        import socket
+        try:
+            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+        except OSError:
             return False
+        for *_meta, sockaddr in infos:
+            try:
+                resolved = ipaddress.ip_address(sockaddr[0])
+            except ValueError:
+                continue
+            if not resolved.is_global:
+                return True
+        return False
 
     @staticmethod
     def _as_text(raw: object) -> str:

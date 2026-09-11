@@ -196,6 +196,24 @@ class TestCodeQLStatusMapping:
         ))
         assert vo2.status == OutcomeStatus.REFUTED
 
+    def test_evidence_preserves_stored_is_sound_and_carries_gated_verdict(self):
+        """The projection must not overwrite the record's stored
+        technical ``is_sound`` with the outcome-gated verdict — that
+        would make 'technically sound but outcome-uncertain'
+        indistinguishable from 'not sound'. The gated verdict rides
+        under its own ``outcome_sound`` key."""
+        vo = from_labeled_attempt(_codeql_attempt(
+            is_sound=True, outcome="uncertain",
+        ))
+        assert vo.evidence["is_sound"] is True       # stored technical field
+        assert vo.evidence["outcome_sound"] is False  # gated verdict
+
+        vo2 = from_labeled_attempt(_codeql_attempt(
+            is_sound=True, outcome="success",
+        ))
+        assert vo2.evidence["is_sound"] is True
+        assert vo2.evidence["outcome_sound"] is True
+
 
 class TestWebStatusMapping:
     """Web success → VERIFIED. Web is point-in-time → not reproducible."""
@@ -333,6 +351,28 @@ class TestRanking:
         )
         # Highest score (10, exact id) first.
         assert ranked[0].outcome.finding_id == "F-target"
+
+    def test_cwe_match_is_canonicalised(self):
+        """A record stored with a non-canonical CWE spelling
+        ('cwe416') must still score as a CWE match against the
+        canonical finding form ('CWE-416') — retrieval already matches
+        it, so the outcome scorer must not silently drop it."""
+        vo = self._vo(finding_id="", cwe_id="cwe416", file=None)
+        ranked = rank_outcomes_for_finding(
+            [vo], {"cwe_id": "CWE-416"},
+        )
+        assert len(ranked) == 1
+        assert ranked[0].score == 2
+        assert ranked[0].reason == "cwe match"
+
+    def test_cwe_mismatch_still_scores_zero(self):
+        """Counter-direction: canonicalisation must not make DIFFERENT
+        CWEs match."""
+        vo = self._vo(finding_id="", cwe_id="cwe415", file=None)
+        ranked = rank_outcomes_for_finding(
+            [vo], {"cwe_id": "CWE-416"},
+        )
+        assert ranked == []
 
     def test_filters_to_status(self):
         """Default statuses=(VERIFIED,) — REFUTED and INCONCLUSIVE

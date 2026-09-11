@@ -121,8 +121,8 @@
 **exploit_feasibility package error:**
 - Check: Package installed correctly
 - Check: Binary format supported
-- Try: Manual analysis with checksec/readelf
-- Mark: confirmed_unverified with error details
+- Retry: Fix the package error and re-run `analyze_binary()` — do NOT substitute checksec/readelf as the mitigation source of truth (per CLAUDE.md BINARY ANALYSIS they miss empirical %n verification, null-byte constraints, ROP gadget quality, and Full-RELRO .fini_array coverage)
+- Mark: confirmed_unverified with error details if the package cannot be made to run
 
 **Analysis timeout:**
 - Retry: With simpler analysis

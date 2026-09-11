@@ -170,10 +170,41 @@ class TestCheckBoundsInfeasible:
         # only when the parser understood the guard.
         assert result in (True, None)
 
+    def test_signed_sanity_guard_never_reads_infeasible(self):
+        """``len < 0`` is the standard signed sanity check before a
+        copy: UNSAT under an unsigned encoding, SAT under a signed one.
+        A single-profile checker forged UNSAT here and suppressed the
+        real overflow; profile disagreement must read inconclusive."""
+        pytest.importorskip("z3")
+        src = (
+            "ssize_t len = recv(fd, pkt, sizeof(pkt), 0);\n"
+            "if (len < 0) return -1;\n"
+            "memcpy(buf, pkt, len);\n"
+        )
+        assert check_bounds_infeasible(src, "CWE-120") is None
+
+    def test_signed_and_unsigned_agreement_still_reports(self):
+        # Two-direction guard: when both profiles agree the verdict
+        # must still flow through (True on joint UNSAT, False on SAT).
+        pytest.importorskip("z3")
+        # SAT under both profiles → overflow possible.
+        assert (
+            check_bounds_infeasible("if (len >= MAX_LEN) return -1;", "CWE-120")
+            is False
+        )
+        # UNSAT under both profiles (4 and 8 are small positives, so
+        # signedness does not change the contradiction) → still True
+        # when the parser understands the conjunction, honest None
+        # otherwise.
+        result = check_bounds_infeasible(
+            "if (len < 4 && len > 8) { memcpy(buf, s, len); }", "CWE-120"
+        )
+        assert result in (True, None)
+
     def test_extracted_condition_reaches_solver_stripped(self):
         captured = {}
 
-        def fake_check(conditions, timeout_ms):
+        def fake_check(conditions, profile, timeout_ms):
             captured["texts"] = [c.text for c in conditions]
 
             class _Result:

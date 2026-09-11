@@ -52,8 +52,14 @@ _PROJECT_SCHEMA_VERSION = 5
 #: `findings` is the merge fold's output; `ghidra-attach` holds
 #: attached-.gpr database caches and cannot be dot-prefixed (Ghidra
 #: refuses project paths containing hidden elements, and the
-#: attach-time headless import works inside the cache dir).
-GENERATED_PROJECT_DIRS = frozenset({"findings", "ghidra-attach"})
+#: attach-time headless import works inside the cache dir);
+#: `annotations` is the /annotate prose store (human review notes —
+#: doctor.py already special-cases it). Pre-fix the enumerator
+#: classified the annotations tree as an unknown run: adoption
+#: stamped machine metadata inside the human notes and /project
+#: clean planned it for deletion.
+GENERATED_PROJECT_DIRS = frozenset({"findings", "ghidra-attach",
+                                    "annotations"})
 
 # URL-shaped targets (/web scans) are stored and matched as opaque
 # strings, never Path-resolved. Same pattern as core/run/output.py.
@@ -684,8 +690,11 @@ class Project:
             # No PID (legacy run) — use keep_latest heuristic
             if pid is None and keep_latest and i == 0:
                 continue
+            # abandon_sweep marks the heuristic verdict so a misjudged
+            # live run's real finaliser can still override the failed
+            # status (see core.run.metadata._update_status).
             fail_run(d, "stale — session ended without completion",
-                     record_timing=False)
+                     extra={"abandon_sweep": True}, record_timing=False)
             swept += 1
 
         return swept
@@ -1197,14 +1206,17 @@ class ProjectManager:
         return removed
 
     def update_notes(self, name: str, notes: str) -> Project:
-        """Update project notes."""
-        project = self.load(name)
-        if not project:
-            msg = f"Project '{name}' not found"
-            raise ValueError(msg)
+        """Update project notes.
 
-        project.notes = notes
-        save_json(self.projects_dir / f"{name}.json", project.to_dict())
+        Same RMW lock as every other mutator — an unlocked
+        load→mutate→save raced concurrent trust/setting writes and
+        one side's update was silently dropped (last writer wins on
+        the whole file).
+        """
+        with self._mutation_lock(name):
+            project = self._load_or_raise(name)
+            project.notes = notes
+            self._save(project)
         return project
 
     def adopt_target_for(self, directory: str) -> str | None:
@@ -1431,8 +1443,13 @@ class ProjectManager:
             else:
                 skipped = 1
         else:
-            # Directory containing runs
+            # Directory containing runs. Generated (non-run) dirs are
+            # never import candidates — an `annotations/` tree that a
+            # pre-fix enumerator stamped with run metadata must not be
+            # adopted as a first-class run here.
             for child in sorted(src.iterdir()):
+                if child.name in GENERATED_PROJECT_DIRS:
+                    continue
                 if child.is_dir() and is_run_directory(child, strict=False):
                     if _adopt_one(child):
                         added += 1
@@ -1682,7 +1699,15 @@ class ProjectManager:
                                 "keep it (this clears the expiry).",
                                 name, project.expires_at, name,
                             )
-                            active_link.unlink(missing_ok=True)
+                            # Unlink ONLY if the link still names the
+                            # expired target just read: another process
+                            # may have re-pointed .active to a healthy
+                            # project in between, and a path-based
+                            # unlink would destroy the fresh bookmark
+                            # (same guard as the dangling branch below).
+                            with contextlib.suppress(OSError):
+                                if os.readlink(active_link) == target:
+                                    active_link.unlink(missing_ok=True)
                             return None
                     return name
                 # Dangling — clean up, but only if the link still

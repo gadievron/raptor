@@ -277,29 +277,42 @@ def _strip_descriptor(spec_key: str) -> str:
     that npm returned 405 on.
 
     ``ngtemplate-loader/loader-utils`` → ``loader-utils``
+
+    The key is parsed as a ``/``-separated chain of package
+    segments (a segment is ``name`` or ``@scope/name``; ``**``
+    globs are position wildcards) and the LAST package in the
+    chain is the pin target. Segment-aware parsing matters for
+    scoped parents and deep chains — the previous single-split
+    logic returned the whole key for ``@scope/parent/child``
+    (garbage registry lookup) and ``b/c`` for ``a/b/c``.
     """
-    if spec_key.startswith("@"):
-        # Scoped: keep the leading @ and the first @ after the slash
-        # is the descriptor separator.
-        slash = spec_key.find("/")
-        if slash == -1:
-            return spec_key
-        rest = spec_key[slash:]
-        sep = rest.find("@")
-        if sep == -1:
-            return spec_key
-        return spec_key[:slash] + rest[:sep]
-    # Unscoped: handle yarn's ``parent/child`` resolution before
-    # ``name@selector`` because a ``parent/child@selector`` key
-    # has both shapes and the parent's position is what gets
-    # stripped first (we want the child's name, then the child's
-    # name with selector stripped).
-    if "/" in spec_key:
-        spec_key = spec_key.split("/", 1)[1]
-    sep = spec_key.find("@")
-    if sep <= 0:
-        return spec_key
-    return spec_key[:sep]
+    parts = spec_key.split("/")
+    packages: list[str] = []
+    i = 0
+    while i < len(parts):
+        seg = parts[i]
+        if seg.startswith("@") and i + 1 < len(parts):
+            # Scope marker — the package is ``@scope/name``.
+            packages.append(seg + "/" + parts[i + 1])
+            i += 2
+            continue
+        packages.append(seg)
+        i += 1
+    # Last non-glob package in the chain is the pinned one.
+    name = ""
+    for cand in reversed(packages):
+        if cand and cand != "**":
+            name = cand
+            break
+    if not name:
+        return ""
+    # Strip a trailing ``@selector`` descriptor. For scoped names the
+    # leading ``@`` is the scope marker, so search after the slash.
+    search_from = name.find("/") + 1 if name.startswith("@") else 0
+    sep = name.find("@", max(search_from, 1))
+    if sep > 0:
+        name = name[:sep]
+    return name
 
 
 # ---------------------------------------------------------------------------

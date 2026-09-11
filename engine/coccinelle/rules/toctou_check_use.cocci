@@ -4,9 +4,7 @@
 // Matches:
 // 1. Permission check (inode_permission) followed by operation on the
 //    same object without holding a lock.
-// 2. list_empty() check followed by list_del/list_first_entry on the
-//    same list without holding a lock.
-// 3. refcount_read() followed by a free assuming the refcount holds.
+// 2. refcount_read() followed by a free assuming the refcount holds.
 //
 // Under-lock suppression uses the position-exclusion technique
 // (format_string.cocci): a safe rule binds the positions of uses
@@ -15,21 +13,38 @@
 // file-wide (one locked use anywhere would suppress every unlocked
 // one), so they are not used here.
 //
+// Retired legs: list_empty() followed by list_del/list_first_entry.
+// The dominant kernel idiom is a lockless helper whose CALLER holds
+// the list lock (or the structure is single-threaded); lock context
+// outside the matched function is invisible to spatch, so the leg
+// classified the ubiquitous correct helper shape as a race. No
+// structural narrowing can recover it — the distinguishing fact
+// (who holds the lock at the call site) is not in the function body.
+//
 // Covers CWE-367 (TOCTOU) and CWE-362 (race condition).
-// @role: verification
+// Lock context is only visible in-function for the remaining legs
+// too (a caller-held lock still suppresses nothing), so hits are
+// leads for review, not proofs.
+// @role: detection
 
 // Permission check followed by privileged operation without lock.
 // Only checks that BIND the object qualify (inode_permission): the
 // bare capable()/ns_capable() forms carry no object, which left
 // `obj` unconstrained — any dereference of anything in the function
-// could match.
+// could match. Both calling conventions are matched: the two-argument
+// (inode, mask) form and the idmap-first (idmap, inode, mask) form,
+// where the checked object is the SECOND argument.
 @capable_toctou exists@
-expression obj, E;
+expression obj, E, E2;
 identifier op, F;
 position p_use;
 @@
 
-inode_permission(obj, ...)
+(
+inode_permission(obj, E2)
+|
+inode_permission(E2, obj, ...)
+)
 ... when != \(spin_lock\|mutex_lock\|spin_lock_irq\|spin_lock_bh\|read_lock\|write_lock\|rcu_read_lock\)(...)
     when != return ...;
 (
@@ -52,79 +67,6 @@ for _p in p_use:
           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
           "rule": "toctou_check_use",
           "message": "TOCTOU: '%s->%s' used after permission check without intervening lock" % (obj, op)}
-    sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
-
-// Safe set: list_del reached from a lock acquisition with the lock
-// still held.
-@list_del_locked exists@
-expression L;
-position p;
-@@
-
-\(spin_lock\|mutex_lock\|spin_lock_irq\|spin_lock_bh\|write_lock\)(...)
-... when != \(spin_unlock\|mutex_unlock\|spin_unlock_irq\|spin_unlock_bh\|write_unlock\)(...)
-list_del@p(&L);
-
-// list_empty() check followed by list_del() without lock
-@list_empty_del exists@
-expression L;
-position p_del != list_del_locked.p;
-@@
-
-if (\(!list_empty(&L)\|!list_empty_careful(&L)\))
-{
-...
-list_del@p_del(&L);
-...
-}
-
-@script:python@
-p_del << list_empty_del.p_del;
-L << list_empty_del.L;
-@@
-
-import json, sys
-for _p in p_del:
-    _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
-          "line_end": int(_p.line_end), "col_end": int(_p.column_end),
-          "rule": "toctou_check_use",
-          "message": "TOCTOU: list_del on %s after list_empty check — may race without lock" % L}
-    sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
-
-// Safe set: list_first_entry under lock.
-@list_first_locked exists@
-expression L, E;
-position p;
-@@
-
-\(spin_lock\|mutex_lock\|spin_lock_irq\|spin_lock_bh\|write_lock\)(...)
-... when != \(spin_unlock\|mutex_unlock\|spin_unlock_irq\|spin_unlock_bh\|write_unlock\)(...)
-E = list_first_entry@p(&L, ...);
-
-// list_empty() check followed by list_first_entry without lock
-@list_empty_first exists@
-expression L, E;
-position p_first != list_first_locked.p;
-@@
-
-if (\(!list_empty(&L)\|!list_empty_careful(&L)\))
-{
-...
-E = list_first_entry@p_first(&L, ...);
-...
-}
-
-@script:python@
-p_first << list_empty_first.p_first;
-L << list_empty_first.L;
-@@
-
-import json, sys
-for _p in p_first:
-    _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
-          "line_end": int(_p.line_end), "col_end": int(_p.column_end),
-          "rule": "toctou_check_use",
-          "message": "TOCTOU: list_first_entry on %s after list_empty check — may race without lock" % L}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
 // refcount_read() followed by a free assuming the refcount holds

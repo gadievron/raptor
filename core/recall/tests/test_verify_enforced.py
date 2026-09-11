@@ -88,9 +88,27 @@ class TestVerdictScope:
         assert r["records_reviewed"] == 1
         assert r["flagged"] == 1
 
-    def test_malformed_never_reviewed(self):
+    def test_malformed_not_reviewed_but_fails_clean(self):
+        # A truncated jsonl line cannot be located against any expected
+        # entry — it must surface as a counted failure, never a silent
+        # CLEAN (a record that cannot prove where it is cannot prove
+        # it is harmless).
         r = verify_enforced([{"_malformed": True}], [_exp()])
         assert r["records_reviewed"] == 0
+        assert r["records_malformed"] == 1
+        assert not r["clean"]
+
+    def test_unlocatable_file_path_fails_clean(self):
+        r = verify_enforced([_rec(file_path=None)], [_exp()])
+        assert r["records_unlocatable"] == 1
+        assert not r["clean"]
+
+    def test_well_formed_records_keep_zero_counts_and_clean(self):
+        r = verify_enforced([_rec(file_path="/w/src/Other.java")],
+                            [_exp()])
+        assert r["records_malformed"] == 0
+        assert r["records_unlocatable"] == 0
+        assert r["clean"]
 
 
 class TestRendering:
@@ -105,3 +123,11 @@ class TestRendering:
         r = verify_enforced([_rec(file_path="/w/src/Other.java")],
                             [_exp()])
         assert "CLEAN" in render_verify_markdown(r)
+
+    def test_unreviewable_counts_render(self):
+        r = verify_enforced([{"_malformed": True},
+                             _rec(file_path=None)], [_exp()])
+        md = render_verify_markdown(r)
+        assert "unreviewable records: 1 malformed, 1 without a file path" \
+            in md
+        assert "REVIEW REQUIRED" in md

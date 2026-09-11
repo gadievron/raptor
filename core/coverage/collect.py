@@ -31,12 +31,25 @@ if TYPE_CHECKING:
 _TIMEOUT = 300
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 def _safe_env() -> dict[str, str]:
     try:
         from core.config import RaptorConfig
         return RaptorConfig.get_safe_env()
     except (ImportError, AttributeError):
-        return dict(os.environ)
+        # Fail CLOSED: gcov/llvm-cov run over attacker-influenced
+        # build trees, and the repo rule is always-get_safe_env. If
+        # the config chokepoint is unavailable, hand subprocesses a
+        # minimal allowlisted env instead of the full inherited one.
+        keep = ("PATH", "HOME", "TMPDIR", "LANG", "TZ")
+        return {
+            k: v for k, v in os.environ.items()
+            if k in keep or k.startswith("LC_")
+        }
 
 
 # Per-.gcda cap on gcov report size. A legitimate report is
@@ -217,6 +230,22 @@ def parse_drcov(path) -> dict[str, dict[str, Any]]:
         s = line.strip()
         if s.startswith("Module Table:"):
             in_mod = True
+            # Module-table layout is versioned: v2 rows are
+            # ``id, base, ...`` (what the row parser below assumes),
+            # v3/v4 move ``containing_id`` into column 1 and rename
+            # ``base`` to ``start`` — misreading those silently
+            # resolves every non-PIE offset out of range and imports
+            # ZERO coverage. Honest-refuse instead: warn with the
+            # version and return nothing. Legacy tables with no
+            # ``version`` marker keep the v2 row shape.
+            m = re.search(r"version\s+(\d+)", s)
+            if m and int(m.group(1)) != 2:
+                logger.warning(
+                    "drcov %s: unsupported module-table version %s "
+                    "(only v2 rows are parsed); refusing rather than "
+                    "misattributing coverage", path, m.group(1),
+                )
+                return {}
             continue
         if s.startswith("Columns:") or not s:
             continue

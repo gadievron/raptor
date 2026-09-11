@@ -39,10 +39,12 @@ advisory populates:
 
 Each is treated as ``[function_name, ...]``. The
 ``import_path`` field (when present alongside ``symbols``) is
-ignored — the dep's name is the import path for typical PyPI
-packages (``requests`` → ``import requests``). When it isn't
-(e.g. ``Pillow`` → ``import PIL``), the resolver's tail-match
-still works as long as the symbol is uniquely-named.
+ignored — resolver queries are qualified with the dep's importable
+module name(s) instead, resolved through the module-level tier's
+dist→module mapping (``pyyaml`` → ``yaml``, ``Pillow`` → ``PIL``),
+falling back to the PEP 503 / PEP 8 name guess. Imports bind the
+module name, so qualifying with the raw distribution name would
+never match a call chain for dist≠module packages.
 
 ## Cost
 
@@ -149,19 +151,44 @@ def refine_pypi_verdicts(
             return
 
     from core.analysis.reachability import (
+        ReachabilityResult,
         Verdict,
         function_called,
     )
+    from .python import _candidate_modules
+
+    # Prefer-stronger ordering for combining one function's verdicts
+    # across candidate module names: any CALLED wins outright, else
+    # any UNCERTAIN, and NOT_CALLED only when every candidate module
+    # came back not-called.
+    strength = {Verdict.NOT_CALLED: 0, Verdict.UNCERTAIN: 1, Verdict.CALLED: 2}
 
     for d in candidates:
         funcs = pypi_symbol_map[d.key()]
-        paired = []
+        # Imports bind the MODULE name, not the PyPI distribution
+        # name — installing ``pyyaml`` gives ``import yaml``,
+        # ``pillow`` gives ``import PIL``. Qualify each affected
+        # function with the same dist→module candidates the
+        # module-level tier resolves through, otherwise every
+        # dist≠module package reads all-NOT_CALLED and gets wrongly
+        # downgraded despite a real call site.
+        modules = _candidate_modules(d.name)
+        paired: list[tuple[str, ReachabilityResult]] = []
         for fn in funcs:
-            qualified = f"{d.name}.{fn}"
-            try:
-                paired.append((fn, function_called(inventory, qualified)))
-            except ValueError:
+            if not fn:
                 continue
+            best: ReachabilityResult | None = None
+            for mod in modules:
+                try:
+                    r = function_called(inventory, f"{mod}.{fn}")
+                except ValueError:
+                    continue
+                if best is None or strength[r.verdict] > strength[best.verdict]:
+                    best = r
+                if best.verdict == Verdict.CALLED:
+                    break
+            if best is not None:
+                paired.append((fn, best))
 
         if not paired:
             continue

@@ -125,11 +125,19 @@ def _read_validated(directory):
     return result
 
 
-def _write_validated(directory, filename, filehash):
-    """Record a validated file hash."""
+def _write_validated(directory, filename, filehash, schema_type=None):
+    """Record a validated file hash.
+
+    When *schema_type* is given, it is folded into the recorded value
+    (``type:hash``) so the cache is keyed by WHICH validator passed —
+    a file validated as one type must not short-circuit a later
+    validation request under a different type.
+    """
     vfile = Path(directory) / ".validated"
     existing = _read_validated(directory)
-    existing[filename] = filehash
+    existing[filename] = (
+        f"{schema_type}:{filehash}" if schema_type else filehash
+    )
     lines = [f"{k}:{v}" for k, v in sorted(existing.items())]
     vfile.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -284,7 +292,7 @@ def _provenance_checks(schema_type, data):
     return errors, warnings, status not in (STATUS_INVALID, STATUS_LEGACY)
 
 
-def is_already_validated(filepath):
+def is_already_validated(filepath, schema_type=None):
     """Check if file was already validated and hasn't changed.
 
     Looks up the file's content hash in the per-directory
@@ -322,7 +330,13 @@ def is_already_validated(filepath):
     recorded = validated.get(filepath.name)
     if not recorded:
         return False
-    return recorded == _hash_file(filepath)
+    # Match the schema type as well as the content hash when the
+    # caller supplies one: a pass recorded for a different validator
+    # (or a legacy type-less record) must not be claimed for this one.
+    current = _hash_file(filepath)
+    if schema_type is not None:
+        return recorded == f"{schema_type}:{current}"
+    return recorded == current
 
 
 def main():
@@ -352,7 +366,7 @@ def main():
         print(f"✗ file not found: {filepath}", file=sys.stderr)
         sys.exit(3)
 
-    if is_already_validated(filepath):
+    if is_already_validated(filepath, schema_type):
         print(f"OK: {filepath.name} (cached)")
         return
 
@@ -405,7 +419,9 @@ def main():
     if provenance_ok and mark_schema_validated(data):
         save_json(filepath, data, mode=filepath.stat().st_mode & 0o777)
 
-    _write_validated(filepath.parent, filepath.name, _hash_file(filepath))
+    _write_validated(
+        filepath.parent, filepath.name, _hash_file(filepath), schema_type,
+    )
     print(f"OK: {filepath.name}")
 
 

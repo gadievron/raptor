@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from core.audit.constraints import Constraint
 from core.evidence import EvidenceRecord
@@ -229,6 +230,75 @@ class TestTryCodeqlResolve:
         config = PropagationConfig(codeql_db_path=str(tmp_path / "nope"))
         assert try_codeql_resolve(c, config) is None
 
+    def test_no_propagation_chain_is_inapplicable(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        # No chain = no derivable source function. The resolver must
+        # bail before invoking CodeQL — the query generator refuses
+        # empty source names, so proceeding could only ever raise.
+        import core.audit.codeql_validation as cv
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("validate_dataflow_claim must not run")
+
+        monkeypatch.setattr(cv, "validate_dataflow_claim", _boom)
+        c = _constraint(kind="parameter")
+        config = PropagationConfig(codeql_db_path=str(tmp_path))
+        assert try_codeql_resolve(c, config) is None
+
+    def test_confirmed_flow_resolves_with_path_db(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        # The db path must reach the validator as a Path (the config
+        # value is a str, and the validator stats it), and the bin
+        # must default when the config carries None.
+        import core.audit.codeql_validation as cv
+
+        seen: dict = {}
+
+        def _fake_validate(claim, *, db_path=None, codeql_bin="codeql",
+                           **kwargs):
+            seen["db_path"] = db_path
+            seen["codeql_bin"] = codeql_bin
+            seen["source_function"] = claim.source_function
+            return SimpleNamespace(confirmed=True)
+
+        monkeypatch.setattr(cv, "validate_dataflow_claim", _fake_validate)
+        c = _constraint(
+            kind="parameter", propagation_chain=["handle_request"],
+        )
+        config = PropagationConfig(codeql_db_path=str(tmp_path))
+        result = try_codeql_resolve(c, config)
+        assert result is not None
+        assert result.resolved
+        assert result.resolution == "confirmed"
+        assert result.resolver_used == "codeql"
+        assert isinstance(seen["db_path"], Path)
+        assert seen["codeql_bin"] == "codeql"
+        assert seen["source_function"] == "handle_request"
+
+    def test_negative_result_falls_through_without_refuting(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        # Direction check: "refuted" closes constraints, and the
+        # query's source model is a single derived function — a
+        # negative must yield None (next resolver), never a closure.
+        import core.audit.codeql_validation as cv
+
+        called: list[bool] = []
+
+        def _fake_validate(claim, **kw):
+            called.append(True)
+            return SimpleNamespace(confirmed=False)
+
+        monkeypatch.setattr(cv, "validate_dataflow_claim", _fake_validate)
+        c = _constraint(
+            kind="parameter", propagation_chain=["handle_request"],
+        )
+        config = PropagationConfig(codeql_db_path=str(tmp_path))
+        assert try_codeql_resolve(c, config) is None
+        assert called, "validator was expected to run"
+
 
 class TestTryCoccinelleResolve:
     def test_unsupported_kind(self):
@@ -435,11 +505,16 @@ class TestAdversarialFixes:
 
 
 class TestBinaryOracleIntegration:
+    # binary_verdicts is keyed by BARE function name — the producer
+    # (core.analysis.binary_oracle.extract_verdicts) emits
+    # {function: verdict}, and every other consumer reads it bare. A
+    # file:function key here could never hit the map, so the resolver
+    # was dead on every real run.
     def test_absent_function_refuted(self):
         c = _constraint()
         config = PropagationConfig(
             max_depth=5,
-            binary_verdicts={"src/packet.c:parse_header": "absent"},
+            binary_verdicts={"parse_header": "absent"},
         )
         result = propagate_one_hop(
             c,
@@ -451,11 +526,28 @@ class TestBinaryOracleIntegration:
         assert result.resolution == "refuted"
         assert result.resolver_used == "binary_oracle"
 
+    def test_file_function_key_never_matches(self):
+        # Producer-shape pin: a map keyed the OLD (file:function) way
+        # must not resolve — if this starts passing with such a key,
+        # the lookup drifted from the producer again.
+        c = _constraint()
+        config = PropagationConfig(
+            max_depth=5,
+            binary_verdicts={"src/packet.c:parse_header": "absent"},
+        )
+        result = propagate_one_hop(
+            c,
+            checklist=_checklist(),
+            entry_points=set(),
+            config=config,
+        )
+        assert result.resolver_used != "binary_oracle"
+
     def test_present_function_not_short_circuited(self):
         c = _constraint()
         config = PropagationConfig(
             max_depth=5,
-            binary_verdicts={"src/packet.c:parse_header": "symbol_present"},
+            binary_verdicts={"parse_header": "symbol_present"},
         )
         result = propagate_one_hop(
             c,

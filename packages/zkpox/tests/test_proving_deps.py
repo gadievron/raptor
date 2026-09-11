@@ -9,7 +9,6 @@ future prove/verify entry points + their slow tests one canonical
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
@@ -17,8 +16,6 @@ import pytest
 
 # packages/zkpox/tests/test_proving_deps.py → parents[3] = repo root
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
-
 import packages.zkpox.proving_deps as pd  # noqa: E402
 from packages.zkpox import (  # noqa: E402
     ProvingStackUnavailable,

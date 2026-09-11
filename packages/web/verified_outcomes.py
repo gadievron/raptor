@@ -40,6 +40,20 @@ def from_web_finding(
     if not has_exploit_oracle_evidence(data):
         return None
 
+    # The replay pass has the last word: a control-refuted finding must
+    # not be minted as an oracle-verified outcome — the same run's
+    # labeled-attempt record projects it as REFUTED, and one run must
+    # never carry contradictory oracle verdicts for one finding. An
+    # inconclusive replay keeps the detection-time confirmation out of
+    # the verified view too (the oracle did not reproduce it).
+    replay_status = data.get("verification_status")
+    if replay_status == "refuted":
+        status = OutcomeStatus.REFUTED
+    elif replay_status == "inconclusive":
+        status = OutcomeStatus.INCONCLUSIVE
+    else:
+        status = OutcomeStatus.VERIFIED
+
     evidence = {
         "target_url": data.get("target_url") or data.get("url"),
         "url": data.get("url"),
@@ -56,12 +70,13 @@ def from_web_finding(
         "auth_context": data.get("auth_context"),
         "check_id": data.get("check_id"),
         "asvs_category": data.get("asvs_category"),
+        "replay_verification_status": replay_status,
     }
 
     return VerifiedOutcome(
         finding_id=data.get("finding_id") or data["id"],
         oracle=Oracle.WEB,
-        status=OutcomeStatus.VERIFIED,
+        status=status,
         reproducible=False,
         evidence={k: v for k, v in evidence.items() if v is not None},
         cwe_id=data.get("cwe_id"),

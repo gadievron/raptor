@@ -145,6 +145,10 @@ def build_sarif(
     seen_rule_ids: list[str] = []
     seen: set = set()
     for r in rows:
+        if not isinstance(r, dict):
+            # Hand-edited findings.json may contain stray non-dict
+            # elements; skip them like the results loop below does.
+            continue
         rid = r.get("vuln_type")
         if isinstance(rid, str) and rid and rid not in seen:
             seen.add(rid)

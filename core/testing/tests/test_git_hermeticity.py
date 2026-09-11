@@ -61,6 +61,19 @@ def test_pin_sets_config_pins_and_strips_ambient():
     assert saved["GIT_AUTHOR_NAME"] == "Operator"
 
 
+def test_pin_strips_git_config_redirect():
+    # Scope-less `git config <key> <value>` writes to an exported
+    # $GIT_CONFIG (bypassing both the /dev/null pins and the repo
+    # config fingerprint), so the pin must strip it like the other
+    # redirection variables.
+    env = {"GIT_CONFIG": "/home/op/.gitconfig"}
+    saved = gh.pin_git_env(env)
+    assert "GIT_CONFIG" not in env
+    assert saved["GIT_CONFIG"] == "/home/op/.gitconfig"
+    gh.restore_git_env(saved, env)
+    assert env["GIT_CONFIG"] == "/home/op/.gitconfig"
+
+
 def test_pin_restore_round_trips_exactly():
     original = {
         "PATH": "/usr/bin",

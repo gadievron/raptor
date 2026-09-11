@@ -37,7 +37,6 @@ whether transitive coverage was real / approximate / missing-and-why.
 from __future__ import annotations
 
 import logging
-import re
 import tempfile
 import threading
 from dataclasses import dataclass
@@ -45,12 +44,15 @@ from pathlib import Path
 
 
 from .models import Dependency, Manifest
+from .osv import _canonical_name as _osv_canonical_name
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from core.json import JsonCache
     from core.http import HttpClient
     from collections.abc import Callable, Sequence
+
+    from .resolvers import Resolver
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +82,23 @@ _REQ_INCLUDE_PREFIXES = (
 )
 # Mirrors the requirements parser's include-depth cap.
 _REQ_INCLUDE_MAX_DEPTH = 5
+
+
+def _parent_map_key(ecosystem: str, name: str) -> str:
+    """Canonical key for the child → parents maps extracted from
+    cascade lockfiles.
+
+    PyPI needs full PEP 503 folding (runs of ``-``/``_``/``.`` → ``-``,
+    via the shared OSV canonicaliser) so dotted names emitted by
+    pip-compile (``zope.interface``) join with the parser-canonicalised
+    dep names (``zope-interface``) — a partial fold on one side loses
+    the parent linkage and the transitive-drop detector skips the dep.
+    Other ecosystems' maps store plain case-folded names (dots are
+    significant in npm / Cargo package names).
+    """
+    if ecosystem == "PyPI":
+        return _osv_canonical_name(ecosystem, name)
+    return name.lower()
 
 
 def _requirements_include_targets(path: Path) -> set[Path]:
@@ -363,6 +382,12 @@ def expand_missing_transitives(
     if cascade_work and enable_resolver:
         cascade_results = _run_cascades_parallel(cascade_work, cache=cache)
 
+    # Loop-invariant: the direct-dep key set only depends on the
+    # input ``direct_deps``, so build it once rather than per
+    # (eco, project_dir) iteration.
+    direct_keys = {(d.ecosystem, d.name, d.version or "*")
+                   for d in direct_deps}
+
     # Second pass: emit transitives + statuses per (eco, project_dir).
     # ``by_eco_dir`` is the original work list; we look up cascade
     # results by key. Ordering of statuses still matches input order.
@@ -424,8 +449,6 @@ def expand_missing_transitives(
 
         # Dedup against direct_deps — emit only NEW deps the project
         # didn't already declare directly.
-        direct_keys = {(d.ecosystem, d.name, d.version or "*")
-                       for d in direct_deps}
         deduped = [
             d for d in added
             if (d.ecosystem, d.name, d.version or "*") not in direct_keys
@@ -504,33 +527,16 @@ def _try_cascade_batch(
     amortise venv-creation across the batch.
 
     Returns ``[(project_dir, host_manifest, deps_or_None, reason_or_None), ...]``
-    aligned with ``work_items``.
+    covering every entry of ``work_items`` (grouped-by-resolver order;
+    the caller matches results by key, not position).
     """
     _ensure_lockfile_parsers_loaded()
     from .resolvers import get_resolver
-    from .resolvers._cache import cached_dry_run_batch
 
     out: list[tuple[Path, Path, list[Dependency] | None, str | None]] = []
     if not work_items:
         return out
 
-    project_dirs = [pd for pd, _ in work_items]
-    resolver = get_resolver(ecosystem, project_dir=project_dirs[0])
-    if resolver is None:
-        for pd, host in work_items:
-            out.append(
-                (pd, host, None,
-                 f"no cascade resolver registered for {ecosystem}"),
-            )
-        return out
-    if not resolver.is_available():
-        for pd, host in work_items:
-            out.append(
-                (pd, host, None,
-                 (f"{ecosystem} toolchain not installed (cascade resolver "
-                 f"requires it for transitive resolution)")),
-            )
-        return out
     parser = _LOCKFILE_PARSERS.get(ecosystem)
     if parser is None:
         for pd, host in work_items:
@@ -541,6 +547,55 @@ def _try_cascade_batch(
             )
         return out
 
+    # Route each project_dir through ``get_resolver``'s per-dir
+    # ``matches()`` selection — a mixed-tool monorepo (poetry dir +
+    # pip dir under PyPI; yarn / pnpm / npm; Maven / Gradle) needs a
+    # different tool per dir, so picking one resolver from the first
+    # dir would run the wrong tool against the rest. Batch per
+    # distinct resolver instance (the registry resolvers are module
+    # singletons, so identity groups every dir that matched the same
+    # tool and keeps shared-setup batching engaged within each group).
+    groups: dict[int, tuple[Resolver, list[tuple[Path, Path]]]] = {}
+    for pd, host in work_items:
+        resolver = get_resolver(ecosystem, project_dir=pd)
+        if resolver is None:
+            out.append(
+                (pd, host, None,
+                 f"no cascade resolver registered for {ecosystem}"),
+            )
+            continue
+        group = groups.setdefault(id(resolver), (resolver, []))
+        group[1].append((pd, host))
+
+    for resolver, group_items in groups.values():
+        out.extend(_run_resolver_group(
+            ecosystem, resolver, group_items, parser, cache,
+        ))
+    return out
+
+
+def _run_resolver_group(
+    ecosystem: str,
+    resolver: Resolver,
+    work_items: list[tuple[Path, Path]],
+    parser: Callable[[Path], list[Dependency]],
+    cache: JsonCache | None,
+) -> list[tuple[Path, Path, list[Dependency] | None, str | None]]:
+    """Run one resolver over the work items that matched it and parse
+    the resulting lockfile bytes."""
+    from .resolvers._cache import cached_dry_run_batch
+
+    out: list[tuple[Path, Path, list[Dependency] | None, str | None]] = []
+    if not resolver.is_available():
+        for pd, host in work_items:
+            out.append(
+                (pd, host, None,
+                 (f"{ecosystem} toolchain not installed (cascade resolver "
+                 f"requires it for transitive resolution)")),
+            )
+        return out
+
+    project_dirs = [pd for pd, _ in work_items]
     # Common ancestor of every project_dir lets the sandbox cover
     # them all in one ``target=common_root`` session. When
     # ``dry_run_batch`` finds it can't honour the batch (mismatched
@@ -613,7 +668,7 @@ def _try_cascade_batch(
             _with_cascade_source(
                 d, host,
                 parents=parents_by_name.get(
-                    re.sub(r"[-_.]+", "-", d.name.lower()), [],
+                    _parent_map_key(ecosystem, d.name), [],
                 ),
             )
             for d in deps
@@ -839,8 +894,9 @@ def _extract_pip_compile_via(blob: bytes) -> dict[str, list[str]]:
 
     We only need the parent list per package; downstream consumers
     use it to ask "if I bump <parent>, does this transitive
-    disappear?". Returns lowercased package names (PEP 503
-    canonicalised at the call site)."""
+    disappear?". Keys AND parent values are PEP 503 canonicalised
+    (``_parent_map_key``) so dotted names like ``zope.interface``
+    join with the parser-canonicalised dep names downstream."""
     import re as _re
 
     text = blob.decode("utf-8", errors="replace")
@@ -856,7 +912,7 @@ def _extract_pip_compile_via(blob: bytes) -> dict[str, list[str]]:
         m = pkg_re.match(line.strip())
         if m is None:
             continue
-        name = m.group(1).lower().replace("_", "-")
+        name = _parent_map_key("PyPI", m.group(1))
         parents: list[str] = []
         # Look at subsequent indented ``# via`` block.
         j = i + 1
@@ -874,12 +930,12 @@ def _extract_pip_compile_via(blob: bytes) -> dict[str, list[str]]:
                     for p in rest.split(","):
                         p = p.strip()
                         if p and not p.startswith("-"):
-                            parents.append(p.lower().replace("_", "-"))
+                            parents.append(_parent_map_key("PyPI", p))
                 in_via = True
             elif in_via:
                 # Continuation: ``#   <parent>``
                 if content and not content.startswith("-"):
-                    parents.append(content.lower().replace("_", "-"))
+                    parents.append(_parent_map_key("PyPI", content))
             j += 1
         if parents:
             out[name] = parents

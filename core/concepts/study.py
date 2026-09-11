@@ -44,9 +44,9 @@ logger = logging.getLogger(__name__)
 
 def _quarantine_stale_prior(
     prior: DomainModel,
-    source_root: Path | None,
+    source_root: Path | str | None,
     output_dir: Path,
-    on_progress=None,
+    on_progress: Any = None,
     reading_list: Any = None,
 ) -> None:
     """Quarantine prior-run concepts whose evidence drifted on disk.
@@ -65,13 +65,19 @@ def _quarantine_stale_prior(
 
     Fail-soft: a staleness-check error never blocks the study run.
     """
-    if source_root is None:
+    if not source_root:
         return
+    # Coerce at the boundary: callers hold source_root as the str
+    # read from study-list.json, and check_batch calls root.resolve()
+    # — a str here raised AttributeError straight into the fail-soft
+    # except, silently disabling the quarantine on every run.
+    source_root = Path(source_root)
     try:
         stale = check_evidence_staleness(prior, source_root)
     except Exception:
-        logger.debug("staleness check on prior model failed",
-                     exc_info=True)
+        logger.warning("staleness check on prior model failed — "
+                       "prior concepts NOT checked for drifted "
+                       "evidence this run", exc_info=True)
         return
     if not stale:
         return
@@ -137,11 +143,15 @@ def _merge_domain_models(prior: DomainModel, new: DomainModel) -> DomainModel:
     for i in new.invariants:
         inv_map[i.id] = i
 
-    ct_map: dict[str, Contract] = {}
+    # Key by (function, file) — same key the phase-3 dedup uses.
+    # Function name alone collapses same-named functions in different
+    # files, silently deleting one file's contract and priming the
+    # other file's reviews with the wrong semantics.
+    ct_map: dict[tuple[str, str], Contract] = {}
     for ct in prior.contracts:
-        ct_map[ct.function] = ct
+        ct_map[(ct.function, ct.file)] = ct
     for ct in new.contracts:
-        ct_map[ct.function] = ct
+        ct_map[(ct.function, ct.file)] = ct
 
     bp_map: dict[str, BugPattern] = {bp.id: bp for bp in prior.bug_patterns}
     for bp in new.bug_patterns:
@@ -273,6 +283,24 @@ def _promote_to_project(per_run_path: Path, output_dir: Path) -> None:
 
     tmp = None
     try:
+        if canonical.is_file():
+            # MERGE into the canonical model, never replace it: a
+            # reading-list-scoped (or zero-item) pass produces a tiny
+            # per-run model, and an unconditional copy would clobber
+            # the project's accumulated knowledge with that subset.
+            # Merge semantics match the in-run prior merge: the new
+            # run wins on ID collisions, everything else accumulates.
+            canon_model = DomainModel.load(canonical)
+            run_model = DomainModel.load(per_run_path)
+            merged = _merge_domain_models(canon_model, run_model)
+            merged.save(canonical)
+            logger.info(
+                "merged domain-model.json into %s "
+                "(%d concepts, %d invariants, %d contracts)",
+                canonical, len(merged.concepts),
+                len(merged.invariants), len(merged.contracts),
+            )
+            return
         fd, tmp = tempfile.mkstemp(
             dir=str(concepts_dir), suffix=".tmp", prefix="domain-model-",
         )
@@ -2040,13 +2068,19 @@ def _stamp_contract_hashes(
     focus_items: list[StudyItem],
     source_root: Path,
 ) -> None:
-    """Set ``Contract.hash`` by resolving function line ranges from study items."""
-    from core.staleness import hash_span
+    """Set ``Contract.hash`` by resolving function line ranges from study items.
+
+    Spans are grouped by file so each file is read at most once
+    (``core.staleness.hash_spans``) — the per-contract ``hash_span``
+    shape re-read the whole file for every contract.
+    """
+    from core.staleness import hash_spans
 
     item_by_name: dict[str, StudyItem] = {}
     for item in focus_items:
         item_by_name[item.name] = item
 
+    by_file: dict[Path, list[tuple[Contract, int, int]]] = {}
     for ct in contracts:
         item = item_by_name.get(ct.function)
         if item is None or item.line is None:
@@ -2056,9 +2090,14 @@ def _stamp_contract_hashes(
         full_path = _resolve_in_root(source_root, item.file)
         if full_path is None:
             continue
-        h = hash_span(full_path, item.line, end_line)
-        if h:
-            ct.hash = h
+        by_file.setdefault(full_path, []).append((ct, item.line, end_line))
+
+    for full_path, entries in by_file.items():
+        spans = [(start, end) for _, start, end in entries]
+        hashes = hash_spans(full_path, spans)
+        for (ct, _, _), h in zip(entries, hashes):
+            if h:
+                ct.hash = h
 
 
 def _queue_unresolved(
@@ -3048,11 +3087,20 @@ def _semantic_dedup_invariants(
     for i in range(len(invariants)):
         groups.setdefault(find(i), []).append(i)
 
+    from .receipts import tier_rank
+
     merged: list[Invariant] = []
     for indices in groups.values():
+        # Receipted provenance outranks text length: a verbatim
+        # invariant anchored to source must not lose its verified
+        # receipt to a longer unverified paraphrase — tier-gated
+        # consumers would demote the merged fact and staleness
+        # checking would lose its anchor.
         best_idx = max(
             indices,
             key=lambda i: (
+                invariants[i].receipt is not None,
+                -tier_rank(invariants[i].provenance),
                 len(invariants[i].statement),
                 len(invariants[i].negation),
                 len(invariants[i].relevant_cwes),
@@ -3066,6 +3114,13 @@ def _semantic_dedup_invariants(
             for cwe in donor.relevant_cwes:
                 if cwe not in winner.relevant_cwes:
                     winner.relevant_cwes.append(cwe)
+            # A receipt-less winner (possible only when no group
+            # member carries a stronger tier) still inherits the best
+            # donor receipt available, keeping the anchor alive.
+            if winner.receipt is None and donor.receipt is not None:
+                winner.receipt = donor.receipt
+                if tier_rank(donor.provenance) < tier_rank(winner.provenance):
+                    winner.provenance = donor.provenance
         if winner.concept in valid_concepts:
             merged.append(winner)
 
@@ -3809,7 +3864,10 @@ def run_study(
     if out_path.is_file():
         prior = DomainModel.load(out_path)
         _quarantine_stale_prior(
-            prior, source_root, output_dir, on_progress=on_progress,
+            prior,
+            Path(source_root) if source_root else None,
+            output_dir,
+            on_progress=on_progress,
             reading_list=reading_list,
         )
         model = _merge_domain_models(prior, model)
@@ -3865,6 +3923,12 @@ def run_study(
 
 _EVIDENCE_HASH_RE = re.compile(r"\[h=([a-f0-9]+)\]")
 
+#: Minimum normalised-name length for a non-exact (segment-boundary)
+#: concept match in the SAGE-prior lookup.  Short generic names
+#: ('walk', 'init') appear as segments inside many unrelated concept
+#: ids; only an exact match is trustworthy for them.
+_SAGE_PRIOR_MIN_MATCH_LEN = 6
+
 
 def _extract_evidence_hashes(content: str) -> set[str]:
     """Extract per-evidence [h=...] hashes from SAGE content."""
@@ -3881,10 +3945,16 @@ def _verify_evidence_hashes(
     that source line at store time.  Re-hash the same locations now; if
     ALL still match, the concept is fresh.  Returns False when any
     evidence line has changed or when the content has no hashes at all.
-    """
-    from core.staleness import hash_span
 
-    checked = 0
+    Hashing is batched per file (``core.staleness.hash_spans`` reads
+    each file once) — the per-line ``hash_span`` shape re-read the
+    whole file for every evidence line.
+    """
+    from core.staleness import hash_spans
+
+    # (path, line, stored_hash) triples grouped by file for one read
+    # per file.
+    by_file: dict[Path, list[tuple[int, str]]] = {}
     for m in _SAGE_EVIDENCE_RE.finditer(content):
         file_str = m.group(2).strip()
         line_str = m.group(3)
@@ -3899,10 +3969,16 @@ def _verify_evidence_hashes(
             continue
         if not full_path.is_file():
             return False
-        current = hash_span(full_path, line_num, line_num)
-        if current != stored_hash:
-            return False
-        checked += 1
+        by_file.setdefault(full_path, []).append((line_num, stored_hash))
+
+    checked = 0
+    for full_path, entries in by_file.items():
+        spans = [(line, line) for line, _ in entries]
+        current = hash_spans(full_path, spans)
+        for (_, stored_hash), cur in zip(entries, current):
+            if cur != stored_hash:
+                return False
+            checked += 1
     return checked > 0
 
 
@@ -4070,9 +4146,24 @@ def _apply_sage_prior(
                 concept = local_model.get_concept(item.name)
                 if concept is None:
                     norm = re.sub(r"[^a-z0-9]+", "_", item.name.lower()).strip("_")
+                    # Exact match always counts. Anything looser needs
+                    # segment boundaries AND a minimum length: a bare
+                    # substring test let a short item name ('walk')
+                    # claim an unrelated concept
+                    # ('scatter_walk_state_machine'), skipping the item
+                    # from study while injecting the wrong prior.
+                    seg_re = (
+                        re.compile(
+                            rf"(?:^|_){re.escape(norm)}(?:_|$)",
+                        )
+                        if len(norm) >= _SAGE_PRIOR_MIN_MATCH_LEN
+                        else None
+                    )
                     for c in local_model.concepts:
                         c_norm = re.sub(r"[^a-z0-9]+", "_", c.id.lower()).strip("_")
-                        if c_norm == norm or norm in c_norm:
+                        if c_norm == norm or (
+                            seg_re is not None and seg_re.search(c_norm)
+                        ):
                             concept = c
                             break
                 if concept is not None:

@@ -141,26 +141,54 @@ def parse_fix_hunks(diff_text: str,
     deletions have no post span. Both sides are kept where present —
     the recall manifest consumes pre spans, the fp-only twin consumes
     post spans.
+
+    Span attribution follows the tree each side lives in: pre spans
+    belong to the ``--- a/`` path (the pre-fix tree the recall
+    manifest is pinned to) and post spans to the ``+++ b/`` path. A
+    fix that DELETES the vulnerable file (``+++ /dev/null``) keeps its
+    pre spans — dropping them would erase the vulnerability location
+    from ground truth; a RENAME keys the pre spans to the pre-fix
+    path, which is the only one that exists at the pinned pre-fix sha
+    (labelling the post-fix path would manufacture unmatchable
+    misses).
     """
     spans: list[HunkSpan] = []
-    current: str | None = None
+    pre_path: str | None = None
+    post_path: str | None = None
     for line in diff_text.splitlines():
-        if line.startswith("+++ b/"):
-            path = line[6:]
-            current = path if path.endswith(suffixes) else None
+        if line.startswith("diff --git "):
+            # New file section; pure renames carry no ---/+++ lines,
+            # so reset rather than let the previous section leak.
+            pre_path = post_path = None
             continue
-        if line.startswith("+++ /dev/null"):
-            current = None  # deleted file: no post side to label
+        if line.startswith("--- "):
+            path = line[4:]
+            pre_path = path[2:] if path.startswith("a/") else None
+            continue
+        if line.startswith("+++ "):
+            path = line[4:]
+            post_path = path[2:] if path.startswith("b/") else None
             continue
         m = _HUNK_RE.match(line)
-        if m and current:
-            old_start, old_n = int(m.group(1)), int(m.group(2) or "1")
-            new_start, new_n = int(m.group(3)), int(m.group(4) or "1")
-            pre = ((old_start, old_start + old_n - 1)
-                   if old_n > 0 else None)
-            post = ((new_start, new_start + new_n - 1)
-                    if new_n > 0 else None)
-            spans.append(HunkSpan(file=current, pre=pre, post=post))
+        if not m or (pre_path is None and post_path is None):
+            continue
+        old_start, old_n = int(m.group(1)), int(m.group(2) or "1")
+        new_start, new_n = int(m.group(3)), int(m.group(4) or "1")
+        pre = ((old_start, old_start + old_n - 1)
+               if old_n > 0 else None)
+        post = ((new_start, new_start + new_n - 1)
+                if new_n > 0 else None)
+        if pre_path == post_path:
+            if pre_path is not None and pre_path.endswith(suffixes):
+                spans.append(HunkSpan(file=pre_path, pre=pre, post=post))
+            continue
+        # Deletion or rename: each side rides its own path.
+        if pre is not None and pre_path is not None \
+                and pre_path.endswith(suffixes):
+            spans.append(HunkSpan(file=pre_path, pre=pre, post=None))
+        if post is not None and post_path is not None \
+                and post_path.endswith(suffixes):
+            spans.append(HunkSpan(file=post_path, pre=None, post=post))
     return spans
 
 

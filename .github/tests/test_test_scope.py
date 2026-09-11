@@ -219,6 +219,16 @@ class TestOnRealRepo:
                   if not t.startswith("_") and i["run"]]
         assert len(active) <= 3, f"leaf change activated too many tiers: {active}"
 
+    def test_no_dead_deps_gate_in_result(self, repo):
+        # deps-job gating lives in tests.yml (it ORs the venv tier
+        # outputs); a "_deps" entry computed here was never emitted
+        # (_emit_outputs skips underscore keys) and misled readers
+        # into thinking this script drove the deps job.
+        result = compute_tier_dispatch(
+            ["packages/web/scanner.py"], repo
+        )
+        assert "_deps" not in result
+
     def test_sca_only_change(self, repo):
         result = compute_tier_dispatch(
             ["packages/sca/optimise.py"], repo

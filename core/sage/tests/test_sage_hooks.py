@@ -32,10 +32,18 @@ def _stamped_codeql_row(
     languages="cpp",
     outcome="success",
     cmd="make all",
-    repo_key="ab12cd34ef56",
+    repo_path="/repo",
     confidence=0.85,
 ):
-    """Build a CodeQL build-reliability row the way the store hook does."""
+    """Build a CodeQL build-reliability row the way the store hook does.
+
+    The MAC binds the storing repo's key; recall verifies against the
+    CALLER's repo, so tests pass the matching ``repo_path`` to
+    ``infer_codeql_build_from_sage_recall_row`` (or a different one to
+    exercise the cross-repo demotion).
+    """
+    from core.sage.hooks import _repo_key
+    repo_key = _repo_key(repo_path)
     content = (
         f"CodeQL build reliability for repo myapp: "
         f"languages {languages}, outcome {outcome}, "
@@ -201,7 +209,7 @@ class TestInferCodeQLBuild(unittest.TestCase):
             languages="cpp",
             cmd="cmake -B build && cmake --build build",
         )
-        hint = infer_codeql_build_from_sage_recall_row(row)
+        hint = infer_codeql_build_from_sage_recall_row(row, repo_path="/repo")
         self.assertEqual(hint["outcome"], "success")
         self.assertEqual(
             hint["build_command"],
@@ -236,16 +244,62 @@ class TestInferCodeQLBuild(unittest.TestCase):
         from core.sage.hooks import infer_codeql_build_from_sage_recall_row
         row = _stamped_codeql_row(languages="cpp", cmd="make all")
         with patch("core.sage.rowmac.verify", return_value=False):
-            hint = infer_codeql_build_from_sage_recall_row(row)
+            hint = infer_codeql_build_from_sage_recall_row(row, repo_path="/repo")
         self.assertNotIn("build_command", hint)
         self.assertEqual(hint["unverified_build_command"], "make all")
 
     def test_verified_row_has_no_unverified_key(self):
         from core.sage.hooks import infer_codeql_build_from_sage_recall_row
         row = _stamped_codeql_row(languages="cpp", cmd="make all")
-        hint = infer_codeql_build_from_sage_recall_row(row)
+        hint = infer_codeql_build_from_sage_recall_row(row, repo_path="/repo")
         self.assertEqual(hint["build_command"], "make all")
         self.assertNotIn("unverified_build_command", hint)
+
+    def test_cross_repo_replay_demotes_to_unverified(self):
+        """A row MAC-minted while analysing repo A must never yield a
+        replayable command for repo B: the rows live in the GLOBAL
+        methodology domain, and pre-fix the verification repo key was
+        parsed from the row itself — repo A's (possibly hostile-
+        synthesised) build command verified and EXECUTED in repo B."""
+        from core.sage.hooks import infer_codeql_build_from_sage_recall_row
+        row = _stamped_codeql_row(repo_path="/repo-a", cmd="make pwn")
+        hint = infer_codeql_build_from_sage_recall_row(
+            row, repo_path="/repo-b")
+        self.assertNotIn("build_command", hint)
+        self.assertEqual(hint["unverified_build_command"], "make pwn")
+
+    def test_no_caller_repo_binding_demotes_to_unverified(self):
+        """Without a caller repo (no repo_path, no recall annotation)
+        there is nothing sound to verify against — hint only."""
+        from core.sage.hooks import infer_codeql_build_from_sage_recall_row
+        row = _stamped_codeql_row(repo_path="/repo", cmd="make all")
+        hint = infer_codeql_build_from_sage_recall_row(row)
+        self.assertNotIn("build_command", hint)
+        self.assertEqual(hint["unverified_build_command"], "make all")
+
+    def test_caller_repo_annotation_from_recall_verifies(self):
+        """recall_context_for_codeql_build stamps _caller_repo_key on
+        every returned row; the packaged caller passes rows through
+        pick_strongest_recall_row unchanged, so the annotation is the
+        binding when no explicit repo_path is given."""
+        from core.sage.hooks import _repo_key
+        from core.sage.hooks import infer_codeql_build_from_sage_recall_row
+        row = _stamped_codeql_row(repo_path="/repo", cmd="make all")
+        row["_caller_repo_key"] = _repo_key("/repo")
+        hint = infer_codeql_build_from_sage_recall_row(row)
+        self.assertEqual(hint["build_command"], "make all")
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_context_annotates_caller_repo(self, mock_get_client):
+        from core.sage.hooks import _repo_key, recall_context_for_codeql_build
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            {"content": "some row", "confidence": 0.9}]
+        mock_get_client.return_value = mock_client
+        rows = recall_context_for_codeql_build("/repo", ["cpp"])
+        self.assertTrue(rows)
+        for r in rows:
+            self.assertEqual(r["_caller_repo_key"], _repo_key("/repo"))
 
     def test_no_command_on_failure(self):
         from core.sage.hooks import infer_codeql_build_from_sage_recall_row
@@ -286,7 +340,7 @@ class TestInferCodeQLBuild(unittest.TestCase):
     def test_multi_language(self):
         from core.sage.hooks import infer_codeql_build_from_sage_recall_row
         row = _stamped_codeql_row(languages="cpp, javascript", cmd="make all")
-        hint = infer_codeql_build_from_sage_recall_row(row)
+        hint = infer_codeql_build_from_sage_recall_row(row, repo_path="/repo")
         self.assertEqual(hint["languages"], "cpp, javascript")
         self.assertEqual(hint["build_command"], "make all")
 
@@ -2186,7 +2240,7 @@ class TestRowMacDemotionPerHook(unittest.TestCase):
 
         def recall_codeql(content):
             hint = hooks.infer_codeql_build_from_sage_recall_row(
-                {"content": content, "confidence": 0.9})
+                {"content": content, "confidence": 0.9}, repo_path=repo)
             return "build_command" in hint
 
         def store_afl():
@@ -2434,3 +2488,55 @@ class TestStoreTeachConcepts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOllamaGpuProbeTtl(unittest.TestCase):
+    """S04-F15: a failed GPU probe must not latch False for the
+    process lifetime — it re-probes after the negative-cache TTL, and
+    the probe honours SAGE_OLLAMA_URL."""
+
+    def setUp(self):
+        from core.sage import hooks
+        self._saved = (hooks._ollama_has_gpu, hooks._ollama_gpu_checked_at)
+        hooks._ollama_has_gpu = None
+        hooks._ollama_gpu_checked_at = 0.0
+
+    def tearDown(self):
+        from core.sage import hooks
+        hooks._ollama_has_gpu, hooks._ollama_gpu_checked_at = self._saved
+
+    @staticmethod
+    def _gpu_response():
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "models": [{"size": 100, "size_vram": 100}]}
+        return resp
+
+    def test_failed_probe_recovers_after_ttl(self):
+        from core.sage import hooks
+        with patch("httpx.get", side_effect=OSError("refused")) as g:
+            self.assertFalse(hooks._ollama_gpu_available())
+            self.assertEqual(g.call_count, 1)
+        # Within the TTL: cached negative, no new probe.
+        with patch("httpx.get", return_value=self._gpu_response()) as g:
+            self.assertFalse(hooks._ollama_gpu_available())
+            self.assertEqual(g.call_count, 0)
+        # Past the TTL: re-probes and picks the GPU up.
+        hooks._ollama_gpu_checked_at -= hooks._CLIENT_NONE_TTL_S + 1
+        with patch("httpx.get", return_value=self._gpu_response()):
+            self.assertTrue(hooks._ollama_gpu_available())
+        # Positive result is latched (no further probes).
+        with patch("httpx.get", side_effect=OSError("down")) as g:
+            self.assertTrue(hooks._ollama_gpu_available())
+            self.assertEqual(g.call_count, 0)
+
+    def test_probe_honours_sage_ollama_url(self):
+        import os
+        from core.sage import hooks
+        with patch.dict(os.environ,
+                        {"SAGE_OLLAMA_URL": "http://127.0.0.1:21434/"}), \
+                patch("httpx.get", return_value=self._gpu_response()) as g:
+            self.assertTrue(hooks._ollama_gpu_available())
+        self.assertEqual(g.call_args.args[0],
+                         "http://127.0.0.1:21434/api/ps")

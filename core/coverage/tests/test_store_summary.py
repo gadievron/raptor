@@ -324,7 +324,9 @@ def test_store_threshold_helpers(tmp_path):
     assert not store_coverage_threshold_met(view, 75.0)
     result = format_store_threshold_result(view, 75.0)
     assert "50.0% LLM item coverage" in result
-    assert "FAIL" in result
+    # Title Case per the output-style rule (never ALL_CAPS).
+    assert "Fail" in result
+    assert "FAIL" not in result
 
 
 def test_store_threshold_no_reviewable_is_100(tmp_path):
@@ -449,3 +451,32 @@ class TestReadTrackingHealth:
             read_tracking_status,
         )
         assert format_read_tracking(read_tracking_status([])) is None
+
+
+def test_progress_trend_skips_non_object_json_lines(tmp_path):
+    """A valid-JSON ``null`` (or scalar) line must be skipped like a
+    malformed one instead of AttributeError-ing the coverage render."""
+    from core.coverage.store_summary import format_progress_trend
+
+    store_path = tmp_path / "coverage.json"
+    progress = tmp_path / "coverage-progress.jsonl"
+    progress.write_text(
+        'null\n'
+        '42\n'
+        '{"llm_reviewed": 3, "llm_reviewable": 10, "run": "scan_1"}\n')
+    line = format_progress_trend(store_path)
+    assert line is not None
+    assert "3/10" in line
+
+
+def test_read_tracking_status_accepts_generator_input(tmp_path):
+    """run_dirs may arrive as a generator — the runs count must not
+    read from an already-consumed iterator (silently reporting 0)."""
+    from core.coverage.store_summary import read_tracking_status
+
+    d1 = tmp_path / "r1"
+    d2 = tmp_path / "r2"
+    d1.mkdir()
+    d2.mkdir()
+    status = read_tracking_status(d for d in (d1, d2))
+    assert status["runs"] == 2

@@ -384,7 +384,16 @@ def get_stage_budget(stage: str) -> float:
                 val = 0.0  # negative treated as unbounded
             return val
         except ValueError:
-            return _DEFAULT_STAGE_BUDGETS.get(stage, 0.0)
+            # A malformed env value falls THROUGH to the TOML layer (the
+            # documented env → TOML → default precedence) — returning the
+            # code default here would silently discard an operator's
+            # configured budget over a typo in the override.
+            logger.warning(
+                "ignoring malformed %s=%r (not a number); "
+                "falling back to TOML/default budget",
+                env_key,
+                env_val,
+            )
     toml_val = _get_toml_value(["budget", stage.lower()])
     if toml_val is not None:
         try:
@@ -649,7 +658,10 @@ GITHUB_API_BASE: str = "https://api.github.com"
 # version-assertion gate.
 VERSION_ASSERTION_CMD_PATTERN: re.Pattern[str] = re.compile(
     r"--version\b"
-    r"|\b-V\b"
+    # `\b-V\b` never matches a real `cmd -V`: both the space before and
+    # the '-' are non-word chars, so there is no word boundary between
+    # them. Anchor on the preceding whitespace/start instead.
+    r"|(?:^|\s)-V\b"
     r"|\bversion\b"
     r"|\bdpkg -l\b"
     r"|\bdpkg-query\b"

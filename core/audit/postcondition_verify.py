@@ -638,16 +638,27 @@ def format_postcondition_context(
     postconditions: Sequence[Postcondition],
     violations: Sequence[PostconditionViolation],
 ) -> str:
-    """Render postcondition verification results for LLM prompt injection."""
+    """Render postcondition verification results for LLM prompt injection.
+
+    Function names / guarantees / descriptions derive from analysed
+    source, so each field is rendered through ``defend_prompt_field``
+    (newline flatten + tag/heading neutralise) — the block's list rows
+    are line-shaped trusted structure.
+    """
     if not postconditions and not violations:
         return ""
+    from core.audit.prompt_defence import defend_prompt_field as _dpf
 
     lines = ["### Postcondition verification"]
 
     if postconditions:
         lines.append("")
         lines.append(f"**{len(postconditions)} security-critical functions with postconditions:**")
-        lines.extend(f"- `{pc.function}()` ({pc.role}): {pc.claimed_guarantee[:120]}" for pc in postconditions[:10])
+        lines.extend(
+            f"- `{_dpf(pc.function, 120)}()` ({_dpf(pc.role, 40)}): "
+            f"{_dpf(pc.claimed_guarantee, 120)}"
+            for pc in postconditions[:10]
+        )
         if len(postconditions) > 10:
             lines.append(f"  ...and {len(postconditions) - 10} more")
 
@@ -656,12 +667,14 @@ def format_postcondition_context(
         lines.append(f"**{len(violations)} postcondition violations detected:**")
         for v in violations:
             lines.append(
-                f"- [{v.confidence.upper()}] `{v.function}()`: "
-                f"{v.description[:150]}"
+                f"- [{_dpf(v.confidence, 20).upper()}] "
+                f"`{_dpf(v.function, 120)}()`: "
+                f"{_dpf(v.description, 150)}"
             )
             if v.consumer_function:
                 lines.append(
-                    f"  Consumer: `{v.consumer_function}()` ({v.consumer_file})"
+                    f"  Consumer: `{_dpf(v.consumer_function, 120)}()` "
+                    f"({_dpf(v.consumer_file, 200)})"
                 )
 
     return "\n".join(lines)

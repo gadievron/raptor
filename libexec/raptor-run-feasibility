@@ -30,24 +30,72 @@ import core.startup.process_init  # noqa: E402,F401
 from core.json import load_json, save_json  # noqa: E402
 
 
+def _as_dict(value: object) -> dict:
+    """Coerce a possibly-null / non-dict finding field to a dict."""
+    return value if isinstance(value, dict) else {}
+
+
+def _map_filename(raw_id: str) -> str:
+    """Filesystem-safe stem for a finding's mitigation-feasibility file.
+
+    Character sanitisation alone is lossy ("vuln:1" and "vuln_1" both
+    map to "vuln_1"), so a later finding would silently overwrite an
+    earlier one's persisted map while both findings' pointers name the
+    same file. Whenever sanitisation changed the id, a short digest of
+    the raw id keeps distinct findings on distinct files.
+    """
+    safe_id = "".join(
+        c if c.isalnum() or c in "-_" else "_" for c in raw_id
+    ) or "unnamed"
+    if safe_id != raw_id:
+        import hashlib
+        digest = hashlib.sha256(raw_id.encode("utf-8")).hexdigest()[:8]
+        safe_id = f"{safe_id}_{digest}"
+    return safe_id
+
+
 def main():
-    if len(sys.argv) < 4:
-        print(
-            f"Usage: {sys.argv[0]} <binary_path> <findings.json> "
-            f"<output_dir> [--vuln-type <type>] [--target <path>]",
-            file=sys.stderr,
-        )
+    usage = (
+        f"Usage: {sys.argv[0]} <binary_path> <findings.json> "
+        f"<output_dir> [--vuln-type <type>] [--target <path>]"
+    )
+    # Separate flags from positionals BEFORE assigning positionals by
+    # index: a bare len() check lets a flag token stand in for a
+    # forgotten positional (e.g. output_dir becoming the literal
+    # string "--vuln-type"), sending artifacts to a wrong directory.
+    args = sys.argv[1:]
+    positionals: list[str] = []
+    flag_values: dict[str, str] = {}
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("--vuln-type", "--target"):
+            # A trailing valueless flag must error, not be silently
+            # dropped — dropping it skips the requested analysis mode
+            # with no message.
+            if i + 1 >= len(args):
+                print(f"✗ {a} requires a value", file=sys.stderr)
+                print(usage, file=sys.stderr)
+                sys.exit(1)
+            flag_values[a] = args[i + 1]
+            i += 2
+        elif a.startswith("--"):
+            print(f"✗ unknown flag: {a}", file=sys.stderr)
+            print(usage, file=sys.stderr)
+            sys.exit(1)
+        else:
+            positionals.append(a)
+            i += 1
+
+    if len(positionals) != 3:
+        print(usage, file=sys.stderr)
         sys.exit(1)
 
-    binary_path = sys.argv[1]
-    findings_path = Path(sys.argv[2])
-    output_dir = sys.argv[3]
+    binary_path = positionals[0]
+    findings_path = Path(positionals[1])
+    output_dir = positionals[2]
 
-    vuln_type = None
-    if "--vuln-type" in sys.argv:
-        idx = sys.argv.index("--vuln-type")
-        if idx + 1 < len(sys.argv):
-            vuln_type = sys.argv[idx + 1]
+    vuln_type = flag_values.get("--vuln-type")
 
     # ``--target <path>`` enables the per-finding empirical
     # mitigation analysis: with a source root we can resolve
@@ -58,10 +106,8 @@ def main():
     # silently skipped — the static analyze_binary path runs
     # unchanged.
     target_path = None
-    if "--target" in sys.argv:
-        idx = sys.argv.index("--target")
-        if idx + 1 < len(sys.argv):
-            target_path = Path(sys.argv[idx + 1]).resolve()
+    if "--target" in flag_values:
+        target_path = Path(flag_values["--target"]).resolve()
 
     if not Path(binary_path).exists():
         print(f"✗ binary not found: {binary_path}", file=sys.stderr)
@@ -106,12 +152,17 @@ def main():
                 print("✗ Cannot load findings", file=sys.stderr)
                 sys.exit(1)
 
-            # Find findings that reference this binary
+            # Find findings that reference this binary. Findings are
+            # authored across stages — a null or non-dict feasibility/
+            # ruling is expected shape drift (``.get(key, {})`` returns
+            # the null, then ``.get`` on it raises), and one malformed
+            # finding must not abort the whole group.
             group = [
                 f for f in findings_data.get("findings", [])
-                if f.get("feasibility", {}).get("binary_path") == binary_path
+                if _as_dict(f.get("feasibility")).get("binary_path")
+                == binary_path
                 and f.get("status") != "disproven"
-                and f.get("ruling", {}).get("status") != "ruled_out"
+                and _as_dict(f.get("ruling")).get("status") != "ruled_out"
             ]
 
             if not group:
@@ -425,11 +476,9 @@ def _enrich_with_empirical_mitigation_map(
             )
             continue
 
-        safe_id = "".join(
-            c if c.isalnum() or c in "-_" else "_"
-            for c in finding["id"]
-        ) or "unnamed"
-        fmap_file = feasibility_dir / f"{safe_id}.json"
+        fmap_file = (
+            feasibility_dir / f"{_map_filename(str(finding['id']))}.json"
+        )
         fmap_file.write_text(to_json(fmap), encoding="utf-8")
 
         finding.setdefault("feasibility", {})[

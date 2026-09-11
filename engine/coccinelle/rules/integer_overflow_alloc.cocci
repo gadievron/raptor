@@ -13,10 +13,22 @@
 // Known limitations:
 // - Division-based guards (SIZE_MAX / b) are only matched in a few
 //   common forms; unusual guard idioms may not be recognised.
+// - Products with a sizeof() factor are excluded wholesale:
+//   `malloc(n * sizeof(T))` is the idiomatic C array allocation, and
+//   whether n is attacker-controlled or already range-limited by the
+//   caller is not decidable from the allocation site. Excluding the
+//   shape trades away real n*sizeof overflows for not flagging every
+//   array allocation in the codebase; kmalloc_array/calloc migration
+//   is a style concern, not an overflow verdict. The remaining
+//   target is a product of two non-sizeof operands with no guard.
 //
 // Covers CWE-190 (Integer Overflow) leading to CWE-122 (Heap Buffer
 // Overflow).
-// @role: verification
+//
+// Detection role: even the two-variable product can be range-limited
+// by the caller, so a hit is a lead for taint/reachability analysis,
+// not a self-standing confirmed verdict.
+// @role: detection
 
 // --- Find all allocations with a multiplicative size argument ---
 
@@ -124,12 +136,15 @@ position alloc_mul.p;
   krealloc@p(..., C1 * C2, ...)
 )
 
-// --- Exclude sizeof * constant (compile-time, no overflow) ---
+// --- Exclude any product with a sizeof() factor ---
+//
+// K is an arbitrary expression, not just a constant: element-count *
+// element-size is the idiomatic array allocation (see header note).
 
 @sizeof_const_product@
 type T;
 expression SZ;
-constant K;
+expression K;
 position alloc_mul.p;
 @@
 

@@ -439,6 +439,20 @@ def _render_samples(stat: DecisionClassStats) -> str:
             lines.append("**Operator note:**")
             lines.append(note)
             lines.append("")
+        # Producer-specific fields (self-consistency verdict pair,
+        # dataflow method, cross-family trigger, validate-feedback join
+        # keys, ...): render any remaining string-valued field so no
+        # producer's samples come out empty-bodied.
+        handled = {"ts", "event_type", "this_reasoning",
+                   "other_reasoning", "note"}
+        for key in sorted(sample):
+            if key in handled:
+                continue
+            value = sample.get(key)
+            if isinstance(value, str) and value:
+                lines.append(f"**{key}:**")
+                lines.append(value)
+                lines.append("")
     return "\n".join(lines)
 
 
@@ -537,9 +551,19 @@ def cmd_summary(args: argparse.Namespace) -> int:
             learning += 1
         elif p == Policy.FALL_THROUGH:
             fall_through += 1
-        total_cost += s.cost_usd
-        cost_per_model[s.model] = cost_per_model.get(s.model, 0.0) + s.cost_usd
-        calls_per_model[s.model] = calls_per_model.get(s.model, 0) + s.calls
+        # ``_usage`` is the per-model roll-up of every real call and its
+        # spend. Other underscore-prefixed cells (e.g. ``_structured``)
+        # re-count a per-call subset of those same calls on a separate
+        # metric axis — summing them alongside ``_usage`` double-counts
+        # calls and spend.
+        is_subset_cell = (
+            s.decision_class.startswith("_")
+            and s.decision_class != "_usage"
+        )
+        if not is_subset_cell:
+            total_cost += s.cost_usd
+            cost_per_model[s.model] = cost_per_model.get(s.model, 0.0) + s.cost_usd
+            calls_per_model[s.model] = calls_per_model.get(s.model, 0) + s.calls
 
     # Cheapest short-circuit (lowest $/call from each cell's _usage row).
     cheapest: tuple | None = None
@@ -906,12 +930,18 @@ def cmd_unpin(args: argparse.Namespace) -> int:
 
 def cmd_reset(args: argparse.Namespace) -> int:
     sc = ModelScorecard(args.path)
-    n = sc.reset(
-        decision_class=args.decision_class,
-        model=args.model,
-        older_than_days=args.older_than_days,
-        all_=args.all,
-    )
+    try:
+        n = sc.reset(
+            decision_class=args.decision_class,
+            model=args.model,
+            older_than_days=args.older_than_days,
+            all_=args.all,
+        )
+    except ValueError as e:
+        # A bare ``reset`` (no filter, no --all) is refused by the
+        # substrate; surface the reason instead of a traceback.
+        print(f"✗ {e}", file=sys.stderr)
+        return 2
     print(f"Deleted {n} cell(s).", file=sys.stderr)
     return 0
 

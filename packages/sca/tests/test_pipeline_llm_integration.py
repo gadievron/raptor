@@ -15,6 +15,8 @@ from packages.sca.models import (
 from packages.sca.pipeline import (
     _classify_inline_source,
     _run_llm_inline_review,
+    _run_upgrade_impact,
+    _run_version_diff_review,
 )
 
 
@@ -80,6 +82,17 @@ class TestClassifyInlineSource:
 
     def test_unknown_defaults_to_shell(self):
         assert _classify_inline_source(Path("/a/Makefile")) == "shell_script"
+
+    def test_shell_script_with_dockerfile_in_name_is_shell(self):
+        # A loose "dockerfile"-substring match once won over the .sh
+        # suffix; classification must mirror the parser predicates,
+        # which parse this file as a shell script.
+        p = Path("/a/deploy-dockerfile.sh")
+        assert _classify_inline_source(p) == "shell_script"
+
+    def test_dockerfile_suffix_variants_still_dockerfile(self):
+        assert _classify_inline_source(Path("/a/app.Dockerfile")) == "dockerfile"
+        assert _classify_inline_source(Path("/a/base.dockerfile")) == "dockerfile"
 
 
 class TestRunLLMInlineReview:
@@ -157,3 +170,165 @@ class TestRunLLMInlineReview:
 
         assert len(result) == 1
         assert result[0].name == "gunicorn"
+
+
+def _canonical_dep(
+    name: str = "lodash",
+    version: str = "4.17.21",
+    ecosystem: str = "npm",
+) -> Dependency:
+    return Dependency(
+        ecosystem=ecosystem,
+        name=name,
+        version=version,
+        declared_in=Path("/fake/package-lock.json"),
+        scope="main",
+        is_lockfile=True,
+        pin_style=PinStyle.EXACT,
+        direct=True,
+        purl=f"pkg:npm/{name}@{version}",
+        parser_confidence=Confidence(level="high"),
+    )
+
+
+def _prev_run_with_findings(tmp_path: Path, rows: list) -> Path:
+    """Create <tmp>/run1/findings.json and return <tmp>/run2 as the
+    current output dir."""
+    import json
+
+    prev = tmp_path / "run1"
+    prev.mkdir()
+    (prev / "findings.json").write_text(json.dumps(rows), encoding="utf-8")
+    out = tmp_path / "run2"
+    out.mkdir()
+    return out
+
+
+class TestRunVersionDiffReview:
+    """Previous-run dep versions come from findings.json rows, which
+    nest ecosystem/name/version under the "sca" block."""
+
+    @patch("packages.sca.llm.version_diff_review.review_version_diff")
+    def test_nested_sca_rows_feed_version_diff(self, mock_review, tmp_path):
+        out = _prev_run_with_findings(tmp_path, [
+            {
+                "id": "x", "tool": "sca",
+                "sca": {"ecosystem": "npm", "name": "lodash",
+                        "version": "4.10.0"},
+            },
+        ])
+        mock_review.return_value = (
+            MagicMock(verdict="ok", summary="s", anomalies=[]), [],
+        )
+
+        count = _run_version_diff_review(
+            MagicMock(), [_canonical_dep(version="4.17.21")], [],
+            MagicMock(), out,
+        )
+
+        assert count == 1
+        mock_review.assert_called_once()
+        old_dep = mock_review.call_args[0][1]
+        assert old_dep.version == "4.10.0"
+
+    @patch("packages.sca.llm.version_diff_review.review_version_diff")
+    def test_unchanged_version_not_reviewed(self, mock_review, tmp_path):
+        out = _prev_run_with_findings(tmp_path, [
+            {
+                "id": "x", "tool": "sca",
+                "sca": {"ecosystem": "npm", "name": "lodash",
+                        "version": "4.17.21"},
+            },
+        ])
+
+        count = _run_version_diff_review(
+            MagicMock(), [_canonical_dep(version="4.17.21")], [],
+            MagicMock(), out,
+        )
+
+        assert count == 0
+        mock_review.assert_not_called()
+
+    @patch("packages.sca.llm.version_diff_review.review_version_diff")
+    def test_top_level_rows_still_tolerated(self, mock_review, tmp_path):
+        """Foreign / older row shapes with top-level keys keep working."""
+        out = _prev_run_with_findings(tmp_path, [
+            {"ecosystem": "npm", "name": "lodash", "version": "4.10.0"},
+        ])
+        mock_review.return_value = (
+            MagicMock(verdict="ok", summary="s", anomalies=[]), [],
+        )
+
+        count = _run_version_diff_review(
+            MagicMock(), [_canonical_dep(version="4.17.21")], [],
+            MagicMock(), out,
+        )
+
+        assert count == 1
+
+
+class _FakeVulnFinding:
+    """Just the attributes _run_upgrade_impact reads."""
+
+    def __init__(self, dependency: Dependency, fixed_version: str):
+        self.dependency = dependency
+        self.fixed_version = fixed_version
+        self.suppressed = False
+
+
+def _upgrade_verdict():
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        verdict="safe", confidence="low", breaking_changes=[],
+        summary="stub",
+    )
+
+
+class TestRunUpgradeImpactDedup:
+    """A dep with N advisories must be assessed once per unique
+    (ecosystem, name, old, new) upgrade, not once per finding."""
+
+    @patch("packages.sca.llm.upgrade_impact_review.assess_upgrade_impact")
+    @patch("packages.sca.llm.get_llm_client")
+    def test_repeated_advisories_assessed_once(
+        self, mock_client, mock_assess, tmp_path,
+    ):
+        import json
+
+        mock_client.return_value = MagicMock(total_cost=0.05)
+        mock_assess.return_value = _upgrade_verdict()
+        dep = _canonical_dep()
+        findings = [
+            _FakeVulnFinding(dep, "5.0.0"),
+            _FakeVulnFinding(dep, "5.0.0"),
+            _FakeVulnFinding(dep, "5.0.0"),
+        ]
+
+        _run_upgrade_impact(
+            vuln_findings=findings, canonical=[dep],
+            target=tmp_path, output_dir=tmp_path,
+        )
+
+        assert mock_assess.call_count == 1
+        rows = json.loads((tmp_path / "upgrade-impact.json").read_text())
+        assert len(rows) == 1
+
+    @patch("packages.sca.llm.upgrade_impact_review.assess_upgrade_impact")
+    @patch("packages.sca.llm.get_llm_client")
+    def test_distinct_upgrades_each_assessed(
+        self, mock_client, mock_assess, tmp_path,
+    ):
+        mock_client.return_value = MagicMock(total_cost=0.05)
+        mock_assess.return_value = _upgrade_verdict()
+        dep = _canonical_dep()
+        findings = [
+            _FakeVulnFinding(dep, "5.0.0"),
+            _FakeVulnFinding(dep, "6.0.0"),  # different fix target
+        ]
+
+        _run_upgrade_impact(
+            vuln_findings=findings, canonical=[dep],
+            target=tmp_path, output_dir=tmp_path,
+        )
+
+        assert mock_assess.call_count == 2

@@ -12,7 +12,7 @@ Availability detection (SDK flags, Ollama, Claude Code) lives in detection.py.
 import contextlib
 import os
 import threading as _threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Optional
 
@@ -171,9 +171,18 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
                 if entry_role is None:
                     entry_role = ''
 
+                # Pattern ids are undated; compare the entry's undated
+                # form so a dated/alias-rewritten configured id (e.g.
+                # a Sonnet pinned to a snapshot date) still matches its
+                # own tier instead of falling through to a pricier
+                # pattern. The configured (dated) id stays the wire
+                # name on the resulting ModelConfig.
+                from core.llm.model_data import _strip_dated_alias
+                entry_model_undated = _strip_dated_alias(entry_model)
+
                 # Score this model
                 for pattern_provider, pattern_model, base_score in thinking_model_patterns:
-                    if entry_provider == pattern_provider and entry_model == pattern_model:
+                    if entry_provider == pattern_provider and entry_model_undated == pattern_model:
                         # Boost score if explicitly tagged as reasoning/thinking
                         effective_score = base_score
                         if entry_role in ('thinking', 'reasoning'):
@@ -189,12 +198,16 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
                                 if env_key:
                                     api_key = os.getenv(env_key)
 
-                            # Determine cost
-                            cost_info = MODEL_COSTS.get(entry_model, {})
+                            # Determine cost (dated ids resolve their
+                            # undated catalog entry, same ladder as
+                            # _model_config_from_entry)
+                            cost_info = (MODEL_COSTS.get(entry_model, {})
+                                         or MODEL_COSTS.get(entry_model_undated, {}))
                             cost_per_1k = (cost_info.get('input', 0.005) + cost_info.get('output', 0.005)) / 2
 
                             # Determine max_tokens and max_context from config or limits
-                            limits = MODEL_LIMITS.get(entry_model, {})
+                            limits = (MODEL_LIMITS.get(entry_model, {})
+                                      or MODEL_LIMITS.get(entry_model_undated, {}))
                             max_tokens = model_entry.get(
                                 'max_output',
                                 limits.get('max_output', _DEFAULT_MAX_OUTPUT_USER_CONFIGURED),
@@ -227,6 +240,7 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
                                 api_base = PROVIDER_ENDPOINTS.get(entry_provider)
 
                             # Optional overrides from config
+                            api_base = model_entry.get('api_base') or api_base
                             timeout = model_entry.get('timeout', 120)
 
                             best_model = ModelConfig(
@@ -859,7 +873,8 @@ def _model_config_from_entry(entry: dict) -> 'ModelConfig':
     """Build a ModelConfig from a config file entry.
 
     API key resolution: inline api_key → provider env var.
-    Other config fields (timeout, max_context, max_output) are honoured.
+    Other config fields (timeout, max_context, max_output, api_base)
+    are honoured.
     Bedrock entries additionally honour ``bedrock_api`` (surface),
     ``aws_profile`` (signing profile name) and ``region``; a minimal
     ``{"provider": "bedrock"}`` entry backfills surface and model from
@@ -959,7 +974,12 @@ def _model_config_from_entry(entry: dict) -> 'ModelConfig':
     # that's wrong for any operator running Ollama on a separate
     # machine. Validator surface mirrors ``_build_ollama_config`` so
     # an OLLAMA_HOST without a scheme fails the same way here.
-    if provider == "ollama":
+    if entry.get("api_base"):
+        # Explicit api_base in the entry wins — an operator pointing a
+        # provider at a gateway / self-hosted endpoint must not have
+        # their key sent to the public endpoint instead.
+        api_base = entry["api_base"]
+    elif provider == "ollama":
         from core.config import RaptorConfig
         ollama_base = _validate_ollama_url(RaptorConfig.OLLAMA_HOST)
         api_base = f"{ollama_base.rstrip('/')}/v1"
@@ -1005,14 +1025,37 @@ def _model_config_from_entry(entry: dict) -> 'ModelConfig':
     else:
         aws_profile = None
         aws_region = None
+
+    # ClaudeCode CLI transport: the generic 120s / 8192-token defaults
+    # below are calibrated for cloud APIs; the CC subprocess (plus
+    # --json-schema structured output) measured 170s+ on heavy
+    # structured reviews and serves flagship-class limits — use the
+    # same 600s / flagship-proxy calibration as _build_claudecode_config
+    # so a models.json claudecode entry doesn't silently run with a
+    # fraction of the env-built config's budget. Explicit entry fields
+    # still win via entry.get(...) in the construction.
+    if provider in ("claudecode", "claudecode-resumable"):
+        default_timeout = 600
+        if not limits:
+            # Sentinel / unknown ids: current Anthropic flagship as a
+            # capacity proxy, mirroring the env builder.
+            limits = MODEL_LIMITS.get(
+                PROVIDER_DEFAULT_MODELS.get("anthropic", ""), {})
+        default_max_output = limits.get("max_output", 32000)
+        default_max_context = limits.get("max_context", 1000000)
+    else:
+        default_timeout = 120
+        default_max_output = limits.get("max_output", 8192)
+        default_max_context = limits.get(
+            "max_context", _DEFAULT_MAX_CONTEXT_LOCAL)
     return ModelConfig(
         provider=provider,
         model_name=model_name,
         api_key=api_key,
         api_base=api_base,
-        max_tokens=entry.get("max_output", limits.get("max_output", 8192)),
-        max_context=entry.get("max_context", limits.get("max_context", _DEFAULT_MAX_CONTEXT_LOCAL)),
-        timeout=entry.get("timeout", 120),
+        max_tokens=entry.get("max_output", default_max_output),
+        max_context=entry.get("max_context", default_max_context),
+        timeout=entry.get("timeout", default_timeout),
         temperature=0.7,
         cost_per_1k_tokens=cost_per_1k,
         role=entry.get("role") or None,
@@ -1129,19 +1172,20 @@ def _get_default_fallback_models() -> list['ModelConfig']:
     for entry in _get_configured_models():
         if not isinstance(entry, dict):
             continue
-        provider = entry.get("provider", "")
-        model_name = entry.get("model", "")
-        if not model_name and provider:
-            model_name = PROVIDER_DEFAULT_MODELS.get(provider, "")
+        mc = _model_config_from_entry(entry)
 
-        # Skip the primary model
-        if primary_key and (provider, model_name) == primary_key:
+        # Skip the primary model — compared on the NORMALIZED identity
+        # (post provider-derivation / model backfill / Bedrock id
+        # normalization). Comparing the raw entry tuple missed all
+        # three transforms and re-added the primary as its own
+        # fallback (e.g. a provider-less Bedrock-shaped model id, or a
+        # bare claudecode entry whose model the resolver backfills).
+        if primary_key and (mc.provider, mc.model_name) == primary_key:
             continue
 
-        mc = _model_config_from_entry(entry)
         if _entry_auth_resolvable(mc):
             fallbacks.append(mc)
-            config_providers.add(provider)
+            config_providers.add(mc.provider)
 
     # --- Env var fallback for providers not in config ---
     def _is_primary(provider, model):
@@ -1347,7 +1391,17 @@ def _validate_model_roles(models: list['ModelConfig']) -> None:
     has_analysis = analysis_count > 0
     has_consensus = "consensus" in roles
     has_code = code_count > 0
-    only_fallback = all(r == "fallback" for r in roles) if roles else False
+    # A role-less entry is an implicit analysis model (the resolution
+    # below seats it as analysis_model and the loader defaults role-less
+    # extras to fallback), so its presence defeats the all-fallback
+    # refusal: a role-less primary plus one role:fallback entry is a
+    # working configuration, not "all models are fallback".
+    has_roleless = any(not m.role for m in models)
+    only_fallback = (
+        bool(roles)
+        and all(r == "fallback" for r in roles)
+        and not has_roleless
+    )
 
     has_judge = "judge" in roles
     has_aggregate = "aggregate" in roles
@@ -1451,6 +1505,26 @@ class ModelConfig:
     # ``RAPTOR_BEDROCK_REGION``.
     aws_region: str | None = None
 
+    def __repr__(self) -> str:
+        """Dataclass-shaped repr with the API key masked.
+
+        Belt-and-braces behind per-call-site redaction: ModelConfig
+        instances travel through debug logs, error messages and
+        exception args, and the auto-generated dataclass repr printed
+        ``api_key`` verbatim — one stray ``%r``/f-string of a config
+        object leaked the credential. Masking at the repr chokepoint
+        keeps every present and future format site leak-free instead
+        of relying on each caller to redact. ``str()`` falls through
+        to this too (dataclasses define no separate ``__str__``).
+        """
+        parts = []
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if f.name == "api_key" and value:
+                value = "***"
+            parts.append(f"{f.name}={value!r}")
+        return f"{self.__class__.__name__}({', '.join(parts)})"
+
 
 def _shared_prefix_len(a: str, b: str) -> int:
     """Length of the common case-insensitive prefix of two model names —
@@ -1483,6 +1557,22 @@ def _default_cache_ttl() -> float | None:
     except ValueError:
         return 86_400.0
     return val if val > 0 else None
+
+
+def _default_cache_dir() -> Path:
+    """Anchor the response cache to the RAPTOR install (RAPTOR_DIR),
+    not the process cwd.  The old relative ``Path("out/llm_cache")``
+    resolved against whatever directory the process happened to start
+    in — a bare-shell invocation from a scanned repo dropped the cache
+    into the target tree and missed the real cache on every call.
+    Falls back to the relative path only when RAPTOR_DIR is unset
+    (hermetic test environments) — same convention as the scorecard
+    sidecar resolvers (``validate_feedback`` / ``tool_evidence``).
+    """
+    raptor_dir = os.environ.get("RAPTOR_DIR")
+    if raptor_dir:
+        return Path(raptor_dir) / "out" / "llm_cache"
+    return Path("out/llm_cache")
 
 
 def _default_enable_caching() -> bool:
@@ -1520,7 +1610,7 @@ class LLMConfig:
     retry_delay: float = 2.0
     retry_delay_remote: float = 5.0
     enable_caching: bool = field(default_factory=_default_enable_caching)
-    cache_dir: Path = Path("out/llm_cache")
+    cache_dir: Path = field(default_factory=_default_cache_dir)
     # Drop cache entries older than this on read. Default 24h: repeat
     # queries within a working day stay free and deterministic, while a
     # verdict from last month's model behaviour doesn't silently steer
@@ -1687,8 +1777,13 @@ class LLMConfig:
             # config that fails opaquely downstream — an explicit override
             # with an unrecognizable name is almost always a typo / nickname.
             raise ValueError(unknown_model_message(model_id))
+        # Auth-resolvable, not api_key-bearing: a SigV4 Bedrock entry
+        # carries api_key=None by design (the dispatcher signs per
+        # request), yet its surface/profile/region are exactly what an
+        # override of a sibling Bedrock model needs to borrow.
         same_provider = [
-            mc for mc in candidates if mc.provider == provider and mc.api_key
+            mc for mc in candidates
+            if mc.provider == provider and _entry_auth_resolvable(mc)
         ]
         if same_provider:
             target = bare_model_id(model_id)
@@ -1710,6 +1805,12 @@ class LLMConfig:
                 api_base=best.api_base,
                 max_tokens=limits.get("max_output", best.max_tokens),
                 max_context=limits.get("max_context", best.max_context),
+                # Bedrock routing fields ride along (defaults for other
+                # providers): dropping them sent a borrowed-credential
+                # override to the wrong surface / ambient region.
+                bedrock_api=best.bedrock_api,
+                aws_profile=best.aws_profile,
+                aws_region=best.aws_region,
             )
         return ModelConfig(provider=provider, model_name=routing_model_id(model_id))
 

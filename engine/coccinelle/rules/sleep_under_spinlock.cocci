@@ -10,13 +10,20 @@
 // Zero-FP confidence: very high — always wrong.
 // @role: verification
 
+// The release guard carries the lock_releases vocab marker so
+// study-learned project unlock wrappers extend the suppression set —
+// a driver-local wrapper releasing the lock between lock and sleep
+// must defuse the match. The acquire alternation is deliberately NOT
+// vocab-extended: the lock_acquires bucket also carries sleeping-lock
+// acquires (mutex-style), and sleeping under those is legal.
 @sleep_under_spin@
 expression L;
 position p;
 @@
 
-  \(spin_lock\|spin_lock_irq\|spin_lock_irqsave\|spin_lock_bh\)(L, ...);
-  ... when != \(spin_unlock\|spin_unlock_irq\|spin_unlock_irqrestore\|spin_unlock_bh\)(L, ...)
+  \(spin_lock\|spin_lock_irq\|spin_lock_irqsave\|spin_lock_bh\|raw_spin_lock\|raw_spin_lock_irq\|raw_spin_lock_irqsave\|raw_spin_lock_bh\)(L, ...);
+// @vocab: lock_releases
+  ... when != \(spin_unlock\|spin_unlock_irq\|spin_unlock_irqrestore\|spin_unlock_bh\|raw_spin_unlock\|raw_spin_unlock_irq\|raw_spin_unlock_irqrestore\|raw_spin_unlock_bh\)(L, ...)
 (
 * msleep@p(...)
 |

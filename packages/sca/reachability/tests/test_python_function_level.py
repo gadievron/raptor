@@ -292,3 +292,53 @@ def test_preserves_evidence_only_for_called_paths(tmp_path):
     # Module-level "src/main.py:1" evidence shouldn't be preserved
     # — the function-level call site replaces it.
     assert new.evidence == ["main.py:3"]
+
+
+def test_dist_module_mismatch_called_not_downgraded(tmp_path):
+    """Imports bind the MODULE name, not the distribution name:
+    installing ``pyyaml`` gives ``import yaml``. A real call of the
+    affected function through the module name must upgrade, not read
+    as all-NOT_CALLED and get downgraded."""
+    target = _project(
+        tmp_path,
+        "import yaml\nyaml.full_load(payload)\n",
+    )
+    deps = [_dep("pyyaml")]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_pypi_verdicts(
+        deps, out,
+        target=target,
+        pypi_symbol_map={deps[0].key(): ["full_load"]},
+    )
+    assert out[deps[0].key()].verdict == "likely_called"
+
+
+def test_dist_module_mismatch_uncalled_still_downgraded(tmp_path):
+    """Same dist≠module package but the affected function genuinely
+    isn't called — the downgrade must still fire."""
+    target = _project(
+        tmp_path,
+        "import yaml\nyaml.safe_load(payload)\n",
+    )
+    deps = [_dep("pyyaml")]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_pypi_verdicts(
+        deps, out,
+        target=target,
+        pypi_symbol_map={deps[0].key(): ["full_load"]},
+    )
+    assert out[deps[0].key()].verdict == "not_function_reachable"
+
+
+def test_empty_function_name_ignored(tmp_path):
+    """An empty symbol from a malformed advisory can't form a valid
+    qualified name — it is skipped, leaving the verdict untouched."""
+    target = _project(tmp_path, "import requests\n")
+    deps = [_dep("requests")]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_pypi_verdicts(
+        deps, out,
+        target=target,
+        pypi_symbol_map={deps[0].key(): [""]},
+    )
+    assert out[deps[0].key()].verdict == "imported"

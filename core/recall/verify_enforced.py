@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import Any, TYPE_CHECKING
 
-from core.recall.matcher import path_matches
+from core.recall.matcher import path_basename, path_matches
 from core.recall.warm import load_suppression_records
 
 if TYPE_CHECKING:
@@ -68,19 +68,41 @@ def verify_enforced(
     ``sanitizer_dominated`` verdicts to candidate-tier records —
     useful before an enforcement decision that might promote them.
     """
+    # Fail-closed accounting: a record that cannot prove where it is
+    # cannot prove it is harmless. Malformed records (truncated jsonl
+    # lines) and records without a file_path can never be located
+    # against an expected entry, so they are counted and fail the
+    # clean verdict rather than silently dropping out of review.
+    malformed = 0
+    unlocatable = 0
     live: list[dict[str, Any]] = []
     for rec in records:
         if rec.get("_malformed"):
+            malformed += 1
             continue
         verdict = str(rec.get("verdict", ""))
         if verdict == "sanitizer_dominated" or include_candidates:
+            if not rec.get("file_path"):
+                unlocatable += 1
             live.append(rec)
+
+    # Expected entries indexed by path basename (the matcher's index):
+    # path agreement requires equal final components, so the bucket
+    # walk prunes the per-pair scan without changing which pairs can
+    # match — the full live x expected cross is quadratic at
+    # benchmark scale.
+    by_basename: dict[str, list[dict[str, Any]]] = {}
+    for entry in expected:
+        key = path_basename(str(entry.get("file", "")))
+        by_basename.setdefault(key, []).append(entry)
 
     reviews: list[dict[str, Any]] = []
     counts = {"on_expected": 0, "null_line": 0, "same_file": 0}
     for rec in live:
         hits = []
-        for entry in expected:
+        candidates = by_basename.get(path_basename(rec.get("file_path")),
+                                     [])
+        for entry in candidates:
             prox = _entry_proximity(rec, entry, line_drift=line_drift)
             if prox is not None:
                 hits.append((prox, entry))
@@ -117,10 +139,13 @@ def verify_enforced(
                                 r["record_line"] or 0))
     return {
         "records_reviewed": len(live),
+        "records_malformed": malformed,
+        "records_unlocatable": unlocatable,
         "flagged": len(reviews),
         "by_proximity": counts,
         "reviews": reviews,
-        "clean": not (counts["on_expected"] or counts["null_line"]),
+        "clean": not (counts["on_expected"] or counts["null_line"]
+                      or malformed or unlocatable),
     }
 
 
@@ -139,6 +164,15 @@ def render_verify_markdown(result: dict[str, Any]) -> str:
             "REVIEW REQUIRED before any enforcement decision"),
         "",
     ]
+    unreviewable = (result.get("records_malformed", 0)
+                    + result.get("records_unlocatable", 0))
+    if unreviewable:
+        lines.insert(4, (
+            f"- unreviewable records: "
+            f"{result['records_malformed']} malformed, "
+            f"{result['records_unlocatable']} without a file path — "
+            "a record that cannot prove where it is cannot prove it "
+            "is harmless"))
     for r in result["reviews"]:
         lines.append(
             f"## {r['proximity']}: {r['file_path']}:"

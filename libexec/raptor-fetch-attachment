@@ -44,6 +44,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 from core.json import load_json  # noqa: E402
 
+# Byte budget for bug-report.json: it is distilled from an untrusted
+# bug tracker, so cap the read like every other libexec artifact
+# reader rather than buffering a pathological file unbounded.
+_MAX_REPORT_BYTES = 8 * 1024 * 1024
+
 
 def _attachment_urls(report: object) -> set:
     if not isinstance(report, dict):
@@ -65,7 +70,7 @@ def main() -> int:
 
     report_path, url, dest = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
 
-    report = load_json(report_path)
+    report = load_json(report_path, max_bytes=_MAX_REPORT_BYTES)
     if report is None:
         print(f"cannot parse bug report: {report_path}", file=sys.stderr)
         return 1

@@ -41,9 +41,17 @@ import core.startup.process_init  # noqa: E402,F401
 def main() -> int:
     args = sys.argv[1:]
     depth = None
-    if "--full" in args:
+    full = "--full" in args
+    if full:
         args.remove("--full")
     if "--depth" in args:
+        # --full asks for complete history while --depth asks for a
+        # shallow clone; honouring one silently would betray the other,
+        # so refuse the contradictory combination outright.
+        if full:
+            print("--depth and --full are mutually exclusive",
+                  file=sys.stderr)
+            return 2
         i = args.index("--depth")
         try:
             depth = int(args[i + 1])

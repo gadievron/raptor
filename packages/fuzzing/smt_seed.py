@@ -296,6 +296,16 @@ def synthesize_seeds(
                         "bytes": len(encoded),
                         "clamped": False,
                     })
+                else:
+                    # Filename collision (two variables sanitizing to
+                    # the same token in one record, or a pre-existing
+                    # file): every dropped artifact is recorded — the
+                    # manifest promises no silent truncation.
+                    all_skipped.append({
+                        **provenance,
+                        "reason": "seed filename collision",
+                        "seed": name,
+                    })
 
     dict_path = None
     if dict_entries:

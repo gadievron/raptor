@@ -217,8 +217,12 @@ def compute_injection_priority(
     - 1: shed last (medium confidence)
     - 2: shed under pressure (low confidence)
     """
-    if confidence == Confidence.HIGH:
+    if confidence == Confidence.HIGH or is_corroborated:
+        # Corroborated evidence is never shed regardless of its own
+        # confidence — cross-tool agreement is the point of fusion
+        # (the old branch order capped corroborated LOW/MEDIUM at
+        # shed-last, contradicting this docstring).
         return 0
-    if confidence == Confidence.MEDIUM or is_corroborated:
+    if confidence == Confidence.MEDIUM:
         return 1
     return 2

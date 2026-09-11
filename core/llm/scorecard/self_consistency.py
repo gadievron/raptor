@@ -22,6 +22,7 @@ import logging
 from typing import Any
 
 from . import _MAX_REASONING_CHARS
+from ._batch import record_event_batch
 from .scorecard import EventType, ModelScorecard
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ def record_self_consistency_outcomes(
     if scorecard is None:
         return 0
 
-    n_recorded = 0
+    pending: list[dict[str, Any]] = []
     for fid, result in results_by_id.items():
         if not result.get("retried"):
             continue
@@ -76,20 +77,15 @@ def record_self_consistency_outcomes(
                 "post_reasoning": reasoning[:_MAX_REASONING_CHARS],
             }
 
-        try:
-            scorecard.record_event(
-                decision_class,
-                model,
-                EventType.SELF_CONSISTENCY,
-                outcome,
-                model_version=model_version,
-                sample=sample,
-            )
-            n_recorded += 1
-        except Exception:
-            logger.warning(
-                "self-consistency: record_event failed for %s",
-                fid, exc_info=True,
-            )
+        pending.append({
+            "decision_class": decision_class,
+            "model": model,
+            "event_type": EventType.SELF_CONSISTENCY,
+            "outcome": outcome,
+            "model_version": model_version,
+            "sample": sample,
+        })
 
-    return n_recorded
+    return record_event_batch(
+        scorecard, pending, log=logger, producer="self-consistency",
+    )

@@ -206,6 +206,58 @@ class TestGitTrackedProvenanceGate:
         assert locally_built == [fresh]
         assert repo_committed == [committed]
 
+    def test_submodule_committed_binary_dropped(self, tmp_path):
+        """A binary INSIDE a committed-submodule path is repo content
+        pinned by the parent repo (gitlink entry, mode 160000). The
+        old per-path ``--error-unmatch`` probe exited 1 ('did not
+        match') for such paths and let an attacker-committed
+        submodule ELF pass the provenance filter as locally built."""
+        import subprocess
+        self._git_init(tmp_path)
+        (tmp_path / "vendor").mkdir()
+        # Manufacture the gitlink directly — same index entry a real
+        # ``git submodule add`` produces; the commit object need not
+        # exist in the parent's store (it never does for submodules).
+        subprocess.run(
+            ["git", "update-index", "--add", "--cacheinfo",
+             "160000," + "a" * 40 + ",vendor"],
+            cwd=tmp_path, check=True,
+        )
+        binary = tmp_path / "vendor" / "prebuilt"
+        binary.write_bytes(b"\x7fELF")
+        # Two-direction: an untracked sibling OUTSIDE the submodule
+        # still reads locally built.
+        build = tmp_path / "build"
+        build.mkdir()
+        fresh = build / "fresh"
+        fresh.write_bytes(b"\x7fELF")
+        locally_built, repo_committed = _filter_locally_built(
+            tmp_path, [binary, fresh],
+        )
+        assert repo_committed == [binary]
+        assert locally_built == [fresh]
+
+    def test_submodule_prefix_is_path_segment_aware(self, tmp_path):
+        """``vendorx/bin`` is not under a ``vendor`` gitlink — the
+        prefix match must not swallow same-prefix sibling dirs."""
+        import subprocess
+        self._git_init(tmp_path)
+        (tmp_path / "vendor").mkdir()
+        subprocess.run(
+            ["git", "update-index", "--add", "--cacheinfo",
+             "160000," + "a" * 40 + ",vendor"],
+            cwd=tmp_path, check=True,
+        )
+        vendorx = tmp_path / "vendorx"
+        vendorx.mkdir()
+        binary = vendorx / "bin"
+        binary.write_bytes(b"\x7fELF")
+        locally_built, repo_committed = _filter_locally_built(
+            tmp_path, [binary],
+        )
+        assert locally_built == [binary]
+        assert repo_committed == []
+
     def test_non_git_repo_treats_all_as_unverified(self, tmp_path):
         # tmp_path has no .git — provenance unverifiable, so the
         # conservative path fires: all candidates land in the

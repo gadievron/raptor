@@ -32,6 +32,7 @@ from pathlib import Path
 
 from core.http.urllib_backend import UrllibClient
 from core.json import load_json_bounded
+from core.url_patterns import GITHUB_COMMIT_URL_RE, normalize_slug
 from packages.nvd import NvdClient
 from packages.nvd.verify import verify as _nvd_verify
 from packages.osv import OsvClient
@@ -48,10 +49,11 @@ def _osv_client() -> OsvClient:
 def _nvd_client() -> NvdClient:
     return NvdClient()
 
-_GH_COMMIT_URL = re.compile(
-    r"https?://github\.com/([^/]+/[^/#?\s.]+)/commit/([a-f0-9]{7,40})",
-    re.IGNORECASE,
-)
+# Shared commit-URL pattern from core.url_patterns: its repo segment
+# keeps dots. A dot-excluding local copy failed to match dotted repo
+# names ("socketio/engine.io") at all, so the oracle verified a wrong
+# or missing slug and misgraded correct picks.
+_GH_COMMIT_URL = GITHUB_COMMIT_URL_RE
 
 
 def _load_pick_from_osv_file(summary_dir: Path, cve_id: str) -> tuple[str, str]:
@@ -79,9 +81,7 @@ def _load_pick_from_osv_file(summary_dir: Path, cve_id: str) -> tuple[str, str]:
         url = (ref.get("url") or "")
         m = _GH_COMMIT_URL.search(url)
         if m:
-            slug = m.group(1)
-            slug = slug.removesuffix(".git")
-            return slug, m.group(2)
+            return normalize_slug(m.group(1)), m.group(2)
     # Fallback: the repo field + the first fixed event.
     affected = data.get("affected") or []
     if not isinstance(affected, list):
@@ -105,14 +105,16 @@ def _load_pick_from_osv_file(summary_dir: Path, cve_id: str) -> tuple[str, str]:
             # while bounding pathological input. The leading anchor
             # `https?://github.com/` already filters most garbage; this
             # is defence-in-depth.
+            # Repo segment keeps dots (same dotted-name class as the
+            # commit-URL pattern above): a dot-excluding class captured
+            # "socketio/engine" for "socketio/engine.io".
             m = re.match(
-                r"https?://github\.com/([^/]{1,256}/[^/#?\s.]{1,256})",
+                r"https?://github\.com/([^/#?\s]{1,256}/[^/#?\s]{1,256})",
                 repo,
             )
             slug = ""
             if m:
-                slug = m.group(1)
-                slug = slug.removesuffix(".git")
+                slug = normalize_slug(m.group(1))
             events = rng.get("events") or []
             if not isinstance(events, list):
                 continue

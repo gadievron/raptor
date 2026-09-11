@@ -192,6 +192,34 @@ class TestDeriveSeeds:
         snippet = bundles[0].seed.snippet
         assert len(snippet.encode("utf-8")) <= _SEED_SNIPPET_MAX_BYTES
 
+    def test_insert_only_fix_yields_seed(self):
+        # The archetypal missing-check CVE fix inserts a guard without
+        # removing or rewriting any line — the file still changed, and
+        # the unguarded pre-image code at the insertion point is the
+        # vulnerable form the seed must anchor on.
+        before = "\n".join([
+            "int f(char *p, char *buf) {",
+            "    strcpy(buf, p);",
+            "    return 0;",
+            "}",
+        ])
+        after = "\n".join([
+            "int f(char *p, char *buf) {",
+            "    if (strlen(p) >= sizeof(buf)) return -1;",
+            "    strcpy(buf, p);",
+            "    return 0;",
+            "}",
+        ])
+        record = self._record([CveFixFile("src/guard.c", before, after)])
+        bundles = derive_seeds(record, cwe="CWE-120")
+        assert len(bundles) == 1
+        b = bundles[0]
+        # Anchored on the pre-image line following the insertion point.
+        assert b.seed.line_start == 2
+        assert "strcpy" in b.seed.snippet
+        assert b.positive_text == before
+        assert b.negative_text == after
+
     def test_explicit_cwe_beats_root_cause(self):
         record = CveFixRecord(
             cve_id=CVE, repository_url="", fix_commit=SHA,
@@ -305,6 +333,33 @@ class TestSynthesiseFromCve:
         assert report.cve_id == CVE
         assert report.promoted_rule_ids == ["cve-rule-0"]
         assert promoted["source"] == f"cvefix:{CVE}@{'a' * 12}"
+
+    def test_promoted_entry_is_replayable(self, tmp_path, monkeypatch):
+        # Promotion must carry the swept repo's target identity: an
+        # entry with targets=[] passes every control yet is invisible
+        # to find_replayable and the sweep — "promoted" in the report
+        # but never replayed.
+        from packages.checker_synthesis.library import RuleLibrary
+
+        out = _write_run(tmp_path, _osv())
+
+        def fake_synth(seed, repo_root, out_dir, llm, **kw):
+            return self._fake_result(seed)
+
+        import packages.checker_synthesis.cve_bridge as bridge_mod
+        monkeypatch.setattr(bridge_mod, "synthesise_with_refinement", fake_synth)
+
+        report = synthesise_checker_from_cve(
+            out, tmp_path, tmp_path / "chk", lambda *a: None,
+            cwe="CWE-120",
+            library_dir=tmp_path / "lib",
+        )
+        assert report.promoted_rule_ids == ["cve-rule-0"]
+        lib = RuleLibrary(tmp_path / "lib")
+        entry = lib.all_entries()[0]
+        assert len(entry.targets) == 1  # the swept repo_root
+        replayable = lib.find_replayable("CWE-120", "semgrep")
+        assert [e.rule_id for e in replayable] == ["cve-rule-0"]
 
     def test_sweep_once_not_promoted(self, tmp_path, monkeypatch):
         out = _write_run(tmp_path, _osv())

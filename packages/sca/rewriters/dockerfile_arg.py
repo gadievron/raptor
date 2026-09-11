@@ -113,50 +113,71 @@ def _apply_one(
         rf"^(\s*ARG\s+{name}\s*=\s*)(\S+)",
         re.MULTILINE,
     )
-    match = pattern.search(text)
-    if match is None:
+    # Multi-stage Dockerfiles redeclare the same ARG per stage, so the
+    # value can appear on several lines. Verdicts are computed across
+    # ALL matching lines and every occurrence still at the old value is
+    # rewritten — a first-match ``count=1`` substitution would bump one
+    # stage's declaration and leave the redeclaration on the vulnerable
+    # version while the run reports applied.
+    #
+    # Tolerate quoted values: ``ARG FOO="1.2.3"`` should match against
+    # ``edit.old_value="1.2.3"`` (the parser strips quotes when
+    # extracting, so edits won't carry them). Strip outer quotes from
+    # each captured value for comparison.
+    def _bare(value: str) -> str:
+        return value.strip('"').strip("'")
+
+    values = [m.group(2) for m in pattern.finditer(text)]
+    if not values:
         return text, RewriteResult(
             edit=edit, applied=False, reason="not_found",
         )
-    current_value = match.group(2)
-    # Tolerate quoted values: ``ARG FOO="1.2.3"`` should match
-    # against ``edit.old_value="1.2.3"`` (the parser strips quotes
-    # when extracting, so edits won't carry them). Strip outer
-    # quotes from the captured value for comparison.
-    bare_current = current_value.strip('"').strip("'")
-    if bare_current == edit.new_value:
-        # Already at target — idempotent skip. (Per Natalie's
-        # original update_dockerfile() pattern.)
-        return text, RewriteResult(
-            edit=edit, applied=False, reason="no_change",
-        )
-    if bare_current != edit.old_value:
+    # Occurrences that actually need the bump: at the old value and not
+    # already at the new one (a degenerate plan with old == new is
+    # idempotent, not applied).
+    needs_bump = [v for v in values
+                  if _bare(v) == edit.old_value
+                  and _bare(v) != edit.new_value]
+    if not needs_bump:
+        if all(_bare(v) == edit.new_value for v in values):
+            # Already at target everywhere — idempotent skip. (Per
+            # Natalie's original update_dockerfile() pattern.)
+            return text, RewriteResult(
+                edit=edit, applied=False, reason="no_change",
+            )
         # The file's current value differs from what the bumper
         # plan thinks it is — refuse to overwrite. Operator may
         # have already bumped manually, or the plan is stale.
+        stray = next(_bare(v) for v in values
+                     if _bare(v) != edit.new_value)
         return text, RewriteResult(
             edit=edit, applied=False,
             reason=(
-                f"value_mismatch: file has {bare_current!r}, "
+                f"value_mismatch: file has {stray!r}, "
                 f"plan expected {edit.old_value!r}"
             ),
         )
-    # Apply the rewrite. Preserve the prefix verbatim (whitespace
-    # and casing); preserve whether the original was quoted by
-    # quoting the new value the same way.
-    if current_value.startswith('"') and current_value.endswith('"'):
-        new_value_quoted = f'"{edit.new_value}"'
-    elif current_value.startswith("'") and current_value.endswith("'"):
-        new_value_quoted = f"'{edit.new_value}'"
-    else:
-        new_value_quoted = edit.new_value
+
+    # Apply the rewrite to every old-value occurrence. Preserve the
+    # prefix verbatim (whitespace and casing); preserve whether each
+    # original was quoted by quoting the new value the same way.
     # Callable replacement writes the value as an exact literal —
     # interpolating it into a re.sub template would let backslash /
     # group-reference sequences in the value rewrite the ARG line
     # into something other than the validated literal.
-    new_text = pattern.sub(
-        lambda m: m.group(1) + new_value_quoted, text, count=1,
-    )
+    def _repl(m: re.Match) -> str:
+        current_value = m.group(2)
+        if _bare(current_value) != edit.old_value:
+            return m.group(0)
+        if current_value.startswith('"') and current_value.endswith('"'):
+            new_value_quoted = f'"{edit.new_value}"'
+        elif current_value.startswith("'") and current_value.endswith("'"):
+            new_value_quoted = f"'{edit.new_value}'"
+        else:
+            new_value_quoted = edit.new_value
+        return m.group(1) + new_value_quoted
+
+    new_text = pattern.sub(_repl, text)
     return new_text, RewriteResult(
         edit=edit, applied=True, reason="applied",
     )

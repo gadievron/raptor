@@ -753,3 +753,69 @@ class TestLuaCallGraph:
         route_calls = [c for c in g.calls if c.chain == ["route"]]
         assert len(route_calls) == 1
         assert route_calls[0].caller == "dispatch"
+
+
+# ---------------------------------------------------------------------------
+# Ruby — sigiled-variable receivers
+# ---------------------------------------------------------------------------
+
+
+class TestRubyVariableReceivers:
+    """``@service.fetch()`` previously mis-parsed: the ivar matched no
+    branch, the METHOD identifier became the receiver, and the bare
+    ``["fetch"]`` chain minted a false definitive edge to any same-file
+    ``def fetch``."""
+
+    def test_ivar_receiver_keeps_sigil_head(self):
+        g = extract_call_graph_ruby(
+            "class C\n"
+            "  def go\n"
+            "    @service.fetch(1)\n"
+            "  end\n"
+            "  def fetch\n"
+            "  end\n"
+            "end\n"
+        )
+        chains = [c.chain for c in g.calls]
+        assert ["@service", "fetch"] in chains
+        assert ["fetch"] not in chains  # no false internal edge
+
+    def test_self_chain_keeps_self_head(self):
+        g = extract_call_graph_ruby(
+            "class C\n  def go\n    self.service.fetch(2)\n  end\nend\n"
+        )
+        chains = [c.chain for c in g.calls]
+        assert ["self", "service", "fetch"] in chains
+
+    def test_self_method_still_narrows_to_class(self):
+        g = extract_call_graph_ruby(
+            "class C\n  def go\n    self.helper\n    self.a.b\n  end\nend\n"
+        )
+        per = {tuple(c.chain): c.receiver_class for c in g.calls}
+        # Exactly self.<method> narrows; longer chains dispatch on the
+        # intermediate receiver's class.
+        assert per.get(("self", "helper")) == "C"
+        assert per.get(("self", "a", "b")) is None
+
+
+# ---------------------------------------------------------------------------
+# PHP — variable-variable callables + receiver narrowing
+# ---------------------------------------------------------------------------
+
+
+def test_php_variable_variable_call_flags_reflect():
+    """``$$x()`` (dynamic_variable_name) is the same unknowable
+    dispatch as ``$x()``; it previously fell through with no flag."""
+    g = extract_call_graph_php("<?php function f() { $$x(); } ?>")
+    assert INDIRECTION_REFLECT in g.indirection
+
+
+def test_php_this_field_chain_not_tagged_with_enclosing_class():
+    g = extract_call_graph_php(
+        "<?php class W {\n"
+        "  function m() { $this->helper->render(); $this->draw(); }\n"
+        "} ?>"
+    )
+    per = {tuple(c.chain): c.receiver_class for c in g.calls}
+    assert per.get(("this", "helper", "render")) is None
+    assert per.get(("this", "draw")) == "W"

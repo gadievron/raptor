@@ -282,3 +282,34 @@ def test_collect_gcov_attributes_multi_source_sections(tmp_path):
     data = collect_gcov(tmp_path)
     assert 2 in data.get("m.c", set())
     assert 2 in data.get("inl.h", set())
+
+
+def test_parse_drcov_v2_versioned_table_parses(tmp_path):
+    dr = tmp_path / "cov.drcov"
+    header = (b"DRCOV VERSION: 2\nDRCOV FLAVOR: drcov\n"
+              b"Module Table: version 2, count 1\n"
+              b"Columns: id, base, end, entry, path\n"
+              b"0, 4096, 0, 0, /x/prog\n"
+              b"BB Table: 1 bbs\n")
+    dr.write_bytes(header + struct.pack("<IHH", 16, 8, 0))
+    mods = collect_mod.parse_drcov(dr)
+    assert mods == {"/x/prog": {"base": 4096, "offsets": {16}}}
+
+
+def test_parse_drcov_v4_table_refused_with_warning(tmp_path, caplog):
+    """v3/v4 module tables move containing_id into column 1 — parsing
+    them with the v2 row shape misreads base and silently imports zero
+    coverage for non-PIE binaries. Honest-refuse instead."""
+    import logging
+
+    dr = tmp_path / "cov.drcov"
+    header = (b"DRCOV VERSION: 2\nDRCOV FLAVOR: drcov\n"
+              b"Module Table: version 4, count 1\n"
+              b"Columns: id, containing_id, start, end, entry, path\n"
+              b"0, 0, 4096, 8192, 0, /x/prog\n"
+              b"BB Table: 1 bbs\n")
+    dr.write_bytes(header + struct.pack("<IHH", 16, 8, 0))
+    with caplog.at_level(logging.WARNING):
+        mods = collect_mod.parse_drcov(dr)
+    assert mods == {}
+    assert any("module-table version 4" in r.message for r in caplog.records)

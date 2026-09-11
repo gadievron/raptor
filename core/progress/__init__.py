@@ -102,6 +102,11 @@ class HackerProgress:
         # there's real progress to show.
         self.last_update = self.start_time
         self.spinner_idx = 0
+        # Same gate HackerProgressBar applies: the \r\033[K redraws
+        # are TTY furniture — in CI logs / pipes each tick landed as
+        # a fresh ANSI-littered line. Non-TTY keeps the start/finish
+        # lines (plain, no ANSI) and skips per-tick redraws.
+        self._tty = getattr(sys.stderr, "isatty", lambda: False)()
 
     def _format_time(self, seconds: float) -> str:
         """Format seconds as Xm Ys or Xs."""
@@ -136,6 +141,16 @@ class HackerProgress:
         if self.disabled:
             return
         now = time.time()
+
+        if not self._tty:
+            # Redraw-only surface; counters still advance below for
+            # finish()'s final line, but no per-tick output lands in
+            # non-TTY logs.
+            if current is not None:
+                self.current = current
+            else:
+                self.current += 1
+            return
 
         # Update self.current ALWAYS — only the I/O is throttled. Otherwise
         # rapid `update(current=idx)` calls in a tight loop silently drop
@@ -200,14 +215,15 @@ class HackerProgress:
         elapsed = self._format_time(elapsed_seconds)
         # Force-flush the final counter line unconditionally
         # (bypassing the 1s throttle in ``update``).
+        clear = "\r\033[K" if self._tty else ""
         if self.total:
             progress = f"{self.current}/{self.total}"
             sys.stderr.write(
-                f"\r\033[K{self._CHECK} {message} {progress} ({elapsed})\n"
+                f"{clear}{self._CHECK} {message} {progress} ({elapsed})\n"
             )
         else:
             sys.stderr.write(
-                f"\r\033[K{self._CHECK} {message} ({elapsed})\n"
+                f"{clear}{self._CHECK} {message} ({elapsed})\n"
             )
         sys.stderr.flush()
 
@@ -237,8 +253,9 @@ class HackerProgress:
                 exc_repr = repr(exc_val) if exc_val is not None else exc_type.__name__
             except Exception:
                 exc_repr = "<unrepresentable exception>"
+            clear = "\r\033[K" if self._tty else ""
             sys.stderr.write(
-                f"\r\033[K{self._CROSS} {self.operation} failed: {exc_repr}\n"
+                f"{clear}{self._CROSS} {self.operation} failed: {exc_repr}\n"
             )
             sys.stderr.flush()
         return False
@@ -414,9 +431,10 @@ class HackerProgressBar:
             return
         elapsed = time.time() - self._t0
         mins = int(elapsed // 60)
-        secs = elapsed - mins * 60
-        elapsed_str = (f"{mins}m {secs:.0f}s" if mins
-                       else f"{secs:.1f}s")
+        # Truncate, never round: rounding 119.7s produced "1m 60s".
+        secs = int(elapsed - mins * 60)
+        elapsed_str = (f"{mins}m {secs}s" if mins
+                       else f"{elapsed:.1f}s")
         self._stream.write(
             f"  {self._DONE_GLYPH} done · {elapsed_str}"
             + (f" · {summary}" if summary else "")

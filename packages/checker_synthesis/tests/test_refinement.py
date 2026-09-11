@@ -353,3 +353,95 @@ class TestFpDedup:
                 f"FP location should appear exactly once per prompt; "
                 f"saw {count} occurrences"
             )
+
+
+# ---------------------------------------------------------------------------
+# Best-result / on-disk consistency
+# ---------------------------------------------------------------------------
+
+
+class TestBestResultDiskConsistency:
+    def test_returned_rule_path_holds_returned_body(
+        self, tmp_path, monkeypatch,
+    ):
+        """Every iteration overwrites the same rule file; when an
+        EARLIER iteration wins as best, the file must be re-written
+        with the winning body — downstream promotion copies rule_path
+        bytes while hashing rule.body, and those must be one rule."""
+        seed = _seed(tmp_path)
+        seed_m = Match(file="src/auth.py", line=2)
+        _stub_engines_per_iteration(monkeypatch, [
+            # Iter 1: 1 variant + 5 FPs (rate 5/6)
+            ([seed_m], [seed_m, Match(file="src/v.py", line=1)]
+                + [Match(file=f"src/fp1_{i}.py", line=1)
+                   for i in range(5)]),
+            # Iter 2: 1 variant + 2 FPs (rate 2/3) <- best
+            ([seed_m], [seed_m, Match(file="src/v.py", line=1)]
+                + [Match(file=f"src/fp2_{i}.py", line=1)
+                   for i in range(2)]),
+            # Iter 3: 1 variant + 4 FPs (rate 4/5) — overwrites file
+            ([seed_m], [seed_m, Match(file="src/v.py", line=1)]
+                + [Match(file=f"src/fp3_{i}.py", line=1)
+                   for i in range(4)]),
+        ])
+        responses = []
+        for i in range(3):
+            responses.append({"rule_body": f"rules: r{i}",
+                              "rationale": f"iter{i}"})
+            n_triage = [6, 3, 5][i]
+            responses.append({"status": "variant", "reasoning": "tp"})
+            for _ in range(n_triage - 1):
+                responses.append(
+                    {"status": "false_positive", "reasoning": "fp"}
+                )
+        llm = _stub_llm(responses)
+        result = synthesise_with_refinement(
+            seed, tmp_path, tmp_path / "out", llm,
+            max_iterations=3,
+            max_acceptable_fp_rate=0.1,
+        )
+        assert result.rule is not None
+        assert result.rule.body == "rules: r1"  # iteration 2 won
+        assert result.rule_path is not None
+        assert Path(result.rule_path).read_text() == "rules: r1"
+
+
+# ---------------------------------------------------------------------------
+# FP-rate definition parity with the library
+# ---------------------------------------------------------------------------
+
+
+class TestFpRateDefinition:
+    @staticmethod
+    def _result_with_triage(statuses):
+        from packages.checker_synthesis.models import (
+            CheckerSynthesisResult,
+            MatchTriage,
+        )
+        seed = SeedBug(file="a.c", function="f", line_start=1,
+                       line_end=1, cwe="CWE-89", reasoning="")
+        result = CheckerSynthesisResult(seed=seed)
+        result.triage = [
+            MatchTriage(match=Match(file="a.c", line=i), status=s,
+                        reasoning="")
+            for i, s in enumerate(statuses)
+        ]
+        return result
+
+    def test_uncertain_excluded_from_denominator(self):
+        # 1 FP + 4 uncertain must NOT read as fp_rate 0.2 (converged)
+        # while the library persists fp_rate 1.0 for the same triage.
+        result = self._result_with_triage(
+            ["false_positive"] + ["uncertain"] * 4,
+        )
+        assert synth_mod._fp_rate(result) == 1.0
+
+    def test_classified_mix_computes_over_verdicts(self):
+        result = self._result_with_triage(
+            ["false_positive"] + ["variant"] * 4 + ["skipped"] * 3,
+        )
+        assert synth_mod._fp_rate(result) == 0.2
+
+    def test_no_classified_verdicts_returns_none(self):
+        result = self._result_with_triage(["uncertain", "skipped"])
+        assert synth_mod._fp_rate(result) is None

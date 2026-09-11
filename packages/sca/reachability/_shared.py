@@ -21,6 +21,18 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+def _normalise_qualified(name: str) -> str:
+    """Map Rust ``::`` and Ruby ``#`` qualifier separators to dots.
+
+    The cross-language resolver (``core.analysis.reachability
+    .function_called``) splits qualified names on ``.`` only, so a
+    ``SmallVec::insert_many`` or ``Mapper#draw`` symbol left
+    verbatim could never match any call chain — it would read as a
+    single opaque segment and silently guarantee NOT_CALLED.
+    """
+    return name.replace("::", ".").replace("#", ".")
+
+
 def extract_qualified_symbols(advisory: Any, dep_name: str) -> list[str]:
     """Pull qualified affected-symbol names out of an OSV advisory.
 
@@ -33,7 +45,10 @@ def extract_qualified_symbols(advisory: Any, dep_name: str) -> list[str]:
         qualified with ``dep_name``.
 
     Both ``ecosystem_specific`` and ``database_specific`` are
-    consulted. Non-dict sources and non-string symbols are skipped.
+    consulted. Non-dict sources and non-string / empty symbols are
+    skipped. Rust ``::`` and Ruby ``#`` separators are normalised to
+    ``.`` so the resolver's dot-split chain matching can see the
+    individual segments.
     """
     out: list[str] = []
     es = getattr(advisory, "ecosystem_specific", None) or {}
@@ -46,11 +61,19 @@ def extract_qualified_symbols(advisory: Any, dep_name: str) -> list[str]:
                 continue
             path = imp.get("path") or dep_name
             symbols = imp.get("symbols") or []
-            out.extend(f"{path}.{s}" for s in symbols if isinstance(s, str) and s and isinstance(path, str))
+            out.extend(
+                _normalise_qualified(f"{path}.{s}")
+                for s in symbols
+                if isinstance(s, str) and s and isinstance(path, str)
+            )
         for key in ("affected_symbols", "affected_functions"):
             v = source.get(key)
             if isinstance(v, list) and dep_name:
-                out.extend(f"{dep_name}.{s}" for s in v if isinstance(s, str))
+                out.extend(
+                    _normalise_qualified(f"{dep_name}.{s}")
+                    for s in v
+                    if isinstance(s, str) and s
+                )
     return out
 
 

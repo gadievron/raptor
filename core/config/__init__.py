@@ -73,7 +73,7 @@ class RaptorConfig:
     # commits past a release never masquerades as that clean release. It falls
     # back to ``VERSION`` when there is no usable git checkout (archive,
     # exported copy, git absent).
-    VERSION = "3.0.0"
+    VERSION = "3.1.0"
 
     @classmethod
     def effective_version(cls) -> str:
@@ -914,7 +914,24 @@ class RaptorConfig:
         if not base:
             return RaptorConfig.BASE_OUT_DIR
         resolved = Path(base).resolve()
-        forbidden = ("/etc", "/usr", "/bin", "/sbin", "/boot", "/dev", "/proc", "/sys")
+        forbidden = (
+            "/etc", "/usr", "/bin", "/sbin", "/boot", "/dev", "/proc",
+            "/sys", "/lib", "/lib64", "/root", "/srv", "/opt", "/run",
+        )
+        # The filesystem root itself needs an explicit refusal: it is
+        # no prefix's child, so "/etc/.." (→ "/") sailed past the
+        # prefix rules and run scaffolding landed at / on root-run
+        # containers. /var and /tmp stay allowed — scratch output
+        # there is a legitimate operator choice.
+        for path_str in (os.path.normpath(base), str(resolved)):
+            if path_str == "/":
+                msg = (
+                    f"RAPTOR_OUT_DIR={base!r} resolves to the filesystem "
+                    f"root. Refusing to create output there. Set "
+                    f"RAPTOR_OUT_DIR to a path under your home or a "
+                    f"dedicated work directory."
+                )
+                raise ValueError(msg)
         # Check BOTH the lexically-normalised input and the symlink-
         # resolved path. On macOS /etc, /var and /tmp are symlinks into
         # /private, so a literal RAPTOR_OUT_DIR=/etc resolves to

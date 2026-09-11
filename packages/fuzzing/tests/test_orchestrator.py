@@ -163,6 +163,36 @@ class TestOrchestratorPlanning(unittest.TestCase):
         finally:
             os.unlink(tmp)
 
+    def test_pick_unix_binary_macos_broken_shmem_refuses_afl(self):
+        # The confirmed-broken shmem probe must disqualify AFL — the
+        # campaign would die at start while the plan hint promises a
+        # libFuzzer fallback. Previously an unconditional has_afl()
+        # branch made the guard dead code.
+        orch = FuzzingOrchestrator.__new__(FuzzingOrchestrator)
+        caps = _full_caps_macos()  # afl_shmem_ok=False
+        self.assertIsNone(orch._pick_for_unix_binary(caps))
+
+    def test_pick_unix_binary_macos_working_shmem_keeps_afl(self):
+        orch = FuzzingOrchestrator.__new__(FuzzingOrchestrator)
+        caps = _full_caps_macos()
+        caps.afl_shmem_ok = True
+        self.assertEqual(orch._pick_for_unix_binary(caps), "afl")
+
+    def test_pick_unix_binary_linux_unaffected(self):
+        orch = FuzzingOrchestrator.__new__(FuzzingOrchestrator)
+        self.assertEqual(
+            orch._pick_for_unix_binary(_full_caps_linux()), "afl")
+
+    def test_iterations_from_stats_reads_both_runners(self):
+        # AFL writes 'execs_done'; libFuzzer stats carry
+        # 'total_executions' — the extraction must read both (libFuzzer
+        # campaigns previously always reported iterations=0).
+        fn = FuzzingOrchestrator._iterations_from_stats
+        self.assertEqual(fn({"execs_done": "123"}), 123)
+        self.assertEqual(fn({"total_executions": 456}), 456)
+        self.assertEqual(fn({"unrelated": 9}), 0)
+        self.assertEqual(fn({"execs_done": "garbage"}), 0)
+
     def test_plan_summary_has_required_fields(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".c", delete=False) as f:
             f.write("int main(void){ return 0; }\n")

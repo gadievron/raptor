@@ -1522,8 +1522,12 @@ class TestPromoteToProject:
         canonical = tmp_path / "concepts" / "domain-model.json"
         assert not canonical.exists()
 
-    def test_promotion_overwrites_stale(self, tmp_path: Path) -> None:
-        """Promotion replaces an existing stale project-level file."""
+    def test_promotion_merges_into_existing_canonical(
+        self, tmp_path: Path,
+    ) -> None:
+        """An existing canonical model is MERGED with the run model —
+        the run's entries win on ID collision, everything else
+        accumulates."""
         project_dir = tmp_path / "proj"
         run_dir = project_dir / "run-1"
         run_dir.mkdir(parents=True)
@@ -1531,16 +1535,61 @@ class TestPromoteToProject:
 
         concepts_dir = project_dir / "concepts"
         concepts_dir.mkdir()
-        stale = concepts_dir / "domain-model.json"
-        stale.write_text('{"version": "0", "stale": true}', encoding="utf-8")
+        canonical = concepts_dir / "domain-model.json"
+        DomainModel(
+            version="1",
+            concepts=[
+                Concept(id="alpha", description="old alpha"),
+                Concept(id="beta", description="beta"),
+            ],
+        ).save(canonical)
 
         per_run = run_dir / "domain-model.json"
-        per_run.write_text('{"version": "1", "fresh": true}', encoding="utf-8")
+        DomainModel(
+            version="1",
+            concepts=[Concept(id="alpha", description="new alpha")],
+        ).save(per_run)
 
         _promote_to_project(per_run, run_dir)
 
-        result = json.loads(stale.read_text(encoding="utf-8"))
-        assert result == {"version": "1", "fresh": True}
+        merged = DomainModel.load(canonical)
+        by_id = {c.id: c for c in merged.concepts}
+        assert set(by_id) == {"alpha", "beta"}
+        assert by_id["alpha"].description == "new alpha"
+
+    def test_scoped_run_does_not_clobber_canonical(
+        self, tmp_path: Path,
+    ) -> None:
+        """A reading-list-scoped (or empty) run produces a tiny model;
+        promotion must not replace the project's accumulated model
+        with that subset."""
+        project_dir = tmp_path / "proj"
+        run_dir = project_dir / "run-1"
+        run_dir.mkdir(parents=True)
+        (project_dir / "project.json").write_text("{}", encoding="utf-8")
+
+        concepts_dir = project_dir / "concepts"
+        concepts_dir.mkdir()
+        canonical = concepts_dir / "domain-model.json"
+        DomainModel(
+            version="1",
+            concepts=[
+                Concept(id=f"c{i}", description=f"concept {i}")
+                for i in range(5)
+            ],
+            invariants=[Invariant(
+                id="inv1", concept="c0", statement="s", negation="n",
+            )],
+        ).save(canonical)
+
+        per_run = run_dir / "domain-model.json"
+        DomainModel(version="1").save(per_run)
+
+        _promote_to_project(per_run, run_dir)
+
+        merged = DomainModel.load(canonical)
+        assert len(merged.concepts) == 5
+        assert len(merged.invariants) == 1
 
     def test_promotion_is_atomic(self, tmp_path: Path) -> None:
         """Promotion uses atomic rename — no partial writes."""
@@ -2089,3 +2138,319 @@ class TestThreatFrameDerivation:
         model = self._model(with_transfer=True)
         assert _derive_threat_frame_invariants(model, client) == 0
         assert model.invariants == []
+
+
+# ------------------------------------------------------------------
+# Prior-model staleness quarantine through run_study
+# ------------------------------------------------------------------
+
+
+class TestQuarantineStalePriorBoundary:
+    def test_str_source_root_quarantine_still_runs(
+        self, tmp_path: Path,
+    ) -> None:
+        """study-list.json carries source_root as a str — the
+        quarantine must coerce it, not die on root.resolve() inside
+        the fail-soft except (which silently disabled the check on
+        every production run)."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "mm.c").write_text("int a(void) { return 0; }\n")
+
+        out = tmp_path / "run" / "out"
+        out.mkdir(parents=True)
+
+        prior = DomainModel(concepts=[Concept(
+            id="page",
+            description="prior claim",
+            state="validated",
+            provenance="verbatim",
+            evidence=[Evidence(
+                type="code_path", file="mm.c", line=1,
+                observation="alloc", hash="000000000000",
+            )],
+        )])
+        prior.save(out / "domain-model.json")
+
+        study_list = {
+            "target": str(src),
+            "source_root": str(src),  # str, exactly as JSON delivers it
+            "items": [{
+                "id": "i1", "kind": "function", "name": "a",
+                "file": "mm.c", "line": 1,
+                "definition": "int a(void) { return 0; }",
+            }],
+        }
+        (out / "study-list.json").write_text(
+            json.dumps(study_list), encoding="utf-8",
+        )
+
+        class FakeLLM:
+            model = "test"
+
+            def generate_structured(self, prompt, schema, **kw):
+                return [{"concepts": [], "invariants": [],
+                         "contracts": []}]
+
+        model = run_study(out / "study-list.json", out, FakeLLM())
+
+        page = model.get_concept("page")
+        assert page is not None
+        assert page.state == "stale"
+        assert page.provenance == "llm_summarized"
+        assert (out / "study-stale.json").is_file()
+
+
+# ------------------------------------------------------------------
+# Multi-pass merge: contract keying
+# ------------------------------------------------------------------
+
+
+class TestMergeContractsKeyedByFunctionAndFile:
+    def test_same_named_functions_in_two_files_both_survive(self) -> None:
+        from core.concepts.study import _merge_domain_models
+
+        prior = DomainModel(contracts=[Contract(
+            function="parse_header", file="a.c", when="A-side parse",
+        )])
+        new = DomainModel(contracts=[Contract(
+            function="parse_header", file="b.c", when="B-side parse",
+        )])
+        merged = _merge_domain_models(prior, new)
+        assert len(merged.contracts) == 2
+        by_file = {ct.file: ct for ct in merged.contracts}
+        assert by_file["a.c"].when == "A-side parse"
+        assert by_file["b.c"].when == "B-side parse"
+
+    def test_same_function_same_file_new_wins(self) -> None:
+        from core.concepts.study import _merge_domain_models
+
+        prior = DomainModel(contracts=[Contract(
+            function="f", file="a.c", when="old",
+        )])
+        new = DomainModel(contracts=[Contract(
+            function="f", file="a.c", when="new",
+        )])
+        merged = _merge_domain_models(prior, new)
+        assert len(merged.contracts) == 1
+        assert merged.contracts[0].when == "new"
+
+
+# ------------------------------------------------------------------
+# Semantic invariant dedup: receipt-aware winner selection
+# ------------------------------------------------------------------
+
+
+class TestSemanticDedupInvariantReceipts:
+    def test_receipted_verbatim_beats_longer_paraphrase(self) -> None:
+        from core.concepts.study import _semantic_dedup_invariants
+
+        receipted = Invariant(
+            id="i1", concept="c1",
+            statement="buffer length must not exceed capacity limit",
+            negation="overflow",
+            provenance="verbatim",
+            receipt={"file": "a.c", "line": 3, "verified": True},
+        )
+        paraphrase = Invariant(
+            id="i2", concept="c1",
+            statement=(
+                "buffer length must not exceed capacity limit under "
+                "any circumstances whatsoever"
+            ),
+            negation="an overflow would corrupt adjacent memory",
+            provenance="llm_summarized",
+            receipt=None,
+            relevant_cwes=["CWE-120"],
+        )
+        merged = _semantic_dedup_invariants(
+            [receipted, paraphrase], {"c1"},
+        )
+        assert len(merged) == 1
+        winner = merged[0]
+        assert winner.id == "i1"
+        assert winner.receipt is not None
+        assert winner.provenance == "verbatim"
+        # Donor knowledge still merged in.
+        assert "CWE-120" in winner.relevant_cwes
+
+    def test_longer_still_wins_among_equal_provenance(self) -> None:
+        from core.concepts.study import _semantic_dedup_invariants
+
+        short = Invariant(
+            id="i1", concept="c1",
+            statement="buffer length must not exceed capacity limit",
+            negation="x",
+        )
+        longer = Invariant(
+            id="i2", concept="c1",
+            statement=(
+                "buffer length must not exceed capacity limit "
+                "whatsoever"
+            ),
+            negation="xx",
+        )
+        merged = _semantic_dedup_invariants([short, longer], {"c1"})
+        assert len(merged) == 1
+        assert merged[0].id == "i2"
+
+
+# ------------------------------------------------------------------
+# SAGE prior: concept-name matching bounds
+# ------------------------------------------------------------------
+
+
+class TestSagePriorConceptMatching:
+    def _hashed_content(self, tmp_path: Path) -> tuple:
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+        src_file = src_dir / "mm.c"
+        src_file.write_text("int walker(void) { return 0; }\n")
+        from core.staleness import hash_span
+        h = hash_span(src_file, 1, 1)
+        # First line intentionally does NOT parse as a reconstructable
+        # concept ("Concept [id] in scope: ..."), isolating the local-
+        # model lookup path.
+        content = (
+            "Concept [walk]: prior claim\n"
+            f"  Evidence (code_path): mm.c:1 [h={h}] — alloc"
+        )
+        return src_dir, content
+
+    def test_short_name_no_longer_claims_unrelated_concept(
+        self, tmp_path: Path,
+    ) -> None:
+        from core.concepts.study import _apply_sage_prior
+
+        src_dir, content = self._hashed_content(tmp_path)
+        out = tmp_path / "run" / "out"
+        out.mkdir(parents=True)
+        DomainModel(concepts=[Concept(
+            id="scatter_walk_state_machine", description="unrelated",
+        )]).save(out / "domain-model.json")
+
+        items = [StudyItem(id="s1", kind="function", name="walk",
+                           file="mm.c", line=1)]
+        remaining, sc, _si, _sct, _seed = _apply_sage_prior(
+            items, {"walk": [{"content": content, "confidence": 0.9}]},
+            out, source_root=src_dir,
+        )
+        # 'walk' must stay queued for study; the unrelated concept's
+        # prior must NOT be injected for it.
+        assert [it.name for it in remaining] == ["walk"]
+        assert sc == []
+
+    def test_segment_boundary_match_still_skips(
+        self, tmp_path: Path,
+    ) -> None:
+        from core.concepts.study import _apply_sage_prior
+
+        src_dir, content = self._hashed_content(tmp_path)
+        content = content.replace("[walk]", "[scatter_walk]")
+        out = tmp_path / "run" / "out"
+        out.mkdir(parents=True)
+        DomainModel(concepts=[Concept(
+            id="scatter_walk_state_machine", description="related",
+        )]).save(out / "domain-model.json")
+
+        items = [StudyItem(id="s1", kind="function",
+                           name="scatter_walk", file="mm.c", line=1)]
+        remaining, sc, _si, _sct, _seed = _apply_sage_prior(
+            items,
+            {"scatter_walk": [{"content": content, "confidence": 0.9}]},
+            out, source_root=src_dir,
+        )
+        assert remaining == []
+        assert [c.id for c in sc] == ["scatter_walk_state_machine"]
+
+
+# ------------------------------------------------------------------
+# Batched hash stamping / verification
+# ------------------------------------------------------------------
+
+
+class TestStampContractHashes:
+    def test_hashes_equal_single_span_semantics(
+        self, tmp_path: Path,
+    ) -> None:
+        from core.concepts.study import _stamp_contract_hashes
+        from core.staleness import hash_span
+
+        f = tmp_path / "a.c"
+        f.write_text(
+            "int f(void) {\n  return 0;\n}\n"
+            "int g(void) {\n  return 1;\n}\n",
+        )
+        items = [
+            StudyItem(id="1", kind="function", name="f", file="a.c",
+                      line=1,
+                      definition="int f(void) {\n  return 0;\n}"),
+            StudyItem(id="2", kind="function", name="g", file="a.c",
+                      line=4,
+                      definition="int g(void) {\n  return 1;\n}"),
+        ]
+        contracts = [
+            Contract(function="f", file="a.c"),
+            Contract(function="g", file="a.c"),
+        ]
+        _stamp_contract_hashes(contracts, items, tmp_path)
+        assert contracts[0].hash == hash_span(f, 1, 3)
+        assert contracts[1].hash == hash_span(f, 4, 6)
+
+    def test_unknown_function_left_unstamped(
+        self, tmp_path: Path,
+    ) -> None:
+        from core.concepts.study import _stamp_contract_hashes
+
+        (tmp_path / "a.c").write_text("int f(void) { return 0; }\n")
+        contracts = [Contract(function="ghost", file="a.c")]
+        _stamp_contract_hashes(contracts, [], tmp_path)
+        assert contracts[0].hash is None
+
+
+class TestVerifyEvidenceHashes:
+    def _content(self, hashes: list[str]) -> str:
+        lines = ["Concept [c1] in scope: something"]
+        for i, h in enumerate(hashes, start=1):
+            lines.append(
+                f"  Evidence (code_path): mm.c:{i} [h={h}] — obs {i}"
+            )
+        return "\n".join(lines)
+
+    def test_all_hashes_match(self, tmp_path: Path) -> None:
+        from core.concepts.study import _verify_evidence_hashes
+        from core.staleness import hash_span
+
+        f = tmp_path / "mm.c"
+        f.write_text("int a;\nint b;\n")
+        h1 = hash_span(f, 1, 1)
+        h2 = hash_span(f, 2, 2)
+        assert _verify_evidence_hashes(
+            self._content([h1, h2]), tmp_path,
+        ) is True
+
+    def test_one_mismatch_fails(self, tmp_path: Path) -> None:
+        from core.concepts.study import _verify_evidence_hashes
+        from core.staleness import hash_span
+
+        f = tmp_path / "mm.c"
+        f.write_text("int a;\nint b;\n")
+        h1 = hash_span(f, 1, 1)
+        assert _verify_evidence_hashes(
+            self._content([h1, "000000000000"]), tmp_path,
+        ) is False
+
+    def test_no_hashes_fails(self, tmp_path: Path) -> None:
+        from core.concepts.study import _verify_evidence_hashes
+
+        (tmp_path / "mm.c").write_text("int a;\n")
+        assert _verify_evidence_hashes(
+            "Concept [c1] in scope: no evidence lines here", tmp_path,
+        ) is False
+
+    def test_missing_file_fails(self, tmp_path: Path) -> None:
+        from core.concepts.study import _verify_evidence_hashes
+
+        assert _verify_evidence_hashes(
+            self._content(["aaaaaaaaaaaa"]), tmp_path,
+        ) is False

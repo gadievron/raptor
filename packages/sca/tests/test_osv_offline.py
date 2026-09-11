@@ -145,6 +145,32 @@ def test_force_redownloads(tmp_path: Path) -> None:
     assert len(http.calls) == 2
 
 
+def test_refused_zip_keeps_existing_advisories(tmp_path: Path) -> None:
+    """A refresh whose zip the substrate refuses (over the entry cap)
+    must NOT wipe the ecosystem's cached advisories or stamp a fresh
+    ingest_meta — the wipe used to run because the over-cap extract
+    returned {} that looked like an empty success."""
+    good = _make_zip([_osv("PYSEC-1", "PyPI", "django",
+                           introduced="0", fixed="4.2.7")])
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for i in range(10_001):
+            zf.writestr(f"OSV-{i}.json", "{}")
+    bomb = buf.getvalue()
+
+    http = _ZipServingHttp({"PyPI/all.zip": good})
+    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http)
+    db.ensure_fresh(["PyPI"])
+    assert db.query("PyPI", "django", "4.2.0")
+
+    http.zips["PyPI/all.zip"] = bomb
+    stats = db.ensure_fresh(["PyPI"], force=True)
+    # Refused ingest reports no stats for the ecosystem...
+    assert stats == []
+    # ...and the previously ingested advisories remain queryable.
+    assert db.query("PyPI", "django", "4.2.0")
+
+
 def test_unknown_ecosystem_silently_skipped(tmp_path: Path) -> None:
     """Homebrew / etc. have no OSV bucket — silently skip."""
     http = _ZipServingHttp({})

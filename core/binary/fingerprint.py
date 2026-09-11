@@ -37,12 +37,12 @@ versions.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
+from core.hash import sha256_file
 from core.function_taxonomy import (
     ALLOC_FUNCS,
     EXEC_FUNCS,
@@ -381,15 +381,12 @@ def _fingerprint_via_radare2(
 def _sha256_of_file(path: Path, *, chunk_size: int = 64 * 1024) -> str:
     """Stream-hash a file. ``64KB`` chunks balance throughput vs
     memory across small (binaries) + large (containers) inputs.
+
+    Thin wrapper over :func:`core.hash.sha256_file` — the repo's
+    single streamed-hash chokepoint — so hash-policy changes
+    apply here too.
     """
-    h = hashlib.sha256()
-    with Path(path).open("rb") as f:
-        while True:
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
+    return sha256_file(Path(path), chunk_size=chunk_size)
 
 
 __all__ = [

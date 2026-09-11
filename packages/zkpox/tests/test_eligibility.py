@@ -3,13 +3,7 @@ candidacy classification (the free Tier 0/1 layer)."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 
-
-# packages/zkpox/tests/test_eligibility.py → parents[3] = repo root
-REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
 
 from core.witness.types import (  # noqa: E402
     Witness,

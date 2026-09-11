@@ -106,7 +106,15 @@ def _host_is_local(raw: str) -> bool:
     from urllib.parse import urlparse
 
     candidate = raw if "://" in raw else f"//{raw}"
-    host = (urlparse(candidate).hostname or "").lower()
+    try:
+        host = (urlparse(candidate).hostname or "").lower()
+    except ValueError:
+        # A malformed value (e.g. an unbalanced IPv6 bracket in
+        # OLLAMA_HOST) must never raise — callers invoke this inside
+        # exception handlers — and must classify as NOT local so the
+        # value gets redacted rather than disclosed. The raw-value
+        # fallback below still recognises a plainly-loopback literal.
+        host = ""
     if host in ("localhost", "0.0.0.0"):
         return True
     # Try the parsed hostname first, then fall back to the raw value

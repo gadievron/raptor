@@ -10,14 +10,13 @@ don't interleave lines.
 
 from __future__ import annotations
 
-import json
 import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from core.json import append_jsonl
+from core.json import append_jsonl, load_jsonl
 
 
 @dataclass
@@ -101,18 +100,17 @@ class DecisionLog:
             }
 
     def read_all(self) -> list[DecisionRecord]:
-        """Read back all records (for analysis / testing)."""
-        if not self._path.exists():
-            return []
-        records = []
-        with self._path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    d = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                records.append(DecisionRecord(**d))
-        return records
+        """Read back all records (for analysis / testing).
+
+        ``load_jsonl`` is the symmetric hardened reader for the
+        ``append_jsonl`` writer above (O_NOFOLLOW, shared backend) with
+        the same best-effort policy this method always had: a missing
+        trail reads as empty and malformed lines are skipped. Non-dict
+        lines (a foreign writer's arrays/scalars) are skipped too —
+        they can't build a :class:`DecisionRecord`.
+        """
+        return [
+            DecisionRecord(**d)
+            for d in load_jsonl(self._path)
+            if isinstance(d, dict)
+        ]

@@ -162,6 +162,84 @@ def test_advisory_id_matches_primary_or_alias() -> None:
     assert e.matches(_row(advisory_id="GHSA-other", aliases=[])) is False
 
 
+def _merged_row(members: List[Dict[str, Any]]) -> Dict[str, Any]:
+    row = _row(advisory_id=members[0]["id"], aliases=members[0]["aliases"])
+    row["sca"]["all_advisories"] = members
+    return row
+
+
+def test_advisory_id_must_identify_every_merged_member() -> None:
+    """On an alias-merged row the suppressed id must appear in every
+    member's own id/alias set; a member that does not carry it keeps
+    the finding visible. A crafted record aliasing both a suppressed id
+    and a genuine new advisory therefore cannot drag the genuine one
+    under the existing suppression."""
+    e = SuppressionEntry(reason="t", advisory_id="RUSTSEC-2020-0001")
+    bridge = _merged_row([
+        {"id": "RUSTSEC-2020-0001", "aliases": []},
+        {"id": "GHSA-bridge", "aliases": ["RUSTSEC-2020-0001", "GHSA-new"]},
+        {"id": "GHSA-new", "aliases": []},
+    ])
+    assert e.matches(bridge) is False
+
+
+def test_advisory_id_covers_mutual_alias_pair() -> None:
+    pair = _merged_row([
+        {"id": "GHSA-x", "aliases": ["RUSTSEC-2025-0023"]},
+        {"id": "RUSTSEC-2025-0023", "aliases": ["GHSA-x"]},
+    ])
+    for suppressed_id in ("GHSA-x", "RUSTSEC-2025-0023"):
+        e = SuppressionEntry(reason="t", advisory_id=suppressed_id)
+        assert e.matches(pair) is True
+
+
+def test_advisory_id_matching_is_case_insensitive() -> None:
+    pair = _merged_row([
+        {"id": "GHSA-case", "aliases": ["rustsec-2025-0099"]},
+        {"id": "RUSTSEC-2025-0099", "aliases": ["GHSA-case"]},
+    ])
+    e = SuppressionEntry(reason="t", advisory_id="RUSTSEC-2025-0099")
+    assert e.matches(pair) is True
+
+
+def test_finding_id_must_identify_every_merged_member() -> None:
+    """A finding_id entry embeds the representative advisory's id; on a
+    merged row every member must carry that id, or a crafted bridge
+    could hide a newcomer inside a previously suppressed finding_id."""
+    row = _merged_row([
+        {"id": "GHSA-jf85-cpcp-j695", "aliases": []},
+        {"id": "GHSA-bridge",
+         "aliases": ["GHSA-jf85-cpcp-j695", "RUSTSEC-2026-0777"]},
+        {"id": "RUSTSEC-2026-0777", "aliases": []},
+    ])
+    e = SuppressionEntry(
+        reason="t",
+        finding_id="sca:vuln:npm:lodash@4.17.4:GHSA-jf85-cpcp-j695",
+    )
+    assert e.matches(row) is False
+    covered = _merged_row([
+        {"id": "GHSA-jf85-cpcp-j695", "aliases": ["RUSTSEC-2026-0778"]},
+        {"id": "RUSTSEC-2026-0778", "aliases": ["GHSA-jf85-cpcp-j695"]},
+    ])
+    assert e.matches(covered) is True
+
+
+def test_finding_id_matches_advisory_less_rows() -> None:
+    """Hygiene-style rows carry no advisory block; a finding_id entry
+    matches them on the id alone."""
+    e = SuppressionEntry(
+        reason="t", finding_id="sca:hygiene:loose_pin:npm:lodash:/x",
+    )
+    row = {
+        "id": "sca:hygiene:loose_pin:npm:lodash:/x",
+        "finding_id": "sca:hygiene:loose_pin:npm:lodash:/x",
+        "vuln_type": "sca:hygiene:loose_pin",
+        "severity": "low",
+        "sca": {"ecosystem": "npm", "name": "lodash"},
+    }
+    assert e.matches(row) is True
+
+
 def test_ecosystem_name_match_ignores_version_when_unset() -> None:
     e = SuppressionEntry(reason="t", ecosystem="npm", name="lodash")
     assert e.matches(_row(version="4.17.4")) is True

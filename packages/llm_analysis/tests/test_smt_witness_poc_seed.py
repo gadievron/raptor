@@ -481,3 +481,35 @@ class TestWpPredicateInWitness:
         text = "\n".join(m.content for m in bundle.messages)
         assert "(bvugt count #x10000000)" in text
         assert "HARD CONSTRAINT" in text
+
+
+class TestWitnessValueRendering:
+    """Signed profiles (int32/int64) yield negative witness ints and
+    fallback extraction can hand back bools — the hex rendering must
+    stay well-formed (the LLM copies these as layout constants)."""
+
+    def test_negative_value_renders_signed_hex(self):
+        text = _format_smt_witness({
+            "model": {"n": -31},
+            "path_conditions": ["n < 0"],
+            "path_profile": "int32",
+        })
+        assert "n = -31 (-0x1f)" in text
+        assert "0x-" not in text
+
+    def test_bool_value_rendered_bare(self):
+        text = _format_smt_witness({
+            "model": {"flag": True},
+            "path_conditions": [],
+            "path_profile": "int32",
+        })
+        assert "flag = True" in text
+        assert "(0x1)" not in text
+
+    def test_positive_value_unchanged(self):
+        text = _format_smt_witness({
+            "model": {"n": 32},
+            "path_conditions": [],
+            "path_profile": "uint64",
+        })
+        assert "n = 32 (0x20)" in text

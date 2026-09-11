@@ -462,3 +462,37 @@ class TestDoctorIntegration:
         assert n_fail == 0
         assert n_warn == 1
         assert "AWS test advisory" in text
+
+
+class TestBedrockConfigCommentDialect:
+    """The models.json dialect allows INLINE comments; the old
+    hand-rolled full-line stripper missed them and silently
+    suppressed every bedrock IMDS advisory."""
+
+    def test_inline_comments_parse(self, home):
+        from core.startup.aws_imds import _bedrock_configured
+        cfg = home / "models.json"
+        cfg.write_text(
+            '{"models": [ // inline comment here\n'
+            '  {"provider": "bedrock", "model": "m"} # trailing too\n'
+            ']}\n',
+            encoding="utf-8",
+        )
+        assert _bedrock_configured(_env(home, RAPTOR_CONFIG=str(cfg)))
+
+    def test_non_bedrock_inline_commented_config_stays_false(self, home):
+        from core.startup.aws_imds import _bedrock_configured
+        cfg = home / "models.json"
+        cfg.write_text(
+            '{"models": [ // note\n'
+            '  {"provider": "anthropic", "model": "m"}\n'
+            ']}\n',
+            encoding="utf-8",
+        )
+        assert not _bedrock_configured(_env(home, RAPTOR_CONFIG=str(cfg)))
+
+    def test_planted_fifo_does_not_hang(self, home):
+        from core.startup.aws_imds import _bedrock_configured
+        fifo = home / "models.json"
+        os.mkfifo(fifo)
+        assert not _bedrock_configured(_env(home, RAPTOR_CONFIG=str(fifo)))

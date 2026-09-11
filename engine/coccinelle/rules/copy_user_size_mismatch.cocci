@@ -8,8 +8,17 @@
 // CWE-805: Buffer Access with Incorrect Length Value
 // @role: verification
 
+// Typed metavariables: sizeof(*dst) equals sizeof(local) whenever the
+// two sides have the same type, which is the common CORRECT case — the
+// size expression is merely spelled from the other side of the copy.
+// Only a genuine type mismatch is a CWE-805 wrong-length copy, so the
+// types are bound here and compared in the reporting script; when type
+// inference cannot resolve either side the rule stays silent rather
+// than guessing.
 @copy_to_sizeof_star_dst@
-expression USR_DST, LOCAL;
+type TD, TL;
+TD *USR_DST;
+TL LOCAL;
 position p;
 @@
 
@@ -17,16 +26,20 @@ position p;
 
 @script:python copy_to_report depends on copy_to_sizeof_star_dst@
 p << copy_to_sizeof_star_dst.p;
+TD << copy_to_sizeof_star_dst.TD;
+TL << copy_to_sizeof_star_dst.TL;
+LOCAL << copy_to_sizeof_star_dst.LOCAL;
 @@
 import json
-msg = {
-  "rule":  "copy_user_size_mismatch",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message":   "copy_to_user size is sizeof(*userspace_ptr) — should be sizeof(local_var) to match actual source (CWE-805)"
-}
-print("COCCIRESULT:" + json.dumps(msg))
+if str(TD).strip() != str(TL).strip():
+  msg = {
+    "rule":  "copy_user_size_mismatch",
+    "file":  p[0].file,
+    "line":  int(p[0].line),
+    "col":   int(p[0].column),
+    "message":   "copy_to_user size is sizeof(*userspace_ptr) of type %s — actual source '%s' is %s (CWE-805)" % (TD, LOCAL, TL)
+  }
+  print("COCCIRESULT:" + json.dumps(msg))
 
 @copy_from_sizeof_src@
 expression LOCAL, USR_SRC;

@@ -162,3 +162,46 @@ def test_ephemeral_venv_prefix_skipped() -> None:
 
 def test_extra_excludes_honoured() -> None:
     assert _should_skip_dir("custom", EXCLUDED_DIR_NAMES | {"custom"}) is True
+
+
+# ---------------------------------------------------------------------------
+# Manifest-name / parser-registry alignment
+# ---------------------------------------------------------------------------
+
+def test_npm_shrinkwrap_discovered_as_lockfile(tmp_path: Path) -> None:
+    # npm's shrinkwrap file is named ``npm-shrinkwrap.json``; the bare
+    # ``shrinkwrap.json`` spelling previously listed here matched
+    # nothing npm ever writes, so shrinkwrapped projects were silently
+    # invisible.
+    (tmp_path / "npm-shrinkwrap.json").write_text(
+        '{"lockfileVersion": 3, "packages": {}}', encoding="utf-8",
+    )
+    manifests = find_manifests(tmp_path)
+    [m] = [m for m in manifests if m.path.name == "npm-shrinkwrap.json"]
+    assert m.ecosystem == "npm"
+    assert m.is_lockfile is True
+
+
+def test_every_classified_manifest_name_has_a_parser() -> None:
+    # Closure guard: a filename classified by discovery but lacking a
+    # registered parser is a SILENT drop (dispatch logs at debug and
+    # returns zero deps). Every static manifest name must resolve.
+    from pathlib import Path as _P
+
+    from packages.sca.discovery import MANIFEST_FILENAMES
+    from packages.sca.parsers import _resolve
+    missing = [
+        name for name in MANIFEST_FILENAMES
+        if _resolve(_P("proj") / name) is None
+    ]
+    assert missing == []
+
+
+def test_bare_shrinkwrap_name_no_longer_classified(tmp_path: Path) -> None:
+    # Other direction of the rename: the never-real filename is gone
+    # from both the classification table and the parser registry, so
+    # the two sides can't disagree again.
+    from packages.sca.discovery import MANIFEST_FILENAMES
+    from packages.sca.parsers import _resolve
+    assert "shrinkwrap.json" not in MANIFEST_FILENAMES
+    assert _resolve(tmp_path / "shrinkwrap.json") is None

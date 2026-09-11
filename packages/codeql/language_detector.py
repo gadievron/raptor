@@ -6,15 +6,18 @@ Automatically detects programming languages in a repository
 to determine which CodeQL databases need to be created.
 """
 
+import os
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
-# Add parent directory to path for imports
-# packages/codeql/language_detector.py -> repo root
-sys.path.insert(0, str(Path(__file__).parents[2]))
+# `os.environ["RAPTOR_DIR"]` (no fallback) is the canonical project
+# root marker — see CLAUDE.md "Python path safety"; a KeyError surfaces
+# the configuration problem at startup instead of a positional walk
+# silently breaking under relocation.
+sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.json import dumps_display
 from core.logging import get_logger
@@ -620,12 +623,20 @@ class LanguageDetector:
             langs: set[str] = set()
             try:
                 import re
-                import shutil
                 import subprocess
 
                 from core.config import RaptorConfig
 
-                cli = shutil.which("codeql")
+                # Resolve the SAME binary the run will spawn: the
+                # documented CODEQL_CLI operator override first, then
+                # PATH (packages.codeql._resolve_cli, the resolution
+                # DatabaseManager mirrors). A bare shutil.which here
+                # probed whichever codeql was first on PATH, so on a
+                # multi-install host a CODEQL_CLI bundle with the rust
+                # extractor was ignored and rust silently dropped.
+                from packages.codeql import _resolve_cli
+
+                cli = _resolve_cli()
                 if cli:
                     result = subprocess.run(
                         [cli, "resolve", "languages"],

@@ -670,6 +670,75 @@ def strongest_evidence_tier(
 # Evidence index builder
 # ---------------------------------------------------------------------------
 
+def _normalise_scope(
+    scope: str | list[str] | None,
+    target_path: str,
+) -> list[str] | None:
+    """Normalise operator scope entries to checklist-relative form.
+
+    Mirror of the scope normalisation in ``core.audit.gaps`` (that
+    module is the authority; see build_evidence_index's docstring for
+    why it is mirrored rather than imported). Returns ``None`` for
+    "no filter" (empty scope or a target-root entry).
+    """
+    if not scope:
+        return None
+    raw_scopes = [scope] if isinstance(scope, str) else list(scope)
+    normalised = target_path.rstrip("/")
+    scope_list: list[str] = []
+    for raw in raw_scopes:
+        entry = raw
+        # Checklist paths are target-relative with no "./" prefix, so
+        # "./ipc" (and "././ipc") could never prefix-match.
+        while entry.startswith("./"):
+            entry = entry[2:]
+        if entry.startswith("/"):
+            # Absolute scope: rebase to target-relative when it names
+            # the target root or something under it; refuse loudly
+            # otherwise — an absolute path elsewhere can never match a
+            # checklist path, and silently matching zero files made
+            # scoped runs evidence-blind.
+            stripped = entry.rstrip("/")
+            if normalised and stripped == normalised:
+                entry = "."
+            elif normalised and stripped.startswith(normalised + "/"):
+                entry = stripped[len(normalised) + 1:]
+            else:
+                described = target_path or "<no target_path in checklist>"
+                msg = (
+                    f"scope {raw!r} is an absolute path outside the "
+                    f"target ({described}) — it can never match a "
+                    "checklist path; pass a target-relative path or an "
+                    "absolute path under the target"
+                )
+                raise ValueError(msg)
+        scope_list.append(entry)
+    # A target-root entry ("." / "./" / "") means the whole tree.
+    if any(s.rstrip("/") in ("", ".") for s in scope_list):
+        return None
+    if normalised:
+        scope_list = [
+            s for s in scope_list
+            if not (normalised.endswith("/" + s.rstrip("/"))
+                    or normalised == s.rstrip("/"))
+        ]
+        if not scope_list:
+            return None
+    return scope_list
+
+
+def _path_in_scope(file_path: str, scope_list: list[str]) -> bool:
+    """Separator-aware scope match (mirrors ``gaps._in_scope``):
+    scope ``ipc`` matches ``ipc/...`` and the file ``ipc.c`` itself,
+    but never the sibling dir ``ipcz/``."""
+    return any(
+        file_path == sc.rstrip("/")
+        or file_path.startswith(
+            (sc.rstrip("/") + "/", sc.rstrip("/") + "."))
+        for sc in scope_list
+    )
+
+
 def build_evidence_index(
     *,
     checklist: dict,
@@ -689,14 +758,21 @@ def build_evidence_index(
     Keys are "file:function". Each value aggregates all available
     mechanical evidence for that function.
 
-    When *scope* is set, only functions whose file path starts with the
-    prefix are indexed.  This avoids building evidence records (and
-    running downstream layer0 scans) for thousands of out-of-scope
-    functions when auditing a single file or subdirectory.
+    When *scope* is set, only functions under the scoped path(s) are
+    indexed.  This avoids building evidence records (and running
+    downstream layer0 scans) for thousands of out-of-scope functions
+    when auditing a single file or subdirectory.  Scope entries are
+    normalised the same way ``core.audit.gaps``'s ``_in_scope``
+    normalises them (MIRRORED here, not imported — core.audit imports
+    core.evidence, so the dependency must not point back): ``./``
+    spellings are stripped, absolute paths are rebased against the
+    checklist's ``target_path``, matching is separator-aware (scope
+    ``ipc`` matches ``ipc/…`` and ``ipc.c`` but never ``ipcz/``), and
+    a target-root entry means the whole tree.  Before this, the raw
+    ``startswith`` check made ``./ipc``- and absolute-path-scoped runs
+    silently evidence-blind (zero records indexed).
     """
-    scope_tuple: tuple[str, ...] | None = None
-    if scope:
-        scope_tuple = (scope,) if isinstance(scope, str) else tuple(scope)
+    scope_list = _normalise_scope(scope, checklist.get("target_path", ""))
 
     index: dict[str, EvidenceRecord] = {}
 
@@ -704,7 +780,9 @@ def build_evidence_index(
         file_path = file_entry.get("path", "")
         if not file_path:
             continue
-        if scope_tuple and not file_path.startswith(scope_tuple):
+        if scope_list is not None and not _path_in_scope(
+            file_path, scope_list,
+        ):
             continue
         for item in file_entry.get("items", []):
             func_name = item.get("name", "")

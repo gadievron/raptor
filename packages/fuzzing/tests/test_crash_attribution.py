@@ -72,10 +72,17 @@ class TestNameParsing:
         assert _parse_orig("id:000002,src:000000,op:havoc,rep:2") is None
 
 
+def _local_only(index):
+    """Adapt a single-instance queue index to the per-instance lookup."""
+    return lambda inst: index if inst == "main" else {}
+
+
 class TestChainWalk:
     def test_direct_child_of_seed(self):
         index = {"000000": _ORIG_A}
-        roots = _root_orig_seeds("id:000000,sig:06,src:000000,op:havoc", index)
+        roots = _root_orig_seeds(
+            "id:000000,sig:06,src:000000,op:havoc", "main",
+            _local_only(index))
         assert roots == {"smt_000_buf_len_len16"}
 
     def test_multi_hop_chain(self):
@@ -84,7 +91,9 @@ class TestChainWalk:
             "000002": "id:000002,src:000000,time:2,execs:26,op:havoc,rep:2",
             "000005": "id:000005,src:000002,op:havoc,rep:1",
         }
-        roots = _root_orig_seeds("id:000001,sig:11,src:000005,op:havoc", index)
+        roots = _root_orig_seeds(
+            "id:000001,sig:11,src:000005,op:havoc", "main",
+            _local_only(index))
         assert roots == {"smt_000_buf_len_len16"}
 
     def test_splice_converging_to_one_seed(self):
@@ -93,7 +102,9 @@ class TestChainWalk:
             "000002": "id:000002,src:000000,op:havoc,rep:2",
             "000003": "id:000003,src:000000,op:havoc,rep:1",
         }
-        roots = _root_orig_seeds("id:000004,sig:06,src:000002+000003,op:splice", index)
+        roots = _root_orig_seeds(
+            "id:000004,sig:06,src:000002+000003,op:splice", "main",
+            _local_only(index))
         assert roots == {"smt_000_buf_len_len16"}
 
     def test_splice_across_two_seeds_yields_both_roots(self):
@@ -103,21 +114,59 @@ class TestChainWalk:
             "000002": "id:000002,src:000000,op:havoc,rep:2",
             "000003": "id:000003,src:000001,op:havoc,rep:1",
         }
-        roots = _root_orig_seeds("id:000004,sig:06,src:000002+000003,op:splice", index)
+        roots = _root_orig_seeds(
+            "id:000004,sig:06,src:000002+000003,op:splice", "main",
+            _local_only(index))
         assert roots == {"smt_000_buf_len_len16", "plain_seed"}
 
     def test_missing_queue_entry_breaks_chain(self):
-        assert _root_orig_seeds("id:000000,sig:06,src:000042,op:havoc", {}) is None
+        assert _root_orig_seeds(
+            "id:000000,sig:06,src:000042,op:havoc", "main",
+            _local_only({})) is None
 
     def test_no_src_on_crash_is_unattributable(self):
-        assert _root_orig_seeds(_ORIG_A, {"000000": _ORIG_A}) is None
+        assert _root_orig_seeds(
+            _ORIG_A, "main", _local_only({"000000": _ORIG_A})) is None
 
     def test_cycle_terminates_unattributed(self):
         index = {
             "000001": "id:000001,src:000002,op:havoc",
             "000002": "id:000002,src:000001,op:havoc",
         }
-        assert _root_orig_seeds("id:000000,sig:06,src:000001", index) is None
+        assert _root_orig_seeds(
+            "id:000000,sig:06,src:000001", "main",
+            _local_only(index)) is None
+
+    def test_sync_entry_resolves_in_source_instance_queue(self):
+        # An imported queue entry's src id belongs to the NAMED source
+        # instance. The local queue also holds a same-numbered entry
+        # rooted at a different seed — resolving locally would stamp
+        # that wrong root.
+        indexes = {
+            "main": {"000000": _ORIG_A},
+            "secondary1": {
+                "000000": _ORIG_B,
+                "000001": "id:000001,sync:main,src:000000",
+            },
+        }
+        roots = _root_orig_seeds(
+            "id:000002,sig:11,src:000001", "secondary1",
+            lambda inst: indexes.get(inst, {}))
+        assert roots == {"smt_000_buf_len_len16"}
+
+    def test_sync_to_unknown_instance_is_unattributable(self):
+        # Prefer unattributed over wrong: an import from an instance
+        # whose queue we cannot see breaks the chain.
+        indexes = {
+            "secondary1": {
+                "000000": _ORIG_B,
+                "000001": "id:000001,sync:ghost,src:000000",
+            },
+        }
+        roots = _root_orig_seeds(
+            "id:000002,sig:11,src:000001", "secondary1",
+            lambda inst: indexes.get(inst, {}))
+        assert roots is None
 
 
 class TestInstanceResolution:
@@ -277,3 +326,63 @@ class TestSummaryShape:
                 crash_id=cid, seed_name="s", origin_id=origin, source_file="f",
             )
         assert summary.by_finding() == {"F-A": ["1", "3"], "F-B": ["2"]}
+
+
+class TestDuplicateCrashIds:
+    """Consumers key attribution lookups by crash_id — when two
+    attributable crashes arrive sharing one id, every attribution for
+    that id is dropped (a wrong finding-confirmation is worse than
+    none). Unique ids are unaffected."""
+
+    _SEED_ENTRY = TestAttributeCrashes._SEED_ENTRY
+
+    def _two_crashes_same_id(self, tmp_path: Path):
+        afl, files = _mk_afl_tree(
+            tmp_path,
+            [_ORIG_A],
+            [
+                "id:000000,sig:06,src:000000,op:havoc",
+                "id:000000,sig:11,src:000000,op:arith8",
+            ],
+        )
+        manifest = _mk_manifest(tmp_path, [self._SEED_ENTRY])
+        crashes = []
+        for f in files:
+            crash = _crash(f)
+            crash.crash_id = "000000"  # degenerate: no instance suffix
+            crashes.append(crash)
+        return crashes, manifest
+
+    def test_colliding_ids_drop_all_attributions(self, tmp_path):
+        # The second crash filename must differ, but AFL never writes
+        # two id:000000 crashes in ONE instance dir — this simulates a
+        # foreign merge without instance suffixes.
+        crashes, manifest = self._two_crashes_same_id(tmp_path)
+        summary = attribute_crashes(crashes, manifest)
+        assert summary.attributed == {}
+        assert summary.unattributed == 2
+
+    def test_three_way_collision_stays_dropped(self, tmp_path):
+        crashes, manifest = self._two_crashes_same_id(tmp_path)
+        third = crashes[0].input_file.parent / (
+            "id:000000,sig:04,src:000000,op:flip1")
+        third.write_bytes(b"c")
+        crash3 = _crash(third)
+        crash3.crash_id = "000000"
+        summary = attribute_crashes([*crashes, crash3], manifest)
+        assert summary.attributed == {}
+        assert summary.unattributed == 3
+
+    def test_unique_ids_both_attributed(self, tmp_path):
+        afl, files = _mk_afl_tree(
+            tmp_path,
+            [_ORIG_A],
+            [
+                "id:000000,sig:06,src:000000,op:havoc",
+                "id:000001,sig:11,src:000000,op:arith8",
+            ],
+        )
+        manifest = _mk_manifest(tmp_path, [self._SEED_ENTRY])
+        summary = attribute_crashes([_crash(f) for f in files], manifest)
+        assert sorted(summary.attributed) == ["000000", "000001"]
+        assert summary.unattributed == 0

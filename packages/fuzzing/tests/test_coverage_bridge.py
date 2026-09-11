@@ -199,6 +199,35 @@ class TestCorpusDiscovery:
     def test_empty_dir(self, tmp_path):
         assert find_corpus_inputs(tmp_path) == []
 
+    def test_afl_merged_crashes_dir_is_scanned(self, tmp_path):
+        # The AFL runner writes merged multi-instance crashes under
+        # its own output dir: <out>/afl/merged_crashes.
+        merged = tmp_path / "afl" / "merged_crashes"
+        merged.mkdir(parents=True)
+        (merged / "id:000000,sig:11,instance:main").write_bytes(b"c")
+        inputs = find_corpus_inputs(tmp_path)
+        assert len(inputs) == 1
+        assert inputs[0].parent == merged
+
+    def test_libfuzzer_layout_is_scanned(self, tmp_path):
+        # libFuzzer campaigns keep corpus + artifacts under
+        # <out>/libfuzzer/ — they previously replayed zero inputs.
+        lf = tmp_path / "libfuzzer"
+        (lf / "corpus").mkdir(parents=True)
+        (lf / "crashes").mkdir(parents=True)
+        (lf / "corpus" / "deadbeef").write_bytes(b"q")
+        (lf / "crashes" / "crash-1234").write_bytes(b"c")
+        inputs = find_corpus_inputs(tmp_path)
+        assert {f.name for f in inputs} == {"deadbeef", "crash-1234"}
+
+    def test_afl_layout_still_scanned(self, tmp_path):
+        # Direction two: the AFL per-instance layout keeps working.
+        afl = tmp_path / "afl" / "main"
+        (afl / "queue").mkdir(parents=True)
+        (afl / "queue" / "id:000000").write_bytes(b"q")
+        inputs = find_corpus_inputs(tmp_path)
+        assert [f.name for f in inputs] == ["id:000000"]
+
 
 class TestReplay:
     def test_file_mode_passes_input_as_argv(self, tmp_path):
@@ -298,6 +327,85 @@ class TestEmit:
         assert rec["reached"] is False
         rec = data["files"]["src/parse.c"]["functions"]["parse_header"]
         assert rec["iterations"] == 12_345
+
+    def test_directory_target_is_refused(self, tmp_path):
+        # Env-build campaigns hand a source DIRECTORY as the target;
+        # replaying it is meaningless and build_dir would default to
+        # its PARENT, sweeping sibling projects' gcov artifacts into
+        # this campaign's coverage.
+        src_dir = tmp_path / "parent" / "project"
+        src_dir.mkdir(parents=True)
+        # Sibling gcov artifacts under the parent tree.
+        sibling = tmp_path / "parent" / "other"
+        sibling.mkdir()
+        (sibling / "x.gcno").write_bytes(b"")
+        calls = []
+
+        def runner(cmd, **kw):
+            calls.append(cmd)
+
+        assert emit_fuzz_coverage(
+            tmp_path / "out", binary=src_dir, runner=runner,
+        ) is None
+        assert calls == []
+
+    def test_stale_gcda_cleared_before_replay(self, tmp_path):
+        # Counters accumulated by earlier executions (make check,
+        # previous bridge runs) must not be attributed to this
+        # campaign: with no replayable inputs and stale counters
+        # removed, the bridge reports nothing instead of foreign
+        # coverage.
+        build = tmp_path / "build"
+        build.mkdir()
+        binary = build / "target"
+        binary.write_bytes(b"\x7fELF")
+        (build / "parse.gcno").write_bytes(b"")
+        stale = build / "parse.gcda"
+        stale.write_bytes(b"old counters")
+
+        def quiet_runner(cmd, *, cwd=None, stdin_bytes=None, timeout=0):
+            # gcov never runs: rglob finds no .gcda after the reset.
+            raise AssertionError("gcov must not run without counters")
+
+        assert emit_fuzz_coverage(
+            tmp_path / "out", binary=binary, runner=quiet_runner,
+        ) is None
+        assert not stale.exists()
+
+    def test_replay_produced_gcda_still_collected(self, tmp_path):
+        # Direction two: counters written BY the replay survive the
+        # reset (which happens before replay) and drive the report.
+        build = tmp_path / "build"
+        build.mkdir()
+        binary = build / "target"
+        binary.write_bytes(b"\x7fELF")
+        (build / "parse.gcno").write_bytes(b"")
+        (build / "parse.gcda").write_bytes(b"stale")
+        out_dir = tmp_path / "out"
+        q = out_dir / "afl" / "main" / "queue"
+        q.mkdir(parents=True)
+        (q / "id:000000").write_bytes(b"seed")
+
+        class _Proc:
+            stdout = _GCOV_OUTPUT
+
+        def runner(cmd, *, cwd=None, stdin_bytes=None, timeout=0):
+            if cmd[0] == str(binary):
+                (build / "parse.gcda").write_bytes(b"fresh")
+                return None
+            assert cmd[0] == "gcov"
+            return _Proc()
+
+        path = emit_fuzz_coverage(
+            out_dir, binary=binary, harness="libfuzzer", runner=runner,
+        )
+        assert path is not None
+        data = json.loads(path.read_text())
+        # harness passes through to per-function records and meta —
+        # libFuzzer campaigns were stamped 'afl' before.
+        assert data["meta"]["harness"] == "libfuzzer"
+        rec = data["files"]["src/parse.c"]["functions"]["parse_header"]
+        assert rec["harness"] == "libfuzzer"
 
     def test_gcov_yields_nothing_no_file(self, tmp_path):
         build = tmp_path / "build"

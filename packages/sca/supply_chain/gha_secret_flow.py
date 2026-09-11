@@ -53,7 +53,11 @@ What this detector must defend against:
 
   * **echo-with-mask** — ``run: echo "::add-mask::${{ secrets.X }}"``
     is the canonical legitimate use of a secret in a ``run:`` body.
-    Defence: recognise this exact shape and suppress.
+    Defence: recognise this exact shape and suppress the mask
+    occurrence ONLY.  ``add-mask`` merely redacts the value from log
+    output, so any OTHER reference to the same secret in the body
+    (e.g. a curl that posts it) still counts — a mask line must not
+    grant the rest of the body cover.
 
   * **Token-cache-poisoning** — ``actions/cache@save`` with a path
     written by a step that consumed a secret.  We treat
@@ -176,8 +180,14 @@ _ENV_SHELL_RE = re.compile(
     r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"
 )
 # Mask-line shape that legitimately consumes a secret in a run block.
+# Matches the WHOLE ``echo "::add-mask::${{ secrets.X }}"`` occurrence
+# so it can be excised from the body before reference scanning: only
+# the mask occurrence itself is exempt.  ``::add-mask::`` hides the
+# value from LOG OUTPUT only — it does nothing to stop the same
+# secret being exfiltrated by another command, so other references to
+# a masked secret must still count.
 _MASK_RE = re.compile(
-    r'echo\s+"?::add-mask::\$\{\{\s*secrets\.([A-Za-z_][A-Za-z0-9_]*)'
+    r'echo\s+"?::add-mask::\$\{\{\s*secrets\.[A-Za-z_][A-Za-z0-9_]*\s*\}\}"?'
 )
 # ``${{ steps.<id>.outputs.<name> }}`` — a downstream reference to
 # a previous step's output.  Used in both ``with:`` inputs and
@@ -621,6 +631,32 @@ def _extract_redirected_writes(
     return pairs
 
 
+def _merge_env_bindings(
+    env_mapping: object, bound: dict[str, str], *, override: bool,
+) -> None:
+    """Merge one ``env:`` mapping level into ``bound``
+    (env name -> source secret name).
+
+    Entries whose value references ``${{ secrets.X }}`` bind the env
+    name to that secret.  When ``override`` is True, an entry with a
+    NON-secret value removes an inherited binding of the same name —
+    GitHub evaluates env precedence step > job > workflow, so a
+    job-level plain value genuinely shadows a workflow-level secret
+    binding.  Non-mapping input is ignored.
+    """
+    if not isinstance(env_mapping, dict):
+        return
+    for k, v in env_mapping.items():
+        key = str(k)
+        if isinstance(v, str) and _SECRETS_LITERAL_RE.search(v):
+            name_match = re.search(
+                r"secrets\.([A-Za-z_][A-Za-z0-9_]*)", v,
+            )
+            bound[key] = name_match.group(1) if name_match else "?"
+        elif override:
+            bound.pop(key, None)
+
+
 def _value_is_tainted(value: str, job_ctx: _JobContext) -> str | None:
     """Return the source secret name if ``value`` references any
     currently-tainted thing in this job: a literal
@@ -789,24 +825,20 @@ def _scan_one_step(
     hits: list[SecretFlowHit] = []
 
     # 1) Update env bindings — anything assigned from a secret-flavoured
-    #    expression becomes secret-tainted within this job.
-    step_env = step.get("env") or {}
-    if isinstance(step_env, dict):
-        for k, v in step_env.items():
-            if not isinstance(v, str):
-                continue
-            m = _SECRETS_LITERAL_RE.search(v)
-            if m:
-                # Extract the secret name from the literal reference
-                name_match = re.search(
-                    r"secrets\.([A-Za-z_][A-Za-z0-9_]*)", v,
-                )
-                src = name_match.group(1) if name_match else "?"
-                job_ctx.secret_bound_env[str(k)] = src
+    #    expression becomes secret-tainted within this job.  Bind-only
+    #    (no override): a step-level plain value shadows only for that
+    #    step, but the job context persists across steps, so removing
+    #    the binding here would wrongly untaint LATER steps.
+    _merge_env_bindings(step.get("env"), job_ctx.secret_bound_env,
+                        override=False)
 
     # 2) toJSON(secrets) — the high-confidence anchor.  Any reference
     #    anywhere in the step's serialised yaml fires.
-    step_yaml = json.dumps(step)
+    #    ``default=str``: YAML scalars like an unquoted ``2024-01-01``
+    #    parse to ``datetime.date`` objects, which ``json.dumps``
+    #    refuses by default — and one such benign value in any step
+    #    would otherwise abort the whole scan with a TypeError.
+    step_yaml = json.dumps(step, default=str)
     if _TOJSON_SECRETS_RE.search(step_yaml):
         hits.append(SecretFlowHit(
             dependency=dep, workflow_path=workflow_path,
@@ -1027,11 +1059,11 @@ def _scan_one_step(
         ):
             job_ctx.env_written_to_disk = True
         # Mask-line is the canonical legitimate use of a secret in
-        # a run body.  Even when present we still want to update
+        # a run body.  The mask OCCURRENCE itself must not FP, but
         # taint bindings from any GITHUB_ENV/OUTPUT writes in the
-        # SAME body (a body that masks ONE secret can still leak
-        # another via redirect) — but skip emitting a ``run_block``
-        # finding so the mask line itself isn't a FP.
+        # SAME body still update (a body that masks ONE secret can
+        # still leak another via redirect), and any OTHER reference
+        # to the masked secret in the body still counts.
         # Strip bash full-line comments before scanning for
         # ``$VAR`` references — a comment explaining what the body
         # does or why the secret-handling pattern is safe must not
@@ -1042,39 +1074,44 @@ def _scan_one_step(
         # avoid; the FP-shape we close here is the common "docstring-
         # like full-line comment block at top of run body".
         scan_body = _strip_bash_full_line_comments(run_body)
-        masked_secrets = {
-            m.group(1) for m in _MASK_RE.finditer(scan_body)
-        }
+        # Excise the ``echo "::add-mask::${{ secrets.X }}"`` occurrences
+        # THEMSELVES before scanning for references.  Only the mask
+        # text is exempt: masking hides the value from log output but
+        # does not neutralise other uses, so a body that masks a
+        # secret AND also passes it to curl still fires on the curl
+        # reference.  (The old shape collected the masked secret
+        # NAMES and filtered every reference to them — an attacker
+        # could silence the detector for a secret by adding a mask
+        # line for it.)
+        ref_scan_body = _MASK_RE.sub("", scan_body)
         # Check whether the body references a secret literal,
         # a secret-tainted env var, or a tainted prior-step output.
         secret_refs_in_body: list[str] = []
-        for m in _SECRETS_LITERAL_RE.finditer(scan_body):
+        for m in _SECRETS_LITERAL_RE.finditer(ref_scan_body):
             name_match = re.search(
                 r"secrets\.([A-Za-z_][A-Za-z0-9_]*)", m.group(0),
             )
             if name_match:
                 secret_refs_in_body.append(name_match.group(1))
-        for m in _ENV_SHELL_RE.finditer(scan_body):
+        for m in _ENV_SHELL_RE.finditer(ref_scan_body):
             var = m.group(1)
             if var in job_ctx.secret_bound_env:
                 secret_refs_in_body.append(
                     job_ctx.secret_bound_env[var],
                 )
-        for m in _ENV_TEMPLATE_RE.finditer(scan_body):
+        for m in _ENV_TEMPLATE_RE.finditer(ref_scan_body):
             var = m.group(1)
             if var in job_ctx.secret_bound_env:
                 secret_refs_in_body.append(
                     job_ctx.secret_bound_env[var],
                 )
-        for sm in _STEPS_OUTPUT_RE.finditer(scan_body):
+        for sm in _STEPS_OUTPUT_RE.finditer(ref_scan_body):
             step_id = sm.group(1)
             out_name = sm.group(2)
             bound = job_ctx.secret_bound_outputs.get(step_id, {})
             if out_name in bound:
                 secret_refs_in_body.append(bound[out_name])
-        unmasked_refs = [
-            s for s in secret_refs_in_body if s not in masked_secrets
-        ]
+        unmasked_refs = secret_refs_in_body
         if unmasked_refs:
             severity = (
                 "high"
@@ -1154,22 +1191,23 @@ def _scan_workflow(
     jobs = data.get("jobs")
     if not isinstance(jobs, dict):
         return []
+    # Workflow-root ``env:`` bindings apply to every job (and are the
+    # most common place real workflows bind a secret to an env name);
+    # precedence is step > job > workflow, so a job-level entry with
+    # the same name shadows the workflow-level one.
+    workflow_env = data.get("env")
     hits: list[SecretFlowHit] = []
     for job_id, job in jobs.items():
         if not isinstance(job, dict):
             continue
         ctx = _JobContext()
-        # Top-level job env bindings (apply to every step in the job).
-        job_env = job.get("env") or {}
-        if isinstance(job_env, dict):
-            for k, v in job_env.items():
-                if isinstance(v, str) and _SECRETS_LITERAL_RE.search(v):
-                    name_match = re.search(
-                        r"secrets\.([A-Za-z_][A-Za-z0-9_]*)", v,
-                    )
-                    ctx.secret_bound_env[str(k)] = (
-                        name_match.group(1) if name_match else "?"
-                    )
+        _merge_env_bindings(workflow_env, ctx.secret_bound_env,
+                            override=False)
+        # Job-level env bindings (apply to every step in the job);
+        # non-secret values shadow an inherited workflow-level
+        # binding of the same name.
+        _merge_env_bindings(job.get("env"), ctx.secret_bound_env,
+                            override=True)
         steps = job.get("steps")
         if not isinstance(steps, list):
             continue

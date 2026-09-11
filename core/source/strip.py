@@ -220,7 +220,17 @@ def strip_shell_comments(text: str) -> str:
             continue
 
         if c == "#":
-            if i == 0 or text[i - 1] in (" ", "\t", "\n", ";", "(", "{"):
+            # "${#" is the parameter-length expansion ("${#arr[@]}",
+            # "${#var}"), not a comment — the "{" context check alone
+            # would truncate the rest of the line. A bare "{ #" (brace
+            # group followed by a real comment) has whitespace between,
+            # so the preceding char is not "{" and stripping still fires.
+            is_length_expansion = (
+                i >= 2 and text[i - 1] == "{" and text[i - 2] == "$"
+            )
+            if not is_length_expansion and (
+                i == 0 or text[i - 1] in (" ", "\t", "\n", ";", "(", "{")
+            ):
                 while i < n and text[i] != "\n":
                     i += 1
                 continue

@@ -151,6 +151,16 @@ class Witness:
     timestamp: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc),
     )
+    # Reader-side annotation — NEVER serialized (``to_dict`` /
+    # ``from_dict`` exclude it by construction): True only when the
+    # manifest this record was loaded from carried a
+    # witness-provenance MAC that verified under THIS install's key
+    # (``core.witness.provenance.verify_witness_manifest``; the store
+    # sets it on read). Consumers use it to grant mechanical-provenance
+    # weight — e.g. threat-status flips via ``collect_outcomes`` —
+    # so producers must leave it at the default. ``compare=False``:
+    # verification state is not record identity.
+    provenance_verified: bool = field(default=False, compare=False)
 
     def __post_init__(self) -> None:
         # SHA-256 hex is 64 chars; reject silently-truncated hashes

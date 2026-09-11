@@ -43,25 +43,38 @@ class _FakeModelConfig:
     enabled = True
     max_context = 8192
 
+    def __init__(self, provider: str = "test",
+                 model_name: str = "fake-model"):
+        self.provider = provider
+        self.model_name = model_name
+
 
 class _FakeConfig:
     primary_model = _FakeModelConfig()
+    fallback_models: list = []
+
+    def __init__(self, fallback_models: list | None = None):
+        self.fallback_models = fallback_models or []
 
 
 class _StubClient:
-    """Minimal LLM client stub that returns a canned response."""
+    """Minimal LLM client stub that returns a canned response and
+    records the kwargs of every generate_structured call."""
 
-    config = _FakeConfig()
     total_cost = 0.01
-    _call_count = 0
 
-    def __init__(self, result_dict: Dict[str, Any], *, fail: bool = False):
+    def __init__(self, result_dict: Dict[str, Any], *, fail: bool = False,
+                 config: _FakeConfig | None = None):
+        self.config = config or _FakeConfig()
         self._result = result_dict
         self._fail = fail
+        self._call_count = 0
+        self.calls: list[Dict[str, Any]] = []
 
     def generate_structured(self, prompt, schema, system_prompt=None,
                             task_type=None, **kwargs):
         self._call_count += 1
+        self.calls.append(dict(kwargs, task_type=task_type))
         if self._fail:
             raise RuntimeError("LLM unavailable")
         return _FakeStructuredResponse(result=self._result)
@@ -143,6 +156,70 @@ def test_run_stage_preflight_injection_detection():
     # the detector's patterns), the call should complete without error.
     assert result.error is None
     assert result.confidence_haircut in (0.5, 1.0)
+
+
+def test_run_stage_default_call_has_no_model_override():
+    """Without model_id the client's own model selection applies — no
+    model_config kwarg is injected."""
+    client = _StubClient({"answer": "hello", "score": 1})
+    result = run_stage(
+        client=client,
+        system="test",
+        untrusted_blocks=(
+            UntrustedBlock(content="x", kind="TEST", origin="test"),
+        ),
+        slots={},
+        schema_cls=_SimpleSchema,
+    )
+    assert result.model is not None
+    assert len(client.calls) == 1
+    assert "model_config" not in client.calls[0]
+
+
+def test_run_stage_model_id_routes_to_that_model():
+    """An explicit model_id must be resolved to the matching
+    ModelConfig and passed as a per-call generation override —
+    otherwise the primary model answers a request that was routed
+    away from it on purpose."""
+    checker_cfg = _FakeModelConfig("openai", "gpt-checker")
+    client = _StubClient(
+        {"answer": "hello", "score": 1},
+        config=_FakeConfig(fallback_models=[checker_cfg]),
+    )
+    result = run_stage(
+        client=client,
+        system="test",
+        untrusted_blocks=(
+            UntrustedBlock(content="x", kind="TEST", origin="test"),
+        ),
+        slots={},
+        schema_cls=_SimpleSchema,
+        model_id="openai/gpt-checker",
+    )
+    assert result.model is not None
+    assert len(client.calls) == 1
+    assert client.calls[0]["model_config"] is checker_cfg
+
+
+def test_run_stage_unresolvable_model_id_fails_not_silently_primary():
+    """A model_id that matches nothing on the client config must fail
+    the stage — silently generating with the primary model would turn
+    an independent check into a self-check."""
+    client = _StubClient({"answer": "hello", "score": 1})
+    result = run_stage(
+        client=client,
+        system="test",
+        untrusted_blocks=(
+            UntrustedBlock(content="x", kind="TEST", origin="test"),
+        ),
+        slots={},
+        schema_cls=_SimpleSchema,
+        model_id="ghost/no-such-model",
+    )
+    assert result.model is None
+    assert result.error is not None
+    assert "ghost/no-such-model" in result.error
+    assert client.calls == []  # no tokens spent
 
 
 def test_run_stage_records_telemetry():

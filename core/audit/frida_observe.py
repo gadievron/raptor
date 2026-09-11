@@ -293,17 +293,29 @@ def _generate_frida_script(hook_targets: list[str]) -> str:
 var targets = {targets_json};
 var hooked = 0;
 
+function resolveExport(name) {{
+    // Frida >= 17 removed the static Module.findExportByName —
+    // relying on it made every lookup throw into the per-target
+    // catch below, so zero functions were hooked and the whole
+    // channel silently observed nothing. Feature-detect the
+    // replacement and keep the legacy form for older runtimes.
+    if (typeof Module.findGlobalExportByName === 'function') {{
+        return Module.findGlobalExportByName(name);
+    }}
+    var addr = Module.findExportByName(null, name);
+    if (addr) return addr;
+    var matches = [];
+    Process.enumerateModules().forEach(function(m) {{
+        var exp = Module.findExportByName(m.name, name);
+        if (exp) matches.push(exp);
+    }});
+    return matches.length > 0 ? matches[0] : null;
+}}
+
 targets.forEach(function(name) {{
+    var addrs;
     try {{
-        var addrs = Module.findExportByName(null, name);
-        if (!addrs) {{
-            var matches = [];
-            Process.enumerateModules().forEach(function(m) {{
-                var exp = Module.findExportByName(m.name, name);
-                if (exp) matches.push(exp);
-            }});
-            if (matches.length > 0) addrs = matches[0];
-        }}
+        addrs = resolveExport(name);
     }} catch(e) {{
         return;
     }}
@@ -370,13 +382,24 @@ def _run_frida_session(
         script_file.write_text(script_source)
 
         timeout = getattr(config, "frida_timeout_s", _OBSERVE_TIMEOUT_S)
+        # frida exits on its own after the -t window (quiet mode);
+        # the subprocess timeout stays above it as a backstop for a
+        # wedged CLI.
+        session_s = max(1, timeout - 5)
 
+        # No ``--no-pause``: the flag only ever applied to spawn mode
+        # and current CLIs reject it as an unrecognized argument
+        # before attaching — the whole session died on argv parsing.
+        # No ``-o`` either: script ``send()`` payloads are emitted on
+        # the REPL's stdout, not the -o log (which stays empty), so
+        # the captured stdout is persisted to ``log_file`` below for
+        # ``_parse_observations``.
         cmd = [
             "frida",
             "-p", str(pid),
             "-l", str(script_file),
-            "--no-pause",
-            "-o", str(log_file),
+            "-q",
+            "-t", str(session_s),
         ]
 
         env = _safe_env()
@@ -390,10 +413,19 @@ def _run_frida_session(
             check=False,
         )
 
+        _write_session_log(log_file, result.stdout)
         return result.returncode == 0 or log_file.stat().st_size > 0
 
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         logger.debug("Frida session timed out after %ds", timeout)
+        partial = exc.stdout
+        if isinstance(partial, bytes):
+            partial = partial.decode("utf-8", errors="replace")
+        if partial:
+            # Keep whatever the killed CLI managed to emit; when the
+            # exception carries nothing, leave any existing log
+            # content untouched rather than clobbering it with "".
+            _write_session_log(log_file, partial)
         return log_file.exists() and log_file.stat().st_size > 0
     except FileNotFoundError:
         logger.debug("frida CLI not found")
@@ -409,8 +441,26 @@ def _run_frida_session(
                 pass
 
 
+def _write_session_log(log_file: Path, content: str | None) -> None:
+    """Persist a Frida session's captured stdout for parsing."""
+    try:
+        log_file.write_text(content or "")
+    except OSError:
+        logger.debug("could not persist frida session log", exc_info=True)
+
+
 def _parse_observations(log_file: Path) -> list[FridaObservation]:
-    """Parse JSONL observations from a Frida session log."""
+    """Parse observations from a Frida session log.
+
+    Accepts both raw JSONL and the frida CLI's stdout framing, where
+    each ``send()`` payload arrives wrapped in a Python-repr line::
+
+        message: {'type': 'send', 'payload': '{"type":"call",...}'} data: None
+
+    The wrapper is single-quoted (not JSON), so the payload — the
+    first ``{"``-opening object on the line — is decoded with
+    ``raw_decode``, which tolerates the trailing wrapper text.
+    """
     observations: list[FridaObservation] = []
 
     if not log_file.exists():
@@ -422,6 +472,7 @@ def _parse_observations(log_file: Path) -> list[FridaObservation]:
         return observations
 
     call_stack: dict[str, FridaObservation] = {}
+    decoder = json.JSONDecoder()
 
     for line in content.splitlines():
         line = line.strip()
@@ -430,10 +481,12 @@ def _parse_observations(log_file: Path) -> list[FridaObservation]:
         try:
             data = json.loads(line)
         except json.JSONDecodeError:
-            msg_start = line.find('{')
+            msg_start = line.find('{"')
+            if msg_start < 0:
+                msg_start = line.find("{")
             if msg_start >= 0:
                 try:
-                    data = json.loads(line[msg_start:])
+                    data, _end = decoder.raw_decode(line[msg_start:])
                 except json.JSONDecodeError:
                     continue
             else:

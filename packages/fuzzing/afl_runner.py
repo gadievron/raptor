@@ -44,10 +44,21 @@ AFL_PATHS_FOUND_KEYS = (
 )
 _AFL_CRASH_EXECS_RE = re.compile(r"(?:^|,)execs:(\d+)(?:,|$)")
 
+# afl-showmap -C batch-mode summary banner (stderr), e.g.
+# "A coverage of 123 edges were achieved out of 65536 existing (0.19%)
+#  with 42 input files." — verified against afl-showmap++4.33c.
+_SHOWMAP_SUMMARY_RE = re.compile(
+    r"coverage of (\d+) edges? were achieved out of (\d+) existing"
+    r" \((\d+(?:\.\d+)?)%\) with (\d+) input files"
+)
+# One union-map entry per line: "edge_id" or "edge_id:hit_count".
+_SHOWMAP_EDGE_RE = re.compile(r"^\d+(?::\d+)?$")
+
 
 # Re-exported for callers/tests; implementation shared with the
 # libFuzzer runner and the capability probes.
 from packages.fuzzing.env_hygiene import scrub_identity_env  # noqa: E402
+from packages.fuzzing.output_hygiene import strip_terminal_controls  # noqa: E402
 
 
 class _SandboxedAFLInstance:
@@ -294,7 +305,11 @@ class AFLRunner:
             self.output_dir = (RaptorConfig.get_out_dir()
                                / f"fuzz_{self.binary.stem}").resolve()
         # Resolve corpus AFTER output_dir so the default-corpus
-        # path can anchor under output_dir (rather than CWD).
+        # path can anchor under output_dir (rather than CWD), and
+        # AFTER seed_profile is set — _create_default_corpus selects
+        # builtin seeds by profile, so assigning the profile later
+        # silently dropped a non-default profile on this path.
+        self.seed_profile = seed_profile
         self.corpus_dir = (Path(corpus_dir).resolve() if corpus_dir
                            else self._create_default_corpus())
         self.dict_path = Path(dict_path).resolve() if dict_path else None
@@ -319,7 +334,6 @@ class AFLRunner:
         self.use_laf_intel = use_laf_intel
         self.deterministic = deterministic
         self.custom_mutator = Path(custom_mutator).resolve() if custom_mutator else None
-        self.seed_profile = seed_profile
         if self.custom_mutator and not self.custom_mutator.exists():
             msg = f"Custom mutator not found: {custom_mutator}"
             raise FileNotFoundError(msg)
@@ -340,6 +354,10 @@ class AFLRunner:
         # AFL_PATH so afl-fuzz finds a tracer that does not live next
         # to its own binary (e.g. /usr/lib/afl).
         self._binary_only_support_dir: str | None = None
+        # Tracer mode the campaign actually ran with (None for natively
+        # instrumented targets); run_showmap mirrors it so coverage
+        # replay uses the same -Q/-O flags as the campaign.
+        self._resolved_binary_mode: str | None = None
 
         # Telemetry: instantiated lazily by run() to avoid creating
         # the events file when callers only build commands for tests.
@@ -438,7 +456,10 @@ class AFLRunner:
         """
         corpus = self.output_dir / "corpus_default"
         corpus.mkdir(parents=True, exist_ok=True)
-        seed_profile = getattr(self, "seed_profile", "default")
+        # No getattr fallback: seed_profile is assigned before corpus
+        # resolution in __init__; a fallback here would silently mask a
+        # regression in that ordering.
+        seed_profile = self.seed_profile
 
         try:
             manifest = prepare_builtin_seed_corpus(corpus, profile=seed_profile)
@@ -785,6 +806,7 @@ class AFLRunner:
         is_instrumented = self.check_binary_instrumentation()
         binary_mode = (None if is_instrumented
                        else self._resolve_binary_only_mode())
+        self._resolved_binary_mode = binary_mode
 
         # Additional checks if requested
         if self.check_sanitizers:
@@ -961,7 +983,7 @@ class AFLRunner:
                     if stats:
                         execs_per_sec = stats.get('execs_per_sec', 'N/A')
                         total_execs = stats.get('execs_done', 'N/A')
-                        paths_found = stats.get('paths_found', 'N/A')
+                        paths_found = self._status_paths_found(stats)
                         stability = stats.get('stability', 'N/A')
                         bitmap_cvg = stats.get('bitmap_cvg', 'N/A')
 
@@ -973,7 +995,7 @@ class AFLRunner:
                                 self.telemetry.update_stats(
                                     total_executions=int(stats.get("execs_done", 0) or 0),
                                     executions_per_second=int(float(stats.get("execs_per_sec", 0) or 0)),
-                                    paths_found=int(stats.get("paths_found", 0) or 0),
+                                    paths_found=self._afl_paths_found(stats),
                                     corpus_size=int(stats.get("corpus_count", 0) or 0),
                                     coverage_percent=float(str(stats.get("bitmap_cvg", "0")).rstrip("%") or 0),
                                 )
@@ -1138,21 +1160,6 @@ class AFLRunner:
 
         return total_crashes, crashes_dir
 
-    def _find_first_seed(self) -> Path | None:
-        """Return the first seed file in the corpus directory, or *None*.
-
-        The corpus generator writes ``seed-NNNN-<kind>`` files; the
-        emergency fallback writes ``seed0``.  We accept whichever is
-        present, preferring the sorted-first regular file.
-        """
-        try:
-            for entry in sorted(self.corpus_dir.iterdir()):
-                if entry.is_file():
-                    return entry
-        except OSError:
-            pass
-        return None
-
     def _collect_all_crash_files(self) -> list[Path]:
         """Collect crash files from main and all secondary instance directories."""
         crash_files: list[Path] = []
@@ -1205,7 +1212,11 @@ class AFLRunner:
             data = path.read_bytes()
         except OSError:
             return ""
-        return data[-max_bytes:].decode(errors="replace").strip()
+        # Tails are target/afl output relayed to the operator's
+        # terminal — strip escape-injection vectors at this boundary.
+        return strip_terminal_controls(
+            data[-max_bytes:].decode(errors="replace")
+        ).strip()
 
     @staticmethod
     def _log_common_afl_startup_error(stderr_str: str) -> None:
@@ -1277,6 +1288,20 @@ class AFLRunner:
                 return cls._parse_afl_int(stats[key])
         return 0
 
+    @classmethod
+    def _status_paths_found(cls, stats: dict) -> int | str:
+        """Discovery count for the live status line.
+
+        The key varies across AFL++ versions (``paths_found`` →
+        ``corpus_count`` / ``queued_paths``), so resolve through the
+        shared key list — the live status line must agree with the
+        final-stats path. ``'N/A'`` only when the stats file carries
+        no discovery key at all.
+        """
+        if any(key in stats for key in AFL_PATHS_FOUND_KEYS):
+            return cls._afl_paths_found(stats)
+        return "N/A"
+
     @staticmethod
     def _max_crash_execs(crashes_dir: Path) -> int:
         """Use AFL crash filenames as lower-bound exec count when stats lag."""
@@ -1319,11 +1344,15 @@ class AFLRunner:
         """
         cmd = [self.afl_fuzz]
 
-        # Input/output directories
-        if is_main:
-            cmd.extend(["-i", str(self.corpus_dir)])
-        else:
-            cmd.extend(["-i", "-"])  # Secondary instances sync from main
+        # Input/output directories. Every instance (main and secondary)
+        # reads the real corpus: in AFL++ '-i -' means IN-PLACE RESUME
+        # of an existing -o dir and aborts on a fresh campaign ("Resume
+        # attempted but old output directory not found"), so secondaries
+        # launched with '-i -' died at startup and --parallel N>1
+        # silently degraded to the single main instance. Secondaries
+        # seed from the corpus like main does, then sync through the
+        # shared -o dir as usual.
+        cmd.extend(["-i", str(self.corpus_dir)])
 
         cmd.extend(["-o", str(self.output_dir)])
 
@@ -1407,97 +1436,114 @@ class AFLRunner:
                 for line in f:
                     if ":" in line:
                         key, value = line.strip().split(":", 1)
-                        stats[key.strip()] = value.strip()
+                        # fuzzer_stats lives in the target-writable
+                        # output dir and its values are logged to the
+                        # operator's terminal — strip control chars at
+                        # the parse chokepoint (numeric consumers are
+                        # unaffected).
+                        stats[strip_terminal_controls(key.strip())] = (
+                            strip_terminal_controls(value.strip())
+                        )
         except FileNotFoundError:
             pass
         return stats
 
     def run_showmap(self) -> dict:
-        """Run afl-showmap to analyze coverage."""
+        """Measure edge coverage with ``afl-showmap`` batch mode.
+
+        Runs ``afl-showmap -i <inputs> -C -o <map>`` over the campaign
+        queue (falling back to the seed corpus when no queue exists yet)
+        and parses the union edge map plus the coverage-summary banner.
+
+        Batch mode (``-i``) is used for BOTH input modes deliberately:
+        afl-showmap hard-aborts on ``@@`` in single-run mode ("@@ syntax
+        is not supported by this tool"), and it reads no env var naming
+        the input file — ``-i`` is the only mode where ``@@``
+        substitution works. Stdin targets get each input piped by
+        afl-showmap itself.
+        """
         if self.sandbox_rootfs is not None:
             showmap = str(Path(self.afl_fuzz).parent / "afl-showmap")
             target_bin = self.binary_in_rootfs or str(self.binary)
         else:
             showmap = "afl-showmap"
             target_bin = str(self.binary)
-        showmap_cmd = [showmap, "-o", "/dev/null", "--", target_bin]
 
-        stdin_input = None
-        test_input = None
+        # Prefer the main instance's queue — post-campaign it holds the
+        # discovered paths, so the union map reflects what the campaign
+        # actually reached. Fall back to the seed corpus for a
+        # pre-campaign (or failed-campaign) baseline.
+        input_dir: Path | None = None
+        for candidate in (self.output_dir / "main" / "queue", self.corpus_dir):
+            try:
+                if candidate.is_dir() and any(
+                    entry.is_file() for entry in candidate.iterdir()
+                ):
+                    input_dir = candidate
+                    break
+            except OSError:
+                continue
+        if input_dir is None:
+            logger.warning("No inputs available for afl-showmap coverage")
+            return {}
 
-        # Find the first seed file in the corpus directory.  The corpus
-        # generator names seeds ``seed-NNNN-<kind>`` but the emergency
-        # fallback still writes ``seed0``.  Accept whichever exists.
-        test_input = self._find_first_seed()
-
+        map_file = self.output_dir / "showmap-edges.txt"
+        # A reused output_dir can hold a previous invocation's edge map;
+        # the edge-map fallback in _parse_showmap_output would count the
+        # STALE file after a failed run and fabricate coverage. Start
+        # from a clean slate so any map parsed came from THIS run.
+        map_file.unlink(missing_ok=True)
+        showmap_cmd = [
+            showmap, "-i", str(input_dir), "-C", "-o", str(map_file),
+        ]
+        # Mirror the campaign's binary-only tracer: an uninstrumented
+        # target that ran under QEMU/FRIDA needs the same mode here or
+        # the forkserver handshake fails.
+        if self._resolved_binary_mode == "qemu":
+            showmap_cmd.append("-Q")
+        elif self._resolved_binary_mode == "frida":
+            showmap_cmd.append("-O")
+        showmap_cmd.extend(["--", target_bin])
         if self.input_mode == "file":
             showmap_cmd.append("@@")
-            if test_input:
-                # AFL will replace @@ with the input file path
-                # We need to set AFL_INPUT_FILE environment variable
-                pass
-        # For stdin mode, need to provide input via stdin parameter
-        elif test_input:
-            try:
-                stdin_input = open(test_input, 'rb')  # noqa: SIM115 — closed in the finally below
-            except Exception as e:  # noqa: BLE001 — showmap is best-effort
-                logger.warning("Failed to open test input %s: %s", test_input, e)
-                return {}
-        else:
-            logger.warning("No test input for afl-showmap with stdin mode")
-            return {}
 
         try:
             from core.config import RaptorConfig
             # showmap replays the SAME untrusted target — same
             # identity scrub as the campaign env.
             env = scrub_identity_env(RaptorConfig.get_safe_env())
-            if self.input_mode == "file" and test_input:
-                env['AFL_INPUT_FILE'] = str(test_input)
 
             # Landlock readable_paths: afl-showmap needs to READ
-            # the target binary (self.binary) and the input
-            # corpus file (test_input). Both typically live
-            # OUTSIDE self.output_dir — the binary in the
-            # operator's build dir, the input under the project's
-            # corpus tree. Pre-fix the only readable+writable
-            # path was self.output_dir, so:
-            #
-            #   * afl-showmap couldn't open the binary →
-            #     "afl-showmap: cannot open binary" error,
-            #     coverage report empty, operators saw "0%
-            #     coverage" with no signal that landlock was the
-            #     blocker.
-            #   * AFL_INPUT_FILE pointed outside the readable
-            #     scope → afl-showmap couldn't read it either.
-            #
-            # Add binary parent + input parent to readable_paths
-            # so afl-showmap can open both. Output stays
-            # restricted to output_dir.
+            # the target binary (self.binary) and the input corpus
+            # dir. Both can live OUTSIDE self.output_dir — the
+            # binary in the operator's build dir, the seeds under
+            # the project's corpus tree. Output stays restricted
+            # to output_dir (the edge map and afl-showmap's own
+            # per-input temp file both land there; cwd is
+            # output_dir so the temp file is writable).
             if self.sandbox_rootfs is not None:
-                # binary in-image, test_input under the staged corpus
+                # binary in-image, inputs under the staged corpus
                 # (inside the output bind) — nothing external to bind.
                 readable_paths = []
                 env["PATH"] = "/usr/local/bin:/usr/bin:/bin"
                 env["HOME"] = "/tmp"
             else:
-                readable_paths = [str(Path(self.binary).parent)]
-                if test_input:
-                    readable_paths.append(str(Path(test_input).parent))
+                readable_paths = [
+                    str(Path(self.binary).parent),
+                    str(input_dir),
+                ]
 
-            # Bound afl-showmap wallclock. Pre-fix the call had no
-            # `timeout=` — afl-showmap runs the (attacker-controlled)
-            # target binary with a single corpus entry to extract
-            # coverage; a target with an infinite loop, a sleep, or
-            # any non-terminating control flow on the chosen input
-            # would hang the analyser indefinitely. afl-showmap's
-            # own `-t` flag bounds the per-execution timeout, but a
-            # subprocess-level safety net catches the wedge case
-            # where the target ignores SIGALRM (e.g. a binary that
-            # blocks signals or installs a custom handler that
-            # masks the timeout). 5 minutes is generous: typical
-            # showmap runs are sub-second; even instrumentation-
-            # heavy binaries finish in well under a minute.
+            # Bound afl-showmap wallclock — it runs the
+            # (attacker-controlled) target binary once per queue /
+            # corpus entry to extract coverage; a target with an
+            # infinite loop, a sleep, or any non-terminating control
+            # flow on some input would hang the analyser indefinitely.
+            # afl-showmap's own `-t` flag bounds the per-execution
+            # timeout, but a subprocess-level safety net catches the
+            # wedge case where the target ignores SIGALRM (e.g. a
+            # binary that blocks signals or installs a custom handler
+            # that masks the timeout). 5 minutes covers even large
+            # queues: per-input replays are typically sub-10ms.
             extra = {}
             if self.sandbox_rootfs is not None:
                 extra["rootfs"] = str(self.sandbox_rootfs)
@@ -1509,7 +1555,6 @@ class AFLRunner:
                 readable_paths=readable_paths,
                 capture_output=True,
                 text=True,
-                stdin=stdin_input,
                 cwd=str(self.output_dir),
                 env=env,
                 timeout=300,
@@ -1517,16 +1562,11 @@ class AFLRunner:
                 **extra,
             )
 
-            # Parse output for coverage info
-            if result.returncode == 0:
-                coverage = {}
-                for line in result.stdout.split('\n'):
-                    if ':' in line and 'total' in line.lower():
-                        parts = line.split(':')
-                        if len(parts) == 2:
-                            key = parts[0].strip()
-                            value = parts[1].strip()
-                            coverage[key] = value
+            coverage = self._parse_showmap_output(
+                map_file,
+                (result.stdout or "") + "\n" + (result.stderr or ""),
+            )
+            if coverage:
                 logger.info("Coverage analysis complete")
                 return coverage
             logger.warning("afl-showmap failed: %s", result.stderr)
@@ -1537,6 +1577,36 @@ class AFLRunner:
         except Exception as e:  # noqa: BLE001 — showmap is best-effort
             logger.warning("Error running afl-showmap: %s", e)
             return {}
-        finally:
-            if stdin_input:
-                stdin_input.close()
+
+    @staticmethod
+    def _parse_showmap_output(map_file: Path, console: str) -> dict[str, str]:
+        """Extract coverage stats from an afl-showmap batch run.
+
+        Two independent signals, either sufficient:
+
+        * the ``-C`` summary banner ("A coverage of N edges were
+          achieved out of M existing (P%) with K input files.") —
+          printed to the console stream;
+        * the union edge map written to ``-o`` (one ``edge[:count]``
+          entry per line) — counted as a fallback so a banner-format
+          drift across AFL++ versions cannot zero the feature.
+        """
+        coverage: dict[str, str] = {}
+        match = _SHOWMAP_SUMMARY_RE.search(console)
+        if match:
+            coverage["edges_covered"] = match.group(1)
+            coverage["edges_total"] = match.group(2)
+            coverage["coverage_percent"] = match.group(3)
+            coverage["inputs_processed"] = match.group(4)
+            return coverage
+        try:
+            edge_lines = [
+                line for line in map_file.read_text(
+                    encoding="utf-8", errors="replace").splitlines()
+                if _SHOWMAP_EDGE_RE.match(line)
+            ]
+        except OSError:
+            return coverage
+        if edge_lines:
+            coverage["edges_covered"] = str(len(edge_lines))
+        return coverage

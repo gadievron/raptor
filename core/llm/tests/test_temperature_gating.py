@@ -58,3 +58,21 @@ def test_single_number_below_cutoff_keeps_temperature():
     versions: (4, 0) and lower still accept temperature."""
     assert supports_temperature("claude-opus-4") is True
     assert supports_temperature("claude-instant-1") is True
+
+
+def test_dated_snapshot_of_major_only_id_keeps_temperature():
+    """An 8-digit date suffix on a major-only id is a snapshot date,
+    not a minor version: parsing ``claude-opus-4-20250514`` as
+    (4, 20250514) gated it >= (4, 7) and silently dropped
+    ``temperature`` for a 4.0 model that accepts it."""
+    assert supports_temperature("claude-opus-4-20250514") is True
+    assert supports_temperature("claude-sonnet-4-20250514") is True
+    assert supports_temperature("us.anthropic.claude-opus-4-20250514") is True
+
+
+def test_dated_snapshot_of_two_part_id_still_gates():
+    """Two-part dated ids keep their real minor version — the
+    date-suffix exclusion must not swallow a genuine minor."""
+    assert supports_temperature("claude-sonnet-4-7-20260115") is False
+    assert supports_temperature("claude-opus-4-7-20260301") is False
+    assert supports_temperature("claude-sonnet-4-5-20250929") is True

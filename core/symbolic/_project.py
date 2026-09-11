@@ -68,7 +68,21 @@ def load_binary(binary_path: Path, *, auto_load_libs: bool = False) -> BinaryInf
     # on angr_available() and see the primitive's unavailable_result.
     from core.symbolic._availability import angr_available
     if not angr_available():
-        return _load_binary_pyelftools(binary_path)
+        try:
+            return _load_binary_pyelftools(binary_path)
+        except ValueError:
+            raise
+        except Exception as exc:
+            # elftools raises ELFError — a direct Exception subclass,
+            # not ValueError — on non-ELF / corrupt input.  Translate
+            # to the documented ValueError so callers' narrow
+            # ``except (FileNotFoundError, ValueError)`` (the pre-gate
+            # in detect_shape) still degrades gracefully instead of
+            # crashing on a crafted binary.
+            raise ValueError(
+                f"pyelftools failed to load {binary_path}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
 
     try:
         project = _open_project(binary_path, auto_load_libs=auto_load_libs)

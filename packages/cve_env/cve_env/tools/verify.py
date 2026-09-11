@@ -478,6 +478,29 @@ def _inject_functional_smoke(
     return _core_inject_functional_smoke(plan)
 
 
+def _container_ids_match(rid: str, short_id: str) -> bool:
+    """Docker-style container-id match: exact, or a prefix of at least the
+    12-char truncated-id length. The probed id is agent-supplied, so a
+    short (even 1-char) value must never prefix-match every sibling
+    container and pull a foreign run's published ports into this run's
+    allowlist."""
+    if rid == short_id:
+        return True
+    longer, shorter = (
+        (rid, short_id) if len(rid) >= len(short_id) else (short_id, rid)
+    )
+    return len(shorter) >= 12 and longer.startswith(shorter)
+
+
+def _endpoint_run_ports(probed_container_id: str) -> frozenset[int]:
+    """ALL host ports published by this run's containers, regardless of
+    bind address. Compose stacks commonly publish on 0.0.0.0 (still
+    reachable via loopback), so the verify-level ENDPOINT gate must
+    accept those — while the per-step tcp allowlist
+    (:func:`_published_run_ports`) stays loopback-only."""
+    return _enumerate_run_ports(probed_container_id, loopback_only=False)
+
+
 def _published_run_ports(probed_container_id: str) -> frozenset[int]:
     """Loopback host ports published by THIS run's containers.
 
@@ -494,6 +517,13 @@ def _published_run_ports(probed_container_id: str) -> frozenset[int]:
     allowlist. Fails closed: any enumeration failure returns the empty
     set (the primary endpoint port stays allowed engine-side).
     """
+    return _enumerate_run_ports(probed_container_id, loopback_only=True)
+
+
+def _enumerate_run_ports(
+    probed_container_id: str, *, loopback_only: bool
+) -> frozenset[int]:
+    """Shared enumeration for the two run-port views above."""
     from cve_env.tools.docker_run import OWNER_LABEL, session_container_ids
     from cve_env.utils.run import run_with_timeout
 
@@ -521,16 +551,88 @@ def _published_run_ports(probed_container_id: str) -> frozenset[int]:
         # docker ps prints truncated (12-char) ids; the registry holds
         # full 64-char ids — prefix-match ours, drop everyone else's.
         if not short_id or not any(
-            rid.startswith(short_id) or short_id.startswith(rid)
-            for rid in run_ids
+            _container_ids_match(rid, short_id) for rid in run_ids
         ):
             continue
-        for match in _re.finditer(r"127\.0\.0\.1:(\d+)->", port_text):
+        # Loopback-only for the tcp allowlist; any bind address for the
+        # endpoint view (":(\d+)->" — the host port always precedes "->").
+        port_re = r"127\.0\.0\.1:(\d+)->" if loopback_only else r":(\d+)->"
+        for match in _re.finditer(port_re, port_text):
             try:
                 ports.add(int(match.group(1)))
             except ValueError:  # pragma: no cover — \d+ always int-parses
                 continue
     return frozenset(ports)
+
+
+def _is_loopback_host(host_ip: str) -> bool:
+    """True for 127.0.0.0/8, ::1 and the literal ``localhost``."""
+    import ipaddress
+
+    lowered = (host_ip or "").strip().lower()
+    if lowered == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(lowered).is_loopback
+    except ValueError:
+        return False
+
+
+# Check types that actually aim traffic at the verify-level endpoint.
+# Plans without any of them (exec/log/status-only) never touch the
+# endpoint, so a stale host_ip/host_port must not fail them.
+_ENDPOINT_CHECK_TYPES = frozenset(
+    {"http_check", "http_request_check", "tcp_probe_check"}
+)
+
+
+def _plan_uses_endpoint(plan: list[dict[str, Any]]) -> bool:
+    return any(
+        isinstance(step, dict) and step.get("type") in _ENDPOINT_CHECK_TYPES
+        for step in plan or []
+    )
+
+
+def _endpoint_binding_issue(
+    *,
+    host_ip: str,
+    host_port: int,
+    plan: list[dict[str, Any]],
+    endpoint_ports: frozenset[int],
+) -> str:
+    """Gate the agent-supplied probe endpoint; "" means acceptable.
+
+    ``host_ip``/``host_port`` come straight from the agent's tool call,
+    and the engine's per-step port allowlist always includes the
+    endpoint port itself — so an unchecked endpoint would let a hostile
+    plan aim probe payloads at arbitrary private-network or host-local
+    services. For plans that actually probe the endpoint:
+
+    * the host must be loopback (this run's containers are reached via
+      their host-published ports — a private-LAN address here targets
+      unrelated internal services);
+    * when this run's containers publish host ports
+      (``endpoint_ports`` non-empty), the port must be one of them — a
+      sibling run's sidecar port never qualifies. Runs whose containers
+      publish nothing (or whose enumeration failed) keep the
+      loopback-only rule.
+    """
+    if not _plan_uses_endpoint(plan):
+        return ""
+    if host_ip and not _is_loopback_host(host_ip):
+        return (
+            f"verify: host_ip {host_ip!r} is not a loopback address — "
+            "probes are pinned to this run's own containers, which are "
+            "reached via 127.0.0.1"
+        )
+    if host_port and endpoint_ports and host_port not in endpoint_ports:
+        allowed = ", ".join(str(p) for p in sorted(endpoint_ports))
+        return (
+            f"verify: host_port {host_port} is not a port published by "
+            f"this run's containers (published: {allowed}) — use the "
+            "host_port returned by docker_run / docker_compose_up"
+        )
+    return ""
 
 
 def verify(
@@ -555,7 +657,24 @@ def verify(
     addresses to the endpoint and per-step ``tcp_probe_check`` ports to
     the published loopback ports of this run's own containers
     (see :func:`_published_run_ports`).
+
+    The endpoint itself (``host_ip``/``host_port``) is agent-supplied
+    too, so when the plan probes it, it gets the same treatment before
+    anything is dispatched: the host must be loopback (a private-LAN
+    address here would aim probe payloads at unrelated internal
+    services), and when this run's containers publish host ports the
+    port must be one of them (see :func:`_endpoint_binding_issue`).
     """
+    if _plan_uses_endpoint(plan):
+        endpoint_issue = _endpoint_binding_issue(
+            host_ip=host_ip,
+            host_port=host_port,
+            plan=plan,
+            endpoint_ports=_endpoint_run_ports(container_id),
+        )
+        if endpoint_issue:
+            return {"passed": False, "results": [], "reason": endpoint_issue}
+    published = _published_run_ports(container_id)
     executors = {
         "container_status": lambda: check_container_status(container_id),
         "http_check": lambda **kw: check_http(
@@ -572,7 +691,7 @@ def verify(
         plan=plan,
         executors=executors,
         endpoint=(host_ip, host_port),
-        allowed_tcp_ports=_published_run_ports(container_id),
+        allowed_tcp_ports=published,
         version_literal=cve_version,
         version_cmd_pattern=VERSION_ASSERTION_CMD_PATTERN,
         hooks=_HOOKS,

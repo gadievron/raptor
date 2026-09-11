@@ -69,6 +69,8 @@ class SensitiveFileCheck(Check):
     request/response evidence."""
 
     def run(self, client, target_url, session=None, discovery=None):
+        import secrets
+
         from packages.web.sensitive_paths import SENSITIVE_PATHS
 
         findings = []
@@ -78,9 +80,38 @@ class SensitiveFileCheck(Check):
         probes.extend(
             (path, label) for path, label in external if path not in known
         )
+
+        # Soft-404 / blanket-403 calibration: probe a path that cannot
+        # exist and remember how the target answers it. SPA catch-alls
+        # (200 + app shell for every path) and WAFs (403 for every
+        # path) would otherwise turn the whole catalog into findings.
+        control_status: int | None = None
+        control_length: int | None = None
+        try:
+            control = client.get(
+                f"/raptor-{secrets.token_hex(8)}-does-not-exist",
+            )
+            control_status = control.status_code
+            control_length = len(control.content or b"")
+        except Exception:
+            pass
+
+        def _matches_control(resp) -> bool:
+            if control_status is None or resp.status_code != control_status:
+                return False
+            if control_length is None:
+                return True
+            length = len(resp.content or b"")
+            bigger = max(length, control_length) or 1
+            return abs(length - control_length) / bigger <= 0.1
+
         for path, label in probes:
             try:
                 resp = client.get(path)
+                # A response indistinguishable from the known-nonexistent
+                # control is the catch-all answer, not the file.
+                if _matches_control(resp):
+                    continue
                 if resp.status_code in (200, 403):
                     severity = "critical" if any(
                         kw in path for kw in (".env", "config", "secret", "database", "heapdump")
@@ -142,12 +173,23 @@ class VerbosHttpMethodsCheck(Check):
     def run(self, client, target_url, session=None, discovery=None):
         try:
             client.get("/", headers={"X-HTTP-Method-Override": "OPTIONS"})
-            # Also try a real OPTIONS request
+            # Also try a real OPTIONS request. This bypasses WebClient
+            # (which speaks only GET/POST), so its transport failures
+            # must be counted here for degraded-coverage accounting;
+            # WebClient's own failures above already self-count.
             import requests as req_lib
             from urllib.parse import urlparse
+
+            from packages.web.checks.base import note_transport_error
             parsed = urlparse(target_url)
             base = f"{parsed.scheme}://{parsed.netloc}"
-            opts = req_lib.options(base + "/", timeout=10, verify=client.verify_ssl)
+            try:
+                opts = req_lib.options(
+                    base + "/", timeout=10, verify=client.verify_ssl,
+                )
+            except req_lib.RequestException:
+                note_transport_error(client)
+                return []
             allow = opts.headers.get("Allow", "")
             if allow:
                 dangerous = {"TRACE", "TRACK", "DELETE", "PUT"} & {

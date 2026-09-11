@@ -233,8 +233,19 @@ def _remove_private_tmp(path: str) -> None:
     try:
         for root, dirs, _files in os.walk(path):
             for name in dirs:
+                entry = os.path.join(root, name)
+                # os.walk(followlinks=False) still LISTS a symlink-to-
+                # directory in dirnames (it just doesn't descend), and
+                # os.chmod follows symlinks (Linux has no lchmod) — so
+                # chmoding it would apply 0700 to the symlink's TARGET,
+                # which a hostile child can point anywhere OUTSIDE its
+                # private tmp. Skip links: rmtree below removes the
+                # link itself without descending, and a link needs no
+                # permission restore anyway.
+                if os.path.islink(entry):
+                    continue
                 try:
-                    os.chmod(os.path.join(root, name), 0o700)
+                    os.chmod(entry, 0o700)
                 except OSError:
                     pass
     except OSError:
@@ -309,7 +320,11 @@ def run_isolated(
 
         budget = timeout + GRACE_SECONDS
         result: SymbolicResult | None = None
-        if parent_conn.poll(budget):
+        # A crashed child closes the pipe, so poll() returns promptly
+        # (EOF is readable) and recv() raises — timed_out separates
+        # "budget genuinely elapsed" from "child died with no result".
+        timed_out = not parent_conn.poll(budget)
+        if not timed_out:
             try:
                 result = parent_conn.recv()
             except (EOFError, OSError):
@@ -329,14 +344,36 @@ def run_isolated(
 
     if result is not None:
         return result
+    if timed_out:
+        return SymbolicResult(
+            succeeded=False,
+            reason=(
+                f"hard-killed after exceeding the {timeout:.0f}s budget "
+                f"(+{GRACE_SECONDS:.0f}s grace) — solver work ignored "
+                "every cooperative bound (hostile or pathological target)"
+            ),
+            wall_seconds=time.monotonic() - t0,
+            states_explored=0,
+            metadata={"isolated": True, "killed": True},
+        )
+    # No result but the budget never elapsed: the child crashed
+    # (segfault, spawn failure, unpicklable payload) — reporting it as
+    # a budget kill made operators and telemetry misdiagnose crashes
+    # as timeouts (wall_seconds contradicted the text).
+    exitcode = proc.exitcode
+    detail = (
+        f"killed by signal {-exitcode}"
+        if isinstance(exitcode, int) and exitcode < 0
+        else f"exit code {exitcode}"
+    )
     return SymbolicResult(
         succeeded=False,
         reason=(
-            f"hard-killed after exceeding the {timeout:.0f}s budget "
-            f"(+{GRACE_SECONDS:.0f}s grace) — solver work ignored "
-            "every cooperative bound (hostile or pathological target)"
+            f"child exited without returning a result ({detail}) — "
+            f"crash, not a budget kill"
         ),
         wall_seconds=time.monotonic() - t0,
         states_explored=0,
-        metadata={"isolated": True, "killed": True},
+        metadata={"isolated": True, "killed": False, "crashed": True,
+                  "exitcode": exitcode},
     )

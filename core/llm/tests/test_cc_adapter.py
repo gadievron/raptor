@@ -202,6 +202,37 @@ class TestStripJsonFences:
         text = "```json\n{\"a\": 1}\n```"
         assert strip_json_fences(text) == '{"a": 1}'
 
+    def test_trailing_invalid_fence_does_not_shadow_valid_block(self):
+        # A later fenced block that merely STARTS with "{" but does
+        # not parse (a code sketch, a truncated echo) must not win
+        # over the earlier valid answer.
+        text = (
+            "```json\n{\"a\": 1}\n```\n"
+            "and a sketch:\n"
+            "```\n{not: valid, json\n```\n"
+        )
+        assert strip_json_fences(text) == '{"a": 1}'
+
+    def test_last_valid_block_still_preferred(self):
+        # Direction two: among multiple VALID blocks the last one
+        # still wins (final-answer-last convention, prepend-prefix
+        # defence).
+        text = (
+            "```json\n{\"a\": 1}\n```\n"
+            "final answer:\n"
+            "```json\n{\"b\": 2}\n```\n"
+        )
+        assert strip_json_fences(text) == '{"b": 2}'
+
+    def test_all_invalid_candidates_keep_last_candidate_fallback(self):
+        # When NO fenced candidate parses, the last "{"-starting one
+        # is still returned so callers keep their own error handling.
+        text = (
+            "```\n{first: invalid\n```\n"
+            "```\n{second: invalid\n```\n"
+        )
+        assert strip_json_fences(text) == "{second: invalid"
+
 
 class TestParseCCStructured:
     def test_valid_json(self):
@@ -678,6 +709,73 @@ class TestParseStreamJsonLines:
         assert r.input_tokens == 100
         assert r.output_tokens == 50
 
+    def test_null_message_degrades_instead_of_raising(self):
+        # ``"message": null`` is None, not a missing key —
+        # ``obj.get("message", {})`` keeps the None and every
+        # ``.get`` on it raised AttributeError pre-hardening.
+        from core.llm.cc_adapter import parse_stream_json_lines
+        lines = [
+            json.dumps({"type": "assistant", "message": None}),
+            json.dumps({"type": "result", "session_id": "s-null"}),
+        ]
+        r = parse_stream_json_lines(lines)
+        assert r.content == ""
+        assert r.input_tokens == 0
+        assert r.session_id == "s-null"
+
+    def test_null_usage_and_content_degrade_instead_of_raising(self):
+        from core.llm.cc_adapter import parse_stream_json_lines
+        lines = [
+            json.dumps({
+                "type": "assistant",
+                "message": {
+                    "content": None,
+                    "usage": None,
+                    "model": "m-1",
+                },
+            }),
+            json.dumps({"type": "result", "usage": None}),
+        ]
+        r = parse_stream_json_lines(lines)
+        assert r.content == ""
+        assert r.input_tokens == 0
+        assert r.output_tokens == 0
+        assert r.model == "m-1"
+
+    def test_null_text_block_degrades_instead_of_raising(self):
+        from core.llm.cc_adapter import parse_stream_json_lines
+        lines = [
+            json.dumps({
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": None},
+                        {"type": "text", "text": "kept"},
+                    ],
+                },
+            }),
+        ]
+        r = parse_stream_json_lines(lines)
+        assert r.content == "kept"
+
+    def test_valid_message_still_parsed_after_hardening(self):
+        # Direction two: the hardening must not eat well-formed
+        # envelopes.
+        from core.llm.cc_adapter import parse_stream_json_lines
+        lines = [
+            json.dumps({
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "hello"}],
+                    "usage": {"input_tokens": 3, "output_tokens": 7},
+                },
+            }),
+        ]
+        r = parse_stream_json_lines(lines)
+        assert r.content == "hello"
+        assert r.input_tokens == 3
+        assert r.output_tokens == 7
+
 
 class TestCcSubprocessEnv:
     """cc_subprocess_env: safe baseline + backend overlay."""
@@ -685,12 +783,12 @@ class TestCcSubprocessEnv:
     def test_backend_families_overlaid(self, monkeypatch):
         from core.llm.cc_adapter import cc_subprocess_env
         monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
-        monkeypatch.setenv("ANTHROPIC_MODEL", "anthropic.claude-mythos-5")
+        monkeypatch.setenv("ANTHROPIC_MODEL", "anthropic.claude-fable-5")
         monkeypatch.setenv("AWS_PROFILE", "bedrock-ci")
         monkeypatch.setenv("AWS_REGION", "us-east-1")
         env = cc_subprocess_env()
         assert env["CLAUDE_CODE_USE_BEDROCK"] == "1"
-        assert env["ANTHROPIC_MODEL"] == "anthropic.claude-mythos-5"
+        assert env["ANTHROPIC_MODEL"] == "anthropic.claude-fable-5"
         assert env["AWS_PROFILE"] == "bedrock-ci"
         assert env["AWS_REGION"] == "us-east-1"
 

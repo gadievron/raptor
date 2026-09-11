@@ -301,19 +301,27 @@ def _verify_caller_constraint(
         if safe_caller is None:
             continue
 
+        # Token-anchored, not bare substring: ".*lock_page.*" counted
+        # every caller of unlock_page as guarded (and the default
+        # alternation matched every *_unlock), pushing callers into
+        # the guarded bucket and toward the false "all callers hold
+        # the guard" non-confirmation. A guard name may extend with
+        # an underscore-suffix variant (spin_lock -> spin_lock_irqsave)
+        # or carry an underscore-joined prefix; a run-in spelling
+        # (unlock_page vs lock_page) may not.
         if guard:
             safe_guard = _safe_name(guard)
             if safe_guard is None:
                 continue
             guard_query = (
                 f'cpg.method.name("{safe_caller}")'
-                f'.ast.isCall.name(".*{safe_guard}.*")'
+                f'.ast.isCall.name("(.*_)?{safe_guard}(_.*)?")'
                 f".l.nonEmpty"
             )
         else:
             guard_query = (
                 f'cpg.method.name("{safe_caller}")'
-                f'.ast.isCall.name(".*lock.*|.*mutex.*|.*spin.*|.*rw.*sem.*")'
+                f'.ast.isCall.name("(.*_)?(lock|mutex|spin|rw_?sem)(_.*)?")'
                 f".l.nonEmpty"
             )
 
@@ -348,9 +356,13 @@ def _verify_caller_constraint(
     return CrossFunctionVerdict(
         verified=False,
         verifier_name="caller_constraint",
+        # Presence, not dominance: the query proves each caller
+        # CONTAINS a guard call somewhere, not that it dominates the
+        # call to F — the evidence must not overclaim ("hold").
         evidence=(
-            f"All {len(guarded)} callers of {function_name} hold "
-            f"{guard or 'a lock/guard'}"
+            f"All {len(guarded)} callers of {function_name} contain "
+            f"a call to {guard or 'a lock/guard'} (presence check — "
+            f"acquisition order not verified)"
         ),
     )
 

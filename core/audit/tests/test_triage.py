@@ -405,6 +405,34 @@ class TestValidateConfirmedNeverSkipped:
         assert tr.bucket == TriageBucket.INVESTIGATE
         assert any("validate-confirmed" in r for r in tr.reasons)
 
+    def test_confirmed_function_beats_prefilter_skip(self):
+        # The floor must precede EVERY mechanical skip: the prefilter
+        # early-return used to sit above it, making the rung dead.
+        from core.audit.triage import TriageBucket, classify_function
+        pf = PrefilterResult(
+            file="audit-x.c", function="selected",
+            skip_llm=True, skip_reason="simple accessor",
+        )
+        tr = classify_function(
+            file="audit-x.c", function="selected", sloc=19,
+            prefilter=pf, validate_confirmed=True,
+        )
+        assert tr.bucket == TriageBucket.INVESTIGATE
+        assert any("validate-confirmed" in r for r in tr.reasons)
+
+    def test_prefilter_skip_still_fires_without_confirmation(self):
+        # Two-direction pin: the prefilter shortcut keeps its normal
+        # routing when no /validate confirmation exists.
+        from core.audit.triage import TriageBucket, classify_function
+        pf = PrefilterResult(
+            file="audit-x.c", function="other",
+            skip_llm=True, skip_reason="simple accessor",
+        )
+        tr = classify_function(
+            file="audit-x.c", function="other", sloc=19, prefilter=pf,
+        )
+        assert tr.bucket == TriageBucket.SKIP
+
     def test_confirmed_key_threads_through_classify_all(self):
         from core.audit.triage import TriageBucket, classify_all
         gaps = [

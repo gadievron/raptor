@@ -154,6 +154,19 @@ class TestExtractFencedCode:
     def test_single_line_block_strips_leading_tag(self):
         assert extract_fenced_code("```ql exists(x)```") == "exists(x)"
 
+    def test_single_line_block_strips_known_tag_only(self):
+        assert extract_fenced_code("```python print(1)```") == "print(1)"
+
+    def test_single_line_block_keeps_leading_identifier(self):
+        # A tag-less single-line block must not lose its leading
+        # identifier: "isBarrier" is code, not a language tag.
+        assert extract_fenced_code("```isBarrier(x)```") == "isBarrier(x)"
+
+    def test_single_line_block_keeps_unknown_leading_word(self):
+        # Whitespace after the token is not enough on its own — only
+        # known language tags are stripped.
+        assert extract_fenced_code("```print x```") == "print x"
+
     def test_first_block_wins(self):
         text = "```\nfirst\n```\nmiddle\n```\nsecond\n```"
         assert extract_fenced_code(text) == "first"

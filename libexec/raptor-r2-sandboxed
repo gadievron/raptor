@@ -57,8 +57,13 @@ Env:
 
 Exit codes:
 - r2's returncode on successful invocation
-- 2 on argv allowlist refusal
-- 3 on missing env or sandbox-setup failure
+- 100 on argv allowlist refusal
+- 101 on sandbox-setup failure
+- 102 on missing trust marker
+- 103 on missing/invalid env
+- 104 on missing analysed binary
+(wrapper codes live at 100+ so they can never be mistaken for r2's
+own exit codes; see the constants below)
 """
 
 from __future__ import annotations

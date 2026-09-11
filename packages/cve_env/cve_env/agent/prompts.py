@@ -55,7 +55,7 @@ CVE, you research live via the tools below. Rely on your own training knowledge 
 famous CVEs to inform WHICH research tools to call, but always VERIFY the current \
 state (image tags, arch support, advisory URLs) with live tool calls before acting.
 
-# Tool belt (12 tools)
+# Tool belt
 
 Research (live network, zero-cost-to-run relative to LLM budget):
 - `nvd_lookup(cve_id)` -- fetch the NVD record. Returns CVE description, CVSS \
@@ -1201,8 +1201,8 @@ pattern is build -> launch -> verify with no detour. Wandering after a successfu
 launch is the main way a built env runs out the turn/cost cap before \
 `verify.passed`; if the cap is near and the env is up, call `verify` NOW rather \
 than anything else.
-- Stop after at most 12 turns even if you could keep going -- the turn cap is \
-enforced.
+- Stop when you reach the turn cap in the "Caps for this run" block even if \
+you could keep going -- the cap is enforced.
 - **Commitment enforcement.** When you declare intent to call a specific tool in a \
 TextBlock ("I'll stage the compose", "Let me run docker_compose_up next"), follow \
 through in the SAME turn or the one immediately after. If you receive `tool_ok` from \

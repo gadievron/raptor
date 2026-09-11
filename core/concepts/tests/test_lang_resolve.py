@@ -170,6 +170,53 @@ class ConfigStore:
         assert "load" in res.items[0].callers
 
 
+class TestTailCollisions:
+    """Identifiers sharing a tail (json.loads / pickle.loads) must
+    EACH be accounted for — resolved or reported unresolved. A
+    tail-keyed lookup used to keep only one and silently drop the
+    other from all accounting."""
+
+    def test_both_colliding_identifiers_resolve(
+        self, tmp_path: Path,
+    ) -> None:
+        _write(tmp_path, "json.py", "def loads(s):\n    return s\n")
+        _write(tmp_path, "pickle.py", "def loads(b):\n    return b\n")
+        res = resolve_identifiers(
+            tmp_path, ["json.loads", "pickle.loads"],
+        )
+        files = {it.file for it in res.items}
+        assert files == {"json.py", "pickle.py"}
+        assert res.unresolved == []
+
+    def test_both_colliding_identifiers_reported_unresolved(
+        self, tmp_path: Path,
+    ) -> None:
+        _write(tmp_path, "other.py", "X = 1\n")
+        res = resolve_identifiers(
+            tmp_path, ["json.loads", "pickle.loads"],
+        )
+        assert res.items == []
+        assert sorted(u["name"] for u in res.unresolved) == [
+            "json.loads", "pickle.loads",
+        ]
+
+    def test_colliding_class_methods_filtered_per_candidate(
+        self, tmp_path: Path,
+    ) -> None:
+        # The qualifier check runs per candidate: Store.load resolves,
+        # Ghost.load is reported unresolved instead of vanishing.
+        _write(tmp_path, "store.py", '''\
+class Store:
+    def load(self, path):
+        return path
+''')
+        res = resolve_identifiers(
+            tmp_path, ["Store.load", "Ghost.load"],
+        )
+        assert [it.name for it in res.items] == ["load"]
+        assert [u["name"] for u in res.unresolved] == ["Ghost.load"]
+
+
 class TestPythonMonkeyPatching:
     def test_monkey_patch_marked_unresolvable(self, tmp_path: Path) -> None:
         _write(tmp_path, "patch.py", '''\

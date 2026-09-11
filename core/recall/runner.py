@@ -22,6 +22,7 @@ from core.json import dumps_artifact
 from core.sarif.parser import parse_sarif_findings
 
 from core.recall.manifest import PROFILES, RecallManifest
+from core.recall.pinned_clone import verify_pinned_clone as _verify_pin
 
 logger = logging.getLogger(__name__)
 
@@ -57,25 +58,7 @@ def verify_pinned_clone(manifest: RecallManifest,
             f"  git -C {target} checkout {manifest.pinned_sha}"
         )
         raise RunnerError(msg)
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(target), "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=60, check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        msg = f"cannot sha-verify {target}: {exc}"
-        raise RunnerError(msg) from exc
-    head = proc.stdout.strip().lower()
-    if proc.returncode != 0 or not head:
-        msg = f"cannot sha-verify {target}: {proc.stderr.strip()}"
-        raise RunnerError(msg)
-    if not head.startswith(manifest.pinned_sha):
-        msg = (
-            f"{target} is at {head[:12]}, manifest pins "
-            f"{manifest.pinned_sha[:12]} — labels are invalid against "
-            "this tree; re-checkout the pinned sha"
-        )
-        raise RunnerError(msg)
+    _verify_pin(target, manifest.pinned_sha, error_cls=RunnerError)
     return target
 
 
@@ -155,8 +138,12 @@ def run_pipeline(manifest: RecallManifest, target: Path, repo_root: Path,
         (proc.stdout or "") + "\n--- stderr ---\n" + (proc.stderr or ""),
         encoding="utf-8")
 
-    m = _OUTPUT_DIR_RE.search(proc.stdout or "")
-    sentinel_dir = Path(m.group(1).strip()) if m else None
+    # The lifecycle contract is "the LAST line of output is
+    # OUTPUT_DIR=<path>" — earlier occurrences (echoed config, nested
+    # tool output) can name other directories, so bind the final one.
+    sentinel_matches = _OUTPUT_DIR_RE.findall(proc.stdout or "")
+    sentinel_dir = (Path(sentinel_matches[-1].strip())
+                    if sentinel_matches else None)
 
     # The artifacts land in the --out dir we pinned; the lifecycle's
     # OUTPUT_DIR sentinel can point elsewhere (raptor.py resolves the
@@ -338,6 +325,13 @@ def collect_findings(out_dir: Path,
     sarifs = [combined] if combined.is_file() else list(per_tool)
     oversized = [p for p in per_tool
                  if p.stat().st_size > _SARIF_CHUNK_THRESHOLD]
+    # The merge has no output cap: per-tool files each under the guard
+    # can merge into an over-guard combined.sarif, which load_sarif
+    # would refuse (None) — silently scoring zero findings. Chunk it
+    # like the per-tool case.
+    if (combined.is_file()
+            and combined.stat().st_size > _SARIF_CHUNK_THRESHOLD):
+        oversized.append(combined)
     findings: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="recall-sarif-chunks-") as td:
         for path in oversized:

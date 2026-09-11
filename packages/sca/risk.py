@@ -55,7 +55,7 @@ _CVSS_MISSING_DEFAULT = 5.0
 # KEV CVE with low CVSS still ranks above a non-KEV high-CVSS finding,
 # matching the "active exploitation > theoretical severity" priority.
 _KEV_FLOOR = 96.8
-_KEV_MULTIPLIER = 1.7569
+_KEV_MULTIPLIER = 1.9326
 
 # Exploit-evidence (Exploit-DB / Metasploit / GitHub PoC). KEV's the
 # strongest "actively exploited in the wild" signal, but it covers
@@ -68,13 +68,13 @@ _KEV_MULTIPLIER = 1.7569
 # in EDB. Floor is below KEV's so KEV-listed still wins on tied CVSS;
 # multiplier is smaller for the same reason — EDB/MSF/PoC are weaker
 # signals than active CISA-tracked exploitation.
-_EXPLOIT_EVIDENCE_FLOOR = 79.86
+_EXPLOIT_EVIDENCE_FLOOR = 87.846
 # Strictly below `_KEV_MULTIPLIER` — pinned by `is_admissible`'s
 # `exploit_evidence_strictly_below_kev` rule. A previous refit
 # pass set this to 1.21 which crossed KEV's 1.20; round-2 with
 # constraint-aware refit caught the violation. If KEV_MULT moves
 # later this constant has headroom to follow.
-_EXPLOIT_EVIDENCE_MULTIPLIER = 1.5839
+_EXPLOIT_EVIDENCE_MULTIPLIER = 1.7423
 
 # CISA Vulnrichment SSVC — pair of tier-floors mirroring KEV /
 # ExploitEvidence semantics but TUNED INDEPENDENTLY. Pre-fix
@@ -115,26 +115,26 @@ _SSVC_AUTOMATABLE_BONUS = 1.331
 # floor multiplier's ~40% weight (a vuln with no observed exploitation
 # isn't impossible to exploit; the floor reflects "unknown is not
 # zero").
-_EPSS_FLOOR_MULTIPLIER = 0.3993
-_EPSS_RANGE_MULTIPLIER = 0.5103
+_EPSS_FLOOR_MULTIPLIER = 0.4392
+_EPSS_RANGE_MULTIPLIER = 0.4593
 _EPSS_MISSING_DEFAULT = 0.5
 
 # Reachability — confidently-not-reachable downgrades hard; uncertain
 # stays neutral. ``not_evaluated`` (no evidence either way) gets a
 # small penalty to nudge operators toward investigating.
-_REACH_NOT_REACHABLE_MAX_REDUCTION = 0.4593
-_REACH_NOT_EVALUATED_MULTIPLIER = 0.6817
+_REACH_NOT_REACHABLE_MAX_REDUCTION = 0.4134
+_REACH_NOT_EVALUATED_MULTIPLIER = 0.6135
 
 # Exposure — call-site density. Maps 0.0..1.0 onto 0.5..1.0 so a dep
 # imported once has half the weight of a dep imported throughout the
 # codebase, but never zero (one call site is still a call site).
-_EXPO_FLOOR_MULTIPLIER = 0.50
+_EXPO_FLOOR_MULTIPLIER = 0.45
 _EXPO_RANGE_MULTIPLIER = 0.50
 
 # Depth decay — direct deps full weight; transitive decays geometrically
 # at 0.7 per level. Depth-3 transitive dep ≈ 0.34 weight: still meaningful
 # but reflects the longer chain to actually trigger it.
-_DEPTH_DECAY_BASE = 0.70
+_DEPTH_DECAY_BASE = 0.77
 
 # Final clamp — keeps the score in 0..100 even when the multipliers
 # compose well above 100 (KEV floor × KEV multiplier alone is ~170

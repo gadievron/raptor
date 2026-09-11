@@ -40,6 +40,12 @@ DockerFailureClass = Literal[
     "gpg_signature",
     "fatal_compose_config",
     "rate_limited",
+    # Wall-clock subprocess timeout, stamped by the build/run surfaces
+    # themselves (never pattern-matched from stderr). In the vocabulary
+    # so is_retry_eligible sees it: as an out-of-vocabulary literal it
+    # silently classified as permanent, the opposite of what a timeout
+    # is.
+    "timeout",
     "unknown",
 ]
 
@@ -188,15 +194,17 @@ def classify_docker_stderr(stderr: str | bytes | None) -> DockerFailureClass:
 def is_retry_eligible(reason_class: DockerFailureClass) -> bool:
     """True iff a failure with this class is worth retrying.
 
-    ``disk_full`` is retry-eligible AFTER a prune. ``transport`` and
-    ``network`` are retry-eligible after a short wait. ``manifest_unknown``
-    and ``auth`` are permanent; retrying without changing inputs is futile.
-    ``unknown`` is treated as transport (give it one chance).
+    ``disk_full`` is retry-eligible AFTER a prune. ``transport``,
+    ``network`` and ``timeout`` are retry-eligible after a short wait.
+    ``manifest_unknown`` and ``auth`` are permanent; retrying without
+    changing inputs is futile. ``unknown`` is treated as transport
+    (give it one chance).
     """
     return reason_class in {
         "disk_full",
         "transport",
         "network",
+        "timeout",
         "unknown",
         "rate_limited",
     }

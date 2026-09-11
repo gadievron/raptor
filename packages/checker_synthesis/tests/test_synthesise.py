@@ -870,3 +870,27 @@ class TestFixupCocciBody:
             "bar(E)\n"
         )
         assert synth_mod._fixup_cocci_body(body) == body
+
+
+class TestCoccinelleIncludePosture:
+    def test_run_coccinelle_disables_include_parsing(self, monkeypatch, tmp_path):
+        """The synthesis path runs spatch over untrusted repos
+        (controls, fixtures, full sweep) — it must pass
+        no_includes=True like the library replay sweep does, so the
+        target's #include graph is never parsed."""
+        captured: dict = {}
+
+        def fake_run_rule(target, rule_path, **kwargs):
+            captured.update(kwargs)
+
+            class _R:
+                matches: list = []
+                errors: list = []
+                returncode = 0
+            return _R()
+
+        import packages.coccinelle.runner as cocci_runner
+        monkeypatch.setattr(cocci_runner, "run_rule", fake_run_rule)
+        from packages.checker_synthesis.synthesise import _run_coccinelle
+        _run_coccinelle(tmp_path / "r.cocci", tmp_path)
+        assert captured.get("no_includes") is True

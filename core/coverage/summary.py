@@ -164,13 +164,27 @@ def _match_to_inventory(
     if stripped in inventory_paths:
         return stripped
 
-    # Try matching by filename
     name = Path(path).name
     if name_index is not None:
         matches = name_index.get(name, [])
     else:
         matches = [p for p in inventory_paths if Path(p).name == name]
-    if len(matches) == 1:
+
+    # Basename-only fallback — RELATIVE, traversal-free paths only.
+    # An absolute reported path that isn't a component-aligned suffix
+    # of any inventory key (strategy below) lives OUTSIDE the target
+    # tree: gcov emits sections for system headers
+    # (``/usr/include/zlib.h``), and mapping one onto an unrelated
+    # ``src/zlib.h`` just because the basename is unique flipped
+    # never-executed target functions runtime-covered. Same for
+    # ``../``-traversal paths. In-tree absolute paths are still
+    # matched by the suffix strategy (the target-relative key is a
+    # '/'-aligned suffix of them by construction).
+    is_out_of_tree_shape = (
+        Path(path).is_absolute()
+        or ".." in Path(path).parts
+    )
+    if len(matches) == 1 and not is_out_of_tree_shape:
         return matches[0]
 
     # Try suffix matching (tool may report relative to different root).

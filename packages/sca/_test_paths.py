@@ -50,8 +50,11 @@ TEST_DIR_NAMES: set[str] = {"tests", "test", "__tests__", "spec", "e2e"}
 # Java / Rust / C# / PHP test conventions.
 #
 # Python:  test_x.py, x_test.py, x.test.py, x.spec.py
-# JS/TS:   x.test.{js,ts,jsx,tsx,mjs,cjs},
-#          x.spec.{js,ts,jsx,tsx,mjs,cjs}
+# JS/TS:   x.test.{js,ts,jsx,tsx,mjs,cjs,mts,cts},
+#          x.spec.{js,ts,jsx,tsx,mjs,cjs,mts,cts}
+#          (.mts/.cts are the TS module/CommonJS variants; folded in
+#          when the nodejs reachability scanner's private copy of
+#          this predicate was consolidated here)
 # Go:      x_test.go
 # Ruby:    x_test.rb, x_spec.rb
 # Java/Kt: XTest.{java,kt}, XTests.{java,kt}, XIT.{java,kt}
@@ -63,8 +66,8 @@ _TEST_FILE_RE = re.compile(
     r"^("
     r"test_.*\.py"
     r"|.*_test\.py"
-    r"|.*\.test\.(?:py|js|ts|jsx|tsx|mjs|cjs)"
-    r"|.*\.spec\.(?:py|js|ts|jsx|tsx|mjs|cjs)"
+    r"|.*\.test\.(?:py|js|ts|jsx|tsx|mjs|cjs|mts|cts)"
+    r"|.*\.spec\.(?:py|js|ts|jsx|tsx|mjs|cjs|mts|cts)"
     r"|.*_test\.go"
     r"|.*_test\.rb"
     r"|.*_spec\.rb"

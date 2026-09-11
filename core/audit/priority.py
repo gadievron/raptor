@@ -370,15 +370,26 @@ def load_tool_coverage(run_dirs: list[Path]) -> dict[str, set[str]]:
 
 
 def load_tool_failures(run_dirs: list[Path]) -> set[str]:
-    """Identify files where a tool attempted to scan but failed."""
+    """Identify files where a tool attempted to scan but failed.
+
+    ``files_failed`` entries are ``{"path": ..., "reason": ...}``
+    dicts (the ``core.coverage.record`` builders' shape); bare-string
+    entries are tolerated for older records.  An unrecognised entry is
+    skipped — never a TypeError that aborts the whole priority pass.
+    """
     failures: set[str] = set()
     for run_dir in run_dirs:
         for cov_file in run_dir.glob("coverage-*.json"):
             data = load_json(cov_file, max_bytes=_MAX_COVERAGE_BYTES)
             if not isinstance(data, dict):
                 continue
-            for fp in data.get("files_failed", []):
-                failures.add(fp)
+            entries = data.get("files_failed", [])
+            if not isinstance(entries, list):
+                continue
+            for fp in entries:
+                path = fp.get("path") if isinstance(fp, dict) else fp
+                if isinstance(path, str) and path:
+                    failures.add(path)
     return failures
 
 

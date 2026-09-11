@@ -17,6 +17,7 @@ The context/result dataclasses (``AgentContext``, ``AgentOutput``,
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
@@ -74,16 +75,80 @@ _MAX_UNVERIFIED_SUBMITS = 2
 _MAX_NOT_FOUND_SUBMITS = 2
 
 
+# Minimum abbreviation length accepted by the verified-SHA gate —
+# matches the oracle layers' shared safety floor (12 hex chars is
+# effectively collision-free within one repo; 7 is inside git's own
+# documented ambiguity range).
+_MIN_VERIFIED_SHA_LEN = 12
+
+
 def _is_verified(slug: str, sha: str, verified: list[tuple[str, str]]) -> bool:
+    """True when ``sha`` is one of the run's verified SHAs for ``slug``.
+
+    The submitted sha may equal a verified sha or be a ≥12-char
+    abbreviation of one. It must never merely EXTEND a shorter verified
+    value: verification proves only the prefix, so a hallucinated
+    40-char sha sharing a verified prefix (confabulated middle) would
+    otherwise pass as "verified".
+    """
     if not slug or not sha:
         return False
     sha = sha.lower()
+    if len(sha) < _MIN_VERIFIED_SHA_LEN:
+        return False
     for vslug, vsha in verified:
         if vslug != slug:
             continue
-        if vsha.startswith(sha) or sha.startswith(vsha):
+        if vsha.startswith(sha):
             return True
     return False
+
+
+# cgit serves its error pages with HTTP 200 and ECHOES the requested
+# object id in them, so "sha appears in body" alone cannot verify —
+# these markers are the cgit error-page texts that must be absent.
+_CGIT_ERROR_MARKERS = (
+    "bad object id",
+    "invalid commit reference",
+    "bad commit reference",
+)
+
+_FULL_HEX_RE = re.compile(r"\A[0-9a-f]{7,64}\Z")
+
+
+def _forge_result_confirms_sha(
+    call_name: str,
+    parsed: dict[str, Any],
+    sha: str,
+) -> str | None:
+    """Return the canonical sha a forge tool response confirms, or None.
+
+    ``gitlab_commit``: the GitLab API echoes the commit's canonical
+    ``id``; accept only when it extends the dispatched sha.
+    ``cgit_fetch``: the HTML body must contain the dispatched sha with
+    no cgit error marker present; prefer the full object id displayed
+    on the page over the (possibly abbreviated) dispatched value.
+    """
+    if not sha:
+        return None
+    if call_name == "gitlab_commit":
+        commit_id = parsed.get("id")
+        if isinstance(commit_id, str):
+            commit_id = commit_id.strip().lower()
+            if commit_id.startswith(sha) and _FULL_HEX_RE.match(commit_id):
+                return commit_id
+        return None
+    body = parsed.get("body")
+    if not isinstance(body, str):
+        return None
+    lower = body.lower()
+    if any(marker in lower for marker in _CGIT_ERROR_MARKERS):
+        return None
+    m = re.search(rf"\b{re.escape(sha)}[0-9a-f]*\b", lower)
+    if m is None:
+        return None
+    found = m.group(0)
+    return found if len(found) in (40, 64) else sha
 
 
 def _price(
@@ -162,10 +227,18 @@ class AgentLoop:
                     unverified_submits += 1
                     if unverified_submits > _MAX_UNVERIFIED_SUBMITS:
                         gate_hard_stop_reason[0] = "submit_unverified_sha"
-                        raise ValueError(dumps_display({
+                        # Return normally (NOT raise): a raised handler
+                        # error keeps ToolUseLoop iterating and the
+                        # "hard stop" would keep burning budget until a
+                        # cap fires. A normal return from the terminal
+                        # tool stops the loop right now; the run-level
+                        # mapping below turns the set flag into the
+                        # surrender.
+                        return dumps_display({
                             "submit_rejected": True,
                             "reason": "too many unverified submits",
-                        }, indent=None))
+                            "final": True,
+                        }, indent=None)
                     verified_brief = ", ".join(
                         f"{vs}@{vh[:SHA_DISPLAY_LEN]}" for vs, vh in verified[:5]
                     ) or "(none)"
@@ -191,10 +264,14 @@ class AgentLoop:
                     not_found_submits += 1
                     if not_found_submits > _MAX_NOT_FOUND_SUBMITS:
                         gate_hard_stop_reason[0] = "sha_not_found_in_repo"
-                        raise ValueError(dumps_display({
+                        # Normal return, same rationale as the
+                        # unverified-submit strikeout above: stop the
+                        # loop immediately instead of iterating on.
+                        return dumps_display({
                             "submit_rejected": True,
                             "reason": "too many sha-not-found submits",
-                        }, indent=None))
+                            "final": True,
+                        }, indent=None)
                     raise ValueError(dumps_display({
                         "submit_rejected": True,
                         "reason": (
@@ -366,8 +443,18 @@ class AgentLoop:
                             a = call_input
                             slug = (a.get("slug") or "").strip().lower()
                             sha = (a.get("sha") or "").strip().lower()
-                            if slug and sha and (slug, sha) not in verified:
-                                verified.append((slug, sha))
+                            # A 2xx alone is NOT verification: cgit
+                            # answers nonexistent object ids with HTTP
+                            # 200 + an error page, and any steered 200
+                            # would otherwise mint a bogus verified
+                            # pair AND permanently disable the
+                            # no-evidence surrender rule. Require the
+                            # response CONTENT to confirm the sha.
+                            confirmed = _forge_result_confirms_sha(
+                                call_name, parsed, sha,
+                            )
+                            if slug and confirmed and (slug, confirmed) not in verified:
+                                verified.append((slug, confirmed))
                     except (ValueError, AttributeError):
                         pass
 
@@ -550,7 +637,23 @@ class AgentLoop:
                 not_found_submits=not_found_submits,
             )
 
-        if loop_result.terminated_by in ("complete", "max_tokens", "refused", "provider_error"):
+        if loop_result.terminated_by == "provider_error":
+            # Transient provider failure, NOT a model decision: surface
+            # it as llm_error so both retry layers (pipeline meta-retry
+            # and the bench retry pass) treat it as retryable instead
+            # of recording a conclusive model failure.
+            return self._finalize(
+                AgentSurrender(
+                    reason="llm_error",
+                    detail=loop_result.final_text[:200],
+                ),
+                tokens_total, cost_usd, elapsed_s,
+                tuple(tool_call_log), tuple(verified),
+                iterations=iterations_count,
+                tool_calls_with_args=tuple(tool_calls_with_args),
+            )
+
+        if loop_result.terminated_by in ("complete", "max_tokens", "refused"):
             return self._finalize(
                 AgentSurrender(
                     reason="model_stopped_without_submit",

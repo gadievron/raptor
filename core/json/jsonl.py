@@ -77,7 +77,23 @@ def append_jsonl(
     flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | _O_NOFOLLOW | _O_CLOEXEC
     fd = os.open(str(path), flags, mode)
     try:
-        os.write(fd, line)
+        # ``os.write`` may return a SHORT count (RLIMIT_FSIZE, quota,
+        # signal after partial progress). Ignoring it reported a
+        # truncated record as success — and the read side deliberately
+        # skips malformed lines, so the audit-trail record vanished
+        # silently. Loop until every byte lands; zero progress raises
+        # instead of spinning. Records are far below PIPE_BUF-ish
+        # sizes, so the first write is whole-line in practice and
+        # concurrent-append line-atomicity is unaffected.
+        view = memoryview(line)
+        written = 0
+        while written < len(view):
+            n = os.write(fd, view[written:])
+            if n <= 0:
+                raise OSError(
+                    f"short write to {path}: os.write returned {n}",
+                )
+            written += n
     finally:
         os.close(fd)
 
@@ -167,6 +183,12 @@ def load_jsonl(
                 except ValueError:
                     # json.JSONDecodeError (both backends) and the
                     # non-finite rejection are ValueError subclasses.
+                    continue
+                except RecursionError:
+                    # Python <= 3.13's stdlib parser is recursive, so a
+                    # deeply-nested line raises RecursionError instead
+                    # of a decode error — same best-effort skip, or the
+                    # foreign writer's bomb line kills the whole trail.
                     continue
         except OSError:
             logger.debug("load_jsonl: read failed for %s", path, exc_info=True)

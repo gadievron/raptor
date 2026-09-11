@@ -30,6 +30,11 @@ class JoernCPG:
     target: Path
     languages: set[str] = field(default_factory=set)
     build_time_ms: int = 0
+    # True when the build path did NOT signal success (timeout, stall
+    # kill, spawn failure). ``exists()`` alone cannot distinguish a
+    # completed graph from a partial file left by a killed writer, and
+    # caching consumers must never manifest a failed build as fresh.
+    build_failed: bool = False
 
     def exists(self) -> bool:
         return self.path.exists()

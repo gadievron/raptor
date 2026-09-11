@@ -547,6 +547,20 @@ def _md_safe(s: str) -> str:
     )
 
 
+def _md_cell(s: str) -> str:
+    """``_md_safe`` plus table/line structure: pipes would split table
+    cells and newlines/CR would start new markdown lines — both let
+    untrusted advisory/repo content (reference URLs, file paths) inject
+    rows, links, or arbitrary markdown into the operator-facing report.
+    """
+    return (
+        _md_safe(s)
+        .replace("|", "&#124;")
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+
 def _neutralize_diff_fence(diff_text: str) -> str:
     """Insert zero-width space inside fence-closing backtick runs.
 
@@ -672,21 +686,25 @@ def _render_consensus(bundle: DiffBundle) -> str:
     lines.append("| Method | Found | Slug / SHA | Note |")
     lines.append("|---|:-:|---|---|")
     for m in c.get("methods") or []:
+        # slug/sha/detail carry raw OSV/NVD advisory content (detail is
+        # the reference URL) — escape before they land in table cells.
+        detail = _md_cell((m.get("detail") or "")[:80])
         if m.get("found"):
             lines.append(
-                f"| {m['name']} | ✓ | `{m['slug']}/{m['sha'][:12]}` | "
-                f"{(m.get('detail') or '')[:80]} |"
+                f"| {_md_cell(m['name'])} | ✓ | "
+                f"`{_md_cell(m['slug'])}/{_md_cell(m['sha'][:12])}` | "
+                f"{detail} |"
             )
         else:
             lines.append(
-                f"| {m['name']} | — | — | {(m.get('detail') or '')[:80]} |"
+                f"| {_md_cell(m['name'])} | — | — | {detail} |"
             )
     lines.append("")
     n_agree = c.get("agreement_count", 0)
     if n_agree >= 2:
         lines.append(
             f"**Both methods agree on "
-            f"`{c.get('consensus_slug', '')}/{c.get('consensus_sha', '')[:12]}`."
+            f"`{_md_cell(c.get('consensus_slug', ''))}/{_md_cell(c.get('consensus_sha', '')[:12])}`."
             f"** Pipeline picked: "
             f"`{bundle.repo_ref.repository_url}` @ `{bundle.commit_after[:12]}`. "
             + ("✓ matches consensus." if _matches(c, bundle) else "⚠ differs from consensus.")
@@ -705,6 +723,13 @@ def _matches(c: dict, bundle: DiffBundle) -> bool:
     cs = (c.get("consensus_slug") or "").lower()
     chs = (c.get("consensus_sha") or "").lower()[:12]
     if not cs or not chs:
+        return False
+    picked = (bundle.commit_after or "").lower()
+    # Symmetric mutual-prefix (both sides ≥7 chars): a short-SHA pick
+    # against a full consensus SHA — or the reverse — is the same
+    # commit; one-way startswith false-negatived correct short picks.
+    if not (len(picked) >= 7 and len(chs) >= 7
+            and (picked.startswith(chs) or chs.startswith(picked[:12]))):
         return False
     # Pre-fix `cs not in repo` was a SUBSTRING match of the
     # consensus slug against the repository URL. Two false-
@@ -734,9 +759,7 @@ def _matches(c: dict, bundle: DiffBundle) -> bool:
     # the bare `owner/repo` slug.
     repo_slug = path.lstrip("/").rstrip("/").lower()
     repo_slug = repo_slug.removesuffix(".git")
-    if cs != repo_slug:
-        return False
-    return bundle.commit_after.lower().startswith(chs)
+    return cs == repo_slug
 
 
 def _render_files(bundle: DiffBundle) -> str:
@@ -748,7 +771,9 @@ def _render_files(bundle: DiffBundle) -> str:
     lines = [f"## Files ({n_prod} production / {n_test} test)\n"]
     for f in bundle.files:
         badge = "test" if f.is_test else "src"
-        lines.append(f"- `{f.path}` ({f.hunks_count} hunk{'' if f.hunks_count == 1 else 's'}) — {badge}")
+        # f.path comes from the analysed repo (hostile-repo-controlled):
+        # escape so a crafted filename can't break out of the code span.
+        lines.append(f"- `{_md_cell(f.path)}` ({f.hunks_count} hunk{'' if f.hunks_count == 1 else 's'}) — {badge}")
     lines.append("")
     return "\n".join(lines) + "\n"
 

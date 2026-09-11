@@ -281,6 +281,10 @@ class _PackageIndex:
     package_vars: dict[str, str | None] = field(default_factory=dict)
     # struct field names declared with an opaque (any/interface{}) type
     opaque_fields: set[str] = field(default_factory=set)
+    # method names declared on ANY package type — the callback-escape
+    # probe reads a selector argument whose field is one of these as a
+    # method value (``x.Handle`` passed as a function value)
+    methods: set[str] = field(default_factory=set)
 
 
 def _index_file(fi: _FileIndex, pkg: _PackageIndex) -> None:
@@ -318,6 +322,10 @@ def _index_file(fi: _FileIndex, pkg: _PackageIndex) -> None:
             name_node = child.child_by_field_name("name")
             if name_node is not None:
                 pkg.functions[_text(name_node)] = child
+        elif child.type == "method_declaration":
+            name_node = child.child_by_field_name("name")
+            if name_node is not None:
+                pkg.methods.add(_text(name_node))
         elif child.type == "type_declaration":
             for spec in child.named_children:
                 name_node = spec.child_by_field_name("name")
@@ -730,6 +738,44 @@ def _spawn_reaches(
     return f"unrecognized spawn callee shape {fn.type} at {where}"
 
 
+def _arg_carries_function_value(arg: Any, pkg: _PackageIndex) -> tuple[bool, list[str]]:
+    """(function value present, non-callee identifiers) for one call
+    argument's whole subtree.
+
+    Function values counted: a func literal (nested composites
+    included — ``Config{Handler: func(){…}}`` hid the closure from a
+    top-level-only scan), a package function's name used as a value,
+    and a METHOD VALUE (``x.Handle`` where ``Handle`` is any package
+    type's method — invisible to the identifier/literal checks, it
+    escaped with ``isolated=True`` standing).  A name or literal in
+    CALLEE position is a call, not a value.  Name collisions over-flag
+    toward escape — the witness then stands down (inconclusive),
+    never discharges on a hidden carrier.
+    """
+    idents: list[str] = []
+    for n in _walk(arg):
+        parent = n.parent
+        in_callee_position = (
+            parent is not None
+            and parent.type == "call_expression"
+            and parent.child_by_field_name("function") is n
+        )
+        if in_callee_position:
+            continue
+        if n.type == "func_literal":
+            return True, idents
+        if n.type == "identifier":
+            name = _text(n)
+            if name in pkg.functions:
+                return True, idents
+            idents.append(name)
+        elif n.type == "selector_expression":
+            fld = n.child_by_field_name("field")
+            if fld is not None and _text(fld) in pkg.methods:
+                return True, idents
+    return False, idents
+
+
 def _callback_escape(
     indexes: list[_FileIndex],
     pkg: _PackageIndex,
@@ -759,23 +805,21 @@ def _callback_escape(
             args = call.child_by_field_name("arguments")
             if args is None:
                 continue
-            # A function value reaches this call as: a literal, a
-            # package function's name, a local name bound to a
-            # closure or declared func-typed (parameters included —
-            # one level of indirection must not hide the closure), or
-            # a package-level func var.
+            # A function value reaches this call as: a literal
+            # (anywhere in an argument subtree — composite-literal
+            # fields included), a package function's name, a method
+            # value, a local name bound to a closure or declared
+            # func-typed (parameters included — one level of
+            # indirection must not hide the closure), or a
+            # package-level func var.
             has_func_arg = False
             ident_args: list[str] = []
             for a in args.named_children:
-                if a.type == "func_literal":
+                carries, idents = _arg_carries_function_value(a, pkg)
+                if carries:
                     has_func_arg = True
                     break
-                if a.type == "identifier":
-                    name = _text(a)
-                    if name in pkg.functions:
-                        has_func_arg = True
-                        break
-                    ident_args.append(name)
+                ident_args.extend(idents)
             if not has_func_arg and ident_args:
                 binds = binds_for(call)
                 for name in ident_args:

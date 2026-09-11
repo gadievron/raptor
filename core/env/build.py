@@ -283,10 +283,14 @@ def _containerized_build(
 
             rootfs = Path(keep_rootfs) if keep_rootfs else Path(tmp) / "rootfs"
             exported = export_rootfs(tag, rootfs)
-            if not getattr(exported, "ok", True):
+            if not exported.ok:
                 product.reason = "export_failed"
-                product.detail = str(
-                    getattr(exported, "detail", ""))[:500]
+                # ExportOutcome carries the diagnostics in reason +
+                # stderr (there is no 'detail' field — the old getattr
+                # shipped every failure with an empty detail).
+                product.detail = (
+                    f"{exported.reason}: {exported.stderr}".strip(": ")
+                )[:500]
                 return product
 
             out.mkdir(parents=True, exist_ok=True)

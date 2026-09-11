@@ -19,14 +19,24 @@ class HttpsRedirectCheck(Check):
             # Check if HTTP version redirects
             http_url = urlunparse(parsed._replace(scheme="http"))
             try:
-                # Use a fresh session to avoid auth cookies interfering
+                # Use a fresh session to avoid auth cookies interfering;
+                # this deliberately bypasses WebClient (the http://
+                # downgrade origin is outside its scope), so a transport
+                # failure must be counted here for the degraded-coverage
+                # accounting.
                 import requests
-                resp = requests.get(
-                    http_url,
-                    allow_redirects=False,
-                    timeout=10,
-                    verify=False,
-                )
+
+                from packages.web.checks.base import note_transport_error
+                try:
+                    resp = requests.get(
+                        http_url,
+                        allow_redirects=False,
+                        timeout=10,
+                        verify=False,
+                    )
+                except requests.RequestException:
+                    note_transport_error(client)
+                    return []
                 if resp.status_code not in (301, 302, 307, 308):
                     return [self._result(
                         passed=False, url=http_url,

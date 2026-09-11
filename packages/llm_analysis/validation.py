@@ -71,10 +71,22 @@ def check_self_contradiction(results_by_id: dict[str, dict]) -> int:
     for fid, r in results_by_id.items():
         if "error" in r:
             continue
-        reasoning = (r.get("reasoning") or "")
+        reasoning = r.get("reasoning") or ""
+        if not isinstance(reasoning, str):
+            # LLM shape drift ("string" field returned as list/dict)
+            # must not crash the check — coerce for the regex pass.
+            reasoning = str(reasoning)
         is_tp = r.get("is_true_positive", True)
         is_exp = r.get("is_exploitable", False)
-        ruling = (r.get("ruling") or "").lower()
+        # `ruling` travels through generate_structured's descriptive
+        # (non-enforced) schema, so fallback extraction can hand back
+        # a dict ({'status': 'false_positive'}) or other non-string
+        # shapes — the same drift journal_emit._panel_verdict defends
+        # against. `.lower()` on those aborts the whole retry stage.
+        ruling_raw = r.get("ruling")
+        if isinstance(ruling_raw, dict):
+            ruling_raw = ruling_raw.get("status")
+        ruling = str(ruling_raw or "").lower()
         fp_reason = r.get("false_positive_reason")
 
         contradictions = []

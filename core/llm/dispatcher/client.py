@@ -614,10 +614,14 @@ def mint_child_token(
     credential — hand it ONLY to the spawned child's env, never log it
     (``token_id`` is the loggable correlation id).
     """
+    # ``is None`` (not falsy) gates: an explicit ``models=[]`` or
+    # ``ttl_s=0`` must travel to the dispatcher and be REJECTED there
+    # (allocate_child raises ValueError), never silently dropped here
+    # and replaced by a default granting more than the caller asked.
     payload: dict = {"budget_usd": budget_usd, "label": label}
-    if models:
+    if models is not None:
         payload["models"] = list(models)
-    if ttl_s:
+    if ttl_s is not None:
         payload["ttl_s"] = int(ttl_s)
     return _child_admin_request(
         "mint", payload, socket_path=socket_path, token=token,

@@ -31,11 +31,15 @@ from __future__ import annotations
 import logging
 import math
 import os
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+from .._test_paths import is_test_path as _shared_is_test_path
 from ..discovery import EXCLUDED_DIR_NAMES
-from ..models import Confidence, Dependency, Manifest, PinStyle
+from ..models import Confidence, Dependency, Manifest
+from ._closest_manifest import project_host_dep
+from ._closest_manifest import rel_to_target as _rel
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -48,8 +52,6 @@ logger = logging.getLogger(__name__)
 _EXCLUDED_DIRS: set[str] = EXCLUDED_DIR_NAMES | {
     "site-packages",        # any virtualenv that snuck in
 }
-
-_TEST_DIR_NAMES: set[str] = {"tests", "test", "__tests__", "spec", "e2e"}
 
 _BINARY_MAGIC = (
     b"\x7fELF",          # Linux / BSD ELF
@@ -316,13 +318,11 @@ def _check_obfuscated(path: Path, target: Path) -> str | None:
     if not data:
         return None
 
-    longest = 0
-    line_start = 0
-    for i, b in enumerate(data):
-        if b == 0x0a:                      # b'\n'
-            longest = max(longest, i - line_start)
-            line_start = i + 1
-    longest = max(longest, len(data) - line_start)
+    # Longest line via one C-level split — identical result to the
+    # per-byte cursor walk it replaces (each segment between newlines,
+    # including the trailing unterminated one, measured without the
+    # newline byte) at a fraction of the interpreter cost.
+    longest = max(len(segment) for segment in data.split(b"\n"))
 
     entropy = _shannon_entropy(data)
     rel = _rel(path, target)
@@ -338,15 +338,17 @@ def _check_obfuscated(path: Path, target: Path) -> str | None:
 
 
 def _shannon_entropy(data: bytes) -> float:
-    """Bit-entropy per byte; 0 ≤ result ≤ 8.0."""
+    """Bit-entropy per byte; 0 ≤ result ≤ 8.0.
+
+    ``collections.Counter`` builds the byte histogram in C — same
+    counts as the per-byte Python loop it replaces, far faster on
+    the ~1 MB buffers this check reads."""
     if not data:
         return 0.0
-    counts = [0] * 256
-    for b in data:
-        counts[b] += 1
+    counts = Counter(data)
     n = len(data)
     return -sum(
-        (c / n) * math.log2(c / n) for c in counts if c
+        (c / n) * math.log2(c / n) for c in counts.values()
     )
 
 
@@ -386,34 +388,9 @@ def _make_finding(
 def _project_host_dep(
     manifests: list[Manifest], path: Path, target: Path,
 ) -> Dependency:
-    closest: Manifest | None = None
-    for m in manifests:
-        if m.is_lockfile:
-            continue
-        try:
-            common = os.path.commonpath([m.path.parent, path])
-        except ValueError:
-            continue
-        if not closest or len(common) > len(
-            os.path.commonpath([closest.path.parent, path])
-        ):
-            closest = m
-    declared_in = closest.path if closest else target
-    ecosystem = closest.ecosystem if closest else "Project"
-    return Dependency(
-        ecosystem=ecosystem,
-        name="<project>",
-        version=None,
-        declared_in=declared_in,
-        scope="main",
-        is_lockfile=False,
-        pin_style=PinStyle.UNKNOWN,
-        direct=True,
-        purl="",
-        parser_confidence=Confidence(
-            "low",
-            reason="placeholder for project-artefact finding host",
-        ),
+    return project_host_dep(
+        manifests, path, target,
+        reason="placeholder for project-artefact finding host",
     )
 
 
@@ -447,11 +424,14 @@ def _allowlisted_binary(path: Path, target: Path) -> bool:
 
 
 def _looks_like_test_path(path: Path, target: Path) -> bool:
-    try:
-        rel = path.relative_to(target)
-    except ValueError:
-        rel = path
-    return any(part in _TEST_DIR_NAMES for part in rel.parts)
+    """Delegates to the shared ``packages.sca._test_paths`` predicate
+    (this module previously carried its own copy of the test-dir-name
+    set). The shared helper also recognises test-file NAMING
+    conventions (``test_*.py``, ``*.test.js``, ``*_test.go``, …), so
+    e.g. a fixture-bearing spec file outside a ``tests/`` dir now
+    classifies as a test path too — deliberate alignment with the
+    other walkers."""
+    return _shared_is_test_path(path, target)
 
 
 def _is_binary(path: Path, sniff_bytes: int = 256) -> bool:
@@ -484,13 +464,6 @@ def _walk(root: Path, *, max_depth: int) -> Iterable[Path]:
             dirnames[:] = [d for d in dirnames if d not in _EXCLUDED_DIRS]
         for fn in filenames:
             yield cur / fn
-
-
-def _rel(path: Path, target: Path) -> Path:
-    try:
-        return path.relative_to(target)
-    except ValueError:
-        return path
 
 
 __all__ = ["ArtefactFinding", "scan_target"]

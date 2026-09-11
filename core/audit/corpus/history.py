@@ -365,7 +365,13 @@ def iter_records(path: Path) -> Iterator[dict[str, Any]]:
     reads over the rest of an append-only store.
     """
     try:
-        f = Path(path).open(encoding="utf-8")
+        # errors="replace": the decode happens in the loop header,
+        # OUTSIDE any per-line try — one invalid-UTF-8 line (torn
+        # append, manual edit) raised UnicodeDecodeError and killed
+        # the whole generator, losing every record after it. Replaced
+        # bytes make that line fail JSON parse and skip like any other
+        # malformed line.
+        f = Path(path).open(encoding="utf-8", errors="replace")
     except OSError:
         return
     with f:

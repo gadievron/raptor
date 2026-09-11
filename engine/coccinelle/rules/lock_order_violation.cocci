@@ -33,7 +33,11 @@ spin_unlock(&B);
 )
 ... when any
 spin_lock@p_b(&B);
+// The reversed acquisition is only a deadlock if B is still held when
+// A is taken — an intervening release of B makes the two critical
+// sections non-overlapping, so the unlock kills the match.
 ... when any
+    when != spin_unlock(&B);
 spin_lock(&A);
 
 @script:python@
@@ -71,7 +75,11 @@ mutex_unlock(&B);
 )
 ... when any
 mutex_lock@p_b(&B);
+// The reversed acquisition is only a deadlock if B is still held when
+// A is taken — an intervening release of B makes the two critical
+// sections non-overlapping, so the unlock kills the match.
 ... when any
+    when != mutex_unlock(&B);
 mutex_lock(&A);
 
 @script:python@

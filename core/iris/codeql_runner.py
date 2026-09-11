@@ -16,6 +16,7 @@ from core.sarif.parser import load_sarif
 
 from .refine import RefinementFeedback
 from .specs import TaintSpec, compile_codeql_config
+from .store import _spec_key
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -72,11 +73,18 @@ def _parse_sarif_matches(sarif_path: Path) -> list[dict[str, Any]]:
 
 
 def _match_to_spec_key(match: dict, specs: list[TaintSpec]) -> str | None:
-    """Map a CodeQL match back to the spec that produced it."""
+    """Map a CodeQL match back to the spec that produced it.
+
+    Keys MUST be built by ``store._spec_key`` — every consumer
+    (``refine._promote_confirmed``, ``store._drop_refuted``, the
+    scorecard bridge) matches on that format, so a locally-formatted
+    key silently never matches any spec: no promotion, no scorecard
+    outcome, and a confirmation that cannot cancel a refutation.
+    """
     msg = match.get("message", "")
     for spec in specs:
         if re.search(r'\b' + re.escape(spec.function) + r'\b', msg):
-            return f"{spec.function}:{spec.file}:{spec.role}"
+            return _spec_key(spec)
     return None
 
 

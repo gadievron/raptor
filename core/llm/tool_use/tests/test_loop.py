@@ -27,6 +27,7 @@ from core.llm.tool_use import (
     ToolCall,
     ToolCallReturned,
     ToolDef,
+    ToolResult,
     TurnCompleted,
     TurnResponse,
     TurnStarted,
@@ -169,6 +170,34 @@ def test_terminates_on_complete_response() -> None:
     assert out.iterations == 1
     assert out.tool_calls_made == 0
     assert len(fp.calls) == 1
+
+
+def test_complete_with_tool_calls_still_dispatches() -> None:
+    """OpenAI-compat endpoints can end a turn with finish_reason
+    'stop' (mapped to COMPLETE) while the message still carries tool
+    calls. Returning at COMPLETE left the appended assistant message
+    holding dangling tool_use blocks and ignored the calls the model
+    requested — they must be dispatched like any tool-use turn."""
+    fp = _FakeProvider([
+        TurnResponse(
+            content=[ToolCall(id="c1", name="echo", input={"x": "1"})],
+            stop_reason=StopReason.COMPLETE,
+            input_tokens=10, output_tokens=5,
+        ),
+        _text_response("done"),
+    ])
+    loop = ToolUseLoop(fp, [_echo_tool()])
+    out = loop.run("go")
+    assert out.tool_calls_made == 1
+    assert out.terminated_by == "complete"
+    assert len(fp.calls) == 2
+    # The tool result made it into the history sent on the next turn —
+    # no dangling tool_use.
+    sent_second = fp.calls[1]["messages"]
+    assert any(
+        isinstance(b, ToolResult) and b.tool_use_id == "c1"
+        for m in sent_second for b in m.content
+    )
 
 
 def test_terminates_on_terminal_tool_call() -> None:
@@ -795,6 +824,56 @@ def test_context_overflow_truncate_policy_drops_oldest() -> None:
         isinstance(b, TextBlock) and "now" in b.text
         for b in sent[-1].content
     )
+
+
+def test_truncate_never_leaves_assistant_first() -> None:
+    """In a plain text-turn history, dropping the oldest USER message
+    left an assistant message at the head — providers reject a
+    conversation that opens with an assistant turn, so the first
+    truncation produced a hard request rejection."""
+    # ~100 tokens per history message; window 260 fits after dropping
+    # the first user message, which puts the assistant turn at the head.
+    fp = _FakeProvider([_text_response("ok")], ctx_window=260)
+    loop = ToolUseLoop(fp, [], context_policy=ContextPolicy.TRUNCATE_OLDEST)
+    history = [
+        Message(role="user", content=[TextBlock(text="a" * 400)]),
+        Message(role="assistant", content=[TextBlock(text="b" * 400)]),
+        Message(role="user", content=[TextBlock(text="c" * 400)]),
+    ]
+    out = loop.run_with_history(history, "now")
+    assert out.terminated_by == "complete"
+    sent = fp.calls[0]["messages"]
+    assert sent[0].role == "user"
+    # The freshest user message is still preserved (adjacent
+    # behaviour of the drop-oldest policy unchanged).
+    assert sent[-1].role == "user"
+    assert any(
+        isinstance(b, TextBlock) and "now" in b.text
+        for b in sent[-1].content
+    )
+
+
+def test_truncate_never_leaves_dangling_tool_result_first() -> None:
+    """A tool_result whose tool_use pair was truncated away must not
+    lead the history either — providers reject a tool_result without
+    its matching tool_use."""
+    fp = _FakeProvider([_text_response("ok")], ctx_window=350)
+    loop = ToolUseLoop(fp, [], context_policy=ContextPolicy.TRUNCATE_OLDEST)
+    history = [
+        Message(role="user", content=[TextBlock(text="a" * 400)]),
+        Message(role="assistant", content=[
+            ToolCall(id="c1", name="echo", input={"x": "b" * 380}),
+        ]),
+        Message(role="user", content=[
+            ToolResult(tool_use_id="c1", content="r" * 400),
+        ]),
+        Message(role="user", content=[TextBlock(text="c" * 400)]),
+    ]
+    out = loop.run_with_history(history, "now")
+    assert out.terminated_by == "complete"
+    sent = fp.calls[0]["messages"]
+    assert sent[0].role == "user"
+    assert not any(isinstance(b, ToolResult) for b in sent[0].content)
 
 
 # ---------------------------------------------------------------------------

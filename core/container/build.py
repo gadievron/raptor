@@ -42,7 +42,10 @@ def extract_from_image(dockerfile_text: str | None, ctx: Path) -> str | None:
             return None
     for raw in text.splitlines():
         line = raw.strip()
-        if not line.upper().startswith("FROM "):
+        # \s, not a literal space: Dockerfile grammar accepts any
+        # whitespace after the instruction ("FROM\tdebian:11" is
+        # valid and previously slipped past the --pull freshness gate).
+        if not re.match(r"FROM\s", line, flags=re.IGNORECASE):
             continue
         # Strip optional --platform=... flag
         rest = re.sub(r"^FROM\s+(?:--\S+\s+)*", "", line, flags=re.IGNORECASE)
@@ -233,14 +236,21 @@ def build_image(
     tmpfile: Path | None = None
     try:
         if dockerfile_text is not None:
+            # encoding pinned: without it the write uses the locale
+            # encoding, and a non-UTF-8 locale turned a Dockerfile
+            # with non-ASCII content into a UnicodeEncodeError that
+            # escaped the failures-are-data contract. tmpfile is
+            # recorded BEFORE the write so the finally-cleanup sees
+            # it even when the write itself fails.
             with tempfile.NamedTemporaryFile(
                 mode="w",
+                encoding="utf-8",
                 prefix="raptor-env-df-",
                 suffix=".Dockerfile",
                 delete=False,
             ) as fd:
-                fd.write(dockerfile_text)
                 tmpfile = Path(fd.name)
+                fd.write(dockerfile_text)
             cmd.extend(["-f", str(tmpfile)])
         cmd.append(str(ctx))
 

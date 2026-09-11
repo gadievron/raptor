@@ -385,9 +385,54 @@ class TestMdTableCellAutofetch(unittest.TestCase):
     def test_existing_escapes_unchanged(self):
         from core.reporting.findings import _md_table_cell
         self.assertEqual(_md_table_cell("a|b"), "a\\|b")
-        self.assertEqual(_md_table_cell("a`b"), "a\\`b")
         self.assertEqual(_md_table_cell("a\nb"), "a<br>b")
+
+    def test_backtick_replaced_not_escaped(self):
+        # Backslash escapes are inert inside code spans, so cells that
+        # callers wrap in `...` must have NO backtick at all — a
+        # target-controlled "f` [link](url) `" otherwise terminates
+        # the span and its markdown renders live.
+        from core.reporting.findings import _md_table_cell
+        out = _md_table_cell("f` [link](url) `")
+        self.assertNotIn("`", out)
+        self.assertEqual(_md_table_cell("a`b"), "aʼb")
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TerminalStatusBucketsTest(unittest.TestCase):
+    """not_disproven and confirmed_unverified are legitimate TERMINAL
+    statuses — neither may fall into the 'other' bucket that feeds the
+    possible-pipeline-bug warning, and unverified must never count as
+    an unrestricted (verified) confirmation."""
+
+    def test_not_disproven_has_its_own_bucket(self):
+        counts = build_findings_summary(
+            [{"final_status": "not_disproven"}])
+        self.assertEqual(counts["not_disproven"], 1)
+        self.assertEqual(counts["other"], 0)
+
+    def test_confirmed_unverified_not_counted_as_unrestricted(self):
+        counts = build_findings_summary(
+            [{"final_status": "confirmed_unverified"}])
+        self.assertEqual(counts["confirmed_unverified"], 1)
+        self.assertEqual(counts["confirmed_unrestricted"], 0)
+        self.assertEqual(counts["confirmed"], 0)
+        self.assertEqual(counts["other"], 0)
+
+    def test_genuinely_unknown_status_still_flags_other(self):
+        counts = build_findings_summary(
+            [{"final_status": "flurgle_state"}])
+        self.assertEqual(counts["other"], 1)
+
+    def test_summary_line_names_the_new_buckets(self):
+        from core.reporting.findings import findings_summary_line
+        counts = build_findings_summary([
+            {"final_status": "not_disproven"},
+            {"final_status": "confirmed_unverified"},
+        ])
+        line = findings_summary_line(counts)
+        self.assertIn("1 Not Disproven", line)
+        self.assertIn("1 Confirmed (Unverified)", line)

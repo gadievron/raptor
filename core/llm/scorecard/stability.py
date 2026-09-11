@@ -2,7 +2,7 @@
 
 Compares the current run's per-finding verdicts against the most
 recent prior agentic run on the same target.  For each finding
-analysed in both runs:
+analysed in both runs by the same model:
 
   * Same normalised verdict → ``correct``
   * Different normalised verdict → ``incorrect``
@@ -118,15 +118,24 @@ def record_cross_run_stability(
         return 0
     prior_results = prior_report.get("results") or []
 
-    prior_verdicts: dict[str, str] = {}
+    # Keyed by finding id, value = (verdict, analysed-by model). The
+    # producer measures whether ONE model holds its verdict across
+    # runs — comparing against a prior verdict from a different model
+    # would book cross-model disagreement as this model's instability.
+    prior_verdicts: dict[str, tuple[str, str]] = {}
     for pf in prior_results:
         fid = pf.get("finding_id")
         if fid is None:
             continue
+        prior_model = str(pf.get("analysed_by") or "")
+        if not prior_model:
+            # Unattributed prior verdict: it can't be matched to the
+            # current model, so it yields no stability signal.
+            continue
         status = get_finding_status(pf)
         normalised = normalize_verdict(status)
         if normalised != "unknown":
-            prior_verdicts[fid] = normalised
+            prior_verdicts[fid] = (normalised, prior_model)
 
     if not prior_verdicts:
         return 0
@@ -136,8 +145,18 @@ def record_cross_run_stability(
         if result.get("is_exploitable") is None:
             continue
 
-        prior_verdict = prior_verdicts.get(fid)
-        if prior_verdict is None:
+        prior_entry = prior_verdicts.get(fid)
+        if prior_entry is None:
+            continue
+        prior_verdict, prior_model = prior_entry
+
+        model = str(result.get("analysed_by") or "")
+        if not model:
+            continue
+        if model != prior_model:
+            # A different model produced the prior verdict. A flip
+            # between two models is cross-model disagreement, not this
+            # model's cross-run instability — record nothing.
             continue
 
         current_status = get_finding_status(result)
@@ -150,9 +169,6 @@ def record_cross_run_stability(
 
         rule_id = str(result.get("rule_id") or "unknown")
         decision_class = f"{decision_class_prefix}:{rule_id}"
-        model = str(result.get("analysed_by") or "")
-        if not model:
-            continue
         model_version = result.get("resolved_model")
 
         sample = None

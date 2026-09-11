@@ -26,6 +26,10 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from packages.ghidra.model import REDatabase, REFunction
 
 # ─── trust-marker check (do not import; inline by design) ───
 # fmt: off
@@ -100,9 +104,10 @@ def cmd_gaps(args: argparse.Namespace) -> int:
     context_map = load_context_map(out_dir)
 
     if not context_map:
-        from core.audit.gaps import load_checklist as _lc
-        _cl = _lc(out_dir)
-        if _cl and _cl.get("target_kind") == "binary":
+        # target_kind is read off the checklist already in scope — a
+        # second load_checklist would repeat the flock + full JSON
+        # parse of a potentially very large file.
+        if checklist.get("target_kind") == "binary":
             hint = ("Run 'libexec/raptor-understand --map --target "
                     "<binary>' for a binary context map.")
         else:
@@ -309,7 +314,8 @@ def cmd_record(args: argparse.Namespace) -> int:
     if args.status == "finding":
         from core.audit.evidence_grade import VALID_EVIDENCE_TOOLS
         tools = "|".join(sorted(VALID_EVIDENCE_TOOLS))
-        base_tool = (args.evidence_tool or "").split(":", 1)[0].strip().lower()
+        tool_norm = (args.evidence_tool or "").strip().lower()
+        base_tool = tool_norm.split(":", 1)[0]
         if not args.evidence_tool:
             print(
                 "error [G2 TOOL-GROUNDED]: --status finding requires "
@@ -318,7 +324,14 @@ def cmd_record(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        if base_tool not in VALID_EVIDENCE_TOOLS:
+        # Namespaced tools (dynamic:crash, frida:runtime, dark_verify:*)
+        # are stored in VALID_EVIDENCE_TOOLS under their full
+        # colon-qualified names — only bare tools (semgrep, smt, ...)
+        # appear as base names. Membership must therefore accept the
+        # full string too; testing only the stripped base rejects every
+        # namespaced choice the argument parser itself offers.
+        if (tool_norm not in VALID_EVIDENCE_TOOLS
+                and base_tool not in VALID_EVIDENCE_TOOLS):
             print(
                 f"error [G2 TOOL-GROUNDED]: --evidence-tool "
                 f"{args.evidence_tool!r} is not a recognised tool "
@@ -456,7 +469,10 @@ def cmd_record(args: argparse.Namespace) -> int:
     if not line_start:
         for ck_file in checklist.get("files", []):
             if ck_file.get("path") == args.file:
-                for item in ck_file.get("items", []):
+                # Legacy checklists keep per-file entries under
+                # 'functions' rather than 'items' — same fallback the
+                # other checklist readers in this file apply.
+                for item in ck_file.get("items", ck_file.get("functions", [])):
                     if item.get("name") == args.function:
                         line_start = item.get("line_start", 0)
                         if not line_end:
@@ -509,25 +525,30 @@ def cmd_record(args: argparse.Namespace) -> int:
 
         if not is_entry and has_callers is not None and not has_callers:
             binary_absent = False
-            binary_tier = None
             for fe in checklist.get("files", []):
                 if fe.get("path") != args.file:
                     continue
-                for item in fe.get("items", []):
+                # Legacy 'functions' key fallback, as above.
+                for item in fe.get("items", fe.get("functions", [])):
                     if item.get("name") != args.function:
                         continue
                     bo = (item.get("metadata") or {}).get("binary_oracle")
                     if bo:
-                        binary_absent = bo.get("classification") == "absent"
-                        binary_tier = "full"
-                        for b in bo.get("binaries", []):
-                            if b.get("tier") == "symbol_only":
-                                binary_tier = "symbol_only"
-                                break
+                        # Shared predicate — the hand-copied tier loop
+                        # here had already drifted from the chokepoint
+                        # rule (it ignored suppression_grade).
+                        from core.analysis.binary_oracle import (
+                            absent_earns_suppression,
+                        )
+                        binary_absent = (
+                            bo.get("classification") == "absent"
+                            and absent_earns_suppression(
+                                bo.get("binaries"))
+                        )
                     break
                 break
 
-            if binary_absent and binary_tier == "full":
+            if binary_absent:
                 print(
                     f"error [G7 REACHABILITY]: {func_key} has zero static "
                     f"callers AND binary oracle says absent (full DWARF). "
@@ -650,6 +671,28 @@ def cmd_record(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_binary_function(db: REDatabase, name: str) -> REFunction | None:
+    """Resolve a checklist function name against the RE database.
+
+    Collision-suffixed names (name@0xADDR) exist precisely because
+    several binary functions share a name, so those must resolve by
+    address — stripping the suffix and taking the first namesake can
+    return a different function than the checklist item denotes.
+    """
+    lookup = name
+    addr: int | None = None
+    if "@0x" in lookup:
+        base, _, addr_s = lookup.rpartition("@")
+        try:
+            addr = int(addr_s, 16)
+            lookup = base
+        except ValueError:
+            addr = None
+    if addr is not None:
+        return next((f for f in db.functions if f.address == addr), None)
+    return next((f for f in db.functions if f.name == lookup), None)
+
+
 def cmd_sweep(args: argparse.Namespace) -> int:
     """Run a mechanical tool against a file/function and log the result.
 
@@ -670,6 +713,7 @@ def cmd_sweep(args: argparse.Namespace) -> int:
 
     # Auto-run mode: --rule or --rule-file triggers actual tool execution
     rule_file = args.rule_file
+    inline_rule_tmp: Path | None = None
     if not rule_file and args.rule and tool in ("semgrep", "coccinelle"):
         import tempfile
         suffix = ".yaml" if tool == "semgrep" else ".cocci"
@@ -679,6 +723,16 @@ def cmd_sweep(args: argparse.Namespace) -> int:
         ) as _tmp:
             _tmp.write(args.rule)
             rule_file = _tmp.name
+        inline_rule_tmp = Path(rule_file)
+
+    def _discard_inline_rule() -> None:
+        # The inline --rule tempfile is a dotfile in the run directory;
+        # it must be removed on EVERY exit path (error returns and tool
+        # exceptions included), or repeated inline sweeps litter the
+        # output directory with orphaned .sweep-rule-* files.
+        if inline_rule_tmp is not None:
+            with contextlib.suppress(OSError):
+                inline_rule_tmp.unlink()
 
     if rule_file and tool in ("semgrep", "coccinelle", "codeql"):
         from core.audit.sweep import (
@@ -690,6 +744,7 @@ def cmd_sweep(args: argparse.Namespace) -> int:
         rule_path = Path(rule_file)
         if not rule_path.exists():
             print(f"error: rule file {rule_path} not found", file=sys.stderr)
+            _discard_inline_rule()
             return 1
 
         fn_line_start = args.line_start
@@ -715,47 +770,31 @@ def cmd_sweep(args: argparse.Namespace) -> int:
         _bin_tmp = None
         from core.inventory.binary_builder import BINARY_PATH_PREFIX
         if args.file.startswith(BINARY_PATH_PREFIX):
-            if tool == "symbolic":
-                pass  # handled below — symbolic runs on the binary itself
-            elif tool != "semgrep":
+            # This branch is guarded by tool in (semgrep, coccinelle,
+            # codeql); symbolic takes its own binary-native path below
+            # and never reaches here.
+            if tool != "semgrep":
                 print(
                     f"error: {tool} needs source; only semgrep and "
                     "symbolic run on binary targets",
                     file=sys.stderr,
                 )
+                _discard_inline_rule()
                 return 1
             from core.audit.binary_context import find_redb, load_redb
             redb_path = find_redb(out_dir, target_path)
             db = load_redb(redb_path) if redb_path else None
-            func_obj = None
-            if db is not None:
-                lookup = args.function
-                addr = None
-                # Collision-suffixed checklist names (name@0xADDR)
-                # resolve by address.
-                if "@0x" in lookup:
-                    base, _, addr_s = lookup.rpartition("@")
-                    try:
-                        addr = int(addr_s, 16)
-                        lookup = base
-                    except ValueError:
-                        addr = None
-                if addr is not None:
-                    func_obj = next(
-                        (f for f in db.functions
-                         if f.address == addr), None,
-                    )
-                else:
-                    func_obj = next(
-                        (f for f in db.functions
-                         if f.name == lookup), None,
-                    )
+            func_obj = (
+                _resolve_binary_function(db, args.function)
+                if db is not None else None
+            )
             if func_obj is None or not func_obj.decompilation:
                 print(
                     "error: no decompilation available for "
                     f"{args.function} — cannot sweep",
                     file=sys.stderr,
                 )
+                _discard_inline_rule()
                 return 1
             import tempfile as _tempfile
             # Fixed suffix: hostile symbol names can carry '/' or
@@ -805,6 +844,9 @@ def cmd_sweep(args: argparse.Namespace) -> int:
                     line_end=fn_line_end,
                 )
         finally:
+            # Covers the success path AND a raising sweep: only the
+            # log entry needs rule_path (as a string) past this point.
+            _discard_inline_rule()
             if _bin_tmp is not None:
                 try:
                     Path(_bin_tmp.name).unlink()
@@ -822,12 +864,6 @@ def cmd_sweep(args: argparse.Namespace) -> int:
         if args.rule and not args.rule_file:
             entry["rule_inline"] = args.rule
         append_audit_log(out_dir, entry)
-
-        if not args.rule_file and rule_path.name.startswith(".sweep-rule-"):
-            try:
-                rule_path.unlink()
-            except OSError:
-                pass
 
         match_info = ""
         if result.matches:
@@ -918,12 +954,7 @@ def cmd_sweep(args: argparse.Namespace) -> int:
             redb_path = find_redb(out_dir, target_path)
             db = load_redb(redb_path) if redb_path else None
             if db is not None:
-                lookup = args.function
-                if "@0x" in lookup:
-                    lookup = lookup.rpartition("@")[0]
-                func_obj = next(
-                    (f for f in db.functions if f.name == lookup), None,
-                )
+                func_obj = _resolve_binary_function(db, args.function)
                 if func_obj and func_obj.decompilation:
                     from core.audit.decompiler_sanitise import sanitise
                     source = sanitise(func_obj.decompilation)
@@ -969,12 +1000,7 @@ def cmd_sweep(args: argparse.Namespace) -> int:
             redb_path = find_redb(out_dir, target_path)
             db = load_redb(redb_path) if redb_path else None
             if db is not None:
-                lookup = args.function
-                if "@0x" in lookup:
-                    lookup = lookup.rpartition("@")[0]
-                func_obj = next(
-                    (f for f in db.functions if f.name == lookup), None,
-                )
+                func_obj = _resolve_binary_function(db, args.function)
                 if func_obj and func_obj.decompilation:
                     from core.audit.decompiler_sanitise import sanitise
                     source = sanitise(func_obj.decompilation)
@@ -1450,9 +1476,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     # --- build checklist ---
     checklist_path = out_dir / "checklist.json"
     if not checklist_path.exists():
+        # The builder's contract is two positionals: <target> <output_dir>
+        # (it has no --out flag).
         ck = subprocess.run(
             [str(_RAPTOR_DIR / "libexec" / "raptor-build-checklist"),
-             str(target_path), "--out", str(out_dir)],
+             str(target_path), str(out_dir)],
             capture_output=True, text=True, timeout=300,
             check=False,
         )
@@ -1535,8 +1563,14 @@ def cmd_run(args: argparse.Namespace) -> int:
             enrich_inventory_with_binary_oracle,
             extract_verdicts,
         )
+        from core.config import RaptorConfig
+        # ``_bo_apply`` above populated BINARY_ORACLE_NO_SUPPRESS;
+        # without forwarding it (mirrors core/inventory/builder.py),
+        # guessed env-build binaries earned suppression on the /audit
+        # surface, voiding the documented downgrade.
         bo_counts = enrich_inventory_with_binary_oracle(
             checklist_data, binary_paths,
+            no_suppression_paths=RaptorConfig.BINARY_ORACLE_NO_SUPPRESS,
         )
         binary_verdicts = extract_verdicts(checklist_data)
         if binary_verdicts:
@@ -1798,13 +1832,24 @@ def _finalize_run(
     if result.terminated_by == "sigterm":
         # SIGTERM conclusion: the salvage report above covers whatever
         # the journal holds; the run stays re-enterable.
-        subprocess.run(
+        # Surface the child's stderr on failure, same as the complete
+        # path below — a swallowed failed transition leaves the run
+        # stamped 'running' (so the advertised resume refuses it) while
+        # the console claims a clean interrupt.
+        interrupt_cp = subprocess.run(
             [str(_RAPTOR_DIR / "libexec" / "raptor-run-lifecycle"),
              "interrupt", str(out_dir),
              "SIGTERM — salvage report written",
              "--command", "audit"],
-            capture_output=True, check=False,
+            capture_output=True, text=True, check=False,
         )
+        if interrupt_cp.returncode != 0:
+            detail = (interrupt_cp.stderr or "").strip()
+            print(
+                f"lifecycle interrupt failed (exit {interrupt_cp.returncode})"
+                + (f": {detail}" if detail else ""),
+                file=sys.stderr, flush=True,
+            )
         print(
             f"Interrupted by SIGTERM — salvage report written. "
             f"Resume with: libexec/raptor-audit resume {out_dir}",
@@ -1983,7 +2028,12 @@ def cmd_resume(args: argparse.Namespace) -> int:
         print("error: run metadata records no target_path", file=sys.stderr)
         return 1
     target_path = Path(target_str).resolve()
-    if not target_path.is_dir():
+    # Accept the same target shapes as `run`: source directories AND
+    # binary-file targets (ELF/PE/Mach-O or a Ghidra project) — an
+    # interrupted binary audit must stay resumable.
+    if not (target_path.is_dir()
+            or (target_path.is_file()
+                and _is_binary_audit_target(target_path))):
         print(f"error: target not found: {target_path}", file=sys.stderr)
         return 1
 

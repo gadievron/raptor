@@ -79,14 +79,37 @@ def test_npm_strip_drops_npm_internals_and_metadata() -> None:
     assert out["versions"]["1.0.0"]["version"] == "1.0.0"
     assert out["versions"]["1.0.0"]["dist"]["shasum"] == "abc"
     assert out["versions"]["1.0.0"]["license"] == "MIT"
+    # ``maintainers`` has consumers (maintainer-change / low-bus-
+    # factor detectors) — preserved, not stripped.
+    assert out["maintainers"] == [{"name": "alice"}]
     # Internals + metadata stripped.
-    for k in ("_id", "_rev", "readme", "maintainers"):
+    for k in ("_id", "_rev", "readme"):
         assert k not in out, f"top-level {k} should be stripped"
     v = out["versions"]["1.0.0"]
     for k in ("_id", "_nodeVersion", "_npmVersion",
               "_npmOperationalInternal", "description", "keywords",
               "author", "bugs", "repository", "main"):
         assert k not in v, f"per-version {k} should be stripped"
+
+
+def test_npm_strip_preserves_per_version_maintainers() -> None:
+    """The bump evaluator's maintainer-change detector compares
+    ``versions[v].maintainers`` between the current and target
+    versions of the SAME stripped envelope ``get_metadata`` caches —
+    stripping the field made a maintainer takeover invisible to the
+    real client (only unstripped test stubs could ever fire it)."""
+    raw = {
+        "name": "x",
+        "versions": {
+            "1.0.0": {"version": "1.0.0",
+                      "maintainers": [{"name": "alice"}]},
+            "2.0.0": {"version": "2.0.0",
+                      "maintainers": [{"name": "attacker"}]},
+        },
+    }
+    out = _strip_npm_metadata(raw)
+    assert out["versions"]["1.0.0"]["maintainers"] == [{"name": "alice"}]
+    assert out["versions"]["2.0.0"]["maintainers"] == [{"name": "attacker"}]
 
 
 def test_npm_strip_passes_through_none() -> None:
@@ -197,14 +220,17 @@ def test_pypi_strip_drops_cosmetic_info_fields() -> None:
     out = _strip_pypi_metadata(raw)
     info = out["info"]
     # Fields RAPTOR reads: license, license_expression, requires_dist,
-    # requires_python, yanked, version, name.
+    # requires_python, yanked, version, name — plus the maintainer /
+    # author identity fields the registry-metadata pass builds its
+    # best-effort PyPI maintainer list from (low-bus-factor signal).
     for keep in ("name", "version", "license", "license_expression",
-                 "requires_dist", "requires_python", "yanked"):
+                 "requires_dist", "requires_python", "yanked",
+                 "author", "author_email", "maintainer",
+                 "maintainer_email"):
         assert keep in info, f"{keep} must be preserved"
     # Cosmetic fields stripped.
     for drop in ("description", "description_content_type", "summary",
-                 "author", "author_email", "maintainer",
-                 "maintainer_email", "keywords", "platform",
+                 "keywords", "platform",
                  "home_page", "project_url", "project_urls"):
         assert drop not in info, f"{drop} should be stripped"
     # ``classifiers`` is deliberately PRESERVED — older PyPI packages

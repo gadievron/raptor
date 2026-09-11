@@ -82,10 +82,14 @@ def _frida_python() -> str:
 def _run_side(binary: Path, script_path: Path, side_dir: Path,
               poc: Path | None, duration: float) -> None:
     """Run one sink-watch session; raises RuntimeError on failure."""
-    env = os.environ.copy()
-    raptor_dir = os.environ["RAPTOR_DIR"]
-    env["RAPTOR_DIR"] = raptor_dir
-    env["PYTHONPATH"] = raptor_dir
+    # Same credential-stripped environment as every other frida
+    # launch (active._safe_env): the spawned target inherits this env
+    # from the CLI process, runs unsandboxed, and "built yourself"
+    # does not mean "audited yourself" — operator credentials must
+    # not be readable via getenv from target code. _safe_env keeps
+    # RAPTOR_DIR/PYTHONPATH so the CLI module itself still imports.
+    from packages.frida.active import _safe_env
+    env = _safe_env()
     cmd = [
         _frida_python(), "-m", "packages.frida.cli",
         "--target", str(binary.resolve()),

@@ -7,12 +7,9 @@ Unit tests mock the JVM/PyGhidra layer. The live integration test
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from packages.ghidra.session import GhidraSession, GhidraSessionError
 from packages.ghidra.project_util import fix_owner, prepare_working_copy
@@ -235,3 +232,136 @@ class TestDetectPyGhidra:
         from packages.ghidra.detect import pyghidra_available
         with patch("importlib.util.find_spec", return_value=None):
             assert pyghidra_available() is False
+
+
+# ── PyGhidra export seam: name provenance ────────────────────────────
+
+class _JavaIter:
+    """Java-style iterator over a Python list."""
+
+    def __init__(self, items):
+        self._items = list(items)
+        self._i = 0
+
+    def hasNext(self):
+        return self._i < len(self._items)
+
+    def next(self):
+        item = self._items[self._i]
+        self._i += 1
+        return item
+
+
+def _fake_func(name, addr, source):
+    """Minimal stand-in for a Ghidra Function object."""
+    f = MagicMock()
+    f.getName.return_value = name
+    f.getEntryPoint.return_value.getOffset.return_value = addr
+    f.getBody.return_value.getNumAddresses.return_value = 64
+    f.getSymbol.return_value.getSource.return_value = source
+    f.getSignature.return_value.getPrototypeString.return_value = ""
+    f.getCallingConvention.return_value = None
+    f.isThunk.return_value = False
+    f.isExternal.return_value = False
+    return f
+
+
+class _FakeSourceType:
+    DEFAULT = object()
+    ANALYSIS = object()
+    IMPORTED = object()
+    USER_DEFINED = object()
+
+
+def _install_fake_ghidra(monkeypatch):
+    """Register a fake ghidra.program.model.symbol module so the
+    export seam can run without a JVM."""
+    import types
+    mod = types.ModuleType("ghidra.program.model.symbol")
+    mod.SourceType = _FakeSourceType
+    for name in ("ghidra", "ghidra.program", "ghidra.program.model"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    monkeypatch.setitem(sys.modules, "ghidra.program.model.symbol", mod)
+
+
+class TestSessionExportProvenance:
+    """The in-process export seam must mint the same name-provenance
+    facts as the headless-export seam it mirrors — a session-cached
+    database with empty provenance degrades every name to lowest
+    trust, and an unflagged placeholder name gets indexed as a real
+    anchor."""
+
+    def _export(self, monkeypatch, funcs):
+        _install_fake_ghidra(monkeypatch)
+        session = GhidraSession()
+        program = MagicMock()
+        program.getFunctionManager.return_value.getFunctions.return_value = (
+            _JavaIter(funcs)
+        )
+        return session._export_functions(program, decompile=False)
+
+    def test_imported_source_mints_symtab(self, monkeypatch):
+        (fn,) = self._export(monkeypatch, [
+            _fake_func("parse_packet", 0x1000, _FakeSourceType.IMPORTED),
+        ])
+        assert fn.name_provenance == "symtab"
+        assert fn.is_auto_named is False
+
+    def test_analysis_source_mints_pattern_recovered(self, monkeypatch):
+        (fn,) = self._export(monkeypatch, [
+            _fake_func("memcpy_chk", 0x1000, _FakeSourceType.ANALYSIS),
+        ])
+        assert fn.name_provenance == "pattern_recovered"
+        assert fn.is_auto_named is True
+
+    def test_placeholder_names_flag_auto_regardless_of_source(
+            self, monkeypatch):
+        """A DEFAULT-source placeholder like sub_401000 (IDA-imported)
+        or Ordinal_17 must not ride as a real name just because the
+        symbol source claims better."""
+        fns = self._export(monkeypatch, [
+            _fake_func("sub_401000", 0x1000, _FakeSourceType.DEFAULT),
+            _fake_func("Ordinal_17", 0x2000, _FakeSourceType.IMPORTED),
+            _fake_func("FUN_00403000", 0x3000, _FakeSourceType.DEFAULT),
+        ])
+        for fn in fns:
+            assert fn.is_auto_named is True, fn.name
+            assert fn.name_provenance == "tool_synthetic", fn.name
+
+    def test_user_defined_source_stays_unknown(self, monkeypatch):
+        (fn,) = self._export(monkeypatch, [
+            _fake_func("analyst_renamed", 0x1000,
+                       _FakeSourceType.USER_DEFINED),
+        ])
+        assert fn.name_provenance == ""
+        assert fn.is_auto_named is False
+
+    def test_export_runs_import_provenance_refinement(
+            self, monkeypatch, gpr_project):
+        """export() must split the provisional IMPORTED tag via the
+        binary probe, exactly like the headless-export parse seam."""
+        calls = []
+        import core.analysis.binary_provenance as bp
+        monkeypatch.setattr(
+            bp, "refine_import_provenance", lambda db: calls.append(db))
+
+        session = GhidraSession()
+        program = MagicMock()
+        program.getName.return_value = "prog"
+        program.getLanguageID.return_value = "x86:LE:64:default"
+        program.getExecutablePath.return_value = "/x/prog"
+        program.getImageBase.return_value.getOffset.return_value = 0x400000
+        program.getMetadata.return_value = {}
+        lang = program.getLanguage.return_value.getLanguageDescription
+        lang.return_value.getProcessor.return_value = "x86"
+        lang.return_value.getSize.return_value = 64
+        session._program = program
+        for attr in ("_export_functions", "_export_xrefs", "_export_types",
+                     "_export_comments", "_export_segments",
+                     "_export_imports", "_export_exports",
+                     "_export_strings", "_export_bookmarks"):
+            monkeypatch.setattr(
+                session, attr, lambda *a, **kw: [], raising=True)
+
+        db = session.export()
+        assert calls == [db]

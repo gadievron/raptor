@@ -315,9 +315,16 @@ def _spawn_probe(
             timeout=timeout,
         )
         nonce = result.sandbox_info.get("observe_nonce")
+        # current_run=True: this parse reads a run THIS process just
+        # executed. On a degraded host that produced no nonce it
+        # refuses the target-writable legacy log location and demotes
+        # nonce trust — without it a probed binary on such a host
+        # could plant a forged log and poison the cached Landlock
+        # allowlists this profile feeds.
         observed = parse_observe_log(
             scratch_path, expected_nonce=nonce,
             sandbox_info=result.sandbox_info,
+            current_run=True,
         )
 
         # Hostnames from the proxy event log (which records the

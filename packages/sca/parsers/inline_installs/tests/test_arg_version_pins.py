@@ -249,3 +249,34 @@ def test_parse_dockerfile_includes_arg_pins(tmp_path: Path) -> None:
     # The RUN pip install is the existing path; preserves the
     # pre-fix source_kind.
     assert by_name["requests"].source_kind == "dockerfile"
+
+
+# ---------------------------------------------------------------------------
+# Adversarial whitespace
+# ---------------------------------------------------------------------------
+
+def test_arg_line_with_long_trailing_run_parses_fast() -> None:
+    # The comment tail used to backtrack quadratically on a long
+    # space run after the inline comment; ~200k chars must scan in
+    # linear-ish time (generous bound for slow CI runners).
+    import time
+    text = (
+        "ARG SEMGREP_VERSION=1.117.0  # raptor-sca: PyPI:semgrep"
+        + " " * 200_000 + "\n"
+        + "ARG RUFF_VERSION=0.6.9" + " " * 200_000 + "\n"
+    )
+    t0 = time.monotonic()
+    deps = extract(text, Path("Dockerfile"))
+    assert time.monotonic() - t0 < 2.0
+    # Matching semantics preserved despite the trailing whitespace.
+    got = {(d.ecosystem, d.name, d.version) for d in deps}
+    assert got == {
+        ("PyPI", "semgrep", "1.117.0"),
+        ("PyPI", "ruff", "0.6.9"),
+    }
+
+
+def test_arg_line_without_version_shape_still_skipped() -> None:
+    # Other direction: non-version values stay skipped.
+    deps = extract("ARG FOO_VERSION=${BASE}   \n", Path("Dockerfile"))
+    assert deps == []

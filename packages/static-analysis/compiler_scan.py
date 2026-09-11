@@ -51,9 +51,11 @@ from typing import Any
 
 # Repo root on sys.path — this module lives in a hyphenated package
 # directory (not importable as a package) and is loaded via importlib
-# by scanner.py or the tests; make the absolute imports below work
-# regardless of which entry point loaded us.
-_REPO_ROOT = str(Path(__file__).resolve().parents[2])
+# by scanner.py or the tests. Python path safety: the only permitted
+# sys.path addition is the launcher-pinned RAPTOR_DIR (hard lookup,
+# no __file__-derived fallback — a relocated/vendored copy must fail
+# loudly rather than silently import another tree's core.*).
+_REPO_ROOT = os.environ["RAPTOR_DIR"]
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 

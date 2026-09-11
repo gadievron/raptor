@@ -1057,3 +1057,30 @@ def test_cmd_build_sidecar_written_on_failure_too(tmp_path: Path) -> None:
     assert sidecar.exists(), "sidecar not written for failed run"
     data = json.loads(sidecar.read_text())
     assert data["verify_passed"] is False
+
+
+def test_print_human_report_renders_replay_success(capfd: Any) -> None:
+    """The $0 replay path is a legitimate zero-turn success
+    (stop_reason="replay"); the num_turns>0 gate must not demote it to
+    the '?' unknown-outcome rendering."""
+    out = _outcome(
+        status="success",
+        verify_passed=True,
+        num_turns=0,
+        stop_reason="replay",
+    )
+    cli._print_human_report(out)
+    text = capfd.readouterr().err
+    assert "BUILT" in text or "✓" in text
+    assert "?" not in text.splitlines()[0]
+
+
+def test_print_human_report_zero_turn_non_replay_stays_unknown(
+    capfd: Any,
+) -> None:
+    """Companion direction: an anomalous zero-turn outcome WITHOUT the
+    replay stop reason keeps the conservative rendering."""
+    out = _outcome(status="success", verify_passed=True, num_turns=0)
+    cli._print_human_report(out)
+    text = capfd.readouterr().err
+    assert "BUILT" not in text

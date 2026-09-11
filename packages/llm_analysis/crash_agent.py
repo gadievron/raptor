@@ -31,6 +31,32 @@ from packages.llm_analysis.cc_dispatch import _safe_id
 logger = get_logger()
 
 
+def exploit_artifact_path(out_dir: Path, crash_id: str) -> Path:
+    """Canonical on-disk location of the exploit PoC for ``crash_id``.
+
+    Single source of truth shared by the writer in
+    ``CrashAnalysisAgent.generate_exploit`` and any consumer that
+    re-reads the artifact (e.g. a validate-and-refine stage). The id
+    is routed through ``_safe_id`` — AFL crash ids contain ``:`` and
+    ``,`` — so consumers must derive the path via this helper, never
+    by interpolating the raw crash id (that produces a name that was
+    never written and the consumer silently finds nothing).
+    """
+    return Path(out_dir) / "exploits" / f"{_safe_id(crash_id)}_exploit.cpp"
+
+
+def _input_file_size_str(input_file: Path) -> str:
+    """``st_size`` as a string, or ``"unknown"`` when the crash input
+    has vanished (AFL queue rotation, tmpdir cleanup). The prompt
+    builders degrade a failed input READ into a graceful error block;
+    an unguarded ``stat()`` in the slot dict would re-raise the same
+    OSError and undo that degradation."""
+    try:
+        return str(input_file.stat().st_size)
+    except OSError:
+        return "unknown"
+
+
 _CRASH_ANALYSIS_SYSTEM_PROMPT_BASE = """You are an expert vulnerability researcher and exploit developer specializing in binary exploitation.
 
 Analyse crashes from fuzzing and assess their exploitability with technical precision. Consider:
@@ -99,7 +125,19 @@ def _build_crash_analysis_bundle(
     hex dump is the most attacker-controlled input the framework feeds an
     LLM — quarantining it is the high-leverage win here.
     """
-    crash_input_bytes = crash_context.input_file.read_bytes()[:512]
+    # Bounded, guarded read. Only the first 512 bytes feed the prompt,
+    # so never load the whole file — fuzz crashes on archive/media
+    # parsers are routinely multi-hundred-MB (same rationale as the
+    # exploit bundle's 64 KB cap). A missing/unreadable input file
+    # (AFL queue rotation, tmpdir cleanup) degrades to an error block
+    # instead of raising out of analyse_crash.
+    input_read_error: str | None = None
+    try:
+        with open(crash_context.input_file, "rb") as _cif:
+            crash_input_bytes = _cif.read(512)
+    except OSError as exc:
+        crash_input_bytes = b""
+        input_read_error = str(exc)
 
     blocks = []
 
@@ -145,17 +183,24 @@ def _build_crash_analysis_bundle(
             origin=f"crash:{crash_context.crash_id}",
         ))
 
-    blocks.append(UntrustedBlock(
-        content=crash_input_bytes.hex(' ', 16),
-        kind="crash-input-hex-dump",
-        origin=str(crash_context.input_file),
-    ))
+    if input_read_error is None:
+        blocks.append(UntrustedBlock(
+            content=crash_input_bytes.hex(' ', 16),
+            kind="crash-input-hex-dump",
+            origin=str(crash_context.input_file),
+        ))
 
-    blocks.append(UntrustedBlock(
-        content=''.join(chr(b) if 32 <= b <= 126 else '.' for b in crash_input_bytes),
-        kind="crash-input-printable-ascii",
-        origin=str(crash_context.input_file),
-    ))
+        blocks.append(UntrustedBlock(
+            content=''.join(chr(b) if 32 <= b <= 126 else '.' for b in crash_input_bytes),
+            kind="crash-input-printable-ascii",
+            origin=str(crash_context.input_file),
+        ))
+    else:
+        blocks.append(UntrustedBlock(
+            content=f"Error reading input file: {input_read_error}",
+            kind="crash-input-read-error",
+            origin=str(crash_context.input_file),
+        ))
 
     binary_info = crash_context.binary_info
     slots = {
@@ -172,7 +217,8 @@ def _build_crash_analysis_bundle(
             value=str(crash_context.source_location or "Unknown"), trust="untrusted",
         ),
         "input_size": TaintedString(
-            value=str(crash_context.input_file.stat().st_size), trust="untrusted",
+            value=_input_file_size_str(crash_context.input_file),
+            trust="untrusted",
         ),
         "input_path": TaintedString(value=str(crash_context.input_file), trust="untrusted"),
         "aslr_enabled": TaintedString(
@@ -389,7 +435,8 @@ def _build_crash_exploit_bundle(crash_context: CrashContext) -> PromptBundle:
         "function": TaintedString(value=str(crash_context.function_name or ""), trust="untrusted"),
         "crash_address": TaintedString(value=str(crash_context.crash_address or ""), trust="untrusted"),
         "input_size": TaintedString(
-            value=str(crash_context.input_file.stat().st_size), trust="untrusted",
+            value=_input_file_size_str(crash_context.input_file),
+            trust="untrusted",
         ),
         "input_path": TaintedString(value=str(crash_context.input_file), trust="untrusted"),
     }
@@ -669,21 +716,33 @@ class CrashAnalysisAgent:
             analysis_file = self.out_dir / "analysis" / f"{_safe_id(crash_context.crash_id)}.json"
             analysis_file.parent.mkdir(parents=True, exist_ok=True)
             
-            # Include input file information
-            input_info = {
+            # Include input file information. Size via the guarded
+            # helper — a vanished input file must not abort the save
+            # of an analysis the LLM already produced.
+            try:
+                _input_size: int | None = (
+                    crash_context.input_file.stat().st_size
+                )
+            except OSError:
+                _input_size = None
+            input_info: dict[str, object] = {
                 "input_file_path": str(crash_context.input_file),
-                "input_file_size": crash_context.input_file.stat().st_size,
+                "input_file_size": _input_size,
             }
-            
-            # Include input content (truncated if too large)
+
+            # Include input content (truncated if too large). Read
+            # only what the record keeps (+1 byte to detect
+            # truncation) — the record stores 500 bytes; loading the
+            # whole file just to slice it risks OOM on large fuzz
+            # corpora.
             try:
                 with open(crash_context.input_file, 'rb') as f:
-                    input_data = f.read()
-                    input_info["input_content_hex"] = input_data[:500].hex()
-                    # Include ASCII representation for readability
-                    input_info["input_content_ascii"] = input_data.decode('ascii', errors='replace')[:500]  # Truncate long inputs
-                    if len(input_data) > 500:
-                        input_info["input_content_ascii"] += "... (truncated)"
+                    input_data = f.read(501)
+                input_info["input_content_hex"] = input_data[:500].hex()
+                # Include ASCII representation for readability
+                input_info["input_content_ascii"] = input_data[:500].decode('ascii', errors='replace')
+                if len(input_data) > 500:
+                    input_info["input_content_ascii"] += "... (truncated)"
             except Exception as e:  # noqa: BLE001
                 input_info["input_content_error"] = str(e)
             
@@ -784,8 +843,13 @@ class CrashAnalysisAgent:
             if exploit_code:
                 crash_context.exploit_code = exploit_code
 
-                # Save exploit with full response for debugging
-                exploit_file = self.out_dir / "exploits" / f"{_safe_id(crash_context.crash_id)}_exploit.cpp"
+                # Save exploit with full response for debugging.
+                # Path derived via the module-level helper so writer
+                # and readers can never drift on the filename shape
+                # (sanitised id + .cpp extension).
+                exploit_file = exploit_artifact_path(
+                    self.out_dir, crash_context.crash_id,
+                )
                 exploit_file.parent.mkdir(parents=True, exist_ok=True)
                 exploit_file.write_text(exploit_code, encoding="utf-8")
 

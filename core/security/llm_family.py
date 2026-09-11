@@ -143,6 +143,18 @@ _FAMILY_TO_PROVIDER: dict[Family, str] = {
     "cohere": "cohere",
 }
 
+# Heads that :func:`bare_model_id` strips as a ``<provider>/`` prefix.
+# Union of the ROUTING provider strings and the family-detection
+# provider stems: ``family_of`` accepts ``google/gemini-…``,
+# ``meta-llama/Llama-…`` and ``mistralai/Mistral-…`` as
+# provider-qualified ids, so the bare-name peel must strip the same
+# heads — otherwise operator ``--model`` values in those spellings
+# never match their models.json entries.
+_BARE_STRIP_HEADS: frozenset[str] = (
+    frozenset(_FAMILY_TO_PROVIDER.values())
+    | frozenset(stem for stem, _ in _PROVIDER_STEMS)
+)
+
 
 def provider_for_family(family: Family) -> str:
     """Map a model family to its provider string (for ModelConfig)."""
@@ -356,7 +368,7 @@ def bare_model_id(model_id: str) -> str:
         return bare_model_id(needle)
     if "/" in needle:
         head, rest = needle.split("/", 1)
-        if head.lower() in {v for v in _FAMILY_TO_PROVIDER.values()}:
+        if head.lower() in _BARE_STRIP_HEADS:
             needle = rest
     return needle
 
@@ -432,12 +444,21 @@ def select_cross_family_checker(
 
     Returns ``None`` if no suitable candidate exists. ``"unknown"`` family
     candidates are skipped — they cannot be proven cross-family. The
+    same rule applies to the PRODUCER: an unrecognized producer id
+    (e.g. a rebadged or aggregator-aliased model) makes every
+    ``same_family`` comparison return False, which would hand back a
+    "cross-family" checker that may share the producer's lineage.
+    Unprovable is not cross-family, so an unknown producer returns
+    ``None`` — the caller skips the checker leg rather than trusting a
+    rebadged same-family model as an independent validator. The
     ordering of ``candidates`` is preserved so callers can pass a
     preference list (e.g. cheapest-first or fastest-first).
 
     Caller composes this with ``llm_response_schema.validate_response``:
     the chosen candidate becomes the model used inside the retry callback.
     """
+    if family_of(producer_model_id) == "unknown":
+        return None
     for candidate in candidates:
         if not same_family(producer_model_id, candidate) and family_of(candidate) != "unknown":
             return candidate

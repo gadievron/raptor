@@ -638,9 +638,11 @@ class TestSchemaValidationAdversarial:
 class TestCrossFamilyEdgeCases:
 
     def test_empty_model_id(self):
-        """Empty string should resolve to unknown family."""
+        """Empty string resolves to unknown family — an unprovable
+        producer gets NO checker (a rebadged same-family model would
+        otherwise pass as cross-family)."""
         pick = select_cross_family_checker("", ["gpt-5"])
-        assert pick == "gpt-5"
+        assert pick is None
 
     def test_all_candidates_same_family(self):
         pick = select_cross_family_checker(

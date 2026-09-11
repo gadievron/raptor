@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from core.recall.manifest import ExpectedFinding, Provenance, Tolerance
 from core.recall.matcher import (
+    canonical_cwe,
     clean_region_hits,
     match_findings,
     path_matches,
@@ -43,6 +44,29 @@ class TestPathMatching:
 
     def test_empty_produced_rejected(self):
         assert not path_matches("src/A.java", None)
+
+    def test_suffix_needs_component_boundary(self):
+        # foobar/x.java must not be credited against bar/x.java (a raw
+        # endswith would match), in either direction.
+        assert not path_matches("bar/x.java", "/work/repo/foobar/x.java")
+        assert not path_matches("foobar/x.java", "bar/x.java")
+
+    def test_boundary_suffix_still_matches(self):
+        assert path_matches("bar/x.java", "work/repo/bar/x.java")
+        assert path_matches("work/repo/bar/x.java", "bar/x.java")
+        assert path_matches("bar/x.java", "bar/x.java")
+
+
+class TestCanonicalCwe:
+    def test_bare_number_and_lowercase_normalise(self):
+        assert canonical_cwe("79") == "CWE-79"
+        assert canonical_cwe("cwe-79") == "CWE-79"
+        assert canonical_cwe("CWE-79") == "CWE-79"
+        assert canonical_cwe(79) == "CWE-79"
+
+    def test_empty_stays_empty(self):
+        assert canonical_cwe(None) == ""
+        assert canonical_cwe("") == ""
 
 
 class TestLineDrift:

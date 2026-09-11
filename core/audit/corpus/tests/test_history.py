@@ -980,3 +980,19 @@ class TestFullRunDelta:
             _label_rec("b.c:g", "clean", run_id="v2"),
         ])
         assert history.full_run_delta(store, "v2") is None
+
+
+class TestInvalidUtf8Line:
+    def test_one_bad_line_does_not_kill_the_generator(self, tmp_path):
+        # The decode happens in the loop header — one invalid-UTF-8
+        # line raised UnicodeDecodeError and lost every record after
+        # it, the exact failure the docstring promises to prevent.
+        from core.audit.corpus.history import iter_records
+
+        p = tmp_path / "store.jsonl"
+        with p.open("wb") as f:
+            f.write(b'{"record": "run", "n": 1}\n')
+            f.write(b'\xff\xfe not utf8 \xff\n')
+            f.write(b'{"record": "run", "n": 2}\n')
+        recs = list(iter_records(p))
+        assert [r["n"] for r in recs] == [1, 2]

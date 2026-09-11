@@ -14,11 +14,15 @@ informed by:
   4. **Compile-error anchor** — if compilation failed, do the
      errors mention the finding's file?
 
-When 3 or 4 heuristics fire → ``matches`` without LLM. When 0 fire
-→ ``off_target`` without LLM. When every evaluated heuristic fired
-(≥ 2 evaluated, the strong-partial case) → ``matches`` at reduced
-confidence, also without LLM. Any other 1-2-fired mix → uncertain
-ambiguity; escalate to a 2-step LLM tiebreak (describe-then-judge).
+Heuristics ABSTAIN (``None``) when their input is absent — a missing
+file path / function name / compile-error list is "no data", never a
+missed signal. When 3 or 4 heuristics fire → ``matches`` without
+LLM. When 0 fire across ≥ 2 evaluated heuristics → ``off_target``
+without LLM. When every evaluated heuristic fired (≥ 2 evaluated,
+the strong-partial case) → ``matches`` at reduced confidence, also
+without LLM. All-abstained (nothing to evaluate) → ``uncertain``
+without LLM. Everything else (mixed fires, a single evaluated miss)
+→ ambiguity; escalate to a 2-step LLM tiebreak (describe-then-judge).
 
 v1 is a **weak signal**, not authoritative. No ground-truth
 calibration exists. Downstream consumers should treat the verdict
@@ -89,15 +93,23 @@ SIGNAL_COMPILE_ERROR_ANCHOR = "compile_error_anchor"
 # ---------------------------------------------------------------------------
 
 
-def _file_overlap(finding_file_path: str | None, exploit_code: str) -> bool:
+def _file_overlap(
+    finding_file_path: str | None, exploit_code: str,
+) -> bool | None:
     """Does the exploit text mention the finding's file path?
 
     Matches either the full path (substring) or the basename (word-
     boundary regex). Word boundaries avoid matching ``vuln.c`` inside
     ``vulncheck.cpp``.
+
+    Returns ``None`` (abstain) when there is nothing to evaluate —
+    no file path on the finding, or no exploit text. "No data" must
+    not score identically to "evaluated and missed", or findings with
+    thin metadata manufacture confident off_target verdicts from zero
+    information.
     """
     if not finding_file_path or not exploit_code:
-        return False
+        return None
     if finding_file_path in exploit_code:
         return True
     basename = Path(finding_file_path).name
@@ -110,13 +122,16 @@ def _file_overlap(finding_file_path: str | None, exploit_code: str) -> bool:
 
 def _function_overlap(
     function_name: str | None, exploit_code: str,
-) -> bool:
+) -> bool | None:
     """Does the exploit text mention the finding's function name?
 
     Word-boundary match — ``check`` doesn't fire on ``checkpoint``.
+    Returns ``None`` (abstain) when the finding carries no function
+    name or there is no exploit text — same rationale as
+    :func:`_file_overlap`.
     """
     if not function_name or not exploit_code:
-        return False
+        return None
     return bool(
         re.search(r"\b" + re.escape(function_name) + r"\b", exploit_code)
     )
@@ -125,16 +140,18 @@ def _function_overlap(
 def _compile_error_anchor(
     finding_file_path: str | None,
     exploit_compile_errors: list[str] | None,
-) -> bool:
+) -> bool | None:
     """Do the compile errors mention the finding's file?
 
     A non-compiling exploit that gcc complains about *at the
     finding's source file* is at least targeting the right
-    compilation unit. False if compile_errors is empty (compile
-    succeeded or was skipped).
+    compilation unit. Returns ``None`` (abstain) when there is
+    nothing to evaluate: no compile errors exist (a clean compile —
+    the common case — says nothing about targeting) or the finding
+    carries no file path.
     """
     if not finding_file_path or not exploit_compile_errors:
-        return False
+        return None
     joined = "\n".join(exploit_compile_errors)
     if finding_file_path in joined:
         return True
@@ -349,7 +366,14 @@ def _initial_verdict(
     fired = [k for k, v in signals.items() if v is True]
     not_fired = [k for k, v in signals.items() if v is False]
 
-    if matched == 0:
+    # Confident off_target needs at least two evaluated misses — a
+    # single evaluated heuristic missing (e.g. only file_overlap had
+    # data and the exploit feeds raw bytes to stdin) is thin evidence
+    # for a 0.85-confidence verdict that hard-gates the CONFIRMED
+    # tier downstream. The 1-evaluated 0-matched case falls through
+    # to the ambiguous branch (LLM tiebreak, or uncertain without a
+    # client).
+    if matched == 0 and evaluated >= 2:
         return VERDICT_OFF_TARGET, 0.85, (
             f"no heuristics matched ({evaluated} evaluated); "
             f"exploit appears to target a different bug"
@@ -537,8 +561,19 @@ def _llm_tiebreak(
 
     cost_usd = 0.0
 
-    # Step 1: describe what the exploit does.
-    describe_user, describe_sys = _build_describe_prompt(exploit_code)
+    # Step 1: describe what the exploit does. Prompt CONSTRUCTION is
+    # guarded too — an ImportError from the envelope substrate or a
+    # message-shape drift in build_prompt must degrade to uncertain
+    # (the module's "never raises" contract), not crash the caller's
+    # per-finding loop.
+    try:
+        describe_user, describe_sys = _build_describe_prompt(exploit_code)
+    except Exception as e:  # noqa: BLE001 — best-effort
+        return (
+            VERDICT_UNCERTAIN, 0.0,
+            "LLM describe-prompt build failed; falling back to uncertain",
+            cost_usd, f"describe-prompt: {type(e).__name__}: {e}",
+        )
     try:
         describe_response = llm_client.generate(
             describe_user,
@@ -580,14 +615,23 @@ def _llm_tiebreak(
 
     log.debug("intent_match describe step: %s...", description[:200])
 
-    # Step 2: judge whether description matches finding.
-    judge_user, judge_sys = _build_judge_prompt(
-        description=description,
-        finding_file_path=finding_file_path,
-        finding_function_name=finding_function_name,
-        finding_cwe=finding_cwe,
-        finding_message=finding_message,
-    )
+    # Step 2: judge whether description matches finding. Same
+    # construction guard as the describe step.
+    try:
+        judge_user, judge_sys = _build_judge_prompt(
+            description=description,
+            finding_file_path=finding_file_path,
+            finding_function_name=finding_function_name,
+            finding_cwe=finding_cwe,
+            finding_message=finding_message,
+        )
+    except Exception as e:  # noqa: BLE001 — best-effort
+        return (
+            VERDICT_UNCERTAIN, 0.0,
+            "LLM judge-prompt build failed; falling back to uncertain "
+            f"(describe was: {description[:80]!r})",
+            cost_usd, f"judge-prompt: {type(e).__name__}: {e}",
+        )
     try:
         judge_response = llm_client.generate(
             judge_user,

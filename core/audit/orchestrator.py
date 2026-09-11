@@ -382,11 +382,57 @@ def install_sigterm_grace() -> bool:
         return False
     import signal as _signal
     try:
+        prev = _signal.getsignal(_signal.SIGTERM)
         _signal.signal(_signal.SIGTERM, _handle_sigterm)
     except (ValueError, OSError):
         logger.debug("SIGTERM handler installation failed", exc_info=True)
         return False
+    _sigterm_state["prev"] = prev
     _sigterm_state["installed"] = True
+    return True
+
+
+def uninstall_sigterm_grace() -> bool:
+    """Restore the pre-install SIGTERM disposition — main thread, and
+    only while the installed handler is still ours.
+
+    The handler is PROCESS-WIDE state. The CLI process never needs to
+    undo it, but in-process embedders and tests do: a leaked salvage
+    handler is inherited by every later fork child of the host
+    process, where SIGTERM then starts a salvage drain instead of
+    killing the child — signal-sensitive work elsewhere in the
+    process (pool teardown escalation, subprocess supervision)
+    misreads that as an unresponsive process and SIGKILLs. Install /
+    uninstall must stay symmetric so hosts can scope the salvage
+    semantics to the run.
+
+    Returns True when the uninstall completed — the disposition was
+    restored, or a foreign current handler (someone installed over
+    us) was deliberately left in place with only the bookkeeping
+    cleared. False when nothing was installed or the restore failed.
+    """
+    if not _sigterm_state["installed"]:
+        return False
+    if _threading.current_thread() is not _threading.main_thread():
+        return False
+    import signal as _signal
+    try:
+        if _signal.getsignal(_signal.SIGTERM) is _handle_sigterm:
+            # ``prev`` can be None: getsignal() reports None for a
+            # handler installed by non-Python (C-level) means — the
+            # embedder case this API exists for. signal.signal()
+            # cannot re-install that; fall back to the default
+            # disposition rather than raising TypeError mid-teardown.
+            prev = _sigterm_state.get("prev")
+            if prev is None:
+                prev = _signal.SIG_DFL
+            _signal.signal(_signal.SIGTERM, prev)
+    except (TypeError, ValueError, OSError):
+        # TypeError: exotic non-handler value slipped into ``prev``.
+        logger.debug("SIGTERM handler restore failed", exc_info=True)
+        return False
+    _sigterm_state["installed"] = False
+    _sigterm_state.pop("prev", None)
     return True
 
 
@@ -798,12 +844,12 @@ class ReviewOutcome:
 
         et_lower = self.evidence_tool.strip().lower()
         tools = et_lower.split("+")
-        if any(t.strip() in self._CONFIRMED_EVIDENCE for t in tools):
-            return VerificationTier.CONFIRMED.value
-        if any(t.strip().endswith(":witness") for t in tools):
-            return VerificationTier.CONFIRMED.value
 
-        from .evidence_grade import _PROVENANCE_WRAPPERS, is_tool_evidence
+        from .evidence_grade import (
+            _PROVENANCE_WRAPPERS,
+            _is_single_tool_evidence,
+            is_tool_evidence,
+        )
         if not is_tool_evidence(self.evidence_tool):
             # Detection-role receipts corroborate but may not convict:
             # a stamp the evidence-grade firewall rejects must not
@@ -812,6 +858,20 @@ class ReviewOutcome:
             # findings disproven; the dominant stamps were
             # detection-role smt:check-* variants.)
             return VerificationTier.LLM_ONLY.value
+
+        # Confirmed-tier stamps count only on parts that are
+        # THEMSELVES tool receipts: the firewall must run BEFORE the
+        # ``:witness`` suffix check, or ``llm-claimed:smt:…:witness``
+        # (a pure model claim after sanitization) exports
+        # verification_tier=confirmed — hostile-repo steerable. A real
+        # ``smt:…:witness`` receipt still grades confirmed below.
+        tool_parts = [
+            t.strip() for t in tools if _is_single_tool_evidence(t.strip())
+        ]
+        if any(t in self._CONFIRMED_EVIDENCE for t in tool_parts):
+            return VerificationTier.CONFIRMED.value
+        if any(t.endswith(":witness") for t in tool_parts):
+            return VerificationTier.CONFIRMED.value
 
         first_tool = et_lower.split("+")[0].strip()
         for _wrapper in _PROVENANCE_WRAPPERS:
@@ -1047,6 +1107,54 @@ def _joern_target(config: OrchestratorConfig) -> Path:
     return config.target_path
 
 
+def _gap_sloc(gap: dict[str, Any]) -> int:
+    """Best-effort SLOC for a gap: inventory sloc, else the line span.
+
+    ``or 0``, not a ``get()`` default, on the span fields: line_end /
+    line_start may be present but None (inventory rows without a
+    span), and subtraction on None crashed the run pre-review.  A
+    half-missing span is floored at 0 (span unknown), never negative.
+    """
+    return gap.get("sloc") or max(
+        0, (gap.get("line_end") or 0) - (gap.get("line_start") or 0),
+    )
+
+
+def _await_joern_build(
+    joern_future: Future, joern_timeout_s: int,
+) -> Future | None:
+    """Wait for a still-running Joern CPG build after the main loop.
+
+    Returns the completed future for :func:`drain_joern_future` to
+    consume, or None when the build stalled or failed.  Every failure
+    mode degrades to "no Joern evidence" (mirroring
+    ``drain_joern_future``'s guarded path) — an exception escaping
+    here would kill the deepen/sweep/export passes after paid reviews.
+    """
+    from concurrent.futures import TimeoutError as _CFTimeoutError
+
+    logger.info(
+        "waiting for Joern CPG build (timeout %ds)...", joern_timeout_s,
+    )
+    try:
+        # Both timeout classes: builtin TimeoutError and
+        # concurrent.futures.TimeoutError are distinct on Python 3.10
+        # (aliased from 3.11).
+        joern_future.result(timeout=joern_timeout_s)
+    except (TimeoutError, _CFTimeoutError):
+        logger.warning("Joern CPG build stalled — skipping Joern evidence")
+        joern_future.cancel()
+        return None
+    except Exception:
+        # result() re-raises the build's own exception.
+        logger.warning(
+            "Joern CPG build failed — skipping Joern evidence",
+            exc_info=True,
+        )
+        return None
+    return joern_future
+
+
 def _get_dangerous_flows(approx) -> dict | None:
     """Extract dangerous_flows from a TaintApprox object or dict.
 
@@ -1275,7 +1383,7 @@ def run_orchestrator(
 
     if prep_cache is None or not prep_cache.get("_caches_cleared"):
         _sink_guard_cache.clear()
-        _file_lines_cache.clear()
+        _clear_file_lines_cache()
         _parse_wrapper_cache.clear()
         # line_end values come from the run's inventory — stale bounds
         # from a previous in-process run mis-window the sweeps.
@@ -2203,6 +2311,21 @@ def review_one_function(
             # real review instead of recording a mechanical clean. The
             # prefilter's hits (below) still feed review context.
             pf_result.skip_llm = False
+        if pf_result.skip_llm and _validate_confirmed_gap(
+            evidence_index, gap_key,
+        ):
+            # Never-skip-validate-confirmed floor — the same rung the
+            # triage classifier enforces. A /validate run CONFIRMED a
+            # defect here; the prefilter's mechanical "cannot contain
+            # vulnerabilities" verdict is exactly what a confirmed
+            # detection-evasion defect looks like from the outside, so
+            # this lane must never journal a mechanical clean over it.
+            logger.info(
+                "prefilter skip overridden for %s — /validate-confirmed"
+                " defect forces a full review",
+                gap_key,
+            )
+            pf_result.skip_llm = False
         if pf_result.skip_llm:
             if ctx.get("sink_unreachable"):
                 _increment_tier(result, "sink_unreach", "confirmed")
@@ -3093,27 +3216,7 @@ def review_one_function(
                 exc_info=True,
             )
 
-    # In-run rule precision feedback. ``is_tp`` mirrors record_match's
-    # convention: a claim verdict on the matched function counts the
-    # match as a true positive; clean/dormant counts it false.
-    _rule_is_tp = outcome.status in ("finding", "suspicious")
-    if (
-        pf_result
-        and pf_result.hits
-        and checker_library
-        and checker_library.all_entries()
-    ):
-        library_rule_ids = {
-            e.rule_id for e in checker_library.all_entries()
-        }
-        for hit in pf_result.hits:
-            checker_library.record_match(hit.rule_id, _rule_is_tp)
-            if hit.rule_id in library_rule_ids:
-                _note_rule_triage(shared, hit.rule_id, _rule_is_tp)
-    if outcome.status != "error" and gap.get("synthesis_rule_id"):
-        # This gap exists because a run-synthesized rule matched it —
-        # the review verdict is a direct triage of that match.
-        _note_rule_triage(shared, gap["synthesis_rule_id"], _rule_is_tp)
+    _triage_rule_hits(shared, outcome, gap, pf_result, checker_library)
 
     disagree = _check_layer_disagreement(outcome, ctx, gap)
     if disagree is not None and layer_disagreements is not None:
@@ -3812,11 +3915,19 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None):
     from .capabilities import probe_capabilities
     from .degradation import assess_degradation, format_degradation_report
 
-    caps = probe_capabilities(
-        binary_path=Path(config.binary_verdicts["_binary_path"])
-        if config.binary_verdicts and "_binary_path" in config.binary_verdicts
-        else None,
-    )
+    # Resolve the analysed binary from the enriched inventory's
+    # binary_oracle summary — the declared-binaries block
+    # ``_current_binary_build_ids`` and the triage consumers read.
+    # The old read here consulted a ``binary_verdicts["_binary_path"]``
+    # key no producer writes (``extract_verdicts`` emits only
+    # ``{function: verdict}``), so the capability probe's
+    # binary_available / dwarf_available flags were permanently False.
+    _caps_binary: Path | None = None
+    for _bin_path in _current_binary_build_ids(config, checklist).values():
+        if _bin_path and Path(_bin_path).is_file():
+            _caps_binary = Path(_bin_path)
+            break
+    caps = probe_capabilities(binary_path=_caps_binary)
     tool_capabilities = {
         "joern": joern_server is not None,
         "binary": binary_bridge_early is not None,
@@ -6308,9 +6419,7 @@ def _run_audit_body(
             and key not in trust_boundary_set
             and not (mechanical_findings and mechanical_findings.get(key))
         ):
-            _sloc = gap.get("sloc") or (
-                gap.get("line_end", 0) - gap.get("line_start", 0)
-            )
+            _sloc = _gap_sloc(gap)
             if 0 < _sloc <= 20:
                 _sc_outcome = ReviewOutcome(
                     file=gap["file"],
@@ -7195,13 +7304,7 @@ def _run_audit_body(
     # --- Post-executor: joern drain + constraint save ---
     if joern_future is not None:
         if not joern_future.done():
-            logger.info("waiting for Joern CPG build (timeout %ds)...", joern_timeout_s)
-            try:
-                joern_future.result(timeout=joern_timeout_s)
-            except TimeoutError:
-                logger.warning("Joern CPG build stalled — skipping Joern evidence")
-                joern_future.cancel()
-                joern_future = None
+            joern_future = _await_joern_build(joern_future, joern_timeout_s)
         if joern_future is not None:
             evidence_index = _drain_joern_future(
                 joern_future,
@@ -7416,11 +7519,15 @@ def _run_audit_body(
                             for item in ls_prepared
                         }
                         for fut in as_completed(ls_futs):
+                            # Harvest BEFORE the stop decision: this
+                            # future already completed — its outcome
+                            # is paid work and must reach the tally
+                            # (see the batched-review loop above).
+                            ls_raw.append(fut.result())
                             if _check_budget(config, start_time, result):
                                 for f in ls_futs:
                                     f.cancel()
                                 break
-                            ls_raw.append(fut.result())
 
                 for idx, outcome, exc in sorted(ls_raw, key=lambda r: r[0]):
                     _, target_gap, prior, _ctx = ls_prepared[idx]
@@ -8240,6 +8347,18 @@ def _run_audit_body(
             _hook(result, config)
         except Exception:
             logger.debug("pre-export hook failed", exc_info=True)
+
+    # Re-persist findings.json now that every status-mutating pass
+    # (receipt rescue, validate, error retry, dark verification,
+    # absent demotion, phase 2, pre-export hooks) has run: the
+    # mid-pipeline write above predates them, so late-minted findings
+    # were missing and retracted ones shipped. Unconditional (no
+    # findings>0 gate) so a retract-to-zero run empties the file.
+    if config.out_dir:
+        try:
+            _persist_findings(result, config)
+        except Exception:
+            logger.debug("final findings persist failed", exc_info=True)
 
     # Journal entries were committed mid-loop, pre-resolution — append
     # corrective entries so the journal reflects final statuses (dark
@@ -9418,7 +9537,10 @@ def _run_mechanical_detectors(
     try:
         from .dispatch_completeness import find_dispatch_gaps
 
-        for dg in find_dispatch_gaps(call_graphs or {}, source_texts):
+        for dg in find_dispatch_gaps(
+            call_graphs or {}, source_texts,
+            target_root=config.target_path,
+        ):
             _add(
                 dg.table.file,
                 dg.table.function,
@@ -10598,6 +10720,17 @@ def _classify_error(exc: Exception) -> str:
             return "timeout"
     except ImportError:
         pass
+    # Chain-walking content-filter check, deliberately AFTER the
+    # recoverable classes above: the walk follows non-suppressed
+    # __context__, and an error raised while handling a blocked
+    # failure must keep its own (re-queueable) class rather than
+    # inherit non-recoverable content_filter from the chain.
+    try:
+        from core.llm.structured_call import is_content_filter_error
+        if is_content_filter_error(exc):
+            return "content_filter"
+    except ImportError:
+        pass
     if any(
         k in msg
         for k in (
@@ -10724,10 +10857,21 @@ def _retry_error_outcomes(
         if _check_budget(config, start_time, result):
             break
 
+        # Rebuild the gap WITH its line span (checklist lookup first,
+        # outcome.line — stamped from the original gap's line_start —
+        # as fallback): a span-less gap makes the retry review the
+        # file's opening lines instead of the errored function, and
+        # the wrong-source verdict then replaces the error outcome.
+        gap = _find_gap_in_checklist(
+            checklist, outcome.file, outcome.function,
+        ) or {"file": outcome.file, "name": outcome.function}
+        if not gap.get("line_start") and outcome.line:
+            gap["line_start"] = outcome.line
+
         try:
             ctx = _build_context(
                 config,
-                {"file": outcome.file, "name": outcome.function},
+                gap,
                 checklist,
                 None,
             )
@@ -10761,15 +10905,21 @@ def _retry_error_outcomes(
                 break
             continue
 
-        if outcome.error_class == "timeout" and new_outcome.status != "error":
+        new_outcome.line = gap.get("line_start", 0) or outcome.line
+
+        if (
+            outcome.error_class in ("truncation", "timeout")
+            and new_outcome.status != "error"
+        ):
             # Mirror the inline reduced retry's provenance tag: this
-            # verdict came from stripped context, so it must not
-            # become durable full-confidence coverage evidence —
-            # cross-run reuse (gaps._reuse_ineligibility) refuses to
-            # import context_reduced verdicts and the next run
-            # re-reviews the function at full context. (Deepen has
-            # already run by this point in the pipeline, so the tag's
-            # effect is purely cross-run.)
+            # verdict came from stripped context (both the truncation
+            # and timeout lanes strip above), so it must not become
+            # durable full-confidence coverage evidence — cross-run
+            # reuse (gaps._reuse_ineligibility) refuses to import
+            # context_reduced verdicts and the next run re-reviews the
+            # function at full context. (Deepen has already run by
+            # this point in the pipeline, so the tag's effect is
+            # purely cross-run.)
             new_outcome.context_reduced = True
             if new_outcome.review_result is not None:
                 new_outcome.review_result["context_reduced"] = True
@@ -11154,6 +11304,19 @@ class StudyQueue:
     def enqueue(self, item: StudyRequest) -> None:
         concept = _extract_concept_from_question(item.question)
         with self._not_empty:
+            if concept and concept.lower() in self._studied_concepts:
+                # Already studied: re-adding would re-arm the
+                # executor's suppression hold for a concept study can
+                # make no further progress on (livelock on uncapped
+                # runs). This also drops re-asks after a FAILED study
+                # (failure marks studied for the same anti-livelock
+                # reason) — log so the blackholed question is
+                # diagnosable.
+                logger.debug(
+                    "study-queue: dropping question for already-"
+                    "studied concept %r: %s", concept, item.question,
+                )
+                return
             self._queue.append(item)
             if concept:
                 self._pending_concepts.add(concept.lower())
@@ -11458,12 +11621,23 @@ def _partition_study_batch(
 
 def _mark_concepts_studied(
     study_queue: StudyQueue, reqs: list[StudyRequest],
+    exclude: list[StudyRequest] | None = None,
 ) -> None:
-    """Release the suppression gate for this batch's concepts."""
+    """Release the suppression gate for this batch's concepts.
+
+    ``exclude``: requests whose concepts must stay held — a dropped
+    within-batch duplicate shares its concept with a fresh sibling
+    that is still being studied.
+    """
+    excluded = set()
+    for req in exclude or []:
+        c = _extract_concept_from_question(req.question)
+        if c:
+            excluded.add(c.lower())
     batch_concepts = set()
     for req in reqs:
         c = _extract_concept_from_question(req.question)
-        if c:
+        if c and c.lower() not in excluded:
             batch_concepts.add(c.lower())
     if batch_concepts:
         study_queue.mark_studied(batch_concepts)
@@ -12746,10 +12920,21 @@ def _study_consumer_loop(
 
         dm = shared.domain_model
         fresh = _dedup_batch(batch, seen_concepts, dm)
+        # Every skip path below must release the suppression gate for
+        # the concepts it drops — a concept left in _pending_concepts
+        # with no future batch to study it holds the executor forever.
+        dropped = [req for req in batch if req not in fresh]
+        if dropped:
+            # Within-batch duplicates: the FRESH sibling still studies
+            # this concept, so releasing its suppression hold now would
+            # dispatch held reviews minutes before the study result
+            # exists. Only concepts with no fresh sibling release here.
+            _mark_concepts_studied(study_queue, dropped, exclude=fresh)
         if not fresh:
             continue
 
         if not config.out_dir:
+            _mark_concepts_studied(study_queue, fresh)
             continue
 
         # Flush to reading-list.json (Thread B is sole writer)
@@ -12771,6 +12956,7 @@ def _study_consumer_loop(
                 "study-consumer: flush to reading-list failed",
                 exc_info=True,
             )
+            _mark_concepts_studied(study_queue, fresh)
             continue
 
         # Language dispatch: C/C++ questions resolve against the
@@ -12886,6 +13072,7 @@ def _study_consumer_loop(
             if concept_index_ref is not None:
                 _build_concept_index_from_prep(
                     concept_index_ref, checklist, config.out_dir,
+                    target_path=config.target_path,
                 )
 
         # Multi-language requests: resolve in-process and merge the
@@ -12969,6 +13156,7 @@ def _study_consumer_loop(
             logger.warning(
                 "study-consumer: study-run failed", exc_info=True,
             )
+            _mark_concepts_studied(study_queue, fresh)
             continue
         study_queue.note_progress()
 
@@ -13158,8 +13346,17 @@ def _build_concept_index_from_prep(
     concept_index_ref: list,
     checklist: dict,
     out_dir: Path,
+    target_path: Path | str | None = None,
 ) -> None:
-    """Build ConceptIndex after study-prep, using its type data."""
+    """Build ConceptIndex after study-prep, using its type data.
+
+    ``target_path`` is the RUN's source root (config.target_path).
+    The checklist's own ``target_path`` field is never used as the
+    join root: the checklist is an LLM-writable artifact, so letting
+    it choose the base directory turned every ``files[].path`` read
+    into an arbitrary host-file read.  Without a caller-supplied root
+    the index is built without source bodies.
+    """
     try:
         study_list_path = out_dir / "study-list.json"
         if not study_list_path.is_file():
@@ -13189,8 +13386,9 @@ def _build_concept_index_from_prep(
         if not type_names:
             return
 
-        target_path = checklist.get("target_path", "")
-        enriched = _flatten_checklist_with_source(checklist, target_path)
+        enriched = _flatten_checklist_with_source(
+            checklist, str(target_path or ""),
+        )
         if not enriched:
             return
         idx = ConceptIndex.build({"items": enriched}, type_names)
@@ -13212,8 +13410,17 @@ def _flatten_checklist_with_source(
     checklist: dict,
     target_path: str,
 ) -> list[dict]:
-    """Flatten files[].items[] and read source bodies from disk."""
+    """Flatten files[].items[] and read source bodies from disk.
+
+    ``files[].path`` values are LLM-writable checklist fields, so each
+    join is containment-checked (``core.paths.confine``): an absolute
+    path discards the base under ``/`` semantics and ``../`` segments
+    escape it (CWE-22).  Escaping entries keep their metadata but get
+    no source body.
+    """
     from pathlib import Path as _Path
+
+    from core.paths import confine
 
     base = _Path(target_path) if target_path else None
     result: list[dict] = []
@@ -13233,14 +13440,21 @@ def _flatten_checklist_with_source(
                 le = item.get("line_end")
                 if ls and le:
                     if rel_path not in src_cache:
-                        src_file = base / rel_path
-                        try:
-                            src_cache[rel_path] = (
-                                src_file.read_text(errors="replace")
-                                .splitlines()
+                        src_file = confine(base, rel_path)
+                        if src_file is None:
+                            logger.warning(
+                                "checklist path escapes target root, "
+                                "skipping source read: %r", rel_path,
                             )
-                        except OSError:
                             src_cache[rel_path] = []
+                        else:
+                            try:
+                                src_cache[rel_path] = (
+                                    src_file.read_text(errors="replace")
+                                    .splitlines()
+                                )
+                            except OSError:
+                                src_cache[rel_path] = []
                     lines = src_cache[rel_path]
                     source = "\n".join(lines[ls - 1:le])
             result.append({
@@ -13641,6 +13855,42 @@ def _synthesis_hits_to_gaps(
 _RULE_QUARANTINE_MIN_TRIAGES = 3
 
 
+def _triage_rule_hits(
+    shared: SharedState,
+    outcome: ReviewOutcome,
+    gap: dict[str, Any],
+    pf_result: PrefilterResult | None,
+    checker_library: RuleLibrary | None,
+) -> None:
+    """In-run rule precision feedback.  ``is_tp`` mirrors
+    record_match's convention: a claim verdict on the matched function
+    counts the match as a true positive; clean/dormant counts it
+    false.  Error-status outcomes say nothing about the rule (the
+    review never happened) and record neither — a transport brownout
+    must not retire healthy rules as all-FP.
+    """
+    if outcome.status == "error":
+        return
+    _rule_is_tp = outcome.status in ("finding", "suspicious")
+    if (
+        pf_result
+        and pf_result.hits
+        and checker_library
+        and checker_library.all_entries()
+    ):
+        library_rule_ids = {
+            e.rule_id for e in checker_library.all_entries()
+        }
+        for hit in pf_result.hits:
+            checker_library.record_match(hit.rule_id, _rule_is_tp)
+            if hit.rule_id in library_rule_ids:
+                _note_rule_triage(shared, hit.rule_id, _rule_is_tp)
+    if gap.get("synthesis_rule_id"):
+        # This gap exists because a run-synthesized rule matched it —
+        # the review verdict is a direct triage of that match.
+        _note_rule_triage(shared, gap["synthesis_rule_id"], _rule_is_tp)
+
+
 def _note_rule_triage(shared: SharedState, rule_id: str, is_tp: bool) -> None:
     """Record one triaged match for a synthesized/library rule and
     quarantine the rule for the remainder of the run at 0% precision.
@@ -14036,7 +14286,19 @@ _RACE_KW = ("race condition", "toctou", "time-of-check", "time of check",
             "concurrent", "concurrently", "data race", "deadlock", "livelock")
 
 _RACE_EVIDENCE_PREFIX = ("smt:", "coccinelle:", "semgrep:", "codeql:", "joern:",
-                         "sarif:", "prefilter:lock", "prefilter:race")
+                         "sarif:", "prefilter:lock", "prefilter:race",
+                         # Concurrency-relevant confirm channels only.
+                         # Deliberately NOT the full channel roster:
+                         # consistency:/fail_open/api_boundary receipts
+                         # confirm non-concurrency properties and must
+                         # not shield a race hypothesis they say
+                         # nothing about. critique: is admitted because
+                         # its stamp is hypothesis-correlated at the
+                         # stamping site. llm-claimed:* never matches —
+                         # LLM-provided values are namespaced before
+                         # they reach evidence_tool.
+                         "lock_region:", "compiler:", "dynamic:",
+                         "critique:")
 
 _PROTECTION_RE = re.compile(
     r"\b(?:protected\s+by|under\s+lock|held\s+(?:by\s+)?lock|rcu_read_lock"
@@ -14062,8 +14324,10 @@ def _apply_speculative_race_demotion(outcome: ReviewOutcome) -> ReviewOutcome:
     if not any(kw in hyp for kw in _RACE_KW):
         return outcome
 
-    ev = outcome.evidence_tool or ""
-    if ev and any(ev.startswith(p) for p in _RACE_EVIDENCE_PREFIX):
+    # Multi-tool confirmations are '+'-joined (e.g. "smt:x+lock_region:y")
+    # — test each component, not just the string head.
+    ev_parts = [p for p in (outcome.evidence_tool or "").split("+") if p]
+    if any(part.startswith(_RACE_EVIDENCE_PREFIX) for part in ev_parts):
         return outcome
 
     key = f"{outcome.file}:{outcome.function}"
@@ -14183,6 +14447,25 @@ def _check_language_cwe_mismatch(
     return None
 
 
+def _validate_confirmed_gap(
+    evidence_index: dict[str, EvidenceRecord] | None,
+    gap_key: str,
+) -> bool:
+    """Whether a prior /validate run CONFIRMED a defect in this function.
+
+    Reads the validate-bridge verdict history attached to the evidence
+    record (the same source ``validate_history_keys`` derives the
+    triage classifier's ``validate_confirmed_keys`` from). Consumed by
+    the review-time prefilter skip lane: a /validate-CONFIRMED function
+    must never be resolved by a mechanical skip.
+    """
+    if not evidence_index:
+        return False
+    rec = evidence_index.get(gap_key)
+    entry = getattr(rec, "validate_history", None) if rec else None
+    return bool(isinstance(entry, dict) and entry.get("confirmed"))
+
+
 def _run_prefilter_for_gap(
     config: OrchestratorConfig,
     gap: dict[str, Any],
@@ -14236,6 +14519,16 @@ _file_lines_cache: OrderedDict[tuple[str, float, int], list | None] = (
 _file_lines_cache_bytes = 0
 _file_lines_cache_lock = _threading.Lock()
 
+
+def _clear_file_lines_cache() -> None:
+    """Clear the lines cache AND its byte counter together — a stale
+    counter after a bare .clear() permanently shrinks the byte bound
+    for every later in-process run."""
+    global _file_lines_cache_bytes
+    with _file_lines_cache_lock:
+        _file_lines_cache.clear()
+        _file_lines_cache_bytes = 0
+
 # Same-file parse-wrapper names for the parsed-int contract screen,
 # keyed like _file_lines_cache (absolute path) so concurrent targets
 # in one process never share entries.
@@ -14248,8 +14541,25 @@ def _read_raw_source(
     line_start: int,
     line_end: int | None,
 ) -> str:
-    """Read raw source lines without line-number prefixes."""
-    full_path = target_path / file_path
+    """Read raw source lines without line-number prefixes.
+
+    Shared sink for every raw-source caller: ``file_path`` values come
+    from run artefacts (checklists, gap records, finding fields — all
+    LLM-writable), so the join is containment-checked
+    (``core.paths.confine``): an absolute value discards
+    ``target_path`` entirely under ``/`` semantics and ``../`` values
+    walk out of the root (CWE-22).  Escaping paths degrade to the
+    function's normal empty-string result.
+    """
+    from core.paths import confine
+
+    full_path = confine(target_path, file_path)
+    if full_path is None:
+        logger.warning(
+            "_read_raw_source: refusing path outside target root: %r",
+            file_path,
+        )
+        return ""
     try:
         st = full_path.stat()
     except OSError:
@@ -14561,11 +14871,23 @@ def _hypothesis_to_tool_chain(
         seen_types.add("semgrep")
     elif not semgrep_rule and "semgrep" not in seen_types:
         try:
-            from .sweep import mechanical_check_to_semgrep
+            from .sweep import mechanical_check_to_semgrep_keyed
 
-            mc_pattern = mechanical_check_to_semgrep(hypothesis)
-            if mc_pattern:
-                chain.append({"type": "semgrep", "config": {"pattern": mc_pattern}})
+            keyed_mc = mechanical_check_to_semgrep_keyed(hypothesis)
+            if keyed_mc:
+                mc_pattern, mc_keyword = keyed_mc
+                # keyword travels with the pattern: mechanical-check
+                # patterns are presence-level shapes, so the sweep must
+                # run them with the identifier-consistency and
+                # negative-control caps armed (a keyword-less entry
+                # disables both and a bare presence match stamped
+                # promotion-grade evidence on clean code).
+                chain.append({
+                    "type": "semgrep",
+                    "config": {
+                        "pattern": mc_pattern, "keyword": mc_keyword,
+                    },
+                })
                 seen_types.add("semgrep")
         except ImportError:
             pass
@@ -14771,8 +15093,10 @@ def _hypothesis_to_tool_chain(
             pass
         else:
             codeql_query = codeql_query_for_cwe(cwe)
-            if codeql_query:
+            if codeql_query and _codeql_query_file(codeql_query):
                 chain.append({"type": "codeql", "config": {"query": codeql_query}})
+            elif codeql_query:
+                _note_codeql_unsupported_query_id(codeql_query)
 
     if "integer_truncation" not in seen_types:
         try:
@@ -15133,6 +15457,75 @@ def _note_codeql_degraded_skip(file_path: str, function_name: str) -> None:
     )
 
 
+# Query IDs already reported as unsupported (log once per id, not once
+# per dispatch — a hot CWE class would otherwise spam the log).
+_CODEQL_UNSUPPORTED_IDS_LOGGED: set[str] = set()
+
+
+def _codeql_query_file(query: str) -> bool:
+    """Whether a chain codeql query spec is dispatchable.
+
+    ``run_codeql_sweep`` requires an existing on-disk query file; the
+    CWE dispatch table carries pack query IDs (``cpp/overflow-buffer``)
+    that nothing in this codebase resolves to a file — dispatching one
+    errors unconditionally.
+    """
+    return bool(query) and Path(query).exists()
+
+
+def _note_codeql_unsupported_query_id(
+    query: str, file_path: str = "", function_name: str = "",
+) -> None:
+    """One loud line per query id when a codeql step names a query ID
+    instead of an on-disk query file, debug after — honest degradation
+    instead of a permanently erroring dispatch."""
+    if query not in _CODEQL_UNSUPPORTED_IDS_LOGGED:
+        _CODEQL_UNSUPPORTED_IDS_LOGGED.add(query)
+        logger.info(
+            "codeql chain step unsupported: codeql query id %r is not "
+            "an on-disk query file and no resolver exists — skipping "
+            "(fallback channels cover the claim)",
+            query,
+        )
+    logger.debug(
+        "tool_chain codeql skipped %s:%s — unsupported query id %r",
+        file_path, function_name, query,
+    )
+
+
+def _pattern_rule_file(pattern: str, file_path: str) -> str | None:
+    """Wrap a raw Semgrep pattern in a temp ``audit_sweep_`` rule file.
+
+    ``run_semgrep_sweep`` takes a rule config FILE, never a raw
+    pattern; chain entries built from ``mechanical_check_to_semgrep``
+    carry ``{"pattern": ...}`` only.  The ``audit_sweep_`` prefix
+    routes the file into the semgrep leg's existing unlink cleanup.
+    Returns None when the temp file cannot be written.
+    """
+    from .hypothesis_mapping import semgrep_language_for
+
+    lang = semgrep_language_for(file_path)
+    body = "".join(f"      {ln}\n" for ln in pattern.splitlines())
+    rule_yaml = (
+        "rules:\n"
+        "  - id: audit-sweep-mechanical-check\n"
+        "    pattern: |\n"
+        f"{body}"
+        "    message: 'Mechanical check validation'\n"
+        f"    languages: [{lang}]\n"
+        "    severity: WARNING\n"
+    )
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            prefix="audit_sweep_", suffix=".yaml", text=True,
+        )
+        with os.fdopen(fd, "w") as fh:
+            fh.write(rule_yaml)
+    except OSError:
+        return None
+    return tmp_name
+
+
 # CWEs already reported as having no dispatch entry (log once per run,
 # not once per finding — a hot class would otherwise spam the log).
 _UNMAPPED_CWES_LOGGED: set[str] = set()
@@ -15287,8 +15680,10 @@ def _cwe_fallback_chain(
     chain.extend({"type": "coccinelle", "config": {"rule": cocci_rule}} for cocci_rule in cocci_rules_for_cwe(cwe))
 
     codeql_query = codeql_query_for_cwe(cwe)
-    if codeql_query:
+    if codeql_query and _codeql_query_file(codeql_query):
         chain.append({"type": "codeql", "config": {"query": codeql_query}})
+    elif codeql_query:
+        _note_codeql_unsupported_query_id(codeql_query)
 
     if joern_applicable(cwe):
         sinks = sinks_for_cwe(cwe)
@@ -15616,7 +16011,27 @@ def _run_tool_chain(
                             len(cached),
                         )
 
-                rule_path = tool_cfg["rule"]
+                rule_path = tool_cfg.get("rule") or ""
+                if not rule_path and tool_cfg.get("pattern"):
+                    # Raw-pattern entries (mechanical_check_to_semgrep)
+                    # carry no rule file — wrap the pattern into a
+                    # temp rule run_semgrep_sweep can execute.
+                    rule_path = _pattern_rule_file(
+                        tool_cfg["pattern"], file_path,
+                    ) or ""
+                if not rule_path:
+                    logger.debug(
+                        "tool_chain semgrep skipped %s:%s — no "
+                        "rule/pattern config",
+                        file_path, function_name,
+                    )
+                    if errored_types is not None:
+                        errored_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "semgrep", "errors",
+                        )
+                    continue
                 # keyword marks a dynamic per-hypothesis rule: only
                 # those get the identifier-consistency and
                 # negative-control gates (stock rules are curated).
@@ -16299,7 +16714,12 @@ def _run_tool_chain(
                         function_name=function_name,
                         cocci_rule=tool_cfg["rule"],
                         line_start=line_start or None,
-                        line_end=None,
+                        # Real function bound from the checklist (same
+                        # source the semgrep leg uses); the sweep falls
+                        # back to a +50 window when unresolvable.
+                        line_end=_checklist_line_end(
+                            config, file_path, function_name,
+                        ) or None,
                         domain_vocab=domain_vocab,
                     )
                 if cocci_result.outcome == "confirmed":
@@ -16381,6 +16801,19 @@ def _run_tool_chain(
                     # rest of the chain (semgrep/joern/smt) covers the
                     # claim. Loud once per run, then debug.
                     _note_codeql_degraded_skip(
+                        file_path, function_name,
+                    )
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "codeql", "skipped",
+                        )
+                    continue
+                if not _codeql_query_file(tool_cfg.get("query") or ""):
+                    # Defense in depth behind the producers' filter: a
+                    # query ID (not an on-disk file) would error on
+                    # every dispatch inside run_codeql_sweep.
+                    _note_codeql_unsupported_query_id(
+                        tool_cfg.get("query") or "",
                         file_path, function_name,
                     )
                     if tier_counters:
@@ -17301,36 +17734,18 @@ def _proactive_validate(
     if _has_cwe_dispatch and "codeql" not in dispatched and _cwe_db:
         sinks = sinks_for_cwe(cwe)
         if sinks:
-            try:
-                from .sweep import run_codeql_sweep
-
-                for sink in sinks[:2]:
-                    ran.add("codeql")
-                    codeql_result = run_codeql_sweep(
-                        target_path=config.target_path,
-                        file_path=outcome.file,
-                        function_name=outcome.function,
-                        query_path=f"cwe-{cwe.lower()}-{sink}",
-                        database_path=_cwe_db,
-                        line_start=outcome.line,
-                        line_end=outcome.line + 50 if outcome.line else 0,
-                    )
-                    if codeql_result.outcome == "confirmed":
-                        confirmed_tools.append(f"codeql:{sink}")
-                        if tier_counters:
-                            _increment_tier_dict(tier_counters, "codeql", "confirmed")
-                        break
-                    if codeql_result.outcome == "error":
-                        errored.add("codeql")
-                        if tier_counters:
-                            _increment_tier_dict(tier_counters, "codeql", "errors")
-                    elif tier_counters:
-                        _increment_tier_dict(tier_counters, "codeql", "refuted")
-            except Exception:
-                logger.debug("proactive CodeQL failed for %s", cwe, exc_info=True)
-                errored.add("codeql")
-                if tier_counters:
-                    _increment_tier_dict(tier_counters, "codeql", "errors")
+            # The synthetic per-sink names this leg used to dispatch
+            # (``<cwe>-<sink>``, and before that a doubled
+            # ``cwe-cwe-…`` prefix) are query IDs, not on-disk query
+            # files — run_codeql_sweep errored on every dispatch.
+            # Skip loudly instead — honest degradation; the other
+            # proactive channels cover the claim.
+            _note_codeql_unsupported_query_id(
+                f"{cwe.lower()}-{sinks[0]}",
+                outcome.file, outcome.function,
+            )
+            if tier_counters:
+                _increment_tier_dict(tier_counters, "codeql", "skipped")
 
     is_c_target = outcome.file.endswith((".c", ".h", ".cc", ".cpp", ".cxx", ".hpp"))
     if "coccinelle" not in dispatched and is_c_target:
@@ -17344,6 +17759,13 @@ def _proactive_validate(
                     file_path=outcome.file,
                     function_name=outcome.function,
                     cocci_rule=cocci_rule,
+                    # Confine matches to the reviewed function: a hit
+                    # in an unrelated function elsewhere in the file
+                    # must not confirm THIS outcome's hypothesis.
+                    line_start=outcome.line or None,
+                    line_end=_checklist_line_end(
+                        config, outcome.file, outcome.function,
+                    ) or None,
                 )
                 if cocci_result.outcome == "confirmed":
                     confirmed_tools.append(f"coccinelle:{Path(cocci_rule).stem}")
@@ -17640,13 +18062,38 @@ def _run_critique(
                 project_sinks=config.project_sinks,
             )
             if pf.hits:
-                outcome.evidence_tool = f"critique:prefilter:{pf.hits[0].rule_id}"
-                logger.info(
-                    "critique: %s:%s gained evidence via %s",
-                    outcome.file,
-                    outcome.function,
-                    outcome.evidence_tool,
-                )
+                # Same correlation rule as _sweep_validate: only a hit
+                # in the hypothesis's vulnerability family is evidence
+                # — an unrelated window hit must not permanently
+                # tool-ground the finding and skip its re-validation.
+                _cq_cwe = _effective_cwe(outcome, result.tier_counters)
+                _cq_correlated = [
+                    h for h in pf.hits
+                    if evidence_matches_hypothesis(
+                        family_for_rule(h.rule_id),
+                        outcome.hypothesis or "",
+                        _cq_cwe,
+                    )
+                ]
+                if _cq_correlated:
+                    outcome.evidence_tool = (
+                        f"critique:prefilter:{_cq_correlated[0].rule_id}"
+                    )
+                    logger.info(
+                        "critique: %s:%s gained evidence via %s",
+                        outcome.file,
+                        outcome.function,
+                        outcome.evidence_tool,
+                    )
+                else:
+                    _record_uncorrelated_hits(outcome, pf.hits)
+                    logger.info(
+                        "critique: %s:%s prefilter hits (%s) uncorrelated "
+                        "with hypothesis — kept as context, not evidence",
+                        outcome.file,
+                        outcome.function,
+                        ",".join(h.rule_id for h in pf.hits[:3]),
+                    )
 
     recent_suspicious = [
         o
@@ -18295,6 +18742,13 @@ def _re_review_disagreements(
             continue
 
         re_reviewed += 1
+        # Phase ledger — see the deepen loop for the rationale; the
+        # call cost money whether or not the verdict changed below.
+        result.cost_tracker.record_call(
+            "re_review",
+            cost_usd=outcome.cost_usd,
+            wall_time_s=outcome.duration_s,
+        )
         if outcome.status != prior.status:
             logger.info(
                 "disagreement re-review %s: %s → %s",
@@ -18302,9 +18756,11 @@ def _re_review_disagreements(
             )
             for i, o in enumerate(result.outcomes):
                 if f"{o.file}:{o.function}" == key:
+                    # In-place replacement above — append would tally
+                    # the outcome into result.outcomes a second time.
                     result.outcomes[i] = outcome
                     _untally_outcome(result, prior)
-                    _tally_outcome(result, outcome)
+                    _tally_outcome(result, outcome, append=False)
                     break
 
     if re_reviewed:
@@ -18524,12 +18980,16 @@ def _iterative_re_review(
                     )
                     continue
                 logger.warning(
-                    "re-review failed for %s:%s: %s",
+                    "re-review failed for %s:%s: %s — keeping the "
+                    "prior verdict",
                     gap["file"],
                     gap["name"],
                     type(exc).__name__,
                 )
-                outcome = _error_outcome(gap, exc)
+                # Like the sibling re-review passes: a failed re-review
+                # call must never replace an already-valid verdict with
+                # an error outcome.
+                continue
 
             outcome.line = gap.get("line_start", 0)
             # Phase ledger — see the deepen loop for the rationale.
@@ -19340,7 +19800,20 @@ def _promote_suspicious(
             ]
             if correlated:
                 tool = f"prefilter:{correlated[0].rule_id}"
-                if _premise_blocks_confirm(premise_h, [tool]):
+                # Same sink-guard veto as every other promotion lane
+                # (mech-detector above, critique, secondary sweep).
+                _pf_gblk = _guard_blocks_promotion(
+                    outcome.function, joern_server, result.tier_counters)
+                if _pf_gblk:
+                    logger.info(
+                        "sweep promotion blocked %s:%s via %s — "
+                        "sink-guard veto: %s",
+                        outcome.file,
+                        outcome.function,
+                        tool,
+                        _pf_gblk,
+                    )
+                elif _premise_blocks_confirm(premise_h, [tool]):
                     _note_premise_blocked_validation(
                         outcome, premise_h, [tool],
                         config, result.tier_counters,
@@ -21784,10 +22257,18 @@ def _demote_absent_promotions(
     )):
         return 0
 
+    # Every static-promotion lane's body prefix: the plain sweep
+    # promotion plus the precondition and secondary-hypothesis lanes —
+    # all three prove the code pattern, none prove the code runs.
+    _static_promotion_prefixes = (
+        "[sweep promoted via ",
+        "[precondition-verified via ",
+        "[secondary-hypothesis-confirmed via ",
+    )
     promoted_idx = [
         i for i, o in enumerate(result.outcomes)
         if o.status == "finding"
-        and o.body.startswith("[sweep promoted via ")
+        and o.body.startswith(_static_promotion_prefixes)
     ]
     if not promoted_idx:
         return 0
@@ -22998,7 +23479,13 @@ def _persist_findings(
     result: OrchestratorResult,
     config: OrchestratorConfig,
 ) -> None:
-    """Write all findings to findings.json so they survive even without /validate."""
+    """Write all findings to findings.json so they survive even without /validate.
+
+    Idempotent full rewrite (atomic via save_json): safe to call again
+    after status-mutating post passes — late-minted findings appear,
+    retracted ones disappear.  A run with zero findings only rewrites
+    an EXISTING findings.json (to empty); it never creates one.
+    """
     findings_dicts = []
     for seq, outcome in enumerate(
         (o for o in result.outcomes if o.status == "finding"),
@@ -23020,12 +23507,15 @@ def _persist_findings(
             finding["hypothesis"] = outcome.hypothesis
         findings_dicts.append(finding)
 
-    if findings_dicts:
-        write_findings(findings_dicts, config.out_dir)
-        logger.info(
-            "persisted %d finding(s) to findings.json",
-            len(findings_dicts),
-        )
+    if not findings_dicts and not (
+        config.out_dir and (config.out_dir / "findings.json").exists()
+    ):
+        return
+    write_findings(findings_dicts, config.out_dir)
+    logger.info(
+        "persisted %d finding(s) to findings.json",
+        len(findings_dicts),
+    )
 
 
 def _persist_project_learnings(

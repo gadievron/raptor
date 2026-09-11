@@ -1077,3 +1077,37 @@ def test_fetch_uppercase_request_matches_case_insensitively(
     compare case-insensitively against git's lowercase output."""
     assert _fetch_with_resolved(tmp_path, _VALID_SHA.upper(),
                                 _VALID_SHA + "\n") is True
+
+
+# ---------------------------------------------------------------------------
+# _validate_writable_path — pseudo-fs denylist on the RESOLVED path
+# ---------------------------------------------------------------------------
+
+def test_writable_path_denylist_catches_dotdot_traversal() -> None:
+    from core.git.clone import _validate_writable_path
+
+    with pytest.raises(ValueError, match="pseudo-fs"):
+        _validate_writable_path(
+            Path("/tmp/x/../../dev/shm/evil"), role="output")
+
+
+def test_writable_path_denylist_catches_symlink(tmp_path: Path) -> None:
+    from core.git.clone import _validate_writable_path
+
+    link = tmp_path / "innocuous"
+    link.symlink_to("/dev/shm")
+    with pytest.raises(ValueError, match="pseudo-fs"):
+        _validate_writable_path(link / "evil", role="output")
+
+
+def test_writable_path_denylist_literal_still_refused() -> None:
+    from core.git.clone import _validate_writable_path
+
+    with pytest.raises(ValueError, match="pseudo-fs"):
+        _validate_writable_path(Path("/proc/self/environ"), role="output")
+
+
+def test_writable_path_ordinary_tmp_dir_accepted(tmp_path: Path) -> None:
+    from core.git.clone import _validate_writable_path
+
+    _validate_writable_path(tmp_path / "clone-target", role="output")

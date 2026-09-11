@@ -362,14 +362,51 @@ def merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
     if merged:
         save_json(output_dir / "findings.json", {"findings": merged})
 
+    # --- Re-stamp the imported-origin marker ---
+    # A merged output that folds ANY imported (unsigned-archive) source
+    # must itself carry the marker: the merge CLI deletes the source
+    # runs afterwards, so without the re-stamp the imported findings'
+    # statuses would be laundered into local origin rank permanently
+    # for every later fold.
+    imported_sources = [d.name for d in run_dirs if _run_is_imported(d)]
+    if imported_sources:
+        from datetime import datetime, timezone
+
+        from core.project.findings_utils import IMPORTED_RUN_MARKER_FILE
+        save_json(output_dir / IMPORTED_RUN_MARKER_FILE, {
+            "imported": True,
+            "imported_at": datetime.now(timezone.utc).isoformat(),
+            "source": "merge",
+            "merged_from_imported": imported_sources,
+        })
+
     # --- Merge SARIF ---
     # Top-level *.sarif are the code-scan outputs; SCA writes its SARIF
     # to the sca/ subdir (<run>/sca/findings.sarif), so include that too
     # or merged.sarif would silently omit dependency findings.
+    # Same symlink-skip + containment policy as the artefact legs
+    # below: run dirs are agent-writable, and merge_sarif READS every
+    # path it is given — a symlinked *.sarif (or a link in the sca/
+    # path component) would pull out-of-run content into merged.sarif.
     sarif_paths: list[str] = []
     for run_dir in run_dirs:
-        sarif_paths.extend(str(sarif_file) for sarif_file in run_dir.glob("*.sarif"))
-        sarif_paths.extend(str(sarif_file) for sarif_file in (run_dir / "sca").glob("*.sarif"))
+        run_root = run_dir.resolve()
+        candidates = list(run_dir.glob("*.sarif"))
+        sca_dir = run_dir / "sca"
+        if sca_dir.is_dir() and not sca_dir.is_symlink():
+            candidates.extend(sca_dir.glob("*.sarif"))
+        for sarif_file in candidates:
+            if sarif_file.is_symlink():
+                logger.debug("Skipping symlinked SARIF in merge: %s",
+                             sarif_file)
+                continue
+            if not _resolves_inside(sarif_file, run_root):
+                logger.debug(
+                    "Skipping SARIF resolving outside run dir: %s",
+                    sarif_file,
+                )
+                continue
+            sarif_paths.append(str(sarif_file))
 
     sarif_files_merged = len(sarif_paths)
     if sarif_paths:

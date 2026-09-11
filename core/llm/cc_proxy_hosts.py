@@ -166,6 +166,13 @@ def _load_override_config() -> list[str] | None:
 
     Future fields can be added (commit history will record schema
     evolution). Unknown fields are tolerated.
+
+    ``None`` means UNCONFIGURED (file absent, malformed, or the key
+    missing / not a list) — the caller falls through to the next
+    resolution layer. A configured list is returned as-is, INCLUDING
+    when it sanitises to empty: ``{"proxy_hosts": []}`` is an explicit
+    operator deny-all, and collapsing it to None silently re-granted
+    the default allow hosts the operator just denied.
     """
     if not _OVERRIDE_CONFIG_PATH.exists():
         return None
@@ -180,7 +187,7 @@ def _load_override_config() -> list[str] | None:
         if isinstance(h, str) and h and h not in seen:
             seen.add(h)
             result.append(h)
-    return result or None
+    return result
 
 
 def _profile_config_region() -> str | None:
@@ -464,6 +471,14 @@ def proxy_hosts_for_cc_dispatch(
 
     override = _load_override_config()
     if override is not None:
+        if not override:
+            # Explicit operator deny-all ({"proxy_hosts": []}). The
+            # sandbox rejects an empty allowlist, so deny-all is
+            # encoded as loopback-only — the CONNECT proxy refuses
+            # loopback targets by design, leaving every remote host
+            # denied at the chokepoint (same encoding the
+            # credential-proxy mode uses).
+            return list(_LOOPBACK_ONLY_HOSTS)
         return override
 
     calibrated = _calibrated_proxy_hosts(claude_bin)

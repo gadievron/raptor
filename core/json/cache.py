@@ -12,10 +12,12 @@ Layout:
   ``<root>/vulns/GHSA-xxx.json``.
 
 Concurrency:
-  Writes use atomic rename — write to ``<path>.tmp.<pid>.<tid>``,
-  then rename. Tempfile names include both pid and thread id so
-  concurrent writers (cross-process or cross-thread within a
-  process) never share a tempfile path. Concurrent writers are
+  Writes go through :func:`core.atomic_fs.write_text_atomically` —
+  tempfile named with pid + tid + random suffix, opened
+  ``O_EXCL | O_NOFOLLOW``, then atomic rename. Concurrent writers
+  (cross-process or cross-thread) never share a tempfile path, and
+  a pre-planted symlink or squat file at a predicted tempfile name
+  is refused instead of followed. Concurrent writers are
   last-writer-wins, which is correct because cache values are
   deterministic per key. Readers see either the old version or
   the new version, never a torn write.
@@ -40,7 +42,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -52,6 +53,7 @@ from typing import Any, TYPE_CHECKING
 # ``sys.modules`` to exercise lazy re-exports don't replace the
 # singleton — see that module's docstring for the full reload-
 # stability rationale.
+from core.atomic_fs import write_text_atomically
 from core.sentinels import MISSING
 
 from .utils import _loads, _reject_non_finite
@@ -192,7 +194,9 @@ def _iter_tempfile_candidates(
                 except OSError:
                     continue
                 name = entry.name
-                if ".tmp." not in name:
+                if ".tmp." not in name and not (
+                    name.startswith(".atomic-") and name.endswith(".tmp")
+                ):
                     continue
                 yield Path(entry.path)
 
@@ -271,11 +275,12 @@ class JsonCache:
         self._reap_orphan_tempfiles()
 
     def _reap_orphan_tempfiles(self) -> None:
-        """Sweep ``*.tmp.<pid>.<tid>`` files left by a previously-crashed writer.
+        """Sweep orphan tempfiles left by a previously-crashed writer.
 
-        ``put()`` writes to ``<path>.tmp.<pid>.<tid>`` then renames atomically —
-        if the writer was killed between the open and the rename, the
-        tempfile is orphaned. Without this sweep, every crash leaks one
+        Current writers (via ``core.atomic_fs``) use
+        ``.atomic-<name>.<pid>.<tid>.<rand>.tmp``; legacy writers used
+        ``<path>.tmp.<pid>[.<tid>]``. Either way, a writer killed
+        between the open and the rename orphans the tempfile. Without this sweep, every crash leaks one
         tempfile per partial write, and the cache dir slowly fills up
         across many runs (each run has a different pid, so old orphans
         are never overwritten).
@@ -333,12 +338,21 @@ class JsonCache:
             # ``.tmp.<pid>.<tid>`` (two all-digit segments). Anything
             # else is left alone so we don't collide with caller-chosen
             # keys that happen to contain ".tmp.".
-            parts = entry.name.rsplit(".tmp.", 1)
-            if len(parts) != 2:
-                continue
-            tail = parts[1].split(".")
-            if not (1 <= len(tail) <= 2 and all(s.isdigit() for s in tail)):
-                continue
+            if entry.name.startswith(".atomic-") and entry.name.endswith(".tmp"):
+                # Current shape (core.atomic_fs):
+                # ``.atomic-<name>.<pid>.<tid>.<rand>.tmp``. The
+                # leading-dot prefix can never collide with a real
+                # cache entry (keys refuse empty/dot segments), so the
+                # prefix+suffix match is sufficient.
+                pass
+            else:
+                parts = entry.name.rsplit(".tmp.", 1)
+                if len(parts) != 2:
+                    continue
+                tail = parts[1].split(".")
+                if not (1 <= len(tail) <= 2
+                        and all(s.isdigit() for s in tail)):
+                    continue
             # Skip if mtime is recent — concurrent writer is in
             # the middle of producing this file.
             try:
@@ -521,7 +535,6 @@ class JsonCache:
         if not self._writable or self._root is None:
             return
         path = self._path_for(key)
-        path.parent.mkdir(parents=True, exist_ok=True)
         envelope = CacheEnvelope(
             written_at=time.time(),
             ttl_seconds=ttl_seconds,
@@ -533,31 +546,32 @@ class JsonCache:
         # repopulate the memo via the stat + read path.
         with self._memo_lock:
             self._memo_evict(key)
-        # Tempfile suffix MUST include the thread id, not just pid:
-        # two threads in the same process writing the same key would
-        # otherwise share a tmp path, and ``open("w")`` truncates on
-        # open — clobbering each other's partial writes. With pid+tid
-        # each writer has its own tmpfile, and atomic rename serialises
-        # which one wins (last-writer-wins is the documented contract).
-        tmp = path.with_suffix(f".tmp.{os.getpid()}.{threading.get_ident()}")
         try:
-            with tmp.open("w", encoding="utf-8") as fh:
-                json.dump({
-                    "written_at": envelope.written_at,
-                    "ttl_seconds": envelope.ttl_seconds,
-                    "value": envelope.value,
-                }, fh, allow_nan=False)
-            tmp.replace(path)
-        except (OSError, TypeError, ValueError) as e:
-            # OSError: disk full, permission denied, etc.
-            # TypeError/ValueError: caller passed a non-JSON-serialisable
-            # value (e.g. datetime). Clean up the partial temp file
-            # either way so we don't leak stragglers in the cache dir.
+            payload = json.dumps({
+                "written_at": envelope.written_at,
+                "ttl_seconds": envelope.ttl_seconds,
+                "value": envelope.value,
+            }, allow_nan=False)
+        except (TypeError, ValueError) as e:
+            # Caller passed a non-JSON-serialisable value (datetime,
+            # NaN). Cache degrades, never crashes the consumer.
             logger.warning("core.json.cache: failed to write %s: %s", path, e)
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
+            return
+        # core.atomic_fs owns the tempfile discipline: pid + tid +
+        # RANDOM suffix opened O_EXCL | O_NOFOLLOW. Pre-fix the tmp
+        # name was the predictable <key>.tmp.<pid>.<tid> opened with
+        # a plain truncating ``open("w")`` — a pre-planted symlink at
+        # that name was followed, overwriting the symlink's target
+        # with the envelope JSON.
+        try:
+            write_text_atomically(path, payload)
+        except OSError as e:
+            # Disk full, permission denied (including a cache subdir
+            # turned read-only AFTER construction — the constructor's
+            # writability probe only covers construction time), tmp
+            # squat refused by O_EXCL. All degrade to no-cache with a
+            # warning instead of crashing the consumer.
+            logger.warning("core.json.cache: failed to write %s: %s", path, e)
 
     def invalidate(self, key: str) -> None:
         """Remove an entry. Safe to call on missing keys."""

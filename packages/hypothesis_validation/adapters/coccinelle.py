@@ -36,17 +36,35 @@ def _contains_forbidden_blocks(rule: str) -> bool:
 
     Comments are not stripped first — SmPL `//` comments don't span `@` lines
     in practice, and being conservative (rejecting commented-out script
-    blocks too) is fine: an LLM has no reason to emit commented script
-    blocks. See _FORBIDDEN_ANNOTATION_RE for the matched syntax.
+    blocks too) is acceptable. It does mean prose mentioning the literal
+    annotations trips the gate, so the shipped syntax example (the text
+    the LLM mirrors) deliberately avoids spelling them out. See
+    _FORBIDDEN_ANNOTATION_RE for the matched syntax.
     """
     return bool(_FORBIDDEN_ANNOTATION_RE.search(rule))
+
+
+# Tokens that packages/coccinelle's runner keys its COCCIRESULT
+# extraction-harness injection on (raw substring checks over the whole
+# rule text, comments included). A rule carrying either token would run
+# WITHOUT the harness, emit no COCCIRESULT lines, and read as a clean
+# "no matches" — silently turning a rule that actually matched into a
+# refutation. Reject such rules up front: an LLM-generated declarative
+# rule never legitimately contains them (RAPTOR injects the result
+# scripting itself).
+_HARNESS_SUPPRESSING_TOKENS = ("script:python", "COCCIRESULT:")
+
+
+def _contains_harness_suppressors(rule: str) -> bool:
+    """True when the rule text would disable result-harness injection."""
+    return any(tok in rule for tok in _HARNESS_SUPPRESSING_TOKENS)
 
 
 _SYNTAX_EXAMPLE = """\
 // Find malloc() return values used without a NULL check.
 // Write the matching pattern only — RAPTOR injects the result-extraction
-// script automatically. Do NOT include @script:, @finalize:, or
-// @initialize: blocks; they will be rejected.
+// script automatically. Rules that carry their own script, finalize, or
+// initialize annotations are rejected.
 @unchecked@
 expression E;
 position p;
@@ -130,6 +148,17 @@ class CoccinelleAdapter(ToolAdapter):
                 ),
             )
 
+        if _contains_harness_suppressors(rule):
+            return ToolEvidence(
+                tool=self.name, rule=rule, success=False,
+                error=(
+                    "rule contains text ('script:python' or 'COCCIRESULT:') "
+                    "that would disable RAPTOR's result-extraction harness "
+                    "and make every run read as 'no matches'; remove it — "
+                    "RAPTOR injects the result scripting itself"
+                ),
+            )
+
         if env is None:
             from core.config import RaptorConfig
             env = RaptorConfig.get_safe_env()
@@ -137,13 +166,15 @@ class CoccinelleAdapter(ToolAdapter):
         # spatch needs the rule as a file. Write to temp then run.
         rule_file: Path | None = None
         try:
-            tmp = NamedTemporaryFile(
+            with NamedTemporaryFile(
                 prefix="cocci_hv_", suffix=".cocci",
                 mode="w", delete=False,
-            )
-            tmp.write(rule)
-            tmp.close()
-            rule_file = Path(tmp.name)
+            ) as tmp:
+                # Record the path before writing so the finally-unlink
+                # below also covers a failed write — delete=False files
+                # otherwise leak on ENOSPC/EIO.
+                rule_file = Path(tmp.name)
+                tmp.write(rule)
 
             subprocess_runner = (
                 make_sandbox_runner(target=target) if self._sandbox else None

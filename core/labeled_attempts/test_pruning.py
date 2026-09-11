@@ -233,6 +233,66 @@ def test_corrupt_records_skipped_not_counted(pool):
     assert (sig_dir / "sandbox-corrupt.json").exists()
 
 
+def test_wrong_shape_json_record_skipped_not_fatal(pool):
+    """Valid JSON of the wrong shape (top-level array) raises inside
+    from_dict — the prune must skip it like a corrupt record, not
+    abort."""
+    for d in range(2):
+        write(_attempt(days_old=d), project_dir=pool)
+    sig_dir = next((pool / "labeled_attempts").iterdir())
+    (sig_dir / "sandbox-array.json").write_text('["not", "an", "object"]')
+
+    rep = prune_pool(pool, n_per_bucket=1)
+    assert rep.records_seen == 2
+    assert rep.records_removed == 1
+    assert (sig_dir / "sandbox-array.json").exists()
+
+
+# --------------------------------------------------------------------------
+# Timestamp interpretation
+# --------------------------------------------------------------------------
+
+
+def test_naive_timestamps_ordered_as_utc_on_non_utc_host(pool):
+    """Naive timestamps are interpreted as UTC (the rule retrieval
+    applies), not host-local: on a non-UTC host a mixed naive/aware
+    bucket must still keep the genuinely newest record. Two-direction:
+    the naive record wins when newer, loses when older."""
+    import dataclasses
+    import os
+    import time
+
+    if not hasattr(time, "tzset"):
+        pytest.skip("time.tzset unavailable on this platform")
+
+    def at(ts: str) -> LabeledAttempt:
+        return dataclasses.replace(_attempt(), timestamp=ts)
+
+    old_tz = os.environ.get("TZ")
+    os.environ["TZ"] = "Pacific/Kiritimati"     # UTC+14, no DST
+    time.tzset()
+    try:
+        # Naive record is the newest in UTC terms; a local-time
+        # interpretation would shift it 14h earlier and prune it.
+        write(at("2026-06-05T12:00:00"), project_dir=pool)         # naive, newest
+        write(at("2026-06-05T10:00:00+00:00"), project_dir=pool)   # aware, older
+        prune_pool(pool, n_per_bucket=1)
+        [kept] = read_all(project_dir=pool, include_bundled=False)
+        assert kept.timestamp == "2026-06-05T12:00:00"
+
+        # Counter-direction: an aware record that IS newer survives.
+        write(at("2026-06-05T15:00:00+00:00"), project_dir=pool)
+        prune_pool(pool, n_per_bucket=1)
+        [kept] = read_all(project_dir=pool, include_bundled=False)
+        assert kept.timestamp == "2026-06-05T15:00:00+00:00"
+    finally:
+        if old_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = old_tz
+        time.tzset()
+
+
 # --------------------------------------------------------------------------
 # Empty signature-dirs cleaned up
 # --------------------------------------------------------------------------

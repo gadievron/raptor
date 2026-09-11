@@ -159,6 +159,178 @@ def test_large_prompt_to_busy_child_does_not_deadlock():
     assert sr.session_id == "sess-bigprompt"
 
 
+def test_grandchild_holding_stdout_does_not_block_drain():
+    """Child spawns a background grandchild that inherits the stdout
+    pipe, then exits. The post-exit stdout drain must not read to EOF
+    — the grandchild keeps the write end open for its whole lifetime,
+    so an unguarded drain wedges until the grandchild dies."""
+    import time
+
+    result_line = json.dumps({
+        "type": "result",
+        "session_id": "sess-grandchild",
+        "is_error": False,
+    })
+    script = (
+        "import subprocess, sys\n"
+        # Grandchild inherits stdout/stderr and outlives the child by
+        # far longer than the assertion window below.
+        "subprocess.Popen([sys.executable, '-c', "
+        "'import time; time.sleep(20)'])\n"
+        f"sys.stdout.write({result_line!r} + '\\n')\n"
+        "sys.stdout.flush()\n"
+    )
+    start = time.monotonic()
+    sr = run_cc_streaming(
+        [sys.executable, "-c", script],
+        prompt="",
+        env=_env(),
+        timeout_s=30,
+    )
+    elapsed = time.monotonic() - start
+    assert sr.error is None
+    assert sr.session_id == "sess-grandchild"
+    # Far under the grandchild's 20s lifetime — the drain returned
+    # instead of waiting for pipe EOF.
+    assert elapsed < 10
+
+
+def test_partial_line_does_not_block_past_deadline():
+    """Child writes a partial line (no trailing newline) then goes
+    silent. A buffered readline would block inside the read even after
+    select() reported readiness; the deadline must still fire."""
+    import subprocess
+    import time
+
+    start = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_cc_streaming(
+            [sys.executable, "-c",
+             "import sys, time\n"
+             "sys.stdout.write('{\"type\": \"result\", ')\n"
+             "sys.stdout.flush()\n"
+             "time.sleep(60)\n"],
+            prompt="",
+            env=_env(),
+            timeout_s=2,
+        )
+    # Well under the child's sleep — the deadline, not the child,
+    # ended the call.
+    assert time.monotonic() - start < 30
+
+
+def test_partial_line_completed_later_assembles_correctly():
+    """A line delivered in two flushes (partial, pause, remainder)
+    must be reassembled into one JSON line, not consumed as two
+    fragments."""
+    result_line = json.dumps({
+        "type": "result",
+        "session_id": "sess-split",
+        "is_error": False,
+    })
+    head, tail = result_line[:12], result_line[12:]
+    script = (
+        "import sys, time\n"
+        f"sys.stdout.write({head!r})\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(0.5)\n"
+        f"sys.stdout.write({tail!r} + '\\n')\n"
+    )
+    sr = run_cc_streaming(
+        [sys.executable, "-c", script],
+        prompt="",
+        env=_env(),
+        timeout_s=30,
+    )
+    assert sr.error is None
+    assert sr.session_id == "sess-split"
+
+
+def test_final_line_without_trailing_newline_is_parsed():
+    """A child whose last line has no trailing newline (exit before
+    the final flush completes the line) must still have that line
+    reach the parser."""
+    result_line = json.dumps({
+        "type": "result",
+        "session_id": "sess-no-newline",
+        "is_error": False,
+    })
+    script = (
+        "import sys\n"
+        f"sys.stdout.write({result_line!r})\n"  # NO trailing newline
+    )
+    sr = run_cc_streaming(
+        [sys.executable, "-c", script],
+        prompt="",
+        env=_env(),
+        timeout_s=30,
+    )
+    assert sr.error is None
+    assert sr.session_id == "sess-no-newline"
+
+
+def test_invalid_utf8_on_stdout_does_not_raise():
+    """Invalid UTF-8 bytes from the child must decode with
+    replacement characters, not raise mid-stream (a strict text-mode
+    decode would), and later valid lines must still parse."""
+    result_line = json.dumps({
+        "type": "result",
+        "session_id": "sess-badbytes",
+        "is_error": False,
+    })
+    script = (
+        "import sys\n"
+        "sys.stdout.buffer.write(b'\\xff\\xfe garbage \\xff\\n')\n"
+        f"sys.stdout.write({result_line!r} + '\\n')\n"
+    )
+    sr = run_cc_streaming(
+        [sys.executable, "-c", script],
+        prompt="",
+        env=_env(),
+        timeout_s=30,
+    )
+    assert sr.error is None
+    assert sr.session_id == "sess-badbytes"
+
+
+def test_abnormal_loop_exit_reaps_child(monkeypatch):
+    """An exception escaping the select loop must not leak a running
+    (billed) child — the child is terminated on the way out."""
+    import select as select_mod
+    import subprocess
+
+    procs: list[subprocess.Popen] = []
+    real_popen = subprocess.Popen
+
+    def recording_popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        procs.append(proc)
+        return proc
+
+    monkeypatch.setattr(subprocess, "Popen", recording_popen)
+
+    real_select = select_mod.select
+
+    def raising_select(*args, **kwargs):
+        raise RuntimeError("injected mid-loop failure")
+
+    monkeypatch.setattr(select_mod, "select", raising_select)
+    try:
+        with pytest.raises(RuntimeError, match="injected mid-loop"):
+            run_cc_streaming(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                prompt="",
+                env=_env(),
+                timeout_s=30,
+            )
+    finally:
+        monkeypatch.setattr(select_mod, "select", real_select)
+
+    assert len(procs) == 1
+    # The child was killed by the cleanup path, not left running.
+    assert procs[0].poll() is not None
+
+
 def test_timeout_covers_stdin_write():
     """A child that never reads stdin leaves the parent's prompt feed
     stalled at the pipe buffer — the deadline must still fire as

@@ -312,22 +312,29 @@ class TestBuildSpecPrompt:
 
 
 class _SpecStubClient:
-    """Minimal client returning a canned spec-inference response."""
+    """Minimal client returning a canned spec-inference response in
+    the PRODUCTION shape: LLMResponse carries the payload in
+    ``.content`` (the old ``.text``-only stub pinned a shape no real
+    client returns, hiding that the paid leg parsed the dataclass
+    repr and produced nothing)."""
 
     model_name = "stub"
 
-    def __init__(self, text: str):
+    def __init__(self, text: str, attr: str = "content"):
         self._text = text
+        self._attr = attr
         self.calls = 0
 
     def generate(self, prompt, **kwargs):
         self.calls += 1
+        payload = self._text
 
         class _R:
-            pass
+            def __repr__(self):
+                return f"LLMResponse(content={payload!r})"
 
         r = _R()
-        r.text = self._text
+        setattr(r, self._attr, payload)
         return r
 
 
@@ -355,6 +362,20 @@ class TestSpecClaimGrounding:
         spec = infer_spec_with_llm_sync(gap, client=client)
         assert client.calls == 1
         return spec
+
+    def test_legacy_text_attribute_still_parses(self):
+        from core.audit.spec_inference import infer_spec_with_llm_sync
+
+        gap = {"name": "parse_hdr", "file": "a.c",
+               "source": _GROUND_SOURCE}
+        client = _SpecStubClient(
+            '{"intent": "parses a header", "preconditions": [],'
+            ' "postconditions": [], "invariants": [],'
+            ' "negative_specs": []}',
+            attr="text",
+        )
+        spec = infer_spec_with_llm_sync(gap, client=client)
+        assert spec is not None and spec.intent == "parses a header"
 
     def test_anchored_claim_enters_spec(self):
         spec = self._infer(

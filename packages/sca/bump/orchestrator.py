@@ -37,7 +37,7 @@ from ..parsers.inline_installs._arg_version_pins import (
 from ..rewriters import RewriteEdit, RewriteResult, rewrite
 from .evaluator import evaluate_bump_supply_chain
 from .upstream_map import UpstreamSource, lookup_upstream
-from .vuln_delta import evaluate_bump_vulns
+from .vuln_delta import VulnDeltaDegraded, evaluate_bump_vulns
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -372,6 +372,7 @@ def _enumerate_candidates(
     manifest-walker surfaces are filtered at the candidate choke
     point below, which also acts as the safety net for every
     future walker."""
+    from core.upstream_latest._version_filter import parse_stable
     from core.upstream_latest.github_releases import (
         NoStableVersionsFound,
         UpstreamLookupError,
@@ -385,7 +386,12 @@ def _enumerate_candidates(
     target = target.resolve()
     if not target.exists():
         return candidates, skipped, []
-    dockerfiles = _find_dockerfiles(target)
+    # One tree walk yields both file-list surfaces; one shared
+    # ``find_manifests`` walk feeds the manifest-driven walkers below.
+    # Pre-hoist each walker re-walked the tree itself — five walks per
+    # run on identical inputs.
+    dockerfiles, workflow_files = _find_dockerfiles_and_workflows(target)
+    manifests = _find_all_manifests(target)
     if exclude:
         dockerfiles, dropped = partition_excluded(
             dockerfiles, exclude, root=target,
@@ -407,6 +413,33 @@ def _enumerate_candidates(
                 continue
             arg_name = match.group(1)
             current = match.group(2).strip('"').strip("'")
+            # Inline ``# raptor-sca:`` override — the same operator
+            # channel the scan parser honours. ``skip`` marks
+            # vendored forks / deliberate pins that must not be
+            # bumped to the upstream's version; ``eco:name`` remaps
+            # the pin to the package it actually refers to.
+            override_kind, override_map = _arg_inline_override(
+                match.group(3),
+            )
+            if override_kind == "skip":
+                continue
+            # Version-shape gate (mirrors the sibling walkers): a
+            # value like ``${BASE}`` or ``latest`` is indirection,
+            # not a version — an --apply would overwrite it with a
+            # literal, and the vuln delta would query OSV against
+            # garbage.
+            if parse_stable(current) is None:
+                continue
+            if override_kind == "remap":
+                _emit_arg_remap_candidate(
+                    arg_name=arg_name, current=current,
+                    dockerfile=dockerfile,
+                    eco_map=override_map,
+                    pypi_client=pypi_client,
+                    latest_cache=latest_cache,
+                    candidates=candidates, skipped=skipped,
+                )
+                continue
             upstream = lookup_upstream(arg_name)
             if upstream is None:
                 # No upstream source — silent skip (operator can
@@ -497,6 +530,7 @@ def _enumerate_candidates(
     yaml_candidates, yaml_skipped = _enumerate_yaml_image_candidates(
         target, http=http, cache=cache,
         from_cache=latest_cache,
+        manifests=manifests,
     )
     candidates.extend(yaml_candidates)
     skipped.extend(yaml_skipped)
@@ -507,6 +541,7 @@ def _enumerate_candidates(
     helm_candidates, helm_skipped = _enumerate_helm_chart_candidates(
         target, http=http, cache=cache,
         helm_cache=latest_cache,
+        manifests=manifests,
     )
     candidates.extend(helm_candidates)
     skipped.extend(helm_skipped)
@@ -520,15 +555,16 @@ def _enumerate_candidates(
         target, http=http, cache=cache,
         github_token=github_token,
         sub_cache=latest_cache,
+        manifests=manifests,
     )
     candidates.extend(sub_candidates)
     skipped.extend(sub_skipped)
 
     # GitHub Actions ``uses:`` refs — bump candidates from
-    # ``.github/workflows/*.yml`` files. Phase 3.b ships tag-
-    # pinned support only; SHA-pinned refs (raptor's convention)
-    # need a tag→SHA resolver and ship in 3.b.2.
-    workflow_files = _find_gha_workflows(target)
+    # ``.github/workflows/*.yml`` files (list hoisted from the shared
+    # tree walk above). Phase 3.b ships tag-pinned support only;
+    # SHA-pinned refs (raptor's convention) need a tag→SHA resolver
+    # and ship in 3.b.2.
     if exclude:
         workflow_files, dropped = partition_excluded(
             workflow_files, exclude, root=target,
@@ -562,6 +598,116 @@ def _enumerate_candidates(
             kept.append(cand)
         candidates = kept
     return candidates, skipped, list(excluded_files)
+
+
+def _arg_inline_override(
+    comment: str | None,
+) -> tuple[str, tuple[str, str] | None]:
+    """Parse the inline ``# raptor-sca:`` override on an ARG line.
+
+    Returns ``(kind, mapping)``:
+      * ``("none", None)`` — no override comment.
+      * ``("skip", None)`` — operator opted the pin out
+        (``# raptor-sca: skip``): vendored fork / deliberate pin.
+      * ``("remap", (ecosystem, name))`` — the pin refers to
+        ``ecosystem:name``, not whatever the ARG name resembles.
+
+    Reuses the scan parser's regex + canonicalisation so the bumper
+    honours exactly the channel the scan already documents (the
+    parser is read-only here — the empty ``arg_name`` keeps its
+    built-in-map fallback from ever matching).
+    """
+    from ..parsers.inline_installs._arg_version_pins import (
+        _OVERRIDE_RE,
+        _resolve_mapping,
+    )
+    if not comment or _OVERRIDE_RE.search(comment) is None:
+        return ("none", None)
+    mapping = _resolve_mapping("", comment)
+    if mapping is None:
+        return ("skip", None)
+    return ("remap", mapping)
+
+
+def _emit_arg_remap_candidate(
+    *,
+    arg_name: str,
+    current: str,
+    dockerfile: Path,
+    eco_map: tuple[str, str] | None,
+    pypi_client: PyPIClient | None,
+    latest_cache: dict,
+    candidates: list[BumpCandidate],
+    skipped: list[tuple[str, Path, str]],
+) -> None:
+    """Emit a bump candidate for an ARG whose inline override remaps
+    it to ``eco:name``.
+
+    The built-in upstream map keys on the ARG NAME, so a remapped
+    pin must never use it — that coordinate belongs to the package
+    the ARG name resembles, not the one the operator declared. The
+    remapped ecosystem's own registry answers "latest": PyPI is
+    wired (same lookup the inline-install walker uses); other
+    ecosystems land in ``skipped`` with the gap named rather than
+    being bumped against the wrong upstream.
+
+    The candidate records the mapping in ``extra["eco_map"]`` so the
+    evaluator runs the CVE / supply-chain checks against the mapped
+    target too.
+    """
+    from core.upstream_latest._version_filter import highest_stable
+
+    if eco_map is None:                       # defensive; caller gates
+        return
+    eco, pkg = eco_map
+    if eco != "PyPI":
+        skipped.append((
+            arg_name, dockerfile,
+            f"inline override maps to {eco}:{pkg} — no "
+            f"upstream-latest source wired for this ecosystem",
+        ))
+        return
+    if pypi_client is None:
+        skipped.append((
+            arg_name, dockerfile,
+            f"inline override maps to PyPI:{pkg} — no PyPI "
+            f"client available for the upstream lookup",
+        ))
+        return
+    cache_key = ("arg_override_pypi", pkg)
+    if cache_key in latest_cache:
+        target_version = latest_cache[cache_key]
+    else:
+        try:
+            versions = pypi_client.list_versions(pkg)
+        except Exception as e:                          # noqa: BLE001
+            skipped.append((
+                arg_name, dockerfile,
+                f"upstream lookup failed for override "
+                f"PyPI:{pkg}: {e}",
+            ))
+            return
+        target_version = highest_stable(versions or [])
+        latest_cache[cache_key] = target_version
+    if not target_version:
+        skipped.append((
+            arg_name, dockerfile,
+            f"no stable versions on PyPI for override target {pkg}",
+        ))
+        return
+    if target_version == current:
+        return
+    candidates.append(BumpCandidate(
+        kind="arg",
+        locator=arg_name,
+        file=dockerfile,
+        current_version=current,
+        target_version=target_version,
+        upstream=UpstreamSource("pypi_meta", pkg),
+        # ``kind`` keeps the rewriter dispatch explicit; ``eco_map``
+        # steers the evaluator at the mapped package.
+        extra={"kind": "arg", "eco_map": [eco, pkg]},
+    ))
 
 
 def _enumerate_inline_install_candidates(
@@ -816,11 +962,22 @@ def _evaluate_one(
     """
     eco_map = None
     if cand.kind == "arg":
-        eco_map = _BUILTIN_ARG_MAP.get(cand.locator)
+        # An inline ``# raptor-sca: eco:name`` override recorded by
+        # the walker names the package the pin ACTUALLY refers to
+        # (vendored fork, renamed upstream); it outranks the built-in
+        # ARG-name mapping so the CVE / supply-chain checks evaluate
+        # the mapped target rather than the well-known package the
+        # ARG name resembles.
+        override = (cand.extra or {}).get("eco_map")
+        if override:
+            eco_map = (override[0], override[1])
+        else:
+            eco_map = _BUILTIN_ARG_MAP.get(cand.locator)
     elif cand.kind == "inline_install_pip":
         eco_map = ("PyPI", cand.locator)
     findings: list[SupplyChainFinding] = []
     new_vulns: list = []
+    vuln_delta_degraded: str | None = None
     if eco_map is not None:
         ecosystem, package_name = eco_map
         try:
@@ -854,11 +1011,22 @@ def _evaluate_one(
                     osv_client=osv_client,
                     kev_client=kev_client, epss_client=epss_client,
                 )
+            except VulnDeltaDegraded as e:
+                # The new-CVE gate could not run (transient OSV
+                # failure on either version slot). An empty delta
+                # here would fail OPEN — Clean verdict, auto-apply —
+                # so record the degradation; the verdict below is
+                # floored at Review and carries the breadcrumb.
+                vuln_delta_degraded = str(e)
+                logger.warning(
+                    "sca.bump: vuln-delta degraded for %s: %s",
+                    cand.locator, e,
+                )
             except Exception as e:            # noqa: BLE001
-                # Vuln delta is enrichment, not load-bearing —
-                # don't fail the whole evaluation if it goes
-                # sideways. Operator still gets the supply-chain
-                # verdict + an error breadcrumb.
+                # Unexpected evaluator error (not a lookup failure) —
+                # same disposition: the gate didn't run, so don't
+                # let the verdict pass as Clean.
+                vuln_delta_degraded = f"vuln-delta evaluator raised: {e}"
                 logger.warning(
                     "sca.bump: vuln-delta evaluation failed for %s: %s",
                     cand.locator, e,
@@ -885,12 +1053,20 @@ def _evaluate_one(
         typo_findings=[],
         bump_supply_chain_findings=findings,
     )
+    error: str | None = None
+    if vuln_delta_degraded is not None:
+        # The new-CVE gate didn't run — never report Clean (which
+        # would auto-apply under --apply). Review keeps the operator
+        # in the loop; a Block from other signals stands.
+        verdict = max(verdict, _VERDICT_REVIEW)
+        error = f"vuln-delta unavailable: {vuln_delta_degraded}"
     return BumpResult(
         candidate=cand,
         verdict=verdict,
         verdict_label=_VERDICT_LABEL.get(verdict, str(verdict)),
         bump_supply_chain_findings=findings,
         bump_vuln_findings=new_vulns,
+        error=error,
     )
 
 
@@ -1001,6 +1177,7 @@ def _enumerate_yaml_image_candidates(
     http,
     cache,
     from_cache: dict,
+    manifests: list | None = None,
 ) -> tuple[list[BumpCandidate], list[tuple[str, Path, str]]]:
     """Walk YAML ``image:`` refs in compose / gitlab-ci / k8s
     files via the existing SCA parsers. Each parser already
@@ -1019,22 +1196,16 @@ def _enumerate_yaml_image_candidates(
     )
     from core.upstream_latest.oci_tags import latest_tag as oci_latest_tag
 
-    from ..discovery import find_manifests
     from ..parsers import parse_manifest
 
     candidates: list[BumpCandidate] = []
     skipped: list[tuple[str, Path, str]] = []
     # Reuse the parser dispatch to find OCI deps in YAML files.
-    # ``find_manifests`` walks the target; ``parse_manifest``
-    # dispatches per file shape.
-    try:
-        # Fully inclusive walk: write-path policy (which trees not to
-        # edit) is the operator's ``--exclude`` globs, applied at the
-        # candidate choke point in ``_enumerate_candidates`` — not the
-        # scan walker's test-path default.
-        manifests = find_manifests(target, include_test_paths=True)
-    except Exception:                       # noqa: BLE001
-        return candidates, skipped
+    # ``manifests`` is the orchestrator's shared walk when passed
+    # (one ``find_manifests`` call feeds every manifest walker);
+    # direct callers without it fall back to their own walk.
+    if manifests is None:
+        manifests = _find_all_manifests(target)
     for manifest in manifests:
         # Only YAML manifest shapes; skip Dockerfiles (handled by
         # the FROM walker), GHA workflows (handled by uses
@@ -1114,6 +1285,7 @@ def _enumerate_helm_chart_candidates(
     http,
     cache,
     helm_cache: dict,
+    manifests: list | None = None,
 ) -> tuple[list[BumpCandidate], list[tuple[str, Path, str]]]:
     """Walk ``Chart.yaml`` dependencies via the existing Helm
     parser. Each dep carries a Helm repo URL in
@@ -1138,19 +1310,12 @@ def _enumerate_helm_chart_candidates(
     )
     from core.upstream_latest.helm_index import latest_chart_version
 
-    from ..discovery import find_manifests
     from ..parsers import parse_manifest
 
     candidates: list[BumpCandidate] = []
     skipped: list[tuple[str, Path, str]] = []
-    try:
-        # Fully inclusive walk: write-path policy (which trees not to
-        # edit) is the operator's ``--exclude`` globs, applied at the
-        # candidate choke point in ``_enumerate_candidates`` — not the
-        # scan walker's test-path default.
-        manifests = find_manifests(target, include_test_paths=True)
-    except Exception:                       # noqa: BLE001
-        return candidates, skipped
+    if manifests is None:
+        manifests = _find_all_manifests(target)
     for manifest in manifests:
         if manifest.path.name != "Chart.yaml":
             continue
@@ -1209,6 +1374,7 @@ def _enumerate_git_submodule_candidates(
     cache,
     github_token: str | None,
     sub_cache: dict,
+    manifests: list | None = None,
 ) -> tuple[list[BumpCandidate], list[tuple[str, Path, str]]]:
     """Walk ``.gitmodules`` submodules via the existing parser.
     For each GitHub-shaped submodule with a recorded current SHA,
@@ -1228,19 +1394,12 @@ def _enumerate_git_submodule_candidates(
         resolve_tag_to_sha,
     )
 
-    from ..discovery import find_manifests
     from ..parsers import parse_manifest
 
     candidates: list[BumpCandidate] = []
     skipped: list[tuple[str, Path, str]] = []
-    try:
-        # Fully inclusive walk: write-path policy (which trees not to
-        # edit) is the operator's ``--exclude`` globs, applied at the
-        # candidate choke point in ``_enumerate_candidates`` — not the
-        # scan walker's test-path default.
-        manifests = find_manifests(target, include_test_paths=True)
-    except Exception:                       # noqa: BLE001
-        return candidates, skipped
+    if manifests is None:
+        manifests = _find_all_manifests(target)
     for manifest in manifests:
         if manifest.path.name != ".gitmodules":
             continue
@@ -1678,6 +1837,49 @@ def _find_gha_workflows(target: Path) -> list[Path]:
     return sorted(out)
 
 
+def _find_dockerfiles_and_workflows(
+    target: Path,
+) -> tuple[list[Path], list[Path]]:
+    """One tree walk yielding what :func:`_find_dockerfiles` and
+    :func:`_find_gha_workflows` compute in two separate walks.
+    Predicates are identical: a workflow is a ``.yml``/``.yaml`` file
+    directly inside a ``.github/workflows/`` dir that is a strict
+    descendant of ``target`` (matching the ``rglob('.github')``
+    original, which never matched the target itself)."""
+    if target.is_file():
+        return ([target] if _is_dockerfile(target) else []), []
+    dockerfiles: list[Path] = []
+    workflows: list[Path] = []
+    for path in target.rglob("*"):
+        if not path.is_file():
+            continue
+        if _is_dockerfile(path):
+            dockerfiles.append(path)
+        elif (
+            path.suffix in (".yml", ".yaml")
+            and path.parent.name == "workflows"
+            and path.parent.parent.name == ".github"
+            and path.parent.parent != target
+        ):
+            workflows.append(path)
+    return sorted(dockerfiles), sorted(workflows)
+
+
+def _find_all_manifests(target: Path) -> list:
+    """One shared ``find_manifests`` walk for the manifest-driven
+    walkers (yaml image / Helm chart / git submodule) — each used to
+    re-walk the tree with identical inputs. Fully inclusive: write-
+    path policy (which trees not to edit) is the operator's
+    ``--exclude`` globs at the candidate choke point, not the scan
+    walker's test-path default. A walk failure degrades to an empty
+    list, exactly as each walker's own try/except previously did."""
+    from ..discovery import find_manifests
+    try:
+        return find_manifests(target, include_test_paths=True)
+    except Exception:                       # noqa: BLE001
+        return []
+
+
 def _find_dockerfiles(target: Path) -> list[Path]:
     """Walk ``target`` for files the Dockerfile-ARG rewriter
     knows how to handle. Mirrors the inline-installs parser's
@@ -1696,6 +1898,13 @@ def _is_dockerfile(path: Path) -> bool:
     if name.startswith("Dockerfile.") or name.endswith(".Dockerfile"):
         return True
     return path.suffix == ".dockerfile"
+
+
+def _title_severity(severity: str) -> str:
+    """Title-Case severity for human-readable rendering (``high`` →
+    ``High``), matching the adjacent Title-Case verdict labels. JSON
+    output keeps the raw lowercase value."""
+    return severity.capitalize() if isinstance(severity, str) else severity
 
 
 def render_report(report: BumpReport) -> str:
@@ -1796,7 +2005,14 @@ def render_report(report: BumpReport) -> str:
             # Surface the supply-chain findings inline so operators
             # know WHY a verdict isn't Clean. (One copy per group;
             # identical proposals would emit identical findings.)
-            lines.extend(f"      [{sf.severity}] {sf.kind}: {sf.detail}" for sf in head.bump_supply_chain_findings)
+            # Severity renders Title Case like the adjacent verdict —
+            # human-readable output uses Title Case status values;
+            # the raw lowercase form stays in JSON.
+            lines.extend(
+                f"      [{_title_severity(sf.severity)}] "
+                f"{sf.kind}: {sf.detail}"
+                for sf in head.bump_supply_chain_findings
+            )
             # Surface newly-introduced CVEs (OSV vuln-delta) —
             # the strongest "do not auto-bump" signal we have.
             for vf in head.bump_vuln_findings:
@@ -1804,7 +2020,7 @@ def render_report(report: BumpReport) -> str:
                 cve = (adv.osv_id if adv else "?")
                 kev_marker = " KEV" if vf.in_kev else ""
                 lines.append(
-                    f"      [{vf.severity}{kev_marker}] "
+                    f"      [{_title_severity(vf.severity)}{kev_marker}] "
                     f"new-CVE {cve}: "
                     f"{(adv.summary[:90] if adv and adv.summary else '')}"
                 )

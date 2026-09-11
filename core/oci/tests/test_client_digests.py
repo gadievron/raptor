@@ -326,3 +326,62 @@ def test_stream_blob_requests_identity_encoding() -> None:
     assert http.calls, "no request recorded"
     headers = http.calls[0].get("headers") or {}
     assert headers.get("Accept-Encoding") == "identity"
+
+
+def test_colonless_index_reference_refused_before_request() -> None:
+    """A colon-less index-supplied value is not a tag override — the
+    reference override is only ever a digest. Pre-fix it skipped the
+    digest gate entirely and was fetched as a MUTABLE tag (with no pin
+    cross-check) while the caller believed it content-addressed; the
+    same bypass admitted dot-segments/query syntax into the authed URL
+    path."""
+    ref = parse_image_ref("ghcr.io/acme/app:latest")
+    http = _StubHttp({})
+    client = OciRegistryClient(http)
+    for hostile in ("latest", "../../v2/other/manifests/x", "latest?x=1"):
+        with pytest.raises(RegistryError, match="sha256"):
+            client.fetch_manifest(ref, reference=hostile)
+    assert http.calls == []
+
+
+def test_digest_shaped_reference_still_fetches() -> None:
+    ref = parse_image_ref("ghcr.io/acme/app:latest")
+    url = f"https://ghcr.io/v2/acme/app/manifests/{_MANIFEST_DIGEST}"
+    client = OciRegistryClient(_StubHttp({
+        url: _StubResponse(200, _MANIFEST),
+    }))
+    out = client.fetch_manifest(ref, reference=_MANIFEST_DIGEST)
+    assert out.digest == _MANIFEST_DIGEST
+
+
+# ── realm validation ───────────────────────────────────────────────────
+
+
+def test_realm_self_on_nonstandard_port_allowed() -> None:
+    from core.oci.client import _validate_realm
+    # urlsplit().hostname is port-stripped; the compare must be against
+    # the registry HOST or every self-hosted bearer registry on a
+    # nonstandard port fail-closes at token exchange.
+    _validate_realm("registry.example.com:5000",
+                    "https://registry.example.com:5000/auth/token")
+    _validate_realm("registry.example.com:5000",
+                    "https://registry.example.com/auth/token")
+
+
+def test_realm_family_auth_hosts_allowed() -> None:
+    from core.oci.client import _validate_realm
+    # Derived from the registry-family table — the elastic family's
+    # token host predates its allowlist entry by one incident.
+    _validate_realm("docker.elastic.co",
+                    "https://docker-auth.elastic.co/auth")
+    _validate_realm("docker.io", "https://auth.docker.io/token")
+    _validate_realm("registry.gitlab.com", "https://gitlab.com/jwt/auth")
+
+
+def test_realm_off_family_host_refused() -> None:
+    from core.oci.client import _validate_realm
+    with pytest.raises(RegistryError, match="realm host"):
+        _validate_realm("docker.elastic.co", "https://attacker.example/x")
+    with pytest.raises(RegistryError, match="realm host"):
+        _validate_realm("registry.example.com:5000",
+                        "https://attacker.example:5000/auth")

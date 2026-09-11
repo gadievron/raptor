@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -300,6 +301,37 @@ def build_summary_from_query_outputs(
     )
 
 
+# Identifier immediately followed by an open paren — the way review
+# prose names a concrete call ("passes fmt to sprintf(dst, fmt)").
+_CALL_SHAPED_NAME_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_.]*)\s*\(")
+
+# Fallback label when a reaches-sink assumption doesn't name the sink
+# concretely. Kept stable so dedup in propagate_taint_upward (keyed on
+# (source_param, sink_call)) behaves.
+_UNSPECIFIED_SINK = "unspecified_sink"
+
+
+def _sink_name_from_assumption(text: str) -> str:
+    """Best-effort sink name from a free-text reaches-sink assumption.
+
+    Preference order: a known dangerous libc/library sink named as a
+    whole word ("passes buf to memcpy without a bounds check"), then
+    the first call-shaped identifier ("reaches sprintf(dst, fmt)"),
+    else the stable :data:`_UNSPECIFIED_SINK` label. Labeling only —
+    the flow claim itself comes from the structured ``check_type``,
+    never from this parse.
+    """
+    if text:
+        from core.analysis.reachability_gates import DANGEROUS_LIBC_SINKS
+        for m in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", text):
+            if m.group(0) in DANGEROUS_LIBC_SINKS:
+                return m.group(0)
+        m2 = _CALL_SHAPED_NAME_RE.search(text)
+        if m2:
+            return m2.group(1)
+    return _UNSPECIFIED_SINK
+
+
 def summary_from_review_result(
     function: str,
     file: str,
@@ -311,12 +343,23 @@ def summary_from_review_result(
     conditional sanitization, protocol semantics, design intent.
     This converts the structured review output into a summary
     that flows to subsequent callers via taint_summary_results.
+
+    Taint rules: a review precondition with
+    ``check_type == "function_reaches_sink"`` is a structured
+    param-flow claim ("THIS function passes ``parameter`` to a
+    dangerous API"), so it becomes a HEURISTIC-tier
+    :class:`TaintRule` — this is what makes
+    :func:`propagate_taint_upward` functional on LLM summaries
+    (it returns ``[]`` for a callee summary with no taint_rules).
     """
     if not review_result:
         return None
 
     preconditions = []
+    taint_rules: list[TaintRule] = []
     for pc in review_result.get("preconditions") or []:
+        if not isinstance(pc, dict):
+            continue
         param = pc.get("parameter", pc.get("param", ""))
         assumption = pc.get("assumption", "")
         if param and assumption:
@@ -326,16 +369,29 @@ def summary_from_review_result(
                 conditions=[assumption],
                 evidence_tier=EvidenceTier.HEURISTIC,
             ))
+        if param and pc.get("check_type") == "function_reaches_sink":
+            # sink_arg_index unknowable from prose — -1 marks it.
+            # source_index -1 (unless the result carries one) lets
+            # propagate_taint_upward recover the index by name from
+            # the sibling precondition record.
+            taint_rules.append(TaintRule(
+                source_param=param,
+                source_index=pc.get("param_index", -1),
+                sink_call=_sink_name_from_assumption(assumption),
+                sink_arg_index=-1,
+                evidence_tier=EvidenceTier.HEURISTIC,
+            ))
 
     callees = review_result.get("callees", [])
     callers = review_result.get("callers", [])
 
-    if not preconditions and not callees and not callers:
+    if not preconditions and not taint_rules and not callees and not callers:
         return None
 
     return FunctionSummary(
         function=function,
         file=file,
+        taint_rules=taint_rules,
         preconditions=preconditions,
         callees=callees[:20] if isinstance(callees, list) else [],
         callers=callers[:20] if isinstance(callers, list) else [],
@@ -343,6 +399,24 @@ def summary_from_review_result(
         confidence="medium",
         evidence_tier=EvidenceTier.HEURISTIC,
     )
+
+
+def _param_index_of(summary: FunctionSummary, param_name: str) -> int:
+    """Best-effort parameter index of ``param_name`` in ``summary``'s
+    own function, recovered from records that carry both the name and
+    a concrete index (mechanical taint rules, preconditions).
+
+    ``FunctionSummary`` doesn't store the parameter list itself, so
+    this is the only in-summary source of name→index evidence.
+    Returns -1 when nothing pins the index down.
+    """
+    for r in summary.taint_rules:
+        if r.source_param == param_name and r.source_index >= 0:
+            return r.source_index
+    for p in summary.preconditions:
+        if p.param == param_name and p.param_index >= 0:
+            return p.param_index
+    return -1
 
 
 def propagate_taint_upward(
@@ -368,13 +442,25 @@ def propagate_taint_upward(
     inherited = []
 
     for rule in callee_summary.taint_rules:
-        caller_param = arg_map.get(rule.source_index)
+        source_index = rule.source_index
+        if source_index < 0:
+            # An inherited rule carries no index of its own — recover
+            # it from the callee summary's other records by name.
+            # Without this, a once-inherited rule could never match
+            # ``arg_map`` (keyed on callee param indices), capping
+            # propagation at a single hop.
+            source_index = _param_index_of(
+                callee_summary, rule.source_param,
+            )
+        caller_param = arg_map.get(source_index)
         if not caller_param:
             continue
 
         new_rule = TaintRule(
             source_param=caller_param,
-            source_index=-1,
+            # Pin the caller-side index when the caller's own records
+            # know it, so the NEXT hop's arg_map lookup can match.
+            source_index=_param_index_of(caller_summary, caller_param),
             sink_call=rule.sink_call,
             sink_arg_index=rule.sink_arg_index,
             hop_count=rule.hop_count + 1,

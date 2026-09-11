@@ -55,6 +55,7 @@ from .eocd import (
 )
 from .extract import (
     ZipEntryCountExceeded,
+    ZipOpenError,
     ZipTotalBytesExceeded,
     extract_files_from_zip,
 )
@@ -75,6 +76,7 @@ __all__ = [
     "MAX_CD_BYTES_PER_ENTRY",
     "UnsafeMemberReason",
     "ZipEntryCountExceeded",
+    "ZipOpenError",
     "ZipTotalBytesExceeded",
     "bomb_shaped_reason",
     "extract_files_from_zip",

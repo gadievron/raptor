@@ -164,20 +164,45 @@ def test_directory_entries_skipped():
 # Malformed input
 # ---------------------------------------------------------------------------
 
-def test_garbage_input_returns_empty_dict():
-    """Garbage bytes that aren't a zip should just return ``{}``
-    rather than raise — matches the tar-companion contract."""
-    result = extract_files_from_zip(b"this is not a zip", selector=lambda i: i.filename)
-    assert result == {}
+def test_garbage_input_raises_zip_open_error():
+    """Garbage bytes that aren't a zip FAIL CLOSED with a typed error
+    — matches the tar-companion contract (TarOpenError): an empty
+    "success" dict is indistinguishable from a genuinely empty
+    selection downstream."""
+    from core.zip.extract import ZipOpenError
+    with pytest.raises(ZipOpenError):
+        extract_files_from_zip(
+            b"this is not a zip", selector=lambda i: i.filename)
 
 
-def test_truncated_zip_returns_what_was_recoverable():
+def test_zip_open_error_is_badzipfile():
+    """Callers already guarding ``zipfile.BadZipFile`` keep working."""
+    from core.zip.extract import ZipOpenError
+    with pytest.raises(zipfile.BadZipFile):
+        extract_files_from_zip(
+            b"this is not a zip", selector=lambda i: i.filename)
+    assert issubclass(ZipOpenError, zipfile.BadZipFile)
+
+
+def test_truncated_zip_raises_zip_open_error():
     """Truncated end-of-central-directory means zipfile can't open
-    the archive at all — same shape as garbage input."""
+    the archive at all — same fail-closed shape as garbage input."""
+    from core.zip.extract import ZipOpenError
     data = _make_zip(("a.txt", b"hello", None))
     # Lop off the trailing EOCD bytes
     truncated = data[: max(1, len(data) - 64)]
-    result = extract_files_from_zip(truncated, selector=lambda i: i.filename)
+    with pytest.raises(ZipOpenError):
+        extract_files_from_zip(truncated, selector=lambda i: i.filename)
+
+
+def test_valid_empty_zip_still_returns_empty_dict():
+    """Fail-closed is for UNREADABLE archives only: a well-formed zip
+    with no selected members legitimately returns ``{}``."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED):
+        pass
+    result = extract_files_from_zip(
+        buf.getvalue(), selector=lambda i: i.filename)
     assert result == {}
 
 
@@ -185,33 +210,8 @@ def test_truncated_zip_returns_what_was_recoverable():
 # Compression bomb
 # ---------------------------------------------------------------------------
 
-def test_entry_count_cap_rejects_in_memory():
-    """A 12k-entry zip exceeds the default cap — extract returns empty."""
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
-        for i in range(12_000):
-            zf.writestr(f"f{i}.txt", b"x")
-    result = extract_files_from_zip(
-        buf.getvalue(), selector=lambda i: i.filename,
-    )
-    assert result == {}
-
-
-def test_entry_count_cap_rejects_path(tmp_path: Path):
-    """Same defence applies when the source is a filesystem path."""
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
-        for i in range(12_000):
-            zf.writestr(f"f{i}.txt", b"x")
-    p = tmp_path / "bomb.zip"
-    p.write_bytes(buf.getvalue())
-    result = extract_files_from_zip(str(p), selector=lambda i: i.filename)
-    assert result == {}
-
-
-def test_entry_count_cap_raises_when_requested():
-    """``raise_on_entry_count=True`` surfaces the rejection so the
-    caller can render a domain-specific error."""
+def test_entry_count_cap_raises_in_memory():
+    """A 12k-entry zip exceeds the default cap — typed refusal."""
     from core.zip.extract import ZipEntryCountExceeded
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
@@ -219,25 +219,52 @@ def test_entry_count_cap_raises_when_requested():
             zf.writestr(f"f{i}.txt", b"x")
     with pytest.raises(ZipEntryCountExceeded):
         extract_files_from_zip(
-            buf.getvalue(),
-            selector=lambda i: i.filename,
-            raise_on_entry_count=True,
+            buf.getvalue(), selector=lambda i: i.filename,
         )
 
 
-def test_entry_count_cap_overridable_per_call():
-    """An operator-trusted archive can raise the cap explicitly."""
+def test_entry_count_cap_raises_path(tmp_path: Path):
+    """Same defence applies when the source is a filesystem path."""
+    from core.zip.extract import ZipEntryCountExceeded
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
+        for i in range(12_000):
+            zf.writestr(f"f{i}.txt", b"x")
+    p = tmp_path / "bomb.zip"
+    p.write_bytes(buf.getvalue())
+    with pytest.raises(ZipEntryCountExceeded):
+        extract_files_from_zip(str(p), selector=lambda i: i.filename)
+
+
+def test_entry_count_cap_tightenable_per_call():
+    """A per-call lower cap fires the same typed refusal (50 > 10)."""
+    from core.zip.extract import ZipEntryCountExceeded
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
         for i in range(50):
             zf.writestr(f"f{i}.txt", b"x")
-    # With cap=10 we'd expect rejection (50 > 10).
+    with pytest.raises(ZipEntryCountExceeded):
+        extract_files_from_zip(
+            buf.getvalue(),
+            selector=lambda i: i.filename,
+            max_entry_count=10,
+        )
+
+
+def test_entry_count_cap_raisable_per_call():
+    """An operator-trusted archive can raise the cap explicitly and
+    extract normally (the fail-closed refusal is cap-relative, not
+    absolute)."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
+        for i in range(50):
+            zf.writestr(f"f{i}.txt", b"x")
     result = extract_files_from_zip(
         buf.getvalue(),
         selector=lambda i: i.filename,
-        max_entry_count=10,
+        max_entry_count=100,
     )
-    assert result == {}
+    assert len(result) == 50
 
 
 def test_compression_bomb_skipped():
@@ -262,3 +289,78 @@ def test_max_total_bytes_caps_aggregate_and_default_unchanged():
     with pytest.raises(ZipTotalBytesExceeded):
         extract_files_from_zip(
             z, selector=lambda i: i.filename, max_total_bytes=250)
+
+
+# ---------------------------------------------------------------------------
+# Per-member fail-closed (intact CD, corrupt member data) + encrypted degrade
+# ---------------------------------------------------------------------------
+
+def _corrupt_member_zip() -> bytes:
+    """Intact central directory, member data corrupted (CRC mismatch)."""
+    data = bytearray(_make_zip(
+        ("a.txt", b"A" * 100, None),
+        ("b.txt", b"B" * 10, None),
+    ))
+    i = data.find(b"A" * 100)
+    assert i > 0, "fixture: stored member data not found"
+    data[i:i + 4] = b"XXXX"
+    return bytes(data)
+
+
+def _encrypted_member_zip() -> bytes:
+    """Two members; enc.txt's central-directory flag bits declare
+    encryption (stdlib can't WRITE encrypted zips, so patch the flag)."""
+    raw = bytearray(_make_zip(
+        ("enc.txt", b"secret", None),
+        ("ok.txt", b"fine", None),
+    ))
+    pos = 0
+    while True:
+        pos = raw.find(b"PK\x01\x02", pos)
+        if pos < 0:
+            break
+        name_len = int.from_bytes(raw[pos + 28:pos + 30], "little")
+        if bytes(raw[pos + 46:pos + 46 + name_len]) == b"enc.txt":
+            raw[pos + 8] |= 0x01
+        pos += 4
+    return bytes(raw)
+
+
+def test_corrupt_member_data_raises_zip_open_error():
+    """An archive whose CD is intact but whose member DATA is corrupt
+    (CRC mismatch) must refuse — silently omitting the member was a
+    bypass of the whole-archive fail-closed contract (a crafted
+    intact-CD zip extracted to a 0-file "success")."""
+    from core.zip.extract import ZipOpenError
+    with pytest.raises(ZipOpenError, match="corrupt member"):
+        extract_files_from_zip(
+            _corrupt_member_zip(), selector=lambda i: i.filename)
+
+
+def test_encrypted_member_degrades_and_is_reported():
+    """Encryption is declared metadata, not corruption: the member is
+    skipped, the rest extracts, and on_skipped surfaces the skip."""
+    skips: list[tuple[str, str]] = []
+    result = extract_files_from_zip(
+        _encrypted_member_zip(),
+        selector=lambda i: i.filename,
+        on_skipped=lambda info, reason: skips.append(
+            (info.filename, reason)),
+    )
+    assert result == {"ok.txt": b"fine"}
+    assert skips == [("enc.txt", "encrypted")]
+
+
+def test_on_skipped_reports_safety_filter_rejects():
+    data = _make_zip(
+        ("../escape.txt", b"bad", None),
+        ("safe.txt", b"ok", None),
+    )
+    skips: list[tuple[str, str]] = []
+    result = extract_files_from_zip(
+        data, selector=lambda i: i.filename,
+        on_skipped=lambda info, reason: skips.append(
+            (info.filename, reason)),
+    )
+    assert result == {"safe.txt": b"ok"}
+    assert ("../escape.txt", "path_traversal") in skips

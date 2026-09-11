@@ -124,6 +124,59 @@ _MAX_INDEX_BYTES = 64 * 1024 * 1024
 # the oldest entries (by mtime) are evicted.
 _MAX_CACHE_ENTRIES = 32
 
+# Grammar modules the inventory's call-graph extractors probe (mirrors
+# the ``_import_grammar`` call sites in ``core.inventory.call_graph``).
+# Their availability determines extraction QUALITY for the same source
+# bytes: without a grammar a language's files get empty call graphs.
+_GRAMMAR_MODULES: tuple[str, ...] = (
+    "tree_sitter",
+    "tree_sitter_c",
+    "tree_sitter_c_sharp",
+    "tree_sitter_cpp",
+    "tree_sitter_go",
+    "tree_sitter_java",
+    "tree_sitter_javascript",
+    "tree_sitter_kotlin",
+    "tree_sitter_lua",
+    "tree_sitter_php",
+    "tree_sitter_ruby",
+    "tree_sitter_rust",
+    "tree_sitter_scala",
+    "tree_sitter_swift",
+    "tree_sitter_typescript",
+)
+
+# Computed once per process — grammar availability doesn't change
+# mid-process (imports are cached), and find_spec costs a path probe
+# per module.
+_EXTRACTOR_IDENTITY: str | None = None
+
+
+def _extractor_identity() -> str:
+    """Availability signature of the call-graph extraction toolchain.
+
+    Folded into the fingerprint so that installing (or removing) a
+    tree-sitter grammar invalidates cached indices: the per-file
+    sha256 rows describe the SOURCE, not the extraction quality — the
+    same source extracted without a parser yields a degraded adjacency
+    index, and serving it after the parser is installed would pin the
+    degraded verdicts forever.
+    """
+    global _EXTRACTOR_IDENTITY
+    if _EXTRACTOR_IDENTITY is not None:
+        return _EXTRACTOR_IDENTITY
+    import importlib.util
+    available: list[str] = []
+    for mod in _GRAMMAR_MODULES:
+        try:
+            found = importlib.util.find_spec(mod) is not None
+        except (ImportError, ValueError):
+            found = False
+        if found:
+            available.append(mod)
+    _EXTRACTOR_IDENTITY = ",".join(available)
+    return _EXTRACTOR_IDENTITY
+
 
 def compute_fingerprint(inventory: dict[str, Any]) -> str | None:
     """Return a stable content fingerprint for ``inventory``, or
@@ -132,6 +185,7 @@ def compute_fingerprint(inventory: dict[str, Any]) -> str | None:
 
     The fingerprint folds:
       * ``_CACHE_VERSION``                         — schema-shape salt
+      * extractor identity (available grammars)    — extraction quality
       * sorted ``(path, sha256)`` over every file  — content shape
 
     Excluding ``mtime`` and other volatile fields is deliberate —
@@ -144,6 +198,7 @@ def compute_fingerprint(inventory: dict[str, Any]) -> str | None:
 
     digest = hashlib.sha256()
     digest.update(f"v={_CACHE_VERSION}\n".encode("ascii"))
+    digest.update(f"x={_extractor_identity()}\n".encode("utf-8"))
     # Sort by path so dict-insertion-order variation across builders
     # doesn't change the fingerprint.
     rows = []

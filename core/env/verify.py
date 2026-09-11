@@ -63,11 +63,13 @@ _ALLOWED_METHODS = frozenset({"GET", "POST", "PUT", "DELETE", "HEAD"})
 
 _LOOPBACK_HOST_NAMES = frozenset({"localhost", "127.0.0.1", "::1"})
 
-_CLOUD_METADATA_IPS = frozenset({
-    "169.254.169.254",
-    "169.254.170.2",
-    "fd00:ec2::254",
-})
+# Held as PARSED addresses and compared post-parse (with any IPv4-mapped
+# IPv6 form unmapped first) so alternate spellings — "::ffff:169.254.169.254",
+# zero-padded or case-varied IPv6 — cannot slip past an exact-string match.
+_CLOUD_METADATA_IPS = frozenset(
+    ipaddress.ip_address(literal)
+    for literal in ("169.254.169.254", "169.254.170.2", "fd00:ec2::254")
+)
 
 
 @dataclass(frozen=True)
@@ -103,17 +105,20 @@ def assert_local_host_ip(host_ip: str) -> str | None:
     lowered = host_ip.lower().strip()
     if lowered in _LOOPBACK_HOST_NAMES:
         return None
-    if lowered in _CLOUD_METADATA_IPS:
-        return (
-            f"host_ip {host_ip!r} is a cloud metadata endpoint; "
-            "verify probes must not reach instance metadata services"
-        )
     try:
         ip = ipaddress.ip_address(lowered)
     except ValueError:
         return (
             f"host_ip {host_ip!r} is not a valid IP literal; verify probes "
             "must target a published container port on loopback/private"
+        )
+    # Unmap ::ffff:a.b.c.d before the metadata comparison — the mapped
+    # spelling parses as is_private=True and would otherwise be allowed.
+    unmapped = getattr(ip, "ipv4_mapped", None) or ip
+    if unmapped in _CLOUD_METADATA_IPS:
+        return (
+            f"host_ip {host_ip!r} is a cloud metadata endpoint; "
+            "verify probes must not reach instance metadata services"
         )
     if ip.is_loopback or ip.is_private:
         return None
@@ -122,6 +127,34 @@ def assert_local_host_ip(host_ip: str) -> str | None:
         "target published container ports (127.0.0.1, ::1, RFC 1918, "
         "Docker bridge subnets)"
     )
+
+
+def _coerce_expected_status(value: Any) -> tuple[list[int] | None, str]:
+    """Coerce an ``expected_status`` value to ``list[int]``.
+
+    Shared by ``check_http`` and ``check_http_request`` (previously two
+    drifted copies). Accepts an int, a digit string, or a list of
+    either — LLM-authored plans quote statuses (``["200"]``), and a
+    string entry that survives uncoerced can NEVER equal the int
+    ``status_code``, silently failing a healthy environment. Returns
+    ``(statuses, "")`` or ``(None, reason)``.
+    """
+    items = value if isinstance(value, list) else [value]
+    out: list[int] = []
+    for item in items:
+        # bool is an int subclass; True == 1 is never an HTTP status.
+        if isinstance(item, int) and not isinstance(item, bool):
+            out.append(item)
+        elif isinstance(item, str) and item.strip().isdigit():
+            out.append(int(item.strip()))
+        else:
+            return None, (
+                f"expected_status must be int or list[int] "
+                f"(digit strings accepted), got {item!r}"
+            )
+    if not out:
+        return None, "expected_status list is empty"
+    return out, ""
 
 
 # ── direct-connection HTTP exchange ───────────────────────────────────
@@ -324,21 +357,14 @@ def check_http(
                 "details": {},
             }
 
-    if not isinstance(expected_status, (int, list)):
+    expected, status_err = _coerce_expected_status(expected_status)
+    if expected is None:
         return {
             "type": "http_check",
             "passed": False,
-            "reason": (
-                f"check_http: expected_status must be int or list[int], "
-                f"got {type(expected_status).__name__}"
-            ),
+            "reason": f"check_http: {status_err}",
             "details": {},
         }
-    expected = (
-        list(expected_status)
-        if isinstance(expected_status, list)
-        else [int(expected_status)]
-    )
     url = _url_for(host_ip, host_port, path)
     start = time.monotonic()
     try:
@@ -440,12 +466,19 @@ def check_logs(
             },
         }
 
-    # ReDoS guard: reject patterns with nested quantifiers or excessive
-    # length that could cause catastrophic backtracking on large logs.
+    # ReDoS guard: route risky patterns to literal matching instead of
+    # re.search — the logs are container-controlled, so catastrophic
+    # backtracking is attacker-reachable CPU burn with no wall clock.
+    # Risky = consecutive quantifiers, possessive-looking (?...+ forms,
+    # or ANY quantified group whose body contains an alternation or its
+    # own quantifier (incl. bounded {m,n} — "(a|a)+" and "(a{1,9}){1,9}"
+    # both blow up). Unquantified groups like "(ERROR|FATAL)" stay
+    # regex, so the guard does not degrade ordinary log asserts.
     _dangerous_re = re.compile(
         r"[+*]{2,}"
         r"|\(\?[^)]*\+"
-        r"|\([^)]*[+*]\)[+*]"
+        r"|\([^)]*[|+*{][^)]*\)\s*[+*{]"
+        r"|\([^)]*\)[+*{][^)]*\)\s*[+*{]"
     )
     missing: list[str] = []
     for pattern in expected_patterns:
@@ -580,21 +613,14 @@ def check_http_request(
             "details": {},
         }
 
-    if not isinstance(expected_status, (int, list)):
+    expected, status_err = _coerce_expected_status(expected_status)
+    if expected is None:
         return {
             "type": "http_request_check",
             "passed": False,
-            "reason": (
-                f"check_http_request: expected_status must be int or list[int], "
-                f"got {type(expected_status).__name__}"
-            ),
+            "reason": f"check_http_request: {status_err}",
             "details": {},
         }
-    expected = (
-        list(expected_status)
-        if isinstance(expected_status, list)
-        else [int(expected_status)]
-    )
     url = _url_for(host_ip, host_port, path)
     req_headers: dict[str, str] = {"User-Agent": "raptor-env-verify/0.1"}
     if headers:
@@ -609,6 +635,21 @@ def check_http_request(
                 path + sep
                 + urllib.parse.urlencode({field_name: request_body})
             )
+        else:
+            # Fail closed: previously neither branch fired and the
+            # request_body was silently dropped — the "functional" probe
+            # degenerated to a bare GET that could pass without ever
+            # exercising the payload.
+            return {
+                "type": "http_request_check",
+                "passed": False,
+                "reason": (
+                    "check_http_request: GET with form_encoded=false cannot "
+                    "carry request_body — set form_encoded=true (query "
+                    "params) or use POST"
+                ),
+                "details": {"method": "GET", "form_encoded": False},
+            }
     elif form_encoded:
         req_headers.setdefault("Content-Type",
                                "application/x-www-form-urlencoded")
@@ -695,6 +736,44 @@ def check_http_request(
         "passed": True,
         "details": details,
     }
+
+
+def _recv_response(
+    sock: socket.socket | ssl.SSLSocket,
+    max_bytes: int,
+    timeout_seconds: float,
+    marker: bytes,
+) -> bytes:
+    """Accumulate response bytes for :func:`check_tcp_probe`.
+
+    A single ``recv()`` returns at most one segment — multi-segment
+    banners made the marker assert fail nondeterministically. Reads
+    until the marker appears, ``max_bytes`` accumulate, the peer
+    closes, or the deadline lapses; a deadline with NO bytes raises
+    ``TimeoutError`` (preserving the caller's timeout classification),
+    while partial data is returned for the marker check to adjudicate.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    buf = bytearray()
+    while len(buf) < max_bytes:
+        if marker and marker in buf:
+            break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            if buf:
+                break
+            raise TimeoutError(f"no response within {timeout_seconds}s")
+        sock.settimeout(remaining)
+        try:
+            chunk = sock.recv(min(65536, max_bytes - len(buf)))
+        except TimeoutError:
+            if buf:
+                break
+            raise
+        if not chunk:
+            break
+        buf.extend(chunk)
+    return bytes(buf)
 
 
 def check_tcp_probe(
@@ -837,6 +916,27 @@ def check_tcp_probe(
                               response_size=response_size)
         return {"hint": hint} if hint else {}
 
+    # Marker bytes are needed by the read loop's early-exit; a malformed
+    # hex marker therefore fails before any connection is opened.
+    if has_marker_hex:
+        try:
+            marker_bytes = bytes.fromhex(expected_response_hex)
+        except ValueError as exc:
+            return {
+                "type": "tcp_probe_check",
+                "passed": False,
+                "reason": f"expected_response_hex is not valid hex: {exc}",
+                "details": {
+                    **details,
+                    "expected_response_hex": expected_response_hex[:80],
+                },
+            }
+    else:
+        # utf-8 encode for the early-exit byte scan only; the
+        # authoritative marker check below still runs on decoded text.
+        marker_bytes = expected_response_contains.encode(
+            "utf-8", errors="replace")
+
     start = time.monotonic()
     sock: socket.socket | ssl.SSLSocket | None = None
     try:
@@ -854,7 +954,8 @@ def check_tcp_probe(
                 sock = raw_sock
             sock.settimeout(timeout_seconds)
             sock.sendall(send_bytes)
-            response = sock.recv(read_bytes)
+            response = _recv_response(
+                sock, read_bytes, timeout_seconds, marker_bytes)
         finally:
             try:
                 if sock is not None:
@@ -925,20 +1026,6 @@ def check_tcp_probe(
         }
 
     if has_marker_hex:
-        try:
-            marker_bytes = bytes.fromhex(expected_response_hex)
-        except ValueError as exc:
-            return {
-                "type": "tcp_probe_check",
-                "passed": False,
-                "reason": f"expected_response_hex is not valid hex: {exc}",
-                "details": {
-                    **details,
-                    "duration_s": duration_s,
-                    "response_size_bytes": response_size,
-                    "expected_response_hex": expected_response_hex[:80],
-                },
-            }
         marker_found = marker_bytes in response
     else:
         response_text = response.decode("utf-8", errors="replace")
@@ -1353,6 +1440,53 @@ def default_executors(
     }
 
 
+# CPython's argument-binding TypeError message shapes — stable across
+# supported interpreters. Used to tell "the plan's kwargs didn't fit
+# the executor signature" apart from a TypeError raised by code that
+# RAN (a genuine executor bug). Traceback depth cannot make that call
+# here: the default executor table wraps checks in lambdas, so a
+# binding failure sits one frame deeper than for a direct-function
+# table.
+_ARG_BINDING_TYPEERROR_RE = re.compile(
+    r"unexpected keyword argument"
+    r"|missing \d+ required"
+    r"|takes \d+ positional argument"
+    r"|takes from \d+ to \d+ positional"
+    r"|multiple values for argument"
+    r"|required keyword-only argument"
+)
+
+
+def _run_executor(
+    fn: Callable[..., CheckResult], ctype: str, /, *args: Any, **kwargs: Any
+) -> CheckResult:
+    """Invoke one executor; a TypeError is a FAILED CHECK, never a crash.
+
+    Plans are LLM-authored: an unknown key that survives alias
+    normalization reaches a fixed-signature check function and raises
+    an argument-binding TypeError — reported as invalid step
+    arguments, blaming the plan. A TypeError from code that ran is a
+    genuine executor bug — still fail-closed, but labelled as an
+    executor error so plan authors aren't blamed for code defects.
+    Either way the step fails with the complaint instead of crashing
+    the whole verify (and, upstream, the provisioner) out of its
+    contract.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except TypeError as exc:
+        if _ARG_BINDING_TYPEERROR_RE.search(str(exc)):
+            reason = f"invalid step arguments: {exc}"
+        else:
+            reason = f"executor error ({ctype}): {exc}"
+        return {
+            "type": ctype,
+            "passed": False,
+            "reason": reason,
+            "details": {},
+        }
+
+
 def verify_plan(
     handle: RuntimeHandle | None = None,
     plan: list[dict[str, Any]] | None = None,
@@ -1423,14 +1557,15 @@ def verify_plan(
         ctype = step.get("type")
         step_kwargs = {k: v for k, v in step.items() if k != "type"}
         if ctype == "container_status":
-            out = executors["container_status"]()
+            out = _run_executor(executors["container_status"], ctype)
         elif ctype == "http_check":
             http_kwargs = normalize_kwargs(step_kwargs, HTTP_KEY_ALIASES)
             http_kwargs.pop("host_ip", None)
             http_kwargs.pop("host_port", None)
-            out = executors["http_check"](**http_kwargs)
+            out = _run_executor(executors["http_check"], ctype, **http_kwargs)
         elif ctype == "log_check":
-            out = executors["log_check"](
+            out = _run_executor(
+                executors["log_check"], ctype,
                 **normalize_kwargs(step_kwargs, LOG_KEY_ALIASES),
             )
         elif ctype == "stability_wait":
@@ -1446,16 +1581,18 @@ def verify_plan(
                     ),
                 }
             else:
-                out = executors["stability_wait"](wait_seconds=_secs_raw)
+                out = _run_executor(
+                    executors["stability_wait"], ctype, wait_seconds=_secs_raw)
         elif ctype == "exec_check":
             exec_kwargs = normalize_kwargs(step_kwargs, EXEC_KEY_ALIASES)
-            out = executors["exec_check"](**exec_kwargs)
+            out = _run_executor(executors["exec_check"], ctype, **exec_kwargs)
         elif ctype == "http_request_check":
             payload_kwargs = normalize_kwargs(step_kwargs,
                                               HTTP_REQUEST_KEY_ALIASES)
             payload_kwargs.pop("host_ip", None)
             payload_kwargs.pop("host_port", None)
-            out = executors["http_request_check"](**payload_kwargs)
+            out = _run_executor(
+                executors["http_request_check"], ctype, **payload_kwargs)
         elif ctype == "tcp_probe_check":
             tcp_kwargs = normalize_kwargs(step_kwargs, TCP_PROBE_KEY_ALIASES)
             # Plan-supplied host_ip is discarded — probes are pinned to
@@ -1484,7 +1621,8 @@ def verify_plan(
                     ),
                 }
             else:
-                out = executors["tcp_probe_check"](
+                out = _run_executor(
+                    executors["tcp_probe_check"], ctype,
                     host_ip=host_ip, host_port=_tcp_port_raw,
                     **tcp_kwargs,
                 )

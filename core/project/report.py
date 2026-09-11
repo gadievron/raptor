@@ -243,7 +243,11 @@ def render_grouped_findings_markdown(
         grouped,
         key=lambda item: (_SEVERITY_ORDER.get(item, _SEVERITY_ORDER["unknown"]), item),
     ):
-        lines.append(f"## {severity.title()}")
+        # severity/status are finding-derived strings: route them
+        # through the same heading sanitiser as every other
+        # interpolation — a "high\n# evil" severity injected a live
+        # heading line pre-fix.
+        lines.append(f"## {_md_heading(severity.title())}")
         lines.append("")
         for finding in grouped[severity]:
             finding_id = (
@@ -256,7 +260,7 @@ def render_grouped_findings_markdown(
             lines.append(
                 f"- **{_md_heading(_finding_title(finding))}** "
                 f"(`{_md_heading(finding_id)}`) — "
-                f"{_md_heading(location)} — {status}"
+                f"{_md_heading(location)} — {_md_heading(status)}"
             )
         lines.append("")
 
@@ -277,7 +281,7 @@ def render_grouped_findings_markdown(
             lines.append(
                 f"- **{_md_heading(_finding_title(finding))}** "
                 f"(`{_md_heading(finding_id)}`) — "
-                f"{_md_heading(package)} — {severity}"
+                f"{_md_heading(package)} — {_md_heading(severity)}"
             )
             evidence = sca.get("evidence") or {}
             reasons = evidence.get("escalation_reasons") or []
@@ -490,8 +494,12 @@ def generate_project_report(project) -> dict[str, Any]:
     # Merge findings — code findings + SCA dependency findings (the
     # latter discovered from each run's sca/ subdir; surfaced in their
     # own section of the report, see render_grouped_findings_markdown).
-    merged = merge_findings(run_dirs)
-    sca_findings = merge_sca_findings(run_dirs)
+    # get_run_dirs returns NEWEST-first; both merge folds take
+    # later-overrides-earlier order, so pass oldest-first or the
+    # oldest run wins every tie (inverting the latest-wins contract).
+    oldest_first = list(reversed(run_dirs))
+    merged = merge_findings(oldest_first)
+    sca_findings = merge_sca_findings(oldest_first)
     save_json(
         report_dir / "findings.json",
         {"findings": merged, "sca_findings": sca_findings},

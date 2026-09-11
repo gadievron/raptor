@@ -720,3 +720,32 @@ class TestPolicyGroupRuleFiles:
     def test_ssrf_group_present(self):
         from core.config import RaptorConfig
         assert "ssrf" in RaptorConfig.POLICY_GROUP_RULE_FILES
+
+
+class TestGetOutDirRootRefusal:
+    """The filesystem root and the previously-unlisted system roots."""
+
+    @pytest.mark.parametrize("root_path", [
+        "/", "/etc/..", "/usr/../srv/..",
+    ])
+    def test_rejects_filesystem_root(self, root_path):
+        # "/" is no prefix's child, so "/etc/.." sailed past the
+        # prefix rules and run scaffolding landed at / on root-run
+        # containers.
+        with patch.dict(os.environ, {"RAPTOR_OUT_DIR": root_path}), \
+             pytest.raises(ValueError, match="filesystem root"):
+            RaptorConfig.get_out_dir()
+
+    @pytest.mark.parametrize("system_path", [
+        "/srv/x", "/root/out", "/opt/out", "/lib/x", "/run/x",
+    ])
+    def test_rejects_added_system_roots(self, system_path):
+        with patch.dict(os.environ, {"RAPTOR_OUT_DIR": system_path}), \
+             pytest.raises(ValueError, match="system path"):
+            RaptorConfig.get_out_dir()
+
+    def test_var_and_tmp_stay_allowed(self, tmp_path):
+        # Documented trade-off: scratch output under /tmp (or /var) is
+        # a legitimate operator choice; only true system roots refuse.
+        with patch.dict(os.environ, {"RAPTOR_OUT_DIR": str(tmp_path)}):
+            assert RaptorConfig.get_out_dir() == tmp_path.resolve()

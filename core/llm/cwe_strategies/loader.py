@@ -176,6 +176,16 @@ def load_strategy(path: Path) -> Strategy:
         if not isinstance(data[required], str) or not data[required]:
             msg = f"{path}.{required}: expected non-empty string"
             raise StrategyLoadError(msg)
+    # prompt_addendum ships verbatim into LLM prompts — a silently
+    # stringified list/dict (mis-indented YAML) would inject a Python
+    # repr, so a non-string is a schema error like any other.
+    addendum = data.get("prompt_addendum")
+    if addendum is not None and not isinstance(addendum, str):
+        msg = (
+            f"{path}.prompt_addendum: expected string, got "
+            f"{type(addendum).__name__}"
+        )
+        raise StrategyLoadError(msg)
     return Strategy(
         name=data["name"],
         description=data["description"],
@@ -183,7 +193,7 @@ def load_strategy(path: Path) -> Strategy:
         key_questions=_str_tuple(
             data.get("key_questions"), f"{path}.key_questions",
         ),
-        prompt_addendum=str(data.get("prompt_addendum") or ""),
+        prompt_addendum=addendum or "",
         exemplars=_load_exemplars(
             data.get("exemplars"), f"{path}.exemplars",
         ),
