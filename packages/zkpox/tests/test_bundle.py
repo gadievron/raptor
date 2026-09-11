@@ -9,9 +9,6 @@ wired); for 1.3 we just confirm the bundle producer/parser is faithful.
 from __future__ import annotations
 
 import secrets
-import json
-from pathlib import Path
-
 import pytest
 
 pytest.importorskip("cryptography")
@@ -36,20 +33,6 @@ from packages.zkpox import (
     to_cbor,
     vendor_envelope_from,
     with_timestamp,
-)
-
-from core.witness.store import WitnessStore  # noqa: E402
-from core.witness.types import (  # noqa: E402
-    Witness,
-    WitnessOutcome,
-    WitnessSource,
-    compute_bytes_hash,
-)
-from packages.zkpox.bundle import (  # noqa: E402
-    ZKPoXBundleError,
-    assemble_bundle,
-    render_bundle,
-    write_bundle,
 )
 
 
