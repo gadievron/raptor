@@ -46,9 +46,26 @@ def _ns(**kw):
 
 
 class SandboxFloorFixture(unittest.TestCase):
-    """Temp projects dir with one active project + sandbox state guard."""
+    """Temp projects dir with one active project + sandbox state guard.
+
+    The sandbox-side plumbing (``set_project_sandbox_floor``) accepts
+    the Linux tier vocabulary and refuses it on macOS, so the
+    consumption tests pin the LINUX behaviour through the cli
+    module's ``sys`` seam (the established SimpleNamespace idiom) —
+    they bind identically on a macOS runner instead of failing on the
+    real platform check. The darwin fail-closed contract has its own
+    emulated test below.
+    """
 
     def setUp(self):
+        import types as _types
+
+        import core.sandbox.cli as _sandbox_cli
+        cli_sys = patch.object(
+            _sandbox_cli, "sys", _types.SimpleNamespace(platform="linux"))
+        cli_sys.start()
+        self.addCleanup(cli_sys.stop)
+        self._sandbox_cli = _sandbox_cli
         self._tmp = TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         root = Path(self._tmp.name)
@@ -200,6 +217,26 @@ class TestConsumption(SandboxFloorFixture):
         self.assertIsNone(applied)
         self.assertIsNone(_sandbox_state._project_sandbox_floor)
         self.assertEqual(out, "")
+
+    def test_darwin_consumption_fails_closed(self):
+        """A stored Linux tier consumed on macOS is IGNORED loudly,
+        never guessed and never a crash: the setter refuses the label
+        (cross-platform tier comparability is refused, not fudged),
+        the consumption catches it, warns, and the run proceeds at
+        the fail-closed default floor with no banner claiming a
+        consent that did not land."""
+        import types as _types
+        self._set_floor("landlock")
+        with patch.object(self._sandbox_cli, "sys",
+                          _types.SimpleNamespace(platform="darwin")):
+            with self.assertLogs("core.project.trust",
+                                 level="WARNING") as logs:
+                applied, out = self._apply()
+        self.assertIsNone(applied)
+        self.assertIsNone(_sandbox_state._project_sandbox_floor)
+        self.assertNotIn("project sandbox-floor:", out)
+        self.assertTrue(any("not applied" in m for m in logs.output),
+                        logs.output)
 
     def test_no_active_project_is_a_noop(self):
         self.mgr.set_active(None)

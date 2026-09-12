@@ -246,12 +246,24 @@ class TestResolveUntrustedFloor:
 # --------------------------------------------------- unit: CLI plumbing
 
 class TestCliSurface:
+    """CLI plumbing, exercised per PLATFORM through the module's
+    ``sys`` seam (the same SimpleNamespace idiom the tiers tests use)
+    rather than gated on the runner's real platform: the Linux tier
+    vocabulary is emulated-Linux so it binds on a macOS runner, and
+    the darwin refusals are emulated-darwin so they bind on a Linux
+    runner — neither contract is ever skipped into silence."""
+
     def _parse(self, argv):
         ap = argparse.ArgumentParser()
         _cli.add_cli_args(ap)
         return ap, ap.parse_args(argv)
 
-    def test_flag_sets_state_for_every_tier(self):
+    def _emulate(self, monkeypatch, platform):
+        monkeypatch.setattr(_cli, "sys",
+                            types.SimpleNamespace(platform=platform))
+
+    def test_flag_sets_state_for_every_tier(self, monkeypatch):
+        self._emulate(monkeypatch, "linux")
         for label in _tiers.CONSENTABLE_FLOOR_LABELS:
             state._cli_sandbox_floor = None
             ap, args = self._parse(["--sandbox-floor", label])
@@ -269,6 +281,8 @@ class TestCliSurface:
             ap.parse_args(["--sandbox-floor", "seatbelt"])
 
     def test_incoherent_with_operator_disable(self):
+        # Platform-independent: the incoherence check fires before
+        # the platform vocabulary check on every OS.
         for disable in (["--no-sandbox"], ["--sandbox", "none"]):
             ap, args = self._parse(
                 [*disable, "--sandbox-floor", "landlock"])
@@ -276,22 +290,54 @@ class TestCliSurface:
                 _cli.apply_cli_args(args)
             assert state._cli_sandbox_floor is None
 
-    def test_darwin_rejects_linux_tier_labels(self, monkeypatch):
-        monkeypatch.setattr(_cli, "sys",
-                            types.SimpleNamespace(platform="darwin"))
-        ap, args = self._parse(["--sandbox-floor", "landlock"])
+    @pytest.mark.parametrize("label", _tiers.CONSENTABLE_FLOOR_LABELS)
+    def test_darwin_rejects_every_linux_tier_on_every_setter(
+            self, monkeypatch, label):
+        """The darwin-side positive contract: EVERY Linux tier label
+        refuses on macOS, on the flag apply path AND both setters,
+        with the platform message naming the env var as the only
+        remaining lowering surface — cross-platform tier
+        comparability is refused, not fudged."""
+        self._emulate(monkeypatch, "darwin")
+        # Library apply path (no parser): typed ValueError.
+        ap, args = self._parse(["--sandbox-floor", label])
         with pytest.raises(ValueError, match="macOS"):
             _cli.apply_cli_args(args)
+        # CLI apply path (parser given): argparse-style exit 2.
+        ap2, args2 = self._parse(["--sandbox-floor", label])
+        with pytest.raises(SystemExit):
+            _cli.apply_cli_args(args2, parser=ap2)
+        # Both setters refuse, naming the macOS story.
+        with pytest.raises(ValueError) as excinfo:
+            _cli.set_cli_sandbox_floor(label)
+        assert "macOS" in str(excinfo.value)
+        assert "RAPTOR_ALLOW_DEGRADED_UNTRUSTED" in str(excinfo.value)
         with pytest.raises(ValueError, match="macOS"):
-            _cli.set_cli_sandbox_floor("mount-ns")
+            _cli.set_project_sandbox_floor(label)
         assert state._cli_sandbox_floor is None
+        assert state._project_sandbox_floor is None
 
-    def test_project_setter_validates_and_rejects_none(self):
+    def test_darwin_flag_none_still_parses(self, monkeypatch):
+        """'none' is cross-platform vocabulary: it parses and lands
+        in state on macOS too (the never-BARE refusal at resolution
+        is platform-independent —
+        test_explicit_bare_refuses_for_untrusted_work)."""
+        self._emulate(monkeypatch, "darwin")
+        ap, args = self._parse(["--sandbox-floor", "none"])
+        _cli.apply_cli_args(args, parser=ap)
+        assert state._cli_sandbox_floor == "none"
+
+    def test_project_setter_validates_and_rejects_none(
+            self, monkeypatch):
+        # The none/junk refusals are platform-independent (the
+        # vocabulary check fires before the platform check).
         with pytest.raises(ValueError):
             _cli.set_project_sandbox_floor("none")
         with pytest.raises(ValueError):
             _cli.set_project_sandbox_floor("junk")
         assert state._project_sandbox_floor is None
+        # The accepting arm is Linux vocabulary — emulate the seam.
+        self._emulate(monkeypatch, "linux")
         _cli.set_project_sandbox_floor("landlock")
         assert state._project_sandbox_floor == "landlock"
 
@@ -302,6 +348,24 @@ class TestCliSurface:
         ap, args = self._parse(["--sandbox-floor", "none"])
         _cli.apply_cli_args(args, parser=ap)
         assert state._cli_sandbox_floor == "none"
+
+    def test_darwin_env_var_remains_the_only_lowering_surface(
+            self, monkeypatch):
+        """On macOS the chain has no explicit surfaces (both setters
+        refuse above), so the env var's frozen darwin semantics are
+        the whole consent story: unset → the seatbelt contract;
+        set → the documented arm-3 mapping (BARE), attributed to
+        "env" — byte-identical to the pre-flag world."""
+        from core.sandbox import context as _ctx
+        monkeypatch.setattr(_tiers, "sys",
+                            types.SimpleNamespace(platform="darwin"))
+        monkeypatch.delenv("RAPTOR_ALLOW_DEGRADED_UNTRUSTED",
+                           raising=False)
+        assert _ctx.resolve_untrusted_floor() == (
+            ContainmentTier.SEATBELT, "default")
+        monkeypatch.setenv("RAPTOR_ALLOW_DEGRADED_UNTRUSTED", "1")
+        assert _ctx.resolve_untrusted_floor() == (
+            ContainmentTier.BARE, "env")
 
 
 # ------------------------------------------------ run()-level behaviour
