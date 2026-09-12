@@ -1,8 +1,8 @@
 """Tree-sitter availability probes for test suites.
 
-The tree-sitter grammar wheels are OPTIONAL dependencies (commented
-out in requirements.txt): bare CI installs none of them, developer
-hosts usually install all of them. Tests that exercise parser-backed
+The tree-sitter grammar wheels live in the uv ``grammars`` dependency
+group: the default development environment installs them, while lean
+production environments may omit them. Tests that exercise parser-backed
 detection therefore need one of two treatments, per the audit-suite
 degradation contracts:
 

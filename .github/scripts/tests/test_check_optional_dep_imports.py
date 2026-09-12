@@ -11,22 +11,18 @@ _SCRIPT = (
     Path(__file__).resolve().parents[1] / "check_optional_dep_imports.py"
 )
 
-_REQUIREMENTS = """\
-requests==2.34.2
-# anthropic==0.103.1
-# botocore==1.43.16
-# tree-sitter==0.25.2
-# tree-sitter-go==0.25.0
-# z3-solver==4.15.4.0
-# openai==2.30.0
-# beautifulsoup4==4.15.0
-"""
-
-_REQUIREMENTS_DEV = """\
--r requirements.txt
-pytest==9.1.1
-beautifulsoup4==4.15.0
-z3-solver==4.15.4.0
+_PYPROJECT = """\
+[project]
+dependencies = ["requests==2.34.2", "openai==2.30.0"]
+[dependency-groups]
+dev = [{ include-group = "test" }, { include-group = "grammars" }]
+test = ["pytest==9.1.1", "beautifulsoup4==4.15.0", "z3-solver==4.15.4.0"]
+grammars = ["tree-sitter==0.25.2", "tree-sitter-go==0.25.0"]
+providers = [
+  "anthropic==0.103.1",
+  "botocore==1.43.16",
+  "sage-agent-sdk==11.17.11",
+]
 """
 
 
@@ -41,8 +37,7 @@ def det():
 
 
 def _tree(tmp_path: Path, files: dict[str, str]) -> Path:
-    (tmp_path / "requirements.txt").write_text(_REQUIREMENTS)
-    (tmp_path / "requirements-dev.txt").write_text(_REQUIREMENTS_DEV)
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
     for rel, body in files.items():
         p = tmp_path / rel
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -53,17 +48,17 @@ def _tree(tmp_path: Path, files: dict[str, str]) -> Path:
 def test_module_list_derivation(det, tmp_path):
     root = _tree(tmp_path, {})
     mods = det.optional_modules(root)
-    # Commented pins, dash mapped to underscore.
+    # Non-default group pins, dash mapped to underscore.
     assert "anthropic" in mods
     assert "botocore" in mods
-    assert "tree_sitter" in mods
-    assert "tree_sitter_go" in mods
-    # Actively installed by requirements-dev.txt: not optional.
+    assert "tree_sitter" not in mods
+    assert "tree_sitter_go" not in mods
+    # Actively installed by the default dev group: not optional.
     assert "z3" not in mods
     assert "bs4" not in mods
     # Transitively guaranteed on bare CI (instructor -> openai).
     assert "openai" not in mods
-    # Actively pinned in requirements.txt itself.
+    # Actively pinned as a project dependency.
     assert "requests" not in mods
 
 
@@ -156,12 +151,12 @@ def test_skipif_naming_module_is_guard(det, tmp_path):
 def test_submodule_import_maps_to_top_level(det, tmp_path):
     root = _tree(tmp_path, {
         "core/llm/tests/test_x.py": (
-            "from tree_sitter_go import language\n"
-            "assert language\n"
+            "from sage_sdk.client import Client\n"
+            "assert Client\n"
         ),
     })
     findings, _ = det.scan(root)
-    assert "core/llm/tests/test_x.py::tree_sitter_go" in findings
+    assert "core/llm/tests/test_x.py::sage_sdk" in findings
 
 
 def test_non_test_files_ignored(det, tmp_path):

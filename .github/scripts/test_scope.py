@@ -335,7 +335,7 @@ def compute_tier_dispatch(
     # Also trigger fast tier for non-Python changes that affect the
     # test infrastructure (requirements, pyproject.toml, etc.).
     infra_changed = any(
-        f.startswith("requirements") or f == "pyproject.toml"
+        f.startswith("requirements") or f in {"pyproject.toml", "uv.lock"}
         for f in changed_non_py
     )
     if infra_changed and not fast_files:

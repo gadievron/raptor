@@ -73,16 +73,15 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip==26.1.1
           # Full SCA dep set — the collector runs the SCA pipeline
           # against each cloned project, so it needs everything
           # SCA needs (urllib3 plus parsers' dependencies).
-          pip install -r requirements.txt
-          # CVSS v4 scoring — optional for end users (see the
-          # requirements.txt entry), required here so the corpus
+          python -m pip install uv==0.12.6
+          uv sync --locked --no-dev --group sca
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          # CVSS v4 scoring is in the sca group and required here so the corpus
           # records numeric severities for v4-only advisories
           # instead of the degraded fallback label.
-          pip install cvss==3.6
 
       - name: Collect samples
         # ``-v`` emits per-sample status lines so the PR body can

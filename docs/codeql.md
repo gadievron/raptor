@@ -271,7 +271,7 @@ source-intel structural evidence.
 
 ### SMT Path Feasibility
 
-Requires `z3-solver` (`pip install z3-solver`); degrades gracefully
+Requires `z3-solver` (`uv sync --locked --no-dev --group smt`); degrades gracefully
 when absent.
 
 After the LLM extracts branch conditions from each dataflow step as
@@ -386,7 +386,7 @@ Rust extractor get a clear skip.
   Kotlin). C/C++, Java, and C# default to buildless extraction, and
   interpreted languages (Python, JavaScript, TypeScript, Ruby) use
   no-build extraction -- neither needs a compiler.
-- **z3-solver** (optional) -- `pip install z3-solver` to enable SMT
+- **z3-solver** (optional) -- sync the `smt` dependency group to enable SMT
   path feasibility checks. Without it, the SMT stage is silently
   skipped and all findings proceed to full LLM analysis.
 - **LLM API key** (for `--analyze`) -- `ANTHROPIC_API_KEY` or

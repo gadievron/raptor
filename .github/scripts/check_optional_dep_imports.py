@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """Optional-dependency import lint for test files (daily CI scan).
 
-Bare CI installs ``requirements-dev.txt`` only; every dependency that
-ships commented out in ``requirements.txt`` (the anthropic SDK,
-botocore, the tree-sitter grammar wheels, ...) is ABSENT there. A test
+Bare CI runs the default ``uv sync``; dependencies in non-default groups
+(the anthropic SDK, botocore, and other capability-specific packages) are
+ABSENT there. A test
 file that imports one of them unguarded therefore passes on developer
 hosts and fails collection or execution on CI — the environment-parity
 defect class behind the 2026-08 91-failure sweep.
 
-Self-contained, stdlib-only. The optional-module list is DERIVED, not
-hardcoded: commented ``# name==version`` pins in requirements.txt,
-minus dists actively installed by requirements(-dev).txt, minus dists
-guaranteed transitively (see ``TRANSITIVE_PRESENT``), mapped to import
-names via ``DIST_TO_MODULES``.
+Self-contained, stdlib-only. The optional-module list is DERIVED from
+``pyproject.toml``: distributions in non-default dependency groups minus
+the project and recursively included ``dev`` dependencies, then minus
+distributions guaranteed transitively (see ``TRANSITIVE_PRESENT``), mapped
+to import names via ``DIST_TO_MODULES``.
 
 A test file importing an optional module is a finding UNLESS the file
 shows guard evidence for that module:
@@ -50,6 +50,7 @@ import ast
 import json
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -70,36 +71,47 @@ DIST_TO_MODULES = {
     "sage-agent-sdk": ("sage_sdk", "sage_agent_sdk"),
 }
 
-# Commented out in requirements.txt but guaranteed present on bare CI
+# Optional-group packages guaranteed present in the default environment
 # anyway, so an unguarded test import cannot fail there:
 #   openai — hard requirement of the pinned ``instructor``;
 #   httpx  — hard requirement of the openai SDK;
 #   tomli  — stdlib ``tomllib`` from Python 3.11 (CI runs newer).
 TRANSITIVE_PRESENT = {"openai", "httpx", "tomli"}
 
-_COMMENTED_PIN_RE = re.compile(r"^#\s*([A-Za-z0-9][A-Za-z0-9._-]*)==\S+")
-_ACTIVE_PIN_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==\S+")
+_DIST_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)")
+
+
+def _group_distributions(groups: dict, name: str, seen=None) -> set[str]:
+    seen = set() if seen is None else seen
+    if name in seen:
+        return set()
+    seen.add(name)
+    distributions = set()
+    for entry in groups.get(name, []):
+        if isinstance(entry, dict) and "include-group" in entry:
+            distributions |= _group_distributions(
+                groups, entry["include-group"], seen,
+            )
+        elif isinstance(entry, str) and (match := _DIST_RE.match(entry)):
+            distributions.add(match.group(1).lower())
+    return distributions
 
 
 def optional_modules(root: Path) -> set[str]:
-    """Import names absent from a bare requirements-dev.txt install."""
-    commented: set[str] = set()
-    active: set[str] = set()
-    for req_name in ("requirements.txt", "requirements-dev.txt"):
-        req = root / req_name
-        if not req.is_file():
-            continue
-        for line in req.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            m = _COMMENTED_PIN_RE.match(line)
-            if m:
-                commented.add(m.group(1).lower())
-                continue
-            m = _ACTIVE_PIN_RE.match(line.split(";")[0].strip())
-            if m:
-                active.add(m.group(1).lower())
+    """Import names absent from the default uv development environment."""
+    data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    groups = data.get("dependency-groups", {})
+    active = {
+        match.group(1).lower()
+        for item in data.get("project", {}).get("dependencies", [])
+        if (match := _DIST_RE.match(item))
+    }
+    active |= _group_distributions(groups, "dev")
+    optional = set().union(*(
+        _group_distributions(groups, name) for name in groups
+    )) - active
     mods: set[str] = set()
-    for dist in sorted(commented - active):
+    for dist in sorted(optional):
         if dist in TRANSITIVE_PRESENT:
             continue
         for mod in DIST_TO_MODULES.get(dist, (dist.replace("-", "_"),)):

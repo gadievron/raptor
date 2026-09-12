@@ -59,8 +59,9 @@ the code.
 ## Prerequisites
 
 - **Claude Code** with an active subscription (Max, Pro, Team, or Enterprise) or an Anthropic API key. This is the orchestration layer -- RAPTOR runs inside a Claude Code session.
-- **Python 3.10+** and **Node.js 18+**.
-- **Semgrep** (`pip install semgrep`) for static analysis. CodeQL is optional but recommended.
+- **Python 3.10+**, **Node.js 18+**, and **uv**.
+- **Semgrep** (installed by the `tools` dependency group below) for static
+  analysis. CodeQL is optional but recommended.
 
 For the analysis dispatch layer (the LLM that analyses individual findings), Claude Code itself handles everything by default -- no extra API keys needed. If you want multi-model analysis (e.g. Claude + GPT + Gemini), you will need API keys for each provider. See [Using a different LLM](#using-a-different-llm) below.
 
@@ -73,14 +74,12 @@ For the analysis dispatch layer (the LLM that analyses individual findings), Cla
 git clone https://github.com/gadievron/raptor.git
 cd raptor
 
-# Install Python dependencies
-pip install -r requirements.txt
+# Install the locked runtime and scanner dependencies
+uv sync --locked --no-dev --group tools
+source .venv/bin/activate
 
 # Install Claude Code (if you don't already have it)
 npm install -g @anthropic-ai/claude-code
-
-# Install Semgrep (required for scanning)
-pip install semgrep
 
 # Add the launcher to your PATH -- put this in your shell profile to make it
 # permanent. Append rather than prepend, so system directories stay ahead of
@@ -306,7 +305,7 @@ Useful subcommands include `fix`, `check`, `upgrade`, `diff`, `verify`, `health`
 
 ## Z3 SMT integration
 
-RAPTOR has a two-layer Z3 integration (`pip install z3-solver`). It is optional. Everything works without it, but the results are better with it.
+RAPTOR has a two-layer Z3 integration (`uv sync --locked --no-dev --group smt`). It is optional. Everything works without it, but the results are better with it.
 
 **Dataflow pre-screening (CodeQL)**
 
@@ -316,7 +315,7 @@ When CodeQL produces a path result, the path constraints are checked for satisfi
 
 During binary exploit feasibility assessment, Z3 checks whether a one-gadget's register and memory constraints are satisfiable against the concrete crash state. Gadgets are ranked by actual reachability rather than heuristics, so you spend time on gadgets that can actually work.
 
-Z3 is pre-installed in the devcontainer. For manual installs: `pip install z3-solver`.
+Z3 is included in the default development environment and the devcontainer.
 
 ---
 
@@ -378,7 +377,7 @@ RAPTOR dogfoods a fair bit of its own security tooling, but it is worth being ho
 | Dataflow corpus | Precision / recall / FP-category tracking for validator behaviour | Developer-run benchmark and corpus tests | `core/dataflow/corpus/`, `core/dataflow/scripts/corpus-metrics` |
 | CI controls doc guard | Documented paths exist, ruff config matches, README links to the doc | PRs | `.github/tests/test_ci_controls_docs.py` |
 
-Not currently enforced: `mypy` is installed in `requirements-dev.txt` but does not block anything; Ruff formatting is not enforced; Semgrep is part of RAPTOR's scanner surface, but we do not yet have a dedicated "scan RAPTOR with RAPTOR" Semgrep workflow.
+Not currently enforced: `mypy` is in the `lint` dependency group but does not block anything; Ruff formatting is not enforced; Semgrep is part of RAPTOR's scanner surface, but we do not yet have a dedicated "scan RAPTOR with RAPTOR" Semgrep workflow.
 
 ---
 

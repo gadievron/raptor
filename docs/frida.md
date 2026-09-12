@@ -26,7 +26,7 @@ See also: [commands](commands.md), [binary analysis](binary-analysis.md),
 ```bash
 pipx install frida-tools         # recommended (PEP 668-safe)
 # or, in a virtualenv:
-pip install frida-tools
+uv sync --locked --no-dev --group frida
 ```
 
 Verify:

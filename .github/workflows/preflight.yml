@@ -11,9 +11,9 @@ name: PR preflight
 #                           (.github/scripts/hide_modules.py). A changed
 #                           test touching them must SKIP, not fail.
 #   hidden-tree-sitter    — tree-sitter core + every grammar wheel
-#                           pinned in requirements-grammars.txt, same
-#                           mechanism (the set derives from the pin
-#                           file, so new wheels are hidden
+#                           pinned in pyproject.toml, same mechanism
+#                           (the set derives from the dependency group,
+#                           so new wheels are hidden
 #                           automatically).
 #   duration-guard        — RAPTOR_MAX_TEST_SECONDS over the changed
 #                           files (root conftest.py flag-not-kill
@@ -136,12 +136,10 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: "uv.lock"
 
       - name: Install deps
-        # --system matches _tier.yml's runner path: deps land in the
-        # setup-python interpreter, no venv activation needed.
-        run: uv pip install --system -r requirements-dev.txt
+        run: uv sync --locked
 
       - name: Run changed tests under simulation
         env:
@@ -172,7 +170,7 @@ jobs:
           # Single process (no -n auto): honest per-test durations for
           # the duration-guard leg and one deterministic order for the
           # shuffle legs; the changed-file bound keeps this cheap.
-          python -m pytest $TEST_FILES || rc=$?
+          uv run --locked python -m pytest $TEST_FILES || rc=$?
           # Exit 5 = "no tests collected" — legitimate when every
           # changed test file is deselected by the default markers
           # (slow / integration).

@@ -32,7 +32,7 @@
         "GitHub.vscode-codeql"
       ],
       "settings": {
-        "python.defaultInterpreterPath": "/usr/bin/python3",
+        "python.defaultInterpreterPath": "/opt/raptor-venv/bin/python",
         "python.terminal.activateEnvironment": true,
         "editor.formatOnSave": true
       }
@@ -42,7 +42,7 @@
     "GIT_TERMINAL_PROMPT": "0",
     "PYTHONUNBUFFERED": "1",
     "PYTHONDONTWRITEBYTECODE": "1",
-    // Runtime proxy passthrough (postCreateCommand pip installs,
+    // Runtime proxy passthrough (postCreateCommand uv sync,
     // in-container scans). Loopback appended to NO_PROXY so
     // in-container sidecars (SAGE, Ollama) are never proxied.
     "http_proxy": "${localEnv:http_proxy}",
@@ -56,7 +56,7 @@
     "source=${localWorkspaceFolder}/.env,target=/workspaces/raptor/.env,type=bind,consistency=cached",
     "source=${localEnv:HOME}/.claude,target=/root/.claude,type=bind,consistency=cached"
   ],
-  "postCreateCommand": "pip install -r .devcontainer/requirements-all-optional.txt && pip install -r requirements-dev.txt",
+  "postCreateCommand": "uv sync --locked --group devcontainer --group tools",
   "postStartCommand": "sudo sh -c 'echo 1 > /proc/sys/kernel/perf_event_paranoid 2>/dev/null || true'",
   "remoteUser": "vscode"
 }

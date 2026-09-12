@@ -117,21 +117,18 @@ class TestNamedSets:
         assert all(n.startswith("tree_sitter") for n in names)
         # Core + one wheel per pinned grammar; every name is a valid
         # stub target (write_stubs would reject anything else).
-        pin_lines = [
-            line
-            for line in (_REPO_ROOT / "requirements-grammars.txt")
-            .read_text(encoding="utf-8")
-            .splitlines()
-            if "==" in line and not line.lstrip().startswith("#")
-        ]
-        assert len(names) == len(pin_lines)
+        import tomllib
+        manifest = tomllib.loads(
+            (_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        )
+        assert len(names) == len(manifest["dependency-groups"]["grammars"])
         assert all(hm._NAME_RE.match(n) for n in names)
 
     def test_tree_sitter_set_requires_pins(self, hm, tmp_path):
-        (tmp_path / "requirements-grammars.txt").write_text(
-            "# only comments\n", encoding="utf-8"
+        (tmp_path / "pyproject.toml").write_text(
+            "[dependency-groups]\ngrammars = []\n", encoding="utf-8"
         )
-        with pytest.raises(ValueError, match="no ==-pinned"):
+        with pytest.raises(ValueError, match="no distributions"):
             hm.tree_sitter_modules(tmp_path)
 
 

@@ -37,6 +37,23 @@ dev = ["pytest>=7"]
     assert deps[("pytest", "optional")].pin_style is PinStyle.RANGE
 
 
+def test_pep735_dependency_groups(tmp_path: Path) -> None:
+    body = """\
+[project]
+name = "demo"
+dependencies = ["requests==2.34.2"]
+
+[dependency-groups]
+test = ["pytest==9.1.1", "z3-solver==4.15.4.0"]
+dev = [{ include-group = "test" }, "ruff==0.15.12"]
+"""
+    deps = {(d.name, d.scope): d for d in parse(_write(tmp_path, body))}
+    assert deps[("requests", "main")].pin_style is PinStyle.EXACT
+    assert deps[("pytest", "dev")].pin_style is PinStyle.EXACT
+    assert deps[("z3-solver", "dev")].pin_style is PinStyle.EXACT
+    assert deps[("ruff", "dev")].pin_style is PinStyle.EXACT
+
+
 def test_poetry_string_and_dict_specs(tmp_path: Path) -> None:
     body = """\
 [tool.poetry.dependencies]

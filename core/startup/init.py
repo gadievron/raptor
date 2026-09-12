@@ -550,7 +550,7 @@ def check_llm() -> tuple[list, list]:
             if models and not validator_available:
                 warnings.append(
                     "LLM key validation skipped — Python `requests` "
-                    "package not installed (pip install requests)"
+                    "package not installed (run uv sync --locked)"
                 )
 
             key_status = {}
@@ -1083,7 +1083,7 @@ def check_lang() -> tuple[str | None, list]:
         warnings.append(
             "no tree-sitter grammars installed — inventory degrades "
             "to regex extraction (fewer functions, no spans); "
-            "install the grammar wheels listed in requirements.txt "
+            "install the uv grammars dependency group "
             "(tree-sitter, tree-sitter-python, tree-sitter-c, ...)"
         )
         return "  lang: tree-sitter ✗", warnings

@@ -457,7 +457,7 @@ verification:
 | `raptor-smt-check-overflow-to-oob` | Chained overflow then OOB | CWE-680 |
 | `raptor-smt-check-negative-bypass` | Signed comparison bypass with negative values | CWE-839 |
 
-Z3 is a soft dependency (`pip install z3-solver`).  When absent, all tools
+Z3 is a soft dependency (sync the `smt` dependency group). When absent, all tools
 return `feasible: null` and the pipeline falls back to LLM reasoning alone.
 
 See [binary analysis](binary-analysis.md) for further detail on the exploit

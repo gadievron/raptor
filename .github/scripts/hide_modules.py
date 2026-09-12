@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 r"""Stub-module writer: simulate absent dependencies for the PR preflight.
 
-Bare CI installs ``requirements-dev.txt`` only, so every dependency that
-ships commented out in ``requirements.txt`` (the anthropic SDK, botocore,
-the tree-sitter grammar wheels, ...) is absent there — a test that
+Bare CI uses the default uv development group. Capability-specific groups
+remain absent there — a test that
 touches one must SKIP, not fail (``pytest.importorskip``, ``try/except
 ImportError``, a ``skipif`` probe). Provisioned developer hosts have the
 packages installed, which hides an unguarded import until it breaks a
@@ -32,7 +31,7 @@ Named sets:
     and its tests guard it, so it is hidden too — coverage holds if it
     ever moves to the optional set.
   * ``tree-sitter`` — tree-sitter core + every grammar wheel, derived
-    from requirements-grammars.txt at run time so a newly pinned
+    from ``pyproject.toml`` at run time so a newly pinned
     grammar wheel is hidden automatically (no second list to maintain).
 
 Usage:
@@ -47,6 +46,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -57,24 +57,25 @@ OPTIONAL_DEP_MODULES = ("anthropic", "botocore", "instructor", "h2", "sage_sdk")
 # (distribution names) cannot be shadowed by a single stub file.
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-# ``name==version`` pin at the start of a line (comments excluded).
-_PIN_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==")
+# Distribution name at the start of a PEP 508 requirement.
+_DIST_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)")
 
 
 def tree_sitter_modules(repo_root: Path = REPO_ROOT) -> tuple[str, ...]:
     """Module names for tree-sitter core + every pinned grammar wheel.
 
-    Derived from requirements-grammars.txt (dash-to-underscore maps the
+    Derived from the ``grammars`` dependency group (dash-to-underscore maps the
     distribution name to the import name for every tree-sitter wheel).
     """
-    req = repo_root / "requirements-grammars.txt"
+    manifest = repo_root / "pyproject.toml"
+    data = tomllib.loads(manifest.read_text(encoding="utf-8"))
     names = []
-    for line in req.read_text(encoding="utf-8").splitlines():
-        match = _PIN_RE.match(line.strip())
+    for requirement in data.get("dependency-groups", {}).get("grammars", []):
+        match = _DIST_RE.match(requirement)
         if match:
             names.append(match.group(1).replace("-", "_"))
     if not names:
-        msg = f"no ==-pinned distributions found in {req}"
+        msg = f"no distributions found in the grammars group in {manifest}"
         raise ValueError(msg)
     return tuple(names)
 

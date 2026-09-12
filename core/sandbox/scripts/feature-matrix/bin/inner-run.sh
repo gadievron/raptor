@@ -29,15 +29,15 @@ cd "$WORK"
 tar -xf /repo.tar
 echo "[inner] repo: $(git rev-parse --short HEAD 2>/dev/null || echo '?') at $WORK"
 
-# --- 3. venv: reuse image-baked when requirements hash matched ----------
+# --- 3. venv: reuse image-baked when lockfile hash matched ---------------
 if [ "${SXV_REQHASH_MATCH:-0}" = "1" ] && [ -x "$WORK/.venv/bin/python" ]; then
     VENV="$WORK/.venv"
-    echo "[inner] venv: image-baked (requirements hash match)"
+    echo "[inner] venv: image-baked (lockfile hash match)"
 else
-    echo "[inner] venv: requirements drift -> building fresh (see pip.log)"
-    "${MATRIX_PY:?}" -m venv "$HOME/venv-fresh"
-    "$HOME/venv-fresh/bin/pip" install --no-cache-dir -r requirements-dev.txt \
-        > "$RES/pip.log" 2>&1 || { echo "[inner] FATAL: pip failed" >&2; exit 4; }
+    echo "[inner] venv: lockfile drift -> building fresh (see uv.log)"
+    UV_PROJECT_ENVIRONMENT="$HOME/venv-fresh" \
+        uv sync --locked --python "${MATRIX_PY:?}" \
+        > "$RES/uv.log" 2>&1 || { echo "[inner] FATAL: uv sync failed" >&2; exit 4; }
     VENV="$HOME/venv-fresh"
 fi
 

@@ -7,7 +7,7 @@ name: CI deps image
 #
 # Tags pushed:
 #   :main        — moving tag the test tiers pull. Updated on every build.
-#   :req-<hash>  — content tag (first 12 hex of sha256 over requirements*.txt)
+#   :req-<hash>  — content tag (first 12 hex of sha256 over pyproject.toml and uv.lock)
 #                  for traceability + rollback.
 #
 # Uses the plain `docker` CLI (preinstalled on ubuntu runners) rather than
@@ -18,8 +18,8 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'requirements.txt'
-      - 'requirements-dev.txt'
+      - 'pyproject.toml'
+      - 'uv.lock'
       - '.github/docker/ci-deps.Dockerfile'
       - '.github/workflows/ci-deps-image.yml'
   workflow_dispatch:
@@ -60,7 +60,7 @@ jobs:
           owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/raptor-ci-deps"
           # Content tag over the manifests that define the image.
-          reqhash="$(cat requirements.txt requirements-dev.txt | sha256sum | cut -c1-12)"
+          reqhash="$(cat pyproject.toml uv.lock | sha256sum | cut -c1-12)"
           docker build \
             -f .github/docker/ci-deps.Dockerfile \
             -t "${image}:main" \
