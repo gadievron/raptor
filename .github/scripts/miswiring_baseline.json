@@ -370,6 +370,18 @@
     "artifacts:write_only_artifact::oracle_summary.md": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:write_only_artifact::openant-report.md": {
+      "note": "operator-facing output: /openant standalone run writes a markdown summary next to the JSON findings; consumed by the operator reviewing results, no in-repo production reader by design"
+    },
+    "artifacts:write_only_artifact::openant.stderr.log": {
+      "note": "operator-facing debug artifact: scanner.py persists full subprocess stderr for post-mortem debugging; the 600-char snippet rides the error message, full log is operator-consumed only"
+    },
+    "artifacts:write_only_artifact::openant_findings.json": {
+      "note": "variable-path read false positive: raptor_agentic.py writes openant_findings.json then passes the Path to run_validation_phase(openant_findings_path=...) which reads it via load_json; the detector cannot trace the path indirection"
+    },
+    "artifacts:write_only_artifact::raptor_openant_report.json": {
+      "note": "operator-facing output: /openant standalone run writes the machine-readable run summary; consumed by the operator and by /project status which reads via glob, no literal-name reader"
+    },
     "artifacts:write_only_artifact::patch-verify.json": {
       "note": "operator/LLM-facing output: the frida runtime regression oracle writes both runs' evidence as patch-verify.json and prints its path; the machine-consumed verdict rides the CLI exit code and the in-process return value, so no in-repo literal-name production reader exists by design (tests read the file back)"
     },

@@ -11,7 +11,6 @@ sys.path.insert(0, str(Path(__file__).parents[4]))  # repo root
 
 from packages.openant.config import (
     OpenAntConfig,
-    get_config,
     is_available,
     _discover_core,
     OPENANT_CORE_ENV,
