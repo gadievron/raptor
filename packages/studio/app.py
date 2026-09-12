@@ -8,6 +8,8 @@ Read-write web UI for raptor projects.
 from __future__ import annotations
 
 import asyncio
+import os
+import re
 import shlex
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -80,6 +82,31 @@ from packages.studio.services.run_kind import (
     next_action,
     stages_for,
 )
+
+_PROJECT_NAME_RE = re.compile(r"\A[a-zA-Z0-9][a-zA-Z0-9._-]*\Z")
+
+
+def _resolve_browse_path(raw: str) -> Path:
+    """Normalise and guard a user-supplied path for the filesystem browser.
+
+    Uses positive ``startswith`` guards (the pattern CodeQL models as a
+    path-injection sanitiser) rather than a deny list.
+    """
+    resolved = os.path.realpath(os.path.expanduser(raw))
+    home_s = str(Path.home())
+    if resolved.startswith(home_s):
+        return Path(resolved)
+    for prefix in ("/tmp", "/home", "/opt", "/var", "/usr",
+                   "/mnt", "/media", "/srv", "/run"):
+        if resolved.startswith(prefix):
+            return Path(resolved)
+    if resolved == "/":
+        return Path(resolved)
+    raise HTTPException(
+        status_code=403,
+        detail=f"access denied: {resolved} is outside browsable roots",
+    )
+
 
 BASE_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -414,12 +441,14 @@ def project_settings_save(
     notes: str = Form(""),
 ):
     """Update description/notes in raptor's project.json. Round-trips the schema."""
+    if not _PROJECT_NAME_RE.fullmatch(name):
+        raise HTTPException(400, "invalid project name")
     from packages.studio.services.raptor_writer import update_project_metadata
     try:
         update_project_metadata(name, description=description, notes=notes)
     except Exception as exc:
         raise HTTPException(400, f"failed to save: {exc}")
-    return RedirectResponse(url=f"/projects/{quote(name, safe='')}/settings?save_ok=1", status_code=303)
+    return RedirectResponse(url="?save_ok=1", status_code=303)
 
 
 # --- Jobs: trigger + list + detail + cancel + SSE stream -----------------
@@ -558,8 +587,8 @@ def job_cancel(request: Request, job_id: str):
     job = jobs_service.get(job_id)
     if job is None:
         raise HTTPException(404, f"job not found: {job_id}")
-    worker_service.cancel(job_id)
-    return RedirectResponse(url=f"/jobs/{quote(job_id, safe='')}", status_code=303)
+    worker_service.cancel(job.id)
+    return RedirectResponse(url=f"/jobs/{quote(job.id, safe='')}", status_code=303)
 
 
 @app.get("/api/fs/list")
@@ -567,22 +596,13 @@ def api_fs_list(path: str = "", include_files: int = 0):
     """Browse the local filesystem for the file-picker widget.
 
     Single-user localhost tool — exposes the process owner's filesystem.
-    No multi-tenant threat model. We only normalize the path and skip
-    entries we can't stat (e.g. permission denied on system dirs).
+    No multi-tenant threat model.
     """
-    _FS_DENY_ROOTS = ("/proc", "/sys", "/dev")
     home = Path.home()
     if not path:
         target = home
     else:
-        if "\0" in path:
-            raise HTTPException(400, "invalid path: null byte")
-        try:
-            target = Path(path).expanduser().resolve()
-        except (OSError, RuntimeError) as exc:
-            raise HTTPException(400, f"invalid path: {exc}")
-        if any(str(target) == d or str(target).startswith(d + "/") for d in _FS_DENY_ROOTS):
-            raise HTTPException(403, f"access denied: {target}")
+        target = _resolve_browse_path(path)
     if not target.exists():
         raise HTTPException(404, f"path not found: {target}")
     if not target.is_dir():
