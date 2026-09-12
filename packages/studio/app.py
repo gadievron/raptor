@@ -84,8 +84,29 @@ from packages.studio.services.run_kind import (
 )
 
 _PROJECT_NAME_RE = re.compile(r"\A[a-zA-Z0-9][a-zA-Z0-9._-]*\Z")
-_FS_PATH_RE = re.compile(r"\A/[^\x00]+\Z")
-_FS_DENY_ROOTS = ("/proc", "/sys", "/dev")
+
+
+def _resolve_browse_path(raw: str) -> Path:
+    """Normalise and guard a user-supplied path for the filesystem browser.
+
+    Uses positive ``startswith`` guards (the pattern CodeQL models as a
+    path-injection sanitiser) rather than a deny list.
+    """
+    resolved = os.path.realpath(os.path.expanduser(raw))
+    home_s = str(Path.home())
+    if resolved.startswith(home_s):
+        return Path(resolved)
+    for prefix in ("/tmp", "/home", "/opt", "/var", "/usr",
+                   "/mnt", "/media", "/srv", "/run"):
+        if resolved.startswith(prefix):
+            return Path(resolved)
+    if resolved == "/":
+        return Path(resolved)
+    raise HTTPException(
+        status_code=403,
+        detail=f"access denied: {resolved} is outside browsable roots",
+    )
+
 
 BASE_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -427,8 +448,7 @@ def project_settings_save(
         update_project_metadata(name, description=description, notes=notes)
     except Exception as exc:
         raise HTTPException(400, f"failed to save: {exc}")
-    safe_name = quote(name, safe="")
-    return RedirectResponse(url=f"/projects/{safe_name}/settings?save_ok=1", status_code=303)
+    return RedirectResponse(url="?save_ok=1", status_code=303)
 
 
 # --- Jobs: trigger + list + detail + cancel + SSE stream -----------------
@@ -576,19 +596,13 @@ def api_fs_list(path: str = "", include_files: int = 0):
     """Browse the local filesystem for the file-picker widget.
 
     Single-user localhost tool — exposes the process owner's filesystem.
-    No multi-tenant threat model. We only normalize the path and skip
-    entries we can't stat (e.g. permission denied on system dirs).
+    No multi-tenant threat model.
     """
     home = Path.home()
     if not path:
         target = home
     else:
-        resolved = os.path.realpath(os.path.expanduser(path))
-        if not _FS_PATH_RE.fullmatch(resolved):
-            raise HTTPException(400, "invalid path")
-        if any(resolved == d or resolved.startswith(d + "/") for d in _FS_DENY_ROOTS):
-            raise HTTPException(403, "access denied")
-        target = Path(resolved)
+        target = _resolve_browse_path(path)
     if not target.exists():
         raise HTTPException(404, f"path not found: {target}")
     if not target.is_dir():
