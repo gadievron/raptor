@@ -239,3 +239,79 @@ def test_graph_path_prefers_project_containing_run_dir(tmp_path, monkeypatch):
     )
 
     assert graph_path_for_run(run_dir, str(target)) == project_b / "graph" / "raptor.graph.sqlite"
+
+
+def test_concurrent_writers_wal_mode(tmp_path):
+    """Two threads writing nodes and edges concurrently must not lose data."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from core.understand_graph.ingest import _upsert_edge, _upsert_node
+    from core.understand_graph.schema import stable_node_id
+    from core.understand_graph.store import open_graph
+
+    db_path = tmp_path / "graph" / "raptor.graph.sqlite"
+    db_path.parent.mkdir(parents=True)
+
+    conn_setup = open_graph(db_path)
+    conn_setup.execute(
+        "INSERT INTO snapshots (id, target_path) VALUES (?, ?)",
+        ("snap-concurrent", "/fake/target"),
+    )
+    conn_setup.commit()
+    conn_setup.close()
+
+    nodes_per_writer = 50
+
+    def writer(writer_id: int) -> list[str]:
+        conn = open_graph(db_path)
+        written = []
+        try:
+            for i in range(nodes_per_writer):
+                key = f"w{writer_id}_func_{i}"
+                node_id = _upsert_node(
+                    conn,
+                    "snap-concurrent",
+                    "function",
+                    key,
+                    {"name": key, "file": f"w{writer_id}.py", "line": i + 1},
+                )
+                written.append(node_id)
+                if i > 0:
+                    prev_key = f"w{writer_id}_func_{i - 1}"
+                    prev_id = stable_node_id("function", "snap-concurrent", prev_key)
+                    _upsert_edge(
+                        conn,
+                        "snap-concurrent",
+                        "CONTAINS",
+                        prev_id,
+                        node_id,
+                        confidence="high",
+                    )
+            conn.commit()
+        finally:
+            conn.close()
+        return written
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(writer, wid) for wid in range(2)]
+        all_written = []
+        for f in as_completed(futures):
+            all_written.extend(f.result())
+
+    assert len(all_written) == nodes_per_writer * 2
+
+    conn = open_graph(db_path)
+    node_count = conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE snapshot_id = ?",
+        ("snap-concurrent",),
+    ).fetchone()[0]
+    edge_count = conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE snapshot_id = ?",
+        ("snap-concurrent",),
+    ).fetchone()[0]
+    integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+    conn.close()
+
+    assert node_count == nodes_per_writer * 2
+    assert edge_count == (nodes_per_writer - 1) * 2
+    assert integrity == "ok"
