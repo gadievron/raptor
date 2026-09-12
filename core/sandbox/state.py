@@ -129,6 +129,21 @@ _cli_sandbox_audit_budget = None
 # validated absolute paths otherwise.
 _cli_sandbox_readable_paths = None
 _cli_sandbox_tool_paths = None
+# Per-run untrusted containment-floor consent: `--sandbox-floor <tier>`
+# (tier label string, e.g. "landlock"; None = flag not passed). The
+# highest-precedence consent surface for the untrusted floor classes
+# (flag > project setting > legacy env var > default-refuse — resolved
+# in core.sandbox.context.resolve_untrusted_floor). Same
+# prompt-injection rule as every slot above: set ONLY from entry-point
+# argparse (core.sandbox.cli.set_cli_sandbox_floor).
+_cli_sandbox_floor: str | None = None
+# Project-surface twin: the active project's registry-validated
+# `sandbox-floor` setting, consumed once at run start by the entry
+# script (core.project.trust.apply_project_sandbox_floor →
+# core.sandbox.cli.set_project_sandbox_floor). Operator-written
+# on-disk project config under ~/.raptor/projects — NEVER read from
+# the scanned repo, never from cwd, and never set by library code.
+_project_sandbox_floor: str | None = None
 
 # Degradation warnings are logged once per process, not once per sandbox()
 # context — kernel capability doesn't change at runtime and scan loops
@@ -160,6 +175,15 @@ _mountless_backend_warned = False
 # containment floor for this process. Once per process; the per-call
 # consented-degrade warning fires every time the lowered floor bites.
 _floor_lowered_banner_warned = False
+# Explicit-surface twins of the consent banner above: the per-run
+# --sandbox-floor flag / the project sandbox-floor setting is the
+# in-force floor source for this process's untrusted-class calls.
+_floor_flag_banner_warned = False
+_floor_project_banner_warned = False
+# Disagreement banner: two consent surfaces named DIFFERENT untrusted
+# floors and the higher-precedence one won (flag > project > env var).
+# Once per process, naming both surfaces and both values.
+_floor_surface_disagreement_warned = False
 # inherit_netns=True dropped the network namespace from a
 # block_network run (sanctioned for netns-coordinator paired runs;
 # a host-netns caller lost the requested block). Once per process;

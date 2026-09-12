@@ -11,11 +11,20 @@ during parser construction and `apply_cli_args` right after `parse_args`.
 
 import argparse
 import logging
+import sys
 
 from . import state
+from . import tiers as _tiers
 from .profiles import PROFILES
 
 logger = logging.getLogger(__name__)
+
+# The --sandbox-floor vocabulary: the consentable tier labels plus
+# "none". "none" parses so the misuse is refused LOUDLY at the point
+# it would matter (an untrusted-class call) with a message naming the
+# real surface (--sandbox none / --no-sandbox) — see
+# tiers.resolve_call_floor's never-BARE-by-consent arm.
+SANDBOX_FLOOR_CHOICES = (*_tiers.CONSENTABLE_FLOOR_LABELS, "none")
 
 
 def _set_cli_state(profile: str) -> None:
@@ -62,6 +71,84 @@ def set_cli_profile(profile: str) -> None:
     """
     logger.warning("Sandbox profile forced to %r by CLI --sandbox flag", profile)
     _set_cli_state(profile)
+
+
+def _validate_floor_label(label: str, *, surface: str,
+                          allow_none: bool) -> None:
+    """Shared validation for the two floor-consent setters.
+
+    Linux tier labels are refused on macOS rather than mapped:
+    cross-platform tier comparability is refused by design (see
+    core/sandbox/tiers.py) — the untrusted contract on macOS is the
+    seatbelt tier, and RAPTOR_ALLOW_DEGRADED_UNTRUSTED remains the
+    only documented lowering surface there.
+    """
+    valid = (SANDBOX_FLOOR_CHOICES if allow_none
+             else _tiers.CONSENTABLE_FLOOR_LABELS)
+    if label not in valid:
+        msg = (
+            f"Unknown sandbox floor {label!r} for {surface}. "
+            f"Valid values: {', '.join(valid)}."
+        )
+        raise ValueError(msg)
+    if sys.platform == "darwin" and label != "none":
+        msg = (
+            f"{surface}={label!r} names a Linux containment tier — "
+            f"not applicable on macOS, where the untrusted contract "
+            f"is the seatbelt tier (cross-platform tier comparison "
+            f"is refused, not fudged). On macOS "
+            f"RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1 remains the only "
+            f"lowering surface."
+        )
+        raise ValueError(msg)
+
+
+def set_cli_sandbox_floor(label: str) -> None:
+    """Called by entry points when `--sandbox-floor <tier>` is passed.
+
+    Sets the per-run untrusted containment floor — the highest-
+    precedence consent surface (flag > project setting > legacy env
+    var > default-refuse). Works in BOTH directions: lowering
+    (`landlock` accepts Landlock/seccomp-only containment for
+    untrusted work on this run) and raising (`mount-ns` pins the full
+    contract, overriding a project setting or the env waiver).
+
+    Same prompt-injection contract as set_cli_profile(): called only
+    from CLI-parsed argparse values — never from env, config, or
+    target repo content.
+    """
+    _validate_floor_label(label, surface="--sandbox-floor",
+                          allow_none=True)
+    logger.warning(
+        "Sandbox untrusted containment floor set to %r by CLI "
+        "--sandbox-floor flag", label,
+    )
+    state._cli_sandbox_floor = label
+
+
+def set_project_sandbox_floor(label: str) -> None:
+    """Project-surface twin of set_cli_sandbox_floor().
+
+    Called ONLY by the run-start project consumption path
+    (core.project.trust.apply_project_sandbox_floor) with the active
+    project's registry-validated ``sandbox-floor`` setting —
+    operator-written on-disk config under the RAPTOR projects dir,
+    never content from the scanned repo or the cwd. The per-run
+    ``--sandbox-floor`` flag beats it in both directions at floor
+    resolution (core.sandbox.context.resolve_untrusted_floor).
+
+    ``none`` is refused here outright: a standing bare floor is not a
+    project-consentable value (the registry never stores it either) —
+    untrusted work never runs bare by consent.
+    """
+    _validate_floor_label(label, surface="project setting sandbox-floor",
+                          allow_none=False)
+    logger.info(
+        "Sandbox untrusted containment floor set to %r by the active "
+        "project's sandbox-floor setting (per-run --sandbox-floor "
+        "overrides)", label,
+    )
+    state._project_sandbox_floor = label
 
 
 def set_cli_readable_paths(paths: list) -> None:
@@ -159,6 +246,37 @@ def add_cli_args(parser: argparse.ArgumentParser) -> None:
              "flag (which controls log level, not audit output).",
     )
     parser.add_argument(
+        "--sandbox-floor", choices=list(SANDBOX_FLOOR_CHOICES),
+        default=None, dest="sandbox_floor", metavar="TIER",
+        help="Per-run consent for the UNTRUSTED containment floor "
+             "(mount-ns | mountless-ns | ns-only | landlock | none). "
+             "Untrusted-class work (attacker-derived payloads, PoC "
+             "execution, target binaries) refuses to run below this "
+             "tier; lanes at or above it are admitted. Lowering "
+             "(e.g. 'landlock' on a host without user namespaces) "
+             "accepts exactly the named tier and nothing below it; "
+             "raising (e.g. 'mount-ns') pins the full contract, "
+             "overriding the project's sandbox-floor setting and "
+             "the RAPTOR_ALLOW_DEGRADED_UNTRUSTED env var "
+             "(precedence: this flag > project setting > env var > "
+             "default-refuse; a banner names both surfaces on "
+             "disagreement). 'none' is NOT a consentable untrusted "
+             "floor — untrusted work never runs bare by consent; "
+             "use the authoritative --sandbox none / --no-sandbox "
+             "for the global sandbox-off. Orthogonal to --sandbox "
+             "(profile = enforcement strictness; floor = minimum "
+             "delivered containment tier). The degraded-NETWORK "
+             "acceptance stays env-var-only (network is a separate "
+             "axis, not a tier); no tier waives a missing libseccomp "
+             "(every tier includes the filter), and an explicit "
+             "floor withdraws the env waiver's filterless "
+             "acceptance. The construction-time Landlock-"
+             "enforceability acceptance follows the same chain for "
+             "ALL calls (the env var's existing host-wide reach), so "
+             "a raised floor also refuses it for trusted "
+             "policy-bearing calls on Landlock-less kernels.",
+    )
+    parser.add_argument(
         "--sandbox-readable-path", action="append", default=None,
         dest="sandbox_readable_paths", metavar="PATH",
         help="Extend the sandbox read allowlist with PATH (repeatable; "
@@ -228,6 +346,7 @@ def apply_cli_args(
     profile = getattr(args, "sandbox", None)
     readable = getattr(args, "sandbox_readable_paths", None)
     tool_dirs = getattr(args, "sandbox_tool_paths", None)
+    floor = getattr(args, "sandbox_floor", None)
 
     def _fail(msg: str) -> None:
         if parser is not None:
@@ -276,6 +395,24 @@ def apply_cli_args(
             "compare against. Use --sandbox full --audit (default) "
             "to engage audit mode."
         )
+    if floor is not None:
+        if no_sandbox or profile == "none":
+            _fail(
+                "--sandbox-floor is incoherent with --sandbox none / "
+                "--no-sandbox: with the sandbox globally disabled "
+                "(the authoritative operator surface) there is no "
+                "containment floor to hold. Drop --sandbox-floor, or "
+                "drop the disable."
+            )
+        if sys.platform == "darwin" and floor != "none":
+            _fail(
+                f"--sandbox-floor {floor} names a Linux containment "
+                f"tier — not applicable on macOS, where the untrusted "
+                f"contract is the seatbelt tier (cross-platform tier "
+                f"comparison is refused, not fudged). On macOS "
+                f"RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1 remains the only "
+                f"lowering surface."
+            )
     # Allowlist extensions: validate existence up-front (a typo'd path
     # would otherwise surface later as the very read-denial the flag
     # was meant to fix), and reject the incoherent no-sandbox combo.
@@ -314,6 +451,8 @@ def apply_cli_args(
         disable_from_cli()
     elif profile is not None:
         set_cli_profile(profile)
+    if floor is not None:
+        set_cli_sandbox_floor(floor)
     if audit:
         state._cli_sandbox_audit = True
         logger.warning(

@@ -103,12 +103,37 @@ _LABEL_TIERS: dict[str, ContainmentTier] = {
     label: tier for tier, label in _TIER_LABELS.items()
 }
 
-# Floor-source vocabulary for the posture record. Phase-2 surfaces
-# only; "flag" and "project" join when the per-run flag and project
-# setting land.
+# Floor-source vocabulary for the posture record.
 FLOOR_SOURCE_DEFAULT = "default"
 FLOOR_SOURCE_ENV = "env"
+FLOOR_SOURCE_FLAG = "flag"
+FLOOR_SOURCE_PROJECT = "project"
 FLOOR_SOURCE_OPERATOR_DISABLE = "operator-disable"
+
+# Sources that carry OPERATOR CONSENT to a lowered untrusted floor
+# (as opposed to the class default or the global operator disable).
+# The consented-degrade warning and the consent banner key off this
+# set; the surface named in each message follows the source.
+CONSENT_FLOOR_SOURCES = frozenset({
+    FLOOR_SOURCE_ENV, FLOOR_SOURCE_FLAG, FLOOR_SOURCE_PROJECT,
+})
+
+# The tier vocabulary the EXPLICIT consent surfaces accept
+# (``--sandbox-floor`` and ``/project set sandbox-floor``). Linux
+# tiers only: cross-platform comparability is refused by design, so
+# on macOS the flag rejects these labels at apply time and the
+# project consumption fails closed (setting ignored with a warning)
+# rather than fudge a seatbelt mapping. ``none`` (BARE) is
+# deliberately absent — it is
+# the operator-explicit sandbox-off semantics, NOT a consentable
+# untrusted floor: no consent surface may run untrusted work bare
+# (see :func:`resolve_call_floor`); the flag still PARSES ``none``
+# (see core/sandbox/cli.py) so the refusal is loud and names the
+# real surface (``--sandbox none`` / ``--no-sandbox``), while the
+# standing project setting refuses to store it at all.
+CONSENTABLE_FLOOR_LABELS = (
+    "mount-ns", "mountless-ns", "ns-only", "landlock",
+)
 
 
 def tier_label(tier: ContainmentTier) -> str:
@@ -156,14 +181,16 @@ def resolve_call_floor(
     require_fresh_procfs: bool | None,
     untrusted_workload: bool,
     waiver_active: bool = False,
+    explicit_floor: "ContainmentTier | None" = None,
+    explicit_source: str | None = None,
 ) -> tuple[ContainmentTier, str]:
     """Resolve one run() call's containment floor and its source.
 
     ``require_fresh_procfs`` is tri-state: ``None`` = the kwarg was
     never passed (trusted default); ``True`` = the resolved untrusted
     contract is in force; ``False`` = the caller passed the kwarg but
-    zeroed — either the env-var-honouring derivation under the
-    operator's waiver, or a caller-level literal relaxation.
+    zeroed — either the consent-chain-honouring derivation under a
+    lowered untrusted floor, or a caller-level literal relaxation.
     ``waiver_active`` carries the env truth (the caller reads
     ``RAPTOR_ALLOW_DEGRADED_UNTRUSTED`` — this module deliberately
     reads no environment) so the floor SOURCE is attributed
@@ -172,15 +199,81 @@ def resolve_call_floor(
     default source, so no banner or waiver-named warning fires for
     consent nobody gave.
 
+    ``explicit_floor``/``explicit_source`` carry the EXPLICIT consent
+    surfaces (per-run ``--sandbox-floor`` flag → source "flag";
+    project ``sandbox-floor`` setting → source "project"), already
+    precedence-resolved by the caller (flag > project — see
+    ``context.resolve_untrusted_floor``). They apply to the untrusted
+    floor classes only (a call carrying the contract kwarg or the
+    untrusted-workload mark): a plain trusted call keeps BARE — the
+    explicit surfaces set the UNTRUSTED floor, exactly like the
+    legacy env var, never a process-wide minimum for trusted work.
+
     Precedence (highest wins): operator-explicit disable (``--sandbox
     none`` / ``--no-sandbox`` / ``disabled=True`` — the documented
-    "all bets off" surface, floor := BARE) > the per-call contract >
-    the waived-untrusted mapping > the trusted default (BARE — plain
-    ``run()``'s documented contract is enforceability-gated
+    "all bets off" surface, floor := BARE) > explicit consent surface
+    (flag > project, both directions — raising back to mount-ns and
+    lowering to landlock are equally expressible) > the per-call
+    contract / the env-waived mapping > the trusted default (BARE —
+    plain ``run()``'s documented contract is enforceability-gated
     degradation, not a tier floor).
+
+    Never-BARE-by-consent: an explicit floor of BARE ("none") on an
+    untrusted-class call raises :class:`SandboxFloorError` — untrusted
+    work can never be CONSENTED to bare through any surface; the
+    operator-explicit sandbox-off (``--sandbox none`` /
+    ``--no-sandbox``), which remains globally authoritative, is the
+    only surface that runs untrusted work bare.
     """
     if operator_disabled:
         return ContainmentTier.BARE, FLOOR_SOURCE_OPERATOR_DISABLE
+    untrusted_class = (require_fresh_procfs is not None) or untrusted_workload
+    if untrusted_class and explicit_floor is not None:
+        explicit_floor = ContainmentTier(explicit_floor)
+        if explicit_source not in (FLOOR_SOURCE_FLAG,
+                                   FLOOR_SOURCE_PROJECT):
+            msg = (
+                "resolve_call_floor: explicit_floor requires an "
+                "explicit_source of 'flag' or 'project' (got "
+                f"{explicit_source!r})"
+            )
+            raise ValueError(msg)
+        if explicit_floor is ContainmentTier.BARE:
+            surface = (
+                "--sandbox-floor none"
+                if explicit_source == FLOOR_SOURCE_FLAG
+                else "project setting sandbox-floor=none"
+            )
+            raise SandboxFloorError(
+                f"sandbox containment floor 'none' ({surface}) is not "
+                f"a consentable untrusted floor — untrusted work never "
+                f"runs bare by consent.",
+                "The lowest consentable untrusted floor is "
+                "'landlock' (--sandbox-floor landlock). Running "
+                "untrusted work with no sandbox at all requires the "
+                "operator-explicit global disable (--sandbox none / "
+                "--no-sandbox), which remains authoritative.",
+                achievable=ContainmentTier.BARE,
+                floor=untrusted_default_floor(),
+            )
+        if (require_fresh_procfs
+                and explicit_floor <= ContainmentTier.LANDLOCK_ONLY):
+            # A LITERAL caller-level contract ask: every in-tree
+            # untrusted caller derives ``require_fresh_procfs`` from
+            # the consent chain, and the derivation arrives False for
+            # every floor at or below the landlock tier — so a True
+            # alongside such a floor can only be a direct caller's
+            # literal ask, and no consent surface relaxes an explicit
+            # caller ask (the same honesty rule the env waiver has
+            # always followed). The contract floor stays; the refusal
+            # hint tells the caller to drop the literal (or derive it)
+            # to honour the operator's consent. Floors that still
+            # deliver a fresh pid-ns procfs (ns-only and above) honour
+            # the ask and keep the explicit attribution below —
+            # indistinguishable from (and identical to) the derived
+            # shape.
+            return untrusted_default_floor(), FLOOR_SOURCE_DEFAULT
+        return explicit_floor, explicit_source
     if require_fresh_procfs:
         return untrusted_default_floor(), FLOOR_SOURCE_DEFAULT
     if require_fresh_procfs is False:
