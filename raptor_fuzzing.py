@@ -401,6 +401,12 @@ Examples:
         from core.run.pin import set_process_project
         set_process_project(args.project)
     apply_cli_args(args, parser=ap)
+    # Project sandbox-floor consent: /fuzz executes target code, so
+    # it consumes the setting at run start like the trust markers;
+    # the per-run --sandbox-floor flag wins in both directions at
+    # floor resolution inside core.sandbox.
+    from core.project.trust import apply_project_sandbox_floor
+    apply_project_sandbox_floor(args)
 
     if args.export_seed_corpus:
         from packages.fuzzing.seed_corpus import prepare_builtin_seed_corpus

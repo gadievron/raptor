@@ -2298,8 +2298,17 @@ Examples:
     # Per-run flags always win (negative > positive > marker > off);
     # a banner line prints when a marker affects this run. Mirrors the
     # persisted-binaries loading path (binary_oracle_cli).
-    from core.project.trust import apply_project_trust_flags
+    from core.project.trust import (
+        apply_project_sandbox_floor,
+        apply_project_trust_flags,
+    )
     apply_project_trust_flags(args)
+    # Project sandbox-floor consent (schema v4 setting): consumed at
+    # run start like the trust markers — plumbed into core.sandbox
+    # state; the per-run --sandbox-floor flag wins in both directions
+    # at floor resolution, and disagreements banner from the sandbox
+    # side. Same one-target rule as the markers.
+    apply_project_sandbox_floor(args)
 
     # Propagate --trust-repo to every target-repo trust check so each
     # in-process consumer (cc_trust, codeql_trust, build_detector, ...)
@@ -2903,6 +2912,14 @@ Examples:
         sandbox_passthrough.append("--audit")
     if getattr(args, "audit_verbose", False):
         sandbox_passthrough.append("--audit-verbose")
+    # Worker-inherit invariant for the per-run floor consent: the
+    # flag rides the worker COMMAND LINE (never an env var — targets
+    # can then neither observe nor influence sandbox policy; the
+    # project setting is re-read by each worker's own run-pin
+    # bootstrap, and the legacy env var already has its
+    # SAFE_ENV_ALLOWLIST + TARGET_ENV_STRIP_SET entries).
+    if getattr(args, "sandbox_floor", None) is not None:
+        sandbox_passthrough.extend(["--sandbox-floor", args.sandbox_floor])
 
     if run_semgrep:
         print("\n[*] Running Semgrep analysis...")

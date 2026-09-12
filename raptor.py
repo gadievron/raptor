@@ -1523,6 +1523,12 @@ not before; the top-level parser does not declare them directly):
                         (composes with --sandbox profiles other than 'none')
   --audit-verbose       With --audit, log every traced syscall
                         (strace-style diagnostic)
+  --sandbox-floor {mount-ns,mountless-ns,ns-only,landlock,none}
+                        Per-run consent for the UNTRUSTED containment
+                        floor (both directions: lower to accept a
+                        degraded host, raise to pin the full contract
+                        over the project setting / env waiver; 'none'
+                        is never a consentable untrusted floor)
   --sandbox-readable-path PATH
                         Extend the read allowlist (repeatable) — the
                         fix when a read-restricting run denies a path

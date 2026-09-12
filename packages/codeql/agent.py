@@ -1282,6 +1282,14 @@ Examples:
         from core.run.pin import bootstrap_process_pin
         bootstrap_process_pin(args.out)
 
+    # Project sandbox-floor consent: workers re-read the on-disk
+    # setting at their own run start (the run-pin bootstrap above
+    # resolves the owning project) — the per-run --sandbox-floor
+    # flag, forwarded on this worker's command line by the /agentic
+    # passthrough, wins in both directions at floor resolution.
+    from core.project.trust import apply_project_sandbox_floor
+    apply_project_sandbox_floor(args)
+
     # Explicit negative beats positive (per-run escape hatch; no
     # project-marker consumption here — the /agentic and /codeql
     # entry points resolve markers before forwarding --traced-build).

@@ -543,7 +543,10 @@ Examples:
     # Per-run flags always win (negative > positive > marker > off);
     # a banner line prints when a marker affects this run. Mirrors the
     # persisted-binaries loading path above.
-    from core.project.trust import apply_project_trust_flags
+    from core.project.trust import (
+        apply_project_sandbox_floor,
+        apply_project_trust_flags,
+    )
     apply_project_trust_flags(args)
     # set_trust_override BEFORE apply_cli_args. apply_cli_args
     # may invoke trust-checks downstream (e.g. when validating
@@ -562,6 +565,13 @@ Examples:
         _cc_set(True)
         _ql_set(True)
     apply_cli_args(args, parser=parser)
+    # Project sandbox-floor consent: consumed at run start like the
+    # trust markers (one-target rule included); the per-run
+    # --sandbox-floor flag wins in both directions at floor
+    # resolution inside core.sandbox. AFTER apply_cli_args so an
+    # operator-disabled sandbox skips the consent (and its banner)
+    # instead of claiming a consent the disable moots.
+    apply_project_sandbox_floor(args)
 
     try:
         run_autonomous_workflow(args)

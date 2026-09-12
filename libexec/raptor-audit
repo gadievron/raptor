@@ -2786,6 +2786,17 @@ def main() -> int:
         from core.run.pin import set_process_project
         set_process_project(args.project)
 
+    # Project sandbox-floor consent: /audit's dark-verification and
+    # dynamic tools execute untrusted payloads through core.sandbox,
+    # and this process is its own entry point — re-read the standing
+    # consent like the run entry points do (one-target rule included;
+    # args.target / RAPTOR_CALLER_DIR is the match signal).
+    # banner=False: several subcommands emit machine-parsed stdout;
+    # the sandbox-side once-per-process banner still logs the
+    # in-force surface on stderr.
+    from core.project.trust import apply_project_sandbox_floor
+    apply_project_sandbox_floor(args, banner=False)
+
     if not args.command:
         parser.print_help()
         return 1

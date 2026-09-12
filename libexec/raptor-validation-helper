@@ -2924,6 +2924,19 @@ def main():
     if project_flag is not None:
         from core.run.pin import set_process_project
         set_process_project(project_flag)
+    # Project sandbox-floor consent: /validate's witness execution
+    # (stage E/F payload runs) goes through core.sandbox in THIS
+    # process, so re-read the standing consent like the run entry
+    # points do (one-target rule: --target / RAPTOR_CALLER_DIR is the
+    # match signal; the workdir positional pins the run's project).
+    # banner=False: this helper's stdout is machine-parsed (the
+    # OUTPUT_DIR sentinel and stage summaries); the sandbox-side
+    # once-per-process banner still logs the in-force surface.
+    _floor_run_dir = (args[1] if len(args) > 1
+                      and not args[1].startswith("--") else None)
+    from core.project.trust import apply_project_sandbox_floor
+    apply_project_sandbox_floor(
+        target_path=target, run_dir=_floor_run_dir, banner=False)
     # Ambient harness model the agent passes (only it knows /model); stage 1
     # records it into models[]. Omitted when absent.
     model = _flag_value(args, "--model")

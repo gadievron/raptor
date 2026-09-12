@@ -720,3 +720,63 @@ class TestRefusalHintHonesty:
             literal = _ctx._fresh_procfs_override_hint(
                 literal_contract=True)
             assert "require_fresh_procfs=True" in literal, _name
+
+
+# ------------------------------------------------ propagation invariant
+
+class TestPropagation:
+    def test_agentic_forwards_the_flag_to_workers(self):
+        """Worker-inherit: the /agentic sandbox passthrough re-emits
+        --sandbox-floor on worker command lines (same structural-drift
+        defense as test_audit_propagation.py)."""
+        src = (_REPO_ROOT / "raptor_agentic.py").read_text()
+        assert "--sandbox-floor" in src
+        assert 'getattr(args, "sandbox_floor"' in src
+
+    @pytest.mark.parametrize("entry", [
+        "raptor_agentic.py", "raptor_codeql.py", "raptor_fuzzing.py",
+        "packages/static-analysis/scanner.py",
+        "packages/codeql/agent.py",
+        # The dispatch helpers whose processes execute untrusted
+        # payloads directly (/audit dark verification and dynamic
+        # tools; /validate witness execution).
+        "libexec/raptor-audit",
+        "libexec/raptor-validation-helper",
+    ])
+    def test_entry_points_consume_the_project_setting(self, entry):
+        """The project surface is re-read at every run start that can
+        execute untrusted/target code — orchestrators and dispatched
+        workers alike (the setting is on disk; workers resolve it
+        through their run-pin bootstrap)."""
+        src = (_REPO_ROOT / entry).read_text()
+        assert "apply_project_sandbox_floor" in src, entry
+
+    def test_no_env_var_expression_exists_for_the_new_surfaces(self):
+        """The flag rides argv, the project setting rides disk —
+        NEITHER has an env-var expression a target could observe or a
+        nested worker could be steered by outside the documented
+        channels. The only floor-consent env var remains the frozen
+        legacy one, with both propagation-list entries."""
+        from core.config import RaptorConfig
+        assert not any(
+            "SANDBOX_FLOOR" in name
+            for name in RaptorConfig.SAFE_ENV_ALLOWLIST)
+        assert not any(
+            "SANDBOX_FLOOR" in name
+            for name in RaptorConfig.TARGET_ENV_STRIP_SET)
+        # The legacy var keeps its worker-inherit + target-strip pair.
+        assert ("RAPTOR_ALLOW_DEGRADED_UNTRUSTED"
+                in RaptorConfig.SAFE_ENV_ALLOWLIST)
+        assert ("RAPTOR_ALLOW_DEGRADED_UNTRUSTED"
+                in RaptorConfig.TARGET_ENV_STRIP_SET)
+
+    def test_target_env_carries_no_floor_expression(self, monkeypatch):
+        """With both explicit surfaces set, the scrubbed subprocess
+        env (the target-bound baseline) contains nothing naming the
+        floor — target code can neither observe nor influence the
+        consent."""
+        from core.config import RaptorConfig
+        state._cli_sandbox_floor = "landlock"
+        state._project_sandbox_floor = "mount-ns"
+        env = RaptorConfig.get_safe_env()
+        assert not any("FLOOR" in k.upper() for k in env)
