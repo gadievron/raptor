@@ -9,11 +9,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from core.artifacts.provenance import provenance_of
 from core.json import load_json as _load_json
-from core.security.prompt_output_sanitise import sanitise_code
+from core.security.prompt_output_sanitise import sanitise_code, sanitise_string
 
-from . import context_map, flow_trace, attack_tree, attack_paths, hypotheses, findings_summary, graph_memory
+from . import context_map, flow_trace, attack_tree, attack_paths, hypotheses, findings_summary, graph_memory, edge_obligations
+from .sanitize import detect_id_collisions, sanitize as _sanitize
 
+
+_FLOW_TRACE_GLOB = "flow-trace-*.json"
+_GRAPH_FILENAME = "raptor.graph.sqlite"
+
+
+def _section(title: str, body: str, level: int = 2) -> str:
+    heading = "#" * level
+    title = " ".join(str(title).split()).strip()
+    return f"{heading} {title}\n\n{body}\n"
 
 
 def _fence(diagram: str) -> str:
@@ -30,13 +41,52 @@ def _fence(diagram: str) -> str:
     return sanitise_code(str(diagram), max_chars=200_000)
 
 
-_FLOW_TRACE_GLOB = "flow-trace-*.json"
-_GRAPH_FILENAME = "raptor.graph.sqlite"
+def _err(exc: object) -> str:
+    return sanitise_string(" ".join(str(exc).split()), max_chars=300)
 
 
-def _section(title: str, body: str, level: int = 2) -> str:
-    heading = "#" * level
-    return f"{heading} {title}\n\n{body}\n"
+def _id_collision_warning(data: object) -> str:
+    if not isinstance(data, dict):
+        return ""
+    raw_ids = [
+        n.get("id", "?") for n in data.get("nodes", [])
+        if isinstance(n, dict)
+    ]
+    root = data.get("root")
+    if root is not None:
+        raw_ids.append(root)
+    collisions = detect_id_collisions(raw_ids)
+    if not collisions:
+        return ""
+    shown = "; ".join(
+        "%s → `%s`" % (
+            ", ".join(
+                f"`{_sanitize(r, 40)}`" for r in sorted(set(raws))
+            ),
+            sanitized,
+        )
+        for sanitized, raws in collisions[:5]
+    )
+    more = "" if len(collisions) <= 5 else f" (+{len(collisions) - 5} more)"
+    return (
+        f"\n\n> Warning: {len(collisions)} node-ID collision(s) after "
+        f"sanitization — distinct source nodes render as one Mermaid "
+        f"node: {shown}{more}. Rename the colliding ids in "
+        f"`attack-tree.json` to disambiguate."
+    )
+
+
+def _provenance_note(data: object) -> str:
+    prov = provenance_of(data)
+    if prov["legacy"] or not prov["untrusted"]:
+        return ""
+    generator = sanitise_string(
+        " ".join(str(prov["generator"]).split()), max_chars=60,
+    ).replace("`", "\\`")
+    return (
+        f"\n\n_Provenance: LLM-derived content (untrusted), generator "
+        f"`{generator}` — verify against source before acting._"
+    )
 
 
 def _graph_path_for_directory(out_dir: Path) -> Optional[Path]:
@@ -60,22 +110,6 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
     sections: list[str] = []
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    # Escape backticks in `target`. Pre-fix `target` was
-    # interpolated raw between backticks: `f" for `{target}`"`.
-    # An operator-supplied `--target` value containing a `` ` ``
-    # broke the markdown inline-code span and either:
-    #   * leaked the rest of the header line into raw markdown
-    #     rendering (a target like `` weird`name `` produced
-    #     `for `weird`name`` — the `name` rendered as bold/code
-    #     depending on what followed)
-    #   * matched another later `` ` `` in the document and
-    #     swallowed prose into a code span until the next
-    #     unmatched backtick
-    # `target` flows from the `--target` CLI flag in
-    # `libexec/raptor-render-diagrams` and is operator-controlled.
-    # Escape backticks to backslash-backtick so markdown renders them as
-    # literal characters; doesn't break valid targets that don't
-    # contain backticks.
     safe_target = (target or "").replace("`", "\\`")
     target_str = f" for `{safe_target}`" if target else ""
     sections.append(f"# Security Diagrams{target_str}\n\n_Generated {now}_\n")
@@ -84,10 +118,6 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
     findings_path = out_dir / "findings.json"
     orch_path_early = out_dir / "orchestrated_report.json"
     summary_findings = None
-    # Shape-guard every element: these artifacts may be partially
-    # written or drifted, and a non-dict entry would raise out of
-    # render_directory() before the per-section try/except degradation
-    # every other block gets.
     if findings_path.exists():
         fdata = _load_json(findings_path)
         if fdata and isinstance(fdata, dict):
@@ -114,7 +144,7 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
             )
             sections.append(_section("Findings Summary", body))
         except Exception as exc:
-            sections.append(_section("Findings Summary", f"> Could not render: {exc}"))
+            sections.append(_section("Findings Summary", f"> Could not render: {_err(exc)}"))
 
     # --- Context map / graph memory / attack surface ---
     context_map_rendered = False
@@ -134,15 +164,11 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
                 data = dict(data)
                 data["meta"] = {"target": target}
             diagram = context_map.generate(data)
-            body = f"_Source: `{fname}`_\n\n```mermaid\n{_fence(diagram)}\n```"
+            body = (f"_Source: `{fname}`_{_provenance_note(data)}"
+                    f"\n\n```mermaid\n{_fence(diagram)}\n```")
             sections.append(_section(title, body))
             if fname.startswith("context-map"):
                 context_map_rendered = True
-            # Per-entry forward-reachable diagrams (substrate-derived
-            # call closure from /understand --map's MAP-5b step).
-            # Only fires for context-map.json today; attack-surface.json
-            # uses a different shape but the helper safely returns []
-            # when no entry has forward_reachable.
             try:
                 fr_blocks = context_map.generate_forward_reachable_blocks(
                     data,
@@ -151,7 +177,7 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
                 fr_blocks = []
                 sections.append(_section(
                     f"{title} — Forward Reachability",
-                    f"> Could not render forward-reachable blocks: {exc}",
+                    f"> Could not render forward-reachable blocks: {_err(exc)}",
                 ))
             if fr_blocks:
                 sub_sections: list[str] = []
@@ -169,7 +195,7 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
                     + "\n".join(sub_sections),
                 ))
         except Exception as exc:
-            sections.append(_section(title, f"> Could not render `{fname}`: {exc}"))
+            sections.append(_section(title, f"> Could not render `{fname}`: {_err(exc)}"))
 
     if not context_map_rendered:
         try:
@@ -194,8 +220,25 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
         except Exception as exc:
             sections.append(_section(
                 "Context Map from Graph Memory",
-                f"> Could not render graph memory: {exc}",
+                f"> Could not render graph memory: {_err(exc)}",
             ))
+
+    # --- Edge obligations (--edges) ---
+    eo_path = out_dir / "edge-obligations.json"
+    if eo_path.exists():
+        try:
+            data = _load_json(eo_path)
+            if data is None:
+                raise ValueError("failed to parse JSON")
+            diagram = edge_obligations.generate(data)
+            body = ("_Source: `edge-obligations.json`_\n\n"
+                    f"```mermaid\n{_fence(diagram)}\n```")
+            sections.append(_section(
+                "Edge Obligations (tier-1 solid, tier-2 dashed)", body))
+        except Exception as exc:
+            sections.append(_section(
+                "Edge Obligations",
+                f"> Could not render `edge-obligations.json`: {_err(exc)}"))
 
     # --- Flow traces ---
     trace_files = sorted(out_dir.glob(_FLOW_TRACE_GLOB))
@@ -206,13 +249,16 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
                 data = _load_json(tf)
                 if data is None:
                     raise ValueError("failed to parse JSON")
-                trace_id = data.get("id", tf.stem)
-                name = data.get("name", trace_id)
+                raw_id = data.get("id", tf.stem)
+                trace_id = _sanitize(raw_id)
+                name = _sanitize(data.get("name", raw_id))
                 diagram = flow_trace.generate(data)
-                body = f"_Source: `{tf.name}`_\n\n```mermaid\n{_fence(diagram)}\n```"
-                trace_sections.append(_section(f"{trace_id}: {name}", body, level=3))
+                body = (f"_Source: `{tf.name}`_{_provenance_note(data)}"
+                        f"\n\n```mermaid\n{_fence(diagram)}\n```")
+                heading = f"{trace_id}: {name}".replace("\n", " ").replace("\r", " ")
+                trace_sections.append(_section(heading, body, level=3))
             except Exception as exc:
-                trace_sections.append(_section(tf.stem, f"> Could not render `{tf.name}`: {exc}", level=3))
+                trace_sections.append(_section(tf.stem, f"> Could not render `{tf.name}`: {_err(exc)}", level=3))
         sections.append(_section("Data Flow Traces", "\n".join(trace_sections)))
 
     # --- Attack tree (with companion files for enrichment) ---
@@ -237,10 +283,12 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
                 disproven=disproven_data,
                 hypotheses=hyp_data,
             )
-            body = f"_Source: `attack-tree.json`_{note}\n\n```mermaid\n{_fence(diagram)}\n```"
+            body = (f"_Source: `attack-tree.json`_{note}{_provenance_note(data)}"
+                    f"\n\n```mermaid\n{_fence(diagram)}\n```"
+                    f"{_id_collision_warning(data)}")
             sections.append(_section("Attack Tree", body))
         except Exception as exc:
-            sections.append(_section("Attack Tree", f"> Could not render `attack-tree.json`: {exc}"))
+            sections.append(_section("Attack Tree", f"> Could not render `attack-tree.json`: {_err(exc)}"))
 
     # --- Hypotheses (separate evidence-chain diagram) ---
     hyp_path = out_dir / "hypotheses.json"
@@ -252,10 +300,11 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
             hyp_list = raw if isinstance(raw, list) else raw.get("hypotheses", [])
             if hyp_list:
                 diagram = hypotheses.generate(hyp_list)
-                body = f"_Source: `hypotheses.json`_\n\n```mermaid\n{_fence(diagram)}\n```"
+                body = (f"_Source: `hypotheses.json`_{_provenance_note(raw)}"
+                        f"\n\n```mermaid\n{_fence(diagram)}\n```")
                 sections.append(_section("Hypotheses,Evidence Chain", body))
         except Exception as exc:
-            sections.append(_section("Hypotheses,Evidence Chain", f"> Could not render `hypotheses.json`: {exc}"))
+            sections.append(_section("Hypotheses,Evidence Chain", f"> Could not render `hypotheses.json`: {_err(exc)}"))
 
     # --- Graph-priority paths (Stage 0 graph handoff) ---
     graph_paths_path = out_dir / "graph-priority-paths.json"
@@ -271,7 +320,7 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
                 body = f"_Source: `graph-priority-paths.json`_\n\n```mermaid\n{_fence(diagram)}\n```"
                 sections.append(_section("Graph Priority Paths", body))
         except Exception as exc:
-            sections.append(_section("Graph Priority Paths", f"> Could not render `graph-priority-paths.json`: {exc}"))
+            sections.append(_section("Graph Priority Paths", f"> Could not render `graph-priority-paths.json`: {_err(exc)}"))
 
     # --- Attack paths ---
     paths_path = out_dir / "attack-paths.json"
@@ -280,13 +329,15 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
             data = _load_json(paths_path)
             if data is None:
                 raise ValueError("failed to parse JSON")
+            prov_note = _provenance_note(data)
             if isinstance(data, dict):
                 data = data.get("paths") or data.get("attack_paths") or next(iter(data.values()), [])
             if isinstance(data, list) and data:
-                body = "_Source: `attack-paths.json`_\n\n" + attack_paths.generate(data)
+                body = (f"_Source: `attack-paths.json`_{prov_note}\n\n"
+                        + attack_paths.generate(data))
                 sections.append(_section("Attack Paths", body))
         except Exception as exc:
-            sections.append(_section("Attack Paths", f"> Could not render `attack-paths.json`: {exc}"))
+            sections.append(_section("Attack Paths", f"> Could not render `attack-paths.json`: {_err(exc)}"))
 
     # --- Graph diff output ---
     for diff_name in ("graph-diff.json", "understand-graph-diff.json"):
@@ -302,7 +353,7 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
                 body = f"_Source: `{diff_name}`_\n\n```mermaid\n{_fence(diagram)}\n```"
                 sections.append(_section("Graph Snapshot Diff", body))
         except Exception as exc:
-            sections.append(_section("Graph Snapshot Diff", f"> Could not render `{diff_name}`: {exc}"))
+            sections.append(_section("Graph Snapshot Diff", f"> Could not render `{diff_name}`: {_err(exc)}"))
 
     if len(sections) <= 1:
         sections.append("> No renderable JSON outputs found in this directory.\n")
