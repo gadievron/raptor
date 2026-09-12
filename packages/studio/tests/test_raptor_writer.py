@@ -182,8 +182,7 @@ def test_schema_matches_raptor_validate_project(tmp_path: Path):
         # Current raptor privatised the validator …
         from core.project.schema import _validate_project as validate_project
     except ImportError:
-        # … older raptor exposes it publicly.
-        from core.project.schema import validate_project  # type: ignore
+        pytest.skip("core.project.schema._validate_project not available")
 
     projects_dir = tmp_path / "projects"
     create_project(

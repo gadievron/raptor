@@ -120,11 +120,6 @@ class RaptorProject:
             return ex.type
         return extras_service.infer_type_from_runs(self.runs())
 
-    @property
-    def target_is_url(self) -> bool:
-        t = self.target or ""
-        return t.startswith(("http://", "https://", "git@", "ssh://"))
-
     def runs(self) -> list[RaptorRun]:
         if not self.output_dir.is_dir():
             return []

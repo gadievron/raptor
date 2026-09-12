@@ -82,12 +82,6 @@ class ModelConfig:
                 return entry
         return None
 
-    def env_fallback(self, provider: str) -> Optional[str]:
-        var = ENV_VARS.get(provider)
-        if not var:
-            return None
-        return os.environ.get(var)
-
     def to_dict(self) -> dict:
         return {"models": [e.to_dict() for e in self.entries]}
 

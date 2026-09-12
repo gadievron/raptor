@@ -414,12 +414,14 @@ def project_settings_save(
     notes: str = Form(""),
 ):
     """Update description/notes in raptor's project.json. Round-trips the schema."""
-    from packages.studio.services.raptor_writer import update_project_metadata
+    from packages.studio.services.raptor_writer import update_project_metadata, _validate_name
+    _validate_name(name)
     try:
         update_project_metadata(name, description=description, notes=notes)
     except Exception as exc:
         raise HTTPException(400, f"failed to save: {exc}")
-    return RedirectResponse(url=f"/projects/{quote(name, safe='')}/settings?save_ok=1", status_code=303)
+    safe_name = quote(name, safe="")
+    return RedirectResponse(url=f"/projects/{safe_name}/settings?save_ok=1", status_code=303)
 
 
 # --- Jobs: trigger + list + detail + cancel + SSE stream -----------------
@@ -558,8 +560,8 @@ def job_cancel(request: Request, job_id: str):
     job = jobs_service.get(job_id)
     if job is None:
         raise HTTPException(404, f"job not found: {job_id}")
-    worker_service.cancel(job_id)
-    return RedirectResponse(url=f"/jobs/{quote(job_id, safe='')}", status_code=303)
+    worker_service.cancel(job.id)
+    return RedirectResponse(url=f"/jobs/{quote(job.id, safe='')}", status_code=303)
 
 
 @app.get("/api/fs/list")

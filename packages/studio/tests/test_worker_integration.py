@@ -12,15 +12,6 @@ import pytest
 from packages.studio.services import jobs as jobs_service
 
 
-def _wait_terminal(job_id, db_path, timeout=15.0, poll=0.1):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        j = jobs_service.get(job_id, db_path=db_path)
-        if j and j.is_terminal:
-            return j
-        time.sleep(poll)
-    return jobs_service.get(job_id, db_path=db_path)
-
 
 @pytest.fixture
 def isolated_worker(tmp_path, monkeypatch):
