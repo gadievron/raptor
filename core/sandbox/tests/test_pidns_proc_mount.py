@@ -288,11 +288,14 @@ class TestPostureStampE2E(unittest.TestCase):
         self.assertNotIn("pidns_proc_mount_unavailable", r.sandbox_info)
 
     @requires_landlock
+    @requires_userns
     def test_contract_lane_run_is_never_stamped_from_a_divergent_probe(self):
         """A require_fresh_procfs run that completed PROVED its procfs
         was fresh (a grandchild remount failure aborts before any
         result exists) — a divergent probe verdict must not mislabel
-        it degraded."""
+        it degraded. Needs the namespace backend for real: on a
+        userns-denied host the contract call refuses up front (the
+        containment floor, by design) instead of completing."""
         from core.sandbox import run, state
         state._pidns_fresh_proc_cache = False  # probe disagrees
         r = run(["true"], timeout=30,

@@ -45,7 +45,15 @@ def _mount_ns_usable() -> bool:
     if not shutil.which("newuidmap") or not shutil.which("newgidmap"):
         return False
     sysctl = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
-    return not (sysctl.exists() and sysctl.read_text().strip() == "1")
+    if sysctl.exists() and sysctl.read_text().strip() == "1":
+        return False
+    # The static checks above cannot see every userns denial (a
+    # container's seccomp filter refuses unshare(2) with EPERM while
+    # uidmap tools are installed and the AppArmor sysctl is absent) —
+    # ask the kernel through the same cached probes production keys
+    # the spawn routing on.
+    from core.sandbox.probes import check_mount_available, check_net_available
+    return check_net_available() and check_mount_available()
 
 
 def _scope_usable() -> bool:
