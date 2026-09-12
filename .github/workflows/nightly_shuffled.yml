@@ -58,17 +58,10 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: "uv.lock"
 
       - name: Create venv and install deps
-        run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
-          # Grammar wheels: same rationale as the slow nightly — the
-          # shuffled fast tier is where grammar-dependent suites run
-          # at volume, and without the wheels they all skip.
-          uv pip install -r requirements-grammars.txt
+        run: uv sync --locked
 
       # Parallelism: ``-n auto --dist loadfile`` (4 workers on
       # ubuntu-latest). The tier's purpose is ORDER-DEPENDENCE
