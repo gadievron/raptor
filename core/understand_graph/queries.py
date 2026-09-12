@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from .schema import json_loads
-from .store import graph_path_for_run, open_graph
+from .store import open_graph
 
 
 def _like_escape(value: str) -> str:
@@ -349,10 +349,6 @@ def prompt_context_for_location(db_path: Path, file_path: str, line: int | None 
             location = f"{location}:{row['line_start']}"
         lines.append(f"- {row['kind']}: {label} @ {location}")
     return "\n".join(lines)
-
-
-def graph_path_for_target(run_dir: Path, target_path: Optional[str]) -> Path:
-    return graph_path_for_run(run_dir, target_path)
 
 
 # ── Consumer query functions (Phase B/C expansion) ──────────────────────
