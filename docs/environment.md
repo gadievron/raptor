@@ -465,6 +465,19 @@ that name now belongs exclusively to `core.llm`'s models config (see
 Core runtime); pointing `RAPTOR_CONFIG` at analysis settings is a
 stale configuration and each reader's schema guard says so.
 
+### OpenAnt integration
+
+`packages/openant` reads three operator-settable variables:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `OPENANT_CORE` | auto-detected | Path to the `openant-core` directory (the OpenAnt repository's `libs/openant-core`). Auto-detection searches sibling directories of `RAPTOR_DIR`. Override when OpenAnt is installed elsewhere. Also settable via `--openant-core`. |
+| `OPENANT_MODEL` | `sonnet` | LLM model for OpenAnt analysis (`sonnet` or `opus`). Also settable via `--openant-model`. |
+| `OPENANT_LEVEL` | `reachable` | Analysis depth (`all`, `reachable`, `codeql`, `exploitable`). Also settable via `--openant-level`. |
+
+All three pass through `get_safe_env()` into the sandboxed subprocess.
+`ANTHROPIC_API_KEY` is also forwarded (OpenAnt calls the Anthropic API).
+
 
 ## SAGE
 
