@@ -3290,9 +3290,19 @@ class AutonomousSecurityAgentV2:
                         _rel, _fn, _line = _finding_coords(finding)
                         _rule = (finding.get("rule_id")
                                  or finding.get("check_id") or "")
-                        if _rel and _fn and _rule and _line > 0:
-                            _src_hash = compute_finding_source_hash(
-                                Path(self.repo_path) / _rel, _line)
+                        if _rel and _fn and _rule and _line >= 0:
+                            _fpath = Path(self.repo_path) / _rel
+                            if _line > 0:
+                                _src_hash = compute_finding_source_hash(
+                                    _fpath, _line)
+                            else:
+                                from core.hash import sha256_string
+                                try:
+                                    _ftxt = _fpath.read_text(
+                                        encoding="utf-8", errors="replace")
+                                    _src_hash = sha256_string(_ftxt)[:12]
+                                except OSError:
+                                    _src_hash = ""
                             if _src_hash:
                                 is_tp = vuln.analysis.get(
                                     "is_true_positive", False)

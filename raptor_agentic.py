@@ -3431,6 +3431,35 @@ Examples:
                 token_usage = oa_result.get("token_usage") or {}
                 if token_usage:
                     openant_metrics["token_usage"] = token_usage
+
+                # Coverage: register files OpenAnt analysed.
+                # The PostToolUse Read hook can't see subprocess reads,
+                # so extract file paths from pipeline_output findings
+                # and append to the run's .reads-manifest.
+                try:
+                    po = oa_result.get("pipeline_output") or {}
+                    oa_files: set[str] = set()
+                    for entry in po.get("findings") or []:
+                        loc = entry.get("location") or {}
+                        rel = loc.get("file") or ""
+                        if rel:
+                            oa_files.add(rel)
+                    if oa_files:
+                        manifest = out_dir / ".reads-manifest"
+                        resolved = []
+                        for rel in sorted(oa_files):
+                            fp = (original_repo_path / rel).resolve()
+                            if fp.is_file():
+                                resolved.append(str(fp))
+                        if resolved:
+                            with open(manifest, "a", encoding="utf-8") as mf:
+                                mf.write("\n".join(resolved) + "\n")
+                            logger.debug(
+                                "Coverage: registered %d OpenAnt-analysed files",
+                                len(resolved),
+                            )
+                except Exception:
+                    logger.debug("Coverage tracking for OpenAnt failed", exc_info=True)
         except RuntimeError as e:
             logger.warning("OpenAnt not configured (continuing without it): %s", e)
         except Exception as e:

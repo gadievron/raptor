@@ -66,6 +66,30 @@ class TestOpenAntFindingsConverter(unittest.TestCase):
             self.assertEqual(f["openant"]["function"], "run_cmd")
             self.assertEqual(f["openant"]["stage1_verdict"], "vulnerable")
 
+    def test_converter_sets_toplevel_function_for_oracle(self):
+        """The binary oracle and reachability chokepoint read
+        ``finding["function"]``, not ``finding["openant"]["function"]``.
+        The converter must set the top-level key so the oracle can
+        suppress absent-function findings."""
+        from packages.exploitability_validation.agentic import (
+            _convert_openant_findings,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._write_findings(Path(tmp), [
+                {
+                    "finding_id": "openant:VULN-010",
+                    "rule_id": "openant/CWE-89",
+                    "file": "src/db.py",
+                    "level": "warning",
+                    "message": "SQL injection",
+                    "metadata": {"function": "query_user"},
+                }
+            ])
+            result = _convert_openant_findings(path)
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result[0]["function"], "query_user")
+            self.assertEqual(result[0]["rule_id"], "openant/CWE-89")
+
     def test_severity_mapping(self):
         from packages.exploitability_validation.agentic import (
             _openant_level_to_severity,
@@ -215,6 +239,36 @@ class TestAgenticOpeantonlySkipsSarif(unittest.TestCase):
             self.src,
             "SARIF exit gate must be bypassed when OpenAnt produced findings",
         )
+
+
+class TestCoverageTrackingIntegration(unittest.TestCase):
+    """Phase 1b must register OpenAnt-analysed files with the coverage system."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.agentic_py = Path(__file__).parents[3] / "raptor_agentic.py"
+        cls.src = cls.agentic_py.read_text()
+
+    def test_coverage_manifest_append_in_phase1b(self):
+        self.assertIn(".reads-manifest", self.src)
+
+    def test_coverage_resolves_to_absolute(self):
+        self.assertIn("original_repo_path / rel", self.src)
+
+
+class TestSageHandlesFunctionLevelFindings(unittest.TestCase):
+    """SAGE verdict storage must work for line=0 (function-level) findings."""
+
+    def test_line_zero_guard_relaxed(self):
+        """The analysis agent must accept _line >= 0, not just > 0."""
+        agent_py = Path(__file__).parents[3] / "packages" / "llm_analysis" / "agent.py"
+        src = agent_py.read_text()
+        self.assertIn("_line >= 0", src)
+
+    def test_line_zero_uses_file_hash(self):
+        agent_py = Path(__file__).parents[3] / "packages" / "llm_analysis" / "agent.py"
+        src = agent_py.read_text()
+        self.assertIn("sha256_string", src)
 
 
 if __name__ == "__main__":
