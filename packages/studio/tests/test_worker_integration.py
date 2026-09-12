@@ -9,8 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from packages.studio.services import jobs as jobs_service
-
 
 
 @pytest.fixture

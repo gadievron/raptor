@@ -2458,6 +2458,56 @@
     "count": 11,
     "kind": "literal"
   },
+  "packages/studio/app.py::raw": {
+    "count": 11,
+    "kind": "literal",
+    "note": "form field names for project creation — schema keys, not a name vocabulary"
+  },
+  "packages/studio/scripts/seed_demo.py::<module>": {
+    "count": 12,
+    "kind": "literal",
+    "note": "finding-dict keys in the seed-demo fixture data — schema keys, not a name vocabulary"
+  },
+  "packages/studio/services/personas.py::MEMORY_CORRUPTION_TYPES": {
+    "count": 14,
+    "kind": "literal",
+    "note": "CWE-class taxonomy for persona routing — domain vocabulary shipped as a literal set"
+  },
+  "packages/studio/services/personas.py::PERSONA_META": {
+    "count": 10,
+    "kind": "literal",
+    "note": "persona registry keys — one per analysis persona definition"
+  },
+  "packages/studio/services/personas.py::WEB_TYPES": {
+    "count": 18,
+    "kind": "literal",
+    "note": "CWE-class taxonomy for web-vuln persona routing — domain vocabulary shipped as a literal set"
+  },
+  "packages/studio/services/run_kind.py::_KNOWN_KINDS": {
+    "count": 10,
+    "kind": "literal",
+    "note": "raptor command taxonomy — one per analysis mode (scan, agentic, codeql, etc.)"
+  },
+  "packages/studio/services/run_kind.py::_LANE_BY_KIND": {
+    "count": 10,
+    "kind": "literal",
+    "note": "kind-to-lane mapping — same taxonomy as _KNOWN_KINDS"
+  },
+  "packages/studio/services/run_kind.py::_STAGES_BY_KIND": {
+    "count": 10,
+    "kind": "literal",
+    "note": "kind-to-stages mapping — same taxonomy as _KNOWN_KINDS"
+  },
+  "packages/studio/services/sarif_reader.py::parse_sarif_file": {
+    "count": 13,
+    "kind": "literal",
+    "note": "finding-dict keys emitted by the SARIF parser — schema keys, not a name vocabulary"
+  },
+  "packages/studio/services/worker.py::_PRESERVED_HOST_ENV": {
+    "count": 15,
+    "kind": "literal",
+    "note": "env-var allowlist for subprocess spawning — security-relevant set, not a name vocabulary"
+  },
   "packages/web/api_testing.py::run_graphql_probes": {
     "count": 14,
     "kind": "literal",

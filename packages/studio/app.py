@@ -8,6 +8,8 @@ Read-write web UI for raptor projects.
 from __future__ import annotations
 
 import asyncio
+import os
+import re
 import shlex
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -80,6 +82,10 @@ from packages.studio.services.run_kind import (
     next_action,
     stages_for,
 )
+
+_PROJECT_NAME_RE = re.compile(r"\A[a-zA-Z0-9][a-zA-Z0-9._-]*\Z")
+_FS_PATH_RE = re.compile(r"\A/[^\x00]+\Z")
+_FS_DENY_ROOTS = ("/proc", "/sys", "/dev")
 
 BASE_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -414,8 +420,9 @@ def project_settings_save(
     notes: str = Form(""),
 ):
     """Update description/notes in raptor's project.json. Round-trips the schema."""
-    from packages.studio.services.raptor_writer import update_project_metadata, _validate_name
-    _validate_name(name)
+    if not _PROJECT_NAME_RE.fullmatch(name):
+        raise HTTPException(400, "invalid project name")
+    from packages.studio.services.raptor_writer import update_project_metadata
     try:
         update_project_metadata(name, description=description, notes=notes)
     except Exception as exc:
@@ -572,19 +579,16 @@ def api_fs_list(path: str = "", include_files: int = 0):
     No multi-tenant threat model. We only normalize the path and skip
     entries we can't stat (e.g. permission denied on system dirs).
     """
-    _FS_DENY_ROOTS = ("/proc", "/sys", "/dev")
     home = Path.home()
     if not path:
         target = home
     else:
-        if "\0" in path:
-            raise HTTPException(400, "invalid path: null byte")
-        try:
-            target = Path(path).expanduser().resolve()
-        except (OSError, RuntimeError) as exc:
-            raise HTTPException(400, f"invalid path: {exc}")
-        if any(str(target) == d or str(target).startswith(d + "/") for d in _FS_DENY_ROOTS):
-            raise HTTPException(403, f"access denied: {target}")
+        resolved = os.path.realpath(os.path.expanduser(path))
+        if not _FS_PATH_RE.fullmatch(resolved):
+            raise HTTPException(400, "invalid path")
+        if any(resolved == d or resolved.startswith(d + "/") for d in _FS_DENY_ROOTS):
+            raise HTTPException(403, "access denied")
+        target = Path(resolved)
     if not target.exists():
         raise HTTPException(404, f"path not found: {target}")
     if not target.is_dir():
