@@ -76,7 +76,7 @@ r2pipe = ["r2pipe==1.9.8"]
 pyghidra = ["pyghidra==3.1.0"]
 frida = ["frida==16.7.19"]
 jsonschema = ["jsonschema==4.23.0"]
-tomli = ["tomli==2.4.1; python_version < '3.11'"]
+tomli = ["tomli==2.4.1; python_version<'3.11'"]
 
 [project.urls]
 Homepage = "https://github.com/gadievron/raptor"
@@ -102,17 +102,8 @@ dev = [
     { include-group = "lint" },
 ]
 
-[tool.poetry]
-package-mode = false
-
-[tool.poetry.group.test]
-optional = true
-
-[tool.poetry.group.lint]
-optional = true
-
-[tool.poetry.group.dev]
-optional = true
+[tool.uv]
+package = false
 
 [tool.ruff]
 target-version = "py310"
@@ -126,7 +117,3 @@ select = [
     "F821", # undefined names
     "F841", # unused local variables
 ]
-
-[build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"

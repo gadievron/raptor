@@ -1,7 +1,7 @@
 # RAPTOR Development Dependencies (compatibility export)
-# Source of truth: pyproject.toml + poetry.lock.
+# Source of truth: pyproject.toml + uv.lock.
 # Install with: pip install -r requirements-dev.txt during the transition
-# window, or prefer: poetry install --with dev.
+# window, or prefer: uv sync --locked.
 
 -r requirements.txt
 
