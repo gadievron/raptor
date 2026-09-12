@@ -45,7 +45,7 @@ When a `/command` fires:
 /agentic - Scan → dedup → analysis pipeline — `libexec/raptor-agentic --repo <path>`
 /exploit /patch - Generate PoCs and fixes (beta) — `python3 raptor.py agentic`
 /validate - Exploitability validation pipeline — `dispatch: skill`, see below
-/openant - OpenAnt AST+LLM source-code vulnerability scan (multi-language, semantic analysis)
+/openant - OpenAnt LLM semantic scan — `libexec/raptor-openant --repo <path> [options]`
 /understand - Code understanding — `dispatch: skill` (mode-routed: binary --map and multi-model --hunt/--trace go to `libexec/raptor-understand`; binary --study goes to `libexec/raptor-binary-study`; source-tree modes run in-session)
 /diagram - Mermaid visual maps — `libexec/raptor-render-diagrams <out-dir> [args]`
 /audit - Hypothesis-driven code audit — `dispatch: skill`, see below
@@ -54,7 +54,7 @@ When a `/command` fires:
 
 **Coverage:** When asked about coverage, run `libexec/raptor-coverage-summary` (no args = active project). Use `--detailed` for per-file table, `--gaps` for unreviewed functions. See `.claude/skills/coverage.md` for mark/unmark and the full API.
 
-**Note:** `/agentic` runs scan → dedup → prep → analysis (with validation methodology). Use `--sequential` to bypass parallel orchestration. Use `--understand` to pre-map the codebase before scanning, `--validate` to run the full validation pipeline on exploitable findings afterwards, and `--gap-audit` to run the /audit orchestrator over the coverage residual (functions no phase reviewed; uses the external LLM, or the claudecode transport when only Claude Code is available; NOT `--audit`, which is the sandbox audit mode). All three flags are opt-in. Multi-model: `--model` is repeatable — multiple models each independently analyse every finding, then results are correlated; `--consensus`, `--judge`, and `--aggregate` add optional review/synthesis models.
+**Note:** `/agentic` runs scan → dedup → prep → analysis (with validation methodology). Use `--sequential` to bypass parallel orchestration. Use `--understand` to pre-map the codebase before scanning, `--validate` to run the full validation pipeline on exploitable findings afterwards, and `--gap-audit` to run the /audit orchestrator over the coverage residual (functions no phase reviewed; uses the external LLM, or the claudecode transport when only Claude Code is available; NOT `--audit`, which is the sandbox audit mode). `--openant` adds an OpenAnt semantic scan phase (AST + LLM per-function analysis) alongside Semgrep/CodeQL — findings are deduplicated and enter the same validation pipeline; `--openant-only` replaces the pattern scanners entirely with OpenAnt. All flags are opt-in. Multi-model: `--model` is repeatable — multiple models each independently analyse every finding, then results are correlated; `--consensus`, `--judge`, and `--aggregate` add optional review/synthesis models.
 /sage - SAGE persistent memory: status, recall, browse, store, manage
 /crash-analysis - Autonomous crash root-cause analysis (see below)
 /oss-forensics - GitHub forensic investigation (see below)
@@ -380,7 +380,6 @@ The `/annotate` command attaches free-form prose to individual functions, stored
 **When errors occur:** Load `tiers/recovery.md` (recovery protocol)
 **When requested:** Load `tiers/personas/[name].md` (expert personas)
 **When running /understand:** Load `.claude/skills/code-understanding/SKILL.md` (gates, config) plus the relevant mode file: `map.md`, `trace.md`, `hunt.md`, `teach.md`, or `study.md`
-**When running /openant:** Confirm `OPENANT_CORE` env var is set (or `--openant-core` passed); run `libexec/raptor-openant --repo <path>`.
 
 ---
 

@@ -1,3 +1,8 @@
+---
+description: OpenAnt LLM-powered source-code vulnerability scan
+dispatch: libexec/raptor-openant $ARGUMENTS
+---
+
 # /openant — OpenAnt LLM-powered source-code vulnerability scan
 
 Run OpenAnt against a repository to find vulnerabilities using AST analysis and
