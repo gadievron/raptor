@@ -12,6 +12,7 @@ import shlex
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator, Optional
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
@@ -418,7 +419,7 @@ def project_settings_save(
         update_project_metadata(name, description=description, notes=notes)
     except Exception as exc:
         raise HTTPException(400, f"failed to save: {exc}")
-    return RedirectResponse(url=f"/projects/{name}/settings?save_ok=1", status_code=303)
+    return RedirectResponse(url=f"/projects/{quote(name, safe='')}/settings?save_ok=1", status_code=303)
 
 
 # --- Jobs: trigger + list + detail + cancel + SSE stream -----------------
@@ -558,7 +559,7 @@ def job_cancel(request: Request, job_id: str):
     if job is None:
         raise HTTPException(404, f"job not found: {job_id}")
     worker_service.cancel(job_id)
-    return RedirectResponse(url=f"/jobs/{job_id}", status_code=303)
+    return RedirectResponse(url=f"/jobs/{quote(job_id, safe='')}", status_code=303)
 
 
 @app.get("/api/fs/list")
@@ -569,14 +570,19 @@ def api_fs_list(path: str = "", include_files: int = 0):
     No multi-tenant threat model. We only normalize the path and skip
     entries we can't stat (e.g. permission denied on system dirs).
     """
+    _FS_DENY_ROOTS = ("/proc", "/sys", "/dev")
     home = Path.home()
     if not path:
         target = home
     else:
+        if "\0" in path:
+            raise HTTPException(400, "invalid path: null byte")
         try:
             target = Path(path).expanduser().resolve()
         except (OSError, RuntimeError) as exc:
             raise HTTPException(400, f"invalid path: {exc}")
+        if any(str(target) == d or str(target).startswith(d + "/") for d in _FS_DENY_ROOTS):
+            raise HTTPException(403, f"access denied: {target}")
     if not target.exists():
         raise HTTPException(404, f"path not found: {target}")
     if not target.is_dir():
