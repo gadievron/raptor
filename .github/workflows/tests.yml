@@ -315,17 +315,14 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            pyproject.toml
-            poetry.lock
-            requirements*.txt
+          cache-dependency-glob: "requirements*.txt"
 
       - name: Restore venv from cache
         id: venv-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
 
       - name: Create venv and install deps
         if: steps.venv-cache.outputs.cache-hit != 'true'
@@ -342,7 +339,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
 
   # Fast tier: everything under core/ and packages/ except the two
   # heavyweight subdirs that get their own jobs (sandbox, exploit_feasibility).
@@ -412,7 +409,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
           fail-on-cache-miss: true
 
       - name: Backoff before retry
@@ -426,7 +423,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
           restore-keys: |
             venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
 
@@ -572,7 +569,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
           fail-on-cache-miss: true
 
       - name: Backoff before retry
@@ -586,7 +583,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
           restore-keys: |
             venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
 
@@ -682,7 +679,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
           fail-on-cache-miss: true
 
       - name: Backoff before retry
@@ -696,7 +693,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
           restore-keys: |
             venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
 
@@ -826,17 +823,14 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            pyproject.toml
-            poetry.lock
-            requirements*.txt
+          cache-dependency-glob: "requirements*.txt"
 
       - name: Restore venv from cache
         id: venv-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
 
       - name: Create venv and install deps
         if: steps.venv-cache.outputs.cache-hit != 'true'
@@ -850,7 +844,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
 
       - name: Run sandbox tests (macOS)
         env:
@@ -1042,7 +1036,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
           fail-on-cache-miss: true
 
       - name: Backoff before retry
@@ -1056,7 +1050,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
           restore-keys: |
             venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
 
