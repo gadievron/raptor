@@ -543,6 +543,11 @@
     "kind": "literal",
     "note": "language-keyword / prose stopword list for the G2 structural-anchor matcher \u2014 tokens that anchor NOTHING (keywords, stock types, ubiquitous prose), not an API vocabulary; the anchors themselves come from study receipt quotes"
   },
+  "core/audit/integer_truncation_checker.py::_WIDE_TYPES": {
+    "count": 17,
+    "kind": "literal",
+    "note": "C/Win32 integer type names for truncation-width tables (language/platform taxonomy, not target API names)"
+  },
   "core/audit/iris_specs.py::_SECURITY_NAME_PATTERNS": {
     "count": 47,
     "kind": "literal"
@@ -1346,6 +1351,11 @@
     "count": 13,
     "kind": "literal"
   },
+  "core/orchestration/understand_bridge.py::attack_path": {
+    "count": 14,
+    "kind": "literal",
+    "note": "attack-path finding-dict field names (finding/evidence/blockers keys) for the understand bridge handoff, not a name vocabulary"
+  },
   "core/orchestration/understand_bridge.py::entry": {
     "count": 10,
     "kind": "literal"
@@ -1621,6 +1631,26 @@
     "count": 15,
     "kind": "literal"
   },
+  "core/understand_graph/queries.py::_DANGEROUS": {
+    "count": 12,
+    "kind": "literal",
+    "note": "dangerous libc/POSIX sink names for graph-derived attack path scoring, not a learnable vocabulary"
+  },
+  "core/understand_graph/queries.py::_path_item": {
+    "count": 11,
+    "kind": "literal",
+    "note": "attack-path result dict field names (confidence/cwe/entry/evidence keys), not a name vocabulary"
+  },
+  "core/understand_graph/schema.py::EDGE_KINDS": {
+    "count": 17,
+    "kind": "literal",
+    "note": "graph schema edge-kind enum (CALLS/READS/WRITES/AFFECTS/...) — fixed taxonomy for the understand graph, not target API names"
+  },
+  "core/understand_graph/schema.py::NODE_KINDS": {
+    "count": 19,
+    "kind": "literal",
+    "note": "graph schema node-kind enum (entry_point/sink/function/...) — fixed taxonomy for the understand graph, not target API names"
+  },
   "libexec/raptor-audit::_run_config_from_args": {
     "count": 37,
     "kind": "literal",
@@ -1716,13 +1746,10 @@
     "count": 10,
     "kind": "literal"
   },
-  "libexec/raptor-understand::_do_hunt": {
-    "count": 11,
-    "kind": "literal"
-  },
-  "libexec/raptor-understand::_do_trace": {
+  "libexec/raptor-understand::payload": {
     "count": 10,
-    "kind": "literal"
+    "kind": "literal",
+    "note": "multi-model correlation result dict field names, not a name vocabulary"
   },
   "libexec/raptor-validation-helper::_BUILD_SYSTEM_MARKERS": {
     "count": 12,
