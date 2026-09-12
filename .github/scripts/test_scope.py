@@ -335,7 +335,7 @@ def compute_tier_dispatch(
     # Also trigger fast tier for non-Python changes that affect the
     # test infrastructure (requirements, pyproject.toml, etc.).
     infra_changed = any(
-        f.startswith("requirements") or f == "pyproject.toml"
+        f.startswith("requirements") or f in {"pyproject.toml", "uv.lock"}
         for f in changed_non_py
     )
     if infra_changed and not fast_files:
@@ -346,13 +346,13 @@ def compute_tier_dispatch(
         "matrix": batch_matrix(fast_files),
     }
 
-    # NOTE: deps-job gating lives in .github/workflows/tests.yml — it
-    # ORs the python/sandbox/exploit_feasibility/sca tier outputs
-    # directly. A "_deps" gate computed here was never emitted
-    # (_emit_outputs skips underscore-prefixed keys) and read as if
-    # this script drove the deps job; the workflow list is the single
-    # live one, so no gate is computed here. When adding a venv tier,
-    # extend the workflow's OR.
+    # The deps job should run if any tier with a venv needs to run.
+    venv_tiers = {"python", "sandbox", "exploit_feasibility", "sca"}
+    deps_needed = any(
+        result.get(t, {}).get("run", False) for t in venv_tiers
+    )
+    result["_deps"] = {"run": deps_needed, "files": []}
+
     n_changed = len(changed_py)
     n_dependents = len(closure) - n_changed
     result["_stats"] = {

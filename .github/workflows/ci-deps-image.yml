@@ -7,8 +7,7 @@ name: CI deps image
 #
 # Tags pushed:
 #   :main        — moving tag the test tiers pull. Updated on every build.
-#   :dep-<hash>  — content tag (first 12 hex of sha256 over pyproject.toml,
-#                  poetry.lock, and the compatibility requirements*.txt)
+#   :req-<hash>  — content tag (first 12 hex of sha256 over requirements*.txt)
 #                  for traceability + rollback.
 #
 # Uses the plain `docker` CLI (preinstalled on ubuntu runners) rather than
@@ -61,18 +60,18 @@ jobs:
           owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/raptor-ci-deps"
           # Content tag over the manifests that define the image.
-          dephash="$(cat pyproject.toml poetry.lock requirements.txt requirements-dev.txt | sha256sum | cut -c1-12)"
+          reqhash="$(cat requirements.txt requirements-dev.txt | sha256sum | cut -c1-12)"
           docker build \
             -f .github/docker/ci-deps.Dockerfile \
             -t "${image}:main" \
-            -t "${image}:dep-${dephash}" \
+            -t "${image}:req-${reqhash}" \
             .
           docker push "${image}:main"
-          docker push "${image}:dep-${dephash}"
-          echo "Pushed ${image}:main and ${image}:dep-${dephash}"
+          docker push "${image}:req-${reqhash}"
+          echo "Pushed ${image}:main and ${image}:req-${reqhash}"
 
-      # Prune the untagged digests left behind when :main / :dep-<hash> move
-      # to this build. Tagged versions (current :main + every :dep-<hash>
+      # Prune the untagged digests left behind when :main / :req-<hash> move
+      # to this build. Tagged versions (current :main + every :req-<hash>
       # rollback anchor) are untouched. GHCR has no auto-retention, so without
       # this the weekly rebuild alone accrues ~52 dangling versions/year.
       # delete-only-untagged + a small floor never risks a rollback anchor.

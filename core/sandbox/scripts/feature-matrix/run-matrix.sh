@@ -181,7 +181,7 @@ git clone -q --no-checkout "$REPO" "$RUN/repo"
 git -C "$RUN/repo" checkout -q --detach "$SHA"
 tar -C "$RUN/repo" -cf "$RUN/repo.tar" .
 
-REQHASH=$(cat "$RUN/repo/requirements.txt" "$RUN/repo/requirements-dev.txt" \
+REQHASH=$(cat "$RUN/repo/pyproject.toml" "$RUN/repo/uv.lock" \
           | sha256sum | cut -d' ' -f1)
 
 # ---- lane seccomp profiles ----------------------------------------------
@@ -211,7 +211,7 @@ raise SystemExit('no linux-24.04 x64 artifact for ' + want)
     mkdir -p "$CTX"
     cp "$HERE/images/rustup-proxy.c" "$CTX/"
     cp "$HERE/images/Dockerfile" "$HERE/images/Dockerfile.26" "$CTX/"
-    cp "$RUN/repo/requirements.txt" "$RUN/repo/requirements-dev.txt" "$CTX/"
+    cp "$RUN/repo/pyproject.toml" "$RUN/repo/uv.lock" "$CTX/"
     for img in "${IMAGES[@]}"; do
         echo "== building raptor-sandbox-matrix:$img (${DOCKERFILE[$img]})"
         docker build -t "raptor-sandbox-matrix:$img" \
