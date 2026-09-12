@@ -17,10 +17,9 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from core.json import load_json, save_json
-from core.config import RaptorConfig
+from core.json import save_json
 from core.logging import get_logger
 from core.security.cc_trust import check_repo_claude_trust
 
@@ -123,7 +122,7 @@ def main() -> int:
     # Build OpenAnt config
     # ------------------------------------------------------------------
     try:
-        from packages.openant import get_config, is_available, run_openant_scan, translate_pipeline_output
+        from packages.openant import get_config, run_openant_scan, translate_pipeline_output
         from packages.openant.config import OpenAntConfig
 
         if args.openant_core:
