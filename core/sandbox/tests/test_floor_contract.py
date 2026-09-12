@@ -682,6 +682,7 @@ def test_inherit_netns_drop_is_stamped_warned_and_floor_gated(
         return _subprocess.CompletedProcess(cmd, returncode=0,
                                             stdout="", stderr="")
 
+    _simulate_capable_host(monkeypatch)
     monkeypatch.setattr(_spawn_mod, "run_sandboxed", ok_spawn)
     monkeypatch.delenv("RAPTOR_ALLOW_DEGRADED_UNTRUSTED", raising=False)
     state.reset_warn_once("_inherit_netns_block_warned")
@@ -852,6 +853,7 @@ def test_unstamped_result_is_refused_at_the_epilogue(
         return _subprocess.CompletedProcess(cmd, returncode=0,
                                             stdout="", stderr="")
 
+    _simulate_capable_host(monkeypatch)
     monkeypatch.setattr(_spawn_mod, "run_sandboxed", ok_spawn)
     try:
         baseline = _ctx.run(["true"], target=str(tmp_path),
@@ -902,6 +904,7 @@ def test_refused_mx_run_does_not_pollute_the_speculative_cache(
         cp._setup_status = ("M", "forced mount-ns failure")
         return cp
 
+    _simulate_capable_host(monkeypatch)
     monkeypatch.setattr(_spawn_mod, "run_sandboxed", fail_bind)
     try:
         with pytest.raises(SandboxFloorError):

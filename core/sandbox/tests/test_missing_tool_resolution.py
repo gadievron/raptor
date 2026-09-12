@@ -26,6 +26,22 @@ pytestmark = pytest.mark.skipif(
 _NOWHERE = "raptor-test-tool-missing-everywhere"
 
 
+def _simulate_spawn_capable_probes(monkeypatch):
+    """Patch the capability probes at their module seams so run()
+    routes to the (stubbed) spawn backend on any host. The engagement
+    probe seam is load-bearing: on a userns-denied runner the REAL
+    ``check_unshare_engages`` refuses the flag-set and run() raises
+    its loud engagement error before the stub is ever reached."""
+    from core.sandbox import _spawn as _spawn_mod
+    from core.sandbox import context as _ctx
+    from core.sandbox import probes as _probes_mod
+    monkeypatch.setattr(_ctx, "check_net_available", lambda: True)
+    monkeypatch.setattr(_ctx, "check_mount_available", lambda: True)
+    monkeypatch.setattr(_spawn_mod, "mount_ns_available", lambda: True)
+    monkeypatch.setattr(_probes_mod, "check_unshare_engages",
+                        lambda flags: (True, ""))
+
+
 def test_bare_name_resolving_nowhere_raises_filenotfound(
         tmp_path, monkeypatch):
     """No spawn attempt, no speculative-cache write, subprocess-parity
@@ -88,9 +104,7 @@ def test_child_path_only_resolution_is_honoured(tmp_path, monkeypatch):
     # userns-less runner the real probes would route this call to the
     # plain-subprocess lane and execute the real script instead of
     # the stub.
-    monkeypatch.setattr(_ctx, "check_net_available", lambda: True)
-    monkeypatch.setattr(_ctx, "check_mount_available", lambda: True)
-    monkeypatch.setattr(_spawn_mod, "mount_ns_available", lambda: True)
+    _simulate_spawn_capable_probes(monkeypatch)
     monkeypatch.setattr(_spawn_mod, "run_sandboxed", ok_spawn)
     import os as _os
     env = {"PATH": f"{tool_dir}:{_os.environ.get('PATH', '/usr/bin')}"}
@@ -121,9 +135,7 @@ def test_host_resolvable_but_bind_invisible_keeps_the_loud_x_shape(
     # userns-less runners, where the real probes would route the call
     # to the plain-subprocess lane and never reach the stub — the
     # rootfs test below uses the same pattern).
-    monkeypatch.setattr(_ctx, "check_net_available", lambda: True)
-    monkeypatch.setattr(_ctx, "check_mount_available", lambda: True)
-    monkeypatch.setattr(_spawn_mod, "mount_ns_available", lambda: True)
+    _simulate_spawn_capable_probes(monkeypatch)
     monkeypatch.setattr(_spawn_mod, "run_sandboxed", x_spawn)
     with pytest.raises(SandboxSetupError) as excinfo:
         _ctx.run(["true"], target=str(tmp_path),
@@ -148,9 +160,7 @@ def test_rootfs_commands_are_exempt_from_host_resolution(
         return subprocess.CompletedProcess(cmd, returncode=0,
                                            stdout="", stderr="")
 
-    monkeypatch.setattr(_ctx, "check_net_available", lambda: True)
-    monkeypatch.setattr(_ctx, "check_mount_available", lambda: True)
-    monkeypatch.setattr(_spawn_mod, "mount_ns_available", lambda: True)
+    _simulate_spawn_capable_probes(monkeypatch)
     monkeypatch.setattr(_spawn_mod, "run_sandboxed", ok_spawn)
     r = _ctx.run(["/bin/only-in-the-image"], rootfs=str(rootfs),
                  target=str(tmp_path), output=str(tmp_path), timeout=30)
