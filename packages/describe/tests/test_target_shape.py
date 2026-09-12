@@ -260,3 +260,38 @@ def test_scan_inventory_hoists_stat_import_out_of_loop():
     src = inspect.getsource(ts._scan_inventory)
     for_body = src.split("for f in files:", 1)[1]
     assert "import stat" not in for_body
+
+
+class TestFirmwareShape:
+    def _elf(self) -> bytes:
+        import struct
+        ident = b"\x7fELF" + bytes([1, 1, 1]) + b"\x00" * 9
+        return ident + struct.pack("<HHIIIIIHHHHHH", 2, 0x28, 1,
+                                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+    def test_extracted_root_detected(self, tmp_path):
+        from packages.describe.target_shape import infer_target_shape
+        (tmp_path / "bin").mkdir()
+        for name in ("busybox", "dropbear", "uhttpd", "dnsmasq", "wpad"):
+            (tmp_path / "bin" / name).write_bytes(self._elf())
+        shape = infer_target_shape(tmp_path)
+        assert shape.elf_count == 5
+        assert shape.firmware_like is True
+
+    def test_source_tree_with_build_system_not_firmware(self, tmp_path):
+        from packages.describe.target_shape import infer_target_shape
+        (tmp_path / "bin").mkdir()
+        for i in range(6):
+            (tmp_path / "bin" / f"tool{i}").write_bytes(self._elf())
+        (tmp_path / "CMakeLists.txt").write_text("project(x)\n")
+        (tmp_path / "main.c").write_text("int main(void){return 0;}\n")
+        shape = infer_target_shape(tmp_path)
+        assert shape.elf_count == 6
+        assert shape.firmware_like is False
+
+    def test_symlinked_elf_not_probed(self, tmp_path):
+        from packages.describe.target_shape import _probe_elf_count
+        real = tmp_path.parent / "host-elf"
+        real.write_bytes(self._elf())
+        (tmp_path / "lnk").symlink_to(real)
+        assert _probe_elf_count(tmp_path) == 0

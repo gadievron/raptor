@@ -24,6 +24,7 @@ Available Modes:
     describe    - Pre-flight inspection: target type, tool readiness, cost estimate
     doctor      - Status report for local setup (no claude needed)
     frida       - Dynamic instrumentation via Frida (alpha)
+    hardware    - Hardware interface enumeration (Glasgow Interface Explorer)
 
 Examples:
     # Full autonomous workflow
@@ -43,6 +44,9 @@ Examples:
 
     # CodeQL analysis
     python3 raptor.py codeql --repo /path/to/code --languages java
+
+    # Hardware interface enumeration
+    python3 raptor.py hardware --voltage 3.3 --pins 0-7
 """
 
 import argparse
@@ -86,7 +90,7 @@ def _extract_target(args: list) -> str | None:
     breaking downstream lifecycle initialisation that relies on
     the target path for project resolution.
     """
-    for flag in ("--repo", "--binary", "--url"):
+    for flag in ("--repo", "--firmware-root", "--binary", "--url"):
         # `--flag value` form.
         if flag in args:
             idx = args.index(flag)
@@ -1266,6 +1270,32 @@ def mode_binary(args: list) -> int:
         return 1
 
 
+def mode_hardware(args: list) -> int:
+    """Run hardware interface enumeration (Glasgow Interface Explorer).
+
+    Direct subprocess, no lifecycle wrapper: the target is a physical
+    device (there is no --repo to resolve or back-fill), the pipeline
+    is operator-attended (stdin prompts for power-cycling the target),
+    and no LLM is involved. The enumerator creates its own output
+    directory under out/ unless --out is passed.
+    """
+    from core.config import RaptorConfig
+
+    script = Path(__file__).parent / "packages/hardware/enumerator.py"
+    if not script.exists():
+        print(f"✗ Hardware enumerator not found: {script}", file=sys.stderr)
+        return 1
+
+    try:
+        return subprocess.call(
+            [sys.executable, str(script), *args],
+            env=RaptorConfig.get_safe_env(),
+        )
+    except KeyboardInterrupt:
+        print("\n\nInterrupted by user", file=sys.stderr)
+        return 130
+
+
 def mode_web(args: list) -> int:
     """Run web application security testing."""
     script_root = Path(__file__).parent
@@ -1477,6 +1507,7 @@ def _mode_help_scripts() -> dict:
         'agentic': script_root / "raptor_agentic.py",
         'codeql': script_root / "raptor_codeql.py",
         'analyze': script_root / "packages/llm_analysis/agent.py",
+        'hardware': script_root / "packages/hardware/enumerator.py",
     }
 
 
@@ -1563,6 +1594,7 @@ Available Modes:
   describe    - Pre-flight inspection: target type, tool readiness, cost estimate
   doctor      - Status report for local setup (no claude needed)
   frida       - Dynamic instrumentation via Frida (alpha)
+  hardware    - Hardware interface enumeration (Glasgow Interface Explorer)
 
 Examples:
   # Full autonomous workflow
@@ -1585,6 +1617,9 @@ Examples:
 
   # LLM analysis of existing SARIF
   python3 raptor.py analyze --repo /path/to/code --sarif findings.sarif
+
+  # Hardware interface enumeration
+  python3 raptor.py hardware --voltage 3.3 --pins 0-7
 
 Sandbox isolation (mode-level flags — pass them AFTER the mode name,
 not before; the top-level parser does not declare them directly):
@@ -1725,6 +1760,7 @@ def main():
         'doctor': mode_doctor,
         'describe': mode_describe,
         'frida': mode_frida,
+        'hardware': mode_hardware,
     }
     
     if mode not in mode_handlers:

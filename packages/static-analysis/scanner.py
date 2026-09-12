@@ -32,6 +32,7 @@ from pathlib import Path
 sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.json import dumps_display
+from core.binary.firmware_inventory import inventory_firmware
 from core.config import RaptorConfig
 from core.git import clone_repository
 from core.hash import sha256_bytes, sha256_tree
@@ -2699,7 +2700,17 @@ def _validate_policy_groups(
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="RAPTOR Automated Code Security Agent with parallel scanning")
-    ap.add_argument("--repo", required=True, help="Path or Git URL")
+    # Source: exactly one of --repo (source tree / Git URL) or
+    # --firmware-root (extracted firmware filesystem).
+    source = ap.add_mutually_exclusive_group(required=True)
+    source.add_argument("--repo", help="Path or Git URL")
+    source.add_argument(
+        "--firmware-root", metavar="PATH", dest="firmware_root",
+        help="Extracted firmware filesystem root (enables firmware scan "
+             "mode: ELF inventory + architecture detection are written to "
+             "firmware-inventory.json, and the policy-group default "
+             "narrows to 'firmware,injection,secrets')",
+    )
     # Argparse accepts BOTH the hyphenated (`--policy-version`,
     # `--policy-groups`) and underscore (`--policy_version`,
     # `--policy_groups`) forms. The hyphenated form is canonical
@@ -2716,9 +2727,12 @@ def main() -> None:
     )
     ap.add_argument(
         "--policy-groups", "--policy_groups",
-        default=RaptorConfig.DEFAULT_POLICY_GROUPS,
+        default=None,
         dest="policy_groups",
-        help="Comma-separated list of rule group names (e.g. crypto,secrets,injection,auth,all)",
+        help="Comma-separated list of rule group names (e.g. "
+             "crypto,secrets,injection,auth,all). Default: "
+             f"'{RaptorConfig.DEFAULT_POLICY_GROUPS}' for source scans, "
+             "'firmware,injection,secrets' in firmware mode.",
     )
     ap.add_argument(
         "--codeql", action="store_true",
@@ -2858,6 +2872,21 @@ def main() -> None:
     ap.add_argument("--keep", action="store_true", help="Keep temp working directory")
     ap.add_argument("--sequential", action="store_true", help="Fully serial run: semgrep packs one at a time AND stages in order (no semgrep/codeql overlap). Debugging knob.")
     ap.add_argument("--out", default=None, help="Output directory (from lifecycle). Overrides auto-generated path.")
+    # Firmware-mode options (recorded in the manifest; unused with --repo).
+    ap.add_argument(
+        "--arch",
+        default="auto",
+        choices=["auto", "arm", "aarch64", "mips", "mipsel", "mipseb",
+                 "mips64", "x86", "x86_64", "riscv", "riscv64", "ppc", "ppc64"],
+        help="Firmware target architecture. auto = majority vote over the "
+             "ELF inventory's per-binary headers; the endian-specific MIPS "
+             "names are operator declarations only (header detection "
+             "reports the family).",
+    )
+    ap.add_argument(
+        "--kernel-version", metavar="VERSION", dest="kernel_version",
+        help="Firmware kernel version string (recorded in the manifest)",
+    )
     ap.add_argument(
         "--project", default=None, metavar="NAME",
         help="Pin this run to the named project (precedence over the "
@@ -2931,6 +2960,18 @@ def main() -> None:
     # example (`--policy-groups injction`) got a scan that silently
     # ran without the intended rules and never found out. Fail fast,
     # before any clone / output-dir work, listing the valid groups.
+    firmware_mode = args.firmware_root is not None
+
+    # Mode-dependent policy-group default: a firmware root is mostly
+    # compiled ELFs plus shell / web glue, so the broad source-scan
+    # group set buys noise, not coverage. An explicit --policy-groups
+    # always wins in either mode.
+    if args.policy_groups is None:
+        args.policy_groups = (
+            "firmware,injection,secrets" if firmware_mode
+            else RaptorConfig.DEFAULT_POLICY_GROUPS
+        )
+
     _validate_policy_groups(ap, args.policy_groups)
 
     # Explicit negative beats positive (per-run escape hatch; project
@@ -2969,13 +3010,26 @@ def main() -> None:
     repo_path = None
 
     logger.info("Starting automated code security scan")
-    logger.info("Repository: %s", args.repo)
+    if firmware_mode:
+        logger.info("Mode: firmware  root=%s", args.firmware_root)
+        logger.info(
+            "Arch: %s  kernel: %s", args.arch,
+            args.kernel_version or "unspecified",
+        )
+    else:
+        logger.info("Repository: %s", args.repo)
     logger.info("Policy version: %s", args.policy_version)
     logger.info("Policy groups: %s", args.policy_groups)
 
     try:
-        # Acquire repository
-        if args.repo.startswith(("http://", "https://", "git@")):
+        # Acquire the scan root: firmware roots are always local
+        # directories; --repo may be a path or a Git URL.
+        if firmware_mode:
+            repo_path = Path(args.firmware_root).resolve()
+            if not repo_path.is_dir():
+                msg = f"firmware root is not a directory: {repo_path}"
+                raise RuntimeError(msg)
+        elif args.repo.startswith(("http://", "https://", "git@")):
             repo_path = tmp / "repo"
             clone_repository(args.repo, repo_path)
         else:
@@ -3037,6 +3091,29 @@ def main() -> None:
         from core.sandbox.summary import set_active_run_dir
         set_active_run_dir(out_dir)
 
+        # Firmware inventory (firmware mode only): every ELF in the
+        # root with arch + interest score, majority-vote architecture
+        # for --arch auto.
+        firmware_inventory = None
+        detected_arch = args.arch
+        if firmware_mode:
+            logger.info("Inventorying ELF binaries in firmware root...")
+            firmware_inventory = inventory_firmware(repo_path)
+            save_json(out_dir / "firmware-inventory.json", firmware_inventory)
+            if args.arch == "auto":
+                detected_arch = firmware_inventory["detected_arch"]
+                logger.info("Detected architecture: %s", detected_arch)
+            hvt = firmware_inventory["high_value_targets"]
+            logger.info(
+                "Found %d ELFs, %d high-value targets",
+                firmware_inventory["total_elfs"], len(hvt),
+            )
+            for t in hvt[:5]:
+                logger.info(
+                    "  %s  (%s, %d bytes)",
+                    t["path"], t["arch"], t["size_bytes"],
+                )
+
         # Manifest
         logger.info("Computing repository hash...")
         repo_hash = sha256_tree(repo_path)
@@ -3050,7 +3127,11 @@ def main() -> None:
             "policy_version": args.policy_version,
             "policy_groups": groups,
             "parallel_scanning": not args.sequential,
+            "firmware_mode": firmware_mode,
         }
+        if firmware_mode:
+            manifest["arch"] = detected_arch
+            manifest["kernel_version"] = args.kernel_version or ""
         save_json(out_dir / "scan-manifest.json", manifest)
 
         # Semgrep stage - Use parallel scanning by default. Resolve
@@ -3587,6 +3668,14 @@ def main() -> None:
             "metrics": metrics,
             "duration": duration,
         }
+        if firmware_inventory is not None:
+            # Compact summary only — the full per-binary list lives in
+            # firmware-inventory.json.
+            result["firmware_inventory"] = {
+                "total_elfs": firmware_inventory["total_elfs"],
+                "detected_arch": firmware_inventory["detected_arch"],
+                "high_value_targets": firmware_inventory["high_value_targets"],
+            }
         print(dumps_display(result, indent=2))
         # Aggregate any tracer-emitted .sandbox-denials.jsonl into
         # sandbox-summary.json. The lifecycle hook lives in raptor.py
