@@ -4,6 +4,9 @@
     "artifacts:orphan_reader::*-metadata.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:orphan_reader::*.jsonl": {
+      "note": "glob-read pattern: artifacts_reader.py reads *.jsonl from run log dirs; files produced by raptor's JSONL audit logger, not by studio"
+    },
     "artifacts:orphan_reader::*.md": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
@@ -87,6 +90,12 @@
     },
     "artifacts:orphan_reader::ghidra-export.json": {
       "note": "written by the JVM, not Python: ExportRaptor.java (sandboxed analyzeHeadless post-script) writes this file; packages/ghidra bridge.import_project's headless fallback parses it via parser.parse_export"
+    },
+    "artifacts:orphan_reader::hypothesis-*.md": {
+      "note": "glob-read pattern: forensics_reader.py reads hypothesis-*.md from forensics run dirs; files produced by raptor's /oss-forensics pipeline"
+    },
+    "artifacts:orphan_reader::hypothesis_*.md": {
+      "note": "glob-read pattern: forensics_reader.py reads hypothesis_*.md (underscore variant) from forensics run dirs; same pipeline as hypothesis-*.md"
     },
     "artifacts:orphan_reader::inventory.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -340,6 +349,15 @@
     "artifacts:write_only_artifact::hash-pin.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:write_only_artifact::hypothesis-001.md": {
+      "note": "test/seed fixture: test_forensics_reader.py and seed_demo.py create numbered hypothesis files to exercise the forensics reader; no production writer in studio"
+    },
+    "artifacts:write_only_artifact::hypothesis-002-rebuttal.md": {
+      "note": "test/seed fixture: same as hypothesis-001.md — exercises the status-suffix detection (rebuttal/confirmed)"
+    },
+    "artifacts:write_only_artifact::hypothesis-003-confirmed.md": {
+      "note": "test/seed fixture: same as hypothesis-001.md — exercises the confirmed-status suffix"
+    },
     "artifacts:write_only_artifact::io-correlation.json": {
       "note": "operator/LLM-facing output: packages/frida cli._maybe_correlate_io writes the ingest-payload/call-argument correlation report after a run and prints its path for the operator to inspect; no in-repo literal-name production reader by design (tests assert the file, the CLI only echoes the path)"
     },
@@ -397,6 +415,9 @@
     "artifacts:write_only_artifact::r.yml": {
       "note": "externally consumed: raptor-self-test writes a scratch Semgrep rule file that semgrep (external tool) reads via --config"
     },
+    "artifacts:write_only_artifact::raptor.jsonl": {
+      "note": "test/seed fixture: test_artifacts_reader.py and seed_demo.py create raptor.jsonl to exercise the log tail reader; production writes come from raptor's JSONL audit logger"
+    },
     "artifacts:write_only_artifact::recon.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
@@ -441,6 +462,9 @@
     },
     "artifacts:write_only_artifact::seed-corpus.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::semgrep_owasp.sarif": {
+      "note": "seed fixture: seed_demo.py creates a minimal SARIF file to populate the demo scan run; production writes come from Semgrep"
     },
     "artifacts:write_only_artifact::source-binary-map.json": {
       "note": "operator/LLM-facing output: Stage A source-to-binary map summary written by raptor-validation-helper for the validation skill stages"
@@ -771,6 +795,9 @@
     },
     "plumbing:orphan_config_field:packages/autonomous/planner.py:FuzzingState.last_coverage_increase": {
       "note": "kept: autonomous fuzzing loop feature seed (operator decision 2026-08-16; re-affirmed 2026-08-17 config-orphan pass \u2014 goal_progress and strategies_tried deleted as shadowed by Goal.progress / successful_strategies). This is the natural input the wired loop derives coverage_plateau_duration from."
+    },
+    "plumbing:orphan_config_field:packages/studio/services/validation_reader.py:DataflowDiagram.svg_filename": {
+      "note": "Jinja2 template reference: run_detail.html accesses df.svg_filename in a template expression; the miswiring detector cannot trace Jinja2 attribute access"
     },
     "plumbing:orphan_env_var::SEMGREP_ENABLE_VERSION_CHECK": {
       "note": "external consumer by design: the variable is semgrep's own phone-home suppression switch, exported into every child env so any invocation shape (including subcommands without the argv flags) stays offline"

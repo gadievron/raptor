@@ -1,0 +1,89 @@
+{% extends "project_base.html" %}
+{% block breadcrumb_tail %}
+  <span class="sep">›</span>
+  <span class="current">Findings</span>
+{% endblock %}
+{% block project_content %}
+
+<div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;">
+  <div>
+    <h1 style="margin: 0; font-size: 22px;">Findings</h1>
+    <div style="color: var(--fg2); font-size: 13px; margin-top: 4px;">All findings merged across every run in this project.</div>
+  </div>
+  <span class="badge b-neutral">{{ findings|length }} total</span>
+</div>
+
+{% if findings %}
+<div class="card" style="padding: 0;">
+  <table>
+    <thead>
+      <tr>
+        <th>Status</th>
+        <th>Verdict · Impact</th>
+        <th>Type</th>
+        <th>CWE</th>
+        <th>Location</th>
+        <th>Run</th>
+        <th style="width: 40px;"></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for item in findings %}
+      {% set f = item.finding %}
+      {% set r = item.run %}
+      {% set fs = f.final_status or f.status or "pending" %}
+      {% set verdict = (f.feasibility or {}).get("verdict") or f.verdict or "unknown" %}
+      {% set impact = f.impact or "unknown" %}
+      <tr class="expander" onclick="toggleRow('f{{ loop.index }}')">
+        <td>
+          {% if fs == "exploitable" %}<span class="badge b-critical">exploitable</span>
+          {% elif fs == "likely_exploitable" %}<span class="badge b-high">likely</span>
+          {% elif fs == "confirmed_constrained" %}<span class="badge b-medium">constrained</span>
+          {% elif fs == "confirmed_blocked" %}<span class="badge b-low">blocked</span>
+          {% elif fs == "confirmed_unverified" %}<span class="badge b-neutral">unverified</span>
+          {% elif fs == "confirmed" %}<span class="badge b-high">confirmed</span>
+          {% elif fs == "ruled_out" %}<span class="badge b-neutral">ruled out</span>
+          {% else %}<span class="badge b-neutral">{{ fs }}</span>{% endif %}
+        </td>
+        <td class="mono" style="font-size: 11px; color: var(--fg2);">
+          <span style="color: var(--fg);">{{ verdict }}</span>
+          <span style="color: var(--fg3);"> · </span>{{ impact }}
+        </td>
+        <td class="mono" style="font-size: 12px;">{{ f.vuln_type or f.type or "—" }}</td>
+        <td class="mono" style="font-size: 11px; color: var(--fg3);">{{ f.cwe_id or f.cwe or "" }}</td>
+        <td class="mono" style="font-size: 11px;">{{ f.file or "" }}{% if f.line %}:{{ f.line }}{% endif %}</td>
+        <td class="mono" style="font-size: 11px; color: var(--fg3);">{{ r.name|truncate(22, True, "…") }}</td>
+        <td style="color: var(--fg3);">▶</td>
+      </tr>
+      <tr class="detail" id="f{{ loop.index }}">
+        <td colspan="7">
+          {% include "_finding_detail.html" %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+{%- set kind = project.kind or 'source' -%}
+{%- if kind == 'binary' -%}
+  {%- set next_stage, next_label = 'fuzz', 'Fuzz this binary' -%}
+{%- elif kind == 'forensics' -%}
+  {%- set next_stage, next_label = 'oss-forensics', 'Start forensic investigation' -%}
+{%- else -%}
+  {%- set next_stage, next_label = 'scan', 'Run your first scan' -%}
+{%- endif -%}
+<div class="card" style="padding: 32px; text-align: center;">
+  <div class="icon" style="font-size: 32px; opacity: 0.5;">∅</div>
+  <h2 style="margin: 6px 0 4px; font-size: 16px;">No findings yet</h2>
+  <p style="color: var(--fg2); font-size: 13px; margin: 0 0 16px;">
+    Findings appear here after any run against this project — <code class="mono">scan</code>, <code class="mono">agentic</code>, <code class="mono">codeql</code>, <code class="mono">validate</code>, or <code class="mono">fuzz</code>.
+  </p>
+  <a href="/projects/{{ project.name }}/{{ next_stage }}/new" class="btn btn-p">{{ next_label }} →</a>
+  <div style="font-size: 11px; color: var(--fg3); margin-top: 14px;">
+    Reads from <code class="mono">findings.json</code>, <code class="mono">findings_validated.json</code>, <code class="mono">findings_agentic.json</code>, <code class="mono">findings_merged.json</code>, or SARIF files in each run directory.
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

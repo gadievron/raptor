@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Glossary — {{ app_title }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Glossary</h1>
+  <div class="sub">Raptor's technical vocabulary, in plain language. Hover a term anywhere in the UI for a one-liner; dig in here for the full shape.</div>
+</div>
+
+<div class="grid g2">
+
+<div class="card">
+  <h2 style="margin-top: 0;">Finding lifecycle</h2>
+  <dl style="margin: 0;">
+    <dt><code class="mono">final_status</code></dt>
+    <dd>The verdict raptor assigns to each finding after validation. Values: <code class="mono">exploitable</code>, <code class="mono">likely_exploitable</code>, <code class="mono">confirmed_constrained</code> (primitive exists but hard to chain), <code class="mono">confirmed_blocked</code> (no viable path given mitigations), <code class="mono">confirmed_unverified</code> (analysis incomplete), <code class="mono">ruled_out</code> (failed sanity / ruling check), <code class="mono">pending</code>.</dd>
+
+    <dt><code class="mono">verdict</code></dt>
+    <dd>Can the bug be triggered? Axis 1 of raptor's two-axis model: <code class="mono">exploitable / likely / difficult / unlikely / unknown</code>.</dd>
+
+    <dt><code class="mono">impact</code></dt>
+    <dd>What happens when you trigger it? Axis 2: <code class="mono">code_execution / dos / info_leak / resource_exhaustion / data_corruption / unknown</code>. A null-deref can be <code class="mono">exploitable × dos</code>; a format-string can be <code class="mono">exploitable × code_execution</code>.</dd>
+  </dl>
+</div>
+
+<div class="card">
+  <h2 style="margin-top: 0;">Validation stages</h2>
+  <dl style="margin: 0;">
+    <dt>Stage A — Pattern triage</dt>
+    <dd>Is this a real vulnerability or pattern-matching noise from the scanner?</dd>
+
+    <dt>Stage B — Attacker reach</dt>
+    <dd>What does an attacker need to reach the code, and what's in the way?</dd>
+
+    <dt>Stage C — Sanity</dt>
+    <dd>Does the code path actually exist and is it reachable from outside? Catches LLM hallucinations.</dd>
+
+    <dt>Stage D — Ruling</dt>
+    <dd>Final call: is this test code, does it have unrealistic preconditions, is the model hedging?</dd>
+
+    <dt>Stage E — Binary feasibility</dt>
+    <dd>Given the binary's protections (PIE, NX, canary, RELRO, glibc mitigations), is a working exploit actually achievable? Only runs for memory-corruption vulnerabilities.</dd>
+
+    <dt>Stage F — Self-review</dt>
+    <dd>Mechanical + critical review of the analysis output. "What did I get wrong?"</dd>
+  </dl>
+</div>
+
+<div class="card">
+  <h2 style="margin-top: 0;">Binary exploit anatomy</h2>
+  <dl style="margin: 0;">
+    <dt><code class="mono">chain_break</code></dt>
+    <dd>A concrete reason a specific exploitation technique is blocked. Tagged <code class="mono">[source]</code> (from code-level analysis) or <code class="mono">[binary]</code> (from Stage E feasibility) to distinguish origin.</dd>
+
+    <dt><code class="mono">what_would_help</code></dt>
+    <dd>Per-finding suggestions for turning a blocked exploit viable — e.g. "find a canary leak primitive", "bypass length check via integer wraparound".</dd>
+
+    <dt><code class="mono">exploitation_paths</code></dt>
+    <dd>Ordered <code class="mono">{technique, target}</code> pairs describing how to turn a vuln primitive into a working exploit. Example: <code class="mono">{"technique": "ROP chain to system", "target": "libc offset 0x50dc0"}</code>.</dd>
+
+    <dt>Protections</dt>
+    <dd>Binary hardening: <code class="mono">PIE</code> (position-independent executable, defeats absolute-address ROP), <code class="mono">NX</code> (no-execute stack), <code class="mono">Canary</code> (stack smashing detector), <code class="mono">RELRO</code> (read-only GOT).</dd>
+  </dl>
+</div>
+
+<div class="card">
+  <h2 style="margin-top: 0;">Scanner output</h2>
+  <dl style="margin: 0;">
+    <dt><code class="mono">CWE</code></dt>
+    <dd>Common Weakness Enumeration — MITRE's taxonomy of software weaknesses. E.g. CWE-78 = OS Command Injection, CWE-89 = SQL Injection, CWE-121 = Stack-based Buffer Overflow.</dd>
+
+    <dt><code class="mono">SARIF</code></dt>
+    <dd>Static Analysis Results Interchange Format — SARIF 2.1.0 is the JSON format Semgrep and CodeQL emit. Raptor-studio falls back to parsing SARIF directly when a run has no post-processed <code class="mono">findings.json</code>.</dd>
+
+    <dt><code class="mono">dataflow</code></dt>
+    <dd>A path from a <em>source</em> (attacker-controlled input) to a <em>sink</em> (dangerous operation), through zero or more sanitizers and transformations. Raptor validates path satisfiability with Z3 before spending LLM tokens on hypothetical exploits.</dd>
+
+    <dt>Source / Sink / Flow</dt>
+    <dd>The three-part proof raptor attaches to each finding. Source = where tainted data enters; sink = where it's used dangerously; flow = the sequence of transformations in between.</dd>
+  </dl>
+</div>
+
+<div class="card">
+  <h2 style="margin-top: 0;">Pipelines & lanes</h2>
+  <dl style="margin: 0;">
+    <dt>Source analysis lane</dt>
+    <dd>Understand → Scan → Validate. Against a code repository. Uses Semgrep + CodeQL + LLM-assisted validation.</dd>
+
+    <dt>Binary fuzzing lane</dt>
+    <dd>Fuzz → Crash analysis. Against a compiled binary. Uses AFL++ with autonomous corpus generation, then rr + GDB + LLM reasoning on each crash.</dd>
+
+    <dt>Forensics lane</dt>
+    <dd>OSS forensics. Against a public GitHub repository. Uses the GitHub API, GH Archive (via BigQuery), Wayback Machine, and local git to produce an evidence-backed investigation.</dd>
+
+    <dt>Agentic</dt>
+    <dd>The all-in-one source-lane workflow: scan → validate → exploit → patch in a single invocation. Highest coverage, highest cost.</dd>
+  </dl>
+</div>
+
+<div class="card">
+  <h2 style="margin-top: 0;">Personas</h2>
+  <dl style="margin: 0;">
+    <dt>Expert persona</dt>
+    <dd>A markdown brief raptor's Claude Code integration loads on-demand to adopt a specialist perspective. See <a href="/personas">/personas</a> for the full set.</dd>
+
+    <dt>Exploit Developer</dt>
+    <dd>Writes working PoCs for confirmed findings. Handle: Mark Dowd.</dd>
+
+    <dt>CodeQL Finding Analyst</dt>
+    <dd>Triages CodeQL findings for false positives using Dowd-style adversarial reading.</dd>
+
+    <dt>Patch Engineer</dt>
+    <dd>Produces production-ready patches for confirmed bugs.</dd>
+  </dl>
+</div>
+
+</div>
+
+{% endblock %}

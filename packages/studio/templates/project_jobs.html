@@ -1,0 +1,60 @@
+{% extends "project_base.html" %}
+{% block breadcrumb_tail %}
+  <span class="sep">›</span>
+  <span class="current">Jobs</span>
+{% endblock %}
+{% block project_content %}
+
+<div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;">
+  <div>
+    <h1 style="margin: 0; font-size: 22px;">Jobs</h1>
+    <div style="color: var(--fg2); font-size: 13px; margin-top: 4px;">UI-triggered raptor invocations and their status.</div>
+  </div>
+  <span class="badge b-neutral">{{ project_jobs|length }} total</span>
+</div>
+
+{% if project_jobs %}
+<div class="card" style="padding: 0;">
+  <table>
+    <thead>
+      <tr>
+        <th>Job</th>
+        <th>Kind</th>
+        <th>Status</th>
+        <th>Started</th>
+        <th>Elapsed</th>
+        <th>Exit</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for j in project_jobs %}
+      <tr>
+        <td class="mono" style="font-size: 11px;">
+          <a href="/jobs/{{ j.id }}">{{ j.id[:8] }}</a>
+        </td>
+        <td><span class="badge b-neutral">{{ j.kind }}</span></td>
+        <td>
+          {% if j.status.value == "completed" %}<span class="badge b-ok">complete</span>
+          {% elif j.status.value == "running" %}<span class="badge b-running">running</span>
+          {% elif j.status.value == "failed" %}<span class="badge b-failed">failed</span>
+          {% elif j.status.value == "queued" %}<span class="badge b-medium">queued</span>
+          {% elif j.status.value == "cancelled" %}<span class="badge b-neutral">cancelled</span>
+          {% else %}<span class="badge b-neutral">{{ j.status.value }}</span>{% endif %}
+        </td>
+        <td class="mono" style="font-size: 11px; color: var(--fg3);">{{ j.started_at or "—" }}</td>
+        <td class="mono" style="font-size: 11px; color: var(--fg3);">{% if j.elapsed_seconds is not none %}{{ j.elapsed_seconds }}s{% else %}—{% endif %}</td>
+        <td class="mono" style="font-size: 11px; color: {{ 'var(--low)' if j.exit_code == 0 else 'var(--fg3)' if j.exit_code is none else 'var(--crit)' }};">{{ j.exit_code if j.exit_code is not none else "—" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="card empty">
+  <div class="icon">○</div>
+  <p>No jobs yet for this project.</p>
+  <p style="font-size: 12px; color: var(--fg3);">Start one from any stage page — Scan, Validate, Fuzz, etc.</p>
+</div>
+{% endif %}
+
+{% endblock %}

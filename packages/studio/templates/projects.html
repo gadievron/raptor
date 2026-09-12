@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Projects — {{ app_title }}{% endblock %}
+{% block content %}
+
+<div class="page-head" style="display: flex; align-items: flex-end; justify-content: space-between; gap: 16px;">
+  <div>
+    <h1>Projects</h1>
+    <div class="sub">All raptor projects registered in <code class="mono">{{ projects_dir }}</code></div>
+  </div>
+  <a href="/projects/new" class="btn btn-p">+ New project</a>
+</div>
+
+{% if projects %}
+<div class="card" style="padding: 0;">
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Target</th>
+        <th>Output dir</th>
+        <th>Runs</th>
+        <th>On disk</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for p in projects %}
+      <tr>
+        <td><a href="/projects/{{ p.name }}"><strong>{{ p.name }}</strong></a>
+          {% if p.description %}<div style="font-size: 12px; color: var(--fg3); margin-top: 2px;">{{ p.description }}</div>{% endif %}
+        </td>
+        <td class="mono" style="font-size: 12px; color: var(--fg2);">{{ p.target }}</td>
+        <td class="mono" style="font-size: 12px; color: var(--fg3);">{{ p.output_dir }}</td>
+        <td>{{ p.runs()|length }}</td>
+        <td>
+          {% if p.exists_on_disk %}<span class="badge b-ok">yes</span>
+          {% else %}<span class="badge b-neutral">missing</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="card empty">
+  <div class="icon">∅</div>
+  <p>No projects.</p>
+</div>
+{% endif %}
+
+{% endblock %}
