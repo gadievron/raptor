@@ -11,6 +11,7 @@ from typing import Optional
 
 from core.artifacts.provenance import provenance_of
 from core.json import load_json as _load_json
+from core.atomic_fs import write_text_atomically
 from core.security.prompt_output_sanitise import sanitise_code, sanitise_string
 
 from . import context_map, flow_trace, attack_tree, attack_paths, hypotheses, findings_summary, graph_memory, edge_obligations
@@ -401,5 +402,7 @@ def _load_disproven(path: Path) -> list | None:
 def render_and_write(out_dir: Path, target: Optional[str] = None) -> Path:
     content = render_directory(out_dir, target)
     output_path = out_dir / "diagrams.md"
-    output_path.write_text(content, encoding="utf-8")
+    # Atomic: diagrams.md is re-rendered and consumed by other tools —
+    # a crash mid-write left a half-written report in place.
+    write_text_atomically(output_path, content)
     return output_path
