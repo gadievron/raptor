@@ -2347,20 +2347,46 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # TCP-port / read-allowlist policy is genuinely unenforced
             # under the acceptance, and the per-call floor comparison
             # still refuses every unconsented untrusted call.
-            _degraded_ll_ok = not untrusted_fresh_procfs_required()
+            #
+            # The acceptance follows the full consent chain (per-run
+            # --sandbox-floor flag > project sandbox-floor setting >
+            # the legacy env var): a floor at or below ns-only IS the
+            # consent to run without the Landlock policy layer, from
+            # whichever surface set it — and an explicitly RAISED
+            # floor (flag/project mountless-ns or mount-ns) refuses
+            # here even when the env waiver is set, because the
+            # explicit surface wins in both directions. An explicit
+            # BARE ("none") consents to nothing on this arm.
+            _consent_floor, _consent_src = resolve_untrusted_floor()
+            _degraded_ll_ok = (
+                _tiers.ContainmentTier.LANDLOCK_ONLY
+                <= _consent_floor
+                <= _tiers.ContainmentTier.NS_NOMOUNT
+            )
             if _degraded_ll_ok:
+                if _consent_src == _tiers.FLOOR_SOURCE_ENV:
+                    _ll_accept_surface = "RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1"
+                elif _consent_src == _tiers.FLOOR_SOURCE_FLAG:
+                    _ll_accept_surface = (
+                        f"--sandbox-floor "
+                        f"{_tiers.tier_label(_consent_floor)}")
+                else:
+                    _ll_accept_surface = (
+                        f"the project sandbox-floor="
+                        f"{_tiers.tier_label(_consent_floor)} setting")
                 if state.warn_once("_degraded_landlock_override_warned"):
                     logger.warning(
                         "Sandbox: target/output/writable_paths/"
                         "allowed_tcp_ports/restrict_reads were set "
                         "but Landlock is unavailable on this kernel — "
-                        "RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1 accepts "
+                        "%s accepts "
                         "running WITHOUT filesystem-write/TCP/read "
                         "policy enforcement; namespace containment "
                         "(fresh procfs, pid/ipc/net isolation) still "
                         "applies where a namespace lane engages, and "
                         "the containment floor still gates every "
                         "dispatch.",
+                        _ll_accept_surface,
                     )
             else:
                 from .errors import SandboxSetupError
@@ -2370,13 +2396,45 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     "Landlock is unavailable on this kernel — filesystem writes "
                     "and TCP ports would NOT be restricted."
                 )
-                raise SandboxSetupError(
-                    msg,
+                _ll_fix = (
                     "Upgrade to kernel 5.13+ for Landlock, pass "
                     "--sandbox network-only to keep namespace/network isolation "
                     "without filesystem restriction, or --sandbox none to "
-                    "disable all isolation.",
+                    "disable all isolation. To accept running without "
+                    "the Landlock policy layer, pass --sandbox-floor "
+                    "ns-only (this run), set sandbox-floor via "
+                    "/project set sandbox-floor ns-only (standing for "
+                    "the project), or set "
+                    "RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1 (host-wide)."
                 )
+                if _consent_src in (_tiers.FLOOR_SOURCE_FLAG,
+                                    _tiers.FLOOR_SOURCE_PROJECT):
+                    # Honesty rule: an explicitly pinned floor is not
+                    # relaxed by the env var or a lower-precedence
+                    # surface — say so instead of steering the
+                    # operator at overrides that would lose.
+                    _pin_surface = (
+                        "--sandbox-floor" if _consent_src
+                        == _tiers.FLOOR_SOURCE_FLAG
+                        else "the project sandbox-floor setting")
+                    if _consent_floor is _tiers.ContainmentTier.BARE:
+                        _ll_fix += (
+                            f" Note: {_pin_surface}=none is not a "
+                            f"consentable floor — untrusted work "
+                            f"never runs bare by consent; use "
+                            f"--sandbox none / --no-sandbox for the "
+                            f"operator-explicit sandbox-off."
+                        )
+                    else:
+                        _ll_fix += (
+                            f" Note: {_pin_surface} currently pins "
+                            f"the floor at "
+                            f"'{_tiers.tier_label(_consent_floor)}'"
+                            f", which the env var and lower-"
+                            f"precedence surfaces do not override — "
+                            f"change that surface itself to consent."
+                        )
+                raise SandboxSetupError(msg, _ll_fix)
         else:
             abi = _get_landlock_abi()
             # Each ABI level adds a restriction mask bit. Warn once per
@@ -2944,16 +3002,6 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # explicit global disable also silences the per-call contract
         # flag, exactly as it silences every other containment layer.
         # Both directions are pinned by tests.
-        _floor, _floor_source = _tiers.resolve_call_floor(
-            operator_disabled=effectively_disabled,
-            require_fresh_procfs=_rfp_kwarg,
-            untrusted_workload=_untrusted_workload,
-            # tiers.py reads no environment by design — hand it the
-            # env truth so the floor source is attributed honestly
-            # (a literal require_fresh_procfs=False without the
-            # waiver must not banner/warn in the waiver's name).
-            waiver_active=not untrusted_fresh_procfs_required(),
-        )
         def _note_floor_refusal(
                 exc: "_errors.SandboxFloorError",
         ) -> "_errors.SandboxFloorError":
@@ -2985,6 +3033,31 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                  exc_info=True)
             return exc
 
+        _explicit_tier, _explicit_src = _explicit_untrusted_floor()
+        try:
+            _floor, _floor_source = _tiers.resolve_call_floor(
+                operator_disabled=effectively_disabled,
+                require_fresh_procfs=_rfp_kwarg,
+                untrusted_workload=_untrusted_workload,
+                # tiers.py reads no environment by design — hand it the
+                # env truth so the floor source is attributed honestly
+                # (a literal require_fresh_procfs=False without the
+                # waiver must not banner/warn in the waiver's name).
+                waiver_active=_degraded_untrusted_waiver(),
+                # Explicit consent surfaces (per-run flag > project
+                # setting), read from the argparse / run-start state
+                # slots — they apply to untrusted-class calls only and
+                # win over the env waiver in both directions.
+                explicit_floor=_explicit_tier,
+                explicit_source=_explicit_src,
+            )
+        except _errors.SandboxFloorError as _resolve_exc:
+            # The never-BARE-by-consent refusal ("--sandbox-floor
+            # none" / a bare project floor on untrusted-class work):
+            # record it into the run-dir evidence stream like every
+            # other floor refusal, then let it propagate.
+            raise _note_floor_refusal(_resolve_exc)
+
         if (_floor_source == _tiers.FLOOR_SOURCE_ENV
                 and sys.platform == "linux"
                 and state.warn_once("_floor_lowered_banner_warned")):
@@ -2996,6 +3069,57 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 "(source: RAPTOR_ALLOW_DEGRADED_UNTRUSTED).",
                 _tiers.tier_label(_floor),
             )
+        elif (_floor_source == _tiers.FLOOR_SOURCE_FLAG
+                and sys.platform == "linux"
+                and state.warn_once("_floor_flag_banner_warned")):
+            logger.warning(
+                "sandbox: untrusted containment floor set to '%s' "
+                "(source: --sandbox-floor).",
+                _tiers.tier_label(_floor),
+            )
+        elif (_floor_source == _tiers.FLOOR_SOURCE_PROJECT
+                and sys.platform == "linux"
+                and state.warn_once("_floor_project_banner_warned")):
+            logger.warning(
+                "sandbox: untrusted containment floor set to '%s' "
+                "(source: project setting sandbox-floor; per-run "
+                "--sandbox-floor overrides).",
+                _tiers.tier_label(_floor),
+            )
+        if (_floor_source in (_tiers.FLOOR_SOURCE_FLAG,
+                              _tiers.FLOOR_SOURCE_PROJECT)
+                and sys.platform == "linux"):
+            # Disagreement banner: an explicit surface won over a
+            # lower-precedence surface that named a DIFFERENT floor.
+            # Explicit-wins is the documented precedence; the banner
+            # makes the overridden surface visible (once per process),
+            # naming both surfaces and both values.
+            _overridden: list = []
+            if (_floor_source == _tiers.FLOOR_SOURCE_FLAG
+                    and state._project_sandbox_floor is not None
+                    and _tiers.label_tier(state._project_sandbox_floor)
+                    != _floor):
+                _overridden.append(
+                    f"project setting sandbox-floor="
+                    f"'{state._project_sandbox_floor}'")
+            if (_degraded_untrusted_waiver()
+                    and _tiers.waived_untrusted_floor() != _floor):
+                _overridden.append(
+                    "RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1 (frozen "
+                    "meaning: untrusted floor 'landlock')")
+            if _overridden and state.warn_once(
+                    "_floor_surface_disagreement_warned"):
+                _winner = ("--sandbox-floor"
+                           if _floor_source == _tiers.FLOOR_SOURCE_FLAG
+                           else "project setting sandbox-floor")
+                logger.warning(
+                    "sandbox: consent surfaces disagree on the "
+                    "untrusted containment floor — %s='%s' wins over "
+                    "%s (precedence: per-run flag > project setting "
+                    "> env var).",
+                    _winner, _tiers.tier_label(_floor),
+                    "; ".join(_overridden),
+                )
         if _require_fresh_procfs and _skip_pid_ns:
             # Contradictory by construction: skip_pid_ns keeps the
             # host procfs on purpose (gdb lane), which is exactly the
@@ -3148,6 +3272,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     _intended, _floor,
                     environmental=not use_sandbox,
                     skip_mount_ns=_skip_mount_ns,
+                    literal_contract=(_rfp_kwarg is True),
                 ))
 
         def _floor_remedy(extra: str = "") -> str:
@@ -3158,7 +3283,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             genuinely relaxes this call's floor, and says the override
             will NOT relax it when the caller passed a literal
             require_fresh_procfs=True (see _fresh_procfs_override_hint)."""
-            hint = _fresh_procfs_override_hint()
+            hint = _fresh_procfs_override_hint(
+                literal_contract=(_rfp_kwarg is True))
             return f"{extra} {hint}".strip() if extra else hint
 
         def _dispatch_floor_check(
@@ -3214,7 +3340,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 _note_floor_refusal(_floor_exc)
                 raise
             if (_landlock_tolerated
-                    and _floor_source != _tiers.FLOOR_SOURCE_ENV
+                    and _floor_source not in _tiers.CONSENT_FLOOR_SOURCES
                     and delivered <= _tiers.ContainmentTier.NS_NOMOUNT
                     and (target or output or allowed_tcp_ports
                          or restrict_reads or extra_writable_paths)
@@ -3237,7 +3363,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     "(Warned once per process.)",
                     lane,
                 )
-            if (_floor_source == _tiers.FLOOR_SOURCE_ENV
+            if (_floor_source in _tiers.CONSENT_FLOOR_SOURCES
                     and sys.platform == "linux"
                     and delivered <= _tiers.ContainmentTier.NS_NOMOUNT):
                 # Consented-degrade warning, per call. The exposure
@@ -3255,10 +3381,22 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     _waived_exposure = (
                         "with the HOST process table visible to the "
                         "untrusted target")
+                if _floor_source == _tiers.FLOOR_SOURCE_ENV:
+                    _consent_surface = ("RAPTOR_ALLOW_DEGRADED_"
+                                        "UNTRUSTED waives")
+                elif _floor_source == _tiers.FLOOR_SOURCE_FLAG:
+                    _consent_surface = (
+                        f"--sandbox-floor "
+                        f"{_tiers.tier_label(_floor)} lowers")
+                else:
+                    _consent_surface = (
+                        f"the project sandbox-floor="
+                        f"{_tiers.tier_label(_floor)} setting lowers")
                 logger.warning(
-                    "sandbox: RAPTOR_ALLOW_DEGRADED_UNTRUSTED waives the "
+                    "sandbox: %s the "
                     "untrusted containment floor and %s — proceeding on "
                     "the %s lane %s.",
+                    _consent_surface,
                     detail or ("the mount-ns backend cannot engage for "
                                "this call"),
                     lane,
@@ -4995,7 +5133,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 "user-namespace-capable kernel — treat a "
                                 "persistent failure as an environment bug "
                                 "worth reporting. "
-                                + _fresh_procfs_override_hint(),
+                                + _fresh_procfs_override_hint(
+                                    literal_contract=(_rfp_kwarg is True)),
                                 setup_category=_setup_status[0],
                             )
                         if _setup_status is not None and _setup_status[0] == "C":
@@ -5701,7 +5840,12 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 "EACCES, including loopback; "
                                 "bind/listen and UDP are unaffected).",
                             )
-                    elif not untrusted_fresh_procfs_required():
+                    # Network-axis waiver: deliberately the RAW env
+                    # var, not the floor consent chain — a tier floor
+                    # (--sandbox-floor / project setting) never
+                    # consents the network axis; accepting an
+                    # unrestricted-network run stays env-var-only.
+                    elif _degraded_untrusted_waiver():
                         if state.warn_once(
                                 "_demoted_net_open_override_warned"):
                             logger.warning(
@@ -6990,9 +7134,51 @@ def _require_userns_or_optin(entry: str, restrict_reads: bool=True) -> bool:
     # the exact silent-downgrade shape the userns gate below exists
     # to refuse. Same explicit operator override governs it.
     if not _seccomp.check_seccomp_available():
-        if os.environ.get(
-            "RAPTOR_ALLOW_DEGRADED_UNTRUSTED", "",
-        ).strip().lower() in ("1", "true", "yes", "on"):
+        # The seccomp filter is part of EVERY tier's delivery
+        # (LANDLOCK_ONLY is "Landlock+seccomp+rlimits"), so a tier
+        # floor never consents its absence — accepting filterless
+        # from `--sandbox-floor landlock` would run BELOW the flag's
+        # documented meaning. Only the legacy env var waives this
+        # axis, and ONLY while no explicit surface pins a floor:
+        # an explicit surface names a tier whose contract includes
+        # the filter, so it wins over the env waiver here exactly as
+        # it does on the tier chain.
+        _floor_e, _src_e = _explicit_untrusted_floor()
+        if _floor_e is not None:
+            from .errors import SandboxSetupError
+            _surface_e = ("--sandbox-floor" if _src_e
+                          == _tiers.FLOOR_SOURCE_FLAG
+                          else "the project sandbox-floor setting")
+            if _floor_e is _tiers.ContainmentTier.BARE:
+                # The "none" edge: not a tier-includes-the-filter
+                # story — never-BARE-by-consent is the reason.
+                _pin_clause = (
+                    f"{_surface_e}=none is not a consentable "
+                    f"untrusted floor — untrusted work never runs "
+                    f"bare by consent; use --sandbox none / "
+                    f"--no-sandbox for the operator-explicit "
+                    f"sandbox-off."
+                )
+            else:
+                _pin_clause = (
+                    f"{_surface_e} pins the containment floor at "
+                    f"'{_tiers.tier_label(_floor_e)}', a tier whose "
+                    f"contract includes the filter — "
+                    f"RAPTOR_ALLOW_DEGRADED_UNTRUSTED does not "
+                    f"override an explicit surface."
+                )
+            raise SandboxSetupError(
+                f"{entry}: libseccomp is unavailable or non-functional "
+                f"on this host — the untrusted-execution contract "
+                f"includes the seccomp syscall filter (socket-family "
+                f"blocklist, escape-primitive blocks, send-flag "
+                f"argument rules), which would silently not engage. "
+                f"{_pin_clause}",
+                "install libseccomp (libseccomp2 package); no "
+                "--sandbox-floor tier waives seccomp absence (every "
+                "tier includes the filter).",
+            )
+        if _degraded_untrusted_waiver():
             logger.warning(
                 "%s: libseccomp unavailable — running UNTRUSTED code "
                 "WITHOUT a seccomp filter (operator override "
@@ -7011,32 +7197,50 @@ def _require_userns_or_optin(entry: str, restrict_reads: bool=True) -> bool:
                 "install libseccomp (libseccomp2 package), or set "
                 "RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1 to explicitly "
                 "accept running untrusted code without a syscall "
-                "filter.",
+                "filter (no --sandbox-floor tier waives seccomp "
+                "absence — every tier includes the filter).",
             )
     if check_net_available():
         return False
-    if os.environ.get(
-        "RAPTOR_ALLOW_DEGRADED_UNTRUSTED", "",
-    ).strip().lower() in ("1", "true", "yes", "on"):
+    # Namespace loss on a userns-blocked host is acceptable only when
+    # the consent chain lowered the untrusted floor to EXACTLY the
+    # landlock tier (per-run flag > project setting > legacy env var).
+    # A floor above it (the default, or an explicitly RAISED
+    # flag/project floor — which wins over the env waiver in both
+    # directions) refuses; an explicit BARE ("none") consents to
+    # nothing and refuses too — untrusted work never runs bare by
+    # consent.
+    _floor, _floor_src = resolve_untrusted_floor()
+    if (_floor is _tiers.ContainmentTier.LANDLOCK_ONLY
+            and _floor_src in _tiers.CONSENT_FLOOR_SOURCES):
+        if _floor_src == _tiers.FLOOR_SOURCE_FLAG:
+            _consent_name = "operator consent --sandbox-floor landlock"
+        elif _floor_src == _tiers.FLOOR_SOURCE_PROJECT:
+            _consent_name = ("operator consent: project setting "
+                             "sandbox-floor=landlock")
+        else:
+            _consent_name = ("operator override "
+                             "RAPTOR_ALLOW_DEGRADED_UNTRUSTED")
         if restrict_reads is not _UNSET and not restrict_reads:
             logger.warning(
                 "%s: unprivileged user namespaces unavailable — running "
                 "UNTRUSTED code with Landlock/seccomp-only containment "
-                "(operator override RAPTOR_ALLOW_DEGRADED_UNTRUSTED) "
+                "(%s) "
                 "AND restrict_reads=False: same-UID /proc/<pid>/environ "
                 "credential reads are NOT blocked for this call.", entry,
+                _consent_name,
             )
             return False
         logger.warning(
             "%s: unprivileged user namespaces unavailable — running "
             "UNTRUSTED code with Landlock/seccomp-only containment "
-            "(operator override RAPTOR_ALLOW_DEGRADED_UNTRUSTED). "
+            "(%s). "
             "/proc is dropped from the read allowlist for this call "
             "so same-UID /proc/<pid>/environ credential reads stay "
             "blocked; tools that read /proc/self/* (ASAN, IFUNC "
             "dispatch, runtime CPU detection) may fail with EACCES — "
             "pass readable_paths= for specific needs, or fix the "
-            "host's userns restriction.", entry,
+            "host's userns restriction.", entry, _consent_name,
         )
         return True
     from .errors import SandboxSetupError
@@ -7046,10 +7250,30 @@ def _require_userns_or_optin(entry: str, restrict_reads: bool=True) -> bool:
         f"hides host /proc; credential exfil blocked) cannot be met. "
         f"Refusing to run untrusted code with degraded containment. "
         f"Fix the host (e.g. the kernel/LSM userns restriction — see "
-        f"core/sandbox/helpers/) or set "
-        f"RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1 to explicitly accept "
-        f"Landlock/seccomp-only containment."
+        f"core/sandbox/helpers/) or explicitly accept "
+        f"Landlock/seccomp-only containment: --sandbox-floor landlock "
+        f"(this run), /project set sandbox-floor landlock (standing "
+        f"for the project), or RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1 "
+        f"(host-wide)."
     )
+    if _floor_src in (_tiers.FLOOR_SOURCE_FLAG,
+                      _tiers.FLOOR_SOURCE_PROJECT):
+        _surface = ("--sandbox-floor" if _floor_src
+                    == _tiers.FLOOR_SOURCE_FLAG
+                    else "the project sandbox-floor setting")
+        if _floor is _tiers.ContainmentTier.BARE:
+            msg += (
+                f" Note: {_surface}=none is not a consentable "
+                f"untrusted floor — untrusted work never runs bare "
+                f"by consent; use --sandbox none / --no-sandbox for "
+                f"the operator-explicit sandbox-off."
+            )
+        else:
+            msg += (
+                f" Note: {_surface} currently pins the floor at "
+                f"'{_tiers.tier_label(_floor)}', which the env var "
+                f"does not override."
+            )
     raise SandboxSetupError(msg)
 
 
@@ -7102,18 +7326,102 @@ def _reopen_write_only(fd: int, flags: int) -> "int | None":
     return None
 
 
-def _fresh_procfs_override_hint() -> str:
+def _fresh_procfs_override_hint(
+        literal_contract: "bool | None" = None) -> str:
     """The override sentence for a fresh-procfs refusal, told honestly.
 
     Every in-tree untrusted caller derives require_fresh_procfs from
-    :func:`untrusted_fresh_procfs_required`, so for them the override
-    env var IS consulted (a truthy value means the flag arrives False
-    and no refusal fires). A direct caller passing a literal
-    ``require_fresh_procfs=True`` made an explicit ask the env var
-    does not relax — telling that caller to set the override would be
-    a lie, so the hint says which situation the reader is in.
+    :func:`untrusted_fresh_procfs_required`, so for them the consent
+    chain IS consulted (a lowered floor means the flag arrives False
+    and no refusal fires). The remedy sentence therefore reflects the
+    reader's ACTUAL situation:
+
+    * an explicit surface (per-run flag / project setting) pinned the
+      floor — say so, name the surface, and say the env var will NOT
+      relax it (explicit wins on disagreement);
+    * the chain is at the default and a lowered floor would relax the
+      refusal — name every override surface with the exact re-run
+      spelling;
+    * the chain is already lowered but the refusal still fired.
+      ``literal_contract`` carries the call's truth from the refusal
+      site: ``True`` = the call carried a literal
+      ``require_fresh_procfs=True`` — an explicit caller ask no
+      consent surface relaxes (telling that caller to consent again
+      would be a lie); ``False`` = the call honoured the lowered
+      floor and this host cannot deliver even the consented tier —
+      no consent surface admits a bare untrusted run; ``None`` =
+      unknown (out-of-run callers), told as the literal-ask case
+      (the only reachable shape for derived callers).
     """
+    _floor, _source = resolve_untrusted_floor()
+    if _source == _tiers.FLOOR_SOURCE_FLAG:
+        if untrusted_fresh_procfs_required():
+            return (
+                f"--sandbox-floor {_tiers.tier_label(_floor)} pins the "
+                f"untrusted containment floor for this run "
+                f"(RAPTOR_ALLOW_DEGRADED_UNTRUSTED does not override "
+                f"it). To accept host-procfs-visible containment, "
+                f"re-run with --sandbox-floor landlock."
+            )
+        if literal_contract is False:
+            return (
+                f"--sandbox-floor {_tiers.tier_label(_floor)} already "
+                f"lowers the untrusted containment floor, but this "
+                f"host cannot deliver even that tier for this call — "
+                f"no consent surface admits a bare untrusted run; fix "
+                f"the host, or use the operator-explicit "
+                f"--sandbox none / --no-sandbox."
+            )
+        return (
+            f"--sandbox-floor {_tiers.tier_label(_floor)} already "
+            f"lowers the untrusted containment floor, but this call "
+            f"passed an explicit require_fresh_procfs=True, which no "
+            f"consent surface relaxes — drop the explicit flag (or "
+            f"derive it from untrusted_fresh_procfs_required()) to "
+            f"honour the consent."
+        )
+    if _source == _tiers.FLOOR_SOURCE_PROJECT:
+        if untrusted_fresh_procfs_required():
+            return (
+                f"the active project's sandbox-floor="
+                f"{_tiers.tier_label(_floor)} setting pins the "
+                f"untrusted containment floor "
+                f"(RAPTOR_ALLOW_DEGRADED_UNTRUSTED does not override "
+                f"it). To accept host-procfs-visible containment, "
+                f"re-run with --sandbox-floor landlock (per-run flag "
+                f"overrides the project setting) or change the "
+                f"standing consent via /project set sandbox-floor "
+                f"landlock."
+            )
+        if literal_contract is False:
+            return (
+                f"the active project's sandbox-floor="
+                f"{_tiers.tier_label(_floor)} setting already lowers "
+                f"the untrusted containment floor, but this host "
+                f"cannot deliver even that tier for this call — no "
+                f"consent surface admits a bare untrusted run; fix "
+                f"the host, or use the operator-explicit "
+                f"--sandbox none / --no-sandbox."
+            )
+        return (
+            f"the active project's sandbox-floor="
+            f"{_tiers.tier_label(_floor)} setting already lowers the "
+            f"untrusted containment floor, but this call passed an "
+            f"explicit require_fresh_procfs=True, which no consent "
+            f"surface relaxes — drop the explicit flag (or derive it "
+            f"from untrusted_fresh_procfs_required()) to honour the "
+            f"consent."
+        )
     if not untrusted_fresh_procfs_required():
+        if literal_contract is False:
+            return (
+                "RAPTOR_ALLOW_DEGRADED_UNTRUSTED already lowers the "
+                "untrusted containment floor, but this host cannot "
+                "deliver even the waived tier for this call — no "
+                "consent surface admits a bare untrusted run; fix "
+                "the host, or use the operator-explicit "
+                "--sandbox none / --no-sandbox."
+            )
         return (
             "RAPTOR_ALLOW_DEGRADED_UNTRUSTED is already set, but this "
             "call passed an explicit require_fresh_procfs=True, which "
@@ -7122,7 +7430,10 @@ def _fresh_procfs_override_hint() -> str:
             "honour the override."
         )
     return (
-        "Alternatively set RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1 to "
+        "Alternatively re-run with --sandbox-floor landlock (this "
+        "run), persist the consent with /project set sandbox-floor "
+        "landlock (standing for the project), or set "
+        "RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1 (host-wide) to "
         "explicitly accept host-procfs-visible containment."
     )
 
@@ -7130,6 +7441,7 @@ def _fresh_procfs_override_hint() -> str:
 def _fresh_procfs_env_refusal(
     achievable: "_tiers.ContainmentTier | None" = None,
     floor: "_tiers.ContainmentTier | None" = None,
+    literal_contract: "bool | None" = None,
 ) -> "_errors.SandboxFloorError":
     """Build the refusal for a fresh-procfs contract call on a host
     where no isolation backend engaged for ENVIRONMENTAL reasons
@@ -7166,7 +7478,8 @@ def _fresh_procfs_env_refusal(
         f"{exposure}."
     )
     return _errors.SandboxFloorError(
-        msg, fix + " " + _fresh_procfs_override_hint(),
+        msg, fix + " " + _fresh_procfs_override_hint(
+            literal_contract=literal_contract),
         achievable=achievable,
         floor=(floor if floor is not None
                else _tiers.untrusted_default_floor()))
@@ -7178,6 +7491,7 @@ def _entry_floor_refusal(
     *,
     environmental: bool,
     skip_mount_ns: bool,
+    literal_contract: "bool | None" = None,
 ) -> "_errors.SandboxFloorError":
     """Build the entry-time containment-floor refusal for the shape
     at hand, preserving the message texts operators (and tests) know
@@ -7190,7 +7504,8 @@ def _entry_floor_refusal(
     :func:`_fresh_procfs_override_hint`.
     """
     if environmental:
-        return _fresh_procfs_env_refusal(achievable=intended, floor=floor)
+        return _fresh_procfs_env_refusal(achievable=intended, floor=floor,
+                                         literal_contract=literal_contract)
     if skip_mount_ns:
         msg = (
             "sandbox run(): the fresh-procfs contract cannot be met "
@@ -7199,7 +7514,8 @@ def _entry_floor_refusal(
             "host-pid /proc visible to the untrusted target."
         )
         return _errors.SandboxFloorError(
-            msg, _fresh_procfs_override_hint(),
+            msg, _fresh_procfs_override_hint(
+                literal_contract=literal_contract),
             achievable=intended, floor=floor)
     msg = (
         "sandbox run(): the fresh-procfs contract cannot be "
@@ -7211,14 +7527,78 @@ def _entry_floor_refusal(
         msg,
         "install newuidmap/newgidmap (uidmap package) so the "
         "mount-ns backend can engage. "
-        + _fresh_procfs_override_hint(),
+        + _fresh_procfs_override_hint(literal_contract=literal_contract),
         achievable=intended, floor=floor)
 
 
+def _degraded_untrusted_waiver() -> bool:
+    """Raw truth of the legacy ``RAPTOR_ALLOW_DEGRADED_UNTRUSTED`` env
+    var (same idiom as the userns entry gate). FROZEN meaning:
+    "untrusted floor := landlock" (Linux) — kept indefinitely as the
+    escape-hatch alias; all new consent semantics ship only on the
+    explicit surfaces (``--sandbox-floor`` / project ``sandbox-floor``),
+    which win over it on disagreement, with a banner naming both.
+    The network-axis waivers (degraded net-deny, proxy tier) keep
+    their own reads of this var by design — a tier floor never
+    consents the network axis.
+    """
+    return os.environ.get(
+        "RAPTOR_ALLOW_DEGRADED_UNTRUSTED", ""
+    ).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _explicit_untrusted_floor() -> (
+        "tuple[_tiers.ContainmentTier | None, str | None]"):
+    """The explicit consent surfaces' untrusted floor, flag first.
+
+    Reads only the two state slots the argparse / project run-start
+    plumbing populated (core.sandbox.cli setters) — never the
+    environment, never project files, never repo content.
+    """
+    label = state._cli_sandbox_floor
+    if label is not None:
+        return _tiers.label_tier(label), _tiers.FLOOR_SOURCE_FLAG
+    label = state._project_sandbox_floor
+    if label is not None:
+        return _tiers.label_tier(label), _tiers.FLOOR_SOURCE_PROJECT
+    return None, None
+
+
+def resolve_untrusted_floor() -> "tuple[_tiers.ContainmentTier, str]":
+    """Resolve the untrusted containment floor from the consent chain.
+
+    Precedence (highest wins), evaluated fresh on every call:
+
+        per-run ``--sandbox-floor`` flag  >  project ``sandbox-floor``
+        setting  >  legacy env var  >  class default (refuse below
+        MOUNT_NS / SEATBELT)
+
+    The explicit surfaces win in BOTH directions — a flag/project
+    ``mount-ns`` refuses the degraded tiers even when the env waiver
+    is set, and a flag/project ``landlock`` lowers without the env
+    var. Returns ``(tier, source)``; a flag value of ``none`` resolves
+    to BARE here and is refused for untrusted-class work at floor
+    resolution (tiers.resolve_call_floor's never-BARE-by-consent arm)
+    — BARE consents to nothing on any acceptance arm.
+    """
+    tier, source = _explicit_untrusted_floor()
+    if tier is not None and source is not None:
+        return tier, source
+    if _degraded_untrusted_waiver():
+        return _tiers.waived_untrusted_floor(), _tiers.FLOOR_SOURCE_ENV
+    return _tiers.untrusted_default_floor(), _tiers.FLOOR_SOURCE_DEFAULT
+
+
 def untrusted_fresh_procfs_required() -> bool:
-    """True unless the operator accepted the degraded-untrusted posture
-    (``RAPTOR_ALLOW_DEGRADED_UNTRUSTED`` truthy — same idiom as the
-    userns entry gate).
+    """True while the resolved untrusted floor demands a fresh pid-ns
+    procfs — i.e. every tier the consent chain admits delivers one
+    (Linux: floor above the landlock tier; macOS: the unwaived
+    seatbelt contract).
+
+    Consent chain: per-run ``--sandbox-floor`` flag > project
+    ``sandbox-floor`` setting > the legacy
+    ``RAPTOR_ALLOW_DEGRADED_UNTRUSTED`` env var (frozen alias for
+    "untrusted floor := landlock") > the fail-closed class default.
 
     The untrusted entry points consume this internally. Direct
     ``run()`` callers that execute attacker-derived payloads (LLM
@@ -7227,9 +7607,10 @@ def untrusted_fresh_procfs_required() -> bool:
     fresh-procfs contract instead of silently accepting host-procfs
     visibility.
     """
-    return os.environ.get(
-        "RAPTOR_ALLOW_DEGRADED_UNTRUSTED", ""
-    ).strip().lower() not in ("1", "true", "yes", "on")
+    floor, _source = resolve_untrusted_floor()
+    if sys.platform == "darwin":
+        return floor >= _tiers.ContainmentTier.SEATBELT
+    return floor >= _tiers.ContainmentTier.NS_NOMOUNT
 
 
 def run_untrusted(cmd: list[str], *, target: str | None = None, output: str | None = None,
