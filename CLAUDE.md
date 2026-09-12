@@ -102,7 +102,10 @@ Activate with `/project use <name>` in-session, or at launch with `-p <name>` (a
 /project untrust <marker>      # remove a trust marker
 /project set                   # list settings
 /project set <key> <value>     # registry-validated setting (description, notes,
-                               #   threat-model, target-kind, build-command[.<lang>])
+                               #   threat-model, target-kind, build-command[.<lang>],
+                               #   sandbox-floor — standing untrusted containment-floor
+                               #   consent: mount-ns|mountless-ns|ns-only|landlock,
+                               #   never none; per-run --sandbox-floor overrides)
 /project unset <key>           # remove a setting
 /project get <key>             # bare value on stdout; exit 1 if unset
 /project clean --keep 3        # delete old runs

@@ -102,6 +102,44 @@
 
 ---
 
+### Sandbox containment-floor refusal (`SandboxFloorError`)
+
+A run that stops with "sandbox containment floor violated" or "the
+fresh-procfs contract cannot be met" refused to execute
+attacker-derived/untrusted code below the required containment tier.
+The refusal text names the required floor, the achievable tier, and
+the exact remedies. This is a run-boundary decision point (nothing
+executed).
+
+In an interactive session, offer the remedies as a structured choice
+(see CLAUDE.md § INTERACTIVE PROMPTS; gate with
+`libexec/raptor-may-ask` first — only if it prints `interactive` AND
+the AskUserQuestion tool is available). Quote the actual refusal text
+for the host condition and the exact tier labels from the error;
+never invent values:
+
+1. **Fix the environment (Recommended)** — apply the named host
+   remedy from the refusal (e.g. install the uidmap package, relax
+   the AppArmor userns sysctl, upgrade to a Landlock kernel) and
+   re-run at full containment.
+2. **Lower the floor for this run** — re-run with the exact flag the
+   refusal names (e.g. `--sandbox-floor landlock`). State exactly
+   what is being accepted (the refusal says: e.g. host process table
+   visible to attacker-derived code; /proc read grant withdrawn).
+3. **Persist for this project** — `/project set sandbox-floor
+   <tier>`; the same grant, standing for every subsequent run on the
+   project (per-run `--sandbox-floor` still overrides).
+
+**Non-interactive fallback: refuse** — report the refusal text
+(which already names all the remedies) and stop. Never select a
+floor on the operator's behalf, and never re-run with a lowered
+floor without the operator choosing it. Note: `--sandbox-floor none`
+is not a consentable untrusted floor — if the operator truly wants
+no sandbox, that is the authoritative `--sandbox none` /
+`--no-sandbox` surface.
+
+---
+
 ## Always Offer Alternatives
 
 When Python fails, always present user with:

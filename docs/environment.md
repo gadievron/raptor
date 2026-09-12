@@ -137,12 +137,23 @@ floor := `landlock`"** (see the containment-floor section of
 [sandbox.md](sandbox.md)). The waiver accepts namespace loss and
 host-procfs visibility for untrusted work but never lowers it to a
 bare run on Linux, never affects trusted, strict, rootfs, or persona
-behaviour, and never grows new semantics — future consent surfaces
-ship as explicit flags/settings. Floor refusals are the typed
+behaviour, and never grows new semantics — the explicit consent
+surfaces carry everything newer. It is the LOWEST rung of the
+consent chain: the per-run `--sandbox-floor <tier>` flag and the
+project `sandbox-floor` setting both override it, **in both
+directions** (`--sandbox-floor mount-ns` re-pins the full contract
+on a host where CI exported the waiver — including the waiver's
+seccomp-absence acceptance, which is withdrawn whenever an explicit
+surface pins a floor, every tier's contract including the filter; a
+banner names both surfaces whenever they disagree). The
+degraded-**network** acceptance is the one axis that stays purely
+env-var-governed — a tier floor never consents the network posture.
+Floor refusals are the typed
 `SandboxFloorError` (carrying the required floor and the achievable
 tier); the per-run posture records `containment_tier`,
-`containment_floor`, and `floor_source` so a waived run is always
-identifiable after the fact.
+`containment_floor`, and `floor_source` (`env` when this waiver is
+the in-force consent) so a waived run is always identifiable after
+the fact.
 
 Distinct from `RAPTOR_ALLOW_UNSANDBOXED_TOOLS`, which waives a
 *missing sandbox module* at the tool-runner import seam — this one

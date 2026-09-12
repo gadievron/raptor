@@ -129,14 +129,77 @@ total order of **containment tiers** per platform:
 
 Each call resolves a **floor** once at entry: untrusted work
 (`run_untrusted*` and every caller passing the `require_fresh_procfs`
-contract) floors at `mount-ns` on Linux and `seatbelt` on macOS;
-`RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1` lowers the untrusted floor to
-`landlock` (its frozen meaning — it never reaches `none` on Linux);
-trusted calls have no floor (`none`) and keep their existing
-enforceability refusals; the operator's explicit `--sandbox none` /
-`--no-sandbox` / `disabled=True` remains globally authoritative
-(floor `none`). Nothing consents untrusted work to a bare run
-implicitly.
+contract) floors at `mount-ns` on Linux and `seatbelt` on macOS by
+default; the consent chain below can move it; trusted calls have no
+floor (`none`) and keep their existing enforceability refusals; the
+operator's explicit `--sandbox none` / `--no-sandbox` /
+`disabled=True` remains globally authoritative (floor `none`).
+Nothing consents untrusted work to a bare run implicitly.
+
+### Consent surfaces
+
+The untrusted floor is resolved from one precedence chain (highest
+wins):
+
+```
+--sandbox-floor <tier>  >  /project set sandbox-floor <tier>
+                        >  RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1  >  default (refuse)
+```
+
+* **`--sandbox-floor {mount-ns,mountless-ns,ns-only,landlock,none}`**
+  — per-run consent, parsed only from entry-point argparse (same
+  prompt-injection posture as `--sandbox`). It works in **both
+  directions**: `--sandbox-floor landlock` accepts
+  Landlock/seccomp-only containment for this run's untrusted work on
+  a host without user namespaces; `--sandbox-floor mount-ns` pins the
+  full contract, overriding a project setting or the env waiver. Each
+  value consents **exactly its named tier and nothing lower** — a
+  lane below the consented floor still refuses. `ns-only` is the
+  consent for Landlock-less kernels (namespaces, fresh procfs and
+  seccomp still enforced). The value `none` is **not** a consentable
+  untrusted floor: it parses, but untrusted-class work under it
+  refuses loudly, naming the authoritative `--sandbox none` /
+  `--no-sandbox` surface — untrusted work never runs bare by consent.
+  Nested RAPTOR workers inherit the flag on their command lines (the
+  `/agentic` sandbox passthrough); no environment variable expresses
+  it, so target code can neither observe nor influence the consent.
+* **`/project set sandbox-floor <tier>`** — the standing project
+  surface (registry-validated; `none` is refused at `set` time).
+  Consumed once at run start like the trust markers, with the same
+  one-target rule (the consent applies only when the run's target is
+  the project's target) and a banner line whenever it affects a run.
+  Dispatched workers re-read it through their run-pin bootstrap.
+* **`RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1`** — the legacy env var, kept
+  indefinitely with a **frozen meaning**: untrusted floor :=
+  `landlock` on Linux (it never reaches `none` there; on macOS it
+  keeps its documented rlimits-only acceptance). All new consent
+  semantics ship only on the explicit surfaces.
+
+When surfaces disagree, the explicit surface wins and a banner names
+both sides and both values (e.g. a paranoid `--sandbox-floor
+mount-ns` over a CI-wide env waiver refuses the degraded lanes and
+says why). Floor refusals always carry the exact re-run remedies —
+the flag spelling, the project spelling, and the env var — with the
+honesty rule preserved: when an explicit surface pinned the floor,
+the refusal says the env var will NOT relax it. In an unattended
+session the refusal stands (fail closed); an interactive session may
+offer the remedies as a structured choice, but never selects a floor
+on the operator's behalf. The degraded-**network** acceptance is a
+separate axis and stays env-var-only — a tier floor never consents
+the network posture. The **seccomp-absence** acceptance is also
+env-var-only in the lowering direction (no `--sandbox-floor` tier
+waives a missing libseccomp — every tier's contract includes the
+filter), and it is WITHDRAWN whenever an explicit surface pins a
+floor: an operator who typed `--sandbox-floor mount-ns` gets the
+full contract, filter included, even on a host where CI exported the
+env waiver. Two reach notes: the project consumption is wired at the
+run entry points and dispatch helpers that execute untrusted/target
+code (`/agentic`, `/codeql`, `/fuzz`, their scanner and CodeQL-agent
+workers, the `/audit` CLI, and the `/validate` helper); and the
+construction-time Landlock-enforceability acceptance follows the
+same chain for ALL calls (the env var's existing host-wide reach) —
+an explicitly raised floor therefore also refuses that acceptance
+for trusted policy-bearing calls on Landlock-less kernels.
 
 Enforcement is two-sided: an entry-time check refuses
 statically-knowable shapes up front with the full remedy text, and a
@@ -162,10 +225,11 @@ Every result stamps the posture: `sandbox_info["containment_tier"]`
 (the tier the call actually ran at — per-call posture reductions such
 as `skip_pid_ns`, which keeps the host procfs on both spawn lanes, cap
 the stamp accordingly), `containment_floor`, and `floor_source`
-(`default` / `env` / `operator-disable`); tracked runs merge the
+(`default` / `flag` / `project` / `env` / `operator-disable`);
+tracked runs merge the
 weakest tier per run directory into `sandbox-summary.json`'s posture
-record. When the waiver lowers the floor, a one-line banner names the
-consent source, and every waived call that lands on a
+record. When a consent surface lowers the floor, a one-line banner
+names the surface, and every consented call that lands on a
 reduced lane (`ns-only` or below) warns individually — naming the
 host process table when the lane leaves it visible, or the missing
 Landlock policy layer on the `ns-only` tier (which keeps a fresh
@@ -698,8 +762,10 @@ fail, the sandbox retains those namespaces and uses Landlock read/write
 rules in place of the bind tree for trusted tool runs. Host paths remain
 visible by name and metadata-only operations are outside Landlock's control.
 Untrusted execution refuses both this tier and the namespace-less fallback.
-Set `RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1` only to explicitly accept the reduced
-containment for untrusted code (see [environment.md](environment.md)).
+Consent to the reduced containment only explicitly: `--sandbox-floor
+landlock` (this run), `/project set sandbox-floor landlock` (standing
+for the project), or `RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1` (host-wide;
+see [environment.md](environment.md)).
 
 ### A target binary fails with EACCES reading `/home/<user>/...`
 
