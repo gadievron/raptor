@@ -1613,6 +1613,10 @@ def _merge_attack_surface(
             "sources": merged_sources,
             "sinks": merged_sinks,
             "trust_boundaries": merged_boundaries,
+            "entry_points": _list_at(context_map, "entry_points"),
+            "sink_details": _list_at(context_map, "sink_details"),
+            "boundary_details": _list_at(context_map, "boundary_details"),
+            "unchecked_flows": _list_at(context_map, "unchecked_flows"),
             "_imported_from": str(understand_dir / "context-map.json"),
             "_imported_at": datetime.now(timezone.utc).isoformat(),
         }
