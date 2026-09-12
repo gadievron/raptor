@@ -1,0 +1,353 @@
+"""SQLite store and migrations for RAPTOR's /understand graph."""
+
+from __future__ import annotations
+
+import sqlite3
+import sys
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Iterator, Optional
+
+from .schema import SCHEMA_VERSION
+
+GRAPH_FILENAME = "raptor.graph.sqlite"
+
+
+def graph_path_for_run(run_dir: Path, target_path: Optional[str] = None) -> Path:
+    """Return the graph DB path for a run or project.
+
+    Project-owned graphs are preferred when a project matches the target. For
+    standalone runs, the graph lives under the run directory.
+    """
+    run_dir = Path(run_dir)
+    try:
+        from core.project.project import ProjectManager
+
+        mgr = ProjectManager()
+        run_resolved = run_dir.resolve()
+        projects = mgr.list_projects()
+
+        # Strongest signal: the caller passed a run dir that is already under a
+        # project output directory. Prefer that project over any other project
+        # pointing at the same target, otherwise duplicate test projects can
+        # steal each other's graph memory.
+        for project in projects:
+            out_dir = Path(project.output_dir).resolve()
+            try:
+                run_resolved.relative_to(out_dir)
+                return out_dir / "graph" / GRAPH_FILENAME
+            except ValueError:
+                continue
+
+        active_name = mgr.get_active()
+        if active_name:
+            active = mgr.load(active_name)
+            if active is not None:
+                if not target_path:
+                    return Path(active.output_dir) / "graph" / GRAPH_FILENAME
+                try:
+                    if Path(active.target).resolve() == Path(target_path).resolve():
+                        return Path(active.output_dir) / "graph" / GRAPH_FILENAME
+                except OSError:
+                    pass
+    except Exception:
+        pass
+
+    if target_path:
+        try:
+            from core.project.project import ProjectManager
+
+            project = ProjectManager().find_project_for_target(str(target_path))
+            if project is not None:
+                return Path(project.output_dir) / "graph" / GRAPH_FILENAME
+        except Exception:
+            pass
+
+    # If the caller passed a project root directly, use its graph directory.
+    try:
+        if (run_dir / ".raptor-project-root").exists():
+            return run_dir / "graph" / GRAPH_FILENAME
+    except OSError:
+        pass
+    return run_dir / "graph" / GRAPH_FILENAME
+
+
+def open_graph(path: Path) -> sqlite3.Connection:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    migrate(conn)
+    return conn
+
+
+@contextmanager
+def graph_connection(path: Path) -> Iterator[sqlite3.Connection]:
+    conn = open_graph(path)
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def query_graph(path: Path, fn, *args, **kwargs):
+    """Run a read query with corruption guard.
+
+    On DatabaseError, delete the corrupt graph and return None — consumers
+    see 'no graph' and degrade gracefully.
+    """
+    if not Path(path).exists():
+        return None
+    try:
+        with graph_connection(path) as conn:
+            return fn(conn, *args, **kwargs)
+    except sqlite3.DatabaseError as exc:
+        print(f"graph: corrupt ({exc}), deleting {Path(path).name}", file=sys.stderr)
+        try:
+            Path(path).unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    current = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    if current > SCHEMA_VERSION:
+        raise RuntimeError(
+            f"graph schema version {current} is newer than this RAPTOR ({SCHEMA_VERSION})"
+        )
+    if current < 1:
+        _migrate_1(conn)
+        current = 1
+    if current < 2:
+        _migrate_2(conn)
+        current = 2
+    if current < 3:
+        _migrate_3(conn)
+        current = 3
+    conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
+        ("schema_version", str(SCHEMA_VERSION)),
+    )
+
+
+def _migrate_1(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS snapshots (
+            id TEXT PRIMARY KEY,
+            target_path TEXT NOT NULL,
+            target_hash TEXT NOT NULL DEFAULT '',
+            git_sha TEXT NOT NULL DEFAULT '',
+            checklist_hash TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT '',
+            producer_run TEXT NOT NULL DEFAULT '',
+            props_json TEXT NOT NULL DEFAULT '{}'
+        );
+
+        CREATE TABLE IF NOT EXISTS nodes (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            stable_key TEXT NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
+            file TEXT NOT NULL DEFAULT '',
+            line_start INTEGER,
+            line_end INTEGER,
+            snapshot_id TEXT NOT NULL,
+            stale INTEGER NOT NULL DEFAULT 0,
+            props_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS edges (
+            id TEXT PRIMARY KEY,
+            src_id TEXT NOT NULL,
+            dst_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            confidence TEXT NOT NULL DEFAULT '',
+            snapshot_id TEXT NOT NULL,
+            stale INTEGER NOT NULL DEFAULT 0,
+            evidence_json TEXT NOT NULL DEFAULT '{}',
+            props_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS artifacts (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            path TEXT NOT NULL,
+            run_dir TEXT NOT NULL DEFAULT '',
+            snapshot_id TEXT NOT NULL,
+            sha256 TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT '',
+            props_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_snapshots_target
+            ON snapshots(target_path, created_at);
+        CREATE INDEX IF NOT EXISTS idx_nodes_kind_snapshot
+            ON nodes(kind, snapshot_id);
+        CREATE INDEX IF NOT EXISTS idx_nodes_stable_snapshot
+            ON nodes(stable_key, snapshot_id);
+        CREATE INDEX IF NOT EXISTS idx_nodes_file
+            ON nodes(file);
+        CREATE INDEX IF NOT EXISTS idx_edges_kind_snapshot
+            ON edges(kind, snapshot_id);
+        CREATE INDEX IF NOT EXISTS idx_edges_src
+            ON edges(src_id);
+        CREATE INDEX IF NOT EXISTS idx_edges_dst
+            ON edges(dst_id);
+        """
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
+        ("schema_version", "1"),
+    )
+
+
+def _migrate_2(conn: sqlite3.Connection) -> None:
+    """Make node rows snapshot-scoped so graph diffs can compare history.
+
+    v1 used ``stable_key UNIQUE`` and updated the same node row on each ingest.
+    That worked as memory, but erased older snapshots' node membership. v2 keeps
+    stable_key for comparison while allowing one row per snapshot.
+    """
+    _recover_interrupted_v2_migration(conn)
+
+    cols = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(nodes)").fetchall()
+    }
+    if "stable_key" not in cols:
+        return
+
+    indexes = conn.execute("PRAGMA index_list(nodes)").fetchall()
+    has_unique_stable = False
+    for row in indexes:
+        if not bool(row["unique"]):
+            continue
+        index_cols = {
+            info["name"]
+            for info in conn.execute(f"PRAGMA index_info({row['name']})").fetchall()
+        }
+        if index_cols == {"stable_key"}:
+            has_unique_stable = True
+            break
+    if not has_unique_stable:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_nodes_stable_snapshot ON nodes(stable_key, snapshot_id)"
+        )
+        return
+
+    nodes_old = "nodes_v1_tmp"
+    edges_old = "edges_v1_tmp"
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("PRAGMA legacy_alter_table=ON")
+    conn.execute(f"ALTER TABLE nodes RENAME TO {nodes_old}")
+    conn.execute(
+        """
+        CREATE TABLE nodes (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            stable_key TEXT NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
+            file TEXT NOT NULL DEFAULT '',
+            line_start INTEGER,
+            line_end INTEGER,
+            snapshot_id TEXT NOT NULL,
+            stale INTEGER NOT NULL DEFAULT 0,
+            props_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        f"""
+        INSERT OR IGNORE INTO nodes
+        (id, kind, stable_key, name, file, line_start, line_end, snapshot_id, stale, props_json)
+        SELECT id, kind, stable_key, name, file, line_start, line_end, snapshot_id, stale, props_json
+        FROM {nodes_old}
+        """
+    )
+    conn.execute(f"ALTER TABLE edges RENAME TO {edges_old}")
+    conn.execute(
+        """
+        CREATE TABLE edges (
+            id TEXT PRIMARY KEY,
+            src_id TEXT NOT NULL,
+            dst_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            confidence TEXT NOT NULL DEFAULT '',
+            snapshot_id TEXT NOT NULL,
+            stale INTEGER NOT NULL DEFAULT 0,
+            evidence_json TEXT NOT NULL DEFAULT '{}',
+            props_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        f"""
+        INSERT OR IGNORE INTO edges
+        (id, src_id, dst_id, kind, confidence, snapshot_id, stale, evidence_json, props_json)
+        SELECT id, src_id, dst_id, kind, confidence, snapshot_id, stale, evidence_json, props_json
+        FROM {edges_old}
+        """
+    )
+    conn.execute(f"DROP TABLE {edges_old}")
+    conn.execute(f"DROP TABLE {nodes_old}")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_kind_snapshot ON nodes(kind, snapshot_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_file ON nodes(file)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_stable_snapshot ON nodes(stable_key, snapshot_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_kind_snapshot ON edges(kind, snapshot_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst_id)")
+    conn.execute("PRAGMA legacy_alter_table=OFF")
+    conn.execute("PRAGMA foreign_keys=ON")
+
+
+def _recover_interrupted_v2_migration(conn: sqlite3.Connection) -> None:
+    tables = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    for old_name in ("nodes_v1_tmp", "nodes_v1"):
+        if old_name in tables and "nodes" in tables:
+            conn.execute(f"DROP TABLE [{old_name}]")
+        elif old_name in tables and "nodes" not in tables:
+            conn.execute(f"ALTER TABLE [{old_name}] RENAME TO nodes")
+    for old_name in ("edges_v1_tmp", "edges_v1"):
+        if old_name in tables and "edges" in tables:
+            conn.execute(f"DROP TABLE [{old_name}]")
+        elif old_name in tables and "edges" not in tables:
+            conn.execute(f"ALTER TABLE [{old_name}] RENAME TO edges")
+
+
+def _migrate_3(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_nodes_snap_kind_stale "
+        "ON nodes(snapshot_id, kind, stale)"
+    )
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
+    if "producer" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN producer TEXT NOT NULL DEFAULT 'understand'"
+        )

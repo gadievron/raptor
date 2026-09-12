@@ -168,8 +168,30 @@ def _materialise_threat_model_phase(
                         understand_dir, len(stale),
                     )
             else:
-                summary["skipped_reason"] = reason or "understand pre-pass did not produce context-map.json"
-                return summary
+                try:
+                    from core.understand_graph import build_context_map, graph_path_for_run
+                    graph_path = graph_path_for_run(out_dir, str(target))
+                    graph_context, graph_stale = build_context_map(graph_path, str(target))
+                    if graph_context:
+                        context_map_path = out_dir / "context-map.graph.json"
+                        save_json(context_map_path, graph_context, mode=0o600)
+                        summary["reused_context_map"] = True
+                        summary["reused_graph"] = str(graph_path)
+                        if graph_stale:
+                            summary["stale_files"] = sorted(graph_stale)
+                            if not allow_stale:
+                                summary["skipped_reason"] = (
+                                    "reused /understand graph is stale; rerun "
+                                    "with --threat-model-use-stale to accept it"
+                                )
+                                return summary
+                    else:
+                        summary["skipped_reason"] = reason or "understand pre-pass did not produce context-map.json"
+                        return summary
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("Threat model graph fallback failed: %s", e)
+                    summary["skipped_reason"] = reason or "understand pre-pass did not produce context-map.json"
+                    return summary
         except Exception as e:  # noqa: BLE001
             logger.debug("Threat model fallback lookup failed: %s", e)
             summary["skipped_reason"] = reason or "understand pre-pass did not produce context-map.json"
@@ -4638,6 +4660,38 @@ Examples:
         ))
     except Exception as e:  # noqa: BLE001
         logger.debug("Run metadata: %s", e)  # Optional — don't fail the pipeline
+
+    # Graph store enrichment — ingest producers into the project graph.
+    # Best-effort: never fails the pipeline.
+    import sqlite3 as _graph_sqlite3
+    try:
+        from core.understand_graph import (
+            ingest_audit_hypotheses,
+            ingest_codeql_sarif,
+            ingest_scan_findings,
+            ingest_validation_outcomes,
+        )
+        _target_str = str(original_repo_path)
+        # Scan findings live under the validation subdirectory
+        _val_dir = out_dir / "validation"
+        if _val_dir.is_dir():
+            ingest_scan_findings(_val_dir, _target_str)
+        # CodeQL SARIF — check the output dir and any codeql subdirectory
+        if args.codeql or args.codeql_only:
+            ingest_codeql_sarif(out_dir, _target_str)
+            _cq_dir = out_dir / "codeql"
+            if _cq_dir.is_dir():
+                ingest_codeql_sarif(_cq_dir, _target_str)
+        # Validation outcomes from --validate post-pass
+        if postpass_result and postpass_result.ran and postpass_result.validate_dir:
+            ingest_validation_outcomes(
+                Path(postpass_result.validate_dir), _target_str,
+            )
+        # Audit hypotheses from --gap-audit
+        if audit_dir and audit_postpass.get("completed"):
+            ingest_audit_hypotheses(audit_dir, _target_str)
+    except (ImportError, _graph_sqlite3.Error, KeyError, TypeError, ValueError):
+        logger.debug("graph store enrichment skipped", exc_info=True)
 
     # Clean up temporary git copy (if we created one for a non-git target)
     if _git_temp_dir and _git_temp_dir.exists():

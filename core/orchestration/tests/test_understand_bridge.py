@@ -509,6 +509,26 @@ class TestLoadUnderstandContextAttackSurface:
         assert len(surface["sources"]) == 1
         assert len(surface["sinks"]) == 1
         assert len(surface["trust_boundaries"]) == 1
+        assert len(surface["entry_points"]) == 1
+        assert len(surface["sink_details"]) == 1
+        assert len(surface["boundary_details"]) == 1
+        assert len(surface["unchecked_flows"]) == 1
+
+    def test_attack_surface_keeps_richer_context_map_fields(self, tmp_path):
+        understand_dir = tmp_path / "understand"
+        validate_dir = tmp_path / "validate"
+        understand_dir.mkdir()
+        validate_dir.mkdir()
+
+        _write_json(understand_dir / "context-map.json", MINIMAL_CONTEXT_MAP)
+
+        load_understand_context(understand_dir, validate_dir)
+
+        surface = json.loads((validate_dir / "attack-surface.json").read_text())
+        assert surface["entry_points"][0]["id"] == "EP-001"
+        assert surface["boundary_details"][0]["id"] == "TB-001"
+        assert surface["sink_details"][0]["id"] == "SINK-001"
+        assert surface["unchecked_flows"][0]["sink"] == "SINK-001"
 
     def test_source_trust_level_survives_into_attack_surface(self, tmp_path):
         """A source's trust_level (provenance, assigned by /understand

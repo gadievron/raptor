@@ -7,29 +7,21 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from core.artifacts.provenance import provenance_of
 from core.json import load_json as _load_json
 from core.security.prompt_output_sanitise import sanitise_code, sanitise_string
 
-from . import (
-    attack_paths,
-    attack_tree,
-    context_map,
-    findings_summary,
-    flow_trace,
-    hypotheses,
-    edge_obligations,
-)
+from . import context_map, flow_trace, attack_tree, attack_paths, hypotheses, findings_summary, graph_memory, edge_obligations
 from .sanitize import detect_id_collisions, sanitize as _sanitize
 
+
 _FLOW_TRACE_GLOB = "flow-trace-*.json"
+_GRAPH_FILENAME = "raptor.graph.sqlite"
 
 
 def _section(title: str, body: str, level: int = 2) -> str:
-    # Headings are one line by contract; collapse whitespace so a
-    # crafted title (trace name, forward-reachable entry label) cannot
-    # inject extra heading/list lines below the real one.
     heading = "#" * level
     title = " ".join(str(title).split()).strip()
     return f"{heading} {title}\n\n{body}\n"
@@ -50,21 +42,10 @@ def _fence(diagram: str) -> str:
 
 
 def _err(exc: object) -> str:
-    """One-line sanitised rendering of an exception for report prose."""
     return sanitise_string(" ".join(str(exc).split()), max_chars=300)
 
 
 def _id_collision_warning(data: object) -> str:
-    """Markdown warning when sanitized node IDs collapse distinct nodes.
-
-    ``sanitize_id`` deterministically maps every non-``[A-Za-z0-9_-]``
-    character to ``_``, so raw ids like ``foo!`` and ``foo?`` both
-    render as the single Mermaid node ``foo_`` — structural information
-    silently lost. Surface that next to the diagram so the operator
-    knows which input ids in attack-tree.json need disambiguation.
-    Raw ids are LLM-derived (untrusted); they go through the label
-    sanitizer before landing in report prose.
-    """
     if not isinstance(data, dict):
         return ""
     raw_ids = [
@@ -96,12 +77,6 @@ def _id_collision_warning(data: object) -> str:
 
 
 def _provenance_note(data: object) -> str:
-    """Render the artifact's provenance stamp as a source annotation.
-
-    Visibility plumbing only (docs/security.md I2-(b)): when the writer
-    stamped the artifact untrusted, say so next to the diagram. Legacy
-    artifacts (no stamp) render exactly as before.
-    """
     prov = provenance_of(data)
     if prov["legacy"] or not prov["untrusted"]:
         return ""
@@ -114,27 +89,27 @@ def _provenance_note(data: object) -> str:
     )
 
 
-def render_directory(out_dir: Path, target: str | None = None) -> str:
+def _graph_path_for_directory(out_dir: Path) -> Optional[Path]:
+    direct = out_dir / "graph" / _GRAPH_FILENAME
+    if direct.exists():
+        return direct
+
+    checklist = _load_json(out_dir / "checklist.json") if (out_dir / "checklist.json").exists() else None
+    target_path = checklist.get("target_path") if isinstance(checklist, dict) else None
+    if not target_path:
+        return None
+
+    from core.understand_graph import graph_path_for_run
+
+    graph_path = graph_path_for_run(out_dir, target_path)
+    return graph_path if graph_path.exists() else None
+
+
+def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
     out_dir = Path(out_dir)
     sections: list[str] = []
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    # Escape backticks in `target`. Pre-fix `target` was
-    # interpolated raw between backticks: `f" for `{target}`"`.
-    # An operator-supplied `--target` value containing a `` ` ``
-    # broke the markdown inline-code span and either:
-    #   * leaked the rest of the header line into raw markdown
-    #     rendering (a target like `` weird`name `` produced
-    #     `for `weird`name`` — the `name` rendered as bold/code
-    #     depending on what followed)
-    #   * matched another later `` ` `` in the document and
-    #     swallowed prose into a code span until the next
-    #     unmatched backtick
-    # `target` flows from the `--target` CLI flag in
-    # `libexec/raptor-render-diagrams` and is operator-controlled.
-    # Escape backticks to backslash-backtick so markdown renders them as
-    # literal characters; doesn't break valid targets that don't
-    # contain backticks.
     safe_target = (target or "").replace("`", "\\`")
     target_str = f" for `{safe_target}`" if target else ""
     sections.append(f"# Security Diagrams{target_str}\n\n_Generated {now}_\n")
@@ -143,10 +118,6 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
     findings_path = out_dir / "findings.json"
     orch_path_early = out_dir / "orchestrated_report.json"
     summary_findings = None
-    # Shape-guard every element: these artifacts may be partially
-    # written or drifted, and a non-dict entry would raise out of
-    # render_directory() before the per-section try/except degradation
-    # every other block gets.
     if findings_path.exists():
         fdata = _load_json(findings_path)
         if fdata and isinstance(fdata, dict):
@@ -172,12 +143,14 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
                 f"```mermaid\n{_fence(vtype)}\n```"
             )
             sections.append(_section("Findings Summary", body))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             sections.append(_section("Findings Summary", f"> Could not render: {_err(exc)}"))
 
-    # --- Context map / attack surface ---
+    # --- Context map / graph memory / attack surface ---
+    context_map_rendered = False
     for fname, title in [
         ("context-map.json", "Context Map, Entry Points, Trust Boundaries, Sinks"),
+        ("context-map.graph.json", "Context Map from Graph Memory"),
         ("attack-surface.json", "Attack Surface (Stage B)"),
     ]:
         fpath = out_dir / fname
@@ -186,22 +159,21 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
         try:
             data = _load_json(fpath)
             if data is None:
-                msg = "failed to parse JSON"
-                raise ValueError(msg)
+                raise ValueError("failed to parse JSON")
+            if isinstance(data, dict) and "meta" not in data and target:
+                data = dict(data)
+                data["meta"] = {"target": target}
             diagram = context_map.generate(data)
             body = (f"_Source: `{fname}`_{_provenance_note(data)}"
                     f"\n\n```mermaid\n{_fence(diagram)}\n```")
             sections.append(_section(title, body))
-            # Per-entry forward-reachable diagrams (substrate-derived
-            # call closure from /understand --map's MAP-5b step).
-            # Only fires for context-map.json today; attack-surface.json
-            # uses a different shape but the helper safely returns []
-            # when no entry has forward_reachable.
+            if fname.startswith("context-map"):
+                context_map_rendered = True
             try:
                 fr_blocks = context_map.generate_forward_reachable_blocks(
                     data,
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 fr_blocks = []
                 sections.append(_section(
                     f"{title} — Forward Reachability",
@@ -222,8 +194,34 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
                     "`raptor-enrich-context-map-callgraph`)_\n\n"
                     + "\n".join(sub_sections),
                 ))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             sections.append(_section(title, f"> Could not render `{fname}`: {_err(exc)}"))
+
+    if not context_map_rendered:
+        try:
+            from core.understand_graph import build_context_map
+            graph_path = _graph_path_for_directory(out_dir)
+            if graph_path and graph_path.exists():
+                data, stale = build_context_map(graph_path)
+                if data:
+                    diagram = context_map.generate(data)
+                    stale_note = (
+                        f"\n\n_Stale files excluded: {len(stale)}_"
+                        if stale else ""
+                    )
+                    body = (
+                        f"_Source: `{graph_path}` (persistent /understand graph)_"
+                        f"{stale_note}\n\n```mermaid\n{_fence(diagram)}\n```"
+                    )
+                    sections.append(_section(
+                        "Context Map from Graph Memory",
+                        body,
+                    ))
+        except Exception as exc:
+            sections.append(_section(
+                "Context Map from Graph Memory",
+                f"> Could not render graph memory: {_err(exc)}",
+            ))
 
     # --- Edge obligations (--edges) ---
     eo_path = out_dir / "edge-obligations.json"
@@ -237,7 +235,7 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
                     f"```mermaid\n{_fence(diagram)}\n```")
             sections.append(_section(
                 "Edge Obligations (tier-1 solid, tier-2 dashed)", body))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             sections.append(_section(
                 "Edge Obligations",
                 f"> Could not render `edge-obligations.json`: {_err(exc)}"))
@@ -250,11 +248,7 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
             try:
                 data = _load_json(tf)
                 if data is None:
-                    msg = "failed to parse JSON"
-                    raise ValueError(msg)
-                # `id` / `name` come raw from the flow-trace JSON; route them
-                # through the shared sanitizer so a crafted value can't break
-                # the heading out of its line or the markdown structure.
+                    raise ValueError("failed to parse JSON")
                 raw_id = data.get("id", tf.stem)
                 trace_id = _sanitize(raw_id)
                 name = _sanitize(data.get("name", raw_id))
@@ -263,7 +257,7 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
                         f"\n\n```mermaid\n{_fence(diagram)}\n```")
                 heading = f"{trace_id}: {name}".replace("\n", " ").replace("\r", " ")
                 trace_sections.append(_section(heading, body, level=3))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 trace_sections.append(_section(tf.stem, f"> Could not render `{tf.name}`: {_err(exc)}", level=3))
         sections.append(_section("Data Flow Traces", "\n".join(trace_sections)))
 
@@ -273,8 +267,7 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
         try:
             data = _load_json(tree_path)
             if data is None:
-                msg = "failed to parse JSON"
-                raise ValueError(msg)
+                raise ValueError("failed to parse JSON")
 
             # Load companion files for cross-referencing
             ap_data = _load_optional_list(out_dir / "attack-paths.json")
@@ -294,7 +287,7 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
                     f"\n\n```mermaid\n{_fence(diagram)}\n```"
                     f"{_id_collision_warning(data)}")
             sections.append(_section("Attack Tree", body))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             sections.append(_section("Attack Tree", f"> Could not render `attack-tree.json`: {_err(exc)}"))
 
     # --- Hypotheses (separate evidence-chain diagram) ---
@@ -303,16 +296,31 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
         try:
             raw = _load_json(hyp_path)
             if raw is None:
-                msg = "failed to parse JSON"
-                raise ValueError(msg)
+                raise ValueError("failed to parse JSON")
             hyp_list = raw if isinstance(raw, list) else raw.get("hypotheses", [])
             if hyp_list:
                 diagram = hypotheses.generate(hyp_list)
                 body = (f"_Source: `hypotheses.json`_{_provenance_note(raw)}"
                         f"\n\n```mermaid\n{_fence(diagram)}\n```")
                 sections.append(_section("Hypotheses,Evidence Chain", body))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             sections.append(_section("Hypotheses,Evidence Chain", f"> Could not render `hypotheses.json`: {_err(exc)}"))
+
+    # --- Graph-priority paths (Stage 0 graph handoff) ---
+    graph_paths_path = out_dir / "graph-priority-paths.json"
+    if graph_paths_path.exists():
+        try:
+            data = _load_json(graph_paths_path)
+            if data is None:
+                raise ValueError("failed to parse JSON")
+            if isinstance(data, dict):
+                data = data.get("paths") or data.get("graph_paths") or data.get("items") or []
+            if isinstance(data, list):
+                diagram = graph_memory.generate_priority_paths(data)
+                body = f"_Source: `graph-priority-paths.json`_\n\n```mermaid\n{_fence(diagram)}\n```"
+                sections.append(_section("Graph Priority Paths", body))
+        except Exception as exc:
+            sections.append(_section("Graph Priority Paths", f"> Could not render `graph-priority-paths.json`: {_err(exc)}"))
 
     # --- Attack paths ---
     paths_path = out_dir / "attack-paths.json"
@@ -320,8 +328,7 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
         try:
             data = _load_json(paths_path)
             if data is None:
-                msg = "failed to parse JSON"
-                raise ValueError(msg)
+                raise ValueError("failed to parse JSON")
             prov_note = _provenance_note(data)
             if isinstance(data, dict):
                 data = data.get("paths") or data.get("attack_paths") or next(iter(data.values()), [])
@@ -329,8 +336,24 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
                 body = (f"_Source: `attack-paths.json`_{prov_note}\n\n"
                         + attack_paths.generate(data))
                 sections.append(_section("Attack Paths", body))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             sections.append(_section("Attack Paths", f"> Could not render `attack-paths.json`: {_err(exc)}"))
+
+    # --- Graph diff output ---
+    for diff_name in ("graph-diff.json", "understand-graph-diff.json"):
+        diff_path = out_dir / diff_name
+        if not diff_path.exists():
+            continue
+        try:
+            data = _load_json(diff_path)
+            if data is None:
+                raise ValueError("failed to parse JSON")
+            if isinstance(data, dict):
+                diagram = graph_memory.generate_diff(data)
+                body = f"_Source: `{diff_name}`_\n\n```mermaid\n{_fence(diagram)}\n```"
+                sections.append(_section("Graph Snapshot Diff", body))
+        except Exception as exc:
+            sections.append(_section("Graph Snapshot Diff", f"> Could not render `{diff_name}`: {_err(exc)}"))
 
     if len(sections) <= 1:
         sections.append("> No renderable JSON outputs found in this directory.\n")
@@ -375,7 +398,7 @@ def _load_disproven(path: Path) -> list | None:
     return data if isinstance(data, list) else None
 
 
-def render_and_write(out_dir: Path, target: str | None = None) -> Path:
+def render_and_write(out_dir: Path, target: Optional[str] = None) -> Path:
     content = render_directory(out_dir, target)
     output_path = out_dir / "diagrams.md"
     output_path.write_text(content, encoding="utf-8")

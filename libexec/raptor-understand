@@ -30,6 +30,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 # ─── trust-marker check (do not import; inline by design) ───
 # fmt: off
@@ -312,6 +313,94 @@ def _build_cost_gate():
 
 
 # ---------------------------------------------------------------------------
+# Graph seeding
+# ---------------------------------------------------------------------------
+
+
+def _load_graph_seeds_for_hunt(
+    target: Path, out_dir: Path, pattern: str,
+) -> dict[str, Any]:
+    """Query the graph store for prior data relevant to a --hunt run.
+
+    Returns a dict with ``hypothesis_seeds`` (functions near known flows)
+    and ``dedup_chains`` (grouped scan findings) when a graph DB exists.
+    Empty dict when no graph or no relevant data.
+    """
+    try:
+        from core.understand_graph import (
+            graph_path_for_run,
+            hypothesis_seeds,
+            scan_dedup_chains,
+        )
+    except Exception:
+        return {}
+
+    graph_path = graph_path_for_run(out_dir, str(target))
+    if not graph_path.exists():
+        return {}
+
+    seeds = hypothesis_seeds(graph_path, str(target), limit=30)
+    chains = scan_dedup_chains(graph_path, str(target))
+    if not seeds and not chains:
+        return {}
+
+    result: dict[str, Any] = {}
+    if seeds:
+        result["hypothesis_seeds"] = seeds
+    if chains:
+        result["dedup_chains"] = chains
+    n_seeds = len(seeds)
+    n_chains = len(chains)
+    print(
+        f"  Graph: {n_seeds} hypothesis seed(s), "
+        f"{n_chains} dedup chain(s) from prior runs",
+        file=sys.stderr,
+    )
+    return result
+
+
+def _load_graph_seeds_for_trace(
+    target: Path, out_dir: Path,
+) -> dict[str, Any]:
+    """Query the graph store for prior paths relevant to a --trace run.
+
+    Returns a dict with ``known_paths`` (source-to-sink attack paths) and
+    ``reachable_sinks`` when a graph DB exists. Empty dict otherwise.
+    """
+    try:
+        from core.understand_graph import (
+            attack_paths,
+            graph_path_for_run,
+            reachable_sinks,
+        )
+    except Exception:
+        return {}
+
+    graph_path = graph_path_for_run(out_dir, str(target))
+    if not graph_path.exists():
+        return {}
+
+    paths = attack_paths(graph_path, str(target), limit=30)
+    sinks = reachable_sinks(graph_path, str(target))
+    if not paths and not sinks:
+        return {}
+
+    result: dict[str, Any] = {}
+    if paths:
+        result["known_paths"] = paths
+    if sinks:
+        result["reachable_sinks"] = sinks
+    n_paths = len(paths)
+    n_sinks = len(sinks)
+    print(
+        f"  Graph: {n_paths} known path(s), "
+        f"{n_sinks} reachable sink(s) from prior runs",
+        file=sys.stderr,
+    )
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Mode handlers
 # ---------------------------------------------------------------------------
 
@@ -513,8 +602,35 @@ def _do_hunt(args: argparse.Namespace) -> dict:
             verbose_logger=verbose_logger,
         )
 
+    # Graph seeding: enrich the pattern with prior knowledge when available.
+    out_dir = Path(args.out).resolve()
+    graph_seeds = _load_graph_seeds_for_hunt(target, out_dir, args.hunt)
+    hunt_pattern = args.hunt
+    if graph_seeds and not use_slopsquat:
+        from core.security.prompt_output_sanitise import sanitise_string
+        seed_lines = []
+        for seed in graph_seeds.get("hypothesis_seeds", [])[:10]:
+            s_file = sanitise_string(str(seed.get('file') or '?'), max_chars=200)
+            s_func = sanitise_string(str(seed.get('function') or '?'), max_chars=100)
+            s_sinks = ", ".join(
+                sanitise_string(str(s), max_chars=80)
+                for s in (seed.get('nearby_sinks') or [])[:3]
+            )
+            seed_lines.append(
+                f"  - {s_file}:{seed.get('line', '?')} "
+                f"({s_func}, {seed.get('flow_count', 0)} flow(s), "
+                f"near sinks: {s_sinks})"
+            )
+        if seed_lines:
+            hunt_pattern = (
+                f"{args.hunt}\n\n"
+                f"Prior graph memory has identified these functions "
+                f"near known flows — check them first:\n"
+                + "\n".join(seed_lines)
+            )
+
     result = hunt(
-        pattern=args.hunt,
+        pattern=hunt_pattern,
         repo_path=str(target),
         models=models,
         dispatch_fn=_bound_dispatch,
@@ -524,16 +640,13 @@ def _do_hunt(args: argparse.Namespace) -> dict:
 
     items = result.items
     if getattr(args, "rank", False):
-        # Opt-in re-rank of the merged union before persistence.
-        # Correlation is keyed by item id, not list position, so
-        # reordering is safe; ranking cost joins the cost summary.
         items, rank_cost = _rank_hunt_items(items, args)
         if rank_cost:
             cost_by_model["ranking"] = (
                 cost_by_model.get("ranking", 0.0) + rank_cost
             )
 
-    return {
+    payload: dict[str, Any] = {
         "mode": "hunt",
         "backend": backend_label,
         "pattern": args.hunt,
@@ -546,6 +659,9 @@ def _do_hunt(args: argparse.Namespace) -> dict:
         "model_costs_usd": dict(cost_by_model),
         "total_cost_usd": round(sum(cost_by_model.values()), 4),
     }
+    if graph_seeds:
+        payload["graph_seeds"] = graph_seeds
+    return payload
 
 
 def _do_trace(args: argparse.Namespace) -> dict:
@@ -558,16 +674,26 @@ def _do_trace(args: argparse.Namespace) -> dict:
 
     traces = _load_traces(args.trace)
 
+    # Graph seeding: enrich traces with prior graph knowledge.
+    out_dir = Path(args.out).resolve()
+    graph_seeds = _load_graph_seeds_for_trace(target, out_dir)
+    if graph_seeds.get("known_paths"):
+        for t in traces:
+            if not isinstance(t, dict):
+                continue
+            t.setdefault("graph_prior_paths", graph_seeds["known_paths"])
+    if graph_seeds.get("reachable_sinks"):
+        for t in traces:
+            if not isinstance(t, dict):
+                continue
+            t.setdefault("graph_reachable_sinks", graph_seeds["reachable_sinks"])
+
     models, missing = _resolve_models(args.model)
     if missing:
         raise SystemExit(
             "Unable to resolve --model entries: " + ", ".join(missing) +
             "\nCheck models.json or set the relevant *_API_KEY env var."
         )
-    # Pin the operator's --model process-wide so any sub-consumer
-    # that constructs ``LLMConfig()`` no-arg honours the operator's
-    # choice instead of silently falling through to a models.json-
-    # configured "thinking model".
     from core.llm.config import set_operator_primary_override
     set_operator_primary_override(models[0])
 
@@ -593,7 +719,7 @@ def _do_trace(args: argparse.Namespace) -> dict:
         max_parallel=args.max_parallel,
     )
 
-    return {
+    payload: dict[str, Any] = {
         "mode": "trace",
         "trace_count": len(traces),
         "target": str(target),
@@ -605,6 +731,9 @@ def _do_trace(args: argparse.Namespace) -> dict:
         "model_costs_usd": dict(cost_by_model),
         "total_cost_usd": round(sum(cost_by_model.values()), 4),
     }
+    if graph_seeds:
+        payload["graph_seeds"] = graph_seeds
+    return payload
 
 
 def _build_cost_and_verbose_helpers(verbose: bool):
@@ -811,6 +940,13 @@ def _main_body(args) -> int:
         # unserialisable dict key).
         print(f"error: could not serialize result payload: {e}", file=sys.stderr)
         return 1
+    try:
+        from core.understand_graph import ingest_run
+        graph_path = ingest_run(out_dir, args.target)
+        if graph_path:
+            print(f"Graph: {graph_path}")
+    except Exception as e:
+        print(f"warning: graph ingest skipped: {e}", file=sys.stderr)
     _print_summary(payload, output_path)
 
     # SAGE store: persist results for cross-run learning.

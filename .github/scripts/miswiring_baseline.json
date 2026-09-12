@@ -7,6 +7,9 @@
     "artifacts:orphan_reader::*.md": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:orphan_reader::*.sarif.json": {
+      "note": "external-input pattern: ingest_codeql_sarif globs *.sarif.json in each run dir; the files are produced by the external CodeQL CLI, not by repo python"
+    },
     "artifacts:orphan_reader::*.osv.json": {
       "note": "external-input pattern: cve_bridge.load_cve_run consumes an operator-supplied /cve-diff output directory via glob(\"*.osv.json\"); the writers (packages/cve_diff cli/main.py, cli/bench.py) spell the name f\"{cve_id}.osv.json\", which the artifact indexer normalises to a different key, so the glob reader looks orphaned"
     },
@@ -76,6 +79,15 @@
     "artifacts:orphan_reader::drcov*.log": {
       "note": "externally produced PC traces (DynamoRIO/Frida/AFL-QEMU drcov logs dropped into the fuzz out dir by the campaign or the operator) \u2014 consumed by packages/fuzzing coverage_bridge.find_pc_dumps; no in-repo writer by design"
     },
+    "artifacts:orphan_reader::findings-deduped.json": {
+      "note": "runtime pipeline artifact: produced by /agentic dedup step (raptor_agentic.py save_json), consumed by graph ingest (ingest.py:317) to seed finding nodes"
+    },
+    "artifacts:orphan_reader::graph-diff.json": {
+      "note": "runtime pipeline artifact: produced by raptor-graph-query --diff CLI (stdout JSON piped to file), consumed by diagram renderer (renderer.py:292) for diff visualisation"
+    },
+    "artifacts:orphan_reader::hunt-result.json": {
+      "note": "runtime pipeline artifact: produced by /understand --hunt (libexec/raptor-understand save_json), consumed by graph ingest (ingest.py:37) to seed hypothesis nodes"
+    },
     "artifacts:orphan_reader::exploit-context.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
@@ -96,6 +108,9 @@
     },
     "artifacts:orphan_reader::layer0-findings.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::lifecycle.json": {
+      "note": "runtime pipeline artifact: produced by raptor-run-lifecycle (shell script writes JSON), consumed by graph ingest (ingest.py:763) to resolve run target and creation time for the rebuild walk"
     },
     "artifacts:orphan_reader::lifecycle.log": {
       "note": "externally produced input: written by libexec/raptor-run-lifecycle (shell), read by run tooling"
@@ -126,6 +141,15 @@
     },
     "artifacts:orphan_reader::showmap-edges.txt": {
       "note": "written by the external afl-showmap tool, not by repo code (run_showmap builds the -o path and hands it to the sandboxed afl-showmap invocation); _parse_showmap_output reads it back as the banner-format-drift fallback, so the indexer only ever sees the read"
+    },
+    "artifacts:orphan_reader::trace-result.json": {
+      "note": "runtime pipeline artifact: produced by /understand --trace (libexec/raptor-understand save_json), consumed by graph ingest (ingest.py:37) to seed flow-trace nodes"
+    },
+    "artifacts:orphan_reader::understand-graph-diff.json": {
+      "note": "runtime pipeline artifact: alias of graph-diff.json (different naming convention), consumed by diagram renderer (renderer.py:292) for diff visualisation"
+    },
+    "artifacts:orphan_reader::validation-outcomes.json": {
+      "note": "runtime pipeline artifact: produced by /validate (validation_report.py save_json), consumed by graph ingest (ingest.py:412) to promote exploitability verdicts into graph nodes"
     },
     "artifacts:orphan_reader::study-discards.json": {
       "note": "writer exists (core/concepts/study.py writes it via save_json; core/audit/orchestrator.py reads) \u2014 the artifact indexer does not resolve the substrate writer call through the path variable, so the read looks orphaned"
@@ -250,6 +274,9 @@
     "artifacts:write_only_artifact::config-resolved.sarif": {
       "note": "config-resolved stage SARIF: run_config_resolved_stage returns the path and the scan merges it into combined.sarif via merge_sarif (path argument, so the reader carries no literal filename)"
     },
+    "artifacts:write_only_artifact::context-map.graph.json": {
+      "note": "written by understand_bridge.save_json (understand_bridge.py:641), read by diagram renderer via string-list iteration (renderer.py:123) and raptor_agentic.py:176 — the checker's literal-name index misses both read sites due to the list-driven loading pattern"
+    },
     "artifacts:write_only_artifact::context-guard-report.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
@@ -355,15 +382,6 @@
     "artifacts:write_only_artifact::merged.sarif": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
-    "artifacts:write_only_artifact::nuclei-headers.txt": {
-      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
-    },
-    "artifacts:write_only_artifact::nuclei-results.jsonl": {
-      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
-    },
-    "artifacts:write_only_artifact::nuclei-targets.txt": {
-      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
-    },
     "artifacts:write_only_artifact::observation-status.json": {
       "note": "operator-facing layer-resolution audit trail; surfaced when the atomic-write idiom became visible to the writer classifier"
     },
@@ -446,9 +464,6 @@
       "note": "operator/LLM-facing output: Stage A source-to-binary map summary written by raptor-validation-helper for the validation skill stages"
     },
     "artifacts:write_only_artifact::stderr.log": {
-      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
-    },
-    "artifacts:write_only_artifact::stdout.log": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:write_only_artifact::study-report.md": {
@@ -619,9 +634,6 @@
     "dead:dead_function:packages/exploit_feasibility/errors.py:reset_error_collector": {
       "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
     },
-    "dead:dead_function:packages/exploit_feasibility/schema.py:validate_context_file": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
-    },
     "dead:dead_method:core/audit/tests/test_return_census.py:TestCpgUsage._fake_server_rows": {
       "note": "test scaffolding kept for the planned CPG-backed census cases; harmless"
     },
@@ -771,12 +783,6 @@
     },
     "plumbing:orphan_config_field:packages/autonomous/planner.py:FuzzingState.last_coverage_increase": {
       "note": "kept: autonomous fuzzing loop feature seed (operator decision 2026-08-16; re-affirmed 2026-08-17 config-orphan pass \u2014 goal_progress and strategies_tried deleted as shadowed by Goal.progress / successful_strategies). This is the natural input the wired loop derives coverage_plateau_duration from."
-    },
-    "plumbing:orphan_env_var::SEMGREP_ENABLE_VERSION_CHECK": {
-      "note": "external consumer by design: the variable is semgrep's own phone-home suppression switch, exported into every child env so any invocation shape (including subcommands without the argv flags) stays offline"
-    },
-    "plumbing:orphan_env_var::SEMGREP_SEND_METRICS": {
-      "note": "external consumer by design: the variable is semgrep's own phone-home suppression switch, exported into every child env so any invocation shape (including subcommands without the argv flags) stays offline"
     }
   },
   "version": 1

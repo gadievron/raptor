@@ -2419,7 +2419,24 @@ def _bridge_understand_output(out_dir, checklist, target,
         enrich_checklist,
         find_understand_output,
         load_understand_context,
+        load_understand_graph_context,
     )
+
+
+    graph_bridge = load_understand_graph_context(out_dir, target)
+    if graph_bridge.get("context_map_loaded"):
+        enrich_checklist(checklist, graph_bridge["context_map"], str(out_dir))
+        n_sources = graph_bridge["attack_surface"]["sources"]
+        n_sinks = graph_bridge["attack_surface"]["sinks"]
+        n_paths = graph_bridge.get("graph_attack_paths", {}).get("imported_as_paths", 0)
+        n_targets = len(checklist.get("priority_targets", []))
+        stale = graph_bridge.get("stale_files_excluded") or []
+        stale_note = f", {len(stale)} stale file(s) excluded" if stale else ""
+        print(f"  Bridge: loaded graph memory"
+              f" — {n_sources} sources, {n_sinks} sinks,"
+              f" {n_paths} graph paths,"
+              f" {n_targets} priority targets{stale_note}")
+        return
 
     understand_dir, stale_files = find_understand_output(
         out_dir, target_path=target,
@@ -2822,6 +2839,17 @@ def prepare_1(workdir, target=None, model=None):
                 disproven_list = disproven_data.get("disproven", []) if disproven_data else []
                 if disproven_list:
                     store_validation_disproven(resolved_target, disproven_list)
+
+    # Graph store enrichment — ingest validation outcomes + scan findings.
+    import sqlite3 as _graph_sqlite3
+    try:
+        from core.understand_graph import ingest_scan_findings, ingest_validation_outcomes
+        _wdir = Path(workdir)
+        _tgt = target or ""
+        ingest_validation_outcomes(_wdir, _tgt)
+        ingest_scan_findings(_wdir, _tgt)
+    except (ImportError, _graph_sqlite3.Error, KeyError, TypeError, ValueError):
+        print("graph: ingest skipped", file=sys.stderr)
 
     # Diagrams
     try:

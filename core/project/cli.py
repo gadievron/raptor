@@ -275,6 +275,20 @@ def main() -> None:
         help="Project name (default: active)")
     p_ghidra.add_argument("--wait", action="store_true", help=_WAIT_HELP)
 
+    # graph — persistent graph store management
+    p_graph = sub.add_parser(
+        "graph",
+        help="Manage the persistent /understand graph store",
+        usage="raptor project graph <status|stats|clear|rebuild> [<name>]",
+        **_F,
+    )
+    p_graph.add_argument(
+        "action", choices=("status", "stats", "clear", "rebuild"),
+        help="Action: status, stats (detailed), clear, or rebuild")
+    p_graph.add_argument(
+        "name", nargs="?", default=None,
+        help="Project name (default: active)")
+
     # trust / untrust — per-project trust markers
     p_trust = sub.add_parser(
         "trust",
@@ -938,6 +952,9 @@ def main() -> None:
                     save_json(project_file, gproj.to_dict())
                 print(_green(f"Detached all Ghidra projects for "
                              f"'{name}'"))
+
+        elif args.subcommand == "graph":
+            _handle_graph(mgr, args)
 
         elif args.subcommand in ("trust", "untrust"):
             _handle_trust(mgr, args)
@@ -1777,6 +1794,96 @@ def _resolve_project_or_exit(mgr, name):
     return name, p
 
 
+def _handle_graph(mgr, args: argparse.Namespace) -> None:
+    """Manage the persistent /understand graph store for a project."""
+    name = args.name or _get_active_project()
+    if not name:
+        print(_red("No project specified. "
+                    "Use: raptor project graph <action> <name>, "
+                    "or set an active project first."))
+        return
+    p = mgr.load(name)
+    if not p:
+        print(_red(f"Project '{name}' not found."))
+        return
+
+    from core.understand_graph import graph_path_for_run
+    graph_path = graph_path_for_run(Path(p.output_dir))
+
+    if args.action == "status":
+        if not graph_path.exists():
+            print(f"Project '{name}': no graph store.")
+            return
+        from core.understand_graph import graph_summary
+        info = graph_summary(graph_path)
+        size = graph_path.stat().st_size
+        if size >= 1024 * 1024:
+            size_str = f"{size / 1024 / 1024:.1f}MB"
+        elif size >= 1024:
+            size_str = f"{size / 1024:.1f}KB"
+        else:
+            size_str = f"{size}B"
+        mtime = datetime.fromtimestamp(
+            graph_path.stat().st_mtime, tz=timezone.utc)
+        from core.understand_graph.schema import SCHEMA_VERSION
+        total_nodes = sum(info.get("nodes", {}).values())
+        total_edges = sum(info.get("edges", {}).values())
+        print(f"Graph store: {graph_path}")
+        print(f"  Size: {size_str}")
+        print(f"  Schema: v{SCHEMA_VERSION}")
+        print(f"  Last modified: {mtime:%Y-%m-%d %H:%M:%S UTC}")
+        print(f"  Nodes: {total_nodes}")
+        print(f"  Edges: {total_edges}")
+        snap = info.get("latest_snapshot")
+        if snap:
+            print(f"  Latest snapshot: {snap.get('created_at', '?')}"
+                  f" ({snap.get('producer', '?')})")
+
+    elif args.action == "stats":
+        if not graph_path.exists():
+            print(f"Project '{name}': no graph store.")
+            return
+        from core.understand_graph import graph_summary
+        info = graph_summary(graph_path)
+        nodes = info.get("nodes", {})
+        edges = info.get("edges", {})
+        if not nodes and not edges:
+            print(f"Project '{name}': graph is empty.")
+            return
+        print(f"Graph store: {graph_path.name}")
+        if nodes:
+            print("\n  Node counts by type:")
+            for kind in sorted(nodes, key=lambda k: -nodes[k]):
+                print(f"    {kind:<24s} {nodes[kind]:>6d}")
+            print(f"    {'TOTAL':<24s} {sum(nodes.values()):>6d}")
+        if edges:
+            print("\n  Edge counts by type:")
+            for kind in sorted(edges, key=lambda k: -edges[k]):
+                print(f"    {kind:<24s} {edges[kind]:>6d}")
+            print(f"    {'TOTAL':<24s} {sum(edges.values()):>6d}")
+
+    elif args.action == "clear":
+        if not graph_path.exists():
+            print(f"Project '{name}': no graph store to clear.")
+            return
+        graph_path.unlink()
+        print(_green(f"Cleared graph store for '{name}'"))
+
+    elif args.action == "rebuild":
+        from core.understand_graph import rebuild_graph
+        result = rebuild_graph(Path(p.output_dir))
+        if result and result.exists():
+            from core.understand_graph import graph_summary
+            info = graph_summary(result)
+            total_nodes = sum(info.get("nodes", {}).values())
+            total_edges = sum(info.get("edges", {}).values())
+            print(_green(
+                f"Rebuilt graph for '{name}': "
+                f"{total_nodes} nodes, {total_edges} edges"))
+        else:
+            print(f"No artefacts found to rebuild from in '{name}'.")
+
+
 def _handle_trust(mgr, args: argparse.Namespace) -> None:
     """List, set, or remove operator trust markers on a project.
 
@@ -2234,6 +2341,36 @@ def _print_status(project) -> None:
             print(f"\nDisk usage: {total_size / 1024:.1f}KB")
         else:
             print(f"\nDisk usage: {total_size}B")
+
+        # Graph store summary — best-effort, never breaks status
+        import sqlite3 as _graph_sqlite3
+        try:
+            from core.understand_graph import dashboard_summary, graph_path_for_run
+            _gp = graph_path_for_run(Path(project.output_dir))
+            if _gp.exists():
+                _gs = dashboard_summary(_gp)
+                totals = _gs.get("totals") or {}
+                if any(totals.values()):
+                    print(f"\nGraph store: {_gp.relative_to(Path(project.output_dir))}")
+                    parts = []
+                    for label, key in (
+                        ("entries", "entries"),
+                        ("sinks", "sinks"),
+                        ("findings", "scan_findings"),
+                        ("CodeQL", "codeql_results"),
+                        ("hypotheses", "hypotheses"),
+                        ("validated", "validated"),
+                    ):
+                        v = totals.get(key, 0)
+                        if v:
+                            parts.append(f"{v} {label}")
+                    if parts:
+                        print(f"  {', '.join(parts)}")
+                    cov = _gs.get("validation_coverage", 0.0)
+                    if cov > 0:
+                        print(f"  Validation coverage: {cov:.0%}")
+        except (ImportError, _graph_sqlite3.Error, KeyError, TypeError, ValueError):
+            pass
 
     else:
         print("\nNo runs.")
