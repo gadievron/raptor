@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.json import load_json as _load_json
-from core.security.prompt_output_sanitise import sanitise_code, sanitise_string
+from core.security.prompt_output_sanitise import sanitise_code
 
 from . import context_map, flow_trace, attack_tree, attack_paths, hypotheses, findings_summary, graph_memory
 
