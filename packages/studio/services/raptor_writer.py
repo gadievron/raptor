@@ -164,6 +164,7 @@ def update_project_metadata(
     Only ``description`` and ``notes`` are writable from the UI today —
     renaming and deleting remain CLI-only.
     """
+    _validate_name(name)
     projects_dir = Path(projects_dir)
     project_file = projects_dir / f"{name}.json"
     if not project_file.is_file():

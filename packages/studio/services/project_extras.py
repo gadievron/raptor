@@ -20,11 +20,14 @@ from its runs.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from packages.studio.config import STUDIO_DATA_DIR
+
+_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
 
 PROJECT_TYPES = ("source", "binary", "forensics")
 
@@ -77,6 +80,8 @@ class ProjectExtras:
 
 
 def _sidecar_path(name: str, studio_dir: Path = STUDIO_DATA_DIR) -> Path:
+    if not name or not _NAME_RE.match(name):
+        raise ValueError(f"invalid project name for sidecar path: {name!r}")
     return studio_dir / "project-extras" / f"{name}.json"
 
 
