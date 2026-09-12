@@ -85,7 +85,6 @@ class TestBugR015StderrPersistence(unittest.TestCase):
 
     def test_stderr_log_path_referenced_in_error_message(self):
         """The error message must point users at the log file path."""
-        from packages.openant.scanner import _empty_result
         # Emulate the fix's error formatting
         msg = "OpenAnt exited 2: some error (full stderr in /tmp/x/openant.stderr.log)"
         self.assertIn("openant.stderr.log", msg)
@@ -161,6 +160,17 @@ class TestBugR012NoAnalyzeRemoved(unittest.TestCase):
                          "--no-analyze flag should be removed (BUG-R-012)")
         self.assertNotIn("no_analyze", text,
                          "no_analyze references should be removed")
+
+
+class TestSandboxIntegration(unittest.TestCase):
+    """Verify OpenAnt subprocess runs under core.sandbox.run."""
+
+    def test_uses_sandbox_run(self):
+        from packages.openant import scanner
+        src = Path(scanner.__file__).read_text()
+        assert "from core.sandbox.context import run as sandbox_run" in src
+        assert "sandbox_run(" in src
+        assert "subprocess.run(" not in src.split("sandbox_run(", 1)[1]
 
 
 if __name__ == "__main__":
