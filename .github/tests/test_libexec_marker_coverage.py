@@ -295,6 +295,7 @@ unset _symhops''',
     "libexec/raptor-llm-scorecard": [("raptor-llm-scorecard", 1, ())],
     "libexec/raptor-sage-mcp": [("raptor-sage-mcp", 3, ())],
     "libexec/raptor-sage-setup": [("raptor-sage-setup", 3, ())],
+    "libexec/raptor-openant": [("raptor-openant", 1, ())],
     "libexec/raptor-threat-model": [("raptor-threat-model", 1, ())],
 }
 
@@ -311,6 +312,7 @@ ENV_STRIP_LINES = {
     "libexec/raptor-frida": '. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"',
     "libexec/raptor-frida-patch-verify": '. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"',
     "libexec/raptor-llm-scorecard": '. "$REPO_ROOT/core/security/_dangerous_env_strip.sh"',
+    "libexec/raptor-openant": '. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"',
     "libexec/raptor-threat-model": '. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"',
 }
 

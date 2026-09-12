@@ -2249,6 +2249,11 @@
     "count": 20,
     "kind": "literal"
   },
+  "packages/openant/translator.py::_translate_finding": {
+    "count": 12,
+    "kind": "literal",
+    "note": "finding-dict field names of the OpenAnt→RAPTOR schema translator (cwe_id, file, finding_id, etc.), not a name vocabulary"
+  },
   "packages/sca/__init__.py::SCA_ALLOWED_HOSTS": {
     "count": 21,
     "kind": "literal"
