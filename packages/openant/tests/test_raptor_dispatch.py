@@ -86,11 +86,11 @@ class TestFeatR005OpenantFlagsInAgentic(unittest.TestCase):
                               f"raptor_agentic.py must declare {flag}")
 
     def test_phase1b_block_present(self):
-        """Phase 1b block runs OpenAnt scan + dedup + merge."""
+        """Phase 1b block runs OpenAnt scan + dedup."""
         self.assertIn("PHASE 1b: OPENANT SEMANTIC SCAN", self.src,
                       "Phase 1b OpenAnt block must be present")
-        self.assertIn("openant_extra_findings", self.src,
-                      "openant_extra_findings variable must be populated")
+        self.assertIn("openant_findings", self.src,
+                      "openant_findings variable must be populated")
         self.assertIn("deduplicate_with_sarif", self.src,
                       "Phase 1b must dedup against SARIF findings")
 
