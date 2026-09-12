@@ -17,6 +17,9 @@ from typing import ClassVar
 from core.config import RaptorConfig
 from core.json import load_json, save_json
 from core.logging import get_logger
+from core.sandbox.tiers import (
+    CONSENTABLE_FLOOR_LABELS as VALID_SANDBOX_FLOORS,
+)
 
 try:
     import fcntl
@@ -114,6 +117,13 @@ _TRUST_MARKER_HELP = {
 # by design.
 VALID_TARGET_KINDS = ("library", "hybrid", "application", "auto")
 
+# VALID_SANDBOX_FLOORS (imported above from core/sandbox/tiers.py —
+# single source of truth, tiny and dependency-free): the untrusted
+# containment-floor consent values. ``none`` is deliberately NOT
+# accepted: a standing bare floor is not a project-consentable value
+# — untrusted work never runs bare by consent; the operator-explicit
+# per-run ``--sandbox none`` / ``--no-sandbox`` remains the only
+# sandbox-off surface.
 SETTINGS_REGISTRY = {
     "description": "one-line project description (string)",
     "notes": "free-form project notes (string)",
@@ -123,11 +133,15 @@ SETTINGS_REGISTRY = {
     "build-command": ("build command (string); per-language form "
                       "``build-command.<lang>`` (bare key sets the "
                       "``default`` language slot)"),
+    "sandbox-floor": ("untrusted containment-floor consent, one of: "
+                      + "|".join(VALID_SANDBOX_FLOORS)
+                      + " (consumed at run start; per-run "
+                        "--sandbox-floor overrides)"),
 }
 
 # Keys persisted in the ``settings`` dict (the others map to existing
 # top-level Project fields).
-_DICT_SETTINGS_KEYS = ("target-kind", "build-command")
+_DICT_SETTINGS_KEYS = ("target-kind", "build-command", "sandbox-floor")
 
 # Language slot names for ``build-command.<lang>``.
 _LANG_SLOT_RE = re.compile(r"\A[a-zA-Z0-9_+#.-]{1,32}\Z")
@@ -420,6 +434,13 @@ class Project:
             # A bare string form (hand-edited JSON) upgrades to the
             # canonical lang→cmd dict on the default slot.
             settings["build-command"] = {"default": build}
+        floor = raw.get("sandbox-floor")
+        if isinstance(floor, str) and floor in VALID_SANDBOX_FLOORS:
+            # A value outside the consent vocabulary (hand-edited
+            # JSON, schema drift) is DROPPED here — a containment
+            # consent is never guessed; the run proceeds at the
+            # fail-closed default floor.
+            settings["sandbox-floor"] = floor
         return settings
 
     def is_expired_machine_project(self, now: datetime | None = None) -> bool:
@@ -505,6 +526,21 @@ class Project:
                 commands = {}
             commands[slot] = value
             self.settings["build-command"] = commands
+        elif base == "sandbox-floor":
+            if value not in VALID_SANDBOX_FLOORS:
+                extra = ""
+                if value == "none":
+                    extra = (
+                        " ('none' is not a consentable untrusted "
+                        "floor — untrusted work never runs bare by "
+                        "consent; the per-run --sandbox none / "
+                        "--no-sandbox operator surface is the only "
+                        "sandbox-off)")
+                raise ValueError(
+                    "sandbox-floor must be one of: "
+                    + ", ".join(VALID_SANDBOX_FLOORS)
+                    + f" (got {value!r}){extra}")
+            self.settings["sandbox-floor"] = value
         else:  # pragma: no cover — split_setting_key guards this
             msg = f"Unknown setting {key!r}"
             raise ValueError(msg)
@@ -528,6 +564,8 @@ class Project:
             return had
         if base == "target-kind":
             return self.settings.pop("target-kind", None) is not None
+        if base == "sandbox-floor":
+            return self.settings.pop("sandbox-floor", None) is not None
         if base == "build-command":
             commands = self.settings.get("build-command")
             if not isinstance(commands, dict):
@@ -552,6 +590,8 @@ class Project:
             return self.threat_model_path or None
         if base == "target-kind":
             return self.settings.get("target-kind")
+        if base == "sandbox-floor":
+            return self.settings.get("sandbox-floor")
         if base == "build-command":
             commands = self.settings.get("build-command")
             if not isinstance(commands, dict):

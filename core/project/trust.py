@@ -317,6 +317,112 @@ def resolve_repo_trust(
     return False
 
 
+def active_project_sandbox_floor(
+    run_dir: str | Path | None = None,
+) -> str | None:
+    """The governing project's ``sandbox-floor`` setting (tier label
+    string), or ``None``. Best-effort, same failure posture as
+    :func:`active_project_trust` — a missing project or schema
+    mismatch resolves to no consent (the fail-closed default floor),
+    never a crash."""
+    try:
+        from core.project.project import ProjectManager
+        mgr = ProjectManager()
+        active = _context_project_name(run_dir)
+        if not active:
+            return None
+        proj = mgr.load(active)
+        if not proj:
+            return None
+        label = proj.get_setting("sandbox-floor")
+        return label if isinstance(label, str) and label else None
+    except Exception as exc:  # noqa: BLE001 — consent loading must never break a run
+        from core.run.pin import ProjectArgvError
+        if isinstance(exc, ProjectArgvError):
+            raise
+        logger.warning(
+            "sandbox-floor: project setting resolution failed (%s) — "
+            "proceeding with the default untrusted floor", exc)
+        return None
+
+
+def apply_project_sandbox_floor(
+    args=None, *, banner: bool = True,
+    target_path: str | Path | None = None,
+    run_dir: str | Path | None = None,
+) -> str | None:
+    """Consume the active project's ``sandbox-floor`` setting at run
+    start — the project surface of the untrusted containment-floor
+    consent chain (per-run ``--sandbox-floor`` flag > this setting >
+    the legacy env var > default-refuse).
+
+    Mirrors :func:`apply_project_trust_flags`: the setting is an
+    operator assertion persisted in the project JSON under the RAPTOR
+    projects dir — never read from the scanned repo, never from cwd —
+    and it only applies when the run's target matches the project's
+    target (a consent to weaker containment is a statement about ONE
+    target's work). A mismatch drops it with a loud notice.
+
+    Plumbs the validated label into ``core.sandbox`` state
+    (``set_project_sandbox_floor``); precedence against the per-run
+    flag and the env var is resolved per call inside the sandbox
+    (context.resolve_untrusted_floor), so the flag wins in both
+    directions and disagreements banner there. Returns the applied
+    label, or ``None`` when no setting applies.
+
+    Consent state must never be invisible: prints one banner line
+    when the setting is loaded and no per-run flag was passed (the
+    flag case banners from the sandbox side, naming both surfaces on
+    disagreement).
+    """
+    try:
+        from core.sandbox import state as _sandbox_state
+        if _sandbox_state._cli_sandbox_disabled:
+            # Operator-explicit sandbox-off (--sandbox none /
+            # --no-sandbox) is globally authoritative — a floor
+            # consent is moot, and printing its banner would claim a
+            # consent the disable overrides. Skip quietly.
+            return None
+    except Exception:  # noqa: BLE001 — consent loading must never break a run
+        pass
+    label = active_project_sandbox_floor(run_dir)
+    if not label:
+        return None
+    run_target = target_path or (
+        _derive_run_target(args) if args is not None
+        else os.environ.get("RAPTOR_CALLER_DIR") or None)
+    if not run_target_matches_project(run_target, run_dir):
+        notice = (
+            f"[*] project sandbox-floor: '{label}' IGNORED — run "
+            f"target {run_target or '<unknown>'} is not the active "
+            f"project's target (floor consent is asserted for one "
+            f"target only)"
+        )
+        if banner:
+            print(notice)
+        else:
+            # banner=False callers have machine-parsed stdout
+            # (libexec dispatch helpers) — keep the drop visible on
+            # the log stream instead.
+            logger.warning("%s", notice)
+        return None
+    try:
+        from core.sandbox.cli import set_project_sandbox_floor
+        set_project_sandbox_floor(label)
+    except ValueError as exc:
+        # Invalid label on disk (schema drift, hand-edited project
+        # file) or a Linux tier on macOS: fail CLOSED to the default
+        # floor, loudly — never guess a consent.
+        logger.warning(
+            "sandbox-floor: project setting not applied (%s) — "
+            "proceeding with the default untrusted floor", exc)
+        return None
+    if banner and getattr(args, "sandbox_floor", None) is None:
+        print(f"[*] project sandbox-floor: {label} "
+              f"(per-run --sandbox-floor overrides)")
+    return label
+
+
 def resolve_build_execution(
     explicit: bool | None, *, banner: bool = True,
     target_path: str | Path | None = None,
@@ -346,8 +452,10 @@ def resolve_build_execution(
 
 
 __all__ = [
+    "active_project_sandbox_floor",
     "active_project_target",
     "active_project_trust",
+    "apply_project_sandbox_floor",
     "apply_project_trust_flags",
     "emit_trust_banner",
     "resolve_build_execution",

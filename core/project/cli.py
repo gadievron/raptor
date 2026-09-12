@@ -311,7 +311,7 @@ def main() -> None:
         "set",
         help=("List or set project settings (registry-validated: "
               "description, notes, threat-model, target-kind, "
-              "build-command[.<lang>])"),
+              "build-command[.<lang>], sandbox-floor)"),
         usage="raptor project set [<key> <value>] [<name>]",
         **_F,
     )
@@ -2173,7 +2173,8 @@ def _print_status(project) -> None:
     # dict (description/notes/threat-model already have lines above).
     setting_parts = [
         f"{k}={v}" for k, v in project.settings_view().items()
-        if v and (k == "target-kind" or k.startswith("build-command"))
+        if v and (k in ("target-kind", "sandbox-floor")
+                  or k.startswith("build-command"))
     ]
     print("Settings: " + (", ".join(setting_parts)
                           if setting_parts else "(defaults)"))

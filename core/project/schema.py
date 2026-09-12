@@ -78,13 +78,22 @@ def _validate_project(data: dict[str, Any]) -> tuple[bool, list[str]]:
         if not isinstance(settings, dict):
             errors.append("settings must be a dict")
         else:
-            from core.project.project import VALID_TARGET_KINDS
+            from core.project.project import (
+                VALID_SANDBOX_FLOORS,
+                VALID_TARGET_KINDS,
+            )
             for key, value in settings.items():
                 if key == "target-kind":
                     if value not in VALID_TARGET_KINDS:
                         errors.append(
                             "settings['target-kind'] must be one of "
                             + ", ".join(VALID_TARGET_KINDS))
+                elif key == "sandbox-floor":
+                    if value not in VALID_SANDBOX_FLOORS:
+                        errors.append(
+                            "settings['sandbox-floor'] must be one of "
+                            + ", ".join(VALID_SANDBOX_FLOORS)
+                            + " ('none' is never a standing consent)")
                 elif key == "build-command":
                     if not isinstance(value, dict):
                         errors.append(
@@ -102,7 +111,7 @@ def _validate_project(data: dict[str, Any]) -> tuple[bool, list[str]]:
                 else:
                     errors.append(
                         f"settings key '{key}' invalid; valid: "
-                        "build-command, target-kind")
+                        "build-command, sandbox-floor, target-kind")
 
     return len(errors) == 0, errors
 
