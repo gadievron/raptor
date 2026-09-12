@@ -76,8 +76,14 @@ def _run_subprocess(
 
     logger.info(f"Running OpenAnt: {' '.join(str(c) for c in cmd)}")
     try:
-        proc = subprocess.run(
+        from core.sandbox.context import run as sandbox_run
+        proc = sandbox_run(
             cmd,
+            block_network=False,
+            target=str(repo_path),
+            output=str(out_dir),
+            readable_paths=[str(config.core_path)],
+            caller_label="openant",
             capture_output=True,
             text=True,
             timeout=config.timeout_seconds,
