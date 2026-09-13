@@ -150,7 +150,6 @@ except ImportError:
 try:
     from packages.zkpox.anchor import (
         InclusionProofError,
-        InclusionProofError,
         SignatureError,
         anchor_bundle,
         bundle_hash_pre_timestamp,
