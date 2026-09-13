@@ -107,4 +107,61 @@ __all__ = [
     "require_proving_stack",
     "summarize_eligibility",
     "write_bundle",
+    "Bundle",
+    "BUNDLE_VERSION",
+    "DisclosureBundle",
+    "Envelope",
+    "HarnessRef",
+    "Proof",
+    "SignatureError",
+    "Target",
+    "Vulnerability",
+    "anchor_bundle",
+    "bundle_hash_pre_timestamp",
+    "canonical_set_payload",
+    "confirm_anchor_matches",
+    "gen_ed25519_keypair",
+    "sha256_bytes",
+    "vendor_envelope_from",
+    "verify_inclusion_proof",
+    "verify_set",
 ]
+
+# Tier 2/3 disclosure bundle + Sigstore anchor — optional deps
+# (cbor2, cryptography). Re-exported so tests can import from the
+# package root; guarded so Tier 0/1 callers aren't broken.
+try:
+    from packages.zkpox.disclosure import (
+        BUNDLE_VERSION,
+        DisclosureBundle,
+        HarnessRef,
+        Proof,
+        Target,
+        Vulnerability,
+        sha256_bytes,
+        vendor_envelope_from,
+    )
+    # Convenience alias — test_anchor.py and early code use "Bundle"
+    Bundle = DisclosureBundle
+except ImportError:
+    pass
+
+try:
+    from packages.zkpox.anchor import (
+        SignatureError,
+        anchor_bundle,
+        bundle_hash_pre_timestamp,
+        canonical_set_payload,
+        confirm_anchor_matches,
+        gen_ed25519_keypair,
+        verify_inclusion_proof,
+        verify_set,
+    )
+except ImportError:
+    pass
+
+try:
+    from packages.zkpox.envelope import Envelope
+except ImportError:
+    pass
+
