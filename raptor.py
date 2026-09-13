@@ -1423,7 +1423,7 @@ def show_mode_help(mode: str, preamble: bool = True) -> None:
     mode_scripts = _mode_help_scripts()
 
     if mode not in mode_scripts:
-        all_modes = set(mode_scripts.keys()) | {'describe', 'doctor', 'sca', 'frida'}
+        all_modes = set(mode_scripts.keys()) | {'describe', 'doctor', 'sca', 'frida', 'zkpox'}
         if mode not in all_modes:
             print(f"✗ Unknown mode: {mode}", file=sys.stderr)
             print(f"Available modes: {', '.join(sorted(all_modes))}", file=sys.stderr)
@@ -1555,6 +1555,19 @@ For more information, visit: https://github.com/gadievron/raptor
 """
 
 
+
+def mode_zkpox(args: list) -> int:
+    """Run ZKPoX zero-knowledge proof of exploit."""
+    script_root = Path(__file__).parent
+    zkpox_script = script_root / "raptor_zkpox.py"
+
+    if not zkpox_script.exists():
+        print(f"\u2717 ZKPoX script not found: {zkpox_script}", file=sys.stderr)
+        return 1
+
+    return _run_with_lifecycle("zkpox", zkpox_script, args,
+                              "Running ZKPoX...")
+
 def main():
     """Main entry point for unified RAPTOR launcher."""
     # Pre-process --trust-repo at the top level so it works in any position
@@ -1651,6 +1664,7 @@ def main():
         'doctor': mode_doctor,
         'describe': mode_describe,
         'frida': mode_frida,
+        'zkpox': mode_zkpox,
     }
     
     if mode not in mode_handlers:

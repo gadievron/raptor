@@ -1,0 +1,7 @@
+# Cargo build artifacts (~2 GB; reproducible from source)
+target/
+
+# Native sanity-check binary (rebuilt by `clang ... -fsanitize=address`
+# per the targets/README or the test harness)
+targets/01-stack-bof
+targets/*.o
