@@ -112,6 +112,7 @@ __all__ = [
     "DisclosureBundle",
     "Envelope",
     "HarnessRef",
+    "InclusionProofError",
     "Proof",
     "SignatureError",
     "Target",
@@ -148,6 +149,7 @@ except ImportError:
 
 try:
     from packages.zkpox.anchor import (
+        InclusionProofError,
         InclusionProofError,
         SignatureError,
         anchor_bundle,
