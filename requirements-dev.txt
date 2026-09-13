@@ -32,6 +32,7 @@ playwright==1.60.0
 # (glibc 2.38+) but the devcontainer base is bookworm (glibc 2.36).
 # Move forward when bookworm → trixie.
 z3-solver==4.15.4.0
+
 # ZKPoX Tier 2/3 (packages/zkpox/{disclosure,anchor,envelope,prove}).
 # Optional at runtime — kept out of requirements.txt to preserve the
 # dependency-free Tier 0/1 import contract — but required here so the
