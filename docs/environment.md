@@ -352,8 +352,8 @@ to 120. Raise it only for unusually slow toolchains.
 | `RAPTOR_SAGE_FP_SUPPRESS` | `1` | Falsy disables SAGE cross-run false-positive suppression entirely (every finding re-tests). The force gate for consumers without a `--force` flag of their own — /agentic's analysis loop suppresses pre-LLM through this hook. |
 | `RAPTOR_SAGE_CVE_PRIOR` | `1` | Falsy disables mechanical reuse of SAGE-remembered verified CVE fix pointers in /cve-diff discovery. MAC-gated: rows without a verifying token are ignored regardless. |
 | `RAPTOR_EF_CONFIG` | unset | Path to `packages/exploit_feasibility`'s analysis-settings JSON (chain: explicit arg > `RAPTOR_EF_CONFIG` > `./.raptor.json` > `~/.config/raptor/config.json`). Not to be confused with `RAPTOR_CONFIG` (core.llm models config) — this reader historically shared that name; each side's schema guard names the right variable on mismatch. See "Exploit-feasibility analysis settings" below for the rest of the `RAPTOR_EF_*` family. |
-
 | `ZKPOX_REKOR_URL` | `https://log2026-1.rekor.sigstore.dev` | Sigstore Rekor transparency-log URL for ZKPoX anchor verification (`packages/zkpox/anchor.py`). Overrides the default public instance so private/on-prem Rekor deployments drop in. Must be http(s); trailing slash is stripped. |
+
 ### cve-env (`CVE_ENV_*`)
 
 `packages/cve_env` (the LLM-agentic CVE → Docker environment builder,
