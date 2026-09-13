@@ -1555,6 +1555,19 @@ For more information, visit: https://github.com/gadievron/raptor
 """
 
 
+
+def mode_zkpox(args: list) -> int:
+    """Run ZKPoX zero-knowledge proof of exploit."""
+    script_root = Path(__file__).parent
+    zkpox_script = script_root / "raptor_zkpox.py"
+
+    if not zkpox_script.exists():
+        print(f"\u2717 ZKPoX script not found: {zkpox_script}", file=sys.stderr)
+        return 1
+
+    return _run_with_lifecycle("zkpox", zkpox_script, args,
+                              "Running ZKPoX...")
+
 def main():
     """Main entry point for unified RAPTOR launcher."""
     # Pre-process --trust-repo at the top level so it works in any position
@@ -1637,20 +1650,6 @@ def main():
     if mode in _HELP_RENDER_MODES and _wants_help(remaining):
         show_mode_help(mode, preamble=False)
         return 0
-
-
-
-def mode_zkpox(args: list) -> int:
-    """Run ZKPoX zero-knowledge proof of exploit."""
-    script_root = Path(__file__).parent
-    zkpox_script = script_root / "raptor_zkpox.py"
-
-    if not zkpox_script.exists():
-        print(f"\u2717 ZKPoX script not found: {zkpox_script}", file=sys.stderr)
-        return 1
-
-    return _run_with_lifecycle("zkpox", zkpox_script, args,
-                              "Running ZKPoX...")
 
     # Route to appropriate mode
     mode_handlers = {
