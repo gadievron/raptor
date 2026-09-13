@@ -1,0 +1,155 @@
+{#- Shared finding detail block — expects `f` to be a finding dict from raptor.
+    Renders raptor's full schema: attack_scenario, proof (source/sink/flow),
+    vulnerable_code, poc.payload, feasibility (protections / exploitation_paths
+    / chain_breaks / what_would_help), validation stage trail. -#}
+
+{% macro label(text) -%}
+<strong style="font-size: 10px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;">{{ text }}</strong>
+{%- endmacro %}
+
+{% if f.attack_scenario %}
+<div style="margin-bottom: 12px;">
+  {{ label("Attack scenario") }}
+  <p style="margin: 6px 0 0; font-size: 13px; line-height: 1.5;">{{ f.attack_scenario }}</p>
+</div>
+{% endif %}
+
+{% if f.proof %}
+  {% if f.proof.source or f.proof.sink %}
+  <div style="margin-bottom: 12px;">
+    {{ label("Flow") }}
+    <div style="display: flex; gap: 12px; margin-top: 6px; flex-wrap: wrap; font-size: 12px;">
+      {% if f.proof.source %}
+      <div style="flex: 1; min-width: 240px;">
+        <div style="font-size: 10px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.04em;">Source</div>
+        <div class="mono" style="color: var(--fg);">{{ f.proof.source }}</div>
+      </div>
+      {% endif %}
+      {% if f.proof.sink %}
+      <div style="flex: 1; min-width: 240px;">
+        <div style="font-size: 10px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.04em;">Sink</div>
+        <div class="mono" style="color: var(--fg);">{{ f.proof.sink }}</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+  {% if f.proof.vulnerable_code %}
+  <div style="margin-bottom: 12px;">
+    {{ label("Vulnerable code") }}
+    <pre>{{ f.proof.vulnerable_code }}</pre>
+  </div>
+  {% endif %}
+  {% if f.proof.flow and f.proof.flow is iterable and f.proof.flow is not string %}
+  <div style="margin-bottom: 12px;">
+    {{ label("Dataflow steps") }}
+    <pre>{% for step in f.proof.flow %}{{ loop.index }}. {{ step }}
+{% endfor %}</pre>
+  </div>
+  {% endif %}
+{% endif %}
+
+{% if f.poc %}
+  {% if f.poc.description %}
+  <div style="margin-bottom: 12px;">
+    {{ label("PoC") }}
+    <p style="margin: 6px 0 0; font-size: 13px;">{{ f.poc.description }}</p>
+  </div>
+  {% endif %}
+  {% if f.poc.payload %}
+  <div style="margin-bottom: 12px;">
+    {{ label("PoC payload") }}
+    <pre>{{ f.poc.payload }}</pre>
+  </div>
+  {% endif %}
+{% endif %}
+
+{% if f.feasibility %}
+  {% set feas = f.feasibility %}
+  <div style="margin-bottom: 12px; padding: 12px; border: 1px solid var(--border-l); border-radius: 6px; background: var(--bg);">
+    {{ label("Binary feasibility (") }}<abbr title="Stage E: binary-feasibility validation — given the binary's protections (PIE/NX/canary/RELRO) and glibc mitigations, is a working exploit actually achievable? Only runs for memory-corruption vulnerabilities."><span style="font-size: 10px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; border-bottom: 1px dotted var(--fg3); cursor: help;">Stage E</span></abbr>{{ label(")") }}
+    <div style="margin-top: 8px; font-size: 12px;">
+      {% if feas.verdict %}
+      <div><strong>Verdict:</strong> <span class="mono">{{ feas.verdict }}</span></div>
+      {% endif %}
+      {% set bin_analysis = feas.binary_analysis or {} %}
+      {% if bin_analysis.protections %}
+      <div style="margin-top: 6px;">
+        <strong>Protections:</strong>
+        <span class="mono" style="color: var(--fg2);">
+        {% for k, v in bin_analysis.protections.items() %}{{ k }}={{ v }}{% if not loop.last %} · {% endif %}{% endfor %}
+        </span>
+      </div>
+      {% endif %}
+      {% if bin_analysis.exploitation_paths %}
+      <div style="margin-top: 6px;">
+        <strong><abbr title="Ordered {technique, target} pairs describing how to turn a vuln primitive into a working exploit." style="border-bottom: 1px dotted var(--fg3); cursor: help;">Exploitation paths</abbr>:</strong>
+        <ul style="margin: 4px 0 0 0; padding-left: 20px;">
+        {% for p in bin_analysis.exploitation_paths %}
+          <li class="mono" style="font-size: 11px;">{{ p.technique }} → {{ p.target }}</li>
+        {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+    </div>
+    {% if feas.chain_breaks %}
+    <div style="margin-top: 10px;">
+      <div style="font-size: 11px; color: var(--fg2); font-weight: 600;">
+        <abbr title="Concrete reasons a specific exploitation technique is blocked. [source]-tagged = from code-level analysis; [binary]-tagged = from Stage E feasibility." style="border-bottom: 1px dotted var(--fg3); cursor: help;">Chain breaks</abbr>:
+      </div>
+      <ul style="margin: 4px 0 0 0; padding-left: 20px; font-size: 12px;">
+        {% for cb in feas.chain_breaks %}
+          <li>{{ cb }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+    {% if feas.what_would_help %}
+    <div style="margin-top: 10px;">
+      <div style="font-size: 11px; color: var(--fg2); font-weight: 600;">What would help:</div>
+      <ul style="margin: 4px 0 0 0; padding-left: 20px; font-size: 12px;">
+        {% for w in feas.what_would_help %}
+          <li>{{ w }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </div>
+{% endif %}
+
+{% if f.ruling_checks or f.evidence_synthesis %}
+<div style="margin-bottom: 12px;">
+  {{ label("Validation trail") }}
+  <div style="font-size: 12px; margin-top: 6px; color: var(--fg2);">
+    {% if f.evidence_synthesis %}<div>{{ f.evidence_synthesis }}</div>{% endif %}
+    {% if f.ruling_checks %}
+    <pre style="margin-top: 6px;">{{ f.ruling_checks | tojson(indent=2) if f.ruling_checks is mapping else f.ruling_checks }}</pre>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% set relevant_personas = personas_for(f) %}
+{% if relevant_personas %}
+<div style="margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--border-l);">
+  {{ label("Relevant expert perspectives") }}
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; margin-top: 8px;">
+  {% for p in relevant_personas %}
+    <details style="border: 1px solid var(--border-l); border-radius: 6px; padding: 10px 12px; background: var(--bg);">
+      <summary style="cursor: pointer;">
+        <div style="font-size: 12px; font-weight: 600; color: var(--fg);">{{ p.label }}{% if p.handle %} <span style="font-weight: 400; color: var(--fg3); font-style: italic;">· {{ p.handle }}</span>{% endif %}</div>
+        <div style="font-size: 11px; color: var(--fg2); margin-top: 2px;">{{ p.use_when }}</div>
+      </summary>
+      {% if p.content %}
+      <pre style="margin: 10px 0 0; max-height: 240px; overflow: auto; font-size: 10px;">{{ p.content }}</pre>
+      <div style="font-size: 10px; color: var(--fg3); margin-top: 6px;">
+        From <code class="mono">tiers/personas/{{ p.key }}.md</code> · invoke in raptor: <code class="mono">"Use {{ p.label|lower }} persona to …"</code>
+      </div>
+      {% else %}
+      <div style="margin-top: 10px; font-size: 11px; color: var(--fg3);">Persona file not found at <code class="mono">$RAPTOR_HOME/tiers/personas/{{ p.key }}.md</code>.</div>
+      {% endif %}
+    </details>
+  {% endfor %}
+  </div>
+</div>
+{% endif %}

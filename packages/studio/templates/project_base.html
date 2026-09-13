@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+{#- Shared project shell — 240px sidebar + main content.
+    Callers pass:
+      project       RaptorProject
+      lane_status   dict from services.run_kind.lane_status
+      active_stage  one of: overview, findings, runs, artifacts,
+                    understand, scan, validate,
+                    fuzz, crash-analysis, oss-forensics,
+                    exploits, patches, reports, activity, settings
+      next_action   dict|None from services.run_kind.next_action
+    Caller fills {% block project_content %}{% endblock %}. -#}
+
+{% block title %}{{ project.name }} — {{ app_title }}{% endblock %}
+
+{% block content %}
+<style>
+  .project-shell {
+    display: grid; grid-template-columns: 240px 1fr; gap: 24px;
+    align-items: start;
+  }
+  @media (max-width: 900px) {
+    .project-shell { grid-template-columns: 1fr; }
+  }
+
+  .proj-side {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px;
+    position: sticky; top: 72px;
+  }
+  .proj-title {
+    font-size: 15px; font-weight: 700; color: var(--fg);
+    word-break: break-all; line-height: 1.3;
+  }
+  .proj-target {
+    font-size: 11px; color: var(--fg3);
+    font-family: "JetBrains Mono", monospace;
+    margin-top: 6px; word-break: break-all;
+  }
+  .proj-divider { height: 1px; background: var(--border-l); margin: 14px -16px; }
+
+  .proj-nav { display: flex; flex-direction: column; gap: 1px; }
+  .proj-nav a {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; border-radius: 6px;
+    text-decoration: none; color: var(--fg2);
+    font-size: 13px; font-weight: 500;
+  }
+  .proj-nav a:hover { color: var(--fg); background: var(--bg3); text-decoration: none; }
+  .proj-nav a.active {
+    color: var(--fg); background: var(--accent-r);
+    font-weight: 600;
+  }
+  .proj-nav a.active .step-num { background: var(--accent); color: white; }
+
+  .proj-nav .step-num {
+    display: inline-flex; width: 18px; height: 18px; border-radius: 50%;
+    align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 600;
+    background: var(--bg3); color: var(--fg3); flex-shrink: 0;
+  }
+  .proj-nav .step-icon {
+    margin-left: auto; font-size: 11px; font-family: "JetBrains Mono", monospace;
+  }
+  .proj-nav .step-icon.complete { color: #16a34a; }
+  .proj-nav .step-icon.partial  { color: var(--accent); }
+  .proj-nav .step-icon.pending  { color: var(--fg3); }
+  .proj-nav .step-icon.failed   { color: var(--crit); }
+  .proj-nav .step-count {
+    font-family: "JetBrains Mono", monospace; font-size: 10px;
+    color: var(--fg3); margin-left: 4px;
+  }
+
+  .section-label {
+    font-size: 10px; color: var(--fg3);
+    text-transform: uppercase; letter-spacing: 0.06em;
+    font-weight: 600; padding: 12px 10px 4px;
+    display: block;
+  }
+  details.other-lanes summary {
+    list-style: none;
+  }
+  details.other-lanes summary::-webkit-details-marker { display: none; }
+  details.other-lanes summary::before {
+    content: "› ";
+    display: inline-block;
+    transition: transform 0.15s ease;
+    margin-right: 2px;
+  }
+  details.other-lanes[open] summary::before { transform: rotate(90deg); }
+
+  .breadcrumbs {
+    font-size: 12px; color: var(--fg3);
+    margin-bottom: 16px;
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  }
+  .breadcrumbs a { color: var(--fg3); }
+  .breadcrumbs a:hover { color: var(--accent); text-decoration: none; }
+  .breadcrumbs .sep { color: var(--border); }
+  .breadcrumbs .current { color: var(--fg); font-weight: 500; }
+</style>
+
+<div class="project-shell">
+  <aside class="proj-side">
+    <div class="proj-title">{{ project.name }}</div>
+    <div class="proj-target">{{ project.target }}</div>
+    {% if project.description %}
+      <div style="font-size: 11px; color: var(--fg2); margin-top: 6px;">{{ project.description }}</div>
+    {% endif %}
+
+    <div class="proj-divider"></div>
+
+    <div class="proj-nav">
+      {%- macro item(href, label, stage, step=None, lane=None) -%}
+        {%- set info = (lane_status.get(lane, {}).get(stage) if (lane and lane_status) else None) -%}
+        {%- set status = info.status if info else None -%}
+        {%- set count = info.count if info else 0 -%}
+        {%- set cls = "active" if active_stage == stage else "" -%}
+        <a href="{{ href }}" class="{{ cls }}">
+          {% if step %}<span class="step-num">{{ step }}</span>{% endif %}
+          <span>{{ label }}</span>
+          {% if count %}<span class="step-count">{{ count }}</span>{% endif %}
+          {% if status == "complete" %}<span class="step-icon complete">✓</span>
+          {% elif status == "partial" %}<span class="step-icon partial">◐</span>
+          {% elif status == "failed" %}<span class="step-icon failed">✗</span>
+          {% elif status == "pending" %}<span class="step-icon pending">○</span>
+          {% endif %}
+        </a>
+      {%- endmacro -%}
+
+      {{ item("/projects/" + project.name, "Overview", "overview") }}
+
+      <div class="section-label">Navigation</div>
+      {{ item("/projects/" + project.name + "/findings", "Findings", "findings") }}
+      {{ item("/projects/" + project.name + "/runs",     "Runs",     "runs") }}
+      {{ item("/projects/" + project.name + "/diff",     "Diff",     "diff") }}
+
+      {#- Lane sections — prominent ones first, irrelevant ones collapsed.
+          project.kind is 'source' / 'binary' / 'forensics' / None. -#}
+      {%- set kind = project.kind or 'all' -%}
+
+      {%- macro source_lane() -%}
+        {{ item("/projects/" + project.name + "/understand", "Understand", "understand", step=1, lane="source") }}
+        {{ item("/projects/" + project.name + "/scan",       "Scan",       "scan",       step=2, lane="source") }}
+        {{ item("/projects/" + project.name + "/validate",   "Validate",   "validate",   step=3, lane="source") }}
+      {%- endmacro -%}
+
+      {%- macro binary_lane() -%}
+        {{ item("/projects/" + project.name + "/fuzz",           "Fuzz",           "fuzz",           step=1, lane="binary") }}
+        {{ item("/projects/" + project.name + "/crash-analysis", "Crash analysis", "crash-analysis", step=2, lane="binary") }}
+      {%- endmacro -%}
+
+      {%- macro forensics_lane() -%}
+        {{ item("/projects/" + project.name + "/oss-forensics", "OSS forensics", "oss-forensics", lane="forensics") }}
+      {%- endmacro -%}
+
+      {% if kind == 'source' %}
+        <div class="section-label">Source analysis</div>
+        {{ source_lane() }}
+        <details class="other-lanes" {% if active_stage in ('fuzz','crash-analysis','oss-forensics') %}open{% endif %}>
+          <summary class="section-label" style="cursor: pointer;">Other capabilities</summary>
+          {{ binary_lane() }}
+          {{ forensics_lane() }}
+        </details>
+      {% elif kind == 'binary' %}
+        <div class="section-label">Binary fuzzing</div>
+        {{ binary_lane() }}
+        <details class="other-lanes" {% if active_stage in ('understand','scan','validate','oss-forensics') %}open{% endif %}>
+          <summary class="section-label" style="cursor: pointer;">Other capabilities</summary>
+          {{ source_lane() }}
+          {{ forensics_lane() }}
+        </details>
+      {% elif kind == 'forensics' %}
+        <div class="section-label">Forensics</div>
+        {{ forensics_lane() }}
+        <details class="other-lanes" {% if active_stage in ('understand','scan','validate','fuzz','crash-analysis') %}open{% endif %}>
+          <summary class="section-label" style="cursor: pointer;">Other capabilities</summary>
+          {{ source_lane() }}
+          {{ binary_lane() }}
+        </details>
+      {% else %}
+        <div class="section-label">Source analysis</div>
+        {{ source_lane() }}
+        <div class="section-label">Binary fuzzing</div>
+        {{ binary_lane() }}
+        <div class="section-label">Forensics</div>
+        {{ forensics_lane() }}
+      {% endif %}
+
+      <div class="section-label">Artifacts</div>
+      {{ item("/projects/" + project.name + "/exploits", "Exploits", "exploits") }}
+      {{ item("/projects/" + project.name + "/patches",  "Patches",  "patches") }}
+      {{ item("/projects/" + project.name + "/reports",  "Reports",  "reports") }}
+
+      <div class="section-label">Project</div>
+      {{ item("/projects/" + project.name + "/jobs",     "Jobs",     "jobs") }}
+      {{ item("/projects/" + project.name + "/activity", "Activity", "activity") }}
+      {{ item("/projects/" + project.name + "/settings", "Settings", "settings") }}
+    </div>
+  </aside>
+
+  <main class="proj-main">
+    <div class="breadcrumbs">
+      <a href="/projects">Projects</a>
+      <span class="sep">›</span>
+      <a href="/projects/{{ project.name }}">{{ project.name }}</a>
+      {% block breadcrumb_tail %}{% endblock %}
+    </div>
+    {% block project_content %}{% endblock %}
+  </main>
+</div>
+{% endblock %}
