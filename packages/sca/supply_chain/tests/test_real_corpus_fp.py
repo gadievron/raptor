@@ -208,8 +208,8 @@ def test_clean_composer_with_test_script_no_findings(tmp_path: Path) -> None:
             ],
         },
     }), encoding="utf-8")
-    manifests = [_manifest(cj, "Composer")]
-    deps = [_dep("vendor/monolog-clone", "Composer", declared_in=cj)]
+    manifests = [_manifest(cj, "Packagist")]
+    deps = [_dep("vendor/monolog-clone", "Packagist", declared_in=cj)]
     findings = evaluate(tmp_path, manifests, deps)
     new = _findings_from_new_detectors(findings)
     assert not new

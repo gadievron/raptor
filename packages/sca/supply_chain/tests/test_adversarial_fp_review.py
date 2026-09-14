@@ -141,8 +141,8 @@ def test_composer_laravel_at_php_artisan_no_finding(tmp_path: Path) -> None:
         },
     }), encoding="utf-8")
     findings = composer_lifecycle_hooks.scan_manifests(
-        [_manifest(cj, "Composer")],
-        [_dep("laravel/clone", "Composer", declared_in=cj)],
+        [_manifest(cj, "Packagist")],
+        [_dep("laravel/clone", "Packagist", declared_in=cj)],
     )
     assert findings == []
 
@@ -155,8 +155,8 @@ def test_composer_phpunit_test_script_no_finding(tmp_path: Path) -> None:
         "scripts": {"test": "phpunit --colors=always"},
     }), encoding="utf-8")
     findings = composer_lifecycle_hooks.scan_manifests(
-        [_manifest(cj, "Composer")],
-        [_dep("vendor/x", "Composer", declared_in=cj)],
+        [_manifest(cj, "Packagist")],
+        [_dep("vendor/x", "Packagist", declared_in=cj)],
     )
     assert findings == []
 

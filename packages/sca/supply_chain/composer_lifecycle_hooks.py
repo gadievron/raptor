@@ -74,7 +74,13 @@ def scan_manifests(
     out: list[ComposerLifecycleFinding] = []
     deps_list = list(deps)
     for m in manifests:
-        if m.ecosystem != "Composer":
+        # Discovery classifies composer.json as "Packagist" (the OSV
+        # ecosystem name) — filtering on the registry-brand spelling
+        # "Composer" matched NOTHING in production and left the whole
+        # detector dead for every PHP target. The filename gate below
+        # is the precise selector; the ecosystem gate is belt and
+        # braces against same-named non-PHP files.
+        if m.ecosystem != "Packagist":
             continue
         if m.path.name != "composer.json" or m.is_lockfile:
             continue

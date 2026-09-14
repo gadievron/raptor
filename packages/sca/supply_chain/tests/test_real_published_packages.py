@@ -290,8 +290,8 @@ def test_monolog_shape_no_new_findings(tmp_path: Path) -> None:
             "phpstan": "phpstan analyse",
         },
     }), encoding="utf-8")
-    manifests = [_manifest(cj, "Composer")]
-    deps = [_dep("monolog/monolog", "Composer", declared_in=cj)]
+    manifests = [_manifest(cj, "Packagist")]
+    deps = [_dep("monolog/monolog", "Packagist", declared_in=cj)]
     findings = evaluate(tmp_path, manifests, deps)
     new = _new_detector_findings(findings)
     assert not new
@@ -304,8 +304,8 @@ def test_symfony_console_shape_no_new_findings(tmp_path: Path) -> None:
         "name": "symfony/console",
         "type": "library",
     }), encoding="utf-8")
-    manifests = [_manifest(cj, "Composer")]
-    deps = [_dep("symfony/console", "Composer", declared_in=cj)]
+    manifests = [_manifest(cj, "Packagist")]
+    deps = [_dep("symfony/console", "Packagist", declared_in=cj)]
     findings = evaluate(tmp_path, manifests, deps)
     new = _new_detector_findings(findings)
     assert not new
@@ -336,8 +336,8 @@ def test_laravel_framework_shape_no_new_findings(tmp_path: Path) -> None:
             "test": ["./vendor/bin/phpunit"],
         },
     }), encoding="utf-8")
-    manifests = [_manifest(cj, "Composer")]
-    deps = [_dep("laravel/framework", "Composer", declared_in=cj)]
+    manifests = [_manifest(cj, "Packagist")]
+    deps = [_dep("laravel/framework", "Packagist", declared_in=cj)]
     findings = evaluate(tmp_path, manifests, deps)
     new = _new_detector_findings(findings)
     assert not new, (
@@ -358,8 +358,8 @@ def test_phpunit_shape_no_new_findings(tmp_path: Path) -> None:
             ],
         },
     }), encoding="utf-8")
-    manifests = [_manifest(cj, "Composer")]
-    deps = [_dep("phpunit/phpunit", "Composer", declared_in=cj)]
+    manifests = [_manifest(cj, "Packagist")]
+    deps = [_dep("phpunit/phpunit", "Packagist", declared_in=cj)]
     findings = evaluate(tmp_path, manifests, deps)
     new = _new_detector_findings(findings)
     assert not new
@@ -378,8 +378,8 @@ def test_doctrine_orm_shape_no_new_findings(tmp_path: Path) -> None:
             ],
         },
     }), encoding="utf-8")
-    manifests = [_manifest(cj, "Composer")]
-    deps = [_dep("doctrine/orm", "Composer", declared_in=cj)]
+    manifests = [_manifest(cj, "Packagist")]
+    deps = [_dep("doctrine/orm", "Packagist", declared_in=cj)]
     findings = evaluate(tmp_path, manifests, deps)
     new = _new_detector_findings(findings)
     assert not new

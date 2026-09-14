@@ -505,7 +505,7 @@ def _composer_lifecycle_to_finding(
             "reasons": list(clh.hit.reasons),
             "reads_credentials": clh.hit.reads_credentials,
             "has_publish_action": clh.hit.has_publish_action,
-            "ecosystem": "Composer",
+            "ecosystem": "Packagist",
         },
         severity=clh.severity,                # type: ignore[arg-type]
         confidence=clh.confidence,

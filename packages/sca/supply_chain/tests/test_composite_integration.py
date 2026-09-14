@@ -129,7 +129,7 @@ def test_composer_dangerous_script_plus_binary_promotes_critical(
         },
     }), encoding="utf-8")
     _write_elf(tmp_path / "tools" / "payload")
-    manifests = [_manifest(cj, "Composer")]
+    manifests = [_manifest(cj, "Packagist")]
     deps = _parsed_deps(*manifests)
     assert any(d.name == "monolog/monolog" for d in deps)
     findings = evaluate(tmp_path, manifests, deps)

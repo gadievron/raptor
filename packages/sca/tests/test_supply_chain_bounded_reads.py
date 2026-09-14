@@ -124,7 +124,7 @@ class TestComposerLifecycleHooksBound:
     ) -> None:
         path = _sparse_oversize(tmp_path / "composer.json")
         manifest = Manifest(
-            path=path, ecosystem="Composer", is_lockfile=False,
+            path=path, ecosystem="Packagist", is_lockfile=False,
         )
         with _expect_refusal(caplog):
             host = composer_lifecycle_hooks._host_dep([], manifest)
