@@ -433,22 +433,51 @@ jobs:
           import json, glob, os, sys
           from datetime import datetime, timezone
 
+          import re
+
+          def _infer_category(artifact_path):
+              """Synthesize automationDetails.id from the artifact dir name.
+
+              Artifact dirs are ``sarif-in/sarif-<language>/...``, so the
+              language is the second path component minus the ``sarif-``
+              prefix.  Returns ``/language:<lang>/`` matching the format
+              the action would have written."""
+              m = re.match(r"sarif-in/sarif-([^/]+)/", artifact_path)
+              return f"/language:{m.group(1)}/" if m else None
+
           runs = []
           for path in sorted(glob.glob("sarif-in/sarif-*/*.sarif")):
+              # CodeQL >=2.26 may emit .quality.sarif alongside the
+              # standard .sarif — those target a separate upload
+              # endpoint and must not be merged into the code-scanning
+              # multi-run file.
+              if path.endswith(".quality.sarif") or path.endswith(".csra.sarif"):
+                  continue
               with open(path) as f:
                   doc = json.load(f)
               for run in doc.get("runs", []):
-                  # Defensive: ensure every run carries automationDetails.id.
-                  # `analyze@v4` writes it from `category:`; the stub writer
-                  # above sets it explicitly. Either path satisfies the
-                  # PR-vs-base correlator.
-                  if not run.get("automationDetails", {}).get("id"):
-                      print(
-                          f"::warning::SARIF run from {path} missing "
-                          f"automationDetails.id — skipping",
-                          file=sys.stderr,
-                      )
-                      continue
+                  aid = run.get("automationDetails", {}).get("id")
+                  if not aid:
+                      # CodeQL CLI >=2.26.2 may omit automationDetails.id
+                      # from raw SARIF when the action uses upload:never.
+                      # Synthesize from the artifact directory name so the
+                      # upload still carries the correct category.
+                      aid = _infer_category(path)
+                      if aid:
+                          run.setdefault("automationDetails", {})["id"] = aid
+                          print(
+                              f"::notice::Injected automationDetails.id "
+                              f"'{aid}' into run from {path}",
+                              file=sys.stderr,
+                          )
+                      else:
+                          print(
+                              f"::warning::SARIF run from {path} missing "
+                              f"automationDetails.id and cannot infer — "
+                              f"skipping",
+                              file=sys.stderr,
+                          )
+                          continue
                   runs.append(run)
 
           if not runs:
