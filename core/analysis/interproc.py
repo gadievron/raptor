@@ -166,6 +166,13 @@ def _call_arg_names(
             continue
         if _chain_str(node.func) != callee_chain:
             continue
+        if any(isinstance(arg, ast.Starred) for arg in node.args):
+            # ``helper(*rest, x)`` — the unpack shifts every later
+            # runtime position by len(rest), so index-based mapping
+            # would bind x to the wrong parameter (possibly a
+            # cleanly-sanitized one). Uncertainty → decline the
+            # binding (the docstring contract).
+            return None
         out: list[str | None] = [arg.id if isinstance(arg, ast.Name) else None for arg in node.args]
         kw_out: list[tuple[str | None, str | None]] = []
         for kw in node.keywords:

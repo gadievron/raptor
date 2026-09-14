@@ -452,3 +452,33 @@ class TestResolverIntegration:
         # crash and no Python inter-proc bindings.
         if isinstance(resolved, ResolvedFinding):
             assert resolved.inter_proc_bindings == frozenset()
+
+
+class TestStarredArgsDeclineBinding:
+    def test_star_unpack_before_named_arg_no_binding(self):
+        # ``helper(*rest, x)`` places x at AST index 1 but runtime
+        # position 1 + len(rest) — index-based mapping claims x lands
+        # in the cleanly-sanitized parameter (index 1 here) when at
+        # runtime it lands elsewhere. The sanitized position must be
+        # the one x's AST index hits, or the pre-fix code never minted
+        # a binding and the test was vacuous.
+        src = (
+            "def _clean(raw, s):\n"
+            "    return str(len(raw)) + html.escape(s)\n"
+            "def handle(x, rest):\n"
+            "    y = _clean(*rest, x)\n"
+            "    render(y)\n"
+        )
+        _, bindings = _bindings_for(src, "handle")
+        assert bindings == frozenset()
+
+    def test_no_star_still_binds(self):
+        src = (
+            "def _clean(s):\n"
+            "    return html.escape(s)\n"
+            "def handle(x):\n"
+            "    y = _clean(x)\n"
+            "    render(y)\n"
+        )
+        _, bindings = _bindings_for(src, "handle")
+        assert len(bindings) == 1
