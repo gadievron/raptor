@@ -613,3 +613,43 @@ class TestDiscoverySummaryLog:
         # Fixture ground truth: lonely is eligible, cb_user is blocked.
         assert result.unreachable_eligible[("app.lua", "lonely")].eligible
         assert not result.unreachable_eligible[("cb.c", "cb_user")].eligible
+
+
+class TestJvmMobileLanguagesEnumerated:
+    """scala/kotlin/swift walkers exist and are builder-wired; the
+    discovery walk must not silently skip their files (zero sinks and
+    reach for those languages in /understand --map and audit review
+    selection)."""
+
+    @staticmethod
+    def _target(tmp_path):
+        (tmp_path / "A.kt").write_text(
+            'fun run(cmd: String) { ProcessBuilder(cmd).start() }\n',
+            encoding="utf-8",
+        )
+        (tmp_path / "B.scala").write_text(
+            'object B { def go(c: String): Unit = '
+            '{ Runtime.getRuntime().exec(c) } }\n',
+            encoding="utf-8",
+        )
+        (tmp_path / "C.swift").write_text(
+            'func launch() {\n    let p = Process()\n    p.launch()\n}\n',
+            encoding="utf-8",
+        )
+        return tmp_path
+
+    def test_discovery_walk_yields_jvm_mobile_files(self, tmp_path):
+        from core.inventory.sink_discovery import iter_discovery_source_files
+
+        target = self._target(tmp_path)
+        langs = {lang for _, _, lang in iter_discovery_source_files(target)}
+        assert {"kotlin", "scala", "swift"} <= langs
+
+    def test_kotlin_process_builder_is_a_direct_sink(self, tmp_path):
+        from core.inventory.sink_discovery import discover_sinks_for_target
+
+        target = self._target(tmp_path)
+        result = discover_sinks_for_target(target, languages={"kotlin"})
+        assert any(
+            s.target == "ProcessBuilder" for s in result.direct_sinks
+        ), "kotlin file contributed no sinks"

@@ -1003,12 +1003,25 @@ def _get_call_graph_extractors():
         extract_call_graph_go,
         extract_call_graph_java,
         extract_call_graph_javascript,
+        extract_call_graph_kotlin,
         extract_call_graph_lua,
         extract_call_graph_php,
         extract_call_graph_python,
         extract_call_graph_ruby,
         extract_call_graph_rust,
+        extract_call_graph_scala,
+        extract_call_graph_swift,
     )
+    # Keep in lockstep with the builder's call-graph wiring: any
+    # language missing here is silently skipped by
+    # iter_discovery_source_files, so its files contribute zero
+    # sinks/reach to /understand --map and audit review selection.
+    # Per-language sink vocabulary: scala/kotlin ride the JVM entries
+    # in _SOURCE_LEVEL_SINKS (Runtime.exec, ProcessBuilder, …); swift
+    # has no swift-specific seed sinks yet — its files still
+    # contribute call graphs (transitive reach, wrapper and framework
+    # detection), and seeds should be learned (study/IRIS) rather
+    # than guessed here.
     return {
         "python": extract_call_graph_python,
         "javascript": extract_call_graph_javascript,
@@ -1019,10 +1032,13 @@ def _get_call_graph_extractors():
         "csharp": extract_call_graph_csharp,
         "go": extract_call_graph_go,
         "java": extract_call_graph_java,
+        "kotlin": extract_call_graph_kotlin,
         "lua": extract_call_graph_lua,
         "php": extract_call_graph_php,
         "ruby": extract_call_graph_ruby,
         "rust": extract_call_graph_rust,
+        "scala": extract_call_graph_scala,
+        "swift": extract_call_graph_swift,
     }
 
 
