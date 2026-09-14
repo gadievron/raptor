@@ -434,28 +434,12 @@ alt_src.write_text(
 alt_bin = TARGET / "build" / "alt"
 subprocess.run(["gcc", "-O0", "-g", str(alt_src), "-o", str(alt_bin)],
                check=True, timeout=60)
-inv3 = {"files": [
-    {"path": "src/api.c", "language": "c", "items": [
-        {"name": "api_dead_function", "kind": "function", "line_start": 1},
-        # 8 padding items so the floor doesn't bounce the small binary.
-        *[{"name": f"api_open_{i}" if i == 0 else f"api_p_{i}",
-           "kind": "function", "line_start": 10 + i} for i in range(8)],
-    ]},
-]}
-# Make the padding match BOTH binaries by giving names api_open knows.
-# Actually simpler: use names that THE REAL BINARY has, but the alt binary
-# lacks. So real binary contributes coverage > floor; alt binary's coverage
-# is low. Both will be admitted (floor only kicks in at >= 8 project names
-# in EACH binary; alt has just "api_dead_function" + "main").
-# Per current floor implementation: floor applies when n_project >= 8;
-# we have 9 project names; alt matches only 1 of them → 11% which is
-# above 5% floor BUT min_matched=3 means alt gets dropped.
-# Let me restructure: use names that BOTH have.
+# Two project names only — the source-coverage floor kicks in at >= 8
+# project names, so the small alt binary is admitted here.
 inv3 = {"files": [
     {"path": "src/api.c", "language": "c", "items": [
         {"name": "api_dead_function", "kind": "function", "line_start": 1},
         {"name": "main", "kind": "function", "line_start": 2},
-        # Below 8 project names → floor doesn't fire.
     ]},
 ]}
 counts_m = enrich_inventory_with_binary_oracle(inv3, (BINARY, alt_bin))
