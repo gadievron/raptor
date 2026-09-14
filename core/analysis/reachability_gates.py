@@ -467,7 +467,16 @@ def query_unguarded_sinks(
     ).replace("__SINK_NAMES__", _scala_string_list(_UNGUARDED_QUERY_SINKS))
     try:
         result = joern_server.query(query, timeout=30, validate=False)
-        if result.errors:
+        # Phantom-error tolerance (same filter as _joern_find_callers
+        # and query_sink_arg_indices): the server transport folds
+        # benign "failed to parse flow:" noise into result.errors on
+        # healthy replies; treating those as fatal silently discarded
+        # the unguarded-sink evidence from the review prompt on that
+        # transport. Only errors OUTSIDE that shape degrade.
+        if any(
+            "failed to parse flow:" not in str(e)
+            for e in (result.errors or [])
+        ):
             return []
         # Transport-tolerant parse: on the server transport the
         # records ride the final expression's value echo.

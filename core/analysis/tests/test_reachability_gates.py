@@ -589,6 +589,36 @@ class TestQueryUnguardedSinks:
         }]
 
 
+    def test_phantom_flow_errors_do_not_drop_sink_evidence(self):
+        # Same transport noise the caller/arg-index queries already
+        # tolerate: benign JOERN_FLOW-scan parse errors ride
+        # result.errors on healthy replies. Treating them as fatal
+        # silently removed the unguarded-sink lines from the review
+        # prompt on the server transport.
+        stdout = (
+            'val res2: String = """JOERN_GUARD_SUMMARY:1/3\n'
+            'JOERN_UNGUARDED:{"sink":"memcpy","line":10,'
+            '"code":"memcpy(d, s, n)","guarded":false}"""'
+        )
+        server = _FakeJoernServer(
+            raw_output=stdout,
+            errors=["failed to parse flow: unparseable JOERN_FLOW: "
+                    "payload '...': Expecting value"],
+        )
+        sinks = query_unguarded_sinks("fn", server)
+        assert [s["sink"] for s in sinks] == ["memcpy"]
+
+    def test_real_error_alongside_phantoms_still_degrades(self):
+        server = _FakeJoernServer(
+            raw_output="JOERN_UNGUARDED:{}",
+            errors=[
+                "failed to parse flow: unparseable JOERN_FLOW: payload",
+                "query failed: server restarting",
+            ],
+        )
+        assert query_unguarded_sinks("fn", server) == []
+
+
 class TestQuerySinkArgIndex:
     def test_none_server(self):
         assert query_sink_arg_index("fn", "memcpy", None) == []
