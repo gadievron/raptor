@@ -212,6 +212,36 @@ def _hosts_in(text: str) -> Iterable[tuple[str, int]]:
 def _nearest_popular(
     host: str, popular: set[str],
 ) -> tuple[int, str] | None:
+    """Best near-miss for ``host`` against the popular set —
+    whole-host comparison PLUS trailing 2- / 3-label suffixes.
+
+    The suffix pass exists for the module's own motivating attack
+    shape: ``scan.aquasecurtiy.org`` (CVE-2026-33634) is distance ≥5
+    from ``aquasecurity.org`` as a whole host, but its registrable
+    suffix is distance 1 — attackers control DNS for the squat
+    domain, so subdomain hosting is the OBSERVED shape.  An exact
+    suffix match means the host is a subdomain of a popular domain
+    (only that domain's owner can serve it) and is skipped as
+    in-family.
+    """
+    best = _nearest_whole(host, popular)
+    labels = host.split(".")
+    for n in (2, 3):
+        if len(labels) <= n:
+            continue
+        suffix = ".".join(labels[-n:])
+        if suffix in popular:
+            # Subdomain of a popular domain — same owner, not a squat.
+            return best
+        cand = _nearest_whole(suffix, popular)
+        if cand is not None and (best is None or cand[0] < best[0]):
+            best = cand
+    return best
+
+
+def _nearest_whole(
+    host: str, popular: set[str],
+) -> tuple[int, str] | None:
     best: tuple[int, str] | None = None
     for pop in popular:
         d = _damerau_levenshtein(host, pop, _MAX_DISTANCE + 1)

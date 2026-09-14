@@ -205,3 +205,30 @@ def test_distance_convention_exact_at_cap_and_cap_plus_one_beyond() -> None:
     # The shared implementation's base-row initialisation carries
     # over (a zeroed base row made DL("a", "cma") come out 0).
     assert _damerau_levenshtein("a", "cma", 98) == 2
+
+
+def test_subdomain_hosted_squat_flagged(tmp_path: Path) -> None:
+    """The module's own motivating shape (CVE-2026-33634):
+    ``scan.aquasecurtiy.org`` is distance ≥5 from any popular entry
+    as a whole host, but its registrable suffix is distance 1 from
+    ``aquasecurity.org`` — the suffix pass must catch it."""
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "src.py").write_text(
+        "URL = 'https://scan.aquasecurtiy.org/payload'\n",
+        encoding="utf-8")
+    out = scan_target(tmp_path, _manifests(tmp_path))
+    assert len(out) == 1
+    assert out[0].suspect_host == "scan.aquasecurtiy.org"
+    assert out[0].nearest_popular == "aquasecurity.org"
+    assert out[0].distance == 1
+    assert out[0].severity == "high"
+
+
+def test_subdomain_of_popular_domain_not_flagged(tmp_path: Path) -> None:
+    """An exact suffix match means the host is a subdomain of the
+    popular domain itself — only that owner can serve it."""
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "src.py").write_text(
+        "URL = 'https://scan.aquasecurity.org/x'\n", encoding="utf-8")
+    out = scan_target(tmp_path, _manifests(tmp_path))
+    assert out == []
