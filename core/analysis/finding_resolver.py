@@ -538,13 +538,22 @@ def _inter_proc_bindings_python(
         )
     except ImportError:                                     # pragma: no cover
         return frozenset()
-    cg = build_python_module_callgraph(source_text)
-    if cg is None:
+    # Blanket catch, mirroring the Java analog: the graph/summary
+    # walks recurse on target-controlled AST depth, and the
+    # docstring's "empty frozenset on ANY failure" contract must be
+    # structural — a RecursionError escaping here aborts the whole
+    # gate evaluation instead of degrading to the intra-procedural
+    # verdict.
+    try:
+        cg = build_python_module_callgraph(source_text)
+        if cg is None:
+            return frozenset()
+        summaries = build_taint_summaries(cg, source_text)
+        return synthetic_sanitizer_bindings(
+            cfg, fn, summaries, cwe, "python",
+        )
+    except Exception:                                       # noqa: BLE001
         return frozenset()
-    summaries = build_taint_summaries(cg, source_text)
-    return synthetic_sanitizer_bindings(
-        cfg, fn, summaries, cwe, "python",
-    )
 
 
 def _resolve_from_parsed_cpp(

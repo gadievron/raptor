@@ -714,3 +714,42 @@ class TestJavaB41SinkShapes:
         assert _pick_value_name({"x", "pre"}, cfg) == "pre"
         # All-namespace surfaces fall back to plain lexicographic.
         assert _pick_value_name({"java", "javax"}, cfg) == "java"
+
+
+class TestInterProcBindingsBestEffort:
+    """The docstring contract — empty frozenset on ANY failure — must
+    be structural: the summary walks recurse on target-controlled AST
+    depth, and an escaping RecursionError aborted the whole gate
+    evaluation instead of degrading to the intra-procedural verdict
+    (the Java analog already had the blanket catch)."""
+
+    def test_summary_failure_degrades_to_empty(self, monkeypatch):
+        import ast as _ast
+
+        import core.analysis.taint_summaries as ts
+        from core.analysis.cfg_builder import build_python_cfg
+        from core.analysis.finding_resolver import (
+            _inter_proc_bindings_python,
+        )
+
+        src = (
+            "def handle(x):\n"
+            "    y = html.escape(x)\n"
+            "    render(y)\n"
+        )
+        cfg = build_python_cfg(src, "handle")
+        fn = next(
+            n for n in _ast.walk(_ast.parse(src))
+            if isinstance(n, _ast.FunctionDef)
+        )
+
+        calls = []
+
+        def _boom(*_a, **_k):
+            calls.append(1)
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(ts, "build_taint_summaries", _boom)
+        out = _inter_proc_bindings_python(src, fn, cfg, "CWE-79")
+        assert calls, "patched summary builder was never reached"
+        assert out == frozenset()
