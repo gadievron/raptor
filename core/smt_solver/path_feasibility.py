@@ -271,6 +271,18 @@ class PathSMTResult:
 # ---------------------------------------------------------------------------
 
 _HEX_RE = re.compile(r'^0x[0-9a-f]+$', re.IGNORECASE)
+
+
+def _hex_literal_forces_unsigned(tok: str, profile: "BVProfile") -> bool:
+    """True when *tok* is a bare hex literal whose value exceeds the
+    profile's signed max — in C such a literal has UNSIGNED type and
+    forces the enclosing comparison unsigned (usual arithmetic
+    conversions). Only exact-literal operands are recognised;
+    compound expressions keep the profile's signedness (conservative:
+    unchanged behaviour)."""
+    if not profile.signed or not _HEX_RE.fullmatch(tok):
+        return False
+    return int(tok, 16) >= (1 << (profile.width - 1))
 _INT_RE = re.compile(r'^\d+$')
 _IDENT_RE = re.compile(r'^[a-z_][a-z0-9_]*$', re.IGNORECASE)
 _NULL_RE = re.compile(r'^NULL$', re.IGNORECASE)
@@ -1089,18 +1101,32 @@ def _parse_condition(
         if isinstance(rhs, Rejection):
             return _propagate(text, rhs)
         op = m.group(2)
+        signed_cmp = profile.signed
+        if signed_cmp and (
+            _hex_literal_forces_unsigned(m.group(1).strip(), profile)
+            or _hex_literal_forces_unsigned(m.group(3).strip(), profile)
+        ):
+            # C's usual arithmetic conversions: a hex literal that
+            # does not fit the signed type has UNSIGNED type, so the
+            # whole comparison is unsigned in the source semantics.
+            # Encoding ``x <= 0x80000000`` as signed at an int32
+            # profile read the literal as INT_MIN and made ``<=``
+            # equivalent to ``== INT_MIN`` — a false unsat that
+            # bypassed the dual safety net entirely for
+            # signed-pinned callers (they skip the dual check).
+            signed_cmp = False
         if op == '==':
             return lhs == rhs
         if op == '!=':
             return lhs != rhs
         if op == '<':
-            return lt(lhs, rhs, signed=profile.signed)
+            return lt(lhs, rhs, signed=signed_cmp)
         if op == '<=':
-            return le(lhs, rhs, signed=profile.signed)
+            return le(lhs, rhs, signed=signed_cmp)
         if op == '>':
-            return gt(lhs, rhs, signed=profile.signed)
+            return gt(lhs, rhs, signed=signed_cmp)
         if op == '>=':
-            return ge(lhs, rhs, signed=profile.signed)
+            return ge(lhs, rhs, signed=signed_cmp)
 
     return Rejection(
         text, RejectionKind.UNRECOGNIZED_FORM,

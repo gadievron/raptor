@@ -2350,3 +2350,43 @@ class TestDualSignedness:
             )
         assert r.feasible is None
         assert "refusing the refutation" in r.reasoning
+
+
+class TestSignedProfileHexLiteralPromotion:
+    """C's usual arithmetic conversions: a hex literal that does not
+    fit the signed type has UNSIGNED type, so the whole comparison is
+    unsigned. Encoding ``x <= 0x80000000`` as signed at int32 read the
+    literal as INT_MIN and made ``<=`` equivalent to ``== INT_MIN`` —
+    a false unsat that signed-pinned callers (which skip the dual
+    check) turned directly into suppression."""
+
+    @_requires_z3
+    def test_large_hex_literal_comparison_is_unsigned(self):
+        from core.smt_solver import BV_C_INT32
+        r = check_path_feasibility([
+            PathCondition("x <= 0x80000000", step_index=0),
+            PathCondition("x != 0x80000000", step_index=1),
+        ], profile=BV_C_INT32)
+        # x = 5 satisfies both in C; the signed misread refuted it.
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_in_range_hex_literal_keeps_signed_semantics(self):
+        from core.smt_solver import BV_C_INT32
+        # Discriminator: under SIGNED semantics x = -1 satisfies
+        # ``x < 0x1 && x != 0x0``; under unsigned it is unsat
+        # (x < 1 forces x == 0). An in-signed-range literal must not
+        # flip the comparison to unsigned.
+        r = check_path_feasibility([
+            PathCondition("x < 0x1", step_index=0),
+            PathCondition("x != 0x0", step_index=1),
+        ], profile=BV_C_INT32)
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_unsigned_profile_unaffected(self):
+        r = check_path_feasibility([
+            PathCondition("x < 0x1", step_index=0),
+            PathCondition("x != 0x0", step_index=1),
+        ])  # default 64-bit unsigned
+        assert r.feasible is False
