@@ -216,6 +216,81 @@ class TestCrossFamilyCheckTaskAdjudication:
         assert prior["F-001"]["is_exploitable"] is True
         assert prior["F-001"].get("cross_family_disputed") is True
 
+    def test_checker_abstention_does_not_flip_primary(self):
+        """A nulled checker verdict (errored / refused / schema-failed
+        response) is an abstention, not a vote (shared counting rule —
+        correlation.py tally contract). Pre-fix it read as a "dispute"
+        and the conservative override flipped a clean not-exploitable
+        primary to exploitable."""
+        prior = {"F-001": _result("F-001", exploitable=False, quality=0.5)}
+        checker_results = [
+            {"finding_id": "F-001", "is_exploitable": None, "ruling": None,
+             "analysed_by": "claude-haiku-4-5-20251001"},
+        ]
+        task = CrossFamilyCheckTask(ANTHROPIC_CHECKER, results_by_id=prior)
+        task.finalize(checker_results, prior)
+
+        assert prior["F-001"]["is_exploitable"] is False
+        assert prior["F-001"].get("cross_family_disputed") is None
+        assert prior["F-001"].get("cross_family_agreed") is None
+        check = prior["F-001"]["cross_family_check"]
+        assert check["verdict"] == "skipped — checker returned no verdict"
+
+    def test_checker_abstention_does_not_dispute_exploitable_primary(self):
+        """Mirror direction: primary exploitable, checker abstained —
+        no dispute noise, verdict preserved."""
+        prior = {"F-001": _result("F-001", exploitable=True, quality=0.5)}
+        checker_results = [
+            {"finding_id": "F-001", "is_exploitable": None,
+             "analysed_by": "claude-haiku-4-5-20251001"},
+        ]
+        task = CrossFamilyCheckTask(ANTHROPIC_CHECKER, results_by_id=prior)
+        task.finalize(checker_results, prior)
+
+        assert prior["F-001"]["is_exploitable"] is True
+        assert prior["F-001"].get("cross_family_disputed") is None
+        assert prior["F-001"].get("cross_family_agreed") is None
+
+    def test_both_abstained_mints_no_agreement(self):
+        """Primary nulled + checker nulled compared equal pre-fix and
+        minted ``cross_family_agreed`` corroboration from zero actual
+        verdicts (downstream: judge/consensus skip agreed findings)."""
+        primary = _result("F-001", quality=0.5)
+        primary["is_exploitable"] = None
+        prior = {"F-001": primary}
+        checker_results = [
+            {"finding_id": "F-001", "is_exploitable": None,
+             "analysed_by": "claude-haiku-4-5-20251001"},
+        ]
+        task = CrossFamilyCheckTask(ANTHROPIC_CHECKER, results_by_id=prior)
+        task.finalize(checker_results, prior)
+
+        assert prior["F-001"].get("cross_family_agreed") is None
+        assert prior["F-001"].get("cross_family_disputed") is None
+        assert "skipped" in prior["F-001"]["cross_family_check"]["verdict"]
+
+    def test_primary_abstention_not_adjudicated(self):
+        """Primary nulled + checker voting: there is no primary vote
+        to agree or dispute with — record but don't adjudicate,
+        matching the same-family fallback shape."""
+        primary = _result("F-001", quality=0.5)
+        primary["is_exploitable"] = None
+        prior = {"F-001": primary}
+        checker_results = [
+            {"finding_id": "F-001", "is_exploitable": False,
+             "ruling": "false_positive",
+             "analysed_by": "claude-haiku-4-5-20251001"},
+        ]
+        task = CrossFamilyCheckTask(ANTHROPIC_CHECKER, results_by_id=prior)
+        task.finalize(checker_results, prior)
+
+        assert prior["F-001"]["is_exploitable"] is None
+        assert prior["F-001"].get("cross_family_disputed") is None
+        assert prior["F-001"].get("cross_family_agreed") is None
+        check = prior["F-001"]["cross_family_check"]
+        assert check["verdict"] == "skipped — primary returned no verdict"
+        assert check["checker_exploitable"] is False
+
     def test_reasoning_distance_attached_for_long_reasonings(self):
         """When primary and checker reasonings are both substantial,
         the cross-family check captures their pairwise Jaccard

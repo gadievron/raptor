@@ -1333,8 +1333,31 @@ class CrossFamilyCheckTask(AnalysisTask):
                 }
                 continue
 
-            primary_exploitable = primary.get("is_exploitable", False)
-            checker_exploitable = r.get("is_exploitable", False)
+            primary_exploitable = primary.get("is_exploitable")
+            checker_exploitable = r.get("is_exploitable")
+
+            # Abstention-aware (shared counting rule — see
+            # correlation.py's tally contract): a nulled
+            # ``is_exploitable`` (errored / refused / schema-failed
+            # response) is NOT a vote. Pre-fix the `.get(..., False)`
+            # comparison let an abstaining checker manufacture a
+            # "dispute" (flipping a clean not-exploitable primary to
+            # exploitable via the conservative override) and let a
+            # both-abstained pair mint ``cross_family_agreed``
+            # corroboration from zero actual verdicts. Record the
+            # check but don't adjudicate — same shape as the
+            # same-family fallback skip above.
+            if primary_exploitable is None or checker_exploitable is None:
+                absent = ("checker" if checker_exploitable is None
+                          else "primary")
+                prior_results[fid]["cross_family_check"] = {
+                    "checker_model": actual_model,
+                    "checker_exploitable": checker_exploitable,
+                    "checker_ruling": r.get("ruling"),
+                    "trigger": trigger,
+                    "verdict": f"skipped — {absent} returned no verdict",
+                }
+                continue
 
             check_record = {
                 "checker_model": actual_model,
