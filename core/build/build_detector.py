@@ -28,6 +28,53 @@ from core.sandbox import run_trusted as _run_trusted
 
 logger = get_logger()
 
+# Cap on files collected by one recursive enumeration of the untrusted
+# repo. Too low silently drops real source files on big targets
+# (missing CodeQL coverage, missed -I dirs, missed build files); too
+# high lets a hostile file farm dominate the UNSANDBOXED detection
+# phase's wall time. 100k files is an order of magnitude above the
+# largest legitimate targets this pipeline scans while keeping the
+# worst-case walk bounded.
+_MAX_WALK_FILES = 100_000
+
+
+def _walk_files(
+    root: Path,
+    suffixes: tuple[str, ...] | None = None,
+    *,
+    max_files: int = _MAX_WALK_FILES,
+) -> list[Path]:
+    """Recursive file enumeration that never follows directory symlinks.
+
+    ``Path.rglob`` follows directory symlinks on Python < 3.13, so a
+    scanned repo containing ``src -> /`` steers detect/synthesise —
+    which run in the UNSANDBOXED parent — into a host-filesystem walk,
+    and ``detect_missing_config_headers`` then reads host files in the
+    parent. ``os.walk(followlinks=False)`` bounds the walk to the real
+    tree on every supported interpreter. File symlinks are still
+    yielded (rglob parity); unreadable subtrees are skipped
+    (``os.walk`` default).
+
+    ``suffixes`` filters by case-sensitive ``str.endswith`` — the same
+    matches ``rglob(f"*{{suffix}}")`` produced for regular files. The
+    result is capped at ``max_files`` with a warning, so a hostile
+    file farm can't monopolise detection either.
+    """
+    out: list[Path] = []
+    for dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
+        for name in filenames:
+            if suffixes is not None and not name.endswith(suffixes):
+                continue
+            out.append(Path(dirpath) / name)
+            if len(out) >= max_files:
+                logger.warning(
+                    "File enumeration under %s hit the %d-file cap — "
+                    "remaining files are not considered for build "
+                    "detection", root, max_files,
+                )
+                return out
+    return out
+
 
 @dataclass
 class BuildSystem:
@@ -316,7 +363,7 @@ class BuildDetector:
                 # which matches operator intuition for "primary"
                 # build root.
                 matches = sorted(
-                    self.repo_path.rglob(f"*{build_file}"),
+                    _walk_files(self.repo_path, (build_file,)),
                     key=lambda p: (len(p.parts), str(p)),
                 )
                 if matches:
@@ -497,11 +544,16 @@ class BuildDetector:
     @staticmethod
     def _has_c_header(path: Path) -> bool:
         """True if ``path`` contains at least one .h/.hpp file
-        recursively. Quick existence check — does not enumerate."""
+        recursively. Quick existence check — does not enumerate.
+        Never follows directory symlinks (a hostile ``include`` tree
+        must not walk the host filesystem)."""
         try:
-            for entry in path.rglob("*"):
-                if entry.is_file() and entry.suffix.lower() in (".h", ".hpp", ".hh"):
-                    return True
+            for _dirpath, _dirnames, filenames in os.walk(
+                path, followlinks=False,
+            ):
+                for name in filenames:
+                    if name.lower().endswith((".h", ".hpp", ".hh")):
+                        return True
         except OSError:
             return False
         return False
@@ -529,14 +581,12 @@ class BuildDetector:
         # Build the set of header names that DO exist on disk —
         # repo_path + ancestor includes we'd consider.
         existing_header_names = set()
-        for ext in (".h", ".hpp", ".hh"):
-            for h in self.repo_path.rglob(f"*{ext}"):
-                existing_header_names.add(h.name)
+        for h in _walk_files(self.repo_path, (".h", ".hpp", ".hh")):
+            existing_header_names.add(h.name)
         for parent_inc in self._discover_ancestor_includes(max_depth=3):
             try:
-                for ext in (".h", ".hpp", ".hh"):
-                    for h in Path(parent_inc).rglob(f"*{ext}"):
-                        existing_header_names.add(h.name)
+                for h in _walk_files(Path(parent_inc), (".h", ".hpp", ".hh")):
+                    existing_header_names.add(h.name)
             except OSError:
                 continue
 
@@ -551,8 +601,10 @@ class BuildDetector:
         # header (e.g. curl's ``curl_setup.h``) that does the
         # ``#include "curl_config.h"`` so the .c files never
         # reference the config header directly.
-        for ext in (".c", ".cc", ".cpp", ".cxx", ".h", ".hpp"):
-            sources.extend(self.repo_path.rglob(f"*{ext}"))
+        sources.extend(
+            _walk_files(self.repo_path, (".c", ".cc", ".cpp", ".cxx",
+                                         ".h", ".hpp")),
+        )
         # Cap at 200 files to bound scan time on huge targets.
         for src in sorted(sources, key=lambda p: (len(p.parts), str(p)))[:200]:
             try:
@@ -1156,19 +1208,19 @@ class BuildDetector:
         """Detect source files, compiler, and include/define flags."""
         source_files: list[Path] = []
         if language == "cpp":
-            for ext in (".c", ".cc", ".cpp", ".cxx"):
-                source_files.extend(self.repo_path.rglob(f"*{ext}"))
+            source_files.extend(
+                _walk_files(self.repo_path, (".c", ".cc", ".cpp", ".cxx")),
+            )
             has_cpp = any(f.suffix in (".cpp", ".cc", ".cxx") for f in source_files)
             compiler = "g++" if has_cpp else "gcc"
 
             # Auto-detect -I flags from header locations
             include_flags = set()
-            for ext in (".h", ".hpp", ".hh"):
-                for h in self.repo_path.rglob(f"*{ext}"):
-                    try:
-                        include_flags.add(f"-I{h.parent.relative_to(self.repo_path)}")
-                    except ValueError:
-                        pass
+            for h in _walk_files(self.repo_path, (".h", ".hpp", ".hh")):
+                try:
+                    include_flags.add(f"-I{h.parent.relative_to(self.repo_path)}")
+                except ValueError:
+                    pass
             # Subdir-target rescue: walk UP from repo_path looking for
             # sibling ``include/`` directories at ancestors. Real-world
             # case: repo_path points at ``curl-8.11.0/lib`` and the
@@ -1185,7 +1237,7 @@ class BuildDetector:
                 include_flags.add(f"-I{parent_inc}")
             include_flags = sorted(include_flags)
         elif language == "java":
-            source_files = list(self.repo_path.rglob("*.java"))
+            source_files = _walk_files(self.repo_path, (".java",))
             compiler = "javac"
             include_flags = ["-sourcepath", str(self.repo_path)]
         else:
