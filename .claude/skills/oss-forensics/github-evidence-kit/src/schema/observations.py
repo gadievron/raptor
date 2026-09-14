@@ -64,7 +64,13 @@ class CommitAuthor(BaseModel):
 
 class FileChange(BaseModel):
     filename: str
-    status: Literal["added", "modified", "removed", "renamed"]
+    # The full documented GitHub commits-API status set — the API also
+    # emits changed/copied/unchanged, and a single such file must not
+    # make evidence collection for the whole commit raise.
+    status: Literal[
+        "added", "modified", "removed", "renamed",
+        "changed", "copied", "unchanged",
+    ]
     additions: int = 0
     deletions: int = 0
     patch: str | None = None

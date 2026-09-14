@@ -30,6 +30,14 @@ from ..helpers import (
 )
 
 
+# Documented GitHub commits-API file statuses (kept in sync with
+# schema.observations.FileChange.status).
+_KNOWN_FILE_STATUSES = frozenset(
+    {"added", "modified", "removed", "renamed", "changed", "copied",
+     "unchanged"},
+)
+
+
 class GitHubAPICollector:
     """Collects evidence from GitHub API."""
 
@@ -45,7 +53,15 @@ class GitHubAPICollector:
         files = [
             FileChange(
                 filename=f["filename"],
-                status=f.get("status", "modified"),
+                # Undocumented / future API statuses degrade to
+                # "modified" (mirrors clients/git.py) instead of
+                # raising ValidationError and killing evidence
+                # collection for the whole commit.
+                status=(
+                    f.get("status", "modified")
+                    if f.get("status", "modified") in _KNOWN_FILE_STATUSES
+                    else "modified"
+                ),
                 additions=f.get("additions", 0),
                 deletions=f.get("deletions", 0),
                 patch=f.get("patch"),
