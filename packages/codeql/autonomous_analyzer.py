@@ -56,6 +56,29 @@ class CodeQLFinding:
     dataflow_path_count: int = 0
 
 
+def _artifact_safe_id(finding: CodeQLFinding) -> str:
+    """Filesystem-safe, per-location stem for a finding's artifacts.
+
+    Carries the file path (sanitised basename + short full-path
+    digest), not just rule + line: two findings of the same rule at
+    the same line number in DIFFERENT files (e.g. ``java/xss`` at line
+    42 of two servlets) must not overwrite each other's
+    analysis/exploit/visualization artifacts. The digest disambiguates
+    same-named files in different directories.
+    """
+    import hashlib
+    import re as _re
+
+    basename = _re.sub(
+        r"[^A-Za-z0-9_.-]", "_", Path(finding.file_path).name,
+    )[:48]
+    digest = hashlib.sha256(
+        finding.file_path.encode("utf-8", "surrogatepass"),
+    ).hexdigest()[:8]
+    rule = str(finding.rule_id).replace("/", "_")
+    return f"{rule}_{basename}_{digest}_{finding.start_line}"
+
+
 @dataclass
 class VulnerabilityAnalysis:
     """LLM analysis result."""
@@ -1236,7 +1259,7 @@ class AutonomousCodeQLAnalyzer:
                     dataflow = self.dataflow_validator.extract_dataflow_from_sarif(sarif_result)
                     if dataflow:
                         visualizer = DataflowVisualizer(out_dir / "visualizations")
-                        finding_id = f"{finding.rule_id}_{finding.start_line}".replace("/", "_")
+                        finding_id = _artifact_safe_id(finding)
                         visualization_paths = visualizer.visualize_all_formats(
                             dataflow,
                             finding_id,
@@ -1360,7 +1383,7 @@ class AutonomousCodeQLAnalyzer:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         # Save analysis
-        safe_id = f"{finding.rule_id}_{finding.start_line}".replace("/", "_")
+        safe_id = _artifact_safe_id(finding)
         analysis_file = out_dir / f"{safe_id}_analysis.json"
         analysis_data = _analysis_artifact_payload(
             finding=finding,
