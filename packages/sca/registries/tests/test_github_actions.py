@@ -231,3 +231,27 @@ def test_hostile_owner_repo_rejected_before_fetch(monkeypatch):
     c.get_branch_protection("owner/repo", "release/1.0")
     url = http.get_json.call_args[0][0]
     assert "/branches/release%2F1.0/protection" in url
+
+
+def test_branch_protection_message_mentioning_404_is_not_a_404(
+    tmp_path,
+):
+    """Only the real status attribute means 404. An error whose TEXT
+    merely mentions 404 (proxy body, quoted upstream JSON, transient
+    5xx page) used to mint — and cache for the TTL — the
+    "unprotected branch" sentinel."""
+    from core.http import HttpError
+    from core.json import JsonCache
+    cache = JsonCache(root=tmp_path / "cache")
+    http = MagicMock()
+    http.get_json.side_effect = HttpError(
+        "upstream proxy said: 502 while fetching /404-page Not Found",
+        status=502,
+    )
+    c = GitHubActionsClient(http, cache=cache, github_token="tok")
+    assert c.get_branch_protection("owner/repo", "main") is None
+    # Transient error → nothing cached; the next call re-asks.
+    http.get_json.reset_mock()
+    http.get_json.side_effect = HttpError("boom 404 boom", status=500)
+    assert c.get_branch_protection("owner/repo", "main") is None
+    http.get_json.assert_called_once()

@@ -261,13 +261,15 @@ class GitHubActionsClient:
             # anonymous requests 404 unconditionally on this endpoint,
             # so an anonymous 404 must not produce (or cache) the
             # "no protection rule" sentinel the caller turns into a
-            # medium finding. ``status`` attr first (core.http
-            # HttpError); message sniff kept for stub exceptions.
-            err_str = str(e)
-            is_404 = (
-                getattr(e, "status", None) == 404
-                or "404" in err_str or "Not Found" in err_str
-            )
+            # medium finding. Status attribute ONLY: a message sniff
+            # ("404" / "Not Found" anywhere in the error text) minted
+            # a 24h "unprotected branch" sentinel from ANY error whose
+            # text merely mentioned 404 — proxy bodies, upstream JSON
+            # quoted into exception messages, transient 5xx pages.
+            # This file's other methods already trust only the real
+            # status; test stubs must set ``.status`` like the real
+            # ``core.http.HttpError`` does.
+            is_404 = getattr(e, "status", None) == 404
             authoritative_404 = is_404 and bool(self._github_token)
             sentinel = (
                 {"_sentinel": "not_found"} if authoritative_404 else None
