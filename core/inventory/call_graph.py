@@ -6422,12 +6422,59 @@ def _extractor_for_language(language: str | None,
     return fn
 
 
+#: Default per-file size gate for :func:`load_call_graphs` — larger
+#: sources are skipped, not parsed. Shared with the audit prep cache's
+#: input fingerprint so both sides agree on which bytes can matter.
+CALL_GRAPH_MAX_FILE_BYTES = 1_500_000
+
+
+def iter_call_graph_candidates(
+    target_path: Any,
+    checklist: dict[str, Any] | None = None,
+) -> list[tuple[str, Any, str | None]]:
+    """Candidate files a :func:`load_call_graphs` build would read.
+
+    Returns ``(relative path, absolute path, checklist language or
+    None)`` tuples in extraction order. Shared between the build and
+    the audit prep cache's input fingerprint
+    (:func:`core.audit.detector_cache.call_graph_inputs_fingerprint`)
+    so the two can never drift over which bytes matter.
+    """
+    from pathlib import Path
+
+    root = Path(target_path)
+    candidates: list[tuple[str, Any, str | None]] = []
+
+    if checklist is not None:
+        for file_info in checklist.get("files", []) or []:
+            rel = file_info.get("path", "")
+            if not rel:
+                continue
+            candidates.append(
+                (rel, root / rel, file_info.get("language")))
+    else:
+        import os as _os
+
+        for dirpath, dirnames, filenames in _os.walk(root):
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if d not in _LOADER_SKIP_DIRS
+                and not (Path(dirpath) / d).is_symlink()
+            )
+            for fname in sorted(filenames):
+                p = Path(dirpath) / fname
+                if p.suffix.lower() in _EXT_TO_LANGUAGE:
+                    candidates.append(
+                        (p.relative_to(root).as_posix(), p, None))
+    return candidates
+
+
 def load_call_graphs(
     target_path: Any,
     checklist: dict[str, Any] | None = None,
     *,
     max_files: int = 2000,
-    max_bytes: int = 1_500_000,
+    max_bytes: int = CALL_GRAPH_MAX_FILE_BYTES,
 ) -> dict[str, FileCallGraph]:
     """Extract per-file call graphs for a target tree.
 
@@ -6452,33 +6499,7 @@ def load_call_graphs(
         fail to read or parse are skipped (extraction is best-effort
         by design); an empty dict when nothing was extractable.
     """
-    from pathlib import Path
-
-    root = Path(target_path)
-    # (relative path, absolute path, checklist language or None)
-    candidates: list[tuple[str, Any, str | None]] = []
-
-    if checklist is not None:
-        for file_info in checklist.get("files", []) or []:
-            rel = file_info.get("path", "")
-            if not rel:
-                continue
-            candidates.append(
-                (rel, root / rel, file_info.get("language")))
-    else:
-        import os as _os
-
-        for dirpath, dirnames, filenames in _os.walk(root):
-            dirnames[:] = sorted(
-                d for d in dirnames
-                if d not in _LOADER_SKIP_DIRS
-                and not (Path(dirpath) / d).is_symlink()
-            )
-            for fname in sorted(filenames):
-                p = Path(dirpath) / fname
-                if p.suffix.lower() in _EXT_TO_LANGUAGE:
-                    candidates.append(
-                        (p.relative_to(root).as_posix(), p, None))
+    candidates = iter_call_graph_candidates(target_path, checklist)
 
     graphs: dict[str, FileCallGraph] = {}
     skipped = 0
