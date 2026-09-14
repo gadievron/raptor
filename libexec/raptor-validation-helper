@@ -2204,6 +2204,37 @@ def prepare_E(workdir, target=None, dynamic=None, build=None,
                     if _ruling(f).get("status") in ("confirmed", "exploitable"))
     print(f"Ruling: {confirmed} confirmed, {ruled_out} ruled out")
 
+    # --- D→E transition: stamp rows Stage E never analyses ---
+    # A Stage-D ruling that legitimately skips Stage E (disproven /
+    # ruled_out — including D-1 test-code rulings — and non-memory-
+    # corruption classes) gets an automatic not_applicable stage-E
+    # record. Without it, prepare_F's carry-forward check demanded a
+    # hand-stubbed stage_e_summary for findings no stage was ever
+    # going to analyse. Rows Stage E actually skips for OPERATIONAL
+    # reasons (no binary) keep their distinct "skipped" record from
+    # the binary-discovery pass.
+    # The status assignments below overwrite any pre-existing
+    # feasibility.status: safe because the stage_e_summary guard above
+    # skips every analysed row (a completed Stage E always writes its
+    # summary), so only pre-analysis placeholders ("", "pending") can
+    # reach the overwrite.
+    for finding in data["findings"]:
+        if finding.get("stage_e_summary"):
+            continue
+        if (finding.get("status") == "disproven"
+                or _ruling(finding).get("status") == "ruled_out"):
+            finding.setdefault("feasibility", {})["status"] = "not_applicable"
+            finding["stage_e_summary"] = {
+                "status": "not_applicable",
+                "reason": "stage-D ruling skips feasibility analysis",
+            }
+        elif finding.get("vuln_type", "") not in MEMORY_CORRUPTION_TYPES:
+            # Same record the binary-discovery pass stamps — repeated
+            # here so no-target runs (binary discovery skipped) get it
+            # too.
+            finding.setdefault("feasibility", {})["status"] = "not_applicable"
+            finding["stage_e_summary"] = {"status": "not_applicable"}
+
     _save_findings(workdir, data)
 
     # --- Discover binaries ---
@@ -2409,10 +2440,18 @@ def prepare_F(workdir, target=None):
             finding["is_exploitable"] = False
 
     # --- Carry-forward check (Stage E) ---
+    # Rows whose Stage-D ruling skips Stage E normally carry the
+    # not_applicable record stamped at the D→E transition; the ruling
+    # re-check here keeps resumed pre-stamp runs from warning about a
+    # summary no stage was ever going to produce.
     for finding in data.get("findings", []):
         se = finding.get("stage_e_summary")
-        if not se and finding.get("vuln_type") in MEMORY_CORRUPTION_TYPES:
-            print(f"  WARN: {finding.get('id', '?')} missing stage_e_summary — add it", file=sys.stderr)
+        if se or finding.get("vuln_type") not in MEMORY_CORRUPTION_TYPES:
+            continue
+        if (finding.get("status") == "disproven"
+                or _ruling(finding).get("status") == "ruled_out"):
+            continue
+        print(f"  WARN: {finding.get('id', '?')} missing stage_e_summary — add it", file=sys.stderr)
 
     _save_findings(workdir, data)
 
