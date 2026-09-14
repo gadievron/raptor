@@ -92,3 +92,78 @@ class TestSynthesiseThreadsAncestorDirs:
                 shutil.rmtree(p_path, ignore_errors=True)
             elif p_path.exists():
                 p_path.unlink()
+
+
+class TestSupersetGrantRefused:
+    """A hostile `include` symlink that resolves to a filesystem root
+    or to a directory CONTAINING the repo must never become a compile
+    -I flag or a dry-run readable grant — that is a superset of the
+    target, not the sibling-include shape the rescue exists for."""
+
+    def test_discovery_refuses_include_containing_repo(self, tmp_path):
+        import os
+
+        base = tmp_path / "base"
+        repo = base / "box" / "src"
+        repo.mkdir(parents=True)
+        (repo / "main.c").write_text("int main(void){}\n", encoding="utf-8")
+        (base / "hdr.h").write_text("// header\n", encoding="utf-8")
+        # box/include resolves to base, which CONTAINS the repo.
+        os.symlink(base, base / "box" / "include")
+
+        found = BuildDetector(repo)._discover_ancestor_includes()
+        assert str(base.resolve()) not in found
+
+    def test_discovery_refuses_filesystem_root(self, tmp_path):
+        import os
+
+        proj = tmp_path / "proj"
+        repo = proj / "src"
+        repo.mkdir(parents=True)
+        (repo / "main.c").write_text("int main(void){}\n", encoding="utf-8")
+        os.symlink("/", proj / "include")
+
+        found = BuildDetector(repo)._discover_ancestor_includes()
+        assert "/" not in found
+
+    def test_grant_site_refuses_superset_even_if_discovered(
+        self, tmp_path,
+    ):
+        # Defense in depth: even if a hostile dir slips into the -I
+        # flags (discovery raced, symlink swapped), the readable grant
+        # re-vets the CURRENT resolution.
+        proj = tmp_path / "proj"
+        src = proj / "src"
+        src.mkdir(parents=True)
+        (src / "main.c").write_text("int main(void){}\n", encoding="utf-8")
+
+        detector = BuildDetector(src)
+        calls: list[list[str]] = []
+
+        def fake_dry_run(script_path, language=None, extra_readable=None):
+            calls.append(list(extra_readable or []))
+            return []
+
+        with mock.patch.object(
+            detector, "_discover_ancestor_includes",
+            return_value=["/", str(tmp_path)],
+        ), mock.patch.object(
+            detector, "_dry_run", side_effect=fake_dry_run,
+        ), mock.patch.object(
+            # The config-header diagnostic walks ancestor includes
+            # too; the point of THIS test is the grant site, so keep
+            # the mocked hostile dirs out of that unrelated walk.
+            detector, "detect_missing_config_headers", return_value=[],
+        ):
+            bs = detector.synthesise_build_command("cpp")
+
+        assert bs is not None and calls
+        assert "/" not in calls[0]
+        assert str(tmp_path) not in calls[0]  # contains the repo
+        import shutil
+        for p in bs.cleanup_paths:
+            p_path = Path(p)
+            if p_path.is_dir():
+                shutil.rmtree(p_path, ignore_errors=True)
+            elif p_path.exists():
+                p_path.unlink()

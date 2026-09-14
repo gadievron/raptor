@@ -489,6 +489,7 @@ class BuildDetector:
             current = self.repo_path.resolve(strict=False)
         except OSError:
             return found
+        repo_resolved = current
         # World-writable temp roots. <temp-root>/include is never a
         # legitimate ancestor include dir: ANY local user could
         # pre-create it and shadow system headers in every
@@ -514,30 +515,38 @@ class BuildDetector:
                 inc_resolved = include_dir.resolve(strict=False)
             except OSError:
                 continue
+            if not (include_dir.is_dir() and os.access(include_dir, os.X_OK)):
+                continue
+            # Sanity-check the resolved path BEFORE the recursive
+            # header walk (a hostile resolution must not even be
+            # enumerated). Reject anything that resolves to a
+            # system path like /etc, /proc, /sys, /dev — these
+            # could not legitimately be the "include/" dir of
+            # the operator's source target. Re-apply the
+            # temp-root block on the RESOLVED path so a symlink
+            # (include -> /tmp/include) can't smuggle a shared
+            # temp root's include dir back in. And refuse any
+            # resolution that is a filesystem root or CONTAINS the
+            # repo: `include -> /` (or -> /home) is a superset
+            # grant, never the sibling-include shape this rescue
+            # exists for — downstream it becomes both a compile
+            # `-I/` and a dry-run sandbox readable grant on the
+            # whole host filesystem.
+            blocked = ("/etc", "/proc", "/sys", "/dev", "/boot")
             if (
-                include_dir.is_dir()
-                and os.access(include_dir, os.X_OK)
-                and self._has_c_header(inc_resolved)
+                any(str(inc_resolved).startswith(b) for b in blocked)
+                or str(inc_resolved.parent) in tmp_roots
+                or inc_resolved == Path(inc_resolved.anchor)
+                or repo_resolved.is_relative_to(inc_resolved)
             ):
-                # Sanity-check the resolved path is somewhere
-                # plausible. Reject anything that resolves to a
-                # system path like /etc, /proc, /sys, /dev — these
-                # could not legitimately be the "include/" dir of
-                # the operator's source target. Also re-apply the
-                # temp-root block on the RESOLVED path so a symlink
-                # (include -> /tmp/include) can't smuggle a shared
-                # temp root's include dir back in.
-                blocked = ("/etc", "/proc", "/sys", "/dev", "/boot")
-                if (
-                    any(str(inc_resolved).startswith(b) for b in blocked)
-                    or str(inc_resolved.parent) in tmp_roots
-                ):
-                    logger.debug(
-                        "Skipping ancestor include candidate %s "
-                        "(resolves to a system path)",
-                        include_dir,
-                    )
-                    continue
+                logger.debug(
+                    "Skipping ancestor include candidate %s "
+                    "(resolves to a system path or a superset of "
+                    "the target)",
+                    include_dir,
+                )
+                continue
+            if self._has_c_header(inc_resolved):
                 found.append(str(inc_resolved))
         return found
 
@@ -1051,13 +1060,35 @@ class BuildDetector:
         # ancestor include dirs must be carved out explicitly or the
         # rescue self-defeats under the read sandbox. Absolute -I
         # flags are exactly the _discover_ancestor_includes results —
-        # already ownership/system-path checked at discovery.
-        ancestor_read_dirs = [
-            flag[2:] for flag in include_flags
-            if isinstance(flag, str)
-            and flag.startswith("-I")
-            and os.path.isabs(flag[2:])
-        ]
+        # already ownership/system-path checked at discovery — but the
+        # grant is re-vetted here on the CURRENT resolution: a symlink
+        # swapped between discovery and grant (or any candidate that
+        # resolves to a filesystem root or a dir containing the repo)
+        # must not widen the read sandbox to a superset of the host.
+        ancestor_read_dirs: list[str] = []
+        try:
+            repo_resolved = self.repo_path.resolve(strict=False)
+        except OSError:
+            repo_resolved = self.repo_path
+        for flag in include_flags:
+            if not (isinstance(flag, str) and flag.startswith("-I")
+                    and os.path.isabs(flag[2:])):
+                continue
+            candidate = flag[2:]
+            try:
+                resolved = Path(candidate).resolve(strict=False)
+            except OSError:
+                continue
+            if (
+                resolved == Path(resolved.anchor)
+                or repo_resolved.is_relative_to(resolved)
+            ):
+                logger.warning(
+                    "Refusing dry-run read grant for include dir %s — "
+                    "it resolves to a superset of the target", candidate,
+                )
+                continue
+            ancestor_read_dirs.append(candidate)
 
         # Diagnostic — does NOT auto-run anything. If the target's
         # .c files reference ``*_config.h``-shaped headers that
