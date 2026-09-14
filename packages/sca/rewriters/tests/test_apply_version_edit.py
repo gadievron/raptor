@@ -73,3 +73,56 @@ def test_result_carries_the_edit():
     edit = RewriteEdit(locator="pkg", old_value="1.0", new_value="2.0")
     _, result = apply_version_edit("", edit, BUILDERS)
     assert result.edit is edit
+
+
+def test_all_matching_occurrences_rewritten():
+    """A per-TFM conditional duplicate (same locator twice at the old
+    value) must have EVERY occurrence bumped — a first-match
+    substitution bumped one and left its twin on the vulnerable
+    version while reporting applied."""
+    text = 'pkg="1.0"\nother="9.9"\npkg="1.0"\n'
+    edit = RewriteEdit(locator="pkg", old_value="1.0", new_value="2.0")
+    new_text, result = apply_version_edit(text, edit, BUILDERS)
+    assert result.applied is True
+    assert new_text.count('pkg="2.0"') == 2
+    assert 'pkg="1.0"' not in new_text
+    assert result.reason == ""            # full apply, no strays
+
+
+def test_later_occurrence_at_old_value_still_bumped():
+    """First occurrence already bumped, second still vulnerable: the
+    verdict must span all matches (old code value_mismatched on the
+    first and touched nothing)."""
+    text = 'pkg="2.0"\npkg="1.0"\n'
+    edit = RewriteEdit(locator="pkg", old_value="1.0", new_value="2.0")
+    new_text, result = apply_version_edit(text, edit, BUILDERS)
+    assert result.applied is True
+    assert new_text.count('pkg="2.0"') == 2
+
+
+def test_mixed_stray_value_reports_partial():
+    text = 'pkg="1.0"\npkg="7.7"\n'
+    edit = RewriteEdit(locator="pkg", old_value="1.0", new_value="2.0")
+    new_text, result = apply_version_edit(text, edit, BUILDERS)
+    assert result.applied is True
+    assert 'pkg="2.0"' in new_text and 'pkg="7.7"' in new_text
+    assert result.reason.startswith("partial:")
+    assert "7.7" in result.reason
+
+
+def test_all_at_new_value_is_no_change():
+    text = 'pkg="2.0"\npkg="2.0"\n'
+    edit = RewriteEdit(locator="pkg", old_value="1.0", new_value="2.0")
+    new_text, result = apply_version_edit(text, edit, BUILDERS)
+    assert result.applied is False
+    assert result.reason == "no_change"
+    assert new_text == text
+
+
+def test_no_old_value_and_stray_is_value_mismatch():
+    text = 'pkg="7.7"\n'
+    edit = RewriteEdit(locator="pkg", old_value="1.0", new_value="2.0")
+    new_text, result = apply_version_edit(text, edit, BUILDERS)
+    assert result.applied is False
+    assert "value_mismatch" in result.reason
+    assert new_text == text

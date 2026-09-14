@@ -77,50 +77,59 @@ def _apply_one_chart(
         rf"(?P<nline>(?P=indent)\s+name:\s*{locator}\s*(?:#[^\n]*)?\n)",
         re.MULTILINE,
     )
-    match = pat_name_first.search(text)
-    shape = "name_first"
-    if match is None:
-        match = pat_version_first.search(text)
-        shape = "version_first"
-    if match is None:
+    # A Chart.yaml can declare the SAME chart several times (aliased
+    # entries — e.g. two redis instances off one chart). Verdicts are
+    # computed across ALL entries and every one still at the old
+    # value is bumped: a first-match ``count=1`` substitution bumped
+    # one alias and left its twin on the vulnerable version while the
+    # run reported applied. Each entry matches exactly one shape
+    # (its own line order), so the two match sets are disjoint.
+    matches = list(pat_name_first.finditer(text))
+    matches += list(pat_version_first.finditer(text))
+    if not matches:
         return text, RewriteResult(
             edit=edit, applied=False, reason="not_found",
         )
-    current_ver = match.group("ver")
-    if current_ver == edit.new_value:
-        return text, RewriteResult(
-            edit=edit, applied=False, reason="no_change",
-        )
-    if current_ver != edit.old_value:
+    values = [m.group("ver") for m in matches]
+    needs_bump = [
+        m for m in matches
+        if m.group("ver") == edit.old_value
+        and m.group("ver") != edit.new_value
+    ]
+    if not needs_bump:
+        if all(v == edit.new_value for v in values):
+            return text, RewriteResult(
+                edit=edit, applied=False, reason="no_change",
+            )
+        stray = next(v for v in values if v != edit.new_value)
         return text, RewriteResult(
             edit=edit, applied=False,
             reason=(
-                f"value_mismatch: file has {current_ver!r}, "
+                f"value_mismatch: file has {stray!r}, "
                 f"plan expected {edit.old_value!r}"
             ),
         )
-    if shape == "name_first":
-        def _name_first_repl(m: re.Match) -> str:
-            comment = m.group("namecomment")
-            comment_part = f" {comment}" if comment else ""
-            return (
-                f"{m.group('indent')}- name: {edit.locator}{comment_part}\n"
-                f"{m.group('between')}"
-                f"{m.group('prefix')}{edit.new_value}{m.group('suffix')}"
-            )
-
-        new_text = pat_name_first.sub(_name_first_repl, text, count=1)
-    else:
-        new_text = pat_version_first.sub(
-            (
-                rf"\g<indent>\g<vprefix>{edit.new_value}\g<vsuffix>"
-                rf"\g<between>"
-                rf"\g<nline>"
-            ),
-            text, count=1,
+    # Replace each entry's version-value span directly (back-to-front
+    # so earlier offsets stay valid) — everything around the value,
+    # including comments and quoting, is preserved verbatim.
+    new_text = text
+    for m in sorted(needs_bump, key=lambda m: m.start("ver"),
+                    reverse=True):
+        new_text = (
+            new_text[:m.start("ver")]
+            + edit.new_value
+            + new_text[m.end("ver"):]
+        )
+    stray_values = sorted(
+        set(values) - {edit.old_value, edit.new_value})
+    reason = "applied"
+    if stray_values:
+        reason = (
+            f"partial: {len(needs_bump)} entrie(s) bumped; other "
+            f"value(s) left in place: {stray_values!r}"
         )
     return new_text, RewriteResult(
-        edit=edit, applied=True, reason="applied",
+        edit=edit, applied=True, reason=reason,
     )
 
 

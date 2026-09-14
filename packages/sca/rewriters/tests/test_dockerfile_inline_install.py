@@ -213,3 +213,48 @@ def test_dispatcher_mixed_arg_and_inline_install(
     txt = dockerfile.read_text()
     assert "ARG CODEQL_VERSION=2.25.4" in txt
     assert "semgrep==1.163.0" in txt
+
+
+def test_inline_install_two_stage_twins_both_bumped(
+    tmp_path: Path,
+) -> None:
+    """A two-stage Dockerfile installing the same pin in builder AND
+    runtime: both occurrences must be bumped — a first-match count=1
+    substitution bumped one stage and left the other vulnerable while
+    the run reported applied."""
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(
+        "FROM python:3.13 AS builder\n"
+        "RUN pip install semgrep==1.161.0\n"
+        "FROM python:3.13-slim\n"
+        "RUN pip install --no-cache-dir semgrep==1.161.0\n",
+    )
+    edits = [RewriteEdit(
+        locator="semgrep", old_value="1.161.0", new_value="1.163.0",
+    )]
+    results = rewrite_dockerfile_inline_install(dockerfile, edits)
+    assert results[0].applied
+    text = dockerfile.read_text()
+    assert text.count("semgrep==1.163.0") == 2
+    assert "semgrep==1.161.0" not in text
+    assert results[0].reason == "applied"
+
+
+def test_inline_install_mixed_versions_partial_reported(
+    tmp_path: Path,
+) -> None:
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(
+        "FROM python:3.13\n"
+        "RUN pip install semgrep==1.161.0\n"
+        "RUN pip install semgrep==1.150.0\n",
+    )
+    edits = [RewriteEdit(
+        locator="semgrep", old_value="1.161.0", new_value="1.163.0",
+    )]
+    results = rewrite_dockerfile_inline_install(dockerfile, edits)
+    assert results[0].applied
+    assert results[0].reason.startswith("partial:")
+    text = dockerfile.read_text()
+    assert "semgrep==1.163.0" in text
+    assert "semgrep==1.150.0" in text

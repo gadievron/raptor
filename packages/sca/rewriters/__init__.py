@@ -268,32 +268,73 @@ def apply_version_edit(
 
     Shared driver for rewriters whose per-edit logic is "try each
     locator-derived pattern in preference order; the first pattern
-    with a match decides the outcome". Each pattern must expose a
-    ``version`` named group; the current value must equal
-    ``edit.old_value`` (else ``value_mismatch``), and no pattern
-    matching at all yields ``not_found``.
+    with any match decides the outcome". Each pattern must expose a
+    ``version`` named group.
+
+    Verdicts are computed across ALL of the deciding pattern's
+    matches and every occurrence still at ``edit.old_value`` is
+    rewritten — a first-match substitution would bump one occurrence
+    (a csproj with per-TFM conditional duplicate ``<PackageReference>``
+    rows, a redeclared catalog entry) and leave its twin on the
+    vulnerable version while the run reports applied. Same semantics
+    as the dockerfile_arg / yaml_image / gha_uses rewriters:
+
+    * no occurrence at the old value, all at the new → ``no_change``
+      (idempotent re-run);
+    * no occurrence at the old value, some other value present →
+      ``value_mismatch`` (stale plan / manual edit — refuse);
+    * otherwise every old-value occurrence is rewritten; when
+      OTHER-valued occurrences remain the result is applied with an
+      explicit ``partial:`` reason so the run never reports a clean
+      apply over a mixed file.
     """
     for pattern_builder in pattern_builders:
         pat = pattern_builder(edit.locator)
-        match = pat.search(text)
-        if match is None:
+        matches = list(pat.finditer(text))
+        if not matches:
             continue
-        current = match.group("version")
-        if current != edit.old_value:
+        needs_bump = [
+            m for m in matches
+            if m.group("version") == edit.old_value
+            and m.group("version") != edit.new_value
+        ]
+        if not needs_bump:
+            if all(m.group("version") == edit.new_value for m in matches):
+                return text, RewriteResult(
+                    edit=edit, applied=False, reason="no_change",
+                )
+            stray = next(
+                m.group("version") for m in matches
+                if m.group("version") != edit.new_value
+            )
             return text, RewriteResult(
                 edit=edit, applied=False,
                 reason=(
-                    f"value_mismatch: file has version={current!r}, "
+                    f"value_mismatch: file has version={stray!r}, "
                     f"edit expected {edit.old_value!r}"
                 ),
             )
-        new_text = (
-            text[:match.start("version")]
-            + edit.new_value
-            + text[match.end("version"):]
+        # Back-to-front so earlier match offsets stay valid.
+        new_text = text
+        for m in sorted(needs_bump, key=lambda m: m.start("version"),
+                        reverse=True):
+            new_text = (
+                new_text[:m.start("version")]
+                + edit.new_value
+                + new_text[m.end("version"):]
+            )
+        stray_values = sorted(
+            {m.group("version") for m in matches}
+            - {edit.old_value, edit.new_value},
         )
+        reason = ""
+        if stray_values:
+            reason = (
+                f"partial: {len(needs_bump)} occurrence(s) bumped; "
+                f"other value(s) left in place: {stray_values!r}"
+            )
         return new_text, RewriteResult(
-            edit=edit, applied=True, reason="",
+            edit=edit, applied=True, reason=reason,
         )
     return text, RewriteResult(
         edit=edit, applied=False, reason="not_found",

@@ -192,3 +192,60 @@ def test_chart_lock_NOT_routed_to_chart_yaml_rewriter(
     assert results == []
     # File untouched.
     assert "13.4.4" in lock.read_text()
+
+
+def test_chart_yaml_aliased_twin_entries_both_bumped(
+    tmp_path: Path,
+) -> None:
+    """Two aliased entries of the SAME chart at the same vulnerable
+    version: both must be bumped — a first-match count=1 substitution
+    bumped one alias and left its twin vulnerable while the run
+    reported applied."""
+    chart = tmp_path / "Chart.yaml"
+    chart.write_text(
+        "apiVersion: v2\n"
+        "name: my-chart\n"
+        "version: 1.0.0\n"
+        "dependencies:\n"
+        "  - name: redis\n"
+        "    alias: cache\n"
+        "    version: 17.0.0\n"
+        "  - name: redis\n"
+        "    alias: queue\n"
+        "    version: 17.0.0\n",
+        encoding="utf-8",
+    )
+    edits = [RewriteEdit(
+        locator="redis", old_value="17.0.0", new_value="18.1.0",
+    )]
+    results = rewrite_chart_yaml(chart, edits)
+    assert results[0].applied
+    text = chart.read_text()
+    assert text.count("version: 18.1.0") == 2
+    assert "17.0.0" not in text
+
+
+def test_chart_yaml_mixed_versions_partial_reported(
+    tmp_path: Path,
+) -> None:
+    chart = tmp_path / "Chart.yaml"
+    chart.write_text(
+        "apiVersion: v2\n"
+        "name: my-chart\n"
+        "version: 1.0.0\n"
+        "dependencies:\n"
+        "  - name: redis\n"
+        "    version: 17.0.0\n"
+        "  - name: redis\n"
+        "    version: 16.5.0\n",
+        encoding="utf-8",
+    )
+    edits = [RewriteEdit(
+        locator="redis", old_value="17.0.0", new_value="18.1.0",
+    )]
+    results = rewrite_chart_yaml(chart, edits)
+    assert results[0].applied
+    assert results[0].reason.startswith("partial:")
+    text = chart.read_text()
+    assert "version: 18.1.0" in text
+    assert "version: 16.5.0" in text
