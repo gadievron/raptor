@@ -107,3 +107,32 @@ def test_unwritable_file_counted_as_error_not_crash(
     assert res.errors == 1
     assert res.files_removed == 1     # the other one succeeded
     assert target.exists()            # the failed one stayed
+
+
+def test_fingerprint_baselines_survive_eviction(tmp_path: Path) -> None:
+    """Drift baselines under <cache_root>/fingerprints are STATE, not
+    TTL'd cache: evicting a rarely-scanned ref's baseline made the
+    next scan read as first-ever ("no baseline, no signal") — the CI
+    drift gate silently disarmed. The broom must never touch them,
+    however old; ordinary cache entries of the same age still go."""
+    import os
+    import time
+
+    root = tmp_path / "sca"
+    (root / "fingerprints").mkdir(parents=True)
+    baseline = root / "fingerprints" / "docker.io_library_alpine.json"
+    baseline.write_text("{}", encoding="utf-8")
+    (root / "queries").mkdir()
+    stale_entry = root / "queries" / "old.json"
+    stale_entry.write_text("{}", encoding="utf-8")
+
+    ancient = time.time() - 400 * 86400
+    os.utime(baseline, (ancient, ancient))
+    os.utime(stale_entry, (ancient, ancient))
+
+    res = evict_stale(root, max_age_days=30)
+    assert baseline.exists(), "drift baseline evicted — gate disarmed"
+    assert not stale_entry.exists()
+    assert res.files_removed == 1
+    # The protected dir itself is never rmdir'd either.
+    assert (root / "fingerprints").is_dir()

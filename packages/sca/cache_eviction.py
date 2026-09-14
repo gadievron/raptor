@@ -33,6 +33,15 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_AGE_DAYS = 30
 
+# First-level subdirs that hold STATE, not cache: the image-drift
+# fingerprint baselines live under ``<cache_root>/fingerprints`` and
+# are the comparison anchor the drift gate needs FOREVER — they carry
+# no TTL envelope and are only rewritten when a scan sees the ref.
+# The 30-day broom deleted a rarely-scanned ref's baseline, and the
+# next scan then read as "first-ever scan, no signal": the CI drift
+# gate silently disarmed. Never evict from these.
+_STATE_DIR_NAMES = frozenset({"fingerprints"})
+
 
 @dataclass
 class EvictionResult:
@@ -72,7 +81,10 @@ def evict_stale(
     # One rglob walk shared by both passes (files first, then empty
     # subdirs so rmdir() succeeds). The cache root itself is never
     # removed.
-    entries = _list_entries(cache_root)
+    entries = [
+        e for e in _list_entries(cache_root)
+        if not _in_state_dir(e, cache_root)
+    ]
     for entry in _iter_files(entries):
         result.files_scanned += 1
         try:
@@ -106,6 +118,15 @@ def evict_stale(
         result.dirs_removed += 1
 
     return result
+
+
+def _in_state_dir(entry: Path, root: Path) -> bool:
+    """True when ``entry`` is (or lives under) a protected state dir."""
+    try:
+        rel = entry.relative_to(root)
+    except ValueError:
+        return False
+    return bool(rel.parts) and rel.parts[0] in _STATE_DIR_NAMES
 
 
 def _list_entries(root: Path) -> list[Path]:
