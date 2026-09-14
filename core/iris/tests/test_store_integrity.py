@@ -356,3 +356,21 @@ def test_persistent_wrong_length_warns_after_retries(
     assert integrity._load_or_create_key() is None
     assert len(_race_warn_calls) == 1
     assert "wrong length" in _race_warn_calls[0][1]
+
+
+def test_forged_operator_confirmed_source_demoted(tmp_path: Path) -> None:
+    """Operator provenance is exactly as trust-bearing as the tier:
+    source == "operator_confirmed" grants refutation immunity and
+    equal-tier merge stickiness. A forged row in an unverified store
+    must lose it alongside the tier floor — never keep durable
+    prompt-direction pollution under a subsequently re-stamped
+    envelope."""
+    proj, run, target = _project(tmp_path)
+    envelope = _forged_envelope(target)
+    envelope["specs"][0]["source"] = "operator_confirmed"
+    _write_store(proj, envelope)
+
+    specs = load_specs(run, target_path=target)
+    assert len(specs) == 1
+    assert specs[0].evidence_tier == EvidenceTier.HEURISTIC
+    assert specs[0].source == "unverified"

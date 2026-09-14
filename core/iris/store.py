@@ -175,6 +175,14 @@ def _floor_unverified_tiers(
         if TIER_RANK.get(row.evidence_tier, 0) > heuristic_rank:
             row.evidence_tier = EvidenceTier.HEURISTIC
             floored += 1
+        # Operator provenance is exactly as trust-bearing as the
+        # tier: ``source == "operator_confirmed"`` grants refutation
+        # immunity (_drop_refuted) and equal-tier merge stickiness. A
+        # forged row in an unverified store must not keep either —
+        # demote the free-text claim alongside the tier.
+        if getattr(row, "source", "") == "operator_confirmed":
+            row.source = "unverified"
+            floored += 1
     if floored:
         logger.warning(
             "iris.store: %s %s — floored %d stored %s evidence "
