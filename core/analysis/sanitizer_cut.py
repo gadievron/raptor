@@ -854,6 +854,12 @@ def _element_exclusive_reason(
     source_symbols,
     candidate_callables,
     array_index,
+    *,
+    java_source_text=None,
+    java_file_path=None,
+    repo_root=None,
+    ban_tf_system_reads: bool = False,
+    union_member_check=None,
 ) -> str | None:
     """Reason string when the value the sink consumes is an element of
     a tracked local array whose every write is a catalog-sanitizer
@@ -910,6 +916,20 @@ def _element_exclusive_reason(
                 return None
     if _sibling_args_tainted(
             graph, sources_set, sink, sink_arg, source_symbols):
+        return None
+    # The front check above is necessary but NOT sufficient: a
+    # sibling tainted through a helper call is invisible to it
+    # (observed live — see _siblings_fold_or_refuse). Every sibling
+    # must additionally fold or be a catalog-sanitizer output.
+    if not _vertex_cut_siblings_clean(
+            graph, reaching_defs(graph), sink, sink_arg,
+            (), candidate_callables,
+            java_source_text=java_source_text,
+            java_file_path=java_file_path,
+            repo_root=repo_root,
+            ban_tf_system_reads=ban_tf_system_reads,
+            union_member_check=union_member_check,
+    ):
         return None
     return (
         f"element-exclusive sanitizer definitions: every write to the "
@@ -1178,6 +1198,12 @@ def _collection_exclusive_reason(
     source_symbols,
     candidate_callables,
     collection_index,
+    *,
+    java_source_text=None,
+    java_file_path=None,
+    repo_root=None,
+    ban_tf_system_reads: bool = False,
+    union_member_check=None,
 ) -> str | None:
     """Reason string when the value the sink consumes is an element of
     a tracked local collection whose every write to the consumed key
@@ -1229,6 +1255,19 @@ def _collection_exclusive_reason(
                 return None
     if _sibling_args_tainted(
             graph, sources_set, sink, sink_arg, source_symbols):
+        return None
+    # Same second gate as the element pre-check: the front check is
+    # blind to helper-fed sibling taint, so every sibling must
+    # additionally fold or be a catalog-sanitizer output.
+    if not _vertex_cut_siblings_clean(
+            graph, reaching_defs(graph), sink, sink_arg,
+            (), candidate_callables,
+            java_source_text=java_source_text,
+            java_file_path=java_file_path,
+            repo_root=repo_root,
+            ban_tf_system_reads=ban_tf_system_reads,
+            union_member_check=union_member_check,
+    ):
         return None
     return (
         f"element-exclusive sanitizer definitions: every write to the "
@@ -1664,6 +1703,11 @@ def evaluate_finding(
             elem_reason = _element_exclusive_reason(
                 graph, sources_set, sink, sink_arg, source_symbols,
                 candidate_callables, array_index,
+                java_source_text=java_source_text,
+                java_file_path=java_file_path,
+                repo_root=repo_root,
+                ban_tf_system_reads=ban_tf_system_reads,
+                union_member_check=_union_member_check(cwe),
             )
             if elem_reason is not None:
                 return SanitizerCutResult(
@@ -1686,6 +1730,11 @@ def evaluate_finding(
                 coll_reason = _collection_exclusive_reason(
                     graph, sources_set, sink, sink_arg, source_symbols,
                     candidate_callables, collection_index,
+                    java_source_text=java_source_text,
+                    java_file_path=java_file_path,
+                    repo_root=repo_root,
+                    ban_tf_system_reads=ban_tf_system_reads,
+                    union_member_check=_union_member_check(cwe),
                 )
                 if coll_reason is not None:
                     return SanitizerCutResult(

@@ -643,6 +643,41 @@ def _java_array_fixtures() -> list[CutFixture]:
                    "        a[0] = y;\n"
                    "        out.println(y);\n"),
         3, 7, language="java", suffix=".java"))
+    # ---- composed pins: element read × sink-sibling taint ----
+    # The element-exclusive pre-check must not trust the local taint
+    # front for sibling arguments — a sibling fed by a same-file
+    # helper is invisible to it (the b34/b41 incident shape restated
+    # on the b19 door). The corpus previously composed element reads
+    # only with front-visible sibling taint.
+    srv = ("import org.owasp.encoder.Encode;\n"
+           "import javax.servlet.http.HttpServletRequest;\n")
+    handle_srv = ("    public void handle(HttpServletRequest request, "
+                  "java.io.PrintWriter out) {\n"
+                  "        String x = request.getParameter(\"q\");\n")
+    fetch_srv = ("    private static String fetch("
+                 "HttpServletRequest r) {\n"
+                 "        return r.getParameter(\"h\");\n    }\n")
+    j.append(_marked(
+        "java_arr_sibling_helper_taint", "xss", "CWE-79",
+        "element_sibling_helper_taint", LABEL_MUST_NOT_SUPPRESS,
+        srv + "public class T {\n" + handle_srv
+        + "        String[] a = new String[2];\n"
+        + "        a[0] = Encode.forHtml(x);\n"
+        + "        String pre = fetch(request);\n"
+        + "        out.printf(pre, a[0]);\n    }\n"
+        + fetch_srv + "}\n",
+        "request.getParameter(\"q\")", "out.printf(pre, a[0])"))
+    # Constant-sibling control: the guard folds the sibling and the
+    # element suppression survives.
+    j.append(_marked(
+        "java_arr_sibling_const", "xss", "CWE-79",
+        "element_sibling_const", LABEL_MAY_SUPPRESS,
+        srv + "public class T {\n" + handle_srv
+        + "        String[] a = new String[2];\n"
+        + "        a[0] = Encode.forHtml(x);\n"
+        + "        String pre = \"Result: %s\";\n"
+        + "        out.printf(pre, a[0]);\n    }\n}\n",
+        "request.getParameter(\"q\")", "out.printf(pre, a[0])"))
     return j
 
 
@@ -2789,6 +2824,35 @@ def _java_b28_collection_fixtures() -> list[CutFixture]:
               + "        String bar = (String) m.get(\"k\");\n"
               + "        out.printf(bar, x);\n    }\n"),
         "public void handle", "out.printf(bar, x)"))
+    # Composed pin: round-trip read × HELPER-FED sibling taint. The
+    # front-visible pin above cannot catch a pre-check that trusts
+    # the local taint front — a sibling fed by a same-file helper is
+    # invisible to it (the b34/b41 incident shape on the b28 door).
+    j.append(_marked(
+        "java_coll_sibling_helper_taint", "xss", "CWE-79",
+        "coll_sibling_helper_taint", LABEL_MUST_NOT_SUPPRESS,
+        cls_t(handle
+              + "        HashMap<String, String> m = new HashMap<>();\n"
+              + "        m.put(\"k\", Encode.forHtml(x));\n"
+              + "        String bar = m.get(\"k\");\n"
+              + "        String pre = fetch(request);\n"
+              + "        out.printf(pre, bar);\n    }\n"
+              + "    private static String fetch("
+              "HttpServletRequest r) {\n"
+              + "        return r.getParameter(\"h\");\n    }\n"),
+        "request.getParameter(\"q\")", "out.printf(pre, bar)"))
+    # Constant-sibling control: the guard folds the sibling and the
+    # round-trip suppression survives.
+    j.append(_marked(
+        "java_coll_sibling_const", "xss", "CWE-79",
+        "coll_sibling_const", LABEL_MAY_SUPPRESS,
+        cls_t(handle
+              + "        HashMap<String, String> m = new HashMap<>();\n"
+              + "        m.put(\"k\", Encode.forHtml(x));\n"
+              + "        String bar = m.get(\"k\");\n"
+              + "        String pre = \"Result: %s\";\n"
+              + "        out.printf(pre, bar);\n    }\n"),
+        "request.getParameter(\"q\")", "out.printf(pre, bar)"))
 
     # ---- may-suppress: the shapes the mechanism exists for ----
     j.append(_marked(
