@@ -582,3 +582,72 @@ jobs:
         if h.sink_kind == "run_block" and h.step_index == 1
     ]
     assert egress and egress[0].severity == "high"
+
+
+# ---------------------------------------------------------------------------
+# Job-level reusable workflows — secrets: inherit / explicit map
+# ---------------------------------------------------------------------------
+
+def test_job_level_secrets_inherit_fires(tmp_path: Path) -> None:
+    """Reusable workflows are invoked at JOB level; ``secrets:
+    inherit`` forwards every repository secret and must produce the
+    documented low-severity informational finding."""
+    _write_wf(tmp_path, "reuse.yml", """\
+name: x
+on: [push]
+jobs:
+  call:
+    uses: other-org/other-repo/.github/workflows/deploy.yml@main
+    secrets: inherit
+""")
+    hits = scan_target(tmp_path, [], [])
+    assert len(hits) == 1
+    assert hits[0].sink_kind == "reusable_workflow_inherit"
+    assert hits[0].secret_names == ("*",)
+    assert hits[0].severity == "low"
+
+
+def test_job_level_explicit_secrets_map_fires(tmp_path: Path) -> None:
+    _write_wf(tmp_path, "reuse.yml", """\
+name: x
+on: [push]
+jobs:
+  call:
+    uses: ./.github/workflows/local.yml
+    secrets:
+      npm-token: ${{ secrets.NPM_TOKEN }}
+""")
+    hits = scan_target(tmp_path, [], [])
+    assert len(hits) == 1
+    assert hits[0].sink_kind == "reusable_workflow_inherit"
+    assert hits[0].secret_names == ("npm-token",)
+
+
+def test_job_level_uses_without_secrets_silent(tmp_path: Path) -> None:
+    _write_wf(tmp_path, "reuse.yml", """\
+name: x
+on: [push]
+jobs:
+  call:
+    uses: other-org/other-repo/.github/workflows/build.yml@v1
+""")
+    assert scan_target(tmp_path, [], []) == []
+
+
+def test_step_level_yml_uses_treated_untrusted(tmp_path: Path) -> None:
+    """Steps can't ``uses:`` a workflow .yml in valid GHA — if one
+    appears anyway, fail closed as an untrusted action."""
+    _write_wf(tmp_path, "weird.yml", """\
+name: x
+on: [push]
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: org/repo/.github/workflows/x.yml@main
+        with:
+          token: ${{ secrets.NPM_TOKEN }}
+""")
+    hits = scan_target(tmp_path, [], [])
+    assert len(hits) == 1
+    assert hits[0].sink_kind == "untrusted_action"

@@ -46,10 +46,14 @@ What this detector must defend against:
     interpretation would recurse into ``./.github/actions/foo/action.yml``
     — left for a follow-on.
 
-  * **Reusable workflows** — ``uses: org/repo/.github/workflows/foo.yml@ref``
-    with ``secrets: inherit`` or explicit secret passing.  Defence:
-    emit a low-severity informational finding (cross-workflow flow
-    is out of static scope here).
+  * **Reusable workflows** — invoked at JOB level:
+    ``jobs.<id>.uses: org/repo/.github/workflows/foo.yml@ref`` with
+    ``secrets: inherit`` (forwards EVERY repository secret) or an
+    explicit ``secrets:`` map.  Defence: emit a low-severity
+    informational ``reusable_workflow_inherit`` finding naming the
+    forwarded secrets (cross-workflow flow is out of static scope
+    here).  A ``.yml``-suffixed STEP-level ``uses:`` is not valid
+    GHA; if one appears it is treated as an untrusted action.
 
   * **echo-with-mask** — ``run: echo "::add-mask::${{ secrets.X }}"``
     is the canonical legitimate use of a secret in a ``run:`` body.
@@ -926,7 +930,6 @@ def _scan_one_step(
     if isinstance(uses, str):
         action_name = _action_name(uses)
         is_local = action_name.startswith(("./", "../"))
-        is_reusable_workflow = action_name.endswith((".yml", ".yaml"))
         # Trust any first-party ``actions/<name>`` action (GitHub's
         # official org).  The ``actions/`` GitHub org is the
         # canonical source of first-party workflow primitives; any
@@ -988,21 +991,12 @@ def _scan_one_step(
                     ),
                     severity="medium",
                 ))
-            elif is_reusable_workflow:
-                hits.append(SecretFlowHit(
-                    dependency=dep, workflow_path=workflow_path,
-                    job_id=job_id, step_index=step_index,
-                    sink_kind="reusable_workflow_inherit",
-                    secret_names=tuple(tainted_inputs),
-                    detail=(
-                        f"reusable workflow ``{action_name}`` "
-                        f"receives secret-tainted input(s) "
-                        f"{tainted_inputs!r}; static scope ends at "
-                        "the workflow boundary"
-                    ),
-                    severity="low",
-                ))
             else:
+                # NOTE: a ``.yml``-suffixed step-level ``uses:`` is
+                # not valid GHA (reusable workflows are invoked at
+                # JOB level — handled in ``_scan_workflow``); if one
+                # appears anyway it lands here as an untrusted
+                # action, the fail-closed direction.
                 hits.append(SecretFlowHit(
                     dependency=dep, workflow_path=workflow_path,
                     job_id=job_id, step_index=step_index,
@@ -1214,6 +1208,53 @@ def _scan_one_step(
     return hits
 
 
+def _scan_reusable_workflow_job(
+    job: dict,
+    job_id: str,
+    job_uses: str,
+    workflow_path: Path,
+    dep: Dependency,
+) -> list[SecretFlowHit]:
+    """Job-level ``uses:`` — a reusable-workflow invocation.
+
+    Cross-workflow flow is out of static scope here (the called
+    workflow may live in another repo at a mutable ref), so the
+    finding is low-severity informational, per the adversarial-model
+    contract: ``secrets: inherit`` forwards EVERY repository secret;
+    an explicit ``secrets:`` map forwards the named ones.  A call
+    that passes no secrets gets no finding.
+    """
+    secrets_val = job.get("secrets")
+    if secrets_val == "inherit":
+        return [SecretFlowHit(
+            dependency=dep, workflow_path=workflow_path,
+            job_id=job_id, step_index=0,
+            sink_kind="reusable_workflow_inherit",
+            secret_names=("*",),
+            detail=(
+                f"job invokes reusable workflow ``{job_uses}`` with "
+                "``secrets: inherit`` — EVERY repository secret is "
+                "forwarded; static scope ends at the workflow boundary"
+            ),
+            severity="low",
+        )]
+    if isinstance(secrets_val, dict) and secrets_val:
+        names = tuple(sorted(str(k) for k in secrets_val))
+        return [SecretFlowHit(
+            dependency=dep, workflow_path=workflow_path,
+            job_id=job_id, step_index=0,
+            sink_kind="reusable_workflow_inherit",
+            secret_names=names,
+            detail=(
+                f"job invokes reusable workflow ``{job_uses}`` "
+                f"passing secret(s) {list(names)!r}; static scope "
+                "ends at the workflow boundary"
+            ),
+            severity="low",
+        )]
+    return []
+
+
 def _scan_workflow(
     workflow_path: Path, dep: Dependency,
 ) -> list[SecretFlowHit]:
@@ -1263,6 +1304,17 @@ def _scan_workflow(
         # binding of the same name.
         _merge_env_bindings(job.get("env"), ctx.secret_bound_env,
                             override=True)
+        # Reusable workflows are invoked at JOB level
+        # (``jobs.<id>.uses`` + ``secrets: inherit`` / an explicit
+        # ``secrets:`` map) — such jobs have no ``steps`` and were
+        # previously skipped whole, making the documented
+        # ``reusable_workflow_inherit`` finding unreachable.
+        job_uses = job.get("uses")
+        if isinstance(job_uses, str):
+            hits.extend(_scan_reusable_workflow_job(
+                job, str(job_id), job_uses, workflow_path, dep,
+            ))
+            continue
         steps = job.get("steps")
         if not isinstance(steps, list):
             continue
