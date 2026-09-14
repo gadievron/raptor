@@ -67,12 +67,42 @@ def scan_target(
     if not target.is_dir():
         return []
     deps_list = list(deps)
-    host = _host_dep_for_target(deps_list, manifests, target) \
+    fallback_host = _host_dep_for_target(deps_list, manifests, target) \
         or _placeholder_for_target(target)
+    # Multi-gem monorepo: anchor EACH script to the closest RubyGems
+    # manifest dominating it (as binary_in_package does for binaries)
+    # rather than pinning every extconf in the tree to the FIRST
+    # manifest — that attributed gem B's extension script to gem A,
+    # fragmented the composite HOOK/BINARY pair across the two gems'
+    # hosts, and keyed the publish-helper suppression on the wrong
+    # name.  Fall back to the historical first-manifest host when no
+    # RubyGems manifest dominates the script.
+    rubygems_manifests = [
+        m for m in manifests
+        if m.ecosystem == "RubyGems" and not m.is_lockfile
+    ]
     out: list[RubyGemsLifecycleFinding] = []
     for script in _iter_extconf_scripts(target):
+        host = (_dominating_host(script, rubygems_manifests)
+                or fallback_host)
         out.extend(_scan_script(script, target, host))
     return out
+
+
+def _dominating_host(
+    script: Path, rubygems_manifests: list[Manifest],
+) -> Dependency | None:
+    """Host anchored at the deepest RubyGems manifest whose directory
+    dominates ``script``; None when no manifest dominates."""
+    from ._closest_manifest import closest_manifest
+    m = closest_manifest(rubygems_manifests, script)
+    if m is None:
+        return None
+    return _own_host.resolve_own_host(
+        m,
+        reason="placeholder for rubygems-lifecycle-hook finding host",
+        placeholder_name="<extconf>",
+    )
 
 
 def _iter_extconf_scripts(target: Path) -> Iterable[Path]:
