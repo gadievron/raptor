@@ -112,6 +112,30 @@ def _mixed_outcomes(n: int = 6) -> list[ReviewOutcome]:
     ]
 
 
+class TestGatePrefixSharedAuthority:
+    def test_new_gate_prefix_reaches_the_refuter_skip(self, tmp_path):
+        # Drift guard: the refuter skip must read the shared
+        # _GATE_DEMOTION_BODY_PREFIXES tuple so a new authoritative
+        # gate prefix skips here too (gate-stamped bodies already
+        # carry a mechanical resolution — re-attacking them wastes
+        # refuter budget).
+        import unittest.mock as mock
+
+        from core.audit import orchestrator as orch
+
+        outcome = _outcome(0, "finding")
+        outcome.body = "[new-gate: G9] mechanically adjudicated"
+        client = _PerFunctionClient(refute=set())
+        with mock.patch.object(
+            orch, "_GATE_DEMOTION_BODY_PREFIXES",
+            orch._GATE_DEMOTION_BODY_PREFIXES + ("[new-gate:",),
+        ):
+            _adversarial_refute_pass(
+                _result([outcome]), _config(tmp_path, client),
+            )
+        assert client.calls == []
+
+
 class TestSerialParallelEquivalence:
     def test_same_verdicts_and_counters(self, tmp_path):
         refute = {"fn1", "fn2", "fn5"}

@@ -135,6 +135,30 @@ class TestDispatchSecondaryHypotheses:
         assert chain_calls == []
         assert result.outcomes[0].status == "suspicious"
 
+    def test_new_gate_prefix_reaches_this_pass(self, tmp_path, monkeypatch):
+        # Drift guard: this pass must read the shared
+        # _GATE_DEMOTION_BODY_PREFIXES tuple, not a verbatim inline
+        # copy — a new authoritative gate prefix added to the shared
+        # tuple that an inline copy misses would dispatch chains at
+        # outcomes the gate already adjudicated.
+        from core.audit import orchestrator as orch
+        monkeypatch.setattr(
+            orch, "_GATE_DEMOTION_BODY_PREFIXES",
+            orch._GATE_DEMOTION_BODY_PREFIXES + ("[new-gate:",),
+        )
+        outcome = _outcome(hypotheses=[
+            {"mechanism": "missing auth check", "confidence": "high"},
+        ])
+        outcome.body = "[new-gate: G9] mechanically adjudicated"
+        result = _result([outcome])
+        chain_calls: list = []
+        _patch_chain(monkeypatch, [], chain_calls=chain_calls)
+
+        orch._dispatch_secondary_hypotheses(result, _config(tmp_path))
+
+        assert chain_calls == []
+        assert result.outcomes[0].status == "suspicious"
+
     def test_primary_duplicate_skipped(self, tmp_path, monkeypatch):
         from core.audit.orchestrator import (
             _dispatch_secondary_hypotheses,

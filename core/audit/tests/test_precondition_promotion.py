@@ -341,6 +341,33 @@ class TestPromoteSuspiciousPreconditions:
         assert not called
         assert result.outcomes[0].status == "suspicious"
 
+    def test_new_gate_prefix_reaches_this_pass(self, tmp_path, monkeypatch):
+        # Drift guard: this pass must read the shared
+        # _GATE_DEMOTION_BODY_PREFIXES tuple, not a verbatim inline
+        # copy — a new authoritative gate prefix added to the shared
+        # tuple that an inline copy misses would re-sweep outcomes the
+        # gate already adjudicated.
+        from core.audit import orchestrator as orch
+        monkeypatch.setattr(
+            orch, "_GATE_DEMOTION_BODY_PREFIXES",
+            orch._GATE_DEMOTION_BODY_PREFIXES + ("[new-gate:",),
+        )
+        outcome = self._outcome(
+            self._preconditions("attacker_controls_input"),
+            body="[new-gate: G9] mechanically adjudicated",
+        )
+        result = self._result([outcome])
+        called = []
+        monkeypatch.setattr(
+            "core.audit.precondition_check.verify_preconditions",
+            lambda *a, **kw: called.append(1) or _verdict(),
+        )
+        orch._promote_suspicious_preconditions(
+            result, self._config(tmp_path),
+        )
+        assert not called
+        assert result.outcomes[0].status == "suspicious"
+
     def test_check_count_bounded_per_function(self, tmp_path, monkeypatch):
         from core.audit import orchestrator as orch
         outcome = self._outcome(self._preconditions(

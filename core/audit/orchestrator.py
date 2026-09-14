@@ -22690,6 +22690,10 @@ def _promote_suspicious_one(
 # Bodies stamped by an authoritative mechanical gate demotion: the
 # promotion pass refuses to sweep them (the gate's verdict stands),
 # so dispatching chains at them buys receipts nothing consumes.
+# Single authority: the zero-dispatch re-sweep, precondition
+# promotion, secondary-hypothesis dispatch, and adversarial-refute
+# passes all read THIS tuple — a new gate prefix added here reaches
+# every consumer (verbatim inline copies drifted apart before).
 _GATE_DEMOTION_BODY_PREFIXES = (
     "[gate violation:",
     "[sink-unreachability:",
@@ -23261,16 +23265,7 @@ def _promote_suspicious_preconditions(
         if outcome.status != "suspicious":
             continue
 
-        if outcome.body.startswith(
-            (
-                "[gate violation:",
-                "[sink-unreachability:",
-                "[guarded-sink:",
-                "[smt-infeasible:",
-                "[entry-unreachability:",
-                "[self-contradiction:",
-            )
-        ):
+        if outcome.body.startswith(_GATE_DEMOTION_BODY_PREFIXES):
             continue
 
         review = outcome.review_result or {}
@@ -24479,16 +24474,7 @@ def _dispatch_secondary_hypotheses(
     for i, outcome in enumerate(result.outcomes):
         if outcome.status not in ("finding", "suspicious"):
             continue
-        if outcome.body.startswith(
-            (
-                "[gate violation:",
-                "[sink-unreachability:",
-                "[guarded-sink:",
-                "[smt-infeasible:",
-                "[entry-unreachability:",
-                "[self-contradiction:",
-            )
-        ):
+        if outcome.body.startswith(_GATE_DEMOTION_BODY_PREFIXES):
             continue
 
         hypotheses = getattr(outcome, "hypotheses", None) or []
@@ -24711,18 +24697,6 @@ def _dispatch_secondary_hypotheses(
 # finding/suspicious outcomes are attacked per run.
 _MAX_ADVERSARIAL_REFUTATIONS = 64
 
-# Sweep/gate body markers whose outcomes already carry a mechanical
-# resolution — re-attacking them wastes refuter budget.
-_ADVERSARIAL_SKIP_PREFIXES = (
-    "[gate violation:",
-    "[sink-unreachability:",
-    "[guarded-sink:",
-    "[smt-infeasible:",
-    "[entry-unreachability:",
-    "[self-contradiction:",
-)
-
-
 def _adversarial_refute_pass(
     result: OrchestratorResult,
     config: OrchestratorConfig,
@@ -24792,7 +24766,9 @@ def _adversarial_refute_pass(
     for i, outcome in enumerate(result.outcomes):
         if outcome.status not in ("finding", "suspicious"):
             continue
-        if outcome.body.startswith(_ADVERSARIAL_SKIP_PREFIXES):
+        # Gate-stamped bodies already carry a mechanical resolution —
+        # re-attacking them wastes refuter budget.
+        if outcome.body.startswith(_GATE_DEMOTION_BODY_PREFIXES):
             continue
         review = outcome.review_result or {}
         if review.get("adversarial_review"):
