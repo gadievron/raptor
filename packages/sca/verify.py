@@ -66,17 +66,16 @@ logger = logging.getLogger(__name__)
 
 
 # Vendored / build-output directories we don't bother copying.
-# Mirrors discovery.EXCLUDED_DIR_NAMES and the supply-chain artefact
-# walk's skiplist.
-_SKIP_DIR_NAMES: set[str] = {
-    "node_modules", "vendor", "bower_components",
-    ".git", ".svn", ".hg",
-    "target", "build", "dist", "out", "_build",
-    "__pycache__", ".tox", ".venv", "venv", ".env",
-    ".pytest_cache", ".mypy_cache", ".ruff_cache",
-    ".gradle", ".idea", ".vscode",
-    ".angular", ".next", ".nuxt", ".cache", ".turbo",
-}
+# DERIVED from discovery's exclusion list, not hand-mirrored: the
+# hand-copied version drifted (no ``.out``, ``.claude``,
+# ``codeql_dbs`` / ``codeql_db``), so every verify overlay copied
+# CodeQL database caches (10K+ files) and agent worktree state into
+# the scratch tree on every run. Anything discovery skips, the
+# overlay skips — a dir discovery won't scan contributes nothing to
+# the verify delta.
+from .discovery import EXCLUDED_DIR_NAMES as _DISCOVERY_EXCLUDED
+
+_SKIP_DIR_NAMES: set[str] = set(_DISCOVERY_EXCLUDED)
 
 
 def main(

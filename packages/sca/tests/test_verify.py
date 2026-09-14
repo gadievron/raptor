@@ -411,3 +411,28 @@ def test_copy_target_survives_cyclic_symlink(tmp_path: Path) -> None:
     verify._copy_target(target, dst)          # must terminate
     assert (dst / "package.json").exists()
     assert not (dst / "loop").exists()
+
+
+def test_overlay_skip_list_cannot_drift_from_discovery(
+    tmp_path: Path,
+) -> None:
+    """The overlay skip list is derived from discovery's exclusions —
+    a hand-mirrored copy drifted (no .out / .claude / codeql_dbs), so
+    every verify run copied CodeQL DB caches and agent state into the
+    scratch overlay."""
+    from packages.sca.discovery import EXCLUDED_DIR_NAMES
+
+    assert verify._SKIP_DIR_NAMES == set(EXCLUDED_DIR_NAMES)
+
+    target = tmp_path / "repo"
+    (target / "codeql_dbs").mkdir(parents=True)
+    (target / "codeql_dbs" / "huge.idx").write_text("x", encoding="utf-8")
+    (target / ".claude").mkdir()
+    (target / ".claude" / "state.json").write_text("{}", encoding="utf-8")
+    (target / "requirements.txt").write_text("requests==2.0.0\n",
+                                             encoding="utf-8")
+    dst = tmp_path / "overlay"
+    verify._copy_target(target, dst)
+    assert (dst / "requirements.txt").exists()
+    assert not (dst / "codeql_dbs").exists()
+    assert not (dst / ".claude").exists()
