@@ -92,6 +92,25 @@ class TestLoadWriteCycle:
         write_prep_cache(tmp_path, "artifact.json", "fp1", {"a": 1},
                          label="test")  # must not raise
 
+    def test_failed_replace_leaves_no_tmp_behind(
+        self, tmp_path, monkeypatch,
+    ):
+        # Disk-full-shaped failure between the tempfile write and the
+        # atomic rename: the temp file must not strand in the cache
+        # dir. Pins the seam property regardless of which writer
+        # implements it (today: core.atomic_fs).
+        import os
+
+        def failing_replace(src, dst):
+            raise OSError("simulated disk full")
+
+        monkeypatch.setattr(os, "replace", failing_replace)
+        write_prep_cache(tmp_path, "artifact.json", "fp1", {"a": 1},
+                         label="test")  # must not raise
+        leftovers = list((tmp_path / PREP_CACHE_DIRNAME).glob("*.tmp"))
+        assert leftovers == []
+        assert not prep_cache_path(tmp_path, "artifact.json").exists()
+
     def test_unserialisable_payload_never_raises(self, tmp_path):
         write_prep_cache(tmp_path, "artifact.json", "fp1", {"a": object()},
                          label="test")  # must not raise
