@@ -522,3 +522,81 @@ class TestPanelTieMajority:
             scorecard, "agentic:py/sql-injection", "gpt-5",
             EventType.JUDGE_REVIEW,
         ) == (1, 0)
+
+
+class TestAbstainedPrimarySnapshot:
+    """A ``None`` snapshot entry means the primary ABSTAINED — it cast
+    no vote. Pre-fix ``bool(None)`` minted a "not exploitable" primary
+    vote, skewing the tie computation and writing a fabricated primary
+    outcome into the ledger against exploitable-voting judges."""
+
+    def _record(self, scorecard, judges, final, primary_snap):
+        results = {"f1": {
+            "rule_id": "py/sql-injection",
+            "judge": "disputed",
+            "is_exploitable": final,
+            "analysed_by": "claude-opus",
+            "reasoning": "primary reasoning",
+            "judge_analyses": [
+                {"model": m, "is_exploitable": v} for m, v in judges
+            ],
+        }}
+        return record_judge_outcomes(
+            scorecard,
+            results_by_id=results,
+            primary_verdicts_before_judge={"f1": primary_snap},
+        )
+
+    def test_abstained_primary_gets_no_event_judges_still_score(self, scorecard):
+        n = self._record(
+            scorecard,
+            judges=[("gpt-5", True), ("gemini", True)],
+            final=True,
+            primary_snap=None,
+        )
+        assert n == 2
+        dc = "agentic:py/sql-injection"
+        assert scorecard.get_stat(dc, "claude-opus") is None
+        assert _stat(scorecard, dc, "gpt-5",  EventType.JUDGE_REVIEW) == (1, 0)
+        assert _stat(scorecard, dc, "gemini", EventType.JUDGE_REVIEW) == (1, 0)
+
+    def test_abstained_primary_split_judges_is_a_tie_skip(self, scorecard):
+        """Primary None + judges [True, False]: the real vote is 1-1 —
+        JudgeTask's finalised value is a mechanical tie-break, so
+        nothing scores. Pre-fix the coerced primary made it 1-vs-2
+        and the exploitable-voting judge was minted incorrect against
+        a majority the primary never joined."""
+        n = self._record(
+            scorecard,
+            judges=[("gpt-5", True), ("gemini", False)],
+            final=False,          # mechanical (preserved abstention)
+            primary_snap=None,
+        )
+        assert n == 0
+        for model in ("claude-opus", "gpt-5", "gemini"):
+            assert scorecard.get_stat("agentic:py/sql-injection", model) is None
+
+    def test_abstained_primary_single_voting_judge_skips(self, scorecard):
+        """Primary None + judges [True, None]: one real vote cannot
+        define a majority — recording the lone voter correct against
+        a verdict only it produced would mint self-corroboration."""
+        n = self._record(
+            scorecard,
+            judges=[("gpt-5", True), ("gemini", None)],
+            final=True,
+            primary_snap=None,
+        )
+        assert n == 0
+
+    def test_voting_primary_unchanged(self, scorecard):
+        """Control: a primary that actually voted keeps scoring
+        exactly as before."""
+        n = self._record(
+            scorecard,
+            judges=[("gpt-5", True), ("gemini", True)],
+            final=True,
+            primary_snap=False,
+        )
+        assert n == 3
+        dc = "agentic:py/sql-injection"
+        assert _stat(scorecard, dc, "claude-opus", EventType.JUDGE_REVIEW) == (0, 1)

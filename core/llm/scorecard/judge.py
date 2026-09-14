@@ -43,7 +43,7 @@ def record_judge_outcomes(
     scorecard: ModelScorecard | None,
     *,
     results_by_id: dict[str, dict],
-    primary_verdicts_before_judge: dict[str, bool],
+    primary_verdicts_before_judge: dict[str, bool | None],
     decision_class_prefix: str = "agentic",
 ) -> int:
     """Walk results that ran through ``JudgeTask``; record one
@@ -54,7 +54,9 @@ def record_judge_outcomes(
     primary verdict captured BEFORE ``JudgeTask`` ran — JudgeTask
     overwrites ``primary["is_exploitable"]`` with the final majority
     verdict, so we need the snapshot to know which way primary
-    originally voted.
+    originally voted. ``None`` means the primary ABSTAINED (its
+    analysis carried no verdict): it joins neither the vote count nor
+    the event stream.
 
     Returns count of events written. No-op on ``scorecard=None``.
     """
@@ -88,7 +90,17 @@ def record_judge_outcomes(
         decision_class = f"{decision_class_prefix}:{rule_id}"
         final_verdict = bool(result.get("is_exploitable"))
         primary_model = str(result.get("analysed_by") or "?")
-        primary_vote = bool(primary_verdicts_before_judge[fid])
+        # The snapshot preserves abstention: a None entry means the
+        # primary's analysis carried no verdict (errored / refused /
+        # schema-nulled) — the primary cast NO vote. bool()-coercing
+        # it minted a "not exploitable" primary vote, which both
+        # skewed the tie computation and wrote a fabricated primary
+        # outcome into the ledger — scoring exploitable-voting judges
+        # "incorrect" against a majority the primary never joined.
+        primary_raw = primary_verdicts_before_judge[fid]
+        primary_vote: bool | None = (
+            None if primary_raw is None else bool(primary_raw)
+        )
 
         # Abstention-aware voter list. A judge whose
         # ``is_exploitable`` is None (errored / refused /
@@ -113,34 +125,43 @@ def record_judge_outcomes(
             # skip defensively.
             continue
 
-        # Exact tie across primary + voting judges (e.g. 2-vs-2):
-        # the finalised verdict is a mechanical tie-break, not a
-        # panel majority, so scoring voters against it would
-        # arbitrarily declare one side "incorrect". Skip — same
-        # rationale as the consensus producer's even-split skip.
-        votes = [primary_vote] + [
+        # Exact tie across the ACTUAL voters (e.g. 2-vs-2): the
+        # finalised verdict is a mechanical tie-break, not a panel
+        # majority, so scoring voters against it would arbitrarily
+        # declare one side "incorrect". Skip — same rationale as the
+        # consensus producer's even-split skip. An abstained primary
+        # contributes no vote here.
+        votes = ([] if primary_vote is None else [primary_vote]) + [
             bool(ja.get("is_exploitable")) for ja in voting_judges
         ]
+        if len(votes) < 2:
+            # Fewer than two real votes cannot define a majority —
+            # recording the lone voter "correct" against a verdict
+            # only it produced would mint self-corroboration (same
+            # guard as the consensus producer).
+            continue
         n_pos = sum(1 for v in votes if v)
         if n_pos * 2 == len(votes):
             continue
 
-        # Primary's outcome
-        primary_correct = (primary_vote == final_verdict)
-        pending.append(_event(
-            decision_class=decision_class,
-            model=primary_model,
-            model_version=result.get("resolved_model"),
-            outcome="correct" if primary_correct else "incorrect",
-            sample_reasoning=(
-                None if primary_correct
-                else str(result.get("reasoning") or "")
-            ),
-            other_summary=(
-                f"panel of {len(voting_judges)} judge(s) voted "
-                f"{'exploitable' if final_verdict else 'not exploitable'}"
-            ),
-        ))
+        # Primary's outcome — only when the primary actually voted;
+        # an abstainer never receives a JUDGE_REVIEW event.
+        if primary_vote is not None:
+            primary_correct = (primary_vote == final_verdict)
+            pending.append(_event(
+                decision_class=decision_class,
+                model=primary_model,
+                model_version=result.get("resolved_model"),
+                outcome="correct" if primary_correct else "incorrect",
+                sample_reasoning=(
+                    None if primary_correct
+                    else str(result.get("reasoning") or "")
+                ),
+                other_summary=(
+                    f"panel of {len(voting_judges)} judge(s) voted "
+                    f"{'exploitable' if final_verdict else 'not exploitable'}"
+                ),
+            ))
 
         # Each voting judge's outcome (abstainers get no event).
         for ja in voting_judges:

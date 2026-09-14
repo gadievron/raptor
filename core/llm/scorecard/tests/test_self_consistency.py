@@ -132,3 +132,31 @@ class TestRecordSelfConsistencyOutcomes:
         ec = cell.events[EventType.SELF_CONSISTENCY]
         assert ec.correct == 1
         assert ec.incorrect == 1
+
+
+def test_abstained_pre_verdict_records_nothing(tmp_path):
+    """A None snapshot entry (abstained pre-retry analysis) grades
+    nothing — held/flipped cannot be computed against a vote that
+    never existed. The producer's pre-existing None-skip now doubles
+    as the abstention rule; this pins it against 'tightening' the
+    skip away."""
+    from pathlib import Path
+
+    from core.llm.scorecard.scorecard import ModelScorecard
+    from core.llm.scorecard.self_consistency import (
+        record_self_consistency_outcomes,
+    )
+
+    sc = ModelScorecard(Path(tmp_path) / "sc.json", shadow_rate=0.0)
+    n = record_self_consistency_outcomes(
+        sc,
+        results_by_id={"f1": {
+            "retried": True,
+            "is_exploitable": False,
+            "rule_id": "py/sqli",
+            "analysed_by": "m1",
+        }},
+        verdicts_pre_retry={"f1": None},
+    )
+    assert n == 0
+    assert sc.get_stat("agentic:py/sqli", "m1") is None

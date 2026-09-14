@@ -200,6 +200,28 @@ class CostTracker:
             return summary
 
 
+def _snapshot_verdicts(
+    results_by_id: dict[str, Any],
+) -> dict[str, bool | None]:
+    """Per-finding verdict snapshot for the reliability producers.
+
+    Preserves abstention: a missing or ``None`` ``is_exploitable``
+    (errored / refused / schema-nulled analysis) snapshots as ``None``
+    so downstream producers exclude the non-vote — bool()-coercing at
+    snapshot time silently wrote abstained primaries into the
+    JUDGE_REVIEW / SELF_CONSISTENCY ledgers as "not exploitable"
+    votes, poisoning outcomes against the judges who actually voted.
+    Error records are excluded entirely (their verdict fields are
+    never trusted).
+    """
+    out: dict[str, bool | None] = {}
+    for fid, r in results_by_id.items():
+        if isinstance(r, dict) and "error" not in r:
+            v = r.get("is_exploitable")
+            out[fid] = None if v is None else bool(v)
+    return out
+
+
 def _cc_fallback_role_resolution(role_resolution: dict) -> dict:
     """Role resolution for the CC fallback dispatch.
 
@@ -1350,10 +1372,7 @@ def orchestrate(
 
     # Snapshot verdicts before Stage F so the self-contradiction
     # producer can detect flips (RetryTask overwrites in place).
-    verdicts_pre_retry: dict[str, bool] = {}
-    for fid, r in results_by_id.items():
-        if isinstance(r, dict) and "error" not in r:
-            verdicts_pre_retry[fid] = bool(r.get("is_exploitable", False))
+    verdicts_pre_retry = _snapshot_verdicts(results_by_id)
 
     # Stage F: self-contradiction check + retry contradictions and low confidence
     dispatch_task(
@@ -1376,12 +1395,7 @@ def orchestrate(
     # the snapshot's purpose. Take it here, before BOTH stages,
     # so judge can compare against the actual primary verdict.
     sc = getattr(client, "scorecard", None) if client is not None else None
-    primary_verdicts_pre_consensus: dict[str, bool] = {}
-    for fid, r in results_by_id.items():
-        if isinstance(r, dict) and "error" not in r:
-            primary_verdicts_pre_consensus[fid] = bool(
-                r.get("is_exploitable", False)
-            )
+    primary_verdicts_pre_consensus = _snapshot_verdicts(results_by_id)
 
     # Consensus (if configured)
     consensus_models = role_resolution.get("consensus_models", [])
@@ -1439,15 +1453,12 @@ def orchestrate(
         # overridden one. Falls back to the post-consensus state
         # for findings that didn't exist pre-consensus (shouldn't
         # happen in normal flow, but defensive).
-        primary_verdicts_before_judge: dict[str, bool] = dict(
+        primary_verdicts_before_judge: dict[str, bool | None] = dict(
             primary_verdicts_pre_consensus
         )
-        for fid, r in results_by_id.items():
-            if (fid not in primary_verdicts_before_judge
-                    and isinstance(r, dict) and "error" not in r):
-                primary_verdicts_before_judge[fid] = bool(
-                    r.get("is_exploitable", False)
-                )
+        for fid, snap in _snapshot_verdicts(results_by_id).items():
+            if fid not in primary_verdicts_before_judge:
+                primary_verdicts_before_judge[fid] = snap
         dispatch_task(
             JudgeTask(results_by_id=results_by_id, profile=profile),
             findings, dispatch_fn, role_resolution,

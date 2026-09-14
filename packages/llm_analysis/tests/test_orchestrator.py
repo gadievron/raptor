@@ -1216,3 +1216,27 @@ class TestDefenseTelemetryKey:
             w["type"] == "weakened_defenses"
             for w in payload["warnings"]
         )
+
+
+class TestSnapshotVerdicts:
+    """The reliability-producer snapshot preserves abstention: a
+    missing/None is_exploitable stays None — bool()-coercing at
+    snapshot time wrote abstained primaries into the JUDGE_REVIEW /
+    SELF_CONSISTENCY ledgers as "not exploitable" votes."""
+
+    def test_abstained_verdict_snapshots_as_none(self):
+        from packages.llm_analysis.orchestrator import _snapshot_verdicts
+        snap = _snapshot_verdicts({
+            "f-null": {"is_exploitable": None},
+            "f-missing": {"reasoning": "no verdict field"},
+            "f-true": {"is_exploitable": True},
+            "f-false": {"is_exploitable": False},
+            "f-err": {"error": "timeout", "is_exploitable": True},
+            "f-junk": "not a dict",
+        })
+        assert snap == {
+            "f-null": None,
+            "f-missing": None,
+            "f-true": True,
+            "f-false": False,
+        }

@@ -32,13 +32,16 @@ def record_self_consistency_outcomes(
     scorecard: ModelScorecard | None,
     *,
     results_by_id: dict[str, dict[str, Any]],
-    verdicts_pre_retry: dict[str, bool],
+    verdicts_pre_retry: dict[str, bool | None],
     decision_class_prefix: str = "agentic",
 ) -> int:
     """Record self-consistency outcomes for retried findings.
 
     ``verdicts_pre_retry`` maps ``finding_id → is_exploitable``
-    captured before ``RetryTask`` ran.
+    captured before ``RetryTask`` ran. A ``None`` entry means the
+    pre-retry analysis ABSTAINED (no verdict was cast) — the
+    ``pre_verdict is None`` skip below covers it: a held/flipped
+    outcome cannot be graded against a vote that never existed.
 
     Returns the number of events recorded.
     """
