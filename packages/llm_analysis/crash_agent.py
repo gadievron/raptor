@@ -840,13 +840,33 @@ class CrashAnalysisAgent:
             exploit_file.parent.mkdir(parents=True, exist_ok=True)
             exploit_file.write_text(exploit_code, encoding="utf-8")
 
-            # Save full response for analysis
+            # Save full response for analysis. Raw LLM output gets
+            # the same targeted treatment as agent.py's patch
+            # artifact body: autofetch-markup stripping (the
+            # documented exfil vector if the .txt is ever re-ingested
+            # or rendered) + control/ANSI/BIDI byte escaping so a
+            # `cat` of the artifact can't drive the terminal — plus a
+            # size cap. No markdown defang: it's a plain-text
+            # debugging sidecar and reasoning/code punctuation must
+            # survive readable.
+            from core.security.log_sanitisation import escape_nonprintable
+            from core.security.prompt_envelope import (
+                _strip_autofetch_markup,
+            )
+
+            def _sanitise_artifact_text(text: object, cap: int) -> str:
+                out = escape_nonprintable(
+                    _strip_autofetch_markup(str(text or "")),
+                    preserve_newlines=True,
+                )
+                return out[:cap]
+
             response_file = self.out_dir / "exploits" / f"{_safe_id(crash_context.crash_id)}_exploit_response.txt"
             response_content = f"""REASONING:
-{reasoning}
+{_sanitise_artifact_text(reasoning, 50_000)}
 
 FULL LLM RESPONSE:
-{full_response}"""
+{_sanitise_artifact_text(full_response, 200_000)}"""
             response_file.write_text(response_content, encoding="utf-8")
 
             logger.info("   ✓ Exploit generated: %d bytes", len(exploit_code))

