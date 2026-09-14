@@ -1585,3 +1585,86 @@ class TestScaPatchPrompt:
         bundle = build_patch_prompt_bundle_from_finding(finding)
         user_msg = next(m.content for m in bundle.messages if m.role == "user")
         assert "sqli" in user_msg or "db.py" in user_msg
+
+
+class TestProvenModelBreakerThreshold:
+    """Both directions of _BREAKER_PROVEN_THRESHOLD: a proven model
+    riding out a sub-threshold burst keeps dispatching, while a proven
+    model failing permanently (mid-run credential expiry, provider
+    outage) still opens the breaker instead of burning one timeout per
+    remaining work item — pre-fix the never-succeeded requirement
+    (completed == consec) meant one early success disabled the breaker
+    for the whole run."""
+
+    def test_proven_model_sub_threshold_burst_survives(self):
+        findings = [_make_finding(f"f-{i:03d}") for i in range(15)]
+        call_count = [0]
+
+        def burst_fn(prompt, schema, system_prompt, temperature, model):
+            call_count[0] += 1
+            # 1 success, a 9-failure burst (threshold - 1), recover.
+            if 2 <= call_count[0] <= 10:
+                raise RuntimeError("upstream blip")
+            return _make_dispatch_result()
+
+        results = dispatch_task(
+            task=AnalysisTask(),
+            items=findings,
+            dispatch_fn=burst_fn,
+            role_resolution={},
+            prior_results={},
+            cost_tracker=CostTracker(0),
+            max_parallel=1,
+        )
+        assert call_count[0] == 15          # every item dispatched
+        assert not [r for r in results
+                    if r.get("error_type") == "circuit_breaker"
+                    or str(r.get("error", "")).startswith("aborted")]
+
+    def test_proven_model_permanent_failure_opens_breaker(self):
+        from core.security.prompt_telemetry import defense_telemetry
+        defense_telemetry.reset()
+
+        findings = [_make_finding(f"f-{i:03d}") for i in range(30)]
+        calls = []
+
+        def _drained_failures() -> int:
+            models = defense_telemetry.summary()[
+                "defense_telemetry"]["models"]
+            return sum(s["schema_failed"] for s in models.values())
+
+        def dead_after_one(prompt, schema, system_prompt, temperature,
+                           model):
+            n_prior_failures = max(0, len(calls) - 1)
+            calls.append(1)
+            if len(calls) == 1:
+                return _make_dispatch_result()
+            # Deterministic drain sync up to the threshold (see the
+            # dead-futures test); post-abort stragglers get a short
+            # stall that lets cancel_futures land.
+            deadline = time.monotonic() + (
+                10.0 if n_prior_failures < 10 else 0.5)
+            while (_drained_failures() < min(n_prior_failures, 10)
+                    and time.monotonic() < deadline):
+                time.sleep(0.002)
+            raise RuntimeError("credential expired mid-run")
+
+        results = dispatch_task(
+            task=AnalysisTask(),
+            items=findings,
+            dispatch_fn=dead_after_one,
+            role_resolution={},
+            prior_results={},
+            cost_tracker=CostTracker(0),
+            max_parallel=1,
+        )
+        defense_telemetry.reset()
+
+        # 1 success + 10 failures + one racing extra (+ possible
+        # cancel-window stragglers) — never one call per item.
+        assert 11 <= len(calls) <= 14
+        assert len(results) == 30
+        broken = [r for r in results
+                  if r.get("error_type") == "circuit_breaker"
+                  or str(r.get("error", "")).startswith("aborted")]
+        assert len(broken) >= 16

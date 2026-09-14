@@ -204,6 +204,18 @@ def _format_elapsed(seconds: float) -> str:
     return format_elapsed(seconds)
 
 
+# Consecutive-failure count at which even a PROVEN model (one with
+# prior successes this run) is circuit-broken. Both-directions
+# trade-off: lower and a transient burst (timeout storm, proxy blip —
+# observed bursts run <= 5) kills a healthy model mid-run; higher and
+# a model that succeeded once then died permanently (mid-run
+# credential expiry, provider outage) burns one full timeout per
+# remaining work item before anything stops it. The never-succeeded
+# fast path stays at 3 — a model that has produced nothing but
+# failures earns no patience.
+_BREAKER_PROVEN_THRESHOLD = 10
+
+
 def dispatch_task(
     task: DispatchTask,
     items: list,
@@ -684,7 +696,13 @@ def _dispatch_inner(
                 )
                 pm["completed"] += 1
                 pm["consec"] += 1
-                if pm["consec"] >= 3 and pm["completed"] == pm["consec"]:
+                # Second, history-independent threshold: a proven
+                # model that fails _BREAKER_PROVEN_THRESHOLD times in
+                # a row (mid-run credential expiry, provider outage)
+                # must still open the breaker — see the constant's
+                # both-directions rationale.
+                if (pm["consec"] >= 3 and pm["completed"] == pm["consec"]) \
+                        or pm["consec"] >= _BREAKER_PROVEN_THRESHOLD:
                     print(
                         f"\n  Model {model_key}:"
                         f" {pm['consec']} consecutive"
