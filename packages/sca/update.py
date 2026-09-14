@@ -952,7 +952,52 @@ def _rewrite_one(
     handler = _resolve_rewriter(manifest)
     if handler is None:
         return text, False, f"no rewriter for {manifest.name}"
+    refusal = refuse_unsafe_target(plan)
+    if refusal is not None:
+        return text, False, refusal
     return handler(manifest, text, plan)
+
+
+# dpkg version grammar admitted alongside the shared literal grammar:
+# optional numeric epoch, then a version-charset tail including ``~``.
+_DPKG_VERSION_RE = re.compile(r"(?:\d{1,8}:)?[A-Za-z0-9][A-Za-z0-9.~_+-]{0,127}")
+
+
+def refuse_unsafe_target(plan: _PlanEntry) -> str | None:
+    """Grammar-gate ``plan.target`` before ANY local rewriter runs.
+
+    ``plan.target`` descends from advisory data (``fixed_versions`` is
+    remote and alias-merged) and, on the harden path, from raw registry
+    version lists — both untrusted. The registry rewriters gate every
+    ``new_value`` through ``is_safe_version_literal`` for exactly this
+    threat; the LOCAL rewriters here splice the target between JSON
+    quotes (package.json — a ``"`` escapes the string and can inject a
+    ``scripts.preinstall`` key), into XML text (pom — ``</version>``
+    breaks out of the element) and onto requirements.txt lines (a
+    newline injects ``--extra-index-url``). One check at the shared
+    dispatch covers every handler; ``optimise._pin_bare_name`` (the
+    only rewrite entry point not routed through here) applies the same
+    gate at its own top.
+
+    Returns a skip reason (loud, with a defanged preview of the
+    refused value) or ``None`` when the target is a plain literal.
+    """
+    from ._md import neutralize_inline
+    from .rewriters import is_safe_version_literal
+
+    if is_safe_version_literal(plan.target):
+        return None
+    # dpkg versions legitimately carry an epoch (``4:12.2.0-3``) and
+    # ``~`` pre-release markers (``1.0~rc1``) that the shared literal
+    # grammar excludes. Admit exactly that shape — the splice-relevant
+    # metacharacters (quotes, angle brackets, whitespace/newlines,
+    # braces) stay excluded.
+    if _DPKG_VERSION_RE.fullmatch(plan.target or ""):
+        return None
+    return (
+        "refused: fix version is not a plain version literal "
+        f"(untrusted advisory/registry data): {neutralize_inline(plan.target, limit=80)}"
+    )
 
 
 def _rewrite_via_registry(

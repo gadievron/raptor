@@ -50,6 +50,7 @@ from .update import (
     _PlanEntry,
     _proposed_rel_path as _cve_proposed_rel,
     _rewrite_one,
+    refuse_unsafe_target,
 )
 from .versions import VersionError
 from .versions import compare as version_compare
@@ -640,6 +641,14 @@ def _pin_bare_name(
     manifest: Path, text: str, plan: _PlanEntry,
 ) -> tuple[str, bool, str | None]:
     """Insert an exact version pin for a bare (unversioned) dep name."""
+    # Same untrusted-target gate as ``update._rewrite_one`` — this is
+    # the one rewrite entry point that does not route through it (the
+    # bare-name fallback runs precisely when the standard rewriter
+    # declined, including a decline BY the gate itself), so the raw
+    # target would otherwise splice verbatim between JSON/TOML quotes.
+    refusal = refuse_unsafe_target(plan)
+    if refusal is not None:
+        return text, False, refusal
     name = manifest.name
 
     if name.startswith("requirements") and name.endswith(".txt"):
