@@ -22,6 +22,11 @@ stronger signal genuinely grades an earlier model decision:
   pools. "Family" here means a different configured model — the
   independence is weaker than a true cross-family pair, which is
   exactly why the consistency axis, not ``judge_review``, is used.
+  Attribution nuance vs the registry's own cross-family producer:
+  that one grades the CHECKER's cell under ``agentic:*`` classes;
+  this producer grades the PRODUCER's cell under ``audit:*`` classes
+  — the disjoint decision-class namespaces keep the two conventions
+  from ever colliding in one cell.
 * ``self_consistency`` — same-model adversarial re-examination
   (single-model runs are self-adversarial: held → ``correct``,
   flipped → ``incorrect``) and verdict-vs-own-output contradictions
@@ -127,9 +132,24 @@ def lone_model(models: Any) -> str:
     return ""
 
 
-def _outcome_key(outcome: Any) -> str:
-    return (
-        f"{getattr(outcome, 'file', '')}:{getattr(outcome, 'function', '')}"
+def cap_key(key: str) -> str:
+    """THE key truncation — the only ``_MAX_KEY_CHARS`` slice.
+
+    Both sides of the flush reconciliation must go through this:
+    events cap their ``_key`` at buffer time, so a finding-key set
+    built from raw ``file:function`` strings would silently stop
+    matching any function whose key exceeds the cap — leaking
+    refutations for rescued findings and dropping confirmations for
+    real ones. One shared helper means the two sides cannot drift."""
+    return str(key or "")[:_MAX_KEY_CHARS]
+
+
+def outcome_key(outcome: Any) -> str:
+    """Canonical (capped) event key for one outcome. The orchestrator
+    builds the flush's ``finding_keys`` set with this so membership
+    tests match buffered ``_key`` values exactly."""
+    return cap_key(
+        f"{getattr(outcome, 'file', '')}:{getattr(outcome, 'function', '')}",
     )
 
 
@@ -182,7 +202,7 @@ def buffer_event(
         model = _normalize_model(model)
         if not model or grade not in ("correct", "incorrect"):
             return False
-        key = str(key or "")[:_MAX_KEY_CHARS]
+        key = cap_key(key)
         sample = None
         if grade == "incorrect":
             sample = {
@@ -233,7 +253,7 @@ def record_mechanical_refutation(
             cwe=_outcome_cwe(outcome),
             event_type=EventType.TOOL_EVIDENCE,
             grade="incorrect",
-            key=_outcome_key(outcome),
+            key=outcome_key(outcome),
             this_reasoning=getattr(outcome, "hypothesis", "") or "",
             other_reasoning=f"{gate}: {reason}",
         )
@@ -261,7 +281,7 @@ def record_self_consistency_violation(
             cwe=_outcome_cwe(outcome),
             event_type=EventType.SELF_CONSISTENCY,
             grade="incorrect",
-            key=_outcome_key(outcome),
+            key=outcome_key(outcome),
             this_reasoning=getattr(outcome, "hypothesis", "") or "",
             other_reasoning=detail,
         )
@@ -307,7 +327,7 @@ def record_adversarial_outcome(
         from core.llm.scorecard import EventType
 
         producer = producer_model or lone_model(models)
-        key = _outcome_key(outcome)
+        key = outcome_key(outcome)
         cwe = _outcome_cwe(outcome)
         hypothesis = getattr(outcome, "hypothesis", "") or ""
         n = 0
@@ -416,7 +436,7 @@ def buffer_confirmed_findings(
                 cwe=_outcome_cwe(outcome),
                 event_type=EventType.TOOL_EVIDENCE,
                 grade="correct",
-                key=_outcome_key(outcome),
+                key=outcome_key(outcome),
             )
         return n
     except Exception:  # noqa: BLE001 — telemetry must never break the run
@@ -552,8 +572,10 @@ def flush_scorecard_events(
 __all__ = [
     "buffer_confirmed_findings",
     "buffer_event",
+    "cap_key",
     "flush_scorecard_events",
     "lone_model",
+    "outcome_key",
     "record_adversarial_outcome",
     "record_mechanical_refutation",
     "record_self_consistency_violation",

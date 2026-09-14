@@ -204,6 +204,7 @@ from .record import (
 from .scorecard_events import (
     buffer_confirmed_findings as _sc_buffer_confirmed_findings,
     flush_scorecard_events as _sc_flush_events,
+    outcome_key as _sc_outcome_key,
     record_adversarial_outcome as _sc_record_adversarial,
     record_mechanical_refutation as _sc_record_refutation,
     record_self_consistency_violation as _sc_record_self_consistency,
@@ -3681,7 +3682,16 @@ def review_one_function(
                 elif dyn_result and dyn_result.evidence_strength == "refuted":
                     outcome = _demote_outcome(outcome, "[dynamic: refuted]")
                     # Graded adjudication: the dynamic harness executed
-                    # and refuted the model's hypothesis.
+                    # and refuted the model's hypothesis. NOTE: the
+                    # dynamic_sweep evidence_strength vocabulary
+                    # (sanitizer/crash/exception/inconclusive) has no
+                    # "refuted" today, so this whole branch — the
+                    # demotion and this grade — is currently
+                    # unreachable. If the vocabulary ever grows a
+                    # refuted verdict, re-examine whether it is a
+                    # deterministic refutation (grades) or a
+                    # didn't-reproduce (must not — same distinction as
+                    # the dark-verify site).
                     _sc_record_refutation(
                         result.scorecard_events, outcome,
                         gate="dynamic-sweep",
@@ -9611,8 +9621,13 @@ def _run_audit_body(
         if not _sc_disabled:
             _sc_flush_events(
                 result.scorecard_events,
+                # Same capped key builder the events buffered with —
+                # a raw f-string here would stop matching any
+                # function whose file:function exceeds the key cap,
+                # silently breaking reconciliation in BOTH grade
+                # directions.
                 finding_keys={
-                    f"{o.file}:{o.function}"
+                    _sc_outcome_key(o)
                     for o in result.outcomes
                     if o.status == "finding"
                 },

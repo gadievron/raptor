@@ -453,6 +453,61 @@ class TestFlush:
         ) == 1
         assert store2.batches[0][0]["outcome"] == "incorrect"
 
+    def test_dedup_ships_both_directions_on_consistency_axes(self) -> None:
+        """Consistency events are never reconciled, so ONLY the dedup
+        tuple stands between an opposite-direction pair and silent
+        swallowing: a clean-with-live-hypotheses contradiction
+        (incorrect) followed by a self-adversarial upheld verdict
+        (correct) for the same cell and function must both ship."""
+        events: list[dict] = []
+        record_self_consistency_violation(
+            events, _outcome(status="clean"),
+            detail="clean verdict despite live hypotheses",
+        )
+        record_adversarial_outcome(
+            events, _outcome(), producer_model="model-a",
+            refuter_model="model-a", verdict="stands",
+        )
+        assert [e["event_type"] for e in events] == [
+            "self_consistency", "self_consistency",
+        ]
+        store = _CapturingStore()
+        assert flush_scorecard_events(events, scorecard=store) == 2
+        assert sorted(e["outcome"] for e in store.batches[0]) == [
+            "correct", "incorrect",
+        ]
+
+    def test_long_keys_reconcile_via_the_shared_builder(self) -> None:
+        """Events cap their keys at buffer time; the flush's finding
+        set is built with the SAME helper (outcome_key), so functions
+        whose file:function exceeds the cap still reconcile in both
+        directions — a rescued finding's refutation drops and a
+        confirmed finding's grade survives."""
+        from core.audit.scorecard_events import outcome_key
+
+        long_fn = _outcome(function="f" * 600)
+        finding_keys = {outcome_key(long_fn)}
+
+        # Rescued-finding direction: the refutation must drop.
+        events: list[dict] = []
+        record_mechanical_refutation(events, long_fn, gate="g", reason="r")
+        store = _CapturingStore()
+        assert flush_scorecard_events(
+            events, finding_keys=finding_keys, scorecard=store,
+        ) == 0
+
+        # Confirmed-finding direction: the correct grade must survive
+        # the symmetric reconciliation.
+        events2: list[dict] = []
+        assert buffer_confirmed_findings(
+            events2, [long_fn], receipt_check=lambda s: True,
+        ) == 1
+        store2 = _CapturingStore()
+        assert flush_scorecard_events(
+            events2, finding_keys=finding_keys, scorecard=store2,
+        ) == 1
+        assert store2.batches[0][0]["outcome"] == "correct"
+
     def test_one_malformed_entry_does_not_abort_the_batch(self) -> None:
         """record_events validates pre-lock and raises on ANY invalid
         entry; the flush must filter per entry so one bad dict cannot
@@ -703,9 +758,13 @@ class TestInlineSitePins:
 
         src = inspect.getsource(orch._run_audit_body)
         idx = src.index("_sc_resolve_store")
-        segment = src[idx:idx + 700]
+        segment = src[idx:idx + 900]
         assert "if not _sc_disabled:" in segment
         assert "_sc_flush_events" in segment
+        # finding_keys must be built with the SAME capped key builder
+        # the events buffered with — a raw f-string comprehension
+        # breaks reconciliation for over-cap file:function keys.
+        assert "_sc_outcome_key(o)" in segment
 
 
 class TestOrchestratedRunBinding:
