@@ -16,6 +16,7 @@ from urllib.parse import unquote
 from core.logging import get_logger
 from core.sarif import emit
 from core.sarif.parser import _coerce_line
+from core.security.log_sanitisation import escape_nonprintable
 
 logger = get_logger()
 
@@ -336,7 +337,7 @@ def normalize_imported_findings(
             result.warnings.append(ImportWarning(
                 idx, "file/startLine",
                 f"Skipped: missing or invalid file/startLine "
-                f"(rule_id={finding.get('rule_id')})",
+                f"(rule_id={escape_nonprintable(str(finding.get('rule_id')))})",
             ))
             result.stats.findings_skipped += 1
             continue
@@ -347,7 +348,13 @@ def normalize_imported_findings(
         if resolved is None:
             result.warnings.append(ImportWarning(
                 idx, "file",
-                f"Skipped: cannot map URI to source: {uri}",
+                # Imported SARIF is untrusted; the message is printed
+                # to the operator terminal by the /agentic import
+                # summary, so hostile URI bytes are escaped at
+                # creation (sibling parser.py escapes the identical
+                # warning).
+                f"Skipped: cannot map URI to source: "
+                f"{escape_nonprintable(uri)}",
             ))
             result.stats.findings_skipped += 1
             result.stats.uri_unresolved += 1
@@ -421,7 +428,11 @@ def format_import_summary(result: ImportResult, sarif_files: list[str]) -> str:
     if s.findings_skipped:
         unmapped = [w for w in result.warnings if w.field == "file"]
         if unmapped:
-            examples = "; ".join(w.message.split(": ", 1)[-1] for w in unmapped[:3])
+            # Belt for records built before message-side escaping.
+            examples = "; ".join(
+                escape_nonprintable(w.message.split(": ", 1)[-1])
+                for w in unmapped[:3]
+            )
             lines.append(f"  → {s.findings_skipped} findings skipped ({examples})")
         else:
             lines.append(f"  → {s.findings_skipped} findings skipped")

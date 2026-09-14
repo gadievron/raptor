@@ -515,6 +515,21 @@ class TestFormatImportSummary:
         text = format_import_summary(result, ["test.sarif"])
         assert "0 dataflow paths" in text
 
+    def test_hostile_uri_escaped_in_warning_and_summary(self, tmp_path):
+        # Imported SARIF is untrusted and the summary is printed to
+        # the operator terminal by /agentic --sarif: a URI carrying
+        # OSC/BEL bytes must not survive raw into either the warning
+        # record or the joined summary examples.
+        root = _source_tree(tmp_path)
+        evil = "/bad/\x1b]0;pwned\x07/path.c"
+        findings = [_make_finding(file=evil)]
+        result = normalize_imported_findings(findings, root)
+        for w in result.warnings:
+            assert "\x1b" not in w.message and "\x07" not in w.message
+        text = format_import_summary(result, ["test.sarif"])
+        assert "\x1b" not in text and "\x07" not in text
+        assert "pwned" in text  # escaped content, not silently dropped
+
 
 # ---------------------------------------------------------------------------
 # import_provenance_block
