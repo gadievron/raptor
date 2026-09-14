@@ -6654,7 +6654,9 @@ class TestPostPassWiring:
         window = self._body_src()
         phase2 = window.find("_run_phase2(result, config)")
         hooks = window.find("config.pre_export_hooks")
-        final_persist = window.rfind("_persist_findings(result, config)")
+        # Match the call head only: the persists thread the prep-time
+        # vendor verdicts (tree-class stamp) as an extra argument.
+        final_persist = window.rfind("_persist_findings(")
         rejournal = window.find("_rejournal_final_statuses(result, config)")
         assert -1 not in (phase2, hooks, final_persist, rejournal)
         assert phase2 < hooks < final_persist < rejournal

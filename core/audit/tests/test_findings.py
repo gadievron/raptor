@@ -176,6 +176,72 @@ class TestPersistFindings:
         _persist_findings(result, config)
         assert (tmp_path / "findings.json").read_text() == first
 
+    def test_tree_class_stamped_on_every_persisted_finding(self, tmp_path):
+        """This writer is the findings.json path the in-session audit
+        loop's findings take — sweep-promoted composites included — and
+        it used to be the one emission path without the tree-class tag.
+        Field fixture shapes: an openbsd-compat portability shim
+        classifies vendored-compat, a first-party source file
+        production."""
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            ReviewOutcome,
+            _persist_findings,
+        )
+
+        result = OrchestratorResult()
+        result.outcomes.append(ReviewOutcome(
+            file="openbsd-compat/glob.c", function="glob2",
+            status="finding",
+            body="[sweep promoted via smt:check-overflow]\n\nbody",
+            hypothesis="off-by-one EOS store past pathend_last",
+        ))
+        result.outcomes.append(ReviewOutcome(
+            file="sshbuf-getput-basic.c",
+            function="sshbuf_put_bignum2_bytes", status="finding",
+            body="[sweep promoted via joern:live+smt:invariant]\n\nbody",
+            hypothesis="len + 4 + prepend sizing overflow",
+        ))
+        _persist_findings(result, self._config(tmp_path))
+        data = json.loads((tmp_path / "findings.json").read_text())
+        by_file = {f["file"]: f for f in data}
+        assert (by_file["openbsd-compat/glob.c"]["tree_class"]
+                == "vendored-compat")
+        assert (by_file["sshbuf-getput-basic.c"]["tree_class"]
+                == "production")
+
+    def test_vendor_verdicts_refine_the_persisted_stamp(self, tmp_path):
+        """A prep-time vendored verdict for the file wins over the
+        path-only production default (same threading contract as the
+        graded export)."""
+        from core.audit.orchestrator import _persist_findings
+
+        result = self._result("finding")
+        _persist_findings(
+            result, self._config(tmp_path),
+            vendor_verdicts={"src/f0.c": object()},
+        )
+        data = json.loads((tmp_path / "findings.json").read_text())
+        assert data[0]["tree_class"] == "vendored-compat"
+
+    def test_final_persist_overwrites_tick_path_only_stamp(self, tmp_path):
+        """Convergence: the tick's verdict-less mid-run write stamps
+        path-only; the final unconditional re-persist (full rewrite)
+        threads the prep verdicts and must OVERWRITE the record with
+        the verdict-refined value."""
+        from core.audit.orchestrator import _persist_findings
+
+        result = self._result("finding")
+        config = self._config(tmp_path)
+        _persist_findings(result, config)  # tick shape: no verdicts
+        data = json.loads((tmp_path / "findings.json").read_text())
+        assert data[0]["tree_class"] == "production"
+        _persist_findings(  # final persist: verdicts threaded
+            result, config, vendor_verdicts={"src/f0.c": object()},
+        )
+        data = json.loads((tmp_path / "findings.json").read_text())
+        assert data[0]["tree_class"] == "vendored-compat"
+
 
 class TestFindingsRobustness:
     def test_scalar_findings_json_degrades_to_empty(self, tmp_path):

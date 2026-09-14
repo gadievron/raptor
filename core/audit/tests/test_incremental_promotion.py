@@ -449,6 +449,22 @@ class TestPromotionReReviewReconciliation:
         assert reviewed_outcomes["a.c:f"] is o_susp  # stale by design
         return config, result, reviewed_outcomes
 
+    def test_tick_midrun_persist_stamps_tree_class(self, monkeypatch,
+                                                   tmp_path):
+        """The tick's ride-along findings.json write happens with no
+        prep verdicts in scope — the provisional record must still
+        carry the tree-class stamp (path-only fallback). Untagged
+        tick-persisted findings were the mid-run half of the
+        every-emission-path-stamps contract."""
+        config, result, _ = self._promoted_with_stale_map(
+            monkeypatch, tmp_path,
+        )
+        data = json.loads((config.out_dir / "findings.json").read_text())
+        findings = data["findings"] if isinstance(data, dict) else data
+        assert len(findings) == 1
+        assert findings[0].get("provisional") is True
+        assert findings[0]["tree_class"] == "production"
+
     def test_tick_updates_reviewed_outcomes(self, monkeypatch, tmp_path):
         _patch_confirming_chain(monkeypatch)
         config = _config(tmp_path)

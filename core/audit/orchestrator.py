@@ -8778,7 +8778,10 @@ def _run_audit_body(
 
     if result.findings > 0:
         logger.debug("entering _persist_findings")
-        _persist_findings(result, config)
+        _persist_findings(
+            result, config,
+            vendor_verdicts=_prep.get("vendor_verdicts") or None,
+        )
 
     if (
         iris_taint_specs and joern_server is not None
@@ -9364,7 +9367,10 @@ def _run_audit_body(
     # findings>0 gate) so a retract-to-zero run empties the file.
     if config.out_dir:
         try:
-            _persist_findings(result, config)
+            _persist_findings(
+                result, config,
+                vendor_verdicts=_prep.get("vendor_verdicts") or None,
+            )
         except Exception:
             logger.debug("final findings persist failed", exc_info=True)
 
@@ -26764,6 +26770,7 @@ def _review_flow_traces(
 def _persist_findings(
     result: OrchestratorResult,
     config: OrchestratorConfig,
+    vendor_verdicts: dict[str, Any] | None = None,
 ) -> None:
     """Write all findings to findings.json so they survive even without /validate.
 
@@ -26771,7 +26778,16 @@ def _persist_findings(
     after status-mutating post passes — late-minted findings appear,
     retracted ones disappear.  A run with zero findings only rewrites
     an EXISTING findings.json (to empty); it never creates one.
+
+    ``vendor_verdicts``: the prep-time per-file vendored/generated map
+    when the caller has one (the _run_audit_body persists thread it);
+    absent — the incremental-promotion tick's mid-run ride-along — the
+    tree-class stamp falls back to path-only classification, and the
+    final unconditional re-persist converges the records on the
+    verdict-refined value.
     """
+    from .tree_class import classify_tree_class
+
     findings_dicts = []
     # Snapshot: the incremental-promotion tick calls this mid-loop
     # while review workers are still appending outcomes.
@@ -26788,6 +26804,16 @@ def _persist_findings(
             "description": outcome.body,
             "severity": "medium",
             "source": "audit",
+            # Tree class (core.audit.tree_class vocabulary) — always
+            # stamped, matching emit_finding and the graded export.
+            # This writer was the one findings.json emission path
+            # without the tag, so every finding it persisted (the
+            # in-session audit loop's regular, sweep-promoted, and
+            # tick-provisional findings alike) shipped untagged and
+            # readers fell back to reclassifying per consumer.
+            "tree_class": classify_tree_class(
+                str(outcome.file or ""), vendor_verdicts,
+            ),
         }
         if outcome.evidence_tool:
             finding["evidence_tool"] = outcome.evidence_tool
