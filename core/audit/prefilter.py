@@ -603,6 +603,38 @@ _WRAPPER_DANGEROUS_TAILS = frozenset(
     e.rsplit(".", 1)[-1] for e in _WRAPPER_DANGEROUS_CALLEES
 )
 
+#: getattr with a LITERAL attribute name: base object dotted path and
+#: the quoted attribute, with no further arguments (a default-argument
+#: form stays unresolved -> conservative no-skip).
+_WRAPPER_GETATTR_LITERAL_RE = re.compile(
+    r'\bgetattr\s*\(\s*([A-Za-z_]\w*(?:\.\w+)*)\s*,\s*'
+    r'[\'"]([A-Za-z_]\w*)[\'"]\s*\)',
+)
+
+#: The standard indirection family: a one-line delegate through any of
+#: these hides its real target from the dotted-callee exclusion.
+#: Shapes with LITERAL arguments resolve mechanically and re-enter the
+#: exclusion checks under the resolved name(s); a shape with no
+#: resolvable literal (dynamic name) refuses the skip — an
+#: unresolvable delegate must never be journalled mechanically clean.
+_WRAPPER_INDIRECTION_TAILS = frozenset({
+    "getattr", "__import__", "import_module",
+    "attrgetter", "methodcaller", "partial",
+    "vars", "globals", "dlsym",
+})
+
+#: Literal names an indirection shape resolves through: quoted string
+#: literals (attrgetter("run"), dlsym(h, "system"), vars(m)["run"],
+#: globals()["system"]) anywhere in the delegate body.
+_WRAPPER_LITERAL_NAME_RE = re.compile(r'[\'"]([A-Za-z_][\w.]*)[\'"]')
+
+#: functools.partial's wrapped callable: the first argument as a plain
+#: (possibly dotted) identifier REFERENCE — `partial(sp.run)` never
+#: emits a call to sp.run, so the reference is the resolvable name.
+_WRAPPER_PARTIAL_ARG_RE = re.compile(
+    r'\bpartial\s*\(\s*((?:\w+\.)*\w+)\s*[,)]',
+)
+
 
 def _is_trivial_wrapper(
     source: str,
@@ -674,6 +706,69 @@ def _is_trivial_wrapper(
 
     callee_name = real_calls[0]
 
+    # Indirection: `getattr(subprocess, "run")(...)`, `vars(m)["run"]
+    # (...)`, `functools.partial(sp.run)(...)`, `dlsym(h, "system")` —
+    # single-call delegates whose captured callee is the indirection
+    # helper, so the dangerous-callee exclusion below never sees the
+    # real target. Literal arguments resolve mechanically: getattr's
+    # base+attr precisely; the rest through every quoted name in the
+    # body (plus partial's first-argument reference). Each resolved
+    # candidate re-enters the exclusion checks; a shape with NO
+    # resolvable literal, or resolving to another indirection helper,
+    # refuses the skip — an unresolvable delegate must never be
+    # journalled mechanically clean.
+    # One-hop local alias first: `f2 = subprocess.run` (or Go `:=`)
+    # then `return f2(...)` captures the LOCAL name as the callee
+    # while the real target sits surface-spelled on the assignment
+    # line. Resolve through the body's simple assignments before the
+    # family/exclusion checks. Known residual (documented, not
+    # chased): a concatenated literal inside a family call
+    # (`attrgetter("ru"+"n")`) is not folded — the wrapper skip is
+    # prefilter-tier only, and the function still passes the triage,
+    # Joern, and hit-scan evidence layers, which see the file's
+    # surface spellings.
+    for _ln in code_lines:
+        am = re.match(
+            rf"{re.escape(callee_name)}\s*(?::=|=)\s*"
+            r"((?:\w+\.)*\w+)\s*;?\s*$",
+            _ln,
+        )
+        if am:
+            callee_name = am.group(1)
+            break
+
+    candidates = [callee_name]
+    _tail = callee_name.rsplit(".", 1)[-1]
+    if _tail in _WRAPPER_INDIRECTION_TAILS:
+        if _tail == "getattr":
+            m = _WRAPPER_GETATTR_LITERAL_RE.search(body_no_sig)
+            if not m:
+                return False, ""
+            callee_name = f"{m.group(1)}.{m.group(2)}"
+            candidates = [callee_name]
+        else:
+            resolved = _WRAPPER_LITERAL_NAME_RE.findall(body_no_sig)
+            if _tail == "partial":
+                pm = _WRAPPER_PARTIAL_ARG_RE.search(body_no_sig)
+                if pm is None:
+                    return False, ""
+                resolved.append(pm.group(1))
+            if not resolved:
+                return False, ""
+            if any(
+                r.rsplit(".", 1)[-1] in _WRAPPER_INDIRECTION_TAILS
+                for r in resolved
+            ):
+                return False, ""
+            candidates = [callee_name, *resolved]
+    elif re.search(r"\)\s*[([]", body_no_sig):
+        # The captured call's RESULT is itself called or subscripted
+        # (`make_fn()(arg)`): the executed target is unknown, and an
+        # unknown delegate is never mechanically clean. Resolved
+        # indirection shapes are handled above; this guards the
+        # factories the family list does not name.
+        return False, ""
+
     # Every language's dangerous-callee set (a wrapper's language arm
     # only strips the signature; the exclusion must not be narrower
     # than _is_trivially_clean's), matched against the full dotted
@@ -685,12 +780,13 @@ def _is_trivial_wrapper(
     tails = _WRAPPER_DANGEROUS_TAILS | {
         e.rsplit(".", 1)[-1] for e in extra_dangerous
     }
-    if callee_name in exclusion or callee_name.rsplit(".", 1)[-1] in tails:
-        return False, ""
-    if any(api in callee_name.lower() for api in _CRYPTO_APIS):
-        return False, ""
-    if project_sinks and callee_name in project_sinks:
-        return False, ""
+    for name in candidates:
+        if name in exclusion or name.rsplit(".", 1)[-1] in tails:
+            return False, ""
+        if any(api in name.lower() for api in _CRYPTO_APIS):
+            return False, ""
+        if project_sinks and name in project_sinks:
+            return False, ""
 
     if lang in ("c", "cpp"):
         return_count = len(re.findall(r'\breturn\b', body_no_sig))

@@ -231,6 +231,119 @@ void *alloc_obj(size_t n) {
         result = self._py_wrapper("loads(arg)")
         assert not result.skip_llm
 
+    def test_getattr_literal_dangerous_delegate_not_skipped(self):
+        # Reflection indirection: the captured callee is `getattr`,
+        # which the dangerous-callee exclusion never matched — the
+        # literal attribute name must resolve to subprocess.run and
+        # refuse the skip.
+        result = self._py_wrapper(
+            'getattr(subprocess, "run")(arg, shell=True)'
+        )
+        assert not result.skip_llm
+
+    def test_getattr_dynamic_name_not_skipped(self):
+        # A dynamic attribute name is unresolvable mechanically: the
+        # delegate's real target is unknown, so it must never be
+        # journalled mechanically clean.
+        result = self._py_wrapper("getattr(subprocess, arg)(arg)")
+        assert not result.skip_llm
+
+    def test_getattr_default_arg_form_not_skipped(self):
+        # The three-argument getattr stays unresolved (conservative):
+        # no skip.
+        result = self._py_wrapper('getattr(subprocess, "run", None)(arg)')
+        assert not result.skip_llm
+
+    def test_getattr_literal_benign_target_still_skips(self):
+        # Both directions: a literal-name getattr RESOLVES and
+        # re-enters the exclusion checks — a benign resolved target
+        # keeps the trivial-wrapper skip.
+        result = self._py_wrapper('getattr(math, "sqrt")(arg)')
+        assert result.skip_llm
+        assert "math.sqrt" in result.skip_reason
+
+    def test_import_module_delegate_not_skipped(self):
+        result = self._py_wrapper("importlib.import_module(arg)")
+        assert not result.skip_llm
+
+    def test_dunder_import_delegate_not_skipped(self):
+        result = self._py_wrapper('__import__("os")')
+        assert not result.skip_llm
+
+    def test_attrgetter_literal_dangerous_not_skipped(self):
+        # The wider indirection family: the captured callee is the
+        # helper, so the literal name must resolve into the
+        # exclusion checks.
+        result = self._py_wrapper('operator.attrgetter("run")(sp)(arg)')
+        assert not result.skip_llm
+
+    def test_methodcaller_literal_dangerous_not_skipped(self):
+        result = self._py_wrapper('operator.methodcaller("run", arg)(sp)')
+        assert not result.skip_llm
+
+    def test_partial_reference_dangerous_not_skipped(self):
+        # partial's wrapped callable is a REFERENCE, not a call — the
+        # first-argument identifier is the resolvable name.
+        result = self._py_wrapper("functools.partial(sp.run)(arg)")
+        assert not result.skip_llm
+
+    def test_partial_of_getattr_not_skipped(self):
+        # Nested indirection resolves to another indirection helper —
+        # refuse, never chase.
+        result = self._py_wrapper('partial(getattr, sp, "run")(arg)')
+        assert not result.skip_llm
+
+    def test_vars_subscript_dangerous_not_skipped(self):
+        result = self._py_wrapper('vars(sp)["run"](arg)')
+        assert not result.skip_llm
+
+    def test_globals_subscript_dangerous_not_skipped(self):
+        result = self._py_wrapper('globals()["system"](arg)')
+        assert not result.skip_llm
+
+    def test_vars_dynamic_name_not_skipped(self):
+        result = self._py_wrapper("vars(sp)[arg](arg)")
+        assert not result.skip_llm
+
+    def test_unknown_factory_result_call_not_skipped(self):
+        # A factory outside the family whose RESULT is called: the
+        # executed target is unknown — never mechanically clean.
+        result = self._py_wrapper("make_fn()(arg)")
+        assert not result.skip_llm
+
+    def test_attrgetter_literal_benign_still_skips(self):
+        # Both directions: family shapes with a resolvable benign
+        # literal keep the skip.
+        result = self._py_wrapper('operator.attrgetter("total")(box)')
+        assert result.skip_llm
+
+    def test_two_line_method_value_not_skipped(self):
+        # The local name captures as the callee while the real target
+        # sits surface-spelled on the assignment line — resolve the
+        # one-hop alias before the exclusion checks.
+        from core.audit.prefilter import _is_trivial_wrapper
+        is_wrapper, _ = _is_trivial_wrapper(
+            "def f(a):\n    f2 = subprocess.run\n    return f2(a)\n",
+            "python", None,
+        )
+        assert not is_wrapper
+
+    def test_two_line_method_value_benign_still_skips(self):
+        from core.audit.prefilter import _is_trivial_wrapper
+        is_wrapper, _ = _is_trivial_wrapper(
+            "def f(a):\n    f2 = helper\n    return f2(a)\n",
+            "python", None,
+        )
+        assert is_wrapper
+
+    def test_c_dlsym_literal_dangerous_not_skipped(self):
+        from core.audit.prefilter import _is_trivial_wrapper
+        is_wrapper, _ = _is_trivial_wrapper(
+            'void *f(void *h) {\n    return dlsym(h, "system");\n}\n',
+            "c", None,
+        )
+        assert not is_wrapper
+
     def test_other_language_callee_sets_excluded(self):
         # The wrapper exclusion must not be narrower than
         # _is_trivially_clean's per-language dangerous-callee sets
