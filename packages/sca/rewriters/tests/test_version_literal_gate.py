@@ -132,3 +132,26 @@ def test_safe_edit_still_applies(tmp_path: Path) -> None:
     )])
     assert results[0].applied is True
     assert "ARG SEMGREP_VERSION=1.119.0" in path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("value", [
+    "4.17.21\n",          # match(...$) admitted ONE trailing newline
+    "4.17.21\r\n",
+    "\n4.17.21",
+])
+def test_trailing_newline_never_passes_the_gate(value: str) -> None:
+    """`$` in the old anchor admitted one trailing newline — a value
+    like "4.17.21\\n" spliced a raw newline into the manifest (invalid
+    JSON in the proposed package.json). fullmatch closes it; the gate's
+    contract is no raw newline, ever."""
+    assert not is_safe_version_literal(value)
+    # The update-side gate refuses it too (dpkg lane included).
+    from pathlib import Path
+
+    from packages.sca.update import _PlanEntry, refuse_unsafe_target
+    plan = _PlanEntry(
+        ecosystem="npm", name="lodash", installed="4.17.19",
+        target=value, manifest=Path("package.json"),
+        advisory_ids=["GHSA-x"],
+    )
+    assert refuse_unsafe_target(plan) is not None

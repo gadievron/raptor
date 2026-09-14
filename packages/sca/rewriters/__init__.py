@@ -55,12 +55,23 @@ logger = logging.getLogger(__name__)
 # surrounding syntax (quotes, angle brackets, backslashes, newlines,
 # whitespace, ``$``, braces) is outside the grammar, so a value that
 # fails the check is skipped, never written.
-_VERSION_LITERAL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
+_VERSION_LITERAL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}")
 
 
 def is_safe_version_literal(value: str) -> bool:
-    """True when ``value`` is safe to splice into a manifest verbatim."""
-    return bool(isinstance(value, str) and _VERSION_LITERAL_RE.match(value))
+    """True when ``value`` is safe to splice into a manifest verbatim.
+
+    ``fullmatch``, not ``match(...$)`` — ``$`` admits one trailing
+    newline, so ``"4.17.21\\n"`` passed the gate and spliced a raw
+    newline into the manifest (invalid JSON in a proposed
+    package.json; corruption-only, since the charset excludes any
+    further content, but the chokepoint's own contract is "no raw
+    newline ever").
+    """
+    return bool(
+        isinstance(value, str)
+        and _VERSION_LITERAL_RE.fullmatch(value),
+    )
 
 
 @dataclass(frozen=True)
