@@ -1907,8 +1907,19 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
     # and UNRESTRICTED filesystem access. Legitimate for network-only
     # tool invocations (pack downloads, wrapper probes); a caller
     # expecting filesystem confinement must pass target= or output=.
+    #
+    # Profiles that discard target=/output= by contract ('none',
+    # 'network-only' — including every run_trusted() call, which routes
+    # here as profile='none' and REJECTS those kwargs outright) are
+    # excluded: the caller explicitly declined filesystem confinement,
+    # so there is no omission to advise on — and, the advisory being
+    # once per process, a trusted call would otherwise consume it and
+    # leave the first REAL bare-run caller unattributed.
+    profile_discards_fs: bool = (
+        profile is not None and not PROFILES[profile]["use_landlock"])
     if (use_sandbox and not use_seatbelt
             and not (target or output or rootfs)
+            and not profile_discards_fs
             and state.warn_once("_bare_run_posture_warned")):
         logger.warning(
             "sandbox: run() without target=/output=/rootfs= applies "
