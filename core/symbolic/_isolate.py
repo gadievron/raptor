@@ -36,8 +36,11 @@ from __future__ import annotations
 import importlib
 import io
 import multiprocessing as mp
+import os
 import pickle
+import selectors
 import shutil
+import struct
 import tempfile
 import time
 from typing import Any
@@ -94,6 +97,83 @@ def _loads_result(payload: bytes) -> SymbolicResult:
             f"{type(obj).__name__}"
         )
     return obj
+
+
+class _FrameRefused(Exception):
+    """Result frame malformed or over the cap — hostile-child signal."""
+
+
+def _read_exact_deadline(
+    fd: int, n: int, deadline: float,
+) -> bytes | None:
+    """Read exactly ``n`` bytes from ``fd``, never blocking past
+    ``deadline`` (monotonic). Returns ``None`` when the deadline
+    expires mid-read; raises :class:`EOFError` on a closed pipe.
+
+    The wait uses :class:`selectors.DefaultSelector` (epoll/kqueue),
+    never ``select.select``: ``select()`` raises ``ValueError`` for
+    any fd >= FD_SETSIZE (1024), which a long-running many-fd
+    orchestrator reaches on a fully legitimate run — and an exception
+    escaping this read would skip the caller's kill escalation, the
+    one guarantee this module exists to provide. ``Connection.poll``
+    (the pre-read gate) has no such limit for the same reason.
+    """
+    buf = bytearray()
+    with selectors.DefaultSelector() as selector:
+        selector.register(fd, selectors.EVENT_READ)
+        while len(buf) < n:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            if not selector.select(remaining):
+                return None
+            chunk = os.read(fd, n - len(buf))
+            if not chunk:
+                raise EOFError(
+                    "symex child closed the result pipe mid-frame"
+                )
+            buf += chunk
+    return bytes(buf)
+
+
+def _recv_frame_deadline(
+    conn: Any, deadline: float, maxlength: int,
+) -> bytes | None:
+    """Deadline-bounded replacement for ``Connection.recv_bytes``.
+
+    ``poll()`` returns as soon as ONE byte is readable, but
+    ``recv_bytes`` then blocks until the whole length-prefixed frame
+    arrives — a compromised child (this module's stated adversary)
+    can write a partial header and sleep, parking the unsandboxed
+    parent forever and disarming the hard-kill budget, the one
+    guarantee this file exists to provide. Reading the frame in
+    ``select``-gated chunks keeps every wait bounded by ``deadline``.
+
+    Frame layout matches CPython's ``Connection._send_bytes``: a
+    4-byte ``!i`` length, with ``-1`` escaping to an 8-byte ``!Q``
+    length for >2 GiB payloads (always over our cap — refused without
+    reading further). Returns the payload bytes, ``None`` when the
+    deadline expired mid-frame (the caller's kill escalation then
+    fires), raises :class:`EOFError` on a closed pipe (child crash)
+    or :class:`_FrameRefused` on a malformed/over-cap header.
+    """
+    fd = conn.fileno()
+    header = _read_exact_deadline(fd, 4, deadline)
+    if header is None:
+        return None
+    (size,) = struct.unpack("!i", header)
+    if size == -1:
+        # 8-byte escape frame: legitimate only for >2 GiB payloads,
+        # which the result cap refuses categorically.
+        raise _FrameRefused("result frame declares a >2 GiB payload")
+    if size < 0:
+        raise _FrameRefused(f"result frame declares negative size {size}")
+    if size > maxlength:
+        raise _FrameRefused(
+            f"result frame declares {size} bytes (cap {maxlength})"
+        )
+    payload = _read_exact_deadline(fd, size, deadline)
+    return payload
 
 
 def _apply_symex_sandbox(private_tmp: str | None = None) -> None:
@@ -374,35 +454,47 @@ def run_isolated(
         child_conn.close()
 
         budget = timeout + GRACE_SECONDS
+        deadline = time.monotonic() + budget
         result: SymbolicResult | None = None
         rejected_reason: str | None = None
         # A crashed child closes the pipe, so poll() returns promptly
-        # (EOF is readable) and recv_bytes() raises — timed_out
+        # (EOF is readable) and the frame read raises — timed_out
         # separates "budget genuinely elapsed" from "child died with
-        # no result".
+        # no result". The frame read itself is deadline-bounded
+        # (_recv_frame_deadline): poll() only proves ONE byte is
+        # readable, and a hostile child that writes a partial frame
+        # and sleeps must still hit the kill escalation below.
         timed_out = not parent_conn.poll(budget)
         if not timed_out:
             try:
-                payload = parent_conn.recv_bytes(_MAX_RESULT_BYTES)
+                payload = _recv_frame_deadline(
+                    parent_conn, deadline, _MAX_RESULT_BYTES,
+                )
             except EOFError:
                 result = None
-            except OSError:
-                # Oversized message (recv_bytes' maxlength) or a torn
-                # transport — either way the child produced no
-                # decodable result; fail closed with the cap named.
+            except (_FrameRefused, OSError):
+                # Oversized/malformed frame or a torn transport —
+                # either way the child produced no decodable result;
+                # fail closed with the cap named.
                 rejected_reason = (
                     "child result payload unreadable or over the "
                     f"{_MAX_RESULT_BYTES}-byte cap — refused"
                 )
             else:
-                try:
-                    result = _loads_result(payload)
-                except Exception as exc:  # noqa: BLE001 — hostile bytes
-                    rejected_reason = (
-                        "restricted result decoder refused the child's "
-                        f"payload ({type(exc).__name__}: "
-                        f"{str(exc)[:200]})"
-                    )
+                if payload is None:
+                    # Deadline expired mid-frame: a partial result is
+                    # a budget overrun (or a stalling hostile child),
+                    # handled by the timeout lane + kill escalation.
+                    timed_out = True
+                else:
+                    try:
+                        result = _loads_result(payload)
+                    except Exception as exc:  # noqa: BLE001 — hostile bytes
+                        rejected_reason = (
+                            "restricted result decoder refused the "
+                            f"child's payload ({type(exc).__name__}: "
+                            f"{str(exc)[:200]})"
+                        )
         parent_conn.close()
 
         proc.join(timeout=0.5)
