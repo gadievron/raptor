@@ -866,8 +866,10 @@ class ToolUseLoop:
                 #   1. Preflight on RAW content (event always fires
                 #      so operators see indicators regardless of
                 #      whether refuse is opted-in).
-                #   2. Extract x-source values from RAW (envelope
-                #      tags would pollute the discovered-values set).
+                #   2. Decide refuse-on-injection, then extract
+                #      x-source values from RAW (envelope tags would
+                #      pollute the discovered-values set; refused
+                #      content never seeds).
                 #   3. Emit ToolCallReturned with the RAW result.
                 #   4. Wrap (or refuse) for the message copy.
                 raw_content = result.content
@@ -880,9 +882,27 @@ class ToolUseLoop:
                         indicators=pf.indicators,
                     ))
 
+                # Refuse-on-injection decision (applied to the
+                # message copy below): any indicator from the
+                # consumer's opt-in list fired. Computed BEFORE
+                # x-source discovery so refused content contributes
+                # nothing.
+                refuse_hit = (
+                    self._refuse_on_indicators
+                    and pf.has_injection_indicators
+                    and any(
+                        ind in self._refuse_on_indicators
+                        for ind in pf.indicators
+                    )
+                )
+
                 # x-source value discovery: only on successful raw
-                # results (errors don't carry tool-output values).
-                if not result.is_error:
+                # results (errors don't carry tool-output values),
+                # and never from injection-refused content — the
+                # refusal's intent is "this content contributes
+                # nothing", so its leaf strings must not become
+                # dispatchable through discovered fields either.
+                if not result.is_error and not refuse_hit:
                     known_values |= _extract_values_from_json(raw_content)
 
                 self._emit(ToolCallReturned(
@@ -893,19 +913,11 @@ class ToolUseLoop:
                 ))
 
                 # Refuse-on-injection: replace the message copy with
-                # a synthetic error if any indicator from the
-                # consumer's opt-in list fired. The original content
-                # never reaches the LLM but consumers/operators saw
-                # it via the ToolCallReturned event above and the
-                # ToolResultPreflight event further above.
-                refuse_hit = (
-                    self._refuse_on_indicators
-                    and pf.has_injection_indicators
-                    and any(
-                        ind in self._refuse_on_indicators
-                        for ind in pf.indicators
-                    )
-                )
+                # a synthetic error when the opt-in indicator fired.
+                # The original content never reaches the LLM but
+                # consumers/operators saw it via the ToolCallReturned
+                # event above and the ToolResultPreflight event
+                # further above.
                 if refuse_hit:
                     matched = sorted(
                         ind for ind in pf.indicators
