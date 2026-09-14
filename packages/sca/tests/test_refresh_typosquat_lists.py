@@ -7,7 +7,12 @@ orchestrator's idempotence + diff-aware writes.
 
 from __future__ import annotations
 
+import itertools
 import json
+import random
+import re
+import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +23,7 @@ from packages.sca.refresh_typosquat_lists import (
     _ANVAKA_NPM_RANK,
     _CRATES_API,
     _HUGOVK_TOP_PYPI,
+    _NAME_GRAMMARS,
     _NPM_MAX_BYTES,
     _PACKAGIST_POPULAR,
     _get_json,
@@ -28,6 +34,7 @@ from packages.sca.refresh_typosquat_lists import (
     main,
     refresh_all,
 )
+from packages.sca.supply_chain._name_grammar import _GRAMMARS
 
 
 class _StubHttp:
@@ -431,3 +438,74 @@ def test_churn_guard_refuses_wholesale_replacement(tmp_path) -> None:
     out = refresh_all(_Http(drifted), top_n=50, only=["PyPI"],
                       data_dir=tmp_path)
     assert out["PyPI.json"] == "updated"
+
+
+# ---------------------------------------------------------------------------
+# Packagist fetch-time grammar: linear-time rewrite equivalence
+# ---------------------------------------------------------------------------
+
+# The pre-rewrite fetch-time Packagist pattern, verbatim.  Its
+# optional-separator repetitions (including two empty alternation
+# branches) are ambiguous, so a failing hostile feed row backtracked
+# exponentially — seconds at ~20 characters, minutes shortly after.
+# Kept ONLY as the equivalence fixture for the tests below; never
+# promote it into production code.
+_LEGACY_PACKAGIST = re.compile(
+    r"[a-z0-9]([_.-]?[a-z0-9]+)*/[a-z0-9](([_.]?|-{0,2})[a-z0-9]+)*")
+
+
+def _packagist_probe_corpus() -> Iterator[str]:
+    """Strings over the grammar's structural alphabet.
+
+    Exhaustive to length 6 (every corner shape: leading / trailing /
+    doubled separators, the ``--`` package-half corner, misplaced
+    slashes), then longer structured strings with short alnum runs so
+    the legacy fixture's ambiguity stays cheap to evaluate.
+    """
+    for length in range(1, 7):
+        for tup in itertools.product("0a_.-/", repeat=length):
+            yield "".join(tup)
+    rng = random.Random(0x5CA)
+    tokens = ["0", "00", "000", "a", "_", ".", "-", "--", "---", "/"]
+    for _ in range(2000):
+        yield "".join(rng.choice(tokens) for _ in range(rng.randint(2, 9)))
+    yield from (
+        "symfony/console", "my-vendor/my-package", "foo/bar--baz",
+        "a/b--c--d", "a/b---c", "a--b/c", "a-/b", "a/-b", "-a/b",
+        "a//b", "a/b/c", "a_b-c.d/e_f-g.h", "0/0", "a/b--", "a--/b",
+    )
+
+
+def test_packagist_grammar_rewrite_is_equivalent() -> None:
+    # ``_validate_names`` applies the grammar with ``fullmatch`` — the
+    # rewrite must agree with the legacy pattern under exactly those
+    # semantics.
+    new = _NAME_GRAMMARS["Packagist"]
+    for s in _packagist_probe_corpus():
+        assert (new.fullmatch(s) is None) == (
+            _LEGACY_PACKAGIST.fullmatch(s) is None
+        ), s
+
+
+def test_packagist_grammar_matches_load_time_grammar() -> None:
+    # Fetch-time (here) and load-time (supply_chain._name_grammar)
+    # gates intend the same Composer name language; a row accepted at
+    # one end and rejected at the other silently drops or admits
+    # trusted entries.
+    load_time = _GRAMMARS["Packagist"]
+    fetch_time = _NAME_GRAMMARS["Packagist"]
+    for s in _packagist_probe_corpus():
+        assert (fetch_time.fullmatch(s) is None) == (
+            load_time.fullmatch(s) is None
+        ), s
+
+
+def test_packagist_grammar_linear_on_adversarial_rows() -> None:
+    # Row shapes that made the legacy pattern backtrack exponentially.
+    # The linear form must dispatch 100k-character rows in
+    # milliseconds; 1s leaves ample headroom for slow CI runners.
+    new = _NAME_GRAMMARS["Packagist"]
+    for row in ("0" * 100_000 + "!", "0/" + "0" * 100_000 + "!"):
+        start = time.perf_counter()
+        assert new.fullmatch(row) is None
+        assert time.perf_counter() - start < 1.0

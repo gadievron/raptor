@@ -289,8 +289,13 @@ _NAME_GRAMMARS: dict[str, re.Pattern[str]] = {
     "npm": re.compile(
         r"(@[a-z0-9~][a-z0-9._~-]*/)?[a-z0-9~._-][a-z0-9._~-]*"),
     "Cargo": re.compile(r"[a-z0-9][a-z0-9_-]*"),
+    # Mandatory separator per repetition (not Composer's published
+    # optional-separator form, which is ambiguous and backtracks
+    # exponentially on hostile feed rows): same language, linear
+    # time.  Must stay in lock-step with the Packagist grammar in
+    # supply_chain/_name_grammar.py (tested).
     "Packagist": re.compile(
-        r"[a-z0-9]([_.-]?[a-z0-9]+)*/[a-z0-9](([_.]?|-{0,2})[a-z0-9]+)*"),
+        r"[a-z0-9]+([_.-][a-z0-9]+)*/[a-z0-9]+(([_.]|-{1,2})[a-z0-9]+)*"),
 }
 
 # Churn guard: refuse an update that would replace more than this
