@@ -933,12 +933,18 @@ def _is_retryable_error(error: Exception) -> bool:
     if any(t in error_type for t in retryable_types):
         return True
 
-    # Check error message for retryable patterns
+    # Check error message for retryable patterns. Gateway statuses go
+    # through the boundary-anchored RE — bare "502"/"503"/"504"
+    # substrings also matched unrelated numerics ("1502 tokens",
+    # request ids), classifying fatal errors retryable and burning
+    # max_retries paid attempts on a hopeless call (same class as the
+    # anchored 429/401/500 classifiers).
     error_str = str(error).lower()
     retryable_patterns = ("timeout", "timed out", "connection",
-                          "502", "503", "504",
                           "internal server error", "service unavailable")
     if any(p in error_str for p in retryable_patterns):
+        return True
+    if _GATEWAY_STATUS_RE.search(error_str):
         return True
 
     # HTTP 500 in the text ("500 INTERNAL", "code: 500") is the same

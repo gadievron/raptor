@@ -68,6 +68,24 @@ class TestGenaiServerErrors:
         assert _is_retryable_error(
             RuntimeError("request id 1500 was rejected")) is False
 
+    def test_bare_numerics_do_not_read_as_gateway(self):
+        """Both directions of the anchored 502/503/504 arm: a fatal
+        error embedding a 50x-shaped numeric must not classify
+        retryable (pre-fix the bare substring burned max_retries paid
+        attempts on it) ..."""
+        assert _is_retryable_error(
+            ValueError("prompt used 1502 tokens over budget")) is False
+        assert _is_retryable_error(
+            ValueError("schema id 5031 rejected")) is False
+
+    def test_gateway_status_messages_stay_retryable(self):
+        """... while genuine gateway statuses keep the retryable
+        classification."""
+        assert _is_retryable_error(
+            RuntimeError("HTTP 502 Bad Gateway")) is True
+        assert _is_retryable_error(
+            RuntimeError("upstream returned 504")) is True
+
 
 # ---------------------------------------------------------------------------
 # Gateway statuses vs client-side timeouts
