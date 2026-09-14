@@ -214,6 +214,16 @@ _COMPREHENSION_TYPES = (
 )
 
 
+# ``ast.TryStar`` (``except*``) is 3.11+; same guard shape as the
+# smt_barrier dominance walk so the two legs stay coherent — an
+# ``except*`` handler group models exactly like ``except`` for
+# reachability-under-deletion purposes (re-raising handlers still
+# converge on the same merge points).
+_TRY_STMTS: tuple[type, ...] = (
+    (ast.Try, ast.TryStar) if hasattr(ast, "TryStar") else (ast.Try,)
+)
+
+
 def _statement_expr_roots(stmt: ast.stmt) -> list[ast.AST]:
     """Per-stmt-kind list of expressions that belong to *this* CFG
     node, excluding nested compound bodies (which become their own
@@ -227,10 +237,29 @@ def _statement_expr_roots(stmt: ast.stmt) -> list[ast.AST]:
         return [stmt.test]
     if isinstance(stmt, ast.While):
         return [stmt.test]
-    if isinstance(stmt, ast.For):
+    if isinstance(stmt, (ast.For, ast.AsyncFor)):
         return [stmt.target, stmt.iter]
-    if isinstance(stmt, ast.Try):
+    if isinstance(stmt, _TRY_STMTS):
         return []  # try has no statement-level expressions
+    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef,
+                         ast.ClassDef)):
+        # Nested def/class: the BODY is not statement-level code of
+        # the enclosing function — flattening it attributed a
+        # sanitizer inside a never-called nested def to a node that
+        # sits unconditionally on the path, and leaked nested locals
+        # / class-body names into defs. Only the parts evaluated AT
+        # the definition site in the enclosing scope are roots:
+        # decorators, parameter defaults, class bases / keywords.
+        roots: list[ast.AST] = list(stmt.decorator_list)
+        if isinstance(stmt, ast.ClassDef):
+            roots.extend(stmt.bases)
+            roots.extend(kw.value for kw in stmt.keywords)
+        else:
+            roots.extend(stmt.args.defaults)
+            roots.extend(
+                d for d in stmt.args.kw_defaults if d is not None
+            )
+        return roots
     if hasattr(ast, "Match") and isinstance(stmt, ast.Match):
         # Only the subject is statement-level; case bodies become
         # their own nodes. Without this the subject node inherits the
@@ -238,8 +267,8 @@ def _statement_expr_roots(stmt: ast.stmt) -> list[ast.AST]:
         # attributed to the subject, so the vertex cut removes the
         # subject and severs the no-match fall-through with it.
         return [stmt.subject]
-    if isinstance(stmt, ast.With):
-        roots: list[ast.AST] = []
+    if isinstance(stmt, (ast.With, ast.AsyncWith)):
+        roots = []
         for item in stmt.items:
             roots.append(item.context_expr)
             if item.optional_vars is not None:
@@ -659,11 +688,17 @@ class _PythonCFGBuilder:
             return self._build_if(stmt, incoming)
         if isinstance(stmt, ast.While):
             return self._build_while(stmt, incoming)
-        if isinstance(stmt, ast.For):
+        if isinstance(stmt, (ast.For, ast.AsyncFor)):
+            # AsyncFor shares For's field shape (target/iter/body/
+            # orelse) and its zero-iteration semantics — collapsing
+            # it to one straight-line node put a sanitizer inside the
+            # body unconditionally on the path.
             return self._build_for(stmt, incoming)
-        if isinstance(stmt, ast.Try):
+        if isinstance(stmt, _TRY_STMTS):
+            # ``except*`` groups converge like ``except`` for
+            # reachability-under-deletion (see _TRY_STMTS).
             return self._build_try(stmt, incoming)
-        if isinstance(stmt, ast.With):
+        if isinstance(stmt, (ast.With, ast.AsyncWith)):
             return self._build_with(stmt, incoming)
         if isinstance(stmt, ast.Return):
             node = self._new_node("stmt", stmt)
@@ -735,7 +770,7 @@ class _PythonCFGBuilder:
         return [exit_node]
 
     def _build_for(
-        self, stmt: ast.For, incoming: list[PyCFGNode],
+        self, stmt: ast.For | ast.AsyncFor, incoming: list[PyCFGNode],
     ) -> list[PyCFGNode]:
         header = self._new_node("stmt", stmt)
         self._link_many(incoming, header)
@@ -823,7 +858,7 @@ class _PythonCFGBuilder:
         return node
 
     def _build_try(
-        self, stmt: ast.Try, incoming: list[PyCFGNode],
+        self, stmt: ast.Try | ast.TryStar, incoming: list[PyCFGNode],
     ) -> list[PyCFGNode]:
         # try-block: incoming flows into body. Any node in body may
         # raise and route to ANY of the except handlers, so the
@@ -859,7 +894,7 @@ class _PythonCFGBuilder:
         return merge_in
 
     def _build_with(
-        self, stmt: ast.With, incoming: list[PyCFGNode],
+        self, stmt: ast.With | ast.AsyncWith, incoming: list[PyCFGNode],
     ) -> list[PyCFGNode]:
         # Model as a sentinel statement for the `with` line + the body.
         header = self._new_node("stmt", stmt)

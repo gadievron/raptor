@@ -631,3 +631,86 @@ def test_callgraph_dominators_work(tmp_path):
         assert tree.dominates(by_name["main"], by_name[name])
     # f does NOT dominate sink (because main has a direct edge to sink)
     assert not tree.dominates(by_name["f"], by_name["sink"])
+
+
+class TestCompoundStatementsNotFlattened:
+    """AsyncFor / AsyncWith / TryStar and nested def/class must not
+    collapse into one straight-line node — the flattened union puts a
+    sanitizer from a conditionally-executed (or never-called) body on
+    a node that sits unconditionally on the path, and leaks nested
+    locals into defs."""
+
+    def test_tryStar_handler_is_a_separate_node(self):
+        src = (
+            "def f(x):\n"
+            "    try:\n"
+            "        y = html.escape(x)\n"
+            "    except* ValueError:\n"
+            "        y = x\n"
+            "    sink(y)\n"
+        )
+        cfg = _cfg(src)
+        sanitizer = next(n for n in cfg.nodes() if "html.escape" in n.calls)
+        handler = next(
+            n for n in cfg.nodes()
+            if n.lineno == 5 and "y" in n.defs and not n.calls
+        )
+        assert sanitizer is not handler
+
+    def test_async_for_body_does_not_dominate(self):
+        src = (
+            "async def f(xs, x):\n"
+            "    y = x\n"
+            "    async for i in xs:\n"
+            "        y = html.escape(x)\n"
+            "    sink(y)\n"
+        )
+        cfg = _cfg(src)
+        header = next(n for n in cfg.nodes() if n.lineno == 3
+                      and "html.escape" not in n.calls)
+        # Zero-iteration path exists: the body node is NOT the only
+        # route from header to the sink.
+        sanitizer = next(n for n in cfg.nodes() if "html.escape" in n.calls)
+        assert sanitizer is not header
+
+    def test_async_with_body_is_separate(self):
+        src = (
+            "async def f(x):\n"
+            "    async with open_conn() as c:\n"
+            "        y = html.escape(x)\n"
+            "    sink(x)\n"
+        )
+        cfg = _cfg(src)
+        header = next(n for n in cfg.nodes() if n.lineno == 2)
+        assert "html.escape" not in header.calls
+        assert "open_conn" in header.calls
+        assert "c" in header.defs
+
+    def test_nested_def_body_not_attributed_to_enclosing_node(self):
+        src = (
+            "def f(x):\n"
+            "    def g(a=setup(x)):\n"
+            "        local = html.escape(a)\n"
+            "        return local\n"
+            "    sink(x)\n"
+        )
+        cfg = _cfg(src)
+        def_node = next(n for n in cfg.nodes() if n.lineno == 2)
+        # Definition-site expressions (decorators, defaults) stay;
+        # the body's calls and locals must not leak.
+        assert "setup" in def_node.calls
+        assert "html.escape" not in def_node.calls
+        assert "local" not in def_node.defs
+
+    def test_class_body_not_attributed_to_enclosing_node(self):
+        src = (
+            "def f(x):\n"
+            "    class C(Base, metaclass=meta(x)):\n"
+            "        attr = html.escape(x)\n"
+            "    sink(x)\n"
+        )
+        cfg = _cfg(src)
+        cls_node = next(n for n in cfg.nodes() if n.lineno == 2)
+        assert "meta" in cls_node.calls
+        assert "html.escape" not in cls_node.calls
+        assert "attr" not in cls_node.defs

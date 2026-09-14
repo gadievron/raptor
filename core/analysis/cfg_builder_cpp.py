@@ -29,9 +29,14 @@ Scope — control-flow constructs handled:
   operand into its own node (so a sanitizer in the RHS of
   ``a && escape(x)`` is independently attributable) is documented
   as a Phase 10/11 refinement and deferred — none of the canonical
-  fixtures need it, and the conservative collapse over-suppresses
-  rather than under-suppresses (a sanitizer in any short-circuit
-  operand still appears in ``call_sites``).
+  fixtures need it. CAUTION on the collapse's direction: attributing
+  a possibly-skipped operand's sanitizer to a node that sits
+  unconditionally on the path is the FALSE-SUPPRESSION direction for
+  a suppression gate, not a safe over-approximation. What keeps it
+  sound today is the assigned_names discipline — collapsed call
+  sites carry empty ``assigned_names``, so the value-bound gate's
+  condition 3 never binds them and the verdict degrades to
+  candidate_only instead of suppress.
 
 What this module deliberately does NOT do:
 
