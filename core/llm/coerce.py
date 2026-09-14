@@ -198,4 +198,5 @@ __all__ = [
     "structured_result",
     "to_float_safe",
     "to_int_safe",
+    "to_lower_token_safe",
 ]

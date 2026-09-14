@@ -205,3 +205,17 @@ class TestAsPair:
         resp = StructuredResponse(result={"a": 1}, raw="text")
         r1, raw1 = resp  # legacy 2-tuple unpack
         assert resp.as_pair() == (r1, raw1) == ({"a": 1}, "text")
+
+
+def test_public_api_star_export_complete():
+    """``__all__`` carries every public coercer — to_lower_token_safe
+    landed without joining it, so star-imports silently dropped it."""
+    import core.llm.coerce as coerce_mod
+
+    public = {
+        n for n in dir(coerce_mod)
+        if not n.startswith("_") and callable(getattr(coerce_mod, n))
+        and getattr(getattr(coerce_mod, n), "__module__", "")
+        == "core.llm.coerce"
+    }
+    assert public == set(coerce_mod.__all__)
