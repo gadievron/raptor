@@ -816,3 +816,81 @@ def test_charset_branch_wrapped_declines_python_tier1b(tmp_path: Path):
     )
     assert r.status is t1.Tier0Status.NOT_APPLICABLE
     assert "dominate" in r.reasoning
+
+
+def test_transform_result_discarded_declines(tmp_path: Path):
+    """Bare ``html.escape(name)`` — result discarded — sanitizes
+    nothing; raw ``name`` reaches the sink. Pre-fix the chain started
+    at the INPUT variable, which trivially reaches the sink, and Tier
+    1B certified SOUND for exactly the incomplete-fix class gate 3
+    exists to catch."""
+    (tmp_path / "app.py").write_text(
+        "import html\n"                       # line 1
+        "def f(name):\n"                      # line 2
+        "    html.escape(name)\n"             # line 3 — discarded
+        "    return render(name)\n"           # line 4 — sink
+    )
+    diff = "+    html.escape(name)\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "html.escape(name)",
+        "variable_name": "name", "charset": "", "forbidden": "",
+        "library_call": "html.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+    assert "not bound" in r.reasoning
+
+
+def test_transform_result_misbound_declines(tmp_path: Path):
+    """``safe = html.escape(name)`` but the sink renders raw ``name``
+    — the transform's OUTPUT never reaches the sink."""
+    (tmp_path / "app.py").write_text(
+        "import html\n"
+        "def f(name):\n"
+        "    safe = html.escape(name)\n"      # line 3 — bound to safe
+        "    return render(name)\n"           # line 4 — sink uses name
+    )
+    diff = "+    safe = html.escape(name)\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "safe = html.escape(name)",
+        "variable_name": "name", "charset": "", "forbidden": "",
+        "library_call": "html.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+    assert "does not reach the sink" in r.reasoning
+
+
+def test_transform_bound_output_reaching_sink_is_sound(tmp_path: Path):
+    """Two-direction: the correctly-bound transform whose output
+    reaches the sink still certifies — even when the LLM names the
+    INPUT variable (the natural reading of the prompt)."""
+    (tmp_path / "app.py").write_text(
+        "import html\n"
+        "def f(name):\n"
+        "    safe = html.escape(name)\n"      # line 3
+        "    return render(safe)\n"           # line 4 — sink uses safe
+    )
+    diff = "+    safe = html.escape(name)\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "safe = html.escape(name)",
+        "variable_name": "name", "charset": "", "forbidden": "",
+        "library_call": "html.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.SOUND

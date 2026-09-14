@@ -51,6 +51,7 @@ from core.dataflow.smt_barrier import (
     Tier0Result,
     Tier0Status,
     ValidatorSpec,
+    _collect_target_names,
     _crosses_function_boundary,
     _function_containing,
     _lexical_validator_in_branch,
@@ -276,6 +277,60 @@ def _line_invokes_library_call(
     return False
 
 
+def _transform_binding_targets(
+    tree, source_text: str, validator_line: int, library_call: str,
+) -> set[str]:
+    """Plain-Name targets the transform call's result is bound to on
+    the claimed line — empty when the result is discarded or bound to
+    nothing the chain tracker can follow (attribute/subscript)."""
+    import ast
+    tail = library_call.rsplit(".", maxsplit=1)[-1]
+    targets: set[str] = set()
+    if tree is not None:
+        for node in ast.walk(tree):
+            if getattr(node, "lineno", None) != validator_line:
+                continue
+            if not isinstance(
+                node, (ast.Assign, ast.AnnAssign, ast.NamedExpr),
+            ):
+                continue
+            value = getattr(node, "value", None)
+            if value is None:
+                continue
+            calls_tail = any(
+                isinstance(c, ast.Call)
+                and isinstance(c.func, (ast.Name, ast.Attribute))
+                and (c.func.id if isinstance(c.func, ast.Name)
+                     else c.func.attr) == tail
+                for c in ast.walk(value)
+            )
+            if not calls_tail:
+                continue
+            node_targets = (list(node.targets)
+                            if isinstance(node, ast.Assign)
+                            else [node.target])
+            names: set[str] = set()
+            for t in node_targets:
+                _collect_target_names(t, names)
+            targets |= names
+        return targets
+    # Lexical languages: accept ``x = ...call(...)`` (with optional
+    # const/let/var/final or a type before the name).
+    lines = source_text.splitlines()
+    if not (0 < validator_line <= len(lines)):
+        return set()
+    line = lines[validator_line - 1]
+    m = _re.match(
+        r"\s*(?:(?:const|let|var|final)\s+)?"
+        r"(?:[A-Za-z_$][\w$<>\[\].]*\s+)?"
+        r"([A-Za-z_$][\w$]*)\s*=[^=]",
+        line,
+    )
+    if m and _re.search(rf"\b{_re.escape(tail)}\s*\(", line[m.end():]):
+        return {m.group(1)}
+    return set()
+
+
 def _try_known_safe_call(
     spec: _LLMSpec, source_text: str, sink_uri: str, sink_line: int,
     sink_class: str, language: str,
@@ -334,29 +389,58 @@ def _try_known_safe_call(
             f"safe-call at line {validator_line} is separated from the "
             f"sink at line {sink_line} by a function boundary",
         )
+    # Transform-kind entries return the sanitized VALUE: the chain
+    # must start from what the call's result is BOUND to, never from
+    # the input argument — ``safe = html.escape(name); render(name)``
+    # (mis-bound) and a bare ``html.escape(name)`` (discarded) both
+    # leave raw ``name`` at the sink, the exact incomplete-fix class
+    # this gate exists to catch (the curated-table contract says "the
+    # return value (or a name assigned from it)"). Validate-kind
+    # (raising) entries constrain the input itself, so the LLM's
+    # variable stays the chain start there.
+    chain_vars: set[str] = (
+        {spec.variable_name} if spec.variable_name else set()
+    )
+    if entry.input_arg_kind == "transform":
+        chain_vars = _transform_binding_targets(
+            tree, source_text, validator_line, spec.library_call,
+        )
+        if not chain_vars:
+            return Tier0Result(
+                Tier0Status.NOT_APPLICABLE,
+                f"Tier 1B: {entry.library_call} result at line "
+                f"{validator_line} is not bound to a variable the "
+                f"chain can follow — a discarded transform sanitizes "
+                f"nothing",
+            )
     # Chain check — only Python has an AST chain tracker for now.  For
-    # non-Python we conservatively require the LLM's variable_name to
+    # non-Python we conservatively require the chain variable to
     # appear textually at the sink line.
     sink_lines = source_text.splitlines()
     sink_line_text = sink_lines[sink_line - 1] if 0 < sink_line <= len(sink_lines) else ""
-    if language == "python" and tree is not None and spec.variable_name:
-        chain_ok = _python_chain_reaches_sink(
-            tree, spec.variable_name, validator_line, sink_line, sink_line_text,
-        )
-    elif spec.variable_name:
-        chain_ok = _lexical_var_reaches_sink(
-            spec.variable_name, source_text, validator_line, sink_line,
-            sink_line_text,
+    if language == "python" and tree is not None:
+        chain_ok = any(
+            _python_chain_reaches_sink(
+                tree, var, validator_line, sink_line, sink_line_text,
+            )
+            for var in chain_vars
         )
     else:
-        chain_ok = False
+        chain_ok = any(
+            _lexical_var_reaches_sink(
+                var, source_text, validator_line, sink_line,
+                sink_line_text,
+            )
+            for var in chain_vars
+        )
     if not chain_ok:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
-            f"variable {spec.variable_name!r} sanitized by "
+            f"variable {sorted(chain_vars) or [spec.variable_name]!r} "
+            f"sanitized by "
             f"{entry.library_call} does not reach the sink line",
         )
-    if (language == "python" and tree is not None and spec.variable_name
+    if (language == "python" and tree is not None and chain_vars
             and _validator_in_branch(tree, validator_line, sink_line)):
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
