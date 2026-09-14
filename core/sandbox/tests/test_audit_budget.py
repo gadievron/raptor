@@ -495,6 +495,20 @@ def test_from_cli_state_honours_state_field():
     state._cli_sandbox_audit_budget = None  # cleanup (autouse fixture also resets)
 
 
+def test_from_cli_state_preserves_explicit_zero():
+    """`--audit-budget 0` is a legal explicit override the parse sites
+    deliberately preserve; an `or None` here silently inverted it back
+    to DEFAULT_GLOBAL_CAP — the empty-operator-override inversion
+    class. Zero must reach AuditBudget as zero."""
+    from core.sandbox import state
+    state._cli_sandbox_audit_budget = 0
+    try:
+        b = audit_budget.from_cli_state()
+        assert b.global_cap == 0
+    finally:
+        state._cli_sandbox_audit_budget = None
+
+
 # ---------------------------------------------------------------------
 # Summary record
 # ---------------------------------------------------------------------

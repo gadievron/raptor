@@ -707,4 +707,10 @@ def from_cli_state() -> AuditBudget:
     """
     from . import state
     cli_cap = getattr(state, "_cli_sandbox_audit_budget", None)
-    return AuditBudget(global_cap=cli_cap or None)
+    # is-None check, never `or None`: both parse sites deliberately
+    # preserve an explicit `--audit-budget 0` (a legal all-suppressing
+    # override AuditBudget.__init__ distinguishes from "use defaults"),
+    # and `or` would erase it back to DEFAULT_GLOBAL_CAP.
+    return AuditBudget(
+        global_cap=None if cli_cap is None else int(cli_cap),
+    )
