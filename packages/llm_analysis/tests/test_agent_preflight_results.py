@@ -122,6 +122,13 @@ class TestReachabilityChokepointWiring:
         assert rec["analysis"]["reachability_suppression"] is True
         assert rec["analysis"]["is_true_positive"] is False
 
+        # The per-run savings counter reaches the report block —
+        # previously incremented but never surfaced, so the
+        # suppressor's savings were only countable by hand from
+        # suppressions.jsonl (every sibling chokepoint surfaces its
+        # skipped_llm_calls).
+        assert report["reachability_suppression"]["skipped_llm_calls"] == 1
+
     def test_non_suppressed_finding_not_stamped(
         self, tmp_path, monkeypatch,
     ):
@@ -142,6 +149,7 @@ class TestReachabilityChokepointWiring:
         assert (results[0].get("analysis") or {}).get(
             "reachability_suppression"
         ) is None
+        assert report["reachability_suppression"]["skipped_llm_calls"] == 0
 
 
 class TestSagePriorVerdictWiring:

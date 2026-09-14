@@ -3448,6 +3448,9 @@ class AutonomousSecurityAgentV2:
                 "prep_outcomes": fixture_prep_outcomes,
                 "skipped_llm_calls": fixture_skipped_llm_calls,
             },
+            "reachability_suppression": {
+                "skipped_llm_calls": reachability_skipped_llm_calls,
+            },
             "sage_fp_suppression": {
                 "skipped_llm_calls": sage_fp_skipped_llm_calls,
                 "verdicts_stored": sage_fp_stored,
@@ -3532,6 +3535,13 @@ class AutonomousSecurityAgentV2:
                     "%s",
                     fixture_skipped_llm_calls,
                     fixture_prep_outcomes,
+                )
+            if reachability_skipped_llm_calls > 0:
+                logger.info(
+                    "✓ Binary-oracle reachability: "
+                    "%d LLM call(s) skipped (function absent from "
+                    "every declared binary)",
+                    reachability_skipped_llm_calls,
                 )
             if sage_fp_skipped_llm_calls > 0:
                 logger.info(
