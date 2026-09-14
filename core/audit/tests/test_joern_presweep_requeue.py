@@ -192,6 +192,34 @@ class TestStatusArtifact:
         assert record["ts"]
         assert load_presweep_status(tmp_path) is not None
 
+    def test_errored_presweep_writes_run_dir_artifact(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        # An errored query (either execution path) leaves the same
+        # incomplete flow set as a lost window; without the artifact
+        # the report and critique read its missing flows as "no
+        # flows" instead of "not swept".
+        def fake_presweep(*_a, status_out=None, **_kw):
+            status_out.update(
+                errors=["query failed: parse error"],
+                errors_fatal=True, completed=False,
+            )
+            return {"src/a.c:f": [1]}
+
+        monkeypatch.setattr(
+            "core.audit.sweep.run_joern_pre_sweep", fake_presweep,
+        )
+        monkeypatch.setattr(
+            "core.audit.joern_backend.joern_tunables",
+            lambda overrides=None: self._tunables(),
+        )
+        build_joern_evidence(tmp_path, tmp_path)
+        record = load_json(tmp_path / PRESWEEP_STATUS_FILENAME)
+        assert record["errors"] == ["query failed: parse error"]
+        assert record["completed"] is False
+        assert record["flows_partial"] == 1
+        assert not record.get("interrupted")
+
     def test_clean_presweep_writes_no_artifact(
         self, tmp_path: Path, monkeypatch,
     ):
@@ -231,6 +259,50 @@ class TestReportAndCritiqueSurfacing:
         from core.audit.report import generate_report
         report = generate_report(tmp_path)
         assert "re-queued and recovered" in report["summary"]
+
+    def test_report_summary_surfaces_errored_sweep(
+        self, tmp_path: Path,
+    ):
+        # Errored, never interrupted: the summary must state the
+        # incomplete evidence WITHOUT misattributing it to a server
+        # restart.
+        from core.json import save_json
+        save_json(tmp_path / PRESWEEP_STATUS_FILENAME, {
+            "errors": ["query failed: parse error"],
+            "errors_fatal": True, "completed": False,
+            "flows_partial": 0,
+        })
+        from core.audit.report import generate_report
+        report = generate_report(tmp_path)
+        assert "pre-sweep errored" in report["summary"]
+        assert "server restart" not in report["summary"]
+
+    def test_critique_warns_on_errored_sweep(
+        self, tmp_path: Path, caplog,
+    ):
+        from core.json import save_json
+        save_json(tmp_path / PRESWEEP_STATUS_FILENAME, {
+            "errors": ["query failed: parse error"],
+            "errors_fatal": True, "completed": False,
+        })
+        from core.audit.orchestrator import _run_critique
+        config = types.SimpleNamespace(
+            critique_interval=10, out_dir=tmp_path,
+            target_path=tmp_path, project_sinks=None,
+        )
+        result = types.SimpleNamespace(outcomes=[], tier_counters={})
+        with caplog.at_level(logging.WARNING, "core.audit.orchestrator"):
+            _run_critique(result, config)
+            _run_critique(result, config)
+        hits = [
+            r for r in caplog.records
+            if "pre-sweep query ERRORED" in r.getMessage()
+        ]
+        assert len(hits) == 1  # once per run, not per critique tick
+        assert not [
+            r for r in caplog.records
+            if "server restart" in r.getMessage()
+        ]
 
     def test_critique_warns_once_on_lost_window(
         self, tmp_path: Path, caplog,

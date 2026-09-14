@@ -542,10 +542,12 @@ def enrich_joern_evidence(
             rec.joern_sink_args = deduped
 
 
-#: Run-dir artifact recording an interrupted/re-queued pre-sweep.
-#: Written by :func:`build_joern_evidence`; read by the report
-#: summary and the critique pass so a lost taint window is surfaced
-#: instead of living only in a log WARNING.
+#: Run-dir artifact recording a degraded pre-sweep — interrupted/
+#: re-queued by a server restart, or errored (``interrupted`` count
+#: distinguishes the two for consumers). Written by
+#: :func:`build_joern_evidence`; read by the report summary and the
+#: critique pass so an incomplete taint window is surfaced instead of
+#: living only in a log WARNING.
 PRESWEEP_STATUS_FILENAME = "joern-presweep-status.json"
 
 
@@ -780,10 +782,11 @@ def build_joern_evidence(
 ) -> dict[str, list] | None:
     """Run Joern pre-sweep (standard_sinks.sc) if available.
 
-    When the pre-sweep window was interrupted by a server restart, the
-    outcome (re-queued and recovered, or lost) is persisted to
+    When the pre-sweep ended degraded — window interrupted by a server
+    restart (re-queued and recovered, or lost) OR the taint query
+    errored on either execution path — the outcome is persisted to
     ``joern-presweep-status.json`` in the run dir for the summary and
-    critique — a lost taint window must not be a log-only event.
+    critique — an incomplete taint window must not be a log-only event.
 
     Completed sweeps are persisted to the run dir's prep cache keyed
     by (CPG content hash, sink-list hash); a resumed segment on an
@@ -843,8 +846,19 @@ def build_joern_evidence(
         # Aborted mid-sweep: a partial result must not be cached or
         # write interruption status for a run that discarded it.
         return None
+    # Persist the status artifact for EVERY degraded end, not just the
+    # server-restart interruption: an errored query (server or file
+    # path) leaves the same incomplete flow set, and without the
+    # artifact the report and the critique cadence read its missing
+    # flows as "no flows" instead of "not swept". Consumers key their
+    # wording on the ``interrupted`` count.
     if status.get("interrupted"):
         status["flows_recovered"] = sum(
+            len(v) for v in (flows or {}).values()
+        )
+        _write_presweep_status(out_dir, status)
+    elif status.get("errors"):
+        status["flows_partial"] = sum(
             len(v) for v in (flows or {}).values()
         )
         _write_presweep_status(out_dir, status)

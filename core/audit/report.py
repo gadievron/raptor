@@ -1539,7 +1539,7 @@ def _format_summary(report: dict[str, Any]) -> str:
                 f"{presweep.get('flows_recovered', 0)} flow group(s) "
                 f"recovered"
             )
-        else:
+        elif interrupted:
             lines.append(
                 f"### ⚠️ Joern pre-sweep window lost"
             )
@@ -1549,6 +1549,21 @@ def _format_summary(report: dict[str, Any]) -> str:
                 f"taint-flow evidence is incomplete (functions read as "
                 f"'no flows' rather than 'not swept'). Re-run /audit "
                 f"or /agentic to regenerate the sweep."
+            )
+        else:
+            # Errored (never interrupted): the record exists exactly
+            # because the taint query failed — restart wording here
+            # would misattribute the loss.
+            n_errors = len(presweep.get("errors") or [])
+            lines.append(
+                "### ⚠️ Joern pre-sweep errored"
+            )
+            lines.append(
+                f"The taint query errored ({n_errors} error(s)) — "
+                f"this run's taint-flow evidence is incomplete "
+                f"(functions read as 'no flows' rather than "
+                f"'not swept'). Re-run /audit or /agentic to "
+                f"regenerate the sweep."
             )
 
     channel_health = report.get("channel_health")

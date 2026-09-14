@@ -20545,11 +20545,11 @@ def _run_critique(
     suspicious items haven't gained new tool evidence since emission.
     Runs every critique_interval functions.
     """
-    # Interrupted pre-sweep awareness (once per run): when the Joern
-    # pre-sweep window was lost to a server restart, critique's
-    # taint-tier evidence base is incomplete — absence of flows means
-    # "not swept", not "no flows". Surface it on the critique cadence,
-    # not just as a startup log line.
+    # Degraded pre-sweep awareness (once per run): when the Joern
+    # pre-sweep window was lost to a server restart OR the taint query
+    # errored, critique's taint-tier evidence base is incomplete —
+    # absence of flows means "not swept", not "no flows". Surface it
+    # on the critique cadence, not just as a startup log line.
     if not getattr(config, "_presweep_loss_warned", False) and config.out_dir:
         try:
             from .joern_backend import load_presweep_status
@@ -20557,13 +20557,22 @@ def _run_critique(
         except Exception:  # noqa: BLE001 — critique must not fail on bookkeeping
             presweep = None
         if presweep and not presweep.get("recovered"):
-            logger.warning(
-                "critique: Joern pre-sweep window was LOST to a server "
-                "restart (%d re-queue attempt(s) failed) — taint-flow "
-                "evidence for this run is incomplete; treating missing "
-                "flows as 'not swept'",
-                presweep.get("requeued", 0),
-            )
+            if presweep.get("interrupted"):
+                logger.warning(
+                    "critique: Joern pre-sweep window was LOST to a "
+                    "server restart (%d re-queue attempt(s) failed) — "
+                    "taint-flow evidence for this run is incomplete; "
+                    "treating missing flows as 'not swept'",
+                    presweep.get("requeued", 0),
+                )
+            else:
+                logger.warning(
+                    "critique: Joern pre-sweep query ERRORED "
+                    "(%d error(s)) — taint-flow evidence for this run "
+                    "is incomplete; treating missing flows as "
+                    "'not swept'",
+                    len(presweep.get("errors") or []),
+                )
         if presweep is not None:
             config._presweep_loss_warned = True
 
