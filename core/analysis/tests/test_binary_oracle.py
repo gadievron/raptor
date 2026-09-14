@@ -267,7 +267,6 @@ def test_enrich_operator_command_build_keeps_suppression(
 
 
 @pytest.mark.slow
-@pytest.mark.slow
 def test_guessed_build_never_reaches_the_suppression_gates(
         built_demo: Path) -> None:
     """S5.4 adversarial-review F1: the summary flag is decorative — the

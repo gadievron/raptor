@@ -238,7 +238,7 @@ def test_e2e_chokepoint_helper_full_flow(_synthetic_target_built) -> None:
     assert decision is None
 
 
-@pytest.mark.slow 
+@pytest.mark.slow
 def test_e2e_hostile_planted_binary_is_dropped(tmp_path: Path) -> None:
     """The hostile-ELF attack shape: a binary with completely
     unrelated symbols (planted in the target tree by an attacker)
@@ -256,7 +256,7 @@ def test_e2e_hostile_planted_binary_is_dropped(tmp_path: Path) -> None:
                     "-o", str(planted_bin)], check=True)
 
     # Enrich with ONLY the planted binary. Defense must fire: the
-    # planted binary names alpha/beta/main from the source, none of
+    # source inventory names alive_helper_*/dead_helper, none of
     # which the planted binary's DWARF knows about → drop with
     # warning, no inventory items annotated.
     counts = enrich_inventory_with_binary_oracle(inv, (planted_bin,))
