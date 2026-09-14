@@ -266,7 +266,9 @@ def import_validation_results(
     report = load_json(validation_report, max_bytes=64 * 1024 * 1024)
     if report is None:
         logger.warning("failed to load validation report %s", validation_report)
-        return {"updated": 0, "downgraded": 0, "upgraded": 0, "corroborated": 0, "skipped": 0}
+        return {"updated": 0, "downgraded": 0, "downgraded_clean": 0,
+                "downgraded_suspicious": 0, "upgraded": 0,
+                "corroborated": 0, "skipped": 0}
 
     findings = _extract_findings(report)
 
@@ -290,6 +292,14 @@ def import_validation_results(
     counts = {
         "updated": 0,
         "downgraded": 0,
+        # Referee-outcome split of "downgraded": a mechanical
+        # disqualifier (or an LLM-tier prior) licenses the clean
+        # downgrade; an LLM-only ruling against a tool-evidenced
+        # finding only demotes to suspicious. Consumers rendering
+        # the counts must label the two transitions distinctly —
+        # "downgraded" alone does not say where the verdict landed.
+        "downgraded_clean": 0,
+        "downgraded_suspicious": 0,
         "upgraded": 0,
         "corroborated": 0,
         "skipped": 0,
@@ -533,6 +543,11 @@ def import_validation_results(
 
         counts["updated"] += 1
         counts[transition["kind"]] += 1
+        if transition["kind"] == "downgraded":
+            if transition.get("new_status") == "suspicious":
+                counts["downgraded_suspicious"] += 1
+            else:
+                counts["downgraded_clean"] += 1
 
         # Reliability event for the model that made the prior claim.
         # Decoy-vetoed disprovals carry no signal about THIS verdict

@@ -1280,9 +1280,16 @@ def cmd_feedback(args: argparse.Namespace) -> int:
     )
 
     print(f"Feedback imported: {result['updated']} journal correction(s)")
-    if result["downgraded"]:
-        print(f"  Downgraded: {result['downgraded']} "
-              f"(finding/suspicious → clean)")
+    # Grouped by referee outcome: a "downgraded" count alone does not
+    # say where the verdict landed — an LLM-only ruling against a
+    # tool-evidenced finding demotes to suspicious, never clean.
+    if result.get("downgraded_clean"):
+        print(f"  Downgraded to clean: {result['downgraded_clean']} "
+              f"(/validate disproved)")
+    if result.get("downgraded_suspicious"):
+        print(f"  Demoted to suspicious: {result['downgraded_suspicious']} "
+              f"(LLM-only ruling, no mechanical disqualifier — "
+              f"tool-evidenced verdict kept for re-review)")
     if result["upgraded"]:
         print(f"  Upgraded: {result['upgraded']} (clean → finding)")
     if result["corroborated"]:

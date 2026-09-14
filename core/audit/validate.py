@@ -599,10 +599,11 @@ def _auto_feedback(
     annotations_dir: Path,
     audit_out_dir: Path,
 ) -> None:
-    """Import /validate results back into audit annotations.
+    """Import /validate results as review-journal corrections.
 
     Searches for findings.json in the validate output directory and
-    feeds verdicts back to update annotation statuses (Reflexion).
+    appends correction entries to the review journal (Reflexion);
+    annotations are consulted read-only, never written back.
     """
     validate_findings_path = validate_dir / "findings.json"
     if not validate_findings_path.is_file():
@@ -625,10 +626,12 @@ def _auto_feedback(
             audit_out_dir=audit_out_dir,
         )
         logger.info(
-            "auto-feedback: %d updated (%d downgraded, %d upgraded, "
+            "auto-feedback: %d updated (%d downgraded to clean, "
+            "%d demoted to suspicious, %d upgraded, "
             "%d corroborated, %d skipped)",
             counts.get("updated", 0),
-            counts.get("downgraded", 0),
+            counts.get("downgraded_clean", 0),
+            counts.get("downgraded_suspicious", 0),
             counts.get("upgraded", 0),
             counts.get("corroborated", 0),
             counts.get("skipped", 0),

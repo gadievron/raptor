@@ -1126,6 +1126,8 @@ class TestDowngradeReferee:
             validation_report=report, annotations_dir=ann_dir,
             audit_out_dir=audit_out)
         assert result["downgraded"] == 1
+        assert result["downgraded_clean"] == 1
+        assert result["downgraded_suspicious"] == 0
         entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
         assert entry.verdict == "clean"
         events = [e for e in self._audit_log_events(audit_out)
@@ -1166,6 +1168,8 @@ class TestDowngradeReferee:
             validation_report=report, annotations_dir=ann_dir,
             audit_out_dir=audit_out)
         assert result["downgraded"] == 1
+        assert result["downgraded_suspicious"] == 1
+        assert result["downgraded_clean"] == 0
         entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
         assert entry.verdict == "suspicious"
         assert entry.prior_review == "finding"
