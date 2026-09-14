@@ -2703,3 +2703,72 @@ def test_substitution_in_plain_for_body_still_refused():
         "    return render(x)\n"               # line 5
     )
     assert sb.substitution_dominates_sink(src, 4, 5, "x") is False
+
+
+def test_chain_kills_for_target_rebind():
+    """A for-loop target between validator and sink rebinds the
+    variable each iteration — the sink consumes the loop value, never
+    the validated one. Pre-fix the KILL leg saw only
+    Assign/AugAssign/AnnAssign and certified the chain."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    name = request.args.get('name')\n"
+        "    if not re.match(r'^[a-z]+$', name):\n"
+        "        return 'bad'\n"
+        "    for name in request.args.getlist('e'):\n"   # line 5 — rebind
+        "        pass\n"
+        "    return open(name)\n"                          # line 7 — sink
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "name", 3, 7, "    return open(name)",
+    ) is False
+
+
+def test_chain_kills_walrus_rebind():
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    name = request.args.get('name')\n"
+        "    if not re.match(r'^[a-z]+$', name):\n"
+        "        return 'bad'\n"
+        "    use((name := request.args.get('raw')))\n"    # line 5 — walrus
+        "    return open(name)\n"                          # line 6 — sink
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "name", 3, 6, "    return open(name)",
+    ) is False
+
+
+def test_chain_kills_with_as_rebind():
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    name = request.args.get('name')\n"
+        "    if not re.match(r'^[a-z]+$', name):\n"
+        "        return 'bad'\n"
+        "    with opener() as name:\n"                    # line 5 — with-as
+        "        pass\n"
+        "    return open(name)\n"
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "name", 3, 7, "    return open(name)",
+    ) is False
+
+
+def test_chain_survives_unrelated_for_target():
+    # Two-direction: a loop over an unrelated variable must not kill
+    # the validated chain.
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request, items):\n"
+        "    name = request.args.get('name')\n"
+        "    if not re.match(r'^[a-z]+$', name):\n"
+        "        return 'bad'\n"
+        "    for item in items:\n"
+        "        log(item)\n"
+        "    return open(name)\n"
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "name", 3, 7, "    return open(name)",
+    ) is True

@@ -1800,6 +1800,26 @@ def _python_chain_reaches_sink(
             # Rebind from non-chain RHS: the target no longer carries
             # the validated value.
             chain -= target_names
+    # Rebind-KILL for non-Assign binding forms: walrus targets,
+    # for/async-for loop targets, ``with ... as``, ``except ... as``,
+    # nested def/class shadowing. The ordered forward pass above sees
+    # only Assign/AugAssign/AnnAssign, so
+    # ``for name in request.args.getlist('e'):`` between validator and
+    # sink left ``name`` "validated" while the sink consumes the loop
+    # rebind. Shrink-only and position-insensitive inside the window —
+    # conservative; the charset twin ``_variable_reassigned_between``
+    # already handles these forms via ``_node_rebinds_var``.
+    for node in _walk_same_scope(scope_root):
+        line = getattr(node, "lineno", None)
+        if line is None or not (validator_line <= line <= sink_line):
+            continue
+        if line == validator_line:
+            continue
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            continue  # the ordered forward pass owns these
+        for var in list(chain):
+            if _node_rebinds_var(node, var):
+                chain.discard(var)
     # Loop back-edge kill: a rebind textually AFTER the sink (or before
     # the validator) still reaches the sink on the next iteration when
     # it shares a loop with the sink — the flat forward pass cannot see
