@@ -297,10 +297,15 @@ def _read_source(target_path: Path, file_path: str) -> str | None:
     # (the caller's hypothesis-unbindable inconclusive), never a
     # verdict.
     from ._util import safe_join
+    # Capped like every migrated core/audit sibling: a multi-GB
+    # planted file must truncate, not buffer wholesale into evidence
+    # records and prompts.
+    from core.source import read_text_capped
     try:
         p = safe_join(Path(target_path), file_path)
         if p is not None and p.is_file():
-            return p.read_text(encoding="utf-8", errors="replace")
+            got = read_text_capped(p)
+            return None if got is None else got[0]
     except OSError:
         pass
     return None

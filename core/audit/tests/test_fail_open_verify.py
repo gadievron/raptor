@@ -2343,3 +2343,24 @@ class TestSourceReadContainment:
 if __name__ == "__main__":  # pragma: no cover
     import sys
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+def test_read_source_is_capped(tmp_path, monkeypatch):
+    """file_path arrives from LLM-writable artifacts: a planted huge
+    file must truncate (every migrated core/audit sibling caps), not
+    buffer wholesale into evidence records and prompts."""
+    import core.source
+
+    from core.audit.fail_open_verify import _read_source
+
+    real = core.source.read_text_capped
+
+    def tiny_cap(path, max_chars=None, **kw):
+        return real(path, 1024, **kw)
+
+    monkeypatch.setattr(core.source, "read_text_capped", tiny_cap)
+    big = tmp_path / "big.py"
+    big.write_text("x = 1\n" * 10_000)
+    text = _read_source(tmp_path, "big.py")
+    assert text is not None
+    assert len(text) <= 1024
