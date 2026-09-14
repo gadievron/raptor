@@ -660,3 +660,49 @@ public class Test {
         sarif = tmp_path / "combined.sarif"
         sarif.write_text("{}", encoding="utf-8")
         assert filter_enforced_from_sarif(sarif, []) == 0
+
+
+_TWO_CANDIDATE_SAFE = """import org.owasp.encoder.Encode;
+import javax.servlet.http.HttpServletRequest;
+import java.io.PrintWriter;
+public class Test {
+    void doPost(HttpServletRequest request, PrintWriter out) {
+        String a = request.getParameter("a");
+        a = a + request.getParameter("b");
+        String y = Encode.forHtml(a);
+        out.println(y);
+    }
+}
+"""
+
+
+class TestMultiCandidateWitness:
+    def test_full_proof_record_carries_every_candidate(self, tmp_path):
+        # Two source candidates, both individually proven: the single
+        # suppression record used to carry only the LAST candidate's
+        # evidence as the whole finding's witness. The aggregate keeps
+        # each candidate's source line attributable.
+        repo, _, sarif_path, out = _write(
+            tmp_path, _TWO_CANDIDATE_SAFE, {"sink_line": 9},
+        )
+        stats = run_postpass([sarif_path], repo, out)
+        assert stats["recorded_suppress"] == 1
+        recs = [
+            json.loads(line) for line in
+            (out / "suppressions.jsonl").read_text().splitlines()
+        ]
+        rec = next(r for r in recs if r["verdict"] == "sanitizer_dominated")
+        srcs = rec.get("candidate_sources")
+        assert srcs and len(srcs) == 2
+        assert {c["source_line"] for c in srcs} == {6, 7}
+        assert all(c["reason"] for c in srcs)
+
+    def test_single_candidate_record_stays_flat(self, tmp_path):
+        repo, _, sarif_path, out = _write(tmp_path, _SAFE_JAVA)
+        run_postpass([sarif_path], repo, out)
+        recs = [
+            json.loads(line) for line in
+            (out / "suppressions.jsonl").read_text().splitlines()
+        ]
+        rec = next(r for r in recs if r["verdict"] == "sanitizer_dominated")
+        assert "candidate_sources" not in rec

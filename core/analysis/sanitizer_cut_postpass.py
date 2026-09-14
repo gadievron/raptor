@@ -687,6 +687,7 @@ def run_postpass(
         # on any candidate — refuses the whole finding.
         verdicts: list[str] = []
         native = None
+        evaluated: list[tuple[dict, Any]] = []
         for source_line in source_lines:
             native = {
                 "cwe": cwe,
@@ -761,6 +762,7 @@ def run_postpass(
             if "returns-taint-free helper union" in reason_text:
                 stats.mechanism("taint-free:helper-summary")
             verdicts.append(result.verdict)
+            evaluated.append((native, result))
 
         if verdicts == ["resolver-refused"]:
             stats.refuse("resolver-refused")
@@ -782,6 +784,25 @@ def run_postpass(
         else:
             stats.refuse("no-suppress-verdict")
             continue
+        # Multi-candidate full proof: the single record carries the
+        # LAST candidate's native/result, so aggregate every
+        # candidate's witness into the record — one candidate's
+        # bindings must not stand in for the others' (the mixed
+        # candidate_only case skips recording for exactly this
+        # misattribution reason).
+        extra_fields = None
+        if full_proof and len(evaluated) > 1:
+            extra_fields = {"candidate_sources": [
+                {
+                    "source_line": int(nat["source_line"]),
+                    "reason": getattr(res, "reason", "") or "",
+                    "sink_arg": getattr(res, "sink_arg", "") or "",
+                    "witness_lines": sorted({
+                        b.lineno for b in res.all_matched_bindings
+                    }),
+                }
+                for nat, res in evaluated
+            ]}
         try:
             # Enforcement is structurally limited to FULL-PROOF suppress
             # verdicts (every source candidate individually proven):
@@ -790,6 +811,7 @@ def run_postpass(
             if full_proof and enforce_live:
                 record_sanitizer_cut_suppression(
                     out_dir, native, result, enforce=True,
+                    extra_fields=extra_fields,
                 )
                 stats.enforced += 1
                 stats.enforced_findings.append({
@@ -798,7 +820,9 @@ def run_postpass(
                     "line": int(sink_line),
                 })
             else:
-                record_sanitizer_cut_suppression(out_dir, native, result)
+                record_sanitizer_cut_suppression(
+                    out_dir, native, result, extra_fields=extra_fields,
+                )
         except Exception as exc:  # noqa: BLE001
             logger.warning("sanitizer-cut post-pass: record failed: %s", exc)
 

@@ -2028,6 +2028,7 @@ def record_sanitizer_cut_suppression(
     result: SanitizerCutResult,
     *,
     enforce: bool = False,
+    extra_fields: Mapping[str, Any] | None = None,
 ) -> None:
     """Write a sanitizer-cut record to ``suppressions.jsonl``.
 
@@ -2145,6 +2146,11 @@ def record_sanitizer_cut_suppression(
             finding.get("cwe") or finding.get("cwe_id") or ""
         ),
     }
+    if extra_fields:
+        # Caller-supplied audit fields (the postpass's per-candidate
+        # aggregation rides here). Merged LAST deliberately — the
+        # caller owns the keys it adds.
+        extra.update(extra_fields)
 
     record_suppression(
         out_dir,
