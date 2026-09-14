@@ -163,9 +163,14 @@ class TestCachedDryRun:
         cached_dry_run(resolver, project, cache=cache)
         assert resolver.calls == 2
 
-    def test_failed_resolves_are_also_cached(self, tmp_path: Path):
-        """If a resolve fails today and the manifest doesn't change,
-        re-running shouldn't pay the subprocess cost again."""
+    def test_failed_resolves_are_never_cached(self, tmp_path: Path):
+        """Failures must NOT be cached: a transient one (registry
+        outage, throttling, timeout) would read as "failed" for the
+        whole TTL even though the next scan would succeed. Trade-off
+        (both directions, see the check site): deterministic failures
+        now pay the subprocess cost per scan — accepted, because the
+        cache cannot tell the two apart and a silently-poisoned scan
+        is the worse failure mode."""
         project = _make_project(tmp_path)
         cache = JsonCache(root=tmp_path / "cache")
 
@@ -187,7 +192,7 @@ class TestCachedDryRun:
         r = _Failer()
         cached_dry_run(r, project, cache=cache)
         cached_dry_run(r, project, cache=cache)
-        assert r.calls == 1
+        assert r.calls == 2
 
     def test_lockfile_bytes_round_trip_through_cache(
         self, tmp_path: Path,
@@ -249,3 +254,75 @@ class TestCachedDryRunBatch:
         assert len(results) == 3
         # Results align with input order.
         assert results[1].proposed_lockfile == b"FROM-CACHE-FOR-B"
+
+
+def test_manifest_hash_refuses_symlinked_manifest(tmp_path: Path) -> None:
+    """Manifests live in the scanned (hostile) tree: a symlinked
+    requirements.txt pointing outside must be refused by the hash's
+    read (lstat-gated), landing in the distinct unreadable-marker
+    bucket rather than hashing host file contents."""
+    from packages.sca.resolvers._cache import manifest_hash
+
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret==1.0\n", encoding="utf-8")
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "requirements.txt").symlink_to(outside)
+
+    class _R:
+        ecosystem = "PyPI"
+        MANIFEST_FILES = ("requirements.txt",)
+
+    h_link = manifest_hash(_R(), project)
+
+    project2 = tmp_path / "proj2"
+    project2.mkdir()
+    (project2 / "requirements.txt").write_text(
+        "secret==1.0\n", encoding="utf-8")
+    h_real = manifest_hash(_R(), project2)
+    # The symlink is REFUSED (marker bucket), so it must not hash
+    # identically to a real file with the target's contents.
+    assert h_link != h_real
+
+
+def test_batch_timeout_falls_back_to_sequential(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """One shared batch budget must not fabricate N failures: on
+    TimeoutExpired the pip batch falls back to per-manifest dry_run
+    (fresh full budget each), and — via the never-cache-failures
+    rule — nothing timeout-shaped is cached either."""
+    import subprocess as _sp
+
+    from packages.sca.resolvers import pip as pip_mod
+
+    projects = []
+    for name in ("a", "b"):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "requirements.txt").write_text("requests==2.0\n",
+                                            encoding="utf-8")
+        projects.append(d)
+
+    resolver = pip_mod.PipResolver()
+    seq_calls: list = []
+
+    def _fake_dry_run(project_dir, *, timeout=120):
+        seq_calls.append(project_dir)
+        return ResolverResult(
+            ecosystem="PyPI", success=True, available=True,
+            proposed_lockfile=None, error=None, raw_output="",
+        )
+
+    monkeypatch.setattr(resolver, "dry_run", _fake_dry_run)
+    monkeypatch.setattr(
+        pip_mod, "_run",
+        lambda *a, **k: (_ for _ in ()).throw(
+            _sp.TimeoutExpired(cmd="sh", timeout=1)),
+    )
+    results = resolver.dry_run_batch(
+        projects, common_root=tmp_path, timeout=1,
+    )
+    assert len(results) == 2
+    assert all(r.success for r in results)
+    assert seq_calls == projects

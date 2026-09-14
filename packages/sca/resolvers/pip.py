@@ -421,13 +421,19 @@ class PipResolver:
                 proxy_hosts=self.proxy_hosts,
             )
         except subprocess.TimeoutExpired:
+            # One shared budget across venv setup + N pip-compiles:
+            # a single slow batch used to mark ALL N manifests failed
+            # (and, pre-fix, cache those failures for a full TTL)
+            # while sequential resolution — each project on a fresh
+            # full budget — would have succeeded. Fall back rather
+            # than fabricate N failures.
+            logger.warning(
+                "sca.resolvers.pip: batch venv pipeline timed out "
+                "after %ss; falling back to sequential per-manifest "
+                "resolution", timeout,
+            )
             return [
-                ResolverResult(
-                    ecosystem=self.ecosystem, success=False, available=True,
-                    error=f"PEP 668 batch venv pipeline timed out "
-                          f"after {timeout}s",
-                )
-                for _ in project_dirs
+                self.dry_run(p, timeout=timeout) for p in project_dirs
             ]
         finally:
             # Host-side cleanup: in mount-ns lanes the sandbox tmpfs

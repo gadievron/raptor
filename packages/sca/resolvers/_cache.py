@@ -40,6 +40,7 @@ import logging
 from typing import Any, TYPE_CHECKING
 
 from . import Resolver, ResolverResult
+from ._safe_io import read_regular_bytes
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -107,12 +108,15 @@ def manifest_hash(
         if not path.is_file():
             continue
         rel_bytes = rel.encode("utf-8")
-        try:
-            payload = path.read_bytes()
-        except OSError:
-            # Present but unreadable: distinct marker record. The
-            # subsequent uncached call surfaces the underlying error
-            # to the operator.
+        # lstat-gated, size-bounded read — manifests live in the
+        # scanned (hostile) tree; a bare read_bytes followed a
+        # symlinked manifest anywhere on the host and buffered a
+        # multi-GB plant whole just to compute a cache key.
+        payload = read_regular_bytes(path)
+        if payload is None:
+            # Present but unreadable/refused: distinct marker record.
+            # The subsequent uncached call surfaces the underlying
+            # error to the operator.
             h.update(b"U")
             h.update(len(rel_bytes).to_bytes(4, "big"))
             h.update(rel_bytes)
@@ -238,6 +242,15 @@ def cached_dry_run(
             return result
 
     result = resolver.dry_run(project_dir, timeout=timeout)
+    if not result.success:
+        # Never cache failures: a transient one (registry outage,
+        # timeout, throttling) would poison this manifest hash as
+        # "failed" for the whole TTL — the next scan must retry.
+        logger.debug(
+            "sca.resolvers.cache: not caching failed resolve for "
+            "%s/%s", resolver.ecosystem, type(resolver).__name__,
+        )
+        return result
     try:
         cache.put(key, _serialise(result), ttl_seconds=ttl_seconds)
     except Exception:                                   # noqa: BLE001
@@ -312,6 +325,11 @@ def cached_dry_run_batch(
         for idx, result in zip(miss_indices, fresh, strict=True):
             hsh = probe_hashes.get(idx)
             if hsh is None:
+                continue
+            if not result.success:
+                # Same rule as the single-project path: one shared
+                # batch timeout used to poison EVERY manifest in the
+                # batch as "failed" for a full TTL.
                 continue
             key = _cache_key(resolver, hsh)
             try:
