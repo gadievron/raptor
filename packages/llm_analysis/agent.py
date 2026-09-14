@@ -3325,19 +3325,29 @@ class AutonomousSecurityAgentV2:
                                 Path(self.repo_path) / _rel, _line)
                             if _src_hash:
                                 is_tp = vuln.analysis.get(
-                                    "is_true_positive", False)
+                                    "is_true_positive")
                                 is_ex = vuln.analysis.get(
-                                    "is_exploitable", False)
-                                if not is_tp:
+                                    "is_exploitable")
+                                # Abstained / schema-nulled verdict
+                                # fields cast no verdict — never
+                                # derive a durable suppression memory
+                                # from one (`not None` would read as
+                                # false_positive).
+                                _v = None
+                                if not isinstance(is_tp, bool) or \
+                                        not isinstance(is_ex, bool):
+                                    _v = None
+                                elif not is_tp:
                                     _v = "false_positive"
                                 elif is_ex:
                                     _v = "exploitable"
                                 else:
                                     _v = "not_exploitable"
-                                if store_finding_verdict(
-                                    str(self.repo_path), _rule,
-                                    _rel, _fn, _src_hash, _v,
-                                ):
+                                if _v is not None and \
+                                        store_finding_verdict(
+                                            str(self.repo_path), _rule,
+                                            _rel, _fn, _src_hash, _v,
+                                        ):
                                     sage_fp_stored += 1
                     except Exception:
                         logger.debug("SAGE verdict storage failed", exc_info=True)

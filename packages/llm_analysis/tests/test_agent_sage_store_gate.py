@@ -147,3 +147,50 @@ class TestSageStoreGate:
         assert rec.get("status") != "error"
         assert len(stored) == 1
         assert stored[0][-1] == "false_positive"
+
+
+class TestSageStoreAbstainedVerdicts:
+    def test_nulled_verdict_fields_never_store(self, tmp_path, monkeypatch):
+        """A CLEAN (non-errored) analysis whose verdict fields came
+        back schema-nulled cast no verdict — `not None` reads as
+        false_positive, so the pre-fix writer derived a durable
+        suppression memory from an abstention."""
+        agent = _make_agent(tmp_path)
+
+        abstained = dict(_ANALYSIS)
+        abstained["is_true_positive"] = None
+        abstained["is_exploitable"] = None
+
+        import core.llm.response_validation as rv
+        import core.sage.hooks as hooks
+
+        llm = MagicMock()
+        llm.generate_structured.return_value = (abstained, "raw")
+        agent.llm = llm
+        monkeypatch.setattr(
+            rv, "attempt_quality_retry",
+            lambda client, validated, *a, **k: validated,
+        )
+        stored: list[tuple] = []
+        monkeypatch.setattr(
+            hooks, "compute_finding_source_hash", lambda p, line: "h" * 16,
+        )
+        monkeypatch.setattr(
+            hooks, "recall_prior_finding_verdict", lambda *a, **k: None,
+        )
+        monkeypatch.setattr(
+            hooks, "store_finding_verdict",
+            lambda *a, **k: (stored.append(a), True)[1],
+        )
+        monkeypatch.setattr(
+            agent_mod, "parse_sarif_findings", lambda _p: [_finding()],
+        )
+        monkeypatch.setattr(agent_mod, "deduplicate_findings", lambda fs: fs)
+        report = agent.process_findings(
+            sarif_paths=["fake.sarif"], checklist=None, emit_journal=False,
+        )
+
+        rec = next(r for r in report["results"]
+                   if r.get("finding_id") == "F1")
+        assert rec.get("status") != "error"          # clean run
+        assert stored == []                          # no durable verdict
