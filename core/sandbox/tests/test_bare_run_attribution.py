@@ -9,6 +9,7 @@ call site that omitted ``target=``/``output=``.
 
 import logging
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -18,12 +19,21 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_bare_run_warning_attributes_the_calling_module(
-    caplog, tmp_path,
-):
+    caplog: pytest.LogCaptureFixture, tmp_path: Path,
+) -> None:
+    from core.sandbox import state
     from core.sandbox.context import check_net_available
 
     if not check_net_available():
         pytest.skip("no namespace backend — bare-run advisory inert")
+
+    # The advisory is once-per-PROCESS by design (warn_once latch), so
+    # any earlier bare-run consumer in the same process — a test from a
+    # directory whose conftest doesn't snapshot this module's flags —
+    # eats the once and the assertion below fails under shuffled
+    # orders. Own the latch (reset_warn_once's documented contract);
+    # this directory's autouse state guard restores the pre-test value.
+    state.reset_warn_once("_bare_run_posture_warned")
 
     # The caller must live OUTSIDE core/sandbox (this test file is
     # inside the package dir the frame walk skips), matching the real
