@@ -296,6 +296,20 @@ def _java_fixtures() -> list[CutFixture]:
                           "java.io.PrintWriter out"),
         3, 6, language="java", suffix=".java"))
     j.append(_fx(
+        # Rebind hidden inside a CONDITION — an assignment-expression
+        # write the CFG must surface as a def, or reaching-defs sees
+        # only the sanitizer and condition-3 exclusivity holds falsely
+        # (the ubiquitous ``while ((line = read()) != null)`` idiom's
+        # adversarial twin).
+        "java_xss_condition_rebind", "xss", "CWE-79",
+        "sanitized_then_condition_rebound", LABEL_MUST_NOT_SUPPRESS,
+        imp + meth("        String y = Encode.forHtml(x);\n"
+                   "        if (flag && (y = x) != null) { }\n"
+                   "        out.println(y);\n",
+                   params="String x, boolean flag, "
+                          "java.io.PrintWriter out"),
+        3, 6, language="java", suffix=".java"))
+    j.append(_fx(
         "java_xss_wrong_variable", "xss", "CWE-79",
         "wrong_variable_sanitized", LABEL_MUST_NOT_SUPPRESS,
         imp + meth("        String safe = Encode.forHtml(other);\n"

@@ -516,3 +516,69 @@ class TestDegradeCleanly:
         # Declaration without definition doesn't match function_definition;
         # the resolver returns None rather than crashing.
         assert result is None
+
+
+class TestEmbeddedStoreDefs:
+    """Assignments/updates embedded in conditions and for-steps must
+    surface as ``defs`` — an invisible definer lets the value-bound
+    gate's condition-3 exclusivity hold falsely on a live re-taint
+    (``if ((p = src))`` then ``sink(p)``)."""
+
+    def test_assignment_in_if_condition_defines(self):
+        cfg = _build(
+            "void f(char *src) {\n"
+            "  char *p = 0;\n"
+            "  if ((p = src) != 0) { }\n"
+            "  use(p);\n"
+            "}\n",
+        )
+        assert any(
+            "p" in n.defs and n.lineno == 3 for n in cfg.nodes()
+        ), f"{[(n.lineno, n.label, sorted(n.defs)) for n in cfg.nodes()]}"
+
+    def test_assignment_in_while_condition_defines(self):
+        cfg = _build(
+            "void f(int fd) {\n"
+            "  int c;\n"
+            "  while ((c = next(fd)) != -1) { }\n"
+            "}\n",
+        )
+        assert any(
+            "c" in n.defs and n.lineno == 3 for n in cfg.nodes()
+        )
+
+    def test_for_step_update_defines(self):
+        cfg = _build(
+            "void f(int n) {\n"
+            "  for (int i = 0; i < n; i++) { }\n"
+            "}\n",
+        )
+        step_defs = [
+            n for n in cfg.nodes() if "i" in n.defs and "step" in n.label
+        ]
+        init_defs = [n for n in cfg.nodes() if "i" in n.defs]
+        # The induction write must be visible SOMEWHERE beyond the
+        # init declaration; the step node is the expected carrier.
+        assert step_defs or len(init_defs) > 1, (
+            f"{[(n.label, sorted(n.defs)) for n in cfg.nodes()]}"
+        )
+
+    def test_embedded_store_earns_no_assigned_names(self):
+        cfg = _build(
+            "void f(char *src) {\n"
+            "  char *p = 0;\n"
+            "  if ((p = clean(src)) != 0) { }\n"
+            "}\n",
+        )
+        cond = next(n for n in cfg.nodes() if n.lineno == 3)
+        assert "p" in cond.defs
+        assert all(not cs.assigned_names for cs in cond.call_sites)
+
+    def test_condition_without_store_defines_nothing(self):
+        cfg = _build(
+            "void f(int a) {\n"
+            "  if (a != 0) { }\n"
+            "}\n",
+        )
+        cond = next(n for n in cfg.nodes() if n.lineno == 2)
+        assert cond.defs == frozenset()

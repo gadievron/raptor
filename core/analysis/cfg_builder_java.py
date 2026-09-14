@@ -587,13 +587,50 @@ def _payload_from_assignment(expr: Node, resolver):
     return frozenset(calls), defs, frozenset(uses), tuple(css)
 
 
+def _embedded_store_names(n) -> frozenset[str]:
+    """Store-side base names of assignments, updates, and
+    try-with-resources declarators EMBEDDED in an expression subtree
+    (a condition, a for-update, a call argument, a resource clause).
+
+    ``if (flag && (y = x) != null)`` writes ``y``; a payload with
+    ``defs=∅`` makes that definer invisible to reaching-defs, so the
+    value-bound gate's condition-3 exclusivity ("EVERY reaching
+    definer of sink_arg is a sanitizer output") holds falsely and a
+    live re-taint suppresses. Recording the def only (never
+    ``assigned_names`` on a call site) is the refusal direction: the
+    extra definer can break an exclusivity proof but never grants
+    sanitizer-output identity.
+    """
+    if n is None:
+        return frozenset()
+    out: set[str] = set()
+    stack = [n]
+    while stack:
+        cur = stack.pop()
+        if cur.type == _ASSIGNMENT:
+            name = _base_ident(cur.child_by_field_name("left"))
+            if name:
+                out.add(name)
+        elif cur.type == _UPDATE:
+            name = _base_ident(cur)
+            if name:
+                out.add(name)
+        elif cur.type == "resource":
+            name_node = cur.child_by_field_name("name")
+            name = _node_text(name_node) if name_node is not None else None
+            if name:
+                out.add(name)
+        stack.extend(c for c in cur.children if c.is_named)
+    return frozenset(out)
+
+
 def _payload_from_subtree(n, resolver):
     if n is None:
         return frozenset(), frozenset(), frozenset(), ()
     css = _walk_call_sites(n, resolver)
     return (
         frozenset({cs.name for cs in css}),
-        frozenset(),
+        _embedded_store_names(n),
         _walk_uses(n, resolver),
         css,
     )

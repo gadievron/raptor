@@ -612,18 +612,51 @@ def _payload_from_assignment(expr: Node) -> tuple[frozenset[str], frozenset[str]
     return (frozenset(calls_acc), defs, frozenset(uses_acc), tuple(cs_acc))
 
 
+def _embedded_store_names(n) -> frozenset[str]:
+    """Store-side base names of assignments and updates EMBEDDED in
+    an expression subtree (a condition, a for-step, a call argument).
+
+    ``if ((p = malloc(n)))`` / ``while ((c = getc(f)) != EOF)`` write
+    their LHS; a payload with ``defs=∅`` makes that definer invisible
+    to reaching-defs, so the value-bound gate's condition-3
+    exclusivity holds falsely on a live re-taint. Recording the def
+    only (never ``assigned_names``) is the refusal direction: an
+    extra definer can break an exclusivity proof but never grants
+    sanitizer-output identity.
+    """
+    if n is None:
+        return frozenset()
+    out: set[str] = set()
+    stack = [n]
+    while stack:
+        cur = stack.pop()
+        if cur.type == _ASSIGNMENT:
+            name = _innermost_ident(cur.child_by_field_name("left"))
+            if name is not None:
+                out.add(name)
+        elif cur.type == "update_expression":
+            arg = cur.child_by_field_name("argument")
+            name = _innermost_ident(arg) if arg is not None else None
+            if name is not None:
+                out.add(name)
+        stack.extend(c for c in cur.children if c.is_named)
+    return frozenset(out)
+
+
 def _payload_from_subtree(n) -> tuple[frozenset[str], frozenset[str],
                                        frozenset[str], tuple[CallSite, ...]]:
     """Fall-through payload extractor for expression-only statements:
     ``return f(x);``, ``if (cond)``, plain expression statements,
-    switch subjects, etc. No defs (no LHS); every identifier feeds
-    uses; every call_expression feeds call_sites + calls.
+    switch subjects, etc. Defs cover only stores EMBEDDED in the
+    expression (assignment-in-condition, ``i++`` in a for-step — see
+    :func:`_embedded_store_names`); every identifier feeds uses;
+    every call_expression feeds call_sites + calls.
     """
     if n is None:
         return (frozenset(), frozenset(), frozenset(), ())
     return (
         _walk_subtree_for_calls(n),
-        frozenset(),
+        _embedded_store_names(n),
         _walk_subtree_for_uses(n),
         _walk_subtree_for_call_sites(n),
     )

@@ -239,3 +239,67 @@ class TestEnclosingMethod:
     def test_no_spanning_method(self):
         name, header = find_enclosing_method("class T {}", 1, 1)
         assert name is None and header == 0
+
+
+class TestEmbeddedStoreDefs:
+    """Assignments embedded in conditions / for-updates / resource
+    clauses must surface as ``defs`` — an invisible definer lets the
+    value-bound gate's condition-3 exclusivity hold falsely on a live
+    re-taint (``if (flag && (y = x) != null)`` then ``sink(y)``)."""
+
+    def _node_with_def(self, cfg, name):
+        return [n for n in cfg.nodes() if name in n.defs]
+
+    def test_assignment_in_condition_defines(self):
+        cfg, _ = _cfg(
+            "        String y = Encode.forHtml(x);\n"
+            "        if ((y = x) != null) { }\n"
+            "        out.println(y);\n",
+        )
+        definers = self._node_with_def(cfg, "y")
+        assert any(n.label.startswith("if") for n in definers), (
+            f"condition write of y invisible: "
+            f"{[(n.label, sorted(n.defs)) for n in cfg.nodes()]}"
+        )
+
+    def test_assignment_in_condition_earns_no_assigned_names(self):
+        # Refusal direction: the embedded def must not grant
+        # sanitizer-output identity via call-site assigned_names.
+        cfg, _ = _cfg(
+            "        String y = x;\n"
+            "        if ((y = Encode.forHtml(x)) != null) { }\n"
+            "        out.println(y);\n",
+        )
+        cond = next(n for n in cfg.nodes() if n.label.startswith("if"))
+        assert "y" in cond.defs
+        assert all(not cs.assigned_names for cs in cond.call_sites)
+
+    def test_while_assignment_condition_defines(self):
+        cfg, _ = _cfg(
+            "        String line = \"\";\n"
+            "        while ((line = x) != null) { }\n"
+            "        out.println(line);\n",
+        )
+        definers = self._node_with_def(cfg, "line")
+        assert any(n.label.startswith("while") for n in definers)
+
+    def test_for_update_expression_defines(self):
+        cfg, _ = _cfg(
+            "        for (int i = 0; i < 3; i++) { }\n"
+            "        out.println(x);\n",
+            params="String x, java.io.PrintWriter out",
+        )
+        assert any(
+            "i" in n.defs and n.label.startswith("i++")
+            for n in cfg.nodes()
+        ), f"for-update def missing: " \
+           f"{[(n.label, sorted(n.defs)) for n in cfg.nodes()]}"
+
+    def test_condition_without_store_defines_nothing(self):
+        cfg, _ = _cfg(
+            "        String y = Encode.forHtml(x);\n"
+            "        if (y != null) { }\n"
+            "        out.println(y);\n",
+        )
+        cond = next(n for n in cfg.nodes() if n.label.startswith("if"))
+        assert cond.defs == frozenset()
