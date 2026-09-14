@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 
 from core.audit.cost_tracker import PhaseCost, PhaseCostLedger
 
@@ -219,5 +220,18 @@ class TestPhaseWallClock:
 
         calls = ct.phases["review"].calls
         assert calls > 0
-        assert abs(ct.phases["review"].cost_usd - calls * 0.001) < 1e-9
+        # Total-magnitude-scaled closeness: repeated float ``+=``
+        # drift is QUADRATIC in the booking count (measured ~1.7e-8
+        # absolute at 1e6 bookings, ~5.6e-7 at 5e6), so any fixed
+        # epsilon — and any bound linear in calls (crossed near 6e7
+        # bookings) — fails on a loaded runner where the marker loop
+        # runs long enough for the spinning workers to record
+        # millions of bookings. rel_tol = calls * 2**-52 is the
+        # standard recursive-summation error bound (~6x above the
+        # measured drift); one LOST booking stays outside it for any
+        # count the loop can physically reach.
+        assert math.isclose(
+            ct.phases["review"].cost_usd, calls * 0.001,
+            rel_tol=calls * 2**-52, abs_tol=1e-9,
+        )
         assert ct._active_phase is None
