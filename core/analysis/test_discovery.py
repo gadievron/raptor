@@ -19,7 +19,29 @@ logger = logging.getLogger(__name__)
 # ``regress`` covers the OpenBSD/openssh convention (openssh ships a
 # 200+ file ``regress/`` tree; without the pattern the whole suite was
 # invisible to discovery).
-_TEST_DIR_PATTERNS = ("test_", "tests", "test", "spec", "specs", "regress")
+_TEST_DIR_PATTERNS = ("test_", "tests", "test", "testing", "spec",
+                      "specs", "regress")
+
+
+def _dir_matches_test_pattern(part: str) -> bool:
+    """Exact or separator-delimited match against the dir patterns.
+
+    A bare prefix match classified ``special/`` (spec) and
+    ``testimonials/`` (test) as test trees — heuristic FPs that then
+    joined the discovery denominator. Patterns ending in ``_``
+    (``test_``) keep their prefix semantics; the rest match exactly or
+    with a ``_``/``-`` separator (``tests-unit``). ``testing`` joined
+    the list explicitly since it no longer rides the ``test`` prefix.
+    """
+    for pat in _TEST_DIR_PATTERNS:
+        if part == pat:
+            return True
+        if pat.endswith("_"):
+            if part.startswith(pat):
+                return True
+        elif part.startswith((pat + "_", pat + "-")):
+            return True
+    return False
 _TEST_FILE_PATTERNS = re.compile(r"(?:test_\w+|_test)\.\w+$")
 # Languages the extraction heuristics below understand. Test-tree files
 # in other languages are counted and reported as skipped, not silently
@@ -297,8 +319,7 @@ def _find_test_files(target: Path) -> tuple[List[Path], int]:
             continue
 
         is_test_dir = any(
-            any(part.startswith(pat) or part == pat for pat in _TEST_DIR_PATTERNS)
-            for part in parts
+            _dir_matches_test_pattern(part) for part in parts
         )
 
         for fname in files:

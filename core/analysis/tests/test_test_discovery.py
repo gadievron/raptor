@@ -350,3 +350,17 @@ class TestHostileTreeRobustness:
         assert files == []
         assert not any("node_modules" in v and v != str(tmp_path)
                        for v in visited if "node_modules" in v.split(_os.sep)[1:])
+
+
+class TestDirPatternBoundaries:
+    def test_lookalike_dirs_are_not_test_trees(self):
+        from core.analysis.test_discovery import _dir_matches_test_pattern
+        for part in ("special", "testimonials", "spectrum",
+                     "testament"):
+            assert not _dir_matches_test_pattern(part), part
+
+    def test_real_test_dirs_still_match(self):
+        from core.analysis.test_discovery import _dir_matches_test_pattern
+        for part in ("tests", "test", "testing", "test_unit",
+                     "tests-integration", "spec", "specs", "regress"):
+            assert _dir_matches_test_pattern(part), part
