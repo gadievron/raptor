@@ -296,3 +296,39 @@ def test_destructured_require_resolves(tmp_path):
         npm_symbol_map={deps[0].key(): ["get"]},
     )
     assert out[deps[0].key()].verdict == "likely_called"
+
+
+def test_alias_dep_real_name_call_still_seen(tmp_path):
+    """A dual-declared dep (name="lodash", alias_name="my-lodash")
+    whose source calls the REAL spelling must not be downgraded —
+    both spellings are queried and the strongest verdict wins."""
+    target = _project(
+        tmp_path,
+        "import lodash from 'lodash';\nlodash.get(obj, 'k');\n",
+    )
+    from dataclasses import replace
+    dep = replace(_dep("lodash"), alias_name="my-lodash")
+    out: Dict[str, Reachability] = {dep.key(): _imported()}
+    refine_npm_verdicts(
+        [dep], out,
+        target=target,
+        npm_symbol_map={dep.key(): ["get"]},
+    )
+    assert out[dep.key()].verdict == "likely_called"
+
+
+def test_alias_dep_alias_spelling_call_still_seen(tmp_path):
+    """The alias spelling keeps working after the both-spellings fix."""
+    target = _project(
+        tmp_path,
+        "import ml from 'my-lodash';\nml.get(obj, 'k');\n",
+    )
+    from dataclasses import replace
+    dep = replace(_dep("lodash"), alias_name="my-lodash")
+    out: Dict[str, Reachability] = {dep.key(): _imported()}
+    refine_npm_verdicts(
+        [dep], out,
+        target=target,
+        npm_symbol_map={dep.key(): ["get"]},
+    )
+    assert out[dep.key()].verdict != "not_function_reachable"

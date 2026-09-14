@@ -124,24 +124,47 @@ def refine_npm_verdicts(
             return
 
     from core.analysis.reachability import (
+        ReachabilityResult,
         Verdict,
         function_called,
     )
 
+    # Prefer-stronger ordering for combining one function's verdicts
+    # across candidate name spellings (mirrors the PyPI tier): any
+    # CALLED wins outright, else any UNCERTAIN, and NOT_CALLED only
+    # when every spelling came back not-called.
+    strength = {Verdict.NOT_CALLED: 0, Verdict.UNCERTAIN: 1, Verdict.CALLED: 2}
+
     for d in candidates:
         funcs = npm_symbol_map[d.key()]
-        paired = []
+        paired: list[tuple[str, ReachabilityResult]] = []
+        # An aliased dep is importable under BOTH spellings: the
+        # alias (``require("my-lodash")``) via the manifest mapping
+        # AND the real name (``require("lodash")``) when tooling or
+        # a dual declaration resolves it directly — the module-level
+        # orchestrator already checks both.  Querying only one
+        # spelling here produced a high-confidence
+        # ``not_function_reachable`` downgrade on functions the
+        # project genuinely calls under the other spelling.
+        names = list(dict.fromkeys(
+            n for n in (d.alias_name, d.name) if n
+        ))
         for fn in funcs:
-            # Source references an aliased dep by its ALIAS spelling
-            # (``require("my-lodash").fn``) — qualify with the name
-            # the project's code actually uses.
-            qualified = _qualified_name(d.alias_name or d.name, fn)
-            if qualified is None:
-                continue
-            try:
-                paired.append((fn, function_called(inventory, qualified)))
-            except ValueError:
-                continue
+            best: ReachabilityResult | None = None
+            for name in names:
+                qualified = _qualified_name(name, fn)
+                if qualified is None:
+                    continue
+                try:
+                    r = function_called(inventory, qualified)
+                except ValueError:
+                    continue
+                if best is None or strength[r.verdict] > strength[best.verdict]:
+                    best = r
+                if best.verdict == Verdict.CALLED:
+                    break
+            if best is not None:
+                paired.append((fn, best))
 
         if not paired:
             continue
