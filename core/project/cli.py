@@ -1938,7 +1938,7 @@ def _handle_settings(mgr, args: argparse.Namespace) -> None:
 
 def _handle_threat_model(mgr, args: argparse.Namespace) -> None:
     """Create, show, export, or resync a project's threat-model artefact."""
-    from core.json import load_json, save_json
+    from core.json import load_json
     from core.threat_model import (
         blank_for_project,
         diff_context_map,
@@ -1996,9 +1996,8 @@ def _handle_threat_model(mgr, args: argparse.Namespace) -> None:
                 return
         model = from_context_map(project, context_map) if context_map else blank_for_project(project)
         save_model(model, json_path, markdown_path)
-        project.threat_model_path = str(json_path)
-        project.threat_model_updated = model.updated_at
-        save_json(mgr.projects_dir / f"{name}.json", project.to_dict())
+        mgr.update_threat_model_stamp(
+            name, updated_at=model.updated_at, path=str(json_path))
         print(_green(f"Threat model initialised for '{name}'"))
         print(f"  json:     {json_path}")
         print(f"  markdown: {markdown_path}")
@@ -2070,15 +2069,14 @@ def _handle_threat_model(mgr, args: argparse.Namespace) -> None:
         except RuntimeError as e:
             print(_red(f"Save refused (concurrent writer?): {e}"))
             return
-        project.threat_model_updated = model.updated_at
-        save_json(mgr.projects_dir / f"{name}.json", project.to_dict())
+        mgr.update_threat_model_stamp(name, updated_at=model.updated_at)
         print(f"  {field}: {len(current)} entries")
         return
 
     if args.action == "sync":
         markdown_path.write_text(render_markdown(model), encoding="utf-8")
-        project.threat_model_updated = datetime.now(timezone.utc).isoformat()
-        save_json(mgr.projects_dir / f"{name}.json", project.to_dict())
+        mgr.update_threat_model_stamp(
+            name, updated_at=datetime.now(timezone.utc).isoformat())
         print(_green(f"Threat model markdown synced: {markdown_path}"))
         return
 

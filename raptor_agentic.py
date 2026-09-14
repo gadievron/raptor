@@ -411,9 +411,15 @@ def _materialise_threat_model_phase(
 
     if mgr is not None and hasattr(project, "name") and hasattr(project, "to_dict"):
         try:
-            project.threat_model_path = str(json_path)
-            project.threat_model_updated = model.updated_at
-            save_json(mgr.projects_dir / f"{project.name}.json", project.to_dict())
+            # RMW mutator, never a full-dict save of a stale snapshot:
+            # this pass runs AFTER long context-map work, and a bare
+            # save_json here resurrected trust markers removed (and
+            # dropped settings written) in the meantime.
+            mgr.update_threat_model_stamp(
+                project.name,
+                updated_at=model.updated_at,
+                path=str(json_path),
+            )
         except Exception as e:  # noqa: BLE001
             logger.debug("Threat model project metadata update skipped: %s", e)
 

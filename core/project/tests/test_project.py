@@ -611,3 +611,41 @@ class TestProjectManager(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestThreatModelStampRMW(unittest.TestCase):
+    def test_stamp_does_not_clobber_concurrent_trust_write(self):
+        # The threat-model actions load a project snapshot BEFORE
+        # potentially long work; persisting the whole snapshot at the
+        # end re-wrote the trust dict as of load time — a trust
+        # marker removed in the meantime silently resurrected (trust
+        # markers gate repo-trust witnesses). The RMW mutator reloads
+        # under the same lock every other registry mutator uses.
+        with TemporaryDirectory() as td:
+            mgr = ProjectManager(Path(td) / "projects")
+            mgr.create("p1", td, resolve_target=False)
+            mgr.set_trust_marker("p1", "config")
+            # Simulate the stale-snapshot writer: a concurrent
+            # operator removes the marker mid-flight...
+            mgr.clear_trust_marker("p1", "config")
+            # ...then the threat-model pass stamps its fields.
+            mgr.update_threat_model_stamp(
+                "p1", updated_at="2026-01-01T00:00:00+00:00",
+                path="/x/tm.json",
+            )
+            fresh = mgr.load("p1")
+            self.assertEqual(fresh.threat_model_path, "/x/tm.json")
+            self.assertEqual(
+                fresh.threat_model_updated, "2026-01-01T00:00:00+00:00")
+            self.assertFalse(fresh.trust)  # marker stays removed
+
+    def test_stamp_without_path_keeps_existing_path(self):
+        with TemporaryDirectory() as td:
+            mgr = ProjectManager(Path(td) / "projects")
+            mgr.create("p2", td, resolve_target=False)
+            mgr.update_threat_model_stamp(
+                "p2", updated_at="t1", path="/x/tm.json")
+            mgr.update_threat_model_stamp("p2", updated_at="t2")
+            fresh = mgr.load("p2")
+            self.assertEqual(fresh.threat_model_path, "/x/tm.json")
+            self.assertEqual(fresh.threat_model_updated, "t2")

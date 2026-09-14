@@ -1421,6 +1421,29 @@ class ProjectManager:
                 self._save(project)
         return removed
 
+    def update_threat_model_stamp(
+        self, name: str, *, updated_at: str, path: str | None = None,
+    ) -> Project:
+        """RMW update of the threat-model registry fields.
+
+        The threat-model CLI actions and the /agentic threat-model
+        pass previously persisted a project snapshot loaded BEFORE
+        potentially long context-map work with a bare full-dict
+        save_json: racing ``/project untrust`` re-persisted the
+        snapshot's trust dict — a just-removed trust marker silently
+        resurrected (trust markers gate repo-trust witnesses) — and
+        racing ``set``/``binary add`` dropped that write wholesale.
+        Same RMW lock discipline as every other registry mutator; only
+        the threat-model fields are touched.
+        """
+        with self._mutation_lock(name):
+            project = self._load_or_raise(name)
+            if path is not None:
+                project.threat_model_path = path
+            project.threat_model_updated = updated_at
+            self._save(project)
+        return project
+
     def update_notes(self, name: str, notes: str) -> Project:
         """Update project notes.
 
