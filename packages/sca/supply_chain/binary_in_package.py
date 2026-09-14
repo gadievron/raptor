@@ -605,20 +605,17 @@ def _closest_manifest(
     manifests: Sequence[Manifest],
 ) -> Manifest | None:
     """Return the manifest whose directory most closely dominates
-    ``path``.  None when no manifest dominates."""
-    best_depth = -1
-    best: Manifest | None = None
-    for m in manifests:
-        m_dir = m.path.parent.resolve()
-        try:
-            path.resolve().relative_to(m_dir)
-        except ValueError:
-            continue
-        depth = len(m_dir.parts)
-        if depth > best_depth:
-            best = m
-            best_depth = depth
-    return best
+    ``path``.  None when no manifest dominates.
+
+    Delegates to the SHARED dominance resolver so this detector and
+    the tree-walking placeholder anchors produce the same manifest
+    for the same path — the composite chokepoint's cross-family
+    pairs key per manifest, and a divergent local rule (this copy
+    historically did not skip lockfiles) let placeholder-keyed
+    pairs split on ``declared_in`` when a lockfile sorted first at
+    equal depth."""
+    from ._closest_manifest import closest_manifest
+    return closest_manifest(manifests, path)
 
 
 def _placeholder_dep(target: Path) -> Dependency:

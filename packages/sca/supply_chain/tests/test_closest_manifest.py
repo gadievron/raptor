@@ -88,3 +88,38 @@ def test_rel_to_target_inside_and_outside(tmp_path: Path) -> None:
     assert rel_to_target(inside, tmp_path) == Path("a/b.py")
     outside = Path("/somewhere/else/b.py")
     assert rel_to_target(outside, tmp_path) == outside
+
+
+def test_sibling_manifest_does_not_win(tmp_path: Path) -> None:
+    """Dominance, not longest-common-prefix: a deep manifest in a
+    SIBLING directory must not out-anchor the root manifest for a
+    file it does not dominate."""
+    root = _manifest(tmp_path / "package.json")
+    sibling = _manifest(
+        tmp_path / "a" / "b" / "c" / "d" / "package.json",
+    )
+    flagged = tmp_path / "a" / "b" / "c" / "f"
+    assert closest_manifest([root, sibling], flagged) is root
+    assert closest_manifest([sibling, root], flagged) is root
+
+
+def test_non_dominating_manifests_return_none(tmp_path: Path) -> None:
+    only = _manifest(tmp_path / "sub" / "package.json")
+    flagged = tmp_path / "elsewhere" / "payload"
+    assert closest_manifest([only], flagged) is None
+
+
+def test_binary_in_package_resolver_skips_lockfiles(
+    tmp_path: Path,
+) -> None:
+    """The binary detector's resolver delegates to the shared one —
+    a lockfile at equal-or-deeper depth must not become the anchor
+    (placeholder-keyed composite pairs split on declared_in)."""
+    from packages.sca.supply_chain.binary_in_package import (
+        _closest_manifest as bip_closest,
+    )
+    lock = _manifest(tmp_path / "sub" / "package-lock.json",
+                     is_lockfile=True)
+    root = _manifest(tmp_path / "package.json")
+    flagged = tmp_path / "sub" / "payload.bin"
+    assert bip_closest(flagged, [lock, root]) is root

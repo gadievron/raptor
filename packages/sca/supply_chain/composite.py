@@ -26,6 +26,22 @@ What this layer must defend against:
     hosted findings from tree-walking detectors key on their
     anchoring manifest instead — see :func:`_dep_key`.)
 
+  * **Composite-evasion by MANIFEST fragmentation** — placeholder-
+    hosted findings from tree-walking detectors key on their
+    anchoring manifest, so an attacker can commit a nested decoy
+    manifest (``bin/package.json`` with a different name) next to
+    the binary / egress payload while the hook stays declared in the
+    root manifest: the two legs anchor to different manifests and
+    the HOOK+BINARY / HOOK+EGRESS pair never co-fires.  Partial
+    defence: every anchor consumer resolves through ONE shared
+    dominance-based, lockfile-skipping resolver
+    (``_closest_manifest``), so at least identical paths can never
+    split keys via resolver drift.  RESIDUAL (documented): the decoy
+    re-anchor itself still works when the flagged files genuinely
+    live under different manifest directories; the standalone
+    per-detector findings (e.g. ``intree_has_binary``'s medium)
+    still fire, so the signal degrades rather than disappears.
+
   * **Family-map gaps used to slip findings past the chokepoint** —
     a finding kind we don't classify gets no family and no
     contribution to a composite.  Defence: enumerate all
