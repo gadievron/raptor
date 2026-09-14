@@ -123,6 +123,37 @@ class TestSinkEntrypoints:
         assert val["chain"][1] == 7
         _assert_redacted_at_rest(sc_path)
 
+    def test_secret_as_dict_key_redacted(self, scorecard, sc_path):
+        """Dict KEYS join the pass at every nesting level: a
+        secret-bearing string used as a key (an LLM-echoed header
+        dict riding a model-derived sample tree) reaches json.dump
+        just as well as a value — keys were the one shape that
+        skipped redaction."""
+        scorecard.record_event(
+            "agentic:r1", "m1", "cheap_short_circuit", "incorrect",
+            sample={"this_reasoning": {
+                "headers": {f"x-api-key: {SECRET}": "present"},
+            }},
+        )
+        _assert_redacted_at_rest(sc_path)
+
+    def test_legit_keys_preserved(self, scorecard, sc_path):
+        """Both directions: ordinary key names survive the key pass
+        byte-identical — consumers address samples by key."""
+        scorecard.record_event(
+            "agentic:r1", "m1", "cheap_short_circuit", "incorrect",
+            sample={"this_reasoning": {
+                "chain": {"quote": f"key {SECRET}", "step": 1},
+            }},
+        )
+        data = json.loads(sc_path.read_text())
+        cell = data["models"]["m1"]["agentic:r1"]
+        val = cell["disagreement_samples"][0]["this_reasoning"]
+        assert set(val.keys()) == {"chain"}
+        assert set(val["chain"].keys()) == {"quote", "step"}
+        assert val["chain"]["step"] == 1
+        _assert_redacted_at_rest(sc_path)
+
     def test_exotic_type_coerced_and_redacted(self, scorecard, sc_path):
         """A non-JSON type is str-coerced then redacted — the
         fail-safe direction; type can never bypass the pass."""

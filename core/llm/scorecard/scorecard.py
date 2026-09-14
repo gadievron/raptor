@@ -373,7 +373,17 @@ def _redact_tree(v: object) -> object:
     if isinstance(v, str):
         return redact_secrets(v)
     if isinstance(v, dict):
-        return {k: _redact_tree(x) for k, x in v.items()}
+        # Keys join the pass too: a secret-bearing string used as a
+        # dict key (an LLM-echoed header dict riding a model-derived
+        # sample tree) reaches json.dump just as well as a value —
+        # keys were the one shape that skipped redaction. Non-str
+        # keys pass through: they carry no text and str-coercing
+        # them would corrupt the shape on reload.
+        return {
+            (redact_secrets(k) if isinstance(k, str) else k):
+                _redact_tree(x)
+            for k, x in v.items()
+        }
     if isinstance(v, (list, tuple)):
         return [_redact_tree(x) for x in v]
     if v is None or isinstance(v, (int, float, bool)):
