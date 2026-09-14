@@ -496,6 +496,9 @@ def resolve_scc_summaries(
     Returns the number of new rules propagated.
     """
     total_new = 0
+    # Set view: membership runs per edge per iteration; list
+    # membership made the loop O(edges x |scc|).
+    scc_set = set(scc)
 
     for _iteration in range(max_iterations):
         round_new = 0
@@ -504,7 +507,7 @@ def resolve_scc_summaries(
             callee_file = edge.get("callee_file") or edge.get("caller_file", "")
             callee_key = f"{callee_file}:{edge.get('callee', '')}"
 
-            if caller_key not in scc or callee_key not in scc:
+            if caller_key not in scc_set or callee_key not in scc_set:
                 continue
             if caller_key not in summaries or callee_key not in summaries:
                 continue
