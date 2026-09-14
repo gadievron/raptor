@@ -138,6 +138,8 @@ _REPORT_WRITER_FILES = (
     "packages/llm_analysis/patch_gate.py",
     "libexec/raptor-review",
     "libexec/raptor-annotate",
+    "libexec/raptor-coverage-summary",
+    "libexec/raptor-llm-ask",
 )
 
 

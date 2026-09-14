@@ -279,3 +279,28 @@ class TestBoundedReads:
             assert "max_bytes" in call, (
                 f"uncapped load_json call: load_json({call})"
             )
+
+
+def test_gaps_output_scrubs_hostile_target_names(tmp_path):
+    # File/function names come from the SCANNED target's checklist --
+    # a hostile repo controls those bytes; the gaps listing prints
+    # straight to the operator's terminal and must escape ESC/BEL.
+    d = tmp_path / "scan-evil"
+    d.mkdir()
+    (d / ".raptor-run.json").write_text("{}")
+    evil_file = "evil\x1b]0;pwn\x07.c"
+    (d / "checklist.json").write_text(json.dumps({"files": [
+        {"path": evil_file, "lines": 100, "items": [
+            {"name": "f\x1b[2J1", "line_start": 0, "line_end": 20},
+        ]}]}))
+    (d / "coverage-semgrep.json").write_text(json.dumps(
+        {"tool": "semgrep", "files_examined": [evil_file],
+         "timestamp": "t"}))
+    r = _run(str(d), "--gaps")
+    assert r.returncode == 0, r.stderr
+    assert "\x1b" not in r.stdout and "\x07" not in r.stdout
+    assert "pwn" in r.stdout  # content survives, escaped
+
+    r2 = _run(str(d), "--store")
+    assert r2.returncode == 0, r2.stderr
+    assert "\x1b" not in r2.stdout and "\x07" not in r2.stdout

@@ -47,6 +47,7 @@ if not (os.environ.get("CLAUDECODE")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 from core.json import dumps_display, load_json  # noqa: E402
+from core.security.log_sanitisation import escape_nonprintable  # noqa: E402
 
 # --json-schema files are small hand-written schemas.
 _MAX_SCHEMA_BYTES = 8 * 1024 * 1024
@@ -263,7 +264,11 @@ def main() -> int:
                 system_prompt=system_prompt,
                 **kwargs,
             )
-            print(response.content)
+            # The model can be induced (e.g. by --file context it is
+            # asked to echo) to emit terminal escape sequences; the
+            # JSON lane is safe (dumps escapes control chars), the
+            # free-text lane must scrub before hitting the terminal.
+            print(escape_nonprintable(response.content, preserve_newlines=True))
             if args.debug:
                 print(f"\n--- model={response.model} "
                       f"provider={response.provider} "
