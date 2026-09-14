@@ -177,6 +177,10 @@ def _is_under_root(source_root: Path, candidate: str) -> bool:
         return False
 
 
+#: See the rejection comment in _resolve_uri.
+_MAX_URI_COMPONENTS = 256
+
+
 def _resolve_uri(
     uri: str,
     source_root: Path,
@@ -200,6 +204,22 @@ def _resolve_uri(
 
     parts = Path(clean).parts
     if not parts:
+        return None
+    # Component cap before the depth loop: each iteration resolves a
+    # path of O(N) components, so an N-component URI costs O(N²) —
+    # measured 62s at 8000 components (~16 KB of SARIF text), and the
+    # 100 MiB document cap admits URIs thousands of times larger. No
+    # legitimate source tree approaches this depth; a hostile imported
+    # SARIF must not wedge /agentic --sarif for hours. Trade-off, both
+    # directions: too low rejects deep-but-real vendored trees (Linux
+    # peaks around depth ~20); too high re-opens the quadratic wedge.
+    # 256 sits an order of magnitude above real trees while bounding
+    # the loop at sub-second cost.
+    if len(parts) > _MAX_URI_COMPONENTS:
+        logger.debug(
+            "URI rejected: %d path components exceeds the %d cap",
+            len(parts), _MAX_URI_COMPONENTS,
+        )
         return None
 
     if depth_cache[0] is not None:

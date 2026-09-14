@@ -1168,3 +1168,28 @@ class TestUntrustedTreeHardening:
         (tmp_path / "ok.c").write_text("line1\nline2\nline3\n")
         snippet = _synthesize_snippet(tmp_path, "ok.c", 2, 2)
         assert "line2" in snippet
+
+
+class TestResolveUriComponentCap:
+    def test_pathological_uri_rejected_fast(self, tmp_path):
+        # O(N^2) resolution: 8000 components measured ~62s pre-fix.
+        # The cap must reject far past-cap URIs in well under a
+        # second (structural bound: the loop never starts).
+        import time as _time
+
+        root = _source_tree(tmp_path)
+        evil = "/".join(["d"] * 5000) + "/x.c"
+        findings = [_make_finding(file=evil)]
+        t0 = _time.monotonic()
+        result = normalize_imported_findings(findings, root)
+        elapsed = _time.monotonic() - t0
+        assert result.stats.findings_skipped == 1
+        assert elapsed < 5.0, f"component cap did not bound the loop ({elapsed:.1f}s)"
+
+    def test_deep_but_real_paths_still_resolve(self, tmp_path):
+        # Two-direction: a deep-but-plausible prefix strips fine.
+        root = _source_tree(tmp_path)
+        prefixed = "/".join(["ci", "build", "workspace", "src"]) + "/main.c"
+        findings = [_make_finding(file=prefixed)]
+        result = normalize_imported_findings(findings, root)
+        assert result.stats.total_imported == 1
