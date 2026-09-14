@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -174,7 +175,7 @@ def main(
         return 3
 
     summary, exit_code = _verdict(delta, severity_floor=args.fail_on_severity,
-                                  applied=applied)
+                                  applied=applied, overlay_root=overlay_dir)
     delta_md = _render_markdown(target, proposed, applied, delta, summary)
     from ._atomic import atomic_write_text
     atomic_write_text(out_dir / "delta.md", delta_md)
@@ -244,23 +245,33 @@ def _resolve_out(explicit: str | None) -> Path:
 def _copy_target(src: Path, dst: Path) -> None:
     """Mirror the target into ``dst``, skipping vendored / build dirs.
 
-    ``shutil.copytree(..., ignore=...)`` would be neat but its ``ignore``
-    callback sees lists of names and we want a name-based predicate; the
-    direct walk is simpler and lets us handle symlinks the same way
-    discovery does (don't follow).
+    Walks with ``os.walk(..., followlinks=False)`` — NOT ``rglob``:
+    before Python 3.13 ``Path.rglob`` recurses THROUGH directory
+    symlinks, so a hostile repo's ``docs -> ~/.ssh`` link pulled
+    operator files into the overlay (which is then scanned and lands
+    in delta artifacts); a cyclic symlink additionally recursed
+    unboundedly. Files are copied through the resolvers' lstat-gated,
+    size-bounded ``copy_regular_file`` so symlinked / non-regular /
+    oversized entries are refused with a log line instead of followed.
     """
+    from .resolvers._safe_io import copy_regular_file
+
     dst.mkdir(parents=True, exist_ok=False)
     src = src.resolve()
-    for path in src.rglob("*"):
-        if any(part in _SKIP_DIR_NAMES for part in path.relative_to(src).parts):
-            continue
-        target_path = dst / path.relative_to(src)
-        if path.is_dir() and not path.is_symlink():
-            target_path.mkdir(parents=True, exist_ok=True)
-        elif path.is_file() and not path.is_symlink():
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, target_path)
-        # symlinks: skip (we don't want to follow)
+    for dirpath, dirnames, filenames in os.walk(src, followlinks=False):
+        # In-place prune: neither descends into nor recreates the
+        # vendored/build dirs. Symlinked directories are listed in
+        # ``dirnames`` but never walked (followlinks=False) and never
+        # recreated (only walked dirpaths get a mkdir below).
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIR_NAMES]
+        cur = Path(dirpath)
+        target_dir = dst / cur.relative_to(src)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for fn in filenames:
+            path = cur / fn
+            if path.is_symlink():
+                continue        # never follow, silently (matches discovery)
+            copy_regular_file(path, target_dir / fn)
 
 
 def _apply_overlay(proposed: Path, overlay: Path) -> list[Path]:
@@ -286,6 +297,7 @@ def _apply_overlay(proposed: Path, overlay: Path) -> list[Path]:
 
 def _verdict(
     delta, *, severity_floor: str, applied: list[Path] | None = None,
+    overlay_root: Path | None = None,
 ) -> tuple[dict[str, Any], int]:
     floor = severity_rank(severity_floor)
     triggering = [
@@ -302,7 +314,8 @@ def _verdict(
     # the open advisories — the documented exit-1 contract. Persistent
     # findings in files the patch never touched don't gate (a targeted
     # ``fix --fix=<adv>`` must not fail on unrelated backlog).
-    not_cleared = _not_cleared_in_applied(persistent_above, applied)
+    not_cleared = _not_cleared_in_applied(
+        persistent_above, applied, overlay_root=overlay_root)
     summary = {
         "resolved": len(delta.resolved),
         "new": len(delta.new),
@@ -319,20 +332,35 @@ def _verdict(
 
 def _not_cleared_in_applied(
     rows: list[dict[str, Any]], applied: list[Path] | None,
+    *, overlay_root: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Subset of ``rows`` whose ``file`` is one of the overlaid
     (patched) relative paths. Finding rows carry overlay-absolute
-    paths; ``applied`` carries proposed/-relative paths — match on
-    the relative suffix."""
+    paths; ``applied`` carries proposed/-relative paths — relativise
+    the row path against the overlay root and require EXACT set
+    membership. A basename/suffix match here false-failed targeted
+    ``fix --fix=<adv>`` runs on any monorepo where an untouched
+    manifest's overlay path merely ends with a patched one's relative
+    path (``x/sub/package.json`` vs applied ``sub/package.json``)."""
     if not applied:
         return []
     rels = {str(p) for p in applied}
+    root = overlay_root.resolve() if overlay_root is not None else None
     out: list[dict[str, Any]] = []
     for r in rows:
         f = r.get("file")
         if not isinstance(f, str):
             continue
-        if any(f == rel or f.endswith("/" + rel) for rel in rels):
+        rel = f
+        if root is not None:
+            try:
+                rel = str(Path(f).resolve().relative_to(root))
+            except (ValueError, OSError):
+                # Row path outside the overlay (or already relative
+                # and unresolvable against it): fall through to the
+                # exact-string check below.
+                rel = f
+        if rel in rels:
             out.append(r)
     return out
 

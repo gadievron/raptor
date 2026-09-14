@@ -144,6 +144,7 @@ def test_verdict_persistent_outside_patched_files_is_clean() -> None:
     )
     summary, exit_code = verify._verdict(
         delta, severity_floor="low", applied=[Path("package.json")],
+        overlay_root=Path("/overlay"),
     )
     assert exit_code == 0
     assert summary["persistent_above_threshold"] == 1
@@ -164,6 +165,7 @@ def test_verdict_persistent_in_patched_file_exits_nonzero() -> None:
     )
     summary, exit_code = verify._verdict(
         delta, severity_floor="high", applied=[Path("requirements.txt")],
+        overlay_root=Path("/overlay"),
     )
     assert exit_code == 1
     assert summary["not_cleared_above_threshold"] == 1
@@ -329,3 +331,83 @@ def test_row_line_neutralises_hostile_findings_fields() -> None:
     # backslash-escaped).
     import re
     assert len(re.findall(r"(?<!\\)\|", line)) == 5
+
+
+# ---------------------------------------------------------------------------
+# _not_cleared_in_applied — exact join, no suffix false positives
+# ---------------------------------------------------------------------------
+
+def test_verdict_suffix_sharing_manifest_does_not_false_fail() -> None:
+    """A monorepo manifest whose overlay path merely ENDS with a
+    patched file's relative path must not read as 'not cleared' — the
+    old suffix match false-failed targeted fix --fix=<adv> runs."""
+    from types import SimpleNamespace
+    delta = SimpleNamespace(
+        new=[],
+        resolved=[],
+        persistent=[
+            # Untouched sibling: other/sub/package.json — suffix of
+            # the applied rel path 'sub/package.json'.
+            {"severity": "high", "id": "OLD-001",
+             "file": "/overlay/other/sub/package.json"},
+        ],
+        suppression_added=[],
+        suppression_lifted=[],
+    )
+    summary, exit_code = verify._verdict(
+        delta, severity_floor="high",
+        applied=[Path("sub/package.json")],
+        overlay_root=Path("/overlay"),
+    )
+    assert exit_code == 0
+    assert summary["not_cleared_above_threshold"] == 0
+    # The genuinely patched manifest still gates.
+    delta.persistent = [{"severity": "high", "id": "OLD-001",
+                         "file": "/overlay/sub/package.json"}]
+    summary, exit_code = verify._verdict(
+        delta, severity_floor="high",
+        applied=[Path("sub/package.json")],
+        overlay_root=Path("/overlay"),
+    )
+    assert exit_code == 1
+    assert summary["not_cleared_above_threshold"] == 1
+
+
+# ---------------------------------------------------------------------------
+# _copy_target — never follows symlinks (directory or file)
+# ---------------------------------------------------------------------------
+
+def test_copy_target_does_not_follow_directory_symlinks(
+    tmp_path: Path,
+) -> None:
+    """A hostile repo's symlinked directory must not pull outside
+    files into the overlay (pre-3.13 Path.rglob recursed THROUGH
+    directory symlinks; os.walk(followlinks=False) never does)."""
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "id_ed25519").write_text("SECRET", encoding="utf-8")
+    target = tmp_path / "repo"
+    target.mkdir()
+    (target / "requirements.txt").write_text("requests==2.0.0\n",
+                                             encoding="utf-8")
+    (target / "docs").symlink_to(victim, target_is_directory=True)
+    (target / "link.txt").symlink_to(victim / "id_ed25519")
+
+    dst = tmp_path / "overlay"
+    verify._copy_target(target, dst)
+
+    copied = {str(p.relative_to(dst)) for p in dst.rglob("*")}
+    assert "requirements.txt" in copied
+    assert not any("id_ed25519" in c for c in copied), copied
+    assert "docs" not in copied and "link.txt" not in copied
+
+
+def test_copy_target_survives_cyclic_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "repo"
+    target.mkdir()
+    (target / "loop").symlink_to(target, target_is_directory=True)
+    (target / "package.json").write_text("{}", encoding="utf-8")
+    dst = tmp_path / "overlay"
+    verify._copy_target(target, dst)          # must terminate
+    assert (dst / "package.json").exists()
+    assert not (dst / "loop").exists()
