@@ -169,15 +169,18 @@ def resolve_default_target() -> str | None:
     resolved target path or None if neither signal is present — the
     caller is expected to error or prompt.
 
-    Sanity gate: when the active project's target is scratch/volatile
+    Sanity gate: when the resolved default — the active project's
+    target OR the ``RAPTOR_CALLER_DIR`` back-fill — is scratch/volatile
     (the system temp dir itself, nonexistent, or an empty directory —
-    e.g. a stale machine-generated corpus project pointing at /tmp),
-    the DEFAULT resolution refuses with a loud banner and returns None
-    instead of silently steering the run at scratch space. The caller
-    then asks the operator (interactive sessions confirm via the
-    documented structured prompt; non-interactive sessions stop). An
-    EXPLICIT target path always bypasses this gate — it only guards
-    the implicit default.
+    e.g. a stale machine-generated corpus project pointing at /tmp, or
+    a launcher started from /tmp), the DEFAULT resolution refuses with
+    a loud banner and returns None instead of silently steering the
+    run at scratch space. The caller then asks the operator
+    (interactive sessions confirm via the documented structured
+    prompt; non-interactive sessions stop). An EXPLICIT target path
+    always bypasses this gate — it only guards the implicit default;
+    the gate exists precisely for scratch/volatile targets steering
+    runs, whichever layer supplies them.
     """
     active = _resolve_active_project()
     if active is not None:
@@ -198,7 +201,22 @@ def resolve_default_target() -> str | None:
             return None
         return project_target
     env = os.environ.get("RAPTOR_CALLER_DIR")
-    return env or None
+    if not env:
+        return None
+    reason = volatile_target_reason(env)
+    if reason:
+        banner = (
+            f"REFUSING default target: RAPTOR_CALLER_DIR points at "
+            f"{env}, which {reason}. Not steering a no-path command "
+            f"at scratch space.\n"
+            f"  To proceed anyway: pass the target path explicitly.\n"
+            f"  To fix the session: re-launch from the target "
+            f"directory, or /project use <project>"
+        )
+        logger.warning("%s", banner)
+        print(banner, file=sys.stderr)
+        return None
+    return env
 
 
 def get_output_dir(command: str, target_name: str = "",

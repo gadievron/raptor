@@ -92,13 +92,48 @@ class TestResolveDefaultTargetGate:
         ):
             assert resolve_default_target() == str(tmp_path)
 
-    def test_no_project_falls_back_to_caller_dir(self, monkeypatch):
-        monkeypatch.setenv("RAPTOR_CALLER_DIR", "/callers/dir")
+    def test_no_project_falls_back_to_caller_dir(
+        self, tmp_path, monkeypatch,
+    ):
+        caller = tmp_path / "checkout"
+        caller.mkdir()
+        (caller / "main.c").write_text("int main(void){}\n")
+        monkeypatch.setenv("RAPTOR_CALLER_DIR", str(caller))
         with patch(
             "core.run.output._resolve_active_project",
             return_value=None,
         ):
-            assert resolve_default_target() == "/callers/dir"
+            assert resolve_default_target() == str(caller)
+
+    def test_volatile_caller_dir_refused_with_banner(
+        self, capsys, monkeypatch,
+    ):
+        # The gate exists for scratch/volatile targets steering runs —
+        # the caller-dir back-fill layer gets the same refusal as the
+        # project layer (a launcher started from /tmp must not steer a
+        # no-path command at the temp root).
+        monkeypatch.setenv("RAPTOR_CALLER_DIR", "/tmp")
+        with patch(
+            "core.run.output._resolve_active_project",
+            return_value=None,
+        ):
+            assert resolve_default_target() is None
+        err = capsys.readouterr().err
+        assert "REFUSING default target" in err
+        assert "RAPTOR_CALLER_DIR" in err
+        assert "/tmp" in err
+        assert "explicitly" in err
+
+    def test_nonexistent_caller_dir_refused(
+        self, tmp_path, capsys, monkeypatch,
+    ):
+        monkeypatch.setenv("RAPTOR_CALLER_DIR", str(tmp_path / "gone"))
+        with patch(
+            "core.run.output._resolve_active_project",
+            return_value=None,
+        ):
+            assert resolve_default_target() is None
+        assert "does not exist" in capsys.readouterr().err
 
     def test_nonexistent_project_target_refused(
         self, tmp_path, capsys,

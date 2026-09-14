@@ -264,10 +264,14 @@ class TestResolveDefaultTarget(unittest.TestCase):
                                      str(target))
 
     def test_falls_back_to_caller_dir_when_no_project(self):
-        with _NO_SYMLINK:
-            with patch.dict(os.environ,
-                            {"RAPTOR_CALLER_DIR": "/path/from/env"}):
-                self.assertEqual(resolve_default_target(), "/path/from/env")
+        # A real, populated dir — the caller-dir layer now passes
+        # through the same volatile-target gate as the project layer,
+        # so a fictional path would be refused ("does not exist").
+        with TemporaryDirectory() as tmp:
+            (Path(tmp) / "main.c").write_text("int main(void){}\n")
+            with _NO_SYMLINK:
+                with patch.dict(os.environ, {"RAPTOR_CALLER_DIR": tmp}):
+                    self.assertEqual(resolve_default_target(), tmp)
 
     def test_returns_none_when_neither_signal_present(self):
         with _NO_SYMLINK:
