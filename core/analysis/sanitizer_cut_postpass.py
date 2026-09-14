@@ -676,8 +676,6 @@ def run_postpass(
         if not source_lines:
             stats.refuse("no-source-candidates")
             continue
-        if finding_kinds & _TF_COLLIDING_KINDS:
-            stats.mechanism("taint-free:banned-system-read-source")
 
         # Evaluate from EVERY candidate source. Suppress only when
         # all candidates suppress (the withheld taint trace started at
@@ -770,6 +768,12 @@ def run_postpass(
         if verdicts == ["gate-error"]:
             stats.refuse("gate-error")
             continue
+        if finding_kinds & _TF_COLLIDING_KINDS:
+            # Counted only for findings the gate actually evaluated —
+            # incrementing before the verdict loop tallied the ban for
+            # resolver-refused / gate-error findings it never armed a
+            # decision on.
+            stats.mechanism("taint-free:banned-system-read-source")
         full_proof = all(v == VERDICT_SUPPRESS for v in verdicts)
         if full_proof:
             stats.recorded_suppress += 1
