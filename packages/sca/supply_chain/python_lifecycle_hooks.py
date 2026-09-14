@@ -46,6 +46,7 @@ from pathlib import Path
 from collections.abc import Iterable
 
 from ..models import Confidence, Dependency, Manifest
+from ..parsers import _safe_read
 from . import _hook_patterns, _own_host
 
 logger = logging.getLogger(__name__)
@@ -115,13 +116,9 @@ def _scan_setup_py(
     setup_py = manifest_dir / "setup.py"
     if not setup_py.is_file():
         return []
-    try:
-        body = setup_py.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.debug(
-            "sca.supply_chain.python_lifecycle_hooks: %s read failed: %s",
-            setup_py, e,
-        )
+    body = _safe_read.read_bounded(setup_py, follow_symlinks=False)
+    if body is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
     analysis = _hook_patterns.analyse_body(body)
     hit = PythonLifecycleHit(

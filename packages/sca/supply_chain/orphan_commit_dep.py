@@ -79,6 +79,7 @@ from pathlib import Path
 from collections.abc import Iterable
 
 from ..models import Confidence, Dependency, Manifest
+from ..parsers import _safe_read
 from . import _own_host
 
 logger = logging.getLogger(__name__)
@@ -171,13 +172,9 @@ def scan_manifests(
 # ---------------------------------------------------------------------------
 
 def _scan_one(path: Path, host: Dependency) -> list[OrphanCommitFinding]:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.debug(
-            "sca.supply_chain.orphan_commit_dep: %s read failed: %s",
-            path, e,
-        )
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
     try:
         data = _json.loads(text)

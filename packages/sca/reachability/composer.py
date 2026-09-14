@@ -29,6 +29,7 @@ import re
 
 from ..models import Confidence, Reachability
 from ._shared import format_evidence as _format_evidence
+from ..parsers import _safe_read
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -62,11 +63,8 @@ def scan_imports(
     out: dict[str, list[tuple[Path, int, bool]]] = {}
     for php_file in _walk_php_sources(target, max_depth=max_depth):
         is_test = _is_test_file(php_file, target)
-        try:
-            text = php_file.read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
-            logger.debug("sca.reachability.composer: skip %s (%s)",
-                          php_file, e)
+        text = _safe_read.read_bounded(php_file, follow_symlinks=False)
+        if text is None:
             continue
         for ns, line in _imports_in(text):
             out.setdefault(ns, []).append((php_file, line, is_test))

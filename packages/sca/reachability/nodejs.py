@@ -64,6 +64,7 @@ _REQUIRE_RE = re.compile(
 # ``packages.sca._test_paths`` (which covers the ``.mts``/``.cts``
 # TS variants this module previously matched with a private regex).
 from .._test_paths import is_test_path as _is_test_file  # noqa: E402
+from ..parsers import _safe_read
 
 _JS_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
 
@@ -88,10 +89,8 @@ def scan_imports(
     out: dict[str, list[tuple[Path, int, bool]]] = {}
     for js_file in _walk_js_sources(target, max_depth=max_depth):
         is_test = _is_test_file(js_file, target)
-        try:
-            text = js_file.read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
-            logger.debug("sca.reachability.nodejs: skip %s (%s)", js_file, e)
+        text = _safe_read.read_bounded(js_file, follow_symlinks=False)
+        if text is None:
             continue
         for specifier, line in _imports_in(text):
             pkg = _specifier_to_package(specifier)

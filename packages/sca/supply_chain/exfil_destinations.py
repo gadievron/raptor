@@ -36,6 +36,7 @@ from core.json import load_json_bounded
 
 from ..discovery import EXCLUDED_DIR_NAMES
 from ..models import Confidence, Dependency, Manifest
+from ..parsers import _safe_read
 from ._closest_manifest import project_host_dep
 from ._closest_manifest import rel_to_target as _rel
 from typing import TYPE_CHECKING
@@ -193,16 +194,9 @@ def _scan_file(
     path: Path, target: Path, manifests: list[Manifest],
     rules: list[_Rule],
 ) -> Iterable[ExfilFinding]:
-    try:
-        with path.open("rb") as fh:
-            data = fh.read(_MAX_BYTES_PER_FILE)
-    except OSError as e:
-        logger.debug(
-            "sca.supply_chain.exfil_destinations: read failed for %s: %s",
-            path, e,
-        )
-        return
+    data = _safe_read.read_head_bytes(path, max_bytes=_MAX_BYTES_PER_FILE)
     if not data:
+        # ``read_head_bytes`` already logged any underlying reason.
         return
     seen: set[tuple[str, str]] = set()         # (category, host) dedup per file
     # Line numbers via a rolling (last_pos, last_line) cursor — the

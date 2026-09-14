@@ -36,6 +36,7 @@ from core.json import load_json_bounded
 from .._test_paths import TEST_DIR_NAMES as _SHARED_TEST_DIR_NAMES
 from ..discovery import EXCLUDED_DIR_NAMES
 from ..models import PinStyle, Confidence, Dependency, Manifest
+from ..parsers import _safe_read
 from ._edit_distance import damerau_levenshtein
 from typing import TYPE_CHECKING
 
@@ -129,11 +130,9 @@ def scan_target(
     for src in _walk_sources(target, max_depth=max_depth):
         if _is_test_file(src, target):
             continue
-        try:
-            text = src.read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
-            logger.debug("sca.supply_chain.typosquat_domain: skip %s (%s)",
-                          src, e)
+        text = _safe_read.read_bounded(src, follow_symlinks=False)
+        if text is None:
+            # ``read_bounded`` already logged the underlying reason.
             continue
         for host, line in _hosts_in(text):
             if host in _SKIP_HOSTS:

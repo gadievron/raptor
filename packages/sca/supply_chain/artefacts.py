@@ -38,6 +38,7 @@ from pathlib import Path
 from .._test_paths import is_test_path as _shared_is_test_path
 from ..discovery import EXCLUDED_DIR_NAMES
 from ..models import Confidence, Dependency, Manifest
+from ..parsers import _safe_read
 from ._closest_manifest import project_host_dep
 from ._closest_manifest import rel_to_target as _rel
 from typing import TYPE_CHECKING
@@ -253,11 +254,7 @@ def _classify(
 def _check_disguised_filename(path: Path, suffix: str) -> str | None:
     """Return a short description of the disguise, or None if benign."""
     expected_magics = _EXTENSION_MAGIC.get(suffix)
-    try:
-        with path.open("rb") as fh:
-            head = fh.read(512)
-    except OSError:
-        return None
+    head = _safe_read.read_head_bytes(path, max_bytes=512)
     if not head:
         return None
 
@@ -313,11 +310,7 @@ def _check_obfuscated(path: Path, target: Path) -> str | None:
         return None
     if stat.st_size < _OBFUSC_MIN_BYTES:
         return None
-    try:
-        with path.open("rb") as fh:
-            data = fh.read(min(stat.st_size, 1024 * 1024))
-    except OSError:
-        return None
+    data = _safe_read.read_head_bytes(path, max_bytes=1024 * 1024)
     if not data:
         return None
 
@@ -416,10 +409,8 @@ def _allowlisted_binary(path: Path, target: Path) -> bool:
         # ``binary_in_package._path_matches_allowlist`` takes the
         # relative path + the first bytes (for magic_required entries
         # like ``.wasm``).  Read just enough to satisfy that signature.
-        try:
-            with path.open("rb") as fh:
-                head = fh.read(256)
-        except OSError:
+        head = _safe_read.read_head_bytes(path, max_bytes=256)
+        if head is None:
             return False
         return binary_in_package._path_matches_allowlist(rel, head)
     except Exception:                              # pragma: no cover
@@ -438,10 +429,8 @@ def _looks_like_test_path(path: Path, target: Path) -> bool:
 
 
 def _is_binary(path: Path, sniff_bytes: int = 256) -> bool:
-    try:
-        with path.open("rb") as fh:
-            head = fh.read(sniff_bytes)
-    except OSError:
+    head = _safe_read.read_head_bytes(path, max_bytes=sniff_bytes)
+    if head is None:
         return False
     if any(head.startswith(sig) for sig in _BINARY_MAGIC):
         return True

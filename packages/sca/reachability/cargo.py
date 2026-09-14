@@ -22,6 +22,7 @@ import re
 
 from ..models import Confidence, Reachability
 from ._shared import format_evidence as _format_evidence
+from ..parsers import _safe_read
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -57,10 +58,8 @@ def scan_imports(
     out: dict[str, list[tuple[Path, int, bool]]] = {}
     for rs_file in _walk_rust_sources(target, max_depth=max_depth):
         is_test = _is_test_file(rs_file, target)
-        try:
-            text = rs_file.read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
-            logger.debug("sca.reachability.cargo: skip %s (%s)", rs_file, e)
+        text = _safe_read.read_bounded(rs_file, follow_symlinks=False)
+        if text is None:
             continue
         for crate, line in _imports_in(text):
             key = _normalise(crate)

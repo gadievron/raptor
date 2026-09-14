@@ -84,9 +84,8 @@ def scan_manifests(
             continue
         if build_script is None:
             continue
-        try:
-            body = build_script.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        body = _safe_read.read_bounded(build_script, follow_symlinks=False)
+        if body is None:
             continue
         analysis = _hook_patterns.analyse_body(body)
         worm_conjunction = (

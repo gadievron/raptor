@@ -35,6 +35,7 @@ from dataclasses import dataclass
 
 from .. import _gha_uses
 from ..models import Confidence, Dependency
+from ..parsers import _safe_read
 from ..parsers._base import build_purl
 from ..parsers.inline_installs import classify_action_ref
 from ._closest_manifest import rel_to_target as _rel
@@ -96,13 +97,9 @@ def scan_target(target: Path) -> list[GhaDriftFinding]:
             continue
         if path.suffix.lower() not in {".yml", ".yaml"}:
             continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
-            logger.debug(
-                "sca.supply_chain.gha_drift: read failed for %s: %s",
-                path, e,
-            )
+        text = _safe_read.read_bounded(path, follow_symlinks=False)
+        if text is None:
+            # ``read_bounded`` already logged the underlying reason.
             continue
         out.extend(_scan_text(text, path, target))
     return out

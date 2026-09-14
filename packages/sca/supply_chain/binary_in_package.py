@@ -440,10 +440,8 @@ def _classify_or_none(path: Path) -> tuple | None:
             return None
     except OSError:
         return None
-    try:
-        with Path(path).open("rb") as f:
-            head = f.read(256)
-    except OSError:
+    head = _safe_read.read_head_bytes(Path(path), max_bytes=256)
+    if head is None:
         return None
     if not head:
         return None

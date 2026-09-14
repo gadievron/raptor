@@ -105,6 +105,7 @@ from core.json import load_json_bounded
 
 from .._yaml_fast import safe_load
 from ..models import Confidence, Dependency, Manifest, PinStyle
+from ..parsers import _safe_read
 
 logger = logging.getLogger(__name__)
 
@@ -1217,22 +1218,17 @@ def _scan_workflow(
     workflow_path: Path, dep: Dependency,
 ) -> list[SecretFlowHit]:
     """Parse one workflow YAML and scan every job's every step."""
-    try:
-        # Read-cap defends against a pathologically large workflow
-        # YAML.  Real GitHub Actions caps workflow files at 1 MB
-        # (documented limit); we accept up to 2 MB to be generous
-        # for forked workflow tooling that may not enforce the
-        # limit locally.
-        with workflow_path.open(encoding="utf-8", errors="replace") as f:
-            text = f.read(_MAX_WORKFLOW_YAML_BYTES + 1)
-        if len(text) > _MAX_WORKFLOW_YAML_BYTES:
-            logger.debug(
-                "sca.supply_chain.gha_secret_flow: %s exceeds %d bytes "
-                "— skipping (DoS bound)",
-                workflow_path, _MAX_WORKFLOW_YAML_BYTES,
-            )
-            return []
-    except OSError:
+    # Read-cap defends against a pathologically large workflow
+    # YAML.  Real GitHub Actions caps workflow files at 1 MB
+    # (documented limit); we accept up to 2 MB to be generous
+    # for forked workflow tooling that may not enforce the
+    # limit locally.  The shared bounded reader also refuses
+    # symlinks and non-regular files (FIFO hang / host-file read).
+    text = _safe_read.read_bounded(
+        workflow_path, max_bytes=_MAX_WORKFLOW_YAML_BYTES,
+        follow_symlinks=False,
+    )
+    if text is None:
         return []
     try:
         data = safe_load(text)

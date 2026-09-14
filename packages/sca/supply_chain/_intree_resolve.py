@@ -69,6 +69,8 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..parsers import _safe_read
+
 logger = logging.getLogger(__name__)
 
 
@@ -182,10 +184,8 @@ def _safe_resolve_intree(
 def _classify_first_bytes(path: Path) -> str:
     """Return ``binary``, ``script``, ``source``, or ``unknown`` based
     on the first 256 bytes of ``path``."""
-    try:
-        with Path(path).open("rb") as f:
-            head = f.read(256)
-    except OSError:
+    head = _safe_read.read_head_bytes(Path(path), max_bytes=256)
+    if head is None:
         return "unknown"
     if not head:
         return "source"          # empty file — uninteresting

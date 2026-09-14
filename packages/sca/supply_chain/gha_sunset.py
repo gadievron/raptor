@@ -40,6 +40,7 @@ from ..models import (
     Severity,
     SupplyChainFinding,
 )
+from ..parsers import _safe_read
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -66,12 +67,9 @@ def load_sunset_map(
     findings, never crashes.
     """
     p = path or _SUNSET_DATA_PATH
-    try:
-        text = p.read_text(encoding="utf-8")
-    except OSError as e:
-        logger.warning(
-            "sca.supply_chain.gha_sunset: cannot read %s: %s", p, e,
-        )
+    text = _safe_read.read_bounded(p)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
         return {}
     try:
         data = json.loads(text)

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..models import Confidence, Dependency, Manifest, PinStyle
+from ..parsers import _safe_read
 from . import _hook_patterns, _own_host
 from typing import TYPE_CHECKING
 
@@ -88,13 +89,9 @@ def _iter_extconf_scripts(target: Path) -> Iterable[Path]:
 def _scan_script(
     script: Path, target: Path, host: Dependency,
 ) -> list[RubyGemsLifecycleFinding]:
-    try:
-        body = script.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.debug(
-            "sca.supply_chain.rubygems_lifecycle_hooks: %s read failed: %s",
-            script, e,
-        )
+    body = _safe_read.read_bounded(script, follow_symlinks=False)
+    if body is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
     analysis = _hook_patterns.analyse_body(body)
     try:

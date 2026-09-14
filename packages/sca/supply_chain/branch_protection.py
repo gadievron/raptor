@@ -52,6 +52,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..models import Confidence, Dependency, Manifest, PinStyle
+from ..parsers import _safe_read
 
 logger = logging.getLogger(__name__)
 
@@ -149,9 +150,8 @@ def _detect_github_remote(target: Path) -> str | None:
     config = target / ".git" / "config"
     if not config.is_file():
         return None
-    try:
-        text = config.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    text = _safe_read.read_bounded(config, follow_symlinks=False)
+    if text is None:
         return None
     # Walk for the [remote "origin"] section's url. Simple line-
     # scanning rather than ConfigParser because .git/config uses

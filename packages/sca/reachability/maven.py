@@ -61,6 +61,7 @@ from pathlib import Path
 from core.json import load_json_bounded
 
 from ..models import Confidence, Reachability
+from ..parsers import _safe_read
 
 logger = logging.getLogger(__name__)
 
@@ -127,12 +128,8 @@ def scan_imports(
     out: dict[str, list[tuple[Path, int, bool]]] = {}
     for java_file in _walk_java_sources(target, max_depth=max_depth):
         is_test = _is_test_file(java_file, target)
-        try:
-            text = java_file.read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
-            logger.debug(
-                "sca.reachability.maven: skip %s (%s)", java_file, e,
-            )
+        text = _safe_read.read_bounded(java_file, follow_symlinks=False)
+        if text is None:
             continue
         for path, line in _imports_in(text):
             out.setdefault(path, []).append((java_file, line, is_test))

@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 # layer is asking.
 from .._test_paths import TEST_DIR_NAMES as _TEST_DIR_NAMES  # noqa: E402,F401
 from .._test_paths import is_test_path as _is_test_file       # noqa: E402
+from ..parsers import _safe_read
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -120,10 +121,8 @@ def scan_imports(
     from .._file_scan_cache import cached_per_file
     for py_file in _walk_python_sources(target, max_depth=max_depth):
         is_test = _is_test_file(py_file, target)
-        try:
-            text = py_file.read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
-            logger.debug("sca.reachability.python: skip %s (%s)", py_file, e)
+        text = _safe_read.read_bounded(py_file, follow_symlinks=False)
+        if text is None:
             continue
 
         def _compute(text=text, py_file=py_file):

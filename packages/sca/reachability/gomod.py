@@ -19,6 +19,7 @@ import re
 
 from ..models import Confidence, Reachability
 from ._shared import format_evidence as _format_evidence
+from ..parsers import _safe_read
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -55,10 +56,8 @@ def scan_imports(
     out: dict[str, list[tuple[Path, int, bool]]] = {}
     for go_file in _walk_go_sources(target, max_depth=max_depth):
         is_test = _is_test_file(go_file)
-        try:
-            text = go_file.read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
-            logger.debug("sca.reachability.gomod: skip %s (%s)", go_file, e)
+        text = _safe_read.read_bounded(go_file, follow_symlinks=False)
+        if text is None:
             continue
         for path, line in _imports_in(text):
             out.setdefault(path, []).append((go_file, line, is_test))
@@ -147,10 +146,10 @@ def _grep_symbols(
         if f in files_checked:
             continue
         files_checked.add(f)
-        try:
-            file_contents[f] = f.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        text = _safe_read.read_bounded(f, follow_symlinks=False)
+        if text is None:
             continue
+        file_contents[f] = text
 
     if not file_contents:
         return []

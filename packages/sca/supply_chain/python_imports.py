@@ -58,6 +58,7 @@ from pathlib import Path
 from .._test_paths import is_test_path as _shared_is_test_path
 from ..discovery import EXCLUDED_DIR_NAMES
 from ..models import Confidence, Dependency, Manifest
+from ..parsers import _safe_read
 from ._closest_manifest import project_host_dep
 from ._closest_manifest import rel_to_target as _rel
 from typing import TYPE_CHECKING
@@ -171,13 +172,9 @@ def scan_target(
     for path in _walk_python_sources(target, max_depth=max_depth):
         if _looks_like_test_path(path, target):
             continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
-            logger.debug(
-                "sca.supply_chain.python_imports: read failed for %s: %s",
-                path, e,
-            )
+        text = _safe_read.read_bounded(path, follow_symlinks=False)
+        if text is None:
+            # ``read_bounded`` already logged the underlying reason.
             continue
 
         def _compute(text=text, path=path):

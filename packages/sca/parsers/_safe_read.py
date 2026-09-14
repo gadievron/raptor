@@ -200,3 +200,61 @@ def read_bounded(
         )
         return None
     return raw.decode("utf-8", errors="replace")
+
+
+def read_head_bytes(path: Path, *, max_bytes: int) -> bytes | None:
+    """Read at most ``max_bytes`` raw bytes from ``path``, refusing
+    symlinks and non-regular files.
+
+    The binary-sniffing detectors (magic-byte classification,
+    obfuscation entropy, URL extraction from source bytes) only ever
+    need a bounded prefix, so unlike :func:`read_bounded` an
+    oversized file is TRUNCATED rather than refused.  What this
+    helper exists to block is the same class the text reader blocks:
+
+      * a symlinked path leaking host-file bytes into operator-facing
+        finding details,
+      * a FIFO / device node hanging or flooding the scan
+        (``open()`` on a FIFO blocks until a writer appears; reads
+        from ``/dev/zero`` never end).
+
+    Returns ``None`` (after a debug log — these are per-file sniffs
+    on arbitrary tree walks, warning-level would flood) when the path
+    is a symlink, not a regular file, or unreadable.
+    """
+    try:
+        st = path.lstat()
+    except OSError as e:
+        logger.debug("sca.parsers: cannot lstat %s: %s", path, e)
+        return None
+    if not _stat.S_ISREG(st.st_mode):
+        logger.debug(
+            "sca.parsers: refusing byte read of %s (not a regular "
+            "file: mode=0o%o)", path, st.st_mode,
+        )
+        return None
+    try:
+        # ``O_NOFOLLOW`` closes the lstat→open TOCTOU window for the
+        # symlink case (re-linked final component fails with ELOOP);
+        # ``O_NONBLOCK`` closes it for the FIFO case (a FIFO swapped
+        # in after the lstat opens immediately instead of blocking
+        # until a writer appears — the fstat below then rejects it).
+        fd = os.open(
+            str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+        )
+        try:
+            if not _stat.S_ISREG(os.fstat(fd).st_mode):
+                logger.debug(
+                    "sca.parsers: refusing byte read of %s (became "
+                    "non-regular between lstat and open)", path,
+                )
+                return None
+            with os.fdopen(fd, "rb", closefd=True) as fh:
+                fd = -1
+                return fh.read(max_bytes)
+        finally:
+            if fd >= 0:
+                os.close(fd)
+    except OSError as e:
+        logger.debug("sca.parsers: cannot read %s: %s", path, e)
+        return None

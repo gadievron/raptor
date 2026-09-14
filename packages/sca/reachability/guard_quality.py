@@ -20,6 +20,7 @@ Layers used:
 from __future__ import annotations
 
 import logging
+from ..parsers import _safe_read
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
@@ -190,12 +191,12 @@ def _analyze_dep_call_sites(
 
         source_path = target / path
         if path not in source_cache:
-            try:
-                source_cache[path] = source_path.read_text(
-                    encoding="utf-8", errors="replace",
-                )
-            except OSError:
+            text = _safe_read.read_bounded(
+                source_path, follow_symlinks=False,
+            )
+            if text is None:
                 continue
+            source_cache[path] = text
         source = source_cache[path]
 
         guards = _extract(source, path, sink_lines=[line])
