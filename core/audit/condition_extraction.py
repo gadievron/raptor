@@ -145,6 +145,16 @@ def _get_parser(lang: str) -> Any | None:
         return _ts_parser_for(lang)
     except ImportError:
         pass
+    except Exception:
+        # Parser setup must degrade to the regex fallback, never
+        # crash the audit stage: mixed installs (grammar wheel
+        # present, tree_sitter runtime absent) historically raised
+        # NameError out of the shared loader, and this call site is
+        # reached from extract_sink_guards with no catch above it.
+        logger.debug(
+            "condition_extraction: shared parser cache failed for %s",
+            lang, exc_info=True,
+        )
     if not _TS_AVAILABLE:
         return None
     try:

@@ -1817,6 +1817,15 @@ def _ts_language(lang: str):
     install pays the import machinery — and its fork-frozen lock
     hazard — once per process, not once per file.
     """
+    if not _TS_AVAILABLE:
+        # Mixed install: grammar wheels declare no dependency on the
+        # tree_sitter runtime, so import_grammar below can succeed
+        # while ``Language`` was never bound — the wrap call at the
+        # bottom then raised NameError (not ImportError), escaping
+        # consumers' ImportError-only catches (e.g. the audit
+        # sink-guard extraction). No runtime → no grammar, regardless
+        # of which wheels are installed.
+        return None
     attr = "language"
     if lang == "python":
         module_name = "tree_sitter_python"

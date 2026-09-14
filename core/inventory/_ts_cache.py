@@ -71,12 +71,14 @@ def cached_parser(key: Any, make_language: "Callable[[], Any]") -> Any:
     """Per-thread cached tree-sitter ``Parser`` for *key*.
 
     ``make_language`` is called on a cache miss and must return a
-    ``tree_sitter.Language`` (or ``None`` when the grammar is
-    unavailable — the miss is NOT cached: absence is already cheap
-    via the grammar-import cache, and not caching it lets a
-    monkeypatched loader seam take effect immediately in tests).
-    Raises ``ImportError`` when ``tree_sitter`` itself isn't
-    installed.
+    ``tree_sitter.Language`` (or ``None`` when the grammar OR the
+    tree_sitter runtime is unavailable — the miss is NOT cached:
+    absence is already cheap via the grammar-import cache, and not
+    caching it lets a monkeypatched loader seam take effect
+    immediately in tests). When tree_sitter itself isn't installed
+    the in-repo loaders return None and so does this function —
+    consumers degrade to their fallback extraction rather than
+    catching an exception.
     """
     cache: dict[Any, Any] | None = getattr(
         _TS_PARSER_LOCAL, "parsers", None,
