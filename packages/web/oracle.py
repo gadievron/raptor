@@ -38,6 +38,7 @@ from __future__ import annotations
 import secrets
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from core.logging import get_logger
 from packages.web.markers import marker_present
@@ -64,6 +65,32 @@ _MARKER_CLASSES = frozenset({"sqli", "command_injection", "path_traversal", "sst
 def mint_canary() -> str:
     """A fresh benign token that cannot collide with page content."""
     return f"raptorcanary{secrets.token_hex(8)}"
+
+
+def _strip_query_params(url: str, names: dict[str, str]) -> str:
+    """Remove ``names``' keys from ``url``'s query string.
+
+    The recorded hit URL is the PRE-injection URL and commonly already
+    carries the fuzzed parameter (``page.php?id=1``). ``requests``
+    APPENDS ``params=`` to the existing query, so a replay/control leg
+    would send ``?id=1&id=<probe>`` — and first-occurrence-wins
+    frameworks (Werkzeug ``request.args.get``, servlet
+    ``getParameter``, Go ``FormValue``) would never see the probed
+    value, systematically demoting real query-vector hits to
+    inconclusive. Detection-time fuzzing REPLACES via
+    ``_url_with_param``; this is the replay-side twin.
+    """
+    parsed = urlparse(url)
+    if not parsed.query:
+        return url
+    query = [
+        (name, existing_value)
+        for name, existing_value in parse_qsl(
+            parsed.query, keep_blank_values=True,
+        )
+        if name not in names
+    ]
+    return urlunparse(parsed._replace(query=urlencode(query)))
 
 
 @dataclass
@@ -121,7 +148,12 @@ class VerificationOracle:
             values = {**(base_data or {}), param: value}
             if method.upper() == "POST":
                 return self.client.post(url, data=values)
-            return self.client.get(url, params=values)
+            # Strip every probed key from the recorded URL's query so
+            # the probe value is the ONLY occurrence (POST bodies
+            # cannot duplicate into the query, so only GET needs it).
+            return self.client.get(
+                _strip_query_params(url, values), params=values,
+            )
         except Exception:
             # Transport errors (offline target, timeout, scope refusal)
             # degrade the verification, never the scan. URL/credential

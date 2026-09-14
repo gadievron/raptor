@@ -247,3 +247,65 @@ class TestSiblingFormFields:
         result = VerificationOracle(client).verify(
             "http://t/search", "q", self.PAYLOAD, "sqli", method="POST")
         assert result.status == INCONCLUSIVE
+
+
+class _UrlRecordingClient:
+    """Records the exact URL + params/data of every request."""
+
+    reveal_secrets = False
+
+    def __init__(self):
+        self.calls = []
+
+    def get(self, url, params=None, **kw):
+        self.calls.append(("GET", url, dict(params or {})))
+        return _Resp(CLEAN)
+
+    def post(self, url, data=None, **kw):
+        self.calls.append(("POST", url, dict(data or {})))
+        return _Resp(CLEAN)
+
+
+class TestProbeQueryDeduplication:
+    """The recorded hit URL is the PRE-injection URL and commonly
+    already carries the fuzzed parameter; requests appends ``params=``
+    to the existing query, so pre-fix every replay/control leg sent
+    ``?id=1&id=<probe>`` and first-occurrence-wins frameworks never
+    saw the probed value — real query-vector hits demoted to
+    inconclusive."""
+
+    def test_fuzzed_param_stripped_from_recorded_url(self):
+        client = _UrlRecordingClient()
+        VerificationOracle(client)._probe(
+            "http://t/page.php?id=1&keep=x", "id", "PROBE", "GET")
+        _, url, params = client.calls[0]
+        assert "id=" not in url
+        assert "keep=x" in url
+        assert params == {"id": "PROBE"}
+
+    def test_base_data_keys_stripped_from_recorded_url(self):
+        client = _UrlRecordingClient()
+        VerificationOracle(client)._probe(
+            "http://t/f?q=a&csrf=old&other=1", "q", "PROBE", "GET",
+            base_data={"csrf": "tok"})
+        _, url, params = client.calls[0]
+        assert "q=" not in url and "csrf=old" not in url
+        assert "other=1" in url
+        assert params == {"q": "PROBE", "csrf": "tok"}
+
+    def test_url_without_query_passes_through(self):
+        client = _UrlRecordingClient()
+        VerificationOracle(client)._probe(
+            "http://t/search", "q", "PROBE", "GET")
+        _, url, _ = client.calls[0]
+        assert url == "http://t/search"
+
+    def test_post_body_never_rewrites_the_url(self):
+        # POST data cannot duplicate into the query string; the form
+        # action URL is replayed exactly as detected.
+        client = _UrlRecordingClient()
+        VerificationOracle(client)._probe(
+            "http://t/f?stage=2", "q", "PROBE", "POST")
+        _, url, data = client.calls[0]
+        assert url == "http://t/f?stage=2"
+        assert data == {"q": "PROBE"}
