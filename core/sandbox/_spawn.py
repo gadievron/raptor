@@ -162,6 +162,18 @@ _DEATH_W_LOCK = threading.Lock()
 _LIVE_DEATH_W: set[int] = set()
 
 
+def _open_capture_pipes() -> tuple[int, int, int, int]:
+    """(out_r, out_w, err_r, err_w) for output capture.
+
+    Split out so tests can simulate sibling write-end retention (a
+    concurrent spawn's intermediate transiently holds inherited
+    copies) — see ``_POST_EXIT_DRAIN_SECONDS``.
+    """
+    out_r, out_w = os.pipe()
+    err_r, err_w = os.pipe()
+    return out_r, out_w, err_r, err_w
+
+
 def open_death_pipe() -> tuple[int, int]:
     """``os.pipe()`` for a death pipe, registering the write end.
 
@@ -1174,6 +1186,20 @@ def _pid1_split_for_waiter(wstat_w: int | None = None) -> None:
 # exercise it without shipping tens of real megabytes per run.
 _CAPTURE_CAP = 64 * 1024 * 1024
 
+#: Post-exit capture drain window (seconds). Once OUR child has been
+#: reaped, the only writers left on the out/err pipes are descendants
+#: it deliberately backgrounded — or, far more commonly, sibling
+#: sandbox intermediates transiently retaining inherited write-end
+#: copies: under concurrency an instant `echo` run's return was pinned
+#: to a sibling's full lifetime (~12s observed), and a shorter caller
+#: timeout then raised TimeoutExpired for a target that had already
+#: exited 0. Trade-off, both directions: too short loses output a
+#: just-exited child's backgrounded descendant flushes moments later;
+#: too long re-couples every return (and the timeout verdict) to
+#: unrelated siblings' lifetimes. 0.5s covers real descendant flush
+#: latency while keeping the sibling coupling human-imperceptible.
+_POST_EXIT_DRAIN_SECONDS = 0.5
+
 
 def run_sandboxed(
     cmd: Sequence[str],
@@ -1700,10 +1726,8 @@ def run_sandboxed(
 
         # Output capture pipes (optional).
         if capture_output:
-            out_r, out_w = os.pipe()
-            _parent_fds.update({out_r, out_w})
-            err_r, err_w = os.pipe()
-            _parent_fds.update({err_r, err_w})
+            out_r, out_w, err_r, err_w = _open_capture_pipes()
+            _parent_fds.update({out_r, out_w, err_r, err_w})
         else:
             out_r = err_r = out_w = err_w = None
 
@@ -3850,6 +3874,9 @@ def run_sandboxed(
     stdout_buf = b"" if capture_output else None
     stderr_buf = b"" if capture_output else None
     _truncated = {1: False, 2: False}
+    # Raw wait-status once the capture loop's exit poll reaps the
+    # child (None = not yet reaped there).
+    child_status = None
     # time.monotonic() for deadline math — see _reap_tracer() above for the
     # NTP/wall-clock-jump rationale; same hazard applies here.
     # `is not None`, NOT truthiness: timeout=0 means "zero budget
@@ -3864,11 +3891,43 @@ def run_sandboxed(
         if capture_output:
             import select
             fds = [out_r, err_r]
+            # Exit/drain decoupling: waiting for plain pipe EOF couples
+            # this run's return to every retained sibling write-end
+            # copy (see _POST_EXIT_DRAIN_SECONDS). Reap-poll the child
+            # inside the loop; once it has exited, drain what is
+            # readable for a BOUNDED window and stop — and never call
+            # an exited-0 target a timeout.
+            drain_deadline = None
             try:
                 while fds:
-                    remaining = ((deadline - time.monotonic())
+                    if child_status is None:
+                        try:
+                            pid_, st = os.waitpid(child_pid, os.WNOHANG)
+                        except ChildProcessError:
+                            # Already reaped elsewhere — status lost;
+                            # same SIGKILL synthesis as the wait below.
+                            logger.warning(
+                                "waitpid: child %d already reaped "
+                                "(ECHILD); exit status unknown",
+                                child_pid,
+                            )
+                            child_status = 9
+                        else:
+                            if pid_ != 0:
+                                child_status = st
+                        if child_status is not None:
+                            drain_deadline = (
+                                time.monotonic() + _POST_EXIT_DRAIN_SECONDS
+                            )
+                    now = time.monotonic()
+                    remaining = ((deadline - now)
                                  if deadline is not None else None)
                     if remaining is not None and remaining <= 0:
+                        if child_status is not None:
+                            # The target already exited — the deadline
+                            # expiring during the post-exit drain must
+                            # not misfire TimeoutExpired.
+                            break
                         # Death-pipe EOF BEFORE killing the
                         # intermediate — see _teardown_target: a
                         # setsid()'d target escapes the killpg sweep
@@ -3880,7 +3939,19 @@ def run_sandboxed(
                         raise subprocess.TimeoutExpired(
                             list(cmd), timeout, output=out_str, stderr=err_str
                         )
-                    ready, _, _ = select.select(fds, [], [], remaining)
+                    waits = []
+                    if remaining is not None:
+                        waits.append(remaining)
+                    if drain_deadline is not None:
+                        drain_left = drain_deadline - now
+                        if drain_left <= 0:
+                            break
+                        waits.append(drain_left)
+                    else:
+                        # Reap-poll cadence while the child is alive
+                        # (same order as the waitpid poll loop below).
+                        waits.append(0.05)
+                    ready, _, _ = select.select(fds, [], [], min(waits))
                     for fd in ready:
                         chunk = os.read(fd, 65536)
                         if not chunk:
@@ -3923,7 +3994,10 @@ def run_sandboxed(
             # falsy float is not a thing, but keep the check shape
             # identical to the deadline construction above (timeout=0
             # must reach the bounded branch).
-            if deadline is not None:
+            if child_status is not None:
+                # Already reaped by the capture loop's exit poll.
+                status = child_status
+            elif deadline is not None:
                 while True:
                     pid_, status = os.waitpid(child_pid, os.WNOHANG)
                     if pid_ != 0:
