@@ -400,3 +400,37 @@ class TestProducerPaths:
         )
         assert n == 3
         _assert_redacted_at_rest(sc_path)
+
+
+class TestTopLevelKeyRedaction:
+    def test_secret_as_top_level_sample_key_redacted(
+        self, scorecard, sc_path,
+    ):
+        """The tree walk redacts keys at every nesting level — the
+        OUTERMOST sample dict must not be the one shape that skips
+        it (its keys were spliced in verbatim around the walk)."""
+        scorecard.record_event(
+            "agentic:r1", "m1", "cheap_short_circuit", "incorrect",
+            sample={
+                f"x-api-key: {SECRET}": "echoed header",
+                "this_reasoning": "context",
+            },
+        )
+        _assert_redacted_at_rest(sc_path)
+
+    def test_top_level_bookkeeping_keys_survive(self, scorecard, sc_path):
+        """Both directions: ordinary top-level keys stay byte-identical
+        (consumers address samples by key), alongside the appended
+        ts/event_type bookkeeping."""
+        scorecard.record_event(
+            "agentic:r1", "m1", "cheap_short_circuit", "incorrect",
+            sample={"this_reasoning": f"saw {SECRET}",
+                    "other_reasoning": "plain"},
+        )
+        data = json.loads(sc_path.read_text())
+        samp = data["models"]["m1"]["agentic:r1"][
+            "disagreement_samples"][0]
+        assert set(samp.keys()) == {
+            "ts", "event_type", "this_reasoning", "other_reasoning",
+        }
+        _assert_redacted_at_rest(sc_path)

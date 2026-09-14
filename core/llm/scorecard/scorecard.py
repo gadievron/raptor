@@ -677,11 +677,20 @@ class ModelScorecard:
         no value shape ever bypasses the pass. Container shapes are
         preserved. Caller holds the lock.
         """
+        from core.security.redaction import redact_secrets
+
         samples = cell.setdefault("disagreement_samples", [])
+        # Top-level KEYS join the pass too — the tree walk redacts
+        # keys at every nesting level below, and the outermost dict
+        # must not be the one shape that skips it.
         samples.append({
             "ts": _now_iso(),
             "event_type": event_type,
-            **{k: _redact_tree(v) for k, v in sample.items()},
+            **{
+                (redact_secrets(k) if isinstance(k, str) else k):
+                    _redact_tree(v)
+                for k, v in sample.items()
+            },
         })
         # Trim to most-recent N. We cap rather than rotate
         # because operators inspecting samples want the
