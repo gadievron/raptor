@@ -526,18 +526,20 @@ class BuildDetector:
             # temp-root block on the RESOLVED path so a symlink
             # (include -> /tmp/include) can't smuggle a shared
             # temp root's include dir back in. And refuse any
-            # resolution that is a filesystem root or CONTAINS the
-            # repo: `include -> /` (or -> /home) is a superset
-            # grant, never the sibling-include shape this rescue
-            # exists for — downstream it becomes both a compile
-            # `-I/` and a dry-run sandbox readable grant on the
-            # whole host filesystem.
+            # resolution that leaves the ancestor subtree the
+            # candidate was found in: the rescue exists for IN-TREE
+            # sibling include dirs only, so `include -> /usr`,
+            # `-> /home/...`, `-> /` (root / repo-superset) are all
+            # out-of-tree grants — downstream they become both a
+            # compile `-I<dir>` and a dry-run sandbox readable grant
+            # on host content the operator never scoped in.
             blocked = ("/etc", "/proc", "/sys", "/dev", "/boot")
             if (
                 any(str(inc_resolved).startswith(b) for b in blocked)
                 or str(inc_resolved.parent) in tmp_roots
                 or inc_resolved == Path(inc_resolved.anchor)
                 or repo_resolved.is_relative_to(inc_resolved)
+                or not inc_resolved.is_relative_to(current)
             ):
                 logger.debug(
                     "Skipping ancestor include candidate %s "
@@ -1062,14 +1064,23 @@ class BuildDetector:
         # flags are exactly the _discover_ancestor_includes results —
         # already ownership/system-path checked at discovery — but the
         # grant is re-vetted here on the CURRENT resolution: a symlink
-        # swapped between discovery and grant (or any candidate that
-        # resolves to a filesystem root or a dir containing the repo)
-        # must not widen the read sandbox to a superset of the host.
+        # swapped between discovery and grant must not widen the read
+        # sandbox. The grant only ever covers dirs inside the walked
+        # ancestor subtree (max_depth parents of the scan root) —
+        # roots, repo-supersets, and out-of-tree resolutions
+        # (`/usr`, a foreign `/home/...`) are all refused.
         ancestor_read_dirs: list[str] = []
         try:
             repo_resolved = self.repo_path.resolve(strict=False)
         except OSError:
             repo_resolved = self.repo_path
+        # Filesystem roots never qualify as a base — for a shallow
+        # repo the third parent can be `/`, which would make the
+        # containment vacuous.
+        allowed_bases = [
+            p for p in list(repo_resolved.parents)[:3]
+            if p != Path(p.anchor)
+        ]
         for flag in include_flags:
             if not (isinstance(flag, str) and flag.startswith("-I")
                     and os.path.isabs(flag[2:])):
@@ -1082,10 +1093,14 @@ class BuildDetector:
             if (
                 resolved == Path(resolved.anchor)
                 or repo_resolved.is_relative_to(resolved)
+                or not any(
+                    resolved.is_relative_to(base) for base in allowed_bases
+                )
             ):
                 logger.warning(
                     "Refusing dry-run read grant for include dir %s — "
-                    "it resolves to a superset of the target", candidate,
+                    "it resolves outside the target's ancestor subtree",
+                    candidate,
                 )
                 continue
             ancestor_read_dirs.append(candidate)

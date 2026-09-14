@@ -126,6 +126,90 @@ class TestSupersetGrantRefused:
         found = BuildDetector(repo)._discover_ancestor_includes()
         assert "/" not in found
 
+    def test_discovery_refuses_out_of_tree_system_dir(self, tmp_path):
+        # `include -> /usr` is not a repo-superset and not on the
+        # blocked-prefix list, but it is OUTSIDE the ancestor subtree
+        # the candidate was found in — an out-of-tree read grant the
+        # operator never scoped in.
+        import os
+
+        proj = tmp_path / "proj"
+        repo = proj / "src"
+        repo.mkdir(parents=True)
+        (repo / "main.c").write_text("int main(void){}\n", encoding="utf-8")
+        os.symlink("/usr", proj / "include")
+
+        found = BuildDetector(repo)._discover_ancestor_includes()
+        assert "/usr" not in found
+
+    def test_discovery_refuses_foreign_out_of_tree_dir(self, tmp_path):
+        # A foreign dir that neither contains the repo nor is a system
+        # path (the `/home/<other>` shape) — still out-of-tree.
+        import os
+
+        foreign = tmp_path / "foreign"
+        (foreign / "sub").mkdir(parents=True)
+        (foreign / "hdr.h").write_text("// header\n", encoding="utf-8")
+        box = tmp_path / "box"
+        repo = box / "proj" / "src"
+        repo.mkdir(parents=True)
+        (repo / "main.c").write_text("int main(void){}\n", encoding="utf-8")
+        os.symlink(foreign, box / "proj" / "include")
+
+        found = BuildDetector(repo)._discover_ancestor_includes()
+        assert str(foreign.resolve()) not in found
+
+    def test_discovery_keeps_legitimate_sibling_include(self, tmp_path):
+        # Control: the real rescue shape (proj/include next to
+        # proj/src) keeps working under the containment.
+        proj = tmp_path / "proj"
+        inc = proj / "include"
+        inc.mkdir(parents=True)
+        (inc / "api.h").write_text("// header\n", encoding="utf-8")
+        repo = proj / "src"
+        repo.mkdir()
+        (repo / "main.c").write_text("int main(void){}\n", encoding="utf-8")
+
+        found = BuildDetector(repo)._discover_ancestor_includes()
+        assert str(inc.resolve()) in found
+
+    def test_grant_site_refuses_out_of_tree_dirs(self, tmp_path):
+        proj = tmp_path / "proj"
+        src = proj / "src"
+        src.mkdir(parents=True)
+        (src / "main.c").write_text("int main(void){}\n", encoding="utf-8")
+        inc = proj / "include"
+        inc.mkdir()
+        (inc / "api.h").write_text("// header\n", encoding="utf-8")
+
+        detector = BuildDetector(src)
+        calls: list[list[str]] = []
+
+        def fake_dry_run(script_path, language=None, extra_readable=None):
+            calls.append(list(extra_readable or []))
+            return []
+
+        with mock.patch.object(
+            detector, "_discover_ancestor_includes",
+            return_value=["/usr", str(inc.resolve())],
+        ), mock.patch.object(
+            detector, "_dry_run", side_effect=fake_dry_run,
+        ), mock.patch.object(
+            detector, "detect_missing_config_headers", return_value=[],
+        ):
+            bs = detector.synthesise_build_command("cpp")
+
+        assert bs is not None and calls
+        assert "/usr" not in calls[0]
+        assert str(inc.resolve()) in calls[0]  # in-tree grant survives
+        import shutil
+        for p in bs.cleanup_paths:
+            p_path = Path(p)
+            if p_path.is_dir():
+                shutil.rmtree(p_path, ignore_errors=True)
+            elif p_path.exists():
+                p_path.unlink()
+
     def test_grant_site_refuses_superset_even_if_discovered(
         self, tmp_path,
     ):
