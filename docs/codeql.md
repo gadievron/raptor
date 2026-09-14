@@ -258,6 +258,13 @@ cause suppression. Suppressed findings are logged to
 `suppressions.jsonl`. See [binary analysis](binary-analysis.md)
 for the binary oracle integration.
 
+Per-finding analysis/exploit/visualization artifacts are named
+`{rule}_{file-basename}_{digest8}_{line}_*` — the sanitised source
+basename plus a short full-path digest keep names unique per location
+(two same-rule findings at the same line of different files used to
+clobber each other). External tooling that globbed the old
+`{rule}_{line}_*` stems must re-glob.
+
 Pass `--allow-unreachable` to disable hard suppression entirely (for
 CTF targets, vendor snippets, or intentional dead-code audits).
 

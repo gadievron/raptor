@@ -24,7 +24,10 @@ Output: markdown to stdout (or ``--out``). Exit code:
          resolves all.
     1  — non-trivial trade-off: some advisories regressed, or no
          candidate fully resolves the open set.
-    2  — invalid arguments.
+    2  — invalid arguments, or verdict unavailable: the OSV lookup
+         degraded (network outage, registry error) and the report
+         carries a "verdict unavailable" section — never a wrong
+         exit 0/1 minted from missing data.
 """
 
 from __future__ import annotations

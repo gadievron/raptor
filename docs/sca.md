@@ -46,7 +46,7 @@ The default (no subcommand) is `scan` -- the full analyse pipeline.
 | `scan` (default) | Walk the target, match every dep against OSV/KEV/EPSS, write findings + report + SBOM + SARIF. |
 | `fix` | Pin loose deps and fix CVEs. Safe plan by default; `--apply` to modify files. |
 | `check <eco> <name> <ver>` | Single-dep pre-install safety verdict (Clean / Review / Block). |
-| `upgrade <eco> <name> <from> <to>` | Forward-looking upgrade impact: advisories resolved vs introduced. |
+| `upgrade <eco> <name> <from> <to>` | Forward-looking upgrade impact: advisories resolved vs introduced. Exit codes: 0 = no new advisories introduced, 1 = non-trivial trade-off, 2 = invalid arguments **or verdict unavailable** (OSV lookup degraded; the report carries a "verdict unavailable" section instead of a wrong 0/1). |
 | `diff <a.json> <b.json>` | Compare two `findings.json` files. |
 | `verify <path> --proposed <dir>` | Round-trip check: re-scan with proposed overlay applied. |
 | `health` | Probe every registry client; report reachability. |
@@ -114,7 +114,15 @@ Bundled data (the popular-package lists behind the typosquat
 heuristics, the KEV/EPSS calibration corpus, and the calibration
 project samples) is kept fresh by scheduled repository workflows —
 see [CI controls](ci-controls.md) for the refresh cadence and the
-matching manual scripts under `packages/sca/scripts/`.
+matching manual scripts under `packages/sca/scripts/`. The typosquat
+list refresh refuses an upstream feed that would replace more than
+half of the existing reference set (supply-chain guard against a
+poisoned feed); `--allow-churn` overrides after review.
+
+Maven coordinates parsed from Gradle DSL files use the canonical
+`group:artifact` (colon) shape. Findings from historical runs that
+recorded the old slash shape will not correlate with new runs — those
+rows never matched an advisory, so re-scan rather than merge.
 
 ### Scan Flags
 
@@ -263,7 +271,7 @@ bin/raptor-sca fix /path/to/project --apply \
 | `--apply` | Apply changes directly to manifest files |
 | `--out <dir>` | Write rewritten manifests to a separate directory |
 | `--cve-only` | Only fix CVEs -- do not tighten loose pins |
-| `--harden` | Upgrade all deps to the latest safe version |
+| `--harden` | Upgrade all deps to the latest safe version. Candidates the promotion-safety check demotes carry the distinct `demoted_safety` status in the candidates JSON and report (inert under every flag combination). |
 | `--allow-major` | Include fixes that cross a major version boundary |
 | `--no-llm` | Skip LLM analysis (mechanical-only, fast, CI-safe) |
 | `--findings <path>` | Reuse findings from a previous scan |

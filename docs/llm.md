@@ -412,6 +412,14 @@ over the CodeQL SARIF):
 Constraints: consensus/judge/aggregate require at least one analysis model. The same
 model cannot serve as both analysis and consensus.
 
+Correlation notes: a finding where every model abstained
+(errored/refused) carries the `no-verdict` confidence signal in
+`correlation.json` — abstentions never count as votes, so an
+all-abstain panel is never reported as unanimous. A model's failure
+circuit breaker also opens after ten consecutive failures even when
+the model succeeded earlier in the run (one early success previously
+held a dying transport closed for the rest of the work items).
+
 Example:
 ```bash
 /agentic ~/target \
