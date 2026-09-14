@@ -130,3 +130,31 @@ class TestMergePreservesKeyFiles:
         prior = DomainModel(key_files=[{"path": "src/a.c", "reason": "r"}])
         merged = _merge_domain_models(prior, DomainModel())
         assert merged.key_files == [{"path": "src/a.c", "reason": "r"}]
+
+    def test_merge_keeps_study_loop_role_file_shape(self):
+        # The study-loop attach emits {"role", "file"} entries; keying
+        # on "path" alone dropped them on every merge-promote, so the
+        # canonical project model never accumulated the loop's key
+        # files.
+        prior = DomainModel(key_files=[
+            {"role": "parser entry", "file": "src/parse.c"},
+        ])
+        new = DomainModel(key_files=[
+            {"path": "src/a.c", "reason": "cited by 2 study entries"},
+            {"role": "allocator", "file": "src/alloc.c"},
+        ])
+        merged = _merge_domain_models(prior, new)
+        keys = {kf.get("path") or kf.get("file") for kf in merged.key_files}
+        assert keys == {"src/parse.c", "src/a.c", "src/alloc.c"}
+
+    def test_merge_new_wins_across_shapes_on_same_file(self):
+        prior = DomainModel(key_files=[
+            {"role": "parser entry", "file": "src/parse.c"},
+        ])
+        new = DomainModel(key_files=[
+            {"path": "src/parse.c", "reason": "cited by 4 study entries"},
+        ])
+        merged = _merge_domain_models(prior, new)
+        assert merged.key_files == [
+            {"path": "src/parse.c", "reason": "cited by 4 study entries"},
+        ]

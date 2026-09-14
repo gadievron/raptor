@@ -189,13 +189,19 @@ def _merge_domain_models(prior: DomainModel, new: DomainModel) -> DomainModel:
     for bp in new.bug_patterns:
         bp_map[bp.id] = bp
 
+    # Two schema-typed attach shapes exist: the study pass emits
+    # {"path", ...} entries; the study-loop attach emits
+    # {"role", "file"}. Keying on "path" alone silently dropped every
+    # loop-attached entry on merge-promote, so the canonical project
+    # model never accumulated the loop's key files.
     kf_map: dict[str, dict[str, str]] = {}
-    for kf in prior.key_files:
-        if isinstance(kf, dict) and kf.get("path"):
-            kf_map[kf["path"]] = kf
-    for kf in new.key_files:
-        if isinstance(kf, dict) and kf.get("path"):
-            kf_map[kf["path"]] = kf
+    for source_list in (prior.key_files, new.key_files):
+        for kf in source_list:
+            if not isinstance(kf, dict):
+                continue
+            kf_key = kf.get("path") or kf.get("file")
+            if kf_key:
+                kf_map[kf_key] = kf
 
     def _merge_vocab(attr: str) -> list:
         """Merge a vocabulary list — new wins on the entry key."""
