@@ -1918,6 +1918,17 @@ def _is_dockerfile(path: Path) -> bool:
     return path.suffix == ".dockerfile"
 
 
+def _term(value: object, max_chars: int) -> str:
+    """Defang an untrusted value for terminal output: ANSI / BIDI /
+    control bytes neutralised, newlines collapsed, length-capped —
+    same treatment the report/review renderers give remote and
+    repo-sourced fields."""
+    from core.security.prompt_output_sanitise import sanitise_string
+    return " ".join(
+        sanitise_string(str(value), max_chars=max_chars).split(),
+    )
+
+
 def _title_severity(severity: str) -> str:
     """Title-Case severity for human-readable rendering (``high`` →
     ``High``), matching the adjacent Title-Case verdict labels. JSON
@@ -2013,12 +2024,17 @@ def render_report(report: BumpReport) -> str:
                 result_label = f"error: {head.error}"
             else:
                 result_label = "" if n_files == 1 else f"({n_files} files)"
+            # Locator / reasons / registry strings land on the
+            # operator's terminal — defang ANSI/BIDI/control bytes
+            # (same treatment the sibling renderers give remote and
+            # repo-sourced fields). Versions are semver-gated at the
+            # candidate walkers.
             lines.append(
                 f"  {head.candidate.kind:<11} "
-                f"{head.candidate.locator:<35} "
+                f"{_term(head.candidate.locator, 60):<35} "
                 f"{head.candidate.current_version:<14} "
                 f"{head.candidate.target_version:<22} "
-                f"{head.verdict_label:<8} {result_label}"
+                f"{head.verdict_label:<8} {_term(result_label, 200)}"
             )
             # Surface the supply-chain findings inline so operators
             # know WHY a verdict isn't Clean. (One copy per group;
@@ -2028,7 +2044,7 @@ def render_report(report: BumpReport) -> str:
             # the raw lowercase form stays in JSON.
             lines.extend(
                 f"      [{_title_severity(sf.severity)}] "
-                f"{sf.kind}: {sf.detail}"
+                f"{sf.kind}: {_term(sf.detail, 300)}"
                 for sf in head.bump_supply_chain_findings
             )
             # Surface newly-introduced CVEs (OSV vuln-delta) —
@@ -2039,14 +2055,15 @@ def render_report(report: BumpReport) -> str:
                 kev_marker = " KEV" if vf.in_kev else ""
                 lines.append(
                     f"      [{_title_severity(vf.severity)}{kev_marker}] "
-                    f"new-CVE {cve}: "
-                    f"{(adv.summary[:90] if adv and adv.summary else '')}"
+                    f"new-CVE {_term(cve, 60)}: "
+                    f"{_term(adv.summary[:90] if adv and adv.summary else '', 120)}"
                 )
     if report.skipped:
         lines.append("")
         lines.append("  Skipped:")
         for arg, path, reason in report.skipped:
             lines.append(
-                f"    {arg} ({path.name}): {reason}"
+                f"    {_term(arg, 80)} ({_term(path.name, 80)}): "
+                f"{_term(reason, 300)}"
             )
     return "\n".join(lines) + "\n"
