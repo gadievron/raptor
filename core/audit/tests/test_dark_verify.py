@@ -4343,6 +4343,12 @@ class TestModuleBindingToFindingFile:
         ("require_path", "ruby", "lib/auth.rb", "lib/lookalike"),
         ("require_path", "php", "src/auth.php", "src/lookalike.php"),
         ("require_path", "lua", "lib/auth.lua", "lib.lookalike"),
+        # Dotted DIRNAME: require "a.b.c" resolves to a/b/c.lua (every
+        # dot maps to a separator), NOT the finding's a.b/c.lua — the
+        # spelling-direction check accepted this plantable lookalike.
+        ("require_path", "lua", "a.b/c.lua", "a.b.c"),
+        # Dotted FILENAME stem: same resolution ambiguity.
+        ("require_path", "lua", "lib/auth.spec.lua", "lib.auth.spec"),
         ("use_module", "perl", "lib/Auth.pm", "lib::Lookalike"),
         ("import_path", "go", "pkg/auth/a.go", "example.com/m/pkg/other"),
     ])
@@ -4350,6 +4356,28 @@ class TestModuleBindingToFindingFile:
         err = validate_spec(self._spec(field, wrong, language, file))
         assert err is not None
         assert "not bound to the finding's file" in err
+
+    def test_lua_dotted_stem_has_no_derived_default(self):
+        # With no override the harness derives the dotted spelling
+        # from the stem — for a dotted-dirname file that inherits the
+        # SAME ambiguity (a.b/c.lua -> "a.b.c" -> a/b/c.lua), so the
+        # spec is rejected before anything executes.
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="a.b/c.lua", function="check",
+            language="lua", lang_config={},
+        )
+        err = validate_spec(spec)
+        assert err is not None
+        assert "no unambiguous" in err
+
+    def test_lua_clean_stem_keeps_derived_default(self):
+        # Both directions: a dot-free stem stays on the derived
+        # default with no override, exactly as before.
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="lib/auth.lua", function="check",
+            language="lua", lang_config={},
+        )
+        assert validate_spec(spec) is None
 
     @pytest.mark.parametrize("field,language,file,value", [
         ("require_path", "javascript", "src/auth.js", "./src/auth"),

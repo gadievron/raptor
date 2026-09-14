@@ -617,12 +617,27 @@ def _module_binding_error(spec: DarkWitnessSpec, lang: str) -> str | None:
         if rp and rp != file:
             return _reject("require_path", rp)
     elif lang == "lua":
+        # require() maps EVERY dot in the module name to a directory
+        # separator, so the binding must hold in the RESOLUTION
+        # direction: accept a spelling only when Lua's own mapping
+        # lands on the finding's file. The old spelling-direction
+        # check (rp == stem-with-dots) accepted "a.b.c" for a finding
+        # in "a.b/c.lua" — which Lua resolves to "a/b/c.lua", a
+        # plantable lookalike. A stem that itself contains a dot has
+        # NO unambiguous spelling (the harness default would inherit
+        # the same ambiguity), so it is rejected outright.
+        stem = file[:-4] if file.endswith(".lua") else file
         rp = lc.get("require_path", "")
         if not rp:
+            if "." in stem:
+                return (
+                    f"finding file {spec.file!r} has no unambiguous "
+                    f"Lua require spelling (require maps dots to "
+                    f"directory separators)"
+                )
             return None
-        stem = file[:-4] if file.endswith(".lua") else file
-        derived = stem.replace("/", ".")
-        if rp != derived and file != rp.replace(".", "/") + "/init.lua":
+        resolved = rp.replace(".", "/")
+        if file not in (resolved + ".lua", resolved + "/init.lua"):
             return _reject("require_path", rp)
     elif lang == "perl":
         um = lc.get("use_module", "")
