@@ -7,6 +7,7 @@ runs offline and is deterministic.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import List
 
@@ -385,6 +386,8 @@ def test_run_sca_warm_cache_avoids_network_on_second_run(tmp_path: Path) -> None
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(os.geteuid() == 0,
+                    reason="chmod 000 does not block reads for root")
 def test_find_previous_deps_skips_unreadable_sibling(tmp_path: Path) -> None:
     """When ``output_dir`` lives under a shared root like /tmp/, the
     parent contains other operators' / system dirs that the SCA
@@ -408,6 +411,8 @@ def test_find_previous_deps_skips_unreadable_sibling(tmp_path: Path) -> None:
         sibling_blocked.chmod(0o755)
 
 
+@pytest.mark.skipif(os.geteuid() == 0,
+                    reason="chmod 000 does not block reads for root")
 def test_find_previous_deps_unreadable_parent_returns_none(
     tmp_path: Path,
 ) -> None:
@@ -437,10 +442,15 @@ def test_find_previous_deps_returns_most_recent_by_mtime(
     older = tmp_path / "older"
     older.mkdir()
     (older / "findings.json").write_text("[]")
-    time.sleep(0.05)
     newer = tmp_path / "newer"
     newer.mkdir()
     (newer / "findings.json").write_text("[]")
+    # Explicit day-scale mtime offsets, not a sleep — a sleep-based
+    # ordering flakes when a loaded runner writes both files within
+    # one timestamp granule (same class as the cache-eviction tests).
+    now = time.time()
+    os.utime(older / "findings.json", (now - 86400, now - 86400))
+    os.utime(newer / "findings.json", (now, now))
     result = _find_previous_deps(out_dir)
     assert result == newer / "findings.json"
 
