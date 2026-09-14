@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 from packages.sca.parsers.inline_installs import (
     parse_devcontainer_json,
@@ -888,3 +890,60 @@ def test_regular_dockerfile_still_parsed(tmp_path: Path) -> None:
     p.write_text("RUN pip install foo==1.0\n", encoding="utf-8")
     deps = parse_dockerfile(p)
     assert [(d.name, d.version) for d in deps] == [("foo", "1.0")]
+
+
+# ---------------------------------------------------------------------------
+# Core-dockerfile parse failure: the regex fallback must actually run
+# ---------------------------------------------------------------------------
+
+def test_core_parse_failure_falls_back_to_regex_for_apt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When core.dockerfile.parse_dockerfile raises, the log promises
+    'falling back to regex scanner' — but the Debian manager stayed
+    suppressed in the shell-line scan, so apt deps were silently
+    dropped AND the raising second call aborted the file, discarding
+    the ARG pins already extracted. Both must survive."""
+    import core.dockerfile as core_df
+
+    def _boom(text: str):
+        raise ValueError("pathological dockerfile")
+
+    monkeypatch.setattr(core_df, "parse_dockerfile", _boom)
+    p = _write(
+        tmp_path,
+        "FROM debian:11\n"
+        "ARG SEMGREP_VERSION=1.161.0\n"
+        "RUN apt-get install -y nginx=1.18.0-6.1\n"
+        "RUN pip install semgrep==${SEMGREP_VERSION}\n",
+        "Dockerfile",
+    )
+    deps = parse_dockerfile(p)
+    by_eco = {}
+    for d in deps:
+        by_eco.setdefault(d.ecosystem, []).append(d)
+    # apt dep recovered by the regex fallback.
+    debian = by_eco.get("Debian", [])
+    assert any(d.name == "nginx" and d.version == "1.18.0-6.1"
+               for d in debian), deps
+    # ARG-pin extraction must not be discarded by the failed parse.
+    assert any(d.name == "semgrep" for d in by_eco.get("PyPI", [])), deps
+
+
+def test_core_parse_failure_regex_run_continuations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import core.dockerfile as core_df
+    monkeypatch.setattr(
+        core_df, "parse_dockerfile",
+        lambda text: (_ for _ in ()).throw(ValueError("nope")))
+    p = _write(
+        tmp_path,
+        "FROM python:3.13\n"
+        "RUN pip install \\\n"
+        "    django==4.2.7\n",
+        "Dockerfile",
+    )
+    deps = parse_dockerfile(p)
+    assert any(d.name == "django" and d.version == "4.2.7"
+               for d in deps), deps

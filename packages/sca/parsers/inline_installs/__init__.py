@@ -365,25 +365,37 @@ def parse_dockerfile(path: Path) -> list[Dependency]:
     # version (``1.0``) wins and the placeholder row is deduped out.
     from . import _arg_version_pins
     deps.extend(_arg_version_pins.extract(text, path))
-    deps.extend(_extract_apt_via_core_dockerfile(text, path))
+    apt_deps = _extract_apt_via_core_dockerfile(text, path)
+    # Debian is suppressed in the shell-line scanner only when the
+    # core apt extractor actually RAN (it is the richer source —
+    # stage/scope attribution, base-image suite). When the core
+    # dockerfile parse failed, the regex scanner is the fallback the
+    # failure log promises: suppressing Debian there too meant apt
+    # deps were silently dropped while the log claimed a fallback.
+    skip: set[str] = {"Debian"} if apt_deps is not None else set()
+    deps.extend(apt_deps or [])
     runs = _extract_dockerfile_run_blocks(text)
     deps.extend(_scan_shell_lines(
         runs, declared_in=path, source_kind="dockerfile",
-        skip_ecosystems={"Debian"},
+        skip_ecosystems=skip,
     ))
     return deps
 
 
 def _extract_apt_via_core_dockerfile(
     text: str, path: Path,
-) -> list[Dependency]:
+) -> list[Dependency] | None:
     """Use ``core.dockerfile.apt`` to extract Debian deps from a
     Dockerfile.
 
-    Returns one ``Dependency`` per ``AptPackage``. ``stage`` is
-    threaded into ``scope`` so multi-stage SBOMs distinguish builder
-    deps from runtime deps; absence of an ``AS <stage>`` clause
-    falls back to ``scope="main"`` (the legacy default).
+    Returns one ``Dependency`` per ``AptPackage``, or ``None`` when
+    the core dockerfile parse itself failed — the caller then lets
+    the regex shell-line scanner handle the Debian manager instead
+    of suppressing it (the actual fallback the log line promises).
+    ``stage`` is threaded into ``scope`` so multi-stage SBOMs
+    distinguish builder deps from runtime deps; absence of an ``AS
+    <stage>`` clause falls back to ``scope="main"`` (the legacy
+    default).
     """
     from core.dockerfile import (
         extract_apt_packages,
@@ -397,7 +409,7 @@ def _extract_apt_via_core_dockerfile(
             "failed for %s — falling back to regex scanner",
             path, exc_info=True,
         )
-        return []
+        return None
     from ._base_image_suite import stage_image_map
     stage_img = stage_image_map(instructions)
     out: list[Dependency] = [_apt_package_to_dep(ap, path,
@@ -645,9 +657,21 @@ def _extract_dockerfile_run_blocks(text: str) -> list[tuple[int, str, bool]]:
     """
     from core.dockerfile import parse_dockerfile as _parse_dockerfile_core
 
-
-    # Live RUN instructions — delegated.
-    out: list[tuple[int, str, bool]] = [(inst.line, inst.args, False) for inst in _parse_dockerfile_core(text) if inst.directive == "RUN" and inst.args]
+    # Live RUN instructions — delegated. Guarded like the apt
+    # extractor's call to the same parser: a raising input previously
+    # aborted the WHOLE file here (discarding the ARG-pin deps already
+    # extracted); now it degrades to the regex RUN scan.
+    try:
+        instructions = _parse_dockerfile_core(text)
+    except Exception:                               # noqa: BLE001
+        logger.warning(
+            "sca.parsers.inline_installs: core.dockerfile parse "
+            "failed — falling back to regex RUN scan", exc_info=True,
+        )
+        out: list[tuple[int, str, bool]] = _extract_live_run_blocks_regex(text)
+    else:
+        out = [(inst.line, inst.args, False) for inst in instructions
+               if inst.directive == "RUN" and inst.args]
 
     # Commented RUN blocks — small inline pass. Rare but cheap to
     # preserve behaviour. Honours backslash continuation across
@@ -655,6 +679,41 @@ def _extract_dockerfile_run_blocks(text: str) -> list[tuple[int, str, bool]]:
     out.extend(_extract_commented_run_blocks(text))
 
     out.sort(key=lambda x: x[0])
+    return out
+
+
+def _extract_live_run_blocks_regex(
+    text: str,
+) -> list[tuple[int, str, bool]]:
+    """Regex fallback for live RUN blocks when the core dockerfile
+    parser refuses the input. Mirrors the commented-block scanner's
+    continuation handling; deliberately simple — the goal is that a
+    pathological Dockerfile still yields its install lines rather
+    than zero deps."""
+    out: list[tuple[int, str, bool]] = []
+    raw = text.splitlines()
+    i = 0
+    while i < len(raw):
+        line = raw[i]
+        if line.lstrip().startswith("#"):
+            i += 1
+            continue
+        m = _DOCKERFILE_RUN_RE.match(line)
+        if m is None:
+            i += 1
+            continue
+        start = i + 1
+        chunks = [line[m.end():]]
+        while chunks[-1].rstrip().endswith("\\"):
+            chunks[-1] = chunks[-1].rstrip()[:-1]
+            i += 1
+            if i >= len(raw):
+                break
+            chunks.append(raw[i])
+        joined = " ".join(c.strip() for c in chunks).strip()
+        if joined:
+            out.append((start, joined, False))
+        i += 1
     return out
 
 
