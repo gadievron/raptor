@@ -2,6 +2,8 @@
 
 import importlib.machinery
 import importlib.util
+import io
+import json
 import os
 import subprocess
 import sys
@@ -55,6 +57,18 @@ def _status(d: Path) -> str:
     return load_json(d / RUN_METADATA_FILE).get("status")
 
 
+#: PostToolUseFailure stdin payload for a failed RAPTOR pipeline call —
+#: the only shape that may stamp the failure marker.
+RAPTOR_BASH_FAILURE = json.dumps({
+    "tool_name": "Bash",
+    "tool_input": {"command": "libexec/raptor-run-lifecycle start scan"},
+})
+
+
+def _stdin(payload: str):
+    return patch.object(sys, "stdin", io.StringIO(payload))
+
+
 class TestToolFailureMarker(unittest.TestCase):
     """tool-failure mode writes a soft marker without changing status."""
 
@@ -64,7 +78,8 @@ class TestToolFailureMarker(unittest.TestCase):
             run = _make_running_run(out, "scan-20260503", "scan")
             with patch.object(_hook_mod, "REPO_ROOT", Path(tmp)), \
                  patch("core.run.metadata._get_session_pid",
-                       return_value=SESSION_PID):
+                       return_value=SESSION_PID), \
+                 _stdin(RAPTOR_BASH_FAILURE):
                 sys.argv = ["hook", "tool-failure"]
                 _hook_mod.main()
             self.assertTrue((run / FAILURE_MARKER).exists())
@@ -77,7 +92,8 @@ class TestToolFailureMarker(unittest.TestCase):
             run2 = _make_running_run(out, "agentic-002", "agentic")
             with patch.object(_hook_mod, "REPO_ROOT", Path(tmp)), \
                  patch("core.run.metadata._get_session_pid",
-                       return_value=SESSION_PID):
+                       return_value=SESSION_PID), \
+                 _stdin(RAPTOR_BASH_FAILURE):
                 sys.argv = ["hook", "tool-failure"]
                 _hook_mod.main()
             self.assertTrue((run1 / FAILURE_MARKER).exists())
@@ -90,7 +106,8 @@ class TestToolFailureMarker(unittest.TestCase):
                                     session_pid=88888)
             with patch.object(_hook_mod, "REPO_ROOT", Path(tmp)), \
                  patch("core.run.metadata._get_session_pid",
-                       return_value=SESSION_PID):
+                       return_value=SESSION_PID), \
+                 _stdin(RAPTOR_BASH_FAILURE):
                 sys.argv = ["hook", "tool-failure"]
                 _hook_mod.main()
             self.assertFalse((run / FAILURE_MARKER).exists())
@@ -104,10 +121,62 @@ class TestToolFailureMarker(unittest.TestCase):
             save_json(run / RUN_METADATA_FILE, meta)
             with patch.object(_hook_mod, "REPO_ROOT", Path(tmp)), \
                  patch("core.run.metadata._get_session_pid",
-                       return_value=SESSION_PID):
+                       return_value=SESSION_PID), \
+                 _stdin(RAPTOR_BASH_FAILURE):
                 sys.argv = ["hook", "tool-failure"]
                 _hook_mod.main()
             self.assertFalse((run / FAILURE_MARKER).exists())
+
+
+class TestToolFailureFiltering(unittest.TestCase):
+    """Only failed Bash calls on the libexec/raptor-* dispatch surface
+    may stamp the failure marker: the hook-config `matcher` filters by
+    tool NAME only, so an unrelated failed Bash call (a typo'd grep)
+    would otherwise flip a successful run to failed at the next Stop."""
+
+    def _run_hook(self, tmp: str, payload: str) -> Path:
+        out = Path(tmp) / "out"
+        run = _make_running_run(out, "scan-001", "scan")
+        with patch.object(_hook_mod, "REPO_ROOT", Path(tmp)), \
+             patch("core.run.metadata._get_session_pid",
+                   return_value=SESSION_PID), \
+             _stdin(payload):
+            sys.argv = ["hook", "tool-failure"]
+            _hook_mod.main()
+        return run
+
+    def test_unrelated_bash_failure_writes_no_marker(self):
+        payload = json.dumps({
+            "tool_name": "Bash",
+            "tool_input": {"command": "grep -r pattern /nonexistent"},
+        })
+        with TemporaryDirectory() as tmp:
+            run = self._run_hook(tmp, payload)
+            self.assertFalse((run / FAILURE_MARKER).exists())
+
+    def test_non_bash_tool_failure_writes_no_marker(self):
+        payload = json.dumps({
+            "tool_name": "Read",
+            "tool_input": {"file_path": "libexec/raptor-agentic"},
+        })
+        with TemporaryDirectory() as tmp:
+            run = self._run_hook(tmp, payload)
+            self.assertFalse((run / FAILURE_MARKER).exists())
+
+    def test_malformed_stdin_writes_no_marker(self):
+        with TemporaryDirectory() as tmp:
+            run = self._run_hook(tmp, "{not json")
+            self.assertFalse((run / FAILURE_MARKER).exists())
+
+    def test_empty_stdin_writes_no_marker(self):
+        with TemporaryDirectory() as tmp:
+            run = self._run_hook(tmp, "")
+            self.assertFalse((run / FAILURE_MARKER).exists())
+
+    def test_raptor_dispatch_failure_writes_marker(self):
+        with TemporaryDirectory() as tmp:
+            run = self._run_hook(tmp, RAPTOR_BASH_FAILURE)
+            self.assertTrue((run / FAILURE_MARKER).exists())
 
 
 class TestStopHook(unittest.TestCase):
@@ -512,7 +581,7 @@ class TestE2EHookScript(unittest.TestCase):
             self.skipTest("Requires CLAUDECODE environment")
         result = subprocess.run(
             [sys.executable, str(HOOK_SCRIPT), "tool-failure"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, input=RAPTOR_BASH_FAILURE,
         )
         self.assertEqual(result.returncode, 0)
 

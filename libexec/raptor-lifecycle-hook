@@ -61,6 +61,36 @@ _MAX_META_BYTES = 8 * 1024 * 1024
 _MULTI_TURN_COMMANDS = frozenset({"validate", "understand", "audit"})
 
 
+def _tool_failure_relevant(stream) -> bool:
+    """Only failures of RAPTOR pipeline commands mark a live run.
+
+    settings.json registers the tool-failure hook with a ``Bash``
+    matcher, but tool-NAME matching alone would stamp the failure
+    marker for ANY failed Bash call in the session (a typo'd grep,
+    an unrelated build command) — the next Stop then finalizes a
+    SUCCESSFUL run as failed. Command-string filtering isn't a
+    supported hook-config field, so read the hook's stdin JSON here
+    and require a Bash tool_input whose command references the
+    ``libexec/raptor-`` dispatch surface.
+
+    Fail direction (both-directions trade-off): unreadable, malformed,
+    or non-matching stdin → NOT relevant, no marker. A spurious marker
+    flips a successful run to Failed at the next Stop; a missed marker
+    merely restores the pre-marker behaviour (run completes; the
+    command's own error handling still reports the failure).
+    """
+    import json
+    try:
+        payload = json.load(stream)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
+        return False
+    tool_input = payload.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    return isinstance(command, str) and "libexec/raptor-" in command
+
+
 def main():
     if len(sys.argv) < 2 or sys.argv[1] not in ("stop", "session-end", "tool-failure"):
         print(f"Usage: {Path(__file__).name} stop|session-end|tool-failure",
@@ -68,6 +98,9 @@ def main():
         sys.exit(1)
 
     event = sys.argv[1]
+
+    if event == "tool-failure" and not _tool_failure_relevant(sys.stdin):
+        return
 
     from core.json import load_json
     from core.run.metadata import (
