@@ -1276,6 +1276,41 @@ class TestNeutralCwd:
         assert (os.stat(d1).st_mode & 0o777) == 0o700
         assert os.listdir(d1) == []
 
+    def test_concurrent_first_calls_create_one_dir(self, monkeypatch):
+        """Lock-guarded lazy init: two threads racing the first CC
+        dispatch must converge on ONE scratch dir — the un-guarded
+        check-then-create let the loser's dir leak (registered,
+        keepalive-refreshed, unused) until process exit."""
+        import threading
+
+        import core.run.scratch as scratch_mod
+        from core.llm import cc_adapter
+
+        monkeypatch.setattr(cc_adapter, "_neutral_cwd", None)
+        created: list[str] = []
+        real_scratch_dir = scratch_mod.scratch_dir
+        entered = threading.Barrier(8, timeout=5)
+
+        def _counting(prefix, **kw):
+            created.append(prefix)
+            return real_scratch_dir(prefix, **kw)
+
+        monkeypatch.setattr(scratch_mod, "scratch_dir", _counting)
+
+        results: list[str] = []
+
+        def _call():
+            entered.wait()
+            results.append(cc_adapter.neutral_cwd())
+
+        threads = [threading.Thread(target=_call) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        assert len(set(results)) == 1
+        assert len(created) == 1
+
 
 class TestResolveClaudeCli:
     """resolve_claude_cli: realpath at the dispatch resolution seam.

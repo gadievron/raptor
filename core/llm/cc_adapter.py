@@ -482,6 +482,7 @@ def _mint_child_aws_credentials(env: dict) -> None:
 
 
 _neutral_cwd: str | None = None
+_neutral_cwd_lock = threading.Lock()
 
 
 def neutral_cwd() -> str:
@@ -503,13 +504,20 @@ def neutral_cwd() -> str:
     """
     import os
     global _neutral_cwd
-    if _neutral_cwd is None or not os.path.isdir(_neutral_cwd):
-        import atexit
-        from core.run.scratch import scratch_dir
-        stack = contextlib.ExitStack()
-        _neutral_cwd = str(stack.enter_context(scratch_dir("raptor-cc-cwd-")))
-        atexit.register(stack.close)
-    return _neutral_cwd
+    # Lock-guarded check-then-create (same discipline as
+    # ``_sysprompt_lock`` below): two threads spawning their first CC
+    # dispatch concurrently would otherwise each create a scratch dir
+    # + ExitStack, leaking the loser's dir until process exit.
+    with _neutral_cwd_lock:
+        if _neutral_cwd is None or not os.path.isdir(_neutral_cwd):
+            import atexit
+            from core.run.scratch import scratch_dir
+            stack = contextlib.ExitStack()
+            _neutral_cwd = str(
+                stack.enter_context(scratch_dir("raptor-cc-cwd-"))
+            )
+            atexit.register(stack.close)
+        return _neutral_cwd
 
 
 @dataclass(frozen=True)
