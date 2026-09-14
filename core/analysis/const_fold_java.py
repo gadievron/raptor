@@ -438,6 +438,15 @@ def _fold(node: Node, resolve_name, depth: int, array_resolver=None,
         raw = node.text.decode()
         if len(raw) < 2 or "\\" in raw:
             return _REFUSE
+        if raw.startswith('"""'):
+            # Java text block (tree-sitter types it string_literal
+            # too): ``"""x"""`` would slice to ``""x""`` — a wrong
+            # value that compares UNEQUAL where Java says EQUAL, and
+            # a wrong-unequal in branch-selection position prunes the
+            # TRUE arm (the false-suppression direction). Text-block
+            # semantics (incidental-whitespace stripping) are not
+            # modelled — refuse, the folder's standing posture.
+            return _REFUSE
         return raw[1:-1]
     if t in ("true", "false"):
         return t == "true"

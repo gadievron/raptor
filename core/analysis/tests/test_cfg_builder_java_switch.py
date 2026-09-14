@@ -299,3 +299,35 @@ class TestGateVerdictsThroughSwitch:
             tmp_path, self._body('int num = 106;', drop_break=True),
             4, 14,
         ) != "suppress"
+
+
+class TestTextBlockDiscriminantRefusesFold:
+    def test_text_block_discriminant_keeps_all_branches(self):
+        # A Java text block parses as string_literal too; slicing its
+        # raw text decoded """b""" to '""b""', which compares UNEQUAL
+        # to the plain "b" label where Java says EQUAL — the
+        # refinement then pruned the TRUE (sanitizing) arm and kept
+        # the tainted default, the false-suppression direction. Text
+        # blocks refuse the fold; every edge stays.
+        cfg, _ = _cfg(
+            '        String mode = """b""";\n'
+            "        String y;\n"
+            "        switch (mode) {\n"
+            '          case "a":\n'
+            "            y = x;\n"
+            "            break;\n"
+            '          case "b":\n'
+            "            y = Encode.forHtml(x);\n"
+            "            break;\n"
+            "          default:\n"
+            "            y = x;\n"
+            "            break;\n"
+            "        }\n"
+            "        out.println(y);\n"
+        )
+        assert cfg is not None
+        assert "switch:constant-resolved" not in cfg.build_notes
+        cond = _by_label(cfg, "switch ")
+        succ = _succ_labels(cfg, cond)
+        assert any('case "a"' in s for s in succ)
+        assert any('case "b"' in s for s in succ)
