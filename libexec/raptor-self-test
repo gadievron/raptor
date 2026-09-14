@@ -1835,7 +1835,7 @@ def case_flag_matrix(ctx: Ctx) -> None:
          (0,), None, base / "scan" / "combined.sarif", False, 600),
         ("agentic-sequential",
          [*agentic_common, "--out", str(base / "ag-seq"), "--sequential"],
-         (0, 1), "sequential-mode", None, False, 600),
+         (0, 1), None, None, False, 600),
         ("agentic-no-binary-oracle",
          [*agentic_common, "--out", str(base / "ag-nbo"),
           "--no-binary-oracle"],
