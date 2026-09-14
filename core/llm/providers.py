@@ -787,6 +787,7 @@ class LLMProvider(ABC):
         say nothing about instructor's reliability.
         """
         from core.llm.structured_call import (
+            RATE_LIMIT_KEYWORDS_RE,
             is_auth_error_text,
             is_content_filter_text,
         )
@@ -811,7 +812,12 @@ class LLMProvider(ABC):
             getattr(exc, "status_code", None) == 429
             or "RateLimitError" in type_name
             or (transport and (
-                "429" in text
+                # Anchored 429 (RATE_LIMIT_KEYWORDS_RE) — even
+                # transport messages embed unrelated numerics (ports,
+                # byte counts, httpx-decoded body fragments), so a
+                # bare "429" substring misroutes. The word-shaped
+                # quota arms stay as-is.
+                RATE_LIMIT_KEYWORDS_RE.search(text)
                 or "rate limit" in lowered
                 or ("quota" in lowered and "exceeded" in lowered)
             ))

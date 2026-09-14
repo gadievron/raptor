@@ -576,3 +576,15 @@ def test_instructor_path_honours_per_call_max_tokens(monkeypatch) -> None:
             max_tokens=1234,
         )
     assert captured.get("max_tokens") == 1234
+
+
+def test_transport_unrelated_429_numeric_routes_fallback() -> None:
+    """Even transport messages embed numerics (ports, byte offsets,
+    httpx-decoded body fragments) — only an anchored 429 shape routes
+    quota."""
+    assert LLMProvider._instructor_exception_route(
+        _transport_exc("connection reset at byte offset 14293")
+    ) == "fallback"
+    # Genuine shapes keep the quota route.
+    assert LLMProvider._instructor_exception_route(
+        _transport_exc("429 RESOURCE_EXHAUSTED")) == "quota"
