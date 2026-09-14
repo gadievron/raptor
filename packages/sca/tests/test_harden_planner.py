@@ -715,8 +715,9 @@ def test_promotion_demoted_when_target_published_recently() -> None:
     2026-05-20 self-bump simulation: harden's OSV-only ranking says
     Clean (no CVEs at 1.163.0); but the bump-tier
     ``recent_publish`` detector says target was published ~now.
-    Post option-2c, harden mirrors bump's verdict and demotes to
-    ``review_required``."""
+    Post option-2c, harden mirrors bump's verdict and demotes —
+    to the distinct ``demoted_safety`` status, which no apply flag
+    (not even --allow-major-without-review) can force through."""
     from datetime import datetime, timezone
 
     dep = _dep(name="semgrep", version="1.161.0",
@@ -734,7 +735,7 @@ def test_promotion_demoted_when_target_published_recently() -> None:
         offline=False, allow_major=False,
     )
 
-    assert cand.status == "review_required"
+    assert cand.status == "demoted_safety"
     assert cand.to_version == "1.163.0"
     assert "recent_publish" in (cand.detail or ""), (
         f"detail should cite the supply-chain finding kind; got: "
@@ -1510,3 +1511,69 @@ def test_plan_parallel_walk_preserves_dep_order(
     assert [c.name for c in candidates] == names
     assert all(c.status == "promoted" and c.to_version == "1.5"
                for c in candidates)
+
+
+# ---------------------------------------------------------------------------
+# demoted_safety: distinct status, never force-appliable; safety check
+# runs even for major-crossing candidates
+# ---------------------------------------------------------------------------
+
+def test_demoted_safety_never_actionable_under_any_flags() -> None:
+    """A supply-chain demotion previously shared review_required with
+    the major-crossing gate, so --allow-major-without-review — a flag
+    about major bumps — force-applied candidates the safety check had
+    demoted. The distinct status must be inert under EVERY flag
+    combination."""
+    from packages.sca.harden import _count_actionable
+    cands = [_candidate("demoted_safety")]
+    for amwr in (False, True):
+        for ad in (False, True):
+            assert _count_actionable(
+                cands, allow_major_without_review=amwr,
+                allow_degraded=ad) == 0
+
+
+def test_major_crossing_candidate_still_gets_safety_check() -> None:
+    """The old early return for major crossings skipped the
+    promotion-safety evaluation entirely: under
+    --allow-major-without-review a major bump to a version published
+    hours ago auto-applied with the recent-publish check never
+    executed. The safety check must run first; its demotion wins."""
+    from datetime import datetime, timezone
+
+    dep = _dep(name="semgrep", version="1.161.0",
+               pin_style=PinStyle.EXACT)
+    now_iso = datetime.now(timezone.utc).isoformat().replace(
+        "+00:00", "Z")
+    # 2.0.0 crosses a major AND was published just now.
+    pypi = _StubPyPIClient(version="2.0.0", upload_iso=now_iso)
+    cand = _plan_one(
+        dep,
+        registries={"PyPI": pypi},
+        osv=_FakeOsv({"2.0.0": []}),
+        offline=False, allow_major=False,
+    )
+    assert cand.crosses_major is True
+    assert cand.status == "demoted_safety"
+    assert "recent_publish" in (cand.detail or "")
+
+
+def test_major_crossing_clean_target_still_review_required() -> None:
+    """Direction two: a major crossing whose safety evaluation finds
+    nothing keeps the review_required gate (appliable via the
+    operator's explicit --allow-major-without-review)."""
+    from datetime import datetime, timezone, timedelta
+
+    dep = _dep(name="semgrep", version="1.161.0",
+               pin_style=PinStyle.EXACT)
+    old_iso = (datetime.now(timezone.utc) - timedelta(days=400)) \
+        .isoformat().replace("+00:00", "Z")
+    pypi = _StubPyPIClient(version="2.0.0", upload_iso=old_iso)
+    cand = _plan_one(
+        dep,
+        registries={"PyPI": pypi},
+        osv=_FakeOsv({"2.0.0": []}),
+        offline=False, allow_major=False,
+    )
+    assert cand.status == "review_required"
+    assert "crosses a major boundary" in (cand.detail or "")

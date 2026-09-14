@@ -110,7 +110,14 @@ class HardenCandidate:
                                 version >= the recorded corridor floor
                                 (gated behind ``--allow-degraded``)
       - ``up_to_date``       — already at latest safe in range
-      - ``review_required``  — bump exists but crosses a major (gated)
+      - ``review_required``  — bump exists but crosses a major (gated;
+                                appliable only via
+                                ``--allow-major-without-review``)
+      - ``demoted_safety``   — the promotion-safety check found
+                                supply-chain findings (recent publish,
+                                suspicious install hook, platform
+                                regression); NEVER auto-applied by any
+                                flag — the operator resolves it by hand
       - ``skipped_loose_pin`` — ``--pin-only`` set + dep is loose
       - ``unsupported_manifest`` — registry has versions but the
                                 manifest format has no rewriter (e.g.,
@@ -836,18 +843,16 @@ def _plan_one(
 
     # Determine major crossing — applies to both promoted and
     # degraded_safety (a degraded promotion that crosses a major needs
-    # review *and* impact analysis).
+    # review *and* impact analysis). The gate itself is applied AFTER
+    # the promotion-safety check below: an early return here used to
+    # skip that check entirely, so ``--allow-major-without-review``
+    # force-applied major bumps whose recent-publish / install-hook
+    # evaluation never executed — the exact scenario the check exists
+    # to block, on a command named "harden".
+    crosses = False
     if dep.version is not None:
         crosses = _crosses_major(dep.ecosystem, dep.version, target_version)
         cand.crosses_major = crosses
-        if crosses and not allow_major:
-            cand.status = "review_required"
-            cand.detail = (
-                f"latest safe ({target_version}) crosses a major boundary "
-                f"from {dep.version}; rerun with --allow-major or wait for "
-                f"LLM impact analysis"
-            )
-            return cand
 
     cand.status = target_status
     if target_status == "degraded_safety":
@@ -889,6 +894,13 @@ def _plan_one(
     # operators who want the pure vuln-only path have
     # ``raptor-sca fix --cve-only``; a fast-flag here would just be
     # a footgun on a command named "harden".
+    # Trade-off, both directions: running this BEFORE the major gate
+    # means major-crossing candidates now pay the per-dep registry-
+    # metadata cost even when the operator never applies them; the
+    # alternative (evaluate at apply time only) would split the safety
+    # authority across two phases and reintroduce the skipped-check
+    # window on any future apply path. The per-dep cost is the same
+    # ~30-60s/week figure the check's design already accepts.
     if (target_status in ("promoted", "degraded_safety")
             and not offline):
         sc_findings = _evaluate_promotion_safety(
@@ -898,7 +910,13 @@ def _plan_one(
         )
         if sc_findings:
             kinds = sorted({f.kind for f in sc_findings})
-            cand.status = "review_required"
+            # Distinct status: a supply-chain demotion must never be
+            # force-appliable. It previously shared "review_required"
+            # with the major-crossing gate, so
+            # ``--allow-major-without-review`` — a flag about MAJOR
+            # BUMPS — silently applied candidates the safety check
+            # had demoted.
+            cand.status = "demoted_safety"
             existing_detail = cand.detail or ""
             cand.detail = (
                 (existing_detail + "; " if existing_detail else "")
@@ -906,6 +924,15 @@ def _plan_one(
                 f"{len(sc_findings)} supply-chain finding(s) "
                 f"({', '.join(kinds)}); operator review required"
             )
+            return cand
+
+    if crosses and not allow_major:
+        cand.status = "review_required"
+        cand.detail = (
+            f"latest safe ({target_version}) crosses a major boundary "
+            f"from {dep.version}; rerun with --allow-major or wait for "
+            f"LLM impact analysis"
+        )
     return cand
 
 
@@ -1761,6 +1788,16 @@ def _write_report(
         lines.extend(f"- **{c.ecosystem}:{c.name}** "
                 f"`{c.from_version or '*'}` → `{c.to_version}` "
                 f"in `{c.manifest}` — {c.detail}" for c in by_status["review_required"])
+        lines.append("")
+
+    if "demoted_safety" in by_status:
+        lines.append(
+            "## Demoted by promotion-safety signals (never auto-applied)")
+        lines.append("")
+        lines.extend(f"- **{c.ecosystem}:{c.name}** "
+                f"`{c.from_version or '*'}` → `{c.to_version}` "
+                f"in `{c.manifest}` — {c.detail}"
+                for c in by_status["demoted_safety"])
         lines.append("")
 
     if "library_floor_raise_unsupported" in by_status:
