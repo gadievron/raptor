@@ -12,10 +12,27 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from packages.llm_analysis.dataflow_validation import (
     _build_hypothesis,
     _build_strategy_block,
 )
+
+
+@pytest.fixture(autouse=True)
+def _empty_l3_pool(monkeypatch):
+    """Hypothesis building reaches L3 exemplar retrieval, which reads
+    real per-user state (labeled-attempt pools, active-project
+    discovery) when left ungated — pin it hermetic like the sibling
+    exemplar tests so these tests only see the state they construct."""
+    monkeypatch.setattr(
+        "core.labeled_attempts.retrieval.retrieve_exemplars",
+        lambda **kw: [],
+    )
+    monkeypatch.setattr(
+        "core.run.output._resolve_active_project", lambda: None,
+    )
 
 # ---------------------------------------------------------------------------
 # CWE → strategy in validator context
