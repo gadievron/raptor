@@ -39,8 +39,10 @@ from .scorecard import (
 
 # Shared resolver (RAPTOR_SCORECARD_PATH override → RAPTOR_DIR-anchored
 # → relative fallback): the CLI must read the SAME ledger analysis runs
-# write, regardless of the invoking cwd.
-DEFAULT_PATH = default_scorecard_path()
+# write, regardless of the invoking cwd. Resolved lazily at
+# parser-build time, NOT frozen at import — an env override set after
+# import (in-process callers, some test orders) must still win, like
+# every other call site of the resolver.
 
 
 # ---------------------------------------------------------------------------
@@ -1194,8 +1196,9 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--path", type=Path, default=DEFAULT_PATH,
-        help=f"sidecar path (default: {DEFAULT_PATH})",
+        "--path", type=Path, default=default_scorecard_path(),
+        help=f"sidecar path (default: {default_scorecard_path()}),"
+             " resolved at invocation",
     )
     p.add_argument(
         "--json", action="store_true",

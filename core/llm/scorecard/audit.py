@@ -45,8 +45,9 @@ if TYPE_CHECKING:
 
 # Shared resolver (RAPTOR_SCORECARD_PATH override → RAPTOR_DIR-anchored
 # → relative fallback): the audit must read the SAME ledger analysis
-# runs write, regardless of the invoking cwd.
-DEFAULT_PATH = default_scorecard_path()
+# runs write, regardless of the invoking cwd. Resolved lazily at each
+# entry point, NOT frozen at import — an env override set after import
+# (in-process callers, some test orders) must still win.
 
 # Sample-count thresholds reported in the cell-count histogram. N=10 is
 # the existing scorecard's ``sample_size_floor`` (where ``learning`` ends
@@ -157,7 +158,7 @@ def _load_raw(path: Path) -> dict | None:
         raise SystemExit(msg) from exc
 
 
-def audit(path: Path = DEFAULT_PATH) -> AuditReport:
+def audit(path: Path | None = None) -> AuditReport:
     """Compute the audit report for the scorecard at ``path``.
 
     Pure function modulo file IO — given identical input, output is
@@ -167,7 +168,12 @@ def audit(path: Path = DEFAULT_PATH) -> AuditReport:
     disagree on totals when the sidecar fails verification (the stats
     view discards unverified content, the raw walk counts it; the raw
     numbers are diagnostic, not trust-bearing).
+
+    ``path=None`` resolves through the shared resolver at CALL time so
+    a ``RAPTOR_SCORECARD_PATH`` override set after import still wins.
     """
+    if path is None:
+        path = default_scorecard_path()
     raw = _load_raw(path)
     if raw is None or not isinstance(raw, dict):
         return AuditReport(
@@ -420,9 +426,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--path",
         type=Path,
-        default=DEFAULT_PATH,
+        default=None,
         help=(
-            f"Path to the scorecard JSON (default: {DEFAULT_PATH}). "
+            "Path to the scorecard JSON (default: the shared "
+            "resolver's path, resolved at invocation). "
             "Pass a project-local path to audit a project sidecar."
         ),
     )

@@ -115,3 +115,25 @@ class TestConsumerResolution:
         ])
         assert n == 1
         assert sc_path.is_file()
+
+
+class TestLazyDefaults:
+    def test_cli_and_audit_defaults_resolve_at_invocation(
+        self, monkeypatch, tmp_path,
+    ):
+        """The CLI parser default and ``audit()``'s default must
+        resolve through the shared resolver at CALL time — a
+        module-level ``default_scorecard_path()`` froze the path at
+        import, silently ignoring an env override set later
+        (in-process callers, some test orders)."""
+        iso = tmp_path / "iso.json"
+        monkeypatch.setenv("RAPTOR_SCORECARD_PATH", str(iso))
+
+        from core.llm.scorecard import audit as audit_mod
+        from core.llm.scorecard import cli as cli_mod
+
+        args = cli_mod._build_parser().parse_args(["list"])
+        assert args.path == iso
+
+        report = audit_mod.audit()
+        assert report.scorecard_path == str(iso)
