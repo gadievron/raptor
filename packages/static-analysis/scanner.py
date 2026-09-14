@@ -1504,12 +1504,63 @@ class _CodeQLStageTag(logging.Filter):
         return True
 
 
+class _CodeQLStageHandle:
+    """Cross-thread kill switch for the concurrent CodeQL stage.
+
+    ``run_codeql`` runs on a NON-daemon executor worker whose inner
+    ``proc.communicate`` waits up to 3600s; concurrent.futures joins
+    that worker at interpreter shutdown. An abort raised out of the
+    semgrep stage (SandboxSetupError's fail-loud contract,
+    KeyboardInterrupt) therefore used to print "scan aborted" and then
+    block for up to an hour while the codeql agent kept burning
+    CPU/disk. The abort path calls :meth:`abort`, which SIGKILLs the
+    agent's whole process group so the worker's join returns promptly;
+    the register/abort race (abort lands before the spawn finishes) is
+    closed by killing at registration when already aborted.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._proc: subprocess.Popen | None = None
+        self._aborted = False
+
+    @property
+    def aborted(self) -> bool:
+        with self._lock:
+            return self._aborted
+
+    def register(self, proc: subprocess.Popen) -> None:
+        with self._lock:
+            self._proc = proc
+            if self._aborted:
+                self._kill_locked()
+
+    def clear(self) -> None:
+        with self._lock:
+            self._proc = None
+
+    def abort(self) -> None:
+        with self._lock:
+            self._aborted = True
+            self._kill_locked()
+
+    def _kill_locked(self) -> None:
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
 def run_codeql(
     repo_path: Path,
     out_dir: Path,
     languages: list[str] | None = None,
     build_command: str | None = None,
     traced_build: bool = False,
+    stage_handle: _CodeQLStageHandle | None = None,
 ) -> list[str]:
     """Delegate CodeQL analysis to packages/codeql/agent.py.
 
@@ -1588,12 +1639,17 @@ def run_codeql(
     # this — their immediate child IS the namespace, and killing
     # the namespace kills everything inside.
     proc = None
+    if stage_handle is not None and stage_handle.aborted:
+        logger.warning("codeql stage aborted before agent spawn; skipping")
+        return []
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, start_new_session=True,
             env=RaptorConfig.get_safe_env(),
         )
+        if stage_handle is not None:
+            stage_handle.register(proc)
         try:
             stdout, stderr = proc.communicate(timeout=3600)
             returncode = proc.returncode
@@ -1608,8 +1664,15 @@ def run_codeql(
                 pass
             logger.warning("codeql agent timed out after 3600s; skipping")
             return []
+        finally:
+            if stage_handle is not None:
+                stage_handle.clear()
     except OSError as e:
         logger.warning("failed to invoke codeql agent: %s", e)
+        return []
+    if stage_handle is not None and stage_handle.aborted:
+        # Killed by the abort path: report the abort, not an agent rc.
+        logger.warning("codeql stage aborted; agent killed")
         return []
 
     if returncode == SANDBOX_ENGAGE_EXIT_CODE:
@@ -3093,27 +3156,46 @@ def main() -> None:
             _codeql_pool = ThreadPoolExecutor(
                 max_workers=1, thread_name_prefix="codeql-stage")
             _codeql_t0 = time.time()
+            _codeql_stage_handle = _CodeQLStageHandle()
             _codeql_future = _codeql_pool.submit(
                 run_codeql, repo_path, out_dir,
                 languages=_langs_arg,
                 build_command=args.build_command,
                 traced_build=args.traced_build,
+                stage_handle=_codeql_stage_handle,
             )
 
-        if args.sequential:
-            # Fallback to sequential for debugging
-            logger.warning("Sequential scanning enabled (slower)")
-            semgrep_sarifs, semgrep_failed = semgrep_scan_sequential(
-                repo_path, rules_dirs, out_dir,
-                baseline_packs=resolved_baseline,
-                extra_configs=args.extra_config,
-            )
-        else:
-            semgrep_sarifs, semgrep_failed = semgrep_scan_parallel(
-                repo_path, rules_dirs, out_dir,
-                baseline_packs=resolved_baseline,
-                extra_configs=args.extra_config,
-            )
+        def _abort_codeql_stage() -> None:
+            # An exception between submit and join (semgrep's fail-loud
+            # SandboxSetupError, KeyboardInterrupt) used to propagate
+            # to sys.exit while concurrent.futures' shutdown hook
+            # JOINED the non-daemon worker — "scan aborted" then hung
+            # up to 1h on the agent's 3600s communicate. Kill the
+            # agent's process group so the join returns promptly.
+            if _codeql_pool is None:
+                return
+            _codeql_stage_handle.abort()
+            _codeql_pool.shutdown(wait=False, cancel_futures=True)
+            logging.getLogger("raptor").removeFilter(_stage_tag)
+
+        try:
+            if args.sequential:
+                # Fallback to sequential for debugging
+                logger.warning("Sequential scanning enabled (slower)")
+                semgrep_sarifs, semgrep_failed = semgrep_scan_sequential(
+                    repo_path, rules_dirs, out_dir,
+                    baseline_packs=resolved_baseline,
+                    extra_configs=args.extra_config,
+                )
+            else:
+                semgrep_sarifs, semgrep_failed = semgrep_scan_parallel(
+                    repo_path, rules_dirs, out_dir,
+                    baseline_packs=resolved_baseline,
+                    extra_configs=args.extra_config,
+                )
+        except BaseException:
+            _abort_codeql_stage()
+            raise
 
         # Surface failed-pack count on stderr — at scan-level so the
         # operator sees it without trawling the run's log file. The

@@ -350,3 +350,81 @@ class TestValidatePolicyGroups:
             _scanner_mod._validate_policy_groups(
                 self._parser(), "whatever",
             )
+
+
+# ---------------------------------------------------------------------------
+# _CodeQLStageHandle — abort kill switch for the concurrent stage
+# ---------------------------------------------------------------------------
+# An exception between the stage submit and its join (semgrep's
+# fail-loud SandboxSetupError, KeyboardInterrupt) used to reach
+# sys.exit while concurrent.futures joined the non-daemon worker:
+# "scan aborted" then hung up to 1h on the agent's communicate.
+
+
+class TestCodeQLStageHandle:
+
+    def test_abort_kills_registered_process_group(self):
+        import subprocess as sp
+        handle = _scanner_mod._CodeQLStageHandle()
+        proc = sp.Popen(["sleep", "60"], start_new_session=True)
+        try:
+            handle.register(proc)
+            handle.abort()
+            # The join the abort exists to unwedge: must return
+            # promptly, not after sleep's 60s.
+            rc = proc.wait(timeout=10)
+            assert rc != 0
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+
+    def test_abort_before_register_kills_at_registration(self):
+        import subprocess as sp
+        handle = _scanner_mod._CodeQLStageHandle()
+        handle.abort()
+        proc = sp.Popen(["sleep", "60"], start_new_session=True)
+        try:
+            handle.register(proc)  # abort raced the spawn
+            rc = proc.wait(timeout=10)
+            assert rc != 0
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+
+    def test_run_codeql_skips_spawn_after_abort(self, tmp_path):
+        handle = _scanner_mod._CodeQLStageHandle()
+        handle.abort()
+        with patch("shutil.which", return_value="/usr/bin/codeql"), \
+             patch.object(_scanner_mod.subprocess, "Popen") as mock_proc:
+            result = run_codeql(
+                tmp_path, tmp_path / "out", ["python"],
+                stage_handle=handle,
+            )
+        assert result == []
+        mock_proc.assert_not_called()
+
+    def test_run_codeql_reports_abort_not_agent_rc(self, tmp_path):
+        # The agent was SIGKILLed by the abort path mid-communicate:
+        # run_codeql must report the abort and return [], not warn
+        # about a mysterious nonzero agent rc or glob half-written
+        # SARIFs into the merge.
+        handle = _scanner_mod._CodeQLStageHandle()
+        (tmp_path / "out").mkdir()
+        (tmp_path / "out" / "codeql_python.sarif").write_text("{}")
+
+        fake = _fake_popen(returncode=-9)
+
+        def _communicate(timeout=None):
+            handle.abort()  # abort lands while communicate is blocked
+            return ("", "")
+
+        fake.communicate.side_effect = _communicate
+        fake.poll.return_value = -9
+        with patch("shutil.which", return_value="/usr/bin/codeql"), \
+             patch.object(_scanner_mod.subprocess, "Popen",
+                          return_value=fake):
+            result = run_codeql(
+                tmp_path, tmp_path / "out", ["python"],
+                stage_handle=handle,
+            )
+        assert result == []
