@@ -215,3 +215,153 @@ def test_capture_captures_directory_packages_props_failure(
     # The dpp warning escapes the path for log hygiene; the captured
     # record still points at the file.
     assert str(props.resolve()) in str(failures[0].path)
+
+
+# ---------------------------------------------------------------------------
+# Whole-file failure / refusal shapes that once bypassed the collector
+# ---------------------------------------------------------------------------
+# Each of these produced only a free-form log line — the run report's
+# structured parse_failures stayed empty, so a repo full of such files
+# read as a clean "0 deps analysed".
+
+def test_capture_captures_package_json_non_object_root(
+    tmp_path: Path,
+) -> None:
+    pj = tmp_path / "package.json"
+    pj.write_text('["not", "an", "object"]', encoding="utf-8")
+    with capture_parse_failures() as failures:
+        parse_manifest(_manifest(pj, ecosystem="npm"))
+    assert len(failures) == 1
+    assert failures[0].path == pj
+    assert "not an object" in failures[0].reason
+
+
+def test_capture_captures_devcontainer_jsonc_failure(
+    tmp_path: Path,
+) -> None:
+    from packages.sca.parsers.inline_installs import parse_devcontainer_json
+    dc = tmp_path / "devcontainer.json"
+    dc.write_text('{"postCreateCommand": [[[', encoding="utf-8")
+    with capture_parse_failures() as failures:
+        parse_devcontainer_json(dc)
+    assert len(failures) == 1
+    assert failures[0].path == dc
+
+
+def test_capture_captures_pnpm_catalog_yaml_failure(
+    tmp_path: Path,
+) -> None:
+    from packages.sca.parsers._pnpm_catalog import get_catalogs
+    ws = tmp_path / "pnpm-workspace.yaml"
+    ws.write_text("catalog:\n  foo: [unclosed\n", encoding="utf-8")
+    with capture_parse_failures() as failures:
+        get_catalogs(tmp_path)
+    assert len(failures) == 1
+    assert failures[0].path == ws
+
+
+def test_capture_captures_pom_defusedxml_rejection(tmp_path: Path) -> None:
+    """A hostile pom rejected by defusedxml (XXE / entity expansion)
+    is a refusal the operator must see in parse_failures — the code's
+    own comment promises the file's rejection is surfaced."""
+    import pytest
+    from packages.sca.parsers import pom
+    if not pom._AVAILABLE:
+        pytest.skip("defusedxml not installed")
+    hostile = tmp_path / "pom.xml"
+    hostile.write_text(
+        '<?xml version="1.0"?>\n'
+        "<!DOCTYPE project [<!ENTITY x \"boom\">]>\n"
+        "<project><dependencies/></project>\n",
+        encoding="utf-8",
+    )
+    with capture_parse_failures() as failures:
+        parse_manifest(_manifest(hostile))
+    assert len(failures) == 1
+    assert failures[0].path == hostile
+    assert "defused" in failures[0].reason.lower()
+
+
+def test_capture_captures_cannot_stat_refusal(tmp_path: Path) -> None:
+    from packages.sca.parsers import _safe_read
+    missing = tmp_path / "vanished" / "pom.xml"
+    with capture_parse_failures() as failures:
+        assert _safe_read.read_bounded(missing) is None
+    assert len(failures) == 1
+    assert failures[0].path == missing
+    assert "cannot stat" in failures[0].reason
+
+
+def test_capture_captures_symlink_escape_refusal(tmp_path: Path) -> None:
+    from packages.sca.parsers import _safe_read
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "real.xml").write_text("<project/>", encoding="utf-8")
+    root = tmp_path / "root"
+    root.mkdir()
+    link = root / "pom.xml"
+    link.symlink_to(outside / "real.xml")
+    token = _safe_read._SCAN_ROOT.set(root.resolve())
+    try:
+        with capture_parse_failures() as failures:
+            assert _safe_read.read_bounded(
+                link, follow_symlinks=False) is None
+    finally:
+        _safe_read._SCAN_ROOT.reset(token)
+    assert len(failures) == 1
+    assert failures[0].path == link
+    assert "outside the scan root" in failures[0].reason
+
+
+def test_capture_captures_grew_past_max_refusal(tmp_path: Path) -> None:
+    """The stat-vs-read race arm: size passes the cap but the read
+    returns more bytes. Simulated with a stub path object (the race
+    itself is not reproducible deterministically)."""
+    import os
+    import stat as _stat_mod
+    from packages.sca.parsers import _safe_read
+
+    real = tmp_path / "grown.xml"
+    real.write_bytes(b"x" * 64)
+
+    class _GrowingPath:
+        def __str__(self) -> str:
+            return str(real)
+
+        def stat(self):
+            st = os.stat(real)
+            # Lie: report a size under the cap.
+            return os.stat_result(
+                (st.st_mode, st.st_ino, st.st_dev, st.st_nlink,
+                 st.st_uid, st.st_gid, 8, st.st_atime, st.st_mtime,
+                 st.st_ctime))
+
+        def open(self, mode="rb"):
+            return open(real, mode)
+
+    stub = _GrowingPath()
+    assert _stat_mod.S_ISREG(stub.stat().st_mode)
+    with capture_parse_failures() as failures:
+        assert _safe_read.read_bounded(
+            stub, max_bytes=8, follow_symlinks=True) is None
+    assert len(failures) == 1
+    assert "grew past max" in failures[0].reason
+
+
+def test_capture_captures_cannot_read_refusal(tmp_path: Path) -> None:
+    import os
+    import pytest
+    if os.geteuid() == 0:
+        pytest.skip("chmod 0o000 does not block root")
+    from packages.sca.parsers import _safe_read
+    blocked = tmp_path / "blocked.xml"
+    blocked.write_text("<project/>", encoding="utf-8")
+    blocked.chmod(0o000)
+    try:
+        with capture_parse_failures() as failures:
+            assert _safe_read.read_bounded(blocked) is None
+    finally:
+        blocked.chmod(0o644)
+    assert len(failures) == 1
+    assert failures[0].path == blocked
+    assert "cannot" in failures[0].reason

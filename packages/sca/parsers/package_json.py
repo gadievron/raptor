@@ -218,8 +218,13 @@ def _load(path: Path) -> dict[str, object] | None:
         )
         return None
     if not isinstance(data, dict):
+        # Canonical parse-failed shape so the whole-file failure lands
+        # in the run report's structured parse_failures (a repo of
+        # array-rooted package.json files must not read as a clean
+        # "0 deps analysed").
         logger.warning(
-            "sca.parsers.package_json: top-level not an object in %s", path
+            "sca.parsers.package_json: JSON parse failed for %s: "
+            "top-level is not an object", path,
         )
         return None
     return data

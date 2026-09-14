@@ -188,9 +188,12 @@ def _load_root(path: Path):
     except DefusedXmlException as e:
         # XXE / DTD / entity-expansion blocked by defusedxml. Treat as a
         # hostile manifest: emit nothing and surface a warning so the
-        # operator sees the file was rejected.
+        # operator sees the file was rejected — in the canonical
+        # parse-failed shape, so the refusal reaches the run report's
+        # structured parse_failures rather than only the log stream.
         logger.warning(
-            "sca.parsers.pom: defused XML protection rejected %s: %s",
+            "sca.parsers.pom: XML parse failed for %s: "
+            "defused XML protection rejected hostile construct: %s",
             path, e,
         )
         return None

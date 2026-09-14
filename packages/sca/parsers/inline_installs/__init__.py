@@ -456,8 +456,14 @@ def parse_devcontainer_json(path: Path) -> list[Dependency]:
         return []
     try:
         data = _load_jsonc(text)
-    except Exception:                       # noqa: BLE001
-        logger.warning("sca.parsers: devcontainer.json parse failed: %s", path)
+    except Exception as e:                  # noqa: BLE001
+        # Canonical shape (logger segment + kind + "parse failed for
+        # <path>: <reason>") so the whole-file failure reaches the run
+        # report's structured parse_failures.
+        logger.warning(
+            "sca.parsers.inline_installs: devcontainer JSONC "
+            "parse failed for %s: %s", path, e,
+        )
         return []
     cmd_keys = (
         "postCreateCommand",

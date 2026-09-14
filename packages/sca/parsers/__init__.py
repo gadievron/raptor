@@ -70,7 +70,11 @@ class ParseFailure:
 _PARSE_FAILURE_RE = re.compile(
     r"sca\.parsers\.[\w_]+:\s+"
     r"(?P<kind>\w+(?:\s\w+)?)\s+parse failed for\s+"
-    r"(?P<path>.+?):\s+(?P<reason>.+)$"
+    r"(?P<path>.+?):\s+(?P<reason>.+)$",
+    # DOTALL: PyYAML (and friends) raise multi-line error messages
+    # with source-context snippets; the reason must capture them or
+    # the whole failure silently misses the collector.
+    re.DOTALL,
 )
 
 # Pattern matching ``_safe_read.read_bounded``'s refusal warnings

@@ -115,10 +115,17 @@ def read_bounded(
     backward compatibility; new SCA parser sites that read attacker-
     controlled manifest paths should pass ``follow_symlinks=False``.
     """
+    # Every refusal below uses the canonical ``refusing to read
+    # <path> (<reason>)`` shape the parse-failure collector matches —
+    # a skipped manifest must reach the run report's structured
+    # parse_failures, not just the log stream (this module's whole
+    # reason to warn instead of silently returning None).
     try:
         st = (path.lstat() if not follow_symlinks else path.stat())
     except OSError as e:
-        logger.warning("sca.parsers: cannot stat %s: %s", path, e)
+        logger.warning(
+            "sca.parsers: refusing to read %s (cannot stat: %s)", path, e,
+        )
         return None
     if not follow_symlinks and _stat.S_ISLNK(st.st_mode):
         # Symlinked manifest. With a declared scan root, resolve and
@@ -134,8 +141,8 @@ def read_bounded(
                 resolved = path.resolve(strict=True)
             except OSError as e:
                 logger.warning(
-                    "sca.parsers: cannot resolve symlink %s: %s",
-                    path, e,
+                    "sca.parsers: refusing to read %s "
+                    "(cannot resolve symlink: %s)", path, e,
                 )
                 return None
             if resolved.is_relative_to(root):
@@ -144,8 +151,8 @@ def read_bounded(
                     follow_symlinks=False,
                 )
             logger.warning(
-                "sca.parsers: refusing symlinked manifest %s — "
-                "resolves outside the scan root (%s); treating as "
+                "sca.parsers: refusing to read %s (symlinked manifest "
+                "resolves outside the scan root: %s); treating as "
                 "unparseable", path, resolved,
             )
             return None
@@ -182,12 +189,14 @@ def read_bounded(
             with path.open("rb") as fh:
                 raw = fh.read(max_bytes + 1)
     except OSError as e:
-        logger.warning("sca.parsers: cannot read %s: %s", path, e)
+        logger.warning(
+            "sca.parsers: refusing to read %s (cannot read: %s)", path, e,
+        )
         return None
     if len(raw) > max_bytes:
         logger.warning(
-            "sca.parsers: %s grew past max during read (>%d); "
-            "treating as unparseable", path, max_bytes,
+            "sca.parsers: refusing to read %s (grew past max=%d "
+            "during read); treating as unparseable", path, max_bytes,
         )
         return None
     return raw.decode("utf-8", errors="replace")

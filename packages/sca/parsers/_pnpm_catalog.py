@@ -142,8 +142,11 @@ def _parse_catalogs(path: Path) -> dict[str, dict[str, str]]:
     try:
         data = safe_load(text)
     except yaml.YAMLError as e:
+        # ``<kind> parse failed for`` — the leading kind token is what
+        # the parse-failure collector's regex requires; without it the
+        # failure never reaches the report's parse_failures.
         logger.warning(
-            "sca.parsers._pnpm_catalog: parse failed for %s: %s",
+            "sca.parsers._pnpm_catalog: YAML parse failed for %s: %s",
             path, e,
         )
         return {}
