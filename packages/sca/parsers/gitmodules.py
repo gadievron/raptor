@@ -250,14 +250,26 @@ def _resolve_from_modules_dir(
 def _resolve_from_ls_tree(
     repo_root: Path, sm_path: str,
 ) -> str | None:
-    """Read the submodule SHA from the parent repo's tree object."""
+    """Read the submodule SHA from the parent repo's tree object.
+
+    The scanned repo is untrusted and this git runs INSIDE it: a
+    hostile committed config could point ``core.fsmonitor`` /
+    ``core.hooksPath`` / ``core.sshCommand`` at attacker commands,
+    and the operator's full environment (tokens, GIT_* overrides)
+    must never reach a child spawned for an untrusted tree. Use the
+    strict read-only git overrides (config neutralised, transports
+    refused) with the repo-standard sanitised environment.
+    """
     if _is_unsafe_path_fragment(sm_path):
         return None
+    from core.config import RaptorConfig
+    from core.git.clone import safe_git_readonly_command
     try:
         result = subprocess.run(
-            ["git", "ls-tree", "HEAD", "--", sm_path],
+            safe_git_readonly_command("ls-tree", "HEAD", "--", sm_path),
             capture_output=True, text=True, timeout=5,
             cwd=str(repo_root),
+            env=RaptorConfig.get_safe_env(),
         )
         if result.returncode != 0 or not result.stdout.strip():
             return None

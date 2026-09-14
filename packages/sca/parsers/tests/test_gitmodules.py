@@ -355,3 +355,43 @@ def test_ls_tree_fallback_no_commit(tmp_path):
     )
     [d] = parse(gm)
     assert d.version is None
+
+
+def test_ls_tree_runs_hardened_and_env_sanitised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ls-tree child runs inside an UNTRUSTED repo: it must get
+    the strict read-only git overrides (committed config cannot pick
+    core.fsmonitor / core.hooksPath / core.sshCommand commands) and
+    the sanitised environment — never the operator's full env."""
+    from packages.sca.parsers import gitmodules as gm
+
+    seen: dict = {}
+
+    class _Result:
+        returncode = 0
+        stdout = ("160000 commit "
+                  "0123456789abcdef0123456789abcdef01234567\tlibs/x\n")
+        stderr = ""
+
+    def _fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        seen["kwargs"] = kwargs
+        return _Result()
+
+    monkeypatch.setattr(gm.subprocess, "run", _fake_run)
+    monkeypatch.setenv("GITHUB_TOKEN", "hostile-must-not-leak")
+    sha = gm._resolve_from_ls_tree(tmp_path, "libs/x")
+    assert sha == "0123456789abcdef0123456789abcdef01234567"
+
+    cmd = seen["cmd"]
+    assert cmd[0] == "git"
+    joined = " ".join(cmd)
+    # Config-neutralising overrides present before the subcommand.
+    assert "core.fsmonitor=" in joined
+    assert "core.hooksPath=" in joined
+    assert cmd.index("ls-tree") > cmd.index("-c")
+    # Sanitised env passed explicitly; allowlist drops the token.
+    env = seen["kwargs"].get("env")
+    assert env is not None
+    assert "GITHUB_TOKEN" not in env
