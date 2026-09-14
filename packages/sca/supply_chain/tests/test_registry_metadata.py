@@ -1157,3 +1157,48 @@ def test_exploding_document_sequential_path_also_isolated() -> None:
         pypi_client=stub, npm_client=None, now=_NOW,
     )
     assert {f.dependency.name for f in out} == {"ok-pkg"}
+
+
+# ---------------------------------------------------------------------------
+# Hostile packument fields — sanitised at ingestion, never a blanket skip
+# ---------------------------------------------------------------------------
+
+def test_non_string_maintainer_name_does_not_suppress_other_findings() -> None:
+    """A hostile packument with a dict-typed maintainer name used to
+    raise AttributeError inside a maintainer check; _scan_one's
+    catch-all then discarded EVERY registry-metadata finding for the
+    dep — including recent_publish.  Ingestion now sanitises the
+    maintainer records so the rest of the checks still run."""
+    npm = _NpmStub({
+        "dist-tags": {"latest": "1.0.0"},
+        "versions": {
+            "1.0.0": {"maintainers": [{"name": {"evil": 1}, "email": 7}]},
+            "0.9.0": {"maintainers": [{"name": None}]},
+        },
+        "maintainers": [
+            {"name": {"$gt": ""}, "email": ["x"]},
+            "not-a-dict",
+            {"name": "real-person", "email": "p@example.org"},
+        ],
+        "time": {
+            "1.0.0": _iso(3),
+            "0.9.0": _iso(400),
+        },
+    })
+    out = scan_deps([_dep(eco="npm", name="hostile", version="1.0.0")],
+                     npm_client=npm, now=_NOW)
+    # The dep's other findings survive the hostile maintainer fields
+    # (pre-fix: the AttributeError blanket-discarded all of them).
+    kinds = {f.kind for f in out}
+    assert "version_publish" in kinds
+    # And the surviving maintainer record still feeds the checks.
+    assert "low_bus_factor" in kinds
+
+
+def test_non_string_pypi_author_email_tolerated() -> None:
+    pypi = _PyPIStub({
+        "info": {"author": "someone", "author_email": {"evil": True}},
+        "releases": {"1.0": [{"upload_time_iso_8601": _iso(3)}]},
+    })
+    out = scan_deps([_dep()], pypi_client=pypi, now=_NOW)
+    assert any(f.kind == "recent_publish" for f in out)

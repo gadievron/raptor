@@ -327,7 +327,10 @@ def _from_pypi(raw: dict) -> _Meta:
         if not (isinstance(n, str) and n.strip()):
             continue
         email_field = f"{field_name}_email"
-        emails_raw = (info.get(email_field) or "").strip()
+        emails_val = info.get(email_field)
+        # Hostile-doc guard: a non-string email field must degrade to
+        # "no emails", not crash the dep's whole metadata scan.
+        emails_raw = emails_val.strip() if isinstance(emails_val, str) else ""
         # PyPI convention: ``author`` / ``maintainer`` is a free-text
         # field that's comma-separated when there are multiple people.
         # Same goes for the parallel ``*_email`` fields. Split both,
@@ -367,6 +370,34 @@ def _from_pypi(raw: dict) -> _Meta:
     )
 
 
+def _clean_maintainers(raw_list: Any) -> list[dict[str, Any]]:
+    """Sanitise a packument maintainer array to string-typed
+    ``{"name", "email"}`` records.
+
+    The packument is hostile input: a registry (or a poisoned proxy)
+    can put a dict / int / null where a maintainer name belongs.
+    Downstream checks call ``.lower()`` on the name, and one
+    AttributeError inside ``_scan_one``'s catch-all discards EVERY
+    registry-metadata finding for that dep — recent-publish,
+    payload-size-spike, maintainer-change and bus-factor included.
+    Filtering at ingestion keeps the per-dep guard a last resort
+    instead of an attacker-triggerable blanket suppression.
+    """
+    out: list[dict[str, Any]] = []
+    if not isinstance(raw_list, list):
+        return out
+    for m in raw_list:
+        if not isinstance(m, dict):
+            continue
+        name = m.get("name")
+        email = m.get("email")
+        out.append({
+            "name": name if isinstance(name, str) else "",
+            "email": email if isinstance(email, str) else "",
+        })
+    return out
+
+
 def _from_npm(raw: dict) -> _Meta:
     """Normalise npm registry shape.
 
@@ -397,13 +428,7 @@ def _from_npm(raw: dict) -> _Meta:
         is_dormant = (latest_pub - second_latest_pub).days >= _DORMANT_DAYS
 
     # Top-level maintainers (current).
-    raw_maint = raw.get("maintainers") or []
-    maintainers: list[dict[str, Any]] = []
-    if isinstance(raw_maint, list):
-        maintainers.extend({
-                    "name": m.get("name", ""),
-                    "email": m.get("email", ""),
-                } for m in raw_maint if isinstance(m, dict))
+    maintainers = _clean_maintainers(raw.get("maintainers"))
 
     # Per-version maintainer comparison: extract maintainer list from
     # the second-most-recent version to detect maintainer additions.
@@ -412,12 +437,9 @@ def _from_npm(raw: dict) -> _Meta:
     if isinstance(versions_obj, dict) and second_latest_ver:
         prev_ver_data = versions_obj.get(second_latest_ver)
         if isinstance(prev_ver_data, dict):
-            prev_maint_raw = prev_ver_data.get("maintainers") or []
-            if isinstance(prev_maint_raw, list):
-                previous_maintainers.extend({
-                            "name": m.get("name", ""),
-                            "email": m.get("email", ""),
-                        } for m in prev_maint_raw if isinstance(m, dict))
+            previous_maintainers = _clean_maintainers(
+                prev_ver_data.get("maintainers"),
+            )
 
     # Per-version unpacked tarball sizes. Populated only when the
     # registry document carries ``dist.unpackedSize`` (set by npm
