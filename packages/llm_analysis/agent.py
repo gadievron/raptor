@@ -3303,7 +3303,15 @@ class AutonomousSecurityAgentV2:
 
                 # Post-LLM: store verdict to SAGE for cross-run
                 # FP suppression.  Best-effort — never blocks.
-                if vuln.analysis and not sage_fp_skipped_this:
+                # Errored analyses never store: ``vuln.analysis`` is
+                # assigned before raise-capable code, so a mid-flight
+                # crash leaves a populated analysis dict alongside a
+                # status=error record (operator expects a re-test) —
+                # persisting its verdict would seed the pre-LLM
+                # suppression and silently skip the LLM next run for
+                # the verdict's TTL.
+                if (vuln.analysis and vuln.error is None
+                        and not sage_fp_skipped_this):
                     try:
                         from core.sage.hooks import (
                             compute_finding_source_hash,
