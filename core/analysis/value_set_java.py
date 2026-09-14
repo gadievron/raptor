@@ -10,7 +10,9 @@ constant-foldable index —
 Array elements can alias, so :mod:`core.analysis.const_fold_java`
 refuses every ``array_access``. This module supplies the missing
 aliasing analysis with a refusal-first whole-file scan: a table name
-qualifies only when its every appearance in the analysed span is one
+qualifies only when its every appearance in the WHOLE FILE (the
+occurrence pass deliberately scans beyond the analysed span — a store
+outside the span is still a store) is one
 of (a) its single initializing declarator with an array-literal
 value, or (b) an ``array_access`` READ base. Any other appearance —
 an element store (``values[i] = …``, compound or update forms), the

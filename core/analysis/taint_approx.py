@@ -3,7 +3,11 @@
 AST-structural only — no CFG, no fixed point. Walks tree-sitter parse
 trees to find direct parameter-to-callee-argument flows. Deliberately
 conservative: false negatives (misses flows through assignments) but
-not false positives (doesn't claim a flow that doesn't exist).
+not false positives (doesn't claim a flow that doesn't exist) — with
+one named exception: the ``extra_edges`` bridge in transitive
+following guesses same-argument-position when it lacks a parameter
+mapping (marked best-effort at the site). Consumers are
+prompt-context only, never a suppression gate.
 
 For Python, core/inventory/taint_summaries.py provides full CFG-based
 analysis. This module covers the C/C++ gap until Joern (tier 3) or

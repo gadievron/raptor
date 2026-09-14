@@ -554,7 +554,12 @@ def _check_resource_leaks(
     total_lines: int,
     violations: list[TypeStateViolation],
 ) -> None:
-    """Check for resources that were allocated but never freed."""
+    """Function-exit check for LOCK-model objects only: a lock still
+    held at exit reports ``lock_not_released``. Non-lock allocations
+    (malloc never freed) are deliberately NOT reported here — exit-
+    liveness for memory needs escape analysis this module doesn't do;
+    the ``resource_leak`` kind fires on realloc-without-free in the
+    operation checker instead."""
     for obj in tracked.values():
         if obj.state == "allocated" and obj.alloc_line > 0:
             is_lock = any(

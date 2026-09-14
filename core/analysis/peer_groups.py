@@ -3,7 +3,9 @@
 Replaces the global verb-prefix grouping in ``sibling_analysis.py`` with
 a seven-layer resolver that uses progressively weaker signals.  Higher-
 confidence layers (Joern call graph, binary edges, dispatch tables) claim
-functions first; lower layers only group what remains unclaimed.
+functions first; the definitive layers L0-L3 group only what remains
+unclaimed, while L4-L6 run independently over the full input (see the
+hierarchy below).
 
 Layer hierarchy:
 
