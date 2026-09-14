@@ -29,6 +29,14 @@ CVEs and an aggressive 7-day TTL, a warm cache makes the lookup
 free; a cold cache costs ~50 ms per CVE in parallel-friendly
 HTTPS GETs through the existing in-process egress proxy.
 
+Scans outside that envelope — container-image scans carry 10^4+
+distro CVE findings — must not loop :meth:`~VulnrichmentClient.lookup`
+per finding: use :meth:`~VulnrichmentClient.lookup_many`, which
+resolves cache hits for free and runs the remaining fetches on a
+bounded thread pool under a caller-set network budget. The upstream
+publishes no bulk artifact (no releases; only the per-CVE files in
+the git tree), so budgeted parallel per-CVE GETs are the fetch shape.
+
 Failure modes:
   * Network down + cold cache → ``lookup()`` returns ``None``;
     callers degrade gracefully (Vulnrichment is a bonus signal
@@ -47,9 +55,13 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from core.http import HttpClient, HttpError
 from core.json import JsonCache
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +136,7 @@ class VulnrichmentClient:
         self._cache = cache
         self._offline = offline
         self._ttl = ttl_seconds
-        self._memo: dict = {}
+        self._memo: dict[str, SSVCDecision | None] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -162,6 +174,125 @@ class VulnrichmentClient:
         self._memo[key] = decision
         return decision
 
+    def lookup_many(
+        self,
+        cve_ids: Iterable[str],
+        *,
+        fetch_budget: int | None = None,
+        max_workers: int = 8,
+    ) -> dict[str, SSVCDecision]:
+        """Batched SSVC lookup for a whole scan's CVE set.
+
+        Same per-id contract as :meth:`lookup`, minus the redundant
+        entries: the returned dict carries only ids that resolved to
+        an actual :class:`SSVCDecision` — malformed ids, upstream
+        404s, scorecard-less records, and offline cache misses are
+        simply absent, and callers treat absence as "no signal".
+
+        Purpose: the per-CVE on-demand design assumes a scan touching
+        5-30 unique CVEs; container-image scans carry 10^4+ distro CVE
+        findings, and calling :meth:`lookup` once per finding turns
+        into hours of serial HTTPS GETs. This entry point makes the
+        cold-cache cost bounded and parallel:
+
+        * ``fetch_budget`` caps the number of NETWORK fetches (memo /
+          disk-cache hits are always resolved and never consume
+          budget, so repeat scans progressively warm the cache past
+          the budget line). Input order is the fetch-priority order —
+          the first ``fetch_budget`` uncached ids are fetched, the
+          rest are skipped with ONE summary log line. ``None`` means
+          unbounded.
+        * Uncached fetches run on a bounded thread pool
+          (``max_workers``); the injected ``HttpClient`` and
+          ``JsonCache`` are shared across threads exactly as the SCA
+          registry-enrichment passes already share them.
+
+        Skipped and failed ids are NOT memoised, so a later direct
+        :meth:`lookup` (or the next run's budget) still gets its
+        chance to fetch them.
+        """
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for cid in cve_ids:
+            if not isinstance(cid, str):
+                continue
+            key = cid.upper()
+            if key in seen or _CVE_ID_RE.fullmatch(key) is None:
+                continue
+            seen.add(key)
+            ordered.append(key)
+
+        out: dict[str, SSVCDecision] = {}
+        uncached: list[str] = []
+        for key in ordered:
+            if key in self._memo:
+                memoed = self._memo[key]
+                if memoed is not None:
+                    out[key] = memoed
+                continue
+            hit, record = self._cached_record(key)
+            if hit:
+                decision = (
+                    _decode_ssvc(record) if record is not None else None
+                )
+                self._memo[key] = decision
+                if decision is not None:
+                    out[key] = decision
+                continue
+            uncached.append(key)
+
+        if self._offline or not uncached:
+            return out
+
+        skipped = 0
+        if fetch_budget is not None and len(uncached) > fetch_budget:
+            skipped = len(uncached) - fetch_budget
+            uncached = uncached[:fetch_budget]
+
+        def _fetch_one(key: str) -> tuple[str, SSVCDecision | None]:
+            try:
+                record = self._fetch_remote(key)
+            except Exception as e:  # noqa: BLE001 — degrade per id, never
+                # let one hostile / malformed response sink the batch
+                # (HttpError is already absorbed inside _fetch_remote;
+                # this catches transport-layer surprises).
+                logger.debug(
+                    "core.cve.vulnrichment: lookup failed for %s: %s",
+                    key, e,
+                )
+                return key, None
+            return key, _decode_ssvc(record) if record is not None else None
+
+        # Same small-input cutoff as the SCA license-enrichment pass:
+        # below a handful of ids the pool spin-up costs more than the
+        # sequential walk.
+        if len(uncached) <= 4 or max_workers <= 1:
+            fetched = [_fetch_one(k) for k in uncached]
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(
+                max_workers=min(max_workers, len(uncached)),
+                thread_name_prefix="cve-vulnrichment",
+            ) as pool:
+                fetched = list(pool.map(_fetch_one, uncached))
+
+        # Memo writes happen on the calling thread — workers only
+        # touch the (thread-safe) JsonCache and HttpClient.
+        for key, decision in fetched:
+            self._memo[key] = decision
+            if decision is not None:
+                out[key] = decision
+
+        if skipped:
+            logger.info(
+                "core.cve.vulnrichment: SSVC fetch budget reached — "
+                "fetched %d uncached CVE(s), skipped %d (budget %d); "
+                "skipped ids degrade to no-signal and are retried by "
+                "later runs against the warmed cache",
+                len(uncached), skipped, fetch_budget,
+            )
+        return out
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
@@ -178,16 +309,37 @@ class VulnrichmentClient:
             backfill from CISA gets picked up in ≤1 day)
           * dict: the actual CVE-JSON-5 record
         """
+        hit, record = self._cached_record(cve_id)
+        if hit:
+            return record
+        if self._offline:
+            return None
+        return self._fetch_remote(cve_id)
+
+    def _cached_record(self, cve_id: str) -> tuple[bool, dict | None]:
+        """Disk-cache read half of :meth:`_fetch_record`.
+
+        Returns ``(hit, record)`` — ``(True, None)`` is a cached
+        negative marker (upstream 404 within its TTL), distinct from
+        ``(False, None)`` = never fetched / expired. Split out so
+        :meth:`lookup_many` can resolve cache hits without spending
+        its network budget on them.
+        """
         cache_key = f"{_CACHE_KEY_PREFIX}/{cve_id}"
         cached = self._cache.get(cache_key, ttl_seconds=self._ttl)
         if isinstance(cached, dict):
             if cached.get("_status") == "missing":
-                return None
-            return cached
+                return True, None
+            return True, cached
+        return False, None
 
-        if self._offline:
-            return None
-
+    def _fetch_remote(self, cve_id: str) -> dict | None:
+        """Network half of :meth:`_fetch_record`: one upstream GET
+        plus the positive / negative cache writes. Thread-safe — the
+        injected ``JsonCache`` locks internally and the ``HttpClient``
+        backends are shared across worker threads by the existing SCA
+        enrichment passes."""
+        cache_key = f"{_CACHE_KEY_PREFIX}/{cve_id}"
         url = _url_for_cve(cve_id)
         if url is None:
             return None

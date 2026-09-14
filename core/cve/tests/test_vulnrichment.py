@@ -389,3 +389,138 @@ class TestSSVCDecisionProperties:
         )
         assert d.is_active is active
         assert d.has_exploit is has_exp
+
+
+# ---------------------------------------------------------------------------
+# lookup_many — scan-wide batched lookup
+# ---------------------------------------------------------------------------
+
+def _url(cve: str) -> str:
+    u = _url_for_cve(cve)
+    assert u is not None
+    return u
+
+
+class TestLookupMany:
+    """``lookup_many`` is the scan-scale entry point: cache hits are
+    free, uncached fetches run on a bounded pool under an optional
+    network budget spent in input order."""
+
+    def test_resolves_all_and_counts_requests(self, tmp_path: Path):
+        cves = [f"CVE-2024-{10000 + i}" for i in range(6)]
+        http = FakeHttp(responses={
+            _url(c): _vulnrichment_record(exploitation="active")
+            for c in cves
+        })
+        client = VulnrichmentClient(http, JsonCache(root=tmp_path))
+        out = client.lookup_many(cves)
+        assert set(out) == set(cves)
+        assert all(d.exploitation == "active" for d in out.values())
+        # One GET per CVE (6 ids exercises the thread-pool path;
+        # order across workers is unspecified).
+        assert sorted(http.gets) == sorted(_url(c) for c in cves)
+
+    def test_budget_spent_in_input_order(self, tmp_path: Path):
+        cves = ["CVE-2024-30001", "CVE-2024-30002", "CVE-2024-30003"]
+        http = FakeHttp(responses={
+            _url(c): _vulnrichment_record() for c in cves
+        })
+        client = VulnrichmentClient(http, JsonCache(root=tmp_path))
+        out = client.lookup_many(cves, fetch_budget=2)
+        assert set(out) == set(cves[:2])
+        assert http.gets == [_url(c) for c in cves[:2]]
+
+    def test_cached_ids_do_not_consume_budget(self, tmp_path: Path):
+        """Disk-cache hits resolve for free: with CVE-1 already
+        cached, a budget of 1 still fetches CVE-2."""
+        cves = ["CVE-2024-40001", "CVE-2024-40002"]
+        cache = JsonCache(root=tmp_path)
+        warm = FakeHttp(responses={_url(cves[0]): _vulnrichment_record()})
+        VulnrichmentClient(warm, cache).lookup(cves[0])
+
+        http = FakeHttp(responses={_url(cves[1]): _vulnrichment_record()})
+        client = VulnrichmentClient(http, cache)
+        out = client.lookup_many(cves, fetch_budget=1)
+        assert set(out) == set(cves)
+        assert http.gets == [_url(cves[1])]
+
+    def test_second_call_uses_memo(self, tmp_path: Path):
+        cves = ["CVE-2024-50001", "CVE-2024-50002"]
+        http = FakeHttp(responses={
+            _url(c): _vulnrichment_record() for c in cves
+        })
+        client = VulnrichmentClient(http, JsonCache(root=tmp_path))
+        client.lookup_many(cves)
+        n = len(http.gets)
+        out = client.lookup_many(cves)
+        assert len(http.gets) == n
+        assert set(out) == set(cves)
+        # ...and the single-CVE path shares the memo too.
+        assert client.lookup(cves[0]) is not None
+        assert len(http.gets) == n
+
+    def test_skipped_ids_are_not_memoised(self, tmp_path: Path):
+        """An over-budget skip must stay retryable: a later direct
+        ``lookup`` (or the next run) still fetches it."""
+        cves = ["CVE-2024-60001", "CVE-2024-60002"]
+        http = FakeHttp(responses={
+            _url(c): _vulnrichment_record() for c in cves
+        })
+        client = VulnrichmentClient(http, JsonCache(root=tmp_path))
+        out = client.lookup_many(cves, fetch_budget=1)
+        assert set(out) == {cves[0]}
+        d = client.lookup(cves[1])
+        assert d is not None
+        assert http.gets == [_url(c) for c in cves]
+
+    def test_offline_serves_cache_only(self, tmp_path: Path):
+        cves = ["CVE-2024-70001", "CVE-2024-70002"]
+        cache = JsonCache(root=tmp_path)
+        warm = FakeHttp(responses={_url(cves[0]): _vulnrichment_record()})
+        VulnrichmentClient(warm, cache).lookup(cves[0])
+
+        http = FakeHttp()
+        client = VulnrichmentClient(http, cache, offline=True)
+        out = client.lookup_many(cves)
+        assert set(out) == {cves[0]}
+        assert http.gets == []
+
+    def test_malformed_ids_skipped(self, tmp_path: Path):
+        http = FakeHttp(responses={
+            _url("CVE-2024-80001"): _vulnrichment_record(),
+        })
+        client = VulnrichmentClient(http, JsonCache(root=tmp_path))
+        out = client.lookup_many(
+            ["CVE-2024-80001", "..", "a//b", "", None, 42],  # type: ignore[list-item]
+        )
+        assert set(out) == {"CVE-2024-80001"}
+        assert http.gets == [_url("CVE-2024-80001")]
+
+    def test_one_failure_degrades_only_that_id(self, tmp_path: Path):
+        """A raising fetch (transport surprise, hostile response)
+        must not sink its batchmates — that id is simply absent."""
+        cves = [f"CVE-2024-{90001 + i}" for i in range(6)]
+        responses = {_url(c): _vulnrichment_record() for c in cves[1:]}
+        http = FakeHttp(
+            responses=responses,
+            errors={_url(cves[0]): RuntimeError("connection reset")},
+        )
+        client = VulnrichmentClient(http, JsonCache(root=tmp_path))
+        out = client.lookup_many(cves)
+        assert set(out) == set(cves[1:])
+
+    def test_budget_truncation_logs_one_summary_line(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    ):
+        cves = [f"CVE-2024-{20001 + i}" for i in range(10)]
+        http = FakeHttp(responses={
+            _url(c): _vulnrichment_record() for c in cves
+        })
+        client = VulnrichmentClient(http, JsonCache(root=tmp_path))
+        with caplog.at_level("INFO", logger="core.cve.vulnrichment"):
+            client.lookup_many(cves, fetch_budget=3)
+        budget_lines = [
+            r for r in caplog.records if "budget" in r.getMessage()
+        ]
+        assert len(budget_lines) == 1
+        assert "skipped 7" in budget_lines[0].getMessage()
