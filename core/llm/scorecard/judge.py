@@ -90,13 +90,36 @@ def record_judge_outcomes(
         primary_model = str(result.get("analysed_by") or "?")
         primary_vote = bool(primary_verdicts_before_judge[fid])
 
-        # Exact tie across primary + judges (e.g. 2-vs-2): the
-        # finalised verdict is a mechanical tie-break, not a panel
-        # majority, so scoring voters against it would arbitrarily
-        # declare one side "incorrect". Skip — same rationale as the
-        # consensus producer's even-split skip.
+        # Abstention-aware voter list. A judge whose
+        # ``is_exploitable`` is None (errored / refused /
+        # schema-failed response — response_validation nulls the
+        # field) cast NO vote: it must not join the tie computation
+        # and must never receive a JUDGE_REVIEW event, which would
+        # mint a reliability outcome for a vote never cast. Same
+        # counting rule as ``tally_verdict_votes`` in
+        # packages/llm_analysis/correlation.py (the contract
+        # JudgeTask.finalize applies) — handled locally like the
+        # consensus producer because a core/llm producer importing
+        # packages.llm_analysis would invert the layering.
+        voting_judges = [
+            ja for ja in judge_analyses
+            if ja.get("is_exploitable") is not None
+        ]
+        if not voting_judges:
+            # Whole panel abstained. JudgeTask marks these
+            # ``judge == "no-verdict"`` so they shouldn't reach
+            # here, but scoring the primary against its own
+            # preserved verdict would mint self-corroboration —
+            # skip defensively.
+            continue
+
+        # Exact tie across primary + voting judges (e.g. 2-vs-2):
+        # the finalised verdict is a mechanical tie-break, not a
+        # panel majority, so scoring voters against it would
+        # arbitrarily declare one side "incorrect". Skip — same
+        # rationale as the consensus producer's even-split skip.
         votes = [primary_vote] + [
-            bool(ja.get("is_exploitable")) for ja in judge_analyses
+            bool(ja.get("is_exploitable")) for ja in voting_judges
         ]
         n_pos = sum(1 for v in votes if v)
         if n_pos * 2 == len(votes):
@@ -114,13 +137,13 @@ def record_judge_outcomes(
                 else str(result.get("reasoning") or "")
             ),
             other_summary=(
-                f"panel of {len(judge_analyses)} judge(s) voted "
+                f"panel of {len(voting_judges)} judge(s) voted "
                 f"{'exploitable' if final_verdict else 'not exploitable'}"
             ),
         ))
 
-        # Each judge's outcome
-        for ja in judge_analyses:
+        # Each voting judge's outcome (abstainers get no event).
+        for ja in voting_judges:
             judge_model = str(ja.get("model") or "?")
             judge_vote = bool(ja.get("is_exploitable"))
             judge_correct = (judge_vote == final_verdict)
