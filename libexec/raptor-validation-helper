@@ -1244,7 +1244,7 @@ def _run_cocci_prereqs(workdir, findings_data, target=None):
                 and result["checks"].get("function_has_callers") is False):
             flagged += 1
             print(
-                f"  C-cocci WARN: {finding['id']} — function "
+                f"  C-cocci WARN: {finding.get('id', '?')} — function "
                 f"{result['details'].get('function')!r} has no callers "
                 f"in tree (orphan-static-helper or dead code)"
             )
@@ -1780,13 +1780,13 @@ def _discover_and_match_binaries(workdir, target, data, build=None,
                 else:
                     finding.setdefault("feasibility", {})[
                         "binary_path"] = bp
-                print(f"  {finding['id']}: matched -> {bp}")
+                print(f"  {finding.get('id', '?')}: matched -> {bp}")
                 matched += 1
         if not bp:
             reason = "no binary found"
             finding.setdefault("feasibility", {})["status"] = "skipped"
             finding["stage_e_summary"] = {"status": "skipped", "reason": reason}
-            skipped.append((finding["id"], reason))
+            skipped.append((finding.get("id", "?"), reason))
 
     _save_findings(workdir, data)
 
@@ -2426,9 +2426,9 @@ def prepare_F(workdir, target=None):
             old_status = finding.get("status", "")
             if old_status != mapped:
                 finding["status"] = mapped
-                print(f"  {finding['id']}: {verdict} -> {mapped} (was {old_status})")
+                print(f"  {finding.get('id', '?')}: {verdict} -> {mapped} (was {old_status})")
             else:
-                print(f"  {finding['id']}: {verdict} -> {mapped}")
+                print(f"  {finding.get('id', '?')}: {verdict} -> {mapped}")
 
     # --- Set final_status for findings not handled by Stage E verdict mapping ---
     # Covers two cases: (1) final_status never set, (2) final_status is stale
@@ -2486,7 +2486,7 @@ def prepare_F(workdir, target=None):
             score = finding.get("cvss_score_estimate")
             vector = finding.get("cvss_vector")
             if score is not None:
-                print(f"  {finding['id']}: {vector} -> {score}")
+                print(f"  {finding.get('id', '?')}: {vector} -> {score}")
         _save_findings(workdir, data)
     except Exception as e:  # noqa: BLE001
         print(f"  ⚠️  CVSS scoring error: {e}", file=sys.stderr)
@@ -2510,16 +2510,18 @@ def prepare_F(workdir, target=None):
             expected = VERDICT_MAP[verdict]
             actual = finding.get("final_status")
             if actual != expected:
-                print(f"  MISMATCH: {finding['id']} verdict={verdict} "
+                print(f"  MISMATCH: {finding.get('id', '?')} verdict={verdict} "
                       f"expected={expected} got={actual}")
 
     # --- Proximity consistency ---
     by_vuln = defaultdict(list)
     for finding in data.get("findings", []):
-        b = finding.get("stage_b_summary", {})
-        if b.get("proximity") is not None:
+        # Bare-string stage summaries are a documented /agentic shape;
+        # a .get() on one crashed the consistency pass mid-Stage-E.
+        b = finding.get("stage_b_summary")
+        if isinstance(b, dict) and b.get("proximity") is not None:
             by_vuln[finding.get("vuln_type", "")].append(
-                (finding["id"], b["proximity"])
+                (finding.get("id", "?"), b["proximity"])
             )
     for vuln, scores in by_vuln.items():
         if len(scores) > 1:

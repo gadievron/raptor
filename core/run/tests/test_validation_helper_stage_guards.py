@@ -380,3 +380,44 @@ class TestNonDictRulingShapes:
         # skipped, the string-ruling finding stays in play.
         assert str(bx) in binaries
         assert str(by) not in binaries
+
+
+class TestPrepareFToleratesHostileShapes:
+    """prepare_F walks every finding for verdict mapping, the
+    dead-verdict cross-check and the proximity consistency pass —
+    id-less findings and bare-string stage summaries are documented
+    /agentic and operator --findings shapes and must not wedge the
+    stage (the s10 consumed-stage-file class, unswept at these
+    sites)."""
+
+    def _data(self):
+        good = _finding("F-1")
+        good["feasibility"] = {"verdict": "likely_exploitable"}
+        good["stage_b_summary"] = {"proximity": 5}
+        idless = _finding("drop-me")
+        del idless["id"]
+        idless["feasibility"] = {"verdict": "likely_exploitable"}
+        stringy = _finding("F-3", stage_b_summary="validated")
+        return {"findings": [good, idless, stringy]}
+
+    def test_prepare_f_survives_idless_and_string_summary(
+            self, tmp_path, capsys):
+        mod = _load_helper()
+        _write(tmp_path, "findings.json", self._data())
+        mod.prepare_F(str(tmp_path))  # must not raise
+        out = capsys.readouterr().out
+        assert "F-1" in out
+
+    def test_prepare_e_skip_report_survives_idless(self, tmp_path, capsys):
+        mod = _load_helper()
+        idless = _finding("gone")
+        del idless["id"]
+        _write(tmp_path, "findings.json", {"findings": [idless]})
+        # No binaries discovered: the skip lane appends (id, reason)
+        # for memory-corruption findings — id-less must not KeyError.
+        mod.prepare_E(str(tmp_path))
+        # The pin is shape tolerance: the stage ran to completion and
+        # the findings artifact is still intact and loadable.
+        saved = load_json(tmp_path / "findings.json")
+        assert isinstance(saved.get("findings"), list)
+        assert len(saved["findings"]) == 1
