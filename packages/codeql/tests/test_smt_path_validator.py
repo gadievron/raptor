@@ -2144,3 +2144,209 @@ class TestDualSignedness:
             )
         assert r.feasible is None
         assert "refusing the refutation" in r.reasoning
+
+    @_requires_z3
+    def test_dual_mixed_signedness_disjoint_cores_not_refuted(self):
+        from core.smt_solver.path_feasibility import (
+            check_path_feasibility_dual,
+        )
+        # ``ssize_t ret`` / ``size_t size``: jointly feasible in C
+        # (ret = -1, size = 2**63) yet unsat under BOTH shared
+        # profiles — the unsigned leg's core is ``ret < 0``, the
+        # signed leg's is the high bound. Each shared profile forces
+        # ALL variables to one signedness; neither core re-solves
+        # unsat under both profiles, so this must not refute. Same
+        # per common C error-guard spellings — the false-refutation
+        # class must stay closed for every one of them.
+        for guard in ("ret", "err", "rc", "fd", "status"):
+            r = check_path_feasibility_dual([
+                PathCondition(f"{guard} < 0", step_index=0),
+                PathCondition("size > 0x7FFFFFFFFFFFFFFF", step_index=1),
+            ])
+            assert r.feasible is None, guard
+            assert "refusing the refutation" in r.reasoning
+
+    @_requires_z3
+    def test_dual_shared_core_condition_alone_not_refuted(self):
+        from core.smt_solver.path_feasibility import (
+            check_path_feasibility_dual,
+        )
+        # ``ssize_t r`` / ``size_t s`` (the C ``ret == len`` mixed
+        # signed/unsigned comparison idiom): satisfiable in compiled C
+        # (r = -1, s = UINT64_MAX) yet unsat under BOTH shared
+        # profiles WITH an overlapping core — the signed leg's core is
+        # the lone high bound, which the unsigned leg's core also
+        # contains. A shared core CONDITION is not a shared
+        # contradiction: the shared subset is satisfiable under the
+        # unsigned profile, so the refutation must be refused.
+        r = check_path_feasibility_dual([
+            PathCondition("r == s", step_index=0),
+            PathCondition("s > 0x7FFFFFFFFFFFFFFF", step_index=1),
+            PathCondition("r <= 0x7FFFFFFFFFFFFFFF", step_index=2),
+        ])
+        assert r.feasible is None
+        assert "refusing the refutation" in r.reasoning
+
+    @_requires_z3
+    def test_dual_pure_contradiction_still_refuted(self):
+        from core.smt_solver.path_feasibility import (
+            check_path_feasibility_dual,
+        )
+        # A single-variable contradiction is unsat under any
+        # signedness; the exhibited-subset rule must keep refuting it.
+        r = check_path_feasibility_dual([
+            PathCondition("x > 5", step_index=0),
+            PathCondition("x < 3", step_index=1),
+        ])
+        assert r.feasible is False
+        assert "signedness-robust" in r.reasoning
+
+    @_requires_z3
+    def test_dual_guarded_contradiction_rescued(self):
+        from core.smt_solver.path_feasibility import (
+            check_path_feasibility_dual,
+        )
+        # A genuinely-infeasible set carrying an independent signed
+        # error-guard — ubiquitous on C paths. The unsigned leg's
+        # minimal core is the lone guard, the signed leg's is the
+        # real contradiction: disjoint. The disjoint-core rescue must
+        # find the contradiction core unsat under BOTH profiles and
+        # keep the refutation; a rule without it refuses every
+        # guard-carrying infeasible path.
+        for guard in ("ret", "err", "rc", "fd", "status"):
+            r = check_path_feasibility_dual([
+                PathCondition(f"{guard} < 0", step_index=0),
+                PathCondition("x > 100", step_index=1),
+                PathCondition("x < 50", step_index=2),
+            ])
+            assert r.feasible is False, guard
+            assert "signedness-robust" in r.reasoning
+
+    @_requires_z3
+    def test_dual_guard_self_contradiction_still_refuted(self):
+        from core.smt_solver.path_feasibility import (
+            check_path_feasibility_dual,
+        )
+        # The contradiction sits ON the guard variable itself: unsat
+        # for signed g (nothing is < 0 and > 10) and for unsigned g
+        # (g < 0 alone). A single identifier means the two profiles
+        # enumerate its whole interpretation space, so the sibling
+        # leg's core exhibits a conclusive contradiction.
+        for guard in ("ret", "err", "len"):
+            r = check_path_feasibility_dual([
+                PathCondition(f"{guard} < 0", step_index=0),
+                PathCondition(f"{guard} > 10", step_index=1),
+            ])
+            assert r.feasible is False, guard
+            assert "signedness-robust" in r.reasoning
+
+    @_requires_z3
+    def test_dual_multi_identifier_contradiction_refused(self):
+        from core.smt_solver.path_feasibility import (
+            check_path_feasibility_dual,
+        )
+        # [x > y, y > x] is infeasible when both comparisons share one
+        # signedness, but the shared-profile encoding cannot exhibit a
+        # per-variable-robust witness of that (a mixed encoding
+        # satisfies it, e.g. x = 2**63 unsigned, y = 1 signed) — so
+        # the dual check refuses and the path is analysed instead.
+        # Documented cost of the exhibited-contradiction rule;
+        # per-variable profiles are the full fix.
+        r = check_path_feasibility_dual([
+            PathCondition("x > y", step_index=0),
+            PathCondition("y > x", step_index=1),
+        ])
+        assert r.feasible is None
+        assert "refusing the refutation" in r.reasoning
+
+    def test_dual_disjoint_core_refutation_refused_without_z3(self):
+        import core.smt_solver.path_feasibility as pf
+
+        unsat_a = pf.PathSMTResult(
+            feasible=False, satisfied=[], unsatisfied=["a < 0"],
+            unknown=[], model={}, smt_available=True, reasoning="unsat",
+        )
+        unsat_b = pf.PathSMTResult(
+            feasible=False, satisfied=[], unsatisfied=["b > 5"],
+            unknown=[], model={}, smt_available=True, reasoning="unsat",
+        )
+        sat_sub = pf.PathSMTResult(
+            feasible=True, satisfied=[], unsatisfied=[],
+            unknown=[], model={}, smt_available=True, reasoning="sat",
+        )
+        # Legs disagree on WHICH condition is contradictory and each
+        # leg's core re-solves sat under the flipped profile — no
+        # exhibited cross-profile contradiction, so the dual check
+        # refuses (two candidate probes, first profile each).
+        with patch.object(
+            pf, "check_path_feasibility",
+            side_effect=[unsat_a, unsat_b, sat_sub, sat_sub],
+        ):
+            r = pf.check_path_feasibility_dual(
+                [PathCondition("a < 0", step_index=0),
+                 PathCondition("b > 5", step_index=1)],
+            )
+        assert r.feasible is None
+        assert "refusing the refutation" in r.reasoning
+
+    def test_dual_disjoint_core_cross_profile_rescue_without_z3(self):
+        import core.smt_solver.path_feasibility as pf
+
+        unsat_guard = pf.PathSMTResult(
+            feasible=False, satisfied=[], unsatisfied=["g < 0"],
+            unknown=[], model={}, smt_available=True, reasoning="unsat",
+        )
+        unsat_pair = pf.PathSMTResult(
+            feasible=False, satisfied=[], unsatisfied=["x > 100", "x < 50"],
+            unknown=[], model={}, smt_available=True, reasoning="unsat",
+        )
+        sat_sub = pf.PathSMTResult(
+            feasible=True, satisfied=[], unsatisfied=[],
+            unknown=[], model={}, smt_available=True, reasoning="sat",
+        )
+        # First candidate (the guard core) fails its first re-solve;
+        # the second candidate (the real contradiction) re-solves
+        # unsat under both profiles — refutation honored.
+        with patch.object(
+            pf, "check_path_feasibility",
+            side_effect=[unsat_guard, unsat_pair,
+                         sat_sub, unsat_pair, unsat_pair],
+        ):
+            r = pf.check_path_feasibility_dual(
+                [PathCondition("g < 0", step_index=0),
+                 PathCondition("x > 100", step_index=1),
+                 PathCondition("x < 50", step_index=2)],
+            )
+        assert r.feasible is False
+        assert "exhibited cross-profile contradiction" in r.reasoning
+
+    def test_dual_shared_core_subset_sat_refused_without_z3(self):
+        import core.smt_solver.path_feasibility as pf
+
+        unsat_all = pf.PathSMTResult(
+            feasible=False, satisfied=[],
+            unsatisfied=["r == s", "s > 9", "r <= 9"],
+            unknown=[], model={}, smt_available=True, reasoning="unsat",
+        )
+        unsat_bound = pf.PathSMTResult(
+            feasible=False, satisfied=[], unsatisfied=["s > 9"],
+            unknown=[], model={}, smt_available=True, reasoning="unsat",
+        )
+        sat_sub = pf.PathSMTResult(
+            feasible=True, satisfied=[], unsatisfied=[],
+            unknown=[], model={}, smt_available=True, reasoning="sat",
+        )
+        # Cores overlap on one condition, but that shared subset
+        # re-solves sat under the first profile: condition-identity is
+        # not contradiction-identity — the refutation is refused.
+        with patch.object(
+            pf, "check_path_feasibility",
+            side_effect=[unsat_all, unsat_bound, sat_sub],
+        ):
+            r = pf.check_path_feasibility_dual(
+                [PathCondition("r == s", step_index=0),
+                 PathCondition("s > 9", step_index=1),
+                 PathCondition("r <= 9", step_index=2)],
+            )
+        assert r.feasible is None
+        assert "refusing the refutation" in r.reasoning

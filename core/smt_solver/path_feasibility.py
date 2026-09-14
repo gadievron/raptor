@@ -1703,6 +1703,61 @@ def check_path_feasibility(
     )
 
 
+def _exhibits_robust_contradiction(
+    candidate: frozenset[str],
+    conditions: list[PathCondition],
+    profiles: tuple[BVProfile, BVProfile],
+    timeout_ms: int | None,
+) -> bool:
+    """Does this unsat-core subset exhibit a contradiction that is
+    independent of the signedness guess?
+
+    ``candidate`` holds display texts from a leg's ``unsatisfied``
+    list; they are matched back to the original conditions by the same
+    rendering ``_classify_text_condition`` used (``NOT (text)`` for
+    negated conditions). Call-summary axiom labels have no matching
+    condition and simply drop out — the shrunken subset is weaker, so
+    the check can only fail toward refusal, never toward suppression.
+
+    True only when BOTH hold:
+
+    * the subset mentions at most ONE identifier. Each profile forces
+      every variable to one signedness, so for a single variable the
+      two profiles enumerate its whole interpretation space — unsat
+      under both is conclusive. A multi-identifier subset has mixed
+      per-variable interpretations neither profile encodes (the
+      ``[r == s, s > SSIZE_MAX, r <= SSIZE_MAX]`` shape is unsat under
+      both shared profiles yet satisfiable in C at r = -1,
+      s = UINT64_MAX), so it must never be honored as agreement —
+      per-variable profiles are the full fix for those. Call heads
+      count as identifiers, which errs toward refusal.
+    * the subset re-solves unsat under BOTH profiles on its own. A
+      subset satisfiable under either profile is that profile's
+      counterexample — the leg refuted through profile-specific
+      semantics, not a genuine contradiction.
+    """
+    subset = [
+        c for c in conditions
+        if (f"NOT ({c.text})" if c.negated else c.text) in candidate
+    ]
+    if not subset:
+        return False
+    idents = {
+        tok.lower()
+        for c in subset
+        for tok in _TOKEN_RE.findall(c.text)
+        if _IDENT_RE.match(tok) and not _NULL_RE.match(tok)
+    }
+    if len(idents) > 1:
+        return False
+    return all(
+        check_path_feasibility(
+            subset, profile=p, timeout_ms=timeout_ms,
+        ).feasible is False
+        for p in profiles
+    )
+
+
 def check_path_feasibility_dual(
     conditions: list[PathCondition],
     *,
@@ -1729,7 +1784,24 @@ def check_path_feasibility_dual(
       signedness-flipped sibling is never solved (no extra cost on
       the common path).
     * A ``feasible=False`` verdict is honored only when the
-      signedness-flipped sibling profile ALSO reports ``False``.
+      signedness-flipped sibling profile ALSO reports ``False``
+      AND a core subset exhibits a single-identifier contradiction
+      that re-solves unsat under BOTH profiles on its own
+      (:func:`_exhibits_robust_contradiction`).
+      Both-legs-unsat alone is NOT agreement: each shared profile
+      forces EVERY variable to one signedness, so a mixed set like
+      ``[ret < 0, size > SSIZE_MAX]`` — a signed error-guard beside
+      an unsigned high-bound, the standard C overflow-path idiom —
+      is unsat under BOTH profiles for DIFFERENT conditions while
+      being jointly feasible in C, where each variable carries its
+      own signedness. Nor is a shared core CONDITION agreement:
+      ``[r == s, s > SSIZE_MAX, r <= SSIZE_MAX]`` puts the high
+      bound in both cores yet is satisfiable in C (r = -1,
+      s = UINT64_MAX) — condition-identity is not
+      contradiction-identity. When no candidate subset exhibits a
+      cross-profile contradiction the verdict is ``feasible=None``.
+      (Per-variable profiles are the full fix; the exhibited-subset
+      rule closes the known false refutations without them.)
       Sibling sat → the sibling's (feasible) result is returned;
       sibling inconclusive → ``feasible=None`` (a single-profile
       refutation under guessed signedness carries no weight — the
@@ -1752,11 +1824,79 @@ def check_path_feasibility_dual(
         timeout_ms=timeout_ms, prefer_witness=prefer_witness,
     )
     if sibling.feasible is False:
-        primary.reasoning += (
-            f" [signedness-robust: also unsat at "
-            f"{sibling_profile.describe()}]"
+        # Both legs unsat is NOT signedness agreement by itself: each
+        # shared profile forces EVERY variable to one signedness, so a
+        # mixed set like [ret < 0, size > SSIZE_MAX] is unsat under
+        # BOTH profiles for DIFFERENT conditions while being jointly
+        # feasible in C. And a merely SHARED core condition is no
+        # better: [r == s, s > SSIZE_MAX, r <= SSIZE_MAX] puts the
+        # high bound in both cores yet is satisfiable in C (r = -1,
+        # s = UINT64_MAX) — condition-identity is not
+        # contradiction-identity. The refutation is honored only when
+        # some candidate core subset — the cores' intersection or
+        # either leg's core — EXHIBITS a single-identifier
+        # contradiction that re-solves unsat under BOTH profiles on
+        # its own (see _exhibits_robust_contradiction). Checking the
+        # legs' cores individually is load-bearing: Z3's minimal core
+        # under the unsigned default is the lone signed guard whenever
+        # one rides beside an independent contradiction ([ret < 0,
+        # x > 100, x < 50] presents disjoint cores), and guard shapes
+        # are ubiquitous on C paths — without it every guard-carrying
+        # infeasible path would refuse. Cost: a few bounded re-solves
+        # of tiny subsets on the already-rare both-legs-unsat path.
+        #
+        # Trade-off, both directions: a genuinely-infeasible set whose
+        # only contradiction spans MULTIPLE variables now refuses —
+        # that costs a refutation (recoverable: the path is analysed),
+        # while honoring multi-variable agreement cost live overflow
+        # paths (suppressed pre-LLM). When core extraction failed,
+        # ``unsatisfied`` is EVERY pending condition; the candidates
+        # then degenerate to the full set, which still refutes only
+        # via a single-identifier contradiction. Per-variable profiles
+        # remain the full fix.
+        primary_core = frozenset(primary.unsatisfied)
+        sibling_core = frozenset(sibling.unsatisfied)
+        candidates: list[frozenset[str]] = []
+        for candidate in (
+            primary_core & sibling_core, primary_core, sibling_core,
+        ):
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+        exhibited: frozenset[str] | None = None
+        for candidate in candidates:
+            if _exhibits_robust_contradiction(
+                candidate, conditions, (profile, sibling_profile),
+                timeout_ms,
+            ):
+                exhibited = candidate
+                break
+        if exhibited is not None:
+            primary.reasoning += (
+                f" [signedness-robust: also unsat at "
+                f"{sibling_profile.describe()}; exhibited cross-profile "
+                f"contradiction: {', '.join(sorted(exhibited)[:3])}]"
+            )
+            return primary
+        return PathSMTResult(
+            feasible=None,
+            satisfied=primary.satisfied,
+            unsatisfied=[],
+            unknown=primary.unknown,
+            model={},
+            smt_available=primary.smt_available,
+            reasoning=(
+                f"signedness-ambiguous: unsat at {profile.describe()} "
+                f"(core: {', '.join(primary.unsatisfied[:3])}) and at "
+                f"{sibling_profile.describe()} (core: "
+                f"{', '.join(sibling.unsatisfied[:3])}), but no core "
+                f"subset exhibits a single-identifier contradiction "
+                f"under BOTH profiles on its own — the mixed-signedness "
+                f"shape a per-variable encoding could satisfy — "
+                f"refusing the refutation"
+            ),
+            unknown_reasons=primary.unknown_reasons,
+            anon_var_map=primary.anon_var_map,
         )
-        return primary
     if sibling.feasible is True:
         sibling.reasoning += (
             f" [note: unsat at {profile.describe()} but satisfiable at "
