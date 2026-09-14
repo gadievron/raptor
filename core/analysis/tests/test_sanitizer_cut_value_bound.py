@@ -551,3 +551,47 @@ class TestRhsCatalogCall:
 
     def test_non_invocation_rejected(self):
         assert not self._check("x + Encoder.encodeForHTML(y)")
+
+
+class TestMatchCaptureRebindNotSuppressed:
+    """A match-case capture pattern rebinds the sanitized name with
+    raw subject content (``case [*y]:``); the value-bound gate must
+    not suppress — the capture def breaks condition-3 exclusivity."""
+
+    def test_capture_rebind_of_sanitized_name_downgrades(self):
+        src = (
+            "def handle(x, render):\n"
+            "    s = str(x)\n"
+            "    y = html.escape(s)\n"
+            "    match x:\n"
+            "        case [*y]:\n"
+            "            pass\n"
+            "    render(y)\n"
+        )
+        cfg = _cfg(src)
+        sink = next(n for n in cfg.nodes() if "render" in n.calls)
+        r = evaluate_finding(
+            cfg, [cfg.entry_node], sink, cwe="CWE-79",
+            language="python", source_symbols={"x"}, sink_arg="y",
+        )
+        assert r.verdict != VERDICT_SUPPRESS
+
+    def test_unrelated_capture_still_suppresses(self):
+        # Direction check: a capture of a DIFFERENT name must not cost
+        # the legitimate suppression.
+        src = (
+            "def handle(x, render):\n"
+            "    s = str(x)\n"
+            "    y = html.escape(s)\n"
+            "    match x:\n"
+            "        case [*other]:\n"
+            "            pass\n"
+            "    render(y)\n"
+        )
+        cfg = _cfg(src)
+        sink = next(n for n in cfg.nodes() if "render" in n.calls)
+        r = evaluate_finding(
+            cfg, [cfg.entry_node], sink, cwe="CWE-79",
+            language="python", source_symbols={"x"}, sink_arg="y",
+        )
+        assert r.verdict == VERDICT_SUPPRESS

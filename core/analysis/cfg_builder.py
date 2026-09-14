@@ -551,6 +551,28 @@ def _pattern_irrefutable(pattern: ast.pattern) -> bool:
     return False
 
 
+def _pattern_capture_names(pattern: ast.AST) -> frozenset[str]:
+    """Names a match-case pattern BINDS on success.
+
+    Capture names are identifier STRINGS (``MatchAs.name`` /
+    ``MatchStar.name`` / ``MatchMapping.rest``), not Store-ctx
+    ``ast.Name`` nodes, so no ``_walk_symbols`` layer can ever see
+    them. Leaving them out of ``defs`` makes a capture rebind of a
+    sanitized name (``case [*y]:``) invisible to reaching-defs — the
+    value-bound gate's condition-3 exclusivity then holds falsely and
+    a runtime-tainted sink suppresses.
+    """
+    out: set[str] = set()
+    for node in ast.walk(pattern):
+        if isinstance(node, (ast.MatchAs, ast.MatchStar)):
+            if node.name is not None:
+                out.add(node.name)
+        elif isinstance(node, ast.MatchMapping):
+            if node.rest is not None:
+                out.add(node.rest)
+    return frozenset(out)
+
+
 def _match_has_irrefutable_case(stmt: ast.Match) -> bool:
     """True when some case of ``stmt`` is guaranteed to execute — an
     irrefutable pattern with no ``if`` guard. Only then does the match
@@ -738,7 +760,15 @@ class _PythonCFGBuilder:
         self._link_many(incoming, subject)
         exits: list[PyCFGNode] = []
         for case in stmt.cases:
-            case_out = self._build_stmts(case.body, [subject])
+            # Per-case binding node between subject and body: carries
+            # the pattern's capture names as defs (see
+            # _pattern_capture_names — invisible to any Name walk) and
+            # the guard's reads/calls. Without it a capture rebind of
+            # a sanitized name never reaches reaching-defs — the
+            # false-suppression direction for the value-bound gate.
+            case_node = self._match_case_node(case)
+            self._link(subject, case_node)
+            case_out = self._build_stmts(case.body, [case_node])
             exits.extend(case_out)
         # When no case is irrefutable, execution can match NOTHING and
         # fall straight through to the post-match code — the subject
@@ -749,6 +779,48 @@ class _PythonCFGBuilder:
         if not _match_has_irrefutable_case(stmt):
             exits.append(subject)
         return exits
+
+    def _match_case_node(self, case: ast.match_case) -> PyCFGNode:
+        """Synthetic node for one match case: pattern capture names as
+        ``defs``; pattern value reads plus the guard's reads as
+        ``uses``; the guard's calls as ``calls``/``call_sites``.
+        Guard call sites carry empty ``assigned_names`` — a guard
+        expression binds nothing the gate may treat as a sanitizer
+        output (refusal direction)."""
+        defs = set(_pattern_capture_names(case.pattern))
+        uses: set[str] = set()
+        for sub in ast.walk(case.pattern):
+            if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
+                uses.add(sub.id)
+        site_records: list[CallSite] = []
+        if case.guard is not None:
+            guard_defs, guard_uses = _walk_symbols(case.guard)
+            defs |= guard_defs  # a walrus in a guard binds too
+            uses |= guard_uses
+            for child in ast.walk(case.guard):
+                if not isinstance(child, ast.Call):
+                    continue
+                name = _resolve_callable_name(child.func)
+                if name is None:
+                    continue
+                site_records.append(CallSite(
+                    name=name,
+                    arg_names=_arg_surface_names(child),
+                    assigned_names=frozenset(),
+                    lineno=child.lineno,
+                    col_offset=getattr(child, "col_offset", 0),
+                ))
+        node = PyCFGNode(
+            kind="stmt",
+            lineno=case.pattern.lineno,
+            label=f"case (line {case.pattern.lineno})",
+            calls=frozenset(cs.name for cs in site_records),
+            defs=frozenset(defs),
+            uses=frozenset(uses),
+            call_sites=tuple(site_records),
+        )
+        self._all_nodes.append(node)
+        return node
 
     def _build_try(
         self, stmt: ast.Try, incoming: list[PyCFGNode],

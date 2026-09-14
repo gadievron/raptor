@@ -453,6 +453,76 @@ def test_match_guarded_wildcard_still_falls_through():
     assert sink in cfg.successors(subject)
 
 
+def test_match_case_capture_binds_as_def():
+    """Pattern captures are identifier STRINGS (MatchAs.name /
+    MatchStar.name / MatchMapping.rest) — invisible to any Name walk.
+    Each case must carry them as defs, or a capture rebind of a
+    sanitized name never reaches reaching-defs and the value-bound
+    gate's exclusivity holds falsely (false-suppression direction)."""
+    src = (
+        "def f(x):\n"
+        "    y = clean(x)\n"
+        "    match x:\n"
+        "        case [*y]:\n"
+        "            pass\n"
+        "    sink(y)\n"
+    )
+    cfg = _cfg(src)
+    case_nodes = [n for n in cfg.nodes() if n.label.startswith("case")]
+    assert case_nodes and "y" in case_nodes[0].defs
+
+
+def test_match_mapping_rest_and_as_capture_bind_as_defs():
+    src = (
+        "def f(x):\n"
+        "    match x:\n"
+        "        case {'k': v, **rest}:\n"
+        "            pass\n"
+        "        case [1, 2] as whole:\n"
+        "            pass\n"
+        "    sink(x)\n"
+    )
+    cfg = _cfg(src)
+    defs = set()
+    for n in cfg.nodes():
+        if n.label.startswith("case"):
+            defs |= n.defs
+    assert {"v", "rest", "whole"} <= defs
+
+
+def test_match_case_guard_reads_and_calls_surface():
+    src = (
+        "def f(x):\n"
+        "    match x:\n"
+        "        case p if check(p, x):\n"
+        "            pass\n"
+        "    sink(x)\n"
+    )
+    cfg = _cfg(src)
+    case_node = next(n for n in cfg.nodes() if n.label.startswith("case"))
+    assert "check" in case_node.calls
+    assert {"p", "x"} <= case_node.uses
+    assert all(not cs.assigned_names for cs in case_node.call_sites)
+
+
+def test_match_case_body_flows_through_case_node():
+    """The case body's predecessors go subject -> case node -> body,
+    so the capture def sits on every path into the body."""
+    src = (
+        "def f(x):\n"
+        "    match x:\n"
+        "        case 'a':\n"
+        "            y = clean(x)\n"
+        "    sink(x)\n"
+    )
+    cfg = _cfg(src)
+    subject = next(n for n in cfg.nodes() if n.label.startswith("match"))
+    case_node = next(n for n in cfg.nodes() if n.label.startswith("case"))
+    body = next(n for n in cfg.nodes() if "clean" in n.calls)
+    assert case_node in cfg.successors(subject)
+    assert body in cfg.successors(case_node)
+
+
 def test_match_bare_capture_counts_as_irrefutable():
     """``case other:`` (a bare capture) always matches, like ``case _``."""
     src = (
