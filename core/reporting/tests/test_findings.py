@@ -387,6 +387,22 @@ class TestMdTableCellAutofetch(unittest.TestCase):
         self.assertEqual(_md_table_cell("a|b"), "a\\|b")
         self.assertEqual(_md_table_cell("a\nb"), "a<br>b")
 
+    def test_control_and_bidi_bytes_escaped(self):
+        # sanitise_code's docstring names the threat: ANSI/BIDI/
+        # control-byte injection via terminal emulators (cat
+        # report.md). The prose lanes go through sanitise_string;
+        # this hand-rolled cell lane must escape too — file/function/
+        # vuln_type/code_line cells are hostile-influenceable.
+        from core.reporting.findings import _md_table_cell
+        out = _md_table_cell("evil\x1b[2Jname\x07")
+        self.assertNotIn("\x1b", out)
+        self.assertNotIn("\x07", out)
+        self.assertIn("evil", out)
+        self.assertNotIn("‮", _md_table_cell("a‮b"))
+        # Carriage returns keep the one-line <br> rendering.
+        self.assertEqual(_md_table_cell("a\r\nb"), "a<br>b")
+        self.assertEqual(_md_table_cell("a\rb"), "a<br>b")
+
     def test_backtick_replaced_not_escaped(self):
         # Backslash escapes are inert inside code spans, so cells that
         # callers wrap in `...` must have NO backtick at all — a

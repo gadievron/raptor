@@ -218,6 +218,13 @@ def _md_table_cell(s: str) -> str:
       * `|` → `\|` (table column separator)
       * `` ` `` → `\` ` (inline-code fence)
       * Newlines → `<br>` (rows must be one line)
+      * Control/bidi bytes → `\xHH` escapes (`escape_nonprintable`):
+        table cells carry hostile-influenceable fields (file path,
+        function, vuln_type, code_line) and the report is catted to
+        terminals — `sanitise_code`'s own docstring names the exact
+        threat ("ANSI/BIDI/control-byte injection via terminal
+        emulators"); the prose fields go through `sanitise_string`
+        which already escapes, this hand-rolled cell lane must too.
 
     Also strips autofetch markup (image/`<img>`/`<iframe>` tags,
     `javascript:`/`data:` links) via the shared prompt-envelope
@@ -231,9 +238,16 @@ def _md_table_cell(s: str) -> str:
     """
     if s is None:
         return ""
+    from core.security.log_sanitisation import escape_nonprintable
     from core.security.prompt_envelope import _strip_autofetch_markup
     s = str(s)
     s = _strip_autofetch_markup(s)
+    # Before the backslash-doubling below, so the `\xHH` escapes this
+    # pass emits render as single-backslash literals in the cell.
+    # ``\r\n``/``\r`` are normalised first so bare carriage returns
+    # keep their pre-existing ``<br>`` rendering instead of escaping.
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    s = escape_nonprintable(s, preserve_newlines=True)
     s = s.replace("\\", "\\\\")
     s = s.replace("|", "\\|")
     # Backticks are REPLACED (U+02BC, same policy as the threat-model
