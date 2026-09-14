@@ -414,16 +414,28 @@ def _expr_taint(
       taint survives with the callable on its chain instead of
       silently vanishing — a dropped atom reads as "param does not
       flow", which the sanitizer-cut consumer can turn into a false
-      clean-wrapper binding that suppresses a real finding.
+      clean-wrapper binding that suppresses a real finding. A
+      method call's RECEIVER (``recv.m(...)``) contributes its own
+      taint the same way, stamped at :data:`_OPAQUE_ARG` — the
+      receiver's value feeds the result exactly like an argument
+      (``a.strip()`` carries ``a``'s taint), and the stamped
+      callable is never a catalog sanitizer, so the consumer
+      refuses rather than suppresses.
     * ``JoinedStr`` / ``FormattedValue`` — union of the interpolated
       expressions' taint (an f-string carries its inputs' taint).
     * ``BinOp`` / ``BoolOp`` / ``IfExp`` / ``UnaryOp`` —
       element-wise union (taint flows through arithmetic / boolean
       composition into the result).
-    * Literals, comprehensions, lambdas, subscripts — return empty
-      (conservative under-approximation: their taint contribution
-      is unknown; Phase 14 will refuse to suppress when this
-      matters).
+    * ``Subscript`` / ``Starred`` / container literals (``List`` /
+      ``Tuple`` / ``Set`` / ``Dict``) / comprehensions — union of
+      the contained expressions' taint. Returning empty here erased
+      real flows: ``return escape(a) + a[0]`` read as "a only
+      reaches the return through escape", minting a false
+      clean-sanitizer binding the enforced sanitizer-cut consumed
+      to suppress real findings (the JoinedStr hazard restated on
+      the element/container shapes).
+    * Literals, lambdas — return empty (a literal carries no param
+      taint; a lambda OBJECT doesn't evaluate its body here).
     """
     if expr is None:
         return _empty_state()
@@ -455,6 +467,29 @@ def _expr_taint(
             (kw.arg, _expr_taint(kw.value, cfg_node, in_state_fn, summaries))
             for kw in expr.keywords
         ]
+        # Method-call receiver: ``recv.m(...)`` evaluates ``recv`` and
+        # its value feeds the result exactly like an argument.
+        # Dropping it read ``return escape(a) + a.strip()`` as "a only
+        # reaches the return through escape" — a false clean-sanitizer
+        # binding on the enforced path. Stamp at _OPAQUE_ARG: the
+        # stamped callable (``a.strip``, or the bare method name when
+        # the chain doesn't bottom out at a Name) is never a catalog
+        # sanitizer, so the consumer refuses rather than suppresses.
+        recv_state = _empty_state()
+        recv_stamp = callable_name
+        if isinstance(expr.func, ast.Attribute):
+            recv_state = _expr_taint(
+                expr.func.value, cfg_node, in_state_fn, summaries,
+            )
+            recv_stamp = callable_name or expr.func.attr
+
+        def _with_receiver(state: TaintState) -> TaintState:
+            if not recv_state:
+                return state
+            return _merge_states(
+                state, _add_effect(recv_state, recv_stamp, _OPAQUE_ARG),
+            )
+
         callee = summaries.get(callable_name)
         if (callee is not None and not callee.summary_unknown
                 and not has_starred):
@@ -493,7 +528,7 @@ def _expr_taint(
                         result,
                         _add_effect(kw_state, callable_name, _OPAQUE_ARG),
                     )
-            return result
+            return _with_receiver(result)
         # External or unknown callee (or unknowable positions after
         # ``*`` unpacking). Each tainted arg contributes via the call
         # with its position stamped — opaque when unknowable.
@@ -509,7 +544,7 @@ def _expr_taint(
                 continue
             stamped = _add_effect(kw_state, callable_name, _OPAQUE_ARG)
             result = _merge_states(result, stamped)
-        return result
+        return _with_receiver(result)
     if isinstance(expr, ast.JoinedStr):
         # f-string: taint flows from every interpolated expression
         # into the result. Returning empty here erased the flow — a
@@ -544,6 +579,53 @@ def _expr_taint(
         )
     if isinstance(expr, ast.UnaryOp):
         return _expr_taint(expr.operand, cfg_node, in_state_fn, summaries)
+    # Element/container shapes: the contained expressions' taint flows
+    # into the result (an element carries its container's taint, a
+    # container carries its elements'). Unstamped — same
+    # over-approximation as the Attribute case above; a surviving
+    # direct atom makes the consumer refuse, never suppress.
+    if isinstance(expr, ast.Subscript):
+        return _merge_states(
+            _expr_taint(expr.value, cfg_node, in_state_fn, summaries),
+            _expr_taint(expr.slice, cfg_node, in_state_fn, summaries),
+        )
+    if isinstance(expr, ast.Starred):
+        return _expr_taint(expr.value, cfg_node, in_state_fn, summaries)
+    if isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
+        out = _empty_state()
+        for e in expr.elts:
+            out = _merge_states(
+                out, _expr_taint(e, cfg_node, in_state_fn, summaries),
+            )
+        return out
+    if isinstance(expr, ast.Dict):
+        out = _empty_state()
+        for e in (*expr.keys, *expr.values):
+            if e is not None:  # None key = ``**expr`` expansion's slot
+                out = _merge_states(
+                    out, _expr_taint(e, cfg_node, in_state_fn, summaries),
+                )
+        return out
+    if isinstance(
+        expr, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp),
+    ):
+        # Union over the element expression(s), every generator's
+        # iterable, and the filter conditions. Comprehension targets
+        # are locals with empty in-state; their taint arrives through
+        # the iterables, which are included directly.
+        parts: list[ast.AST] = (
+            [expr.key, expr.value] if isinstance(expr, ast.DictComp)
+            else [expr.elt]
+        )
+        for gen in expr.generators:
+            parts.append(gen.iter)
+            parts.extend(gen.ifs)
+        out = _empty_state()
+        for e in parts:
+            out = _merge_states(
+                out, _expr_taint(e, cfg_node, in_state_fn, summaries),
+            )
+        return out
     return _empty_state()
 
 

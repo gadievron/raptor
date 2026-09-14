@@ -592,3 +592,70 @@ class TestKeywordAndStarredArgs:
             "    return clean(a)\n"
         )
         assert (0, "clean", 0) in summaries["f"].return_effects
+
+
+class TestDirtySiblingShapesStayDirty:
+    """A wrapper mixing a sanitized flow with a dirty sibling flow of
+    the SAME param must never read as cleanly sanitized — dropping the
+    sibling atom mints a false clean-sanitizer binding the enforced
+    sanitizer-cut consumes to suppress real findings (the JoinedStr
+    hazard restated on the receiver/element/container shapes)."""
+
+    @staticmethod
+    def _cleanly_sanitized(ret: str) -> bool:
+        from core.analysis.interproc import _param_cleanly_sanitized
+        _, summaries = _summaries(
+            f"import html\n\ndef h(a):\n    return {ret}\n"
+        )
+        return _param_cleanly_sanitized(
+            summaries["h"], 0, {"html.escape"},
+        )
+
+    def test_method_receiver_sibling_stays_dirty(self):
+        assert not self._cleanly_sanitized(
+            "html.escape(a) + a.strip()"
+        )
+
+    def test_subscript_sibling_stays_dirty(self):
+        assert not self._cleanly_sanitized("html.escape(a) + a[0]")
+
+    def test_subscript_index_taint_survives(self):
+        assert not self._cleanly_sanitized(
+            "html.escape(a) + table[a]"
+        )
+
+    def test_comprehension_sibling_stays_dirty(self):
+        assert not self._cleanly_sanitized(
+            'html.escape(a) + "".join(c for c in a)'
+        )
+
+    def test_dict_comprehension_value_taint_survives(self):
+        assert not self._cleanly_sanitized(
+            "html.escape(a) + str({k: a for k in (1,)})"
+        )
+
+    def test_container_literal_sibling_stays_dirty(self):
+        assert not self._cleanly_sanitized(
+            "html.escape(a) + str([a])"
+        )
+
+    def test_dict_literal_sibling_stays_dirty(self):
+        assert not self._cleanly_sanitized(
+            "html.escape(a) + str({1: a})"
+        )
+
+    def test_receiver_taint_is_stamped_not_direct(self):
+        # The receiver flow survives WITH the method chain stamped
+        # opaque — a non-catalog callable on the chain, so the
+        # consumer refuses; it is not collapsed into the clean atom.
+        from core.analysis.taint_summaries import _OPAQUE_ARG
+        _, summaries = _summaries(
+            "def h(a):\n    return a.strip()\n"
+        )
+        assert (0, "a.strip", _OPAQUE_ARG) in (
+            summaries["h"].return_effects
+        )
+
+    def test_clean_wrapper_still_reads_clean(self):
+        # Direction check: the pure sanitizer wrapper keeps minting.
+        assert self._cleanly_sanitized("html.escape(a)")
