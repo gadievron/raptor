@@ -713,15 +713,23 @@ class TestE2ELibexecScript(unittest.TestCase):
         self.assertIn("Usage", result.stderr)
 
     def test_missing_output_dir_fails_closed(self):
-        """No OUTPUT_DIR must fail with a clear error, not silently default."""
-        env_no_output = {k: v for k, v in os.environ.items() if k != "OUTPUT_DIR"}
-        result = subprocess.run(
-            ["libexec/raptor-run-sandboxed", "echo", "hi"],
-            capture_output=True, text=True, timeout=5, env=env_no_output,
-            check=False,
-        )
+        """No output dir resolvable must fail with a clear error that
+        names the flag, not silently default. HOME points at an empty
+        dir so the session-run-ledger fallback finds nothing — the
+        test must not pass or fail based on the invoking session's
+        live runs."""
+        with TemporaryDirectory() as empty_home:
+            env_no_output = {
+                k: v for k, v in os.environ.items() if k != "OUTPUT_DIR"}
+            env_no_output["HOME"] = empty_home
+            result = subprocess.run(
+                ["libexec/raptor-run-sandboxed", "echo", "hi"],
+                capture_output=True, text=True, timeout=5,
+                env=env_no_output, check=False,
+            )
         self.assertEqual(result.returncode, 1)
         self.assertIn("OUTPUT_DIR", result.stderr)
+        self.assertIn("--output-dir", result.stderr)
         self.assertIn("[sandbox] ERROR", result.stderr)
 
     def test_help_flag_exits_zero(self):

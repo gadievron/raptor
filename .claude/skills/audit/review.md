@@ -78,7 +78,7 @@ libexec/raptor-smt-validate-path --profile uint32 'len > 0' 'len < BUFSIZE' 'off
 
 **Compilation test** — build a minimal reproducer:
 ```bash
-libexec/raptor-run-sandboxed gcc -o test test.c && libexec/raptor-run-sandboxed ./test
+libexec/raptor-run-sandboxed --output-dir "$OUTPUT_DIR/build" gcc -o "$OUTPUT_DIR/build/test" "$OUTPUT_DIR/build/test.c" && libexec/raptor-run-sandboxed --output-dir "$OUTPUT_DIR/build" "$OUTPUT_DIR/build/test"
 ```
 
 ### Step 4: Evaluate

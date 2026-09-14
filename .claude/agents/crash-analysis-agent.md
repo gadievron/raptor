@@ -50,9 +50,9 @@ When invoked with a bug tracker URL and a git repository URL:
      - CMake: `cmake -DCMAKE_C_FLAGS="-fsanitize=address -g" -DCMAKE_BUILD_TYPE=Debug ..`
      - Makefile: `make CC=clang CFLAGS="-fsanitize=address -g"`
    - Place build artifacts in the working directory if possible
-   - **Sandbox the build.** The repository is untrusted, and its configure/CMake/Make scripts execute arbitrary code the moment the build starts. Run every build command via `libexec/raptor-run-sandboxed <cmd> [args...]` (blocks network, restricts writes, limits resources), with the `OUTPUT_DIR` environment variable set to the directory the command must write into (the cloned repo tree for build steps). Never run configure, make, or compilers directly.
+   - **Sandbox the build.** The repository is untrusted, and its configure/CMake/Make scripts execute arbitrary code the moment the build starts. Run every build command via `libexec/raptor-run-sandboxed --output-dir <dir> <cmd> [args...]` (blocks network, restricts writes, limits resources), with `--output-dir` naming the directory the command must write into (the cloned repo tree for build steps). Never run configure, make, or compilers directly.
 
-9. **Reproduce the Crash**: Use the reproduction steps, crash command, and downloaded attachments from `bug-report.json` to reproduce the crash. Run the crashing command via `libexec/raptor-run-sandboxed` as well (`OUTPUT_DIR` = the working directory) — the binary and its inputs are untrusted.
+9. **Reproduce the Crash**: Use the reproduction steps, crash command, and downloaded attachments from `bug-report.json` to reproduce the crash. Run the crashing command via `libexec/raptor-run-sandboxed` as well (`--output-dir` = the working directory) — the binary and its inputs are untrusted.
 
 10. **Generate Execution Trace**: Invoke the "function-trace-generator" agent to create function-level execution traces in `<working-dir>/traces/`.
 
