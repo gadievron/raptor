@@ -428,3 +428,79 @@ def test_evidence_to_gate_deprecated_npm_never_auto_legit():
         lambda c, ev: Verdict(c.name, "legit", "high"),   # adversarial verdict
     )
     assert outcomes[0].gate_result.disposition is Disposition.ESCALATE
+
+
+# ---------------------------------------------------------------------------
+# Hostile registry JSON — guarded evidence, per-candidate isolation
+# ---------------------------------------------------------------------------
+
+def test_rich_npm_evidence_tolerates_hostile_doc() -> None:
+    """A registry doc whose nested fields are the wrong type (list
+    ``versions``, list ``time``, dict ``readme``) must degrade to
+    thin evidence — which fails the auto-legit floor and escalates —
+    not crash the fetch."""
+    from packages.sca.supply_chain.typosquat_triage import (
+        _evidence_npm_rich,
+    )
+
+    class _Http:
+        def get_json(self, url, max_bytes=None):
+            return {
+                "versions": ["v1"],
+                "dist-tags": ["latest"],
+                "time": ["now"],
+                "readme": {"nested": "x"},
+                "description": None,
+            }
+
+    cand = Candidate(name="evil", near_twin="eslint", rank=1,
+                     twin_rank=2, distance=1)
+    ev = _evidence_npm_rich(cand, _Http())
+    assert ev.num_versions == 0
+    assert ev.readme is None
+    assert ev.age_days is None
+
+
+def test_rich_pypi_evidence_tolerates_hostile_doc() -> None:
+    from packages.sca.supply_chain.typosquat_triage import (
+        _evidence_pypi_rich,
+    )
+
+    class _Http:
+        def get_json(self, url, max_bytes=None):
+            return {
+                "info": ["not-a-dict"],
+                "releases": [["also-not"]],
+            }
+
+    cand = Candidate(name="evil", near_twin="requests", rank=1,
+                     twin_rank=2, distance=1)
+    ev = _evidence_pypi_rich(cand, _Http())
+    assert ev.num_versions == 0
+    assert ev.description is None
+
+
+def test_triage_pending_isolates_a_crashing_candidate() -> None:
+    """One candidate whose evidence fetch raises must be skipped
+    (stays pending → escalates), not abort the batch after the
+    LLM / network budget is spent."""
+    from packages.sca.supply_chain.typosquat_triage import (
+        Evidence,
+        Verdict,
+        triage_pending,
+    )
+    good = Candidate(name="good", near_twin="react", rank=1,
+                     twin_rank=2, distance=1)
+    bad = Candidate(name="bad", near_twin="vue", rank=3,
+                    twin_rank=4, distance=1)
+
+    def evidence_fn(c):
+        if c.name == "bad":
+            raise AttributeError("'list' object has no attribute 'get'")
+        return Evidence(candidate=c)
+
+    def triage_fn(c, ev):
+        return Verdict(name=c.name, verdict="unsure")
+
+    outcomes = triage_pending([bad, good], evidence_fn, triage_fn)
+    assert [o.candidate.name for o in outcomes] == ["good"]
