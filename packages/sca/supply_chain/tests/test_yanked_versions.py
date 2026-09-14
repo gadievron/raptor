@@ -129,3 +129,27 @@ def test_thread_pool_path_preserves_per_dep_results() -> None:
     assert client.version_calls == len(names)
     assert client.aggregate_calls == 0
     assert [f.dependency.name for f in out] == ["b-bad", "d-bad", "f-bad"]
+
+
+def test_hostile_registry_doc_isolated_per_dep() -> None:
+    """A non-dict ``releases`` raises inside one dep's check; the
+    per-dep guard must log-and-skip it, keeping the other dep's
+    yanked finding intact instead of aborting the whole batch."""
+    class _SplitPyPI:
+        def get_version_metadata(self, name: str, version: str) -> object:
+            if name == "hostile":
+                # Malformed versioned response forces the aggregate
+                # fallback below.
+                return {"info": "not-a-dict"}
+            return {"info": {"yanked": True,
+                             "yanked_reason": "CVE-2026-0001"}}
+
+        def get_metadata(self, name: str) -> object:
+            # Non-dict releases → AttributeError inside the fallback.
+            return {"releases": ["garbage"]}
+
+    out = scan_pinned_versions(
+        [_dep("hostile"), _dep("flask")], pypi_client=_SplitPyPI(),
+    )
+    assert len(out) == 1
+    assert out[0].dependency.name == "flask"
