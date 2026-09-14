@@ -12,6 +12,9 @@ Reference: https://learn.microsoft.com/en-us/nuget/concepts/package-versioning
 
 from __future__ import annotations
 
+import re
+
+_NUGET_CHARSET_RE = re.compile(r"[0-9A-Za-z.+-]+")
 
 
 def compare(a: str, b: str) -> int:
@@ -42,11 +45,33 @@ def _split(version: str) -> tuple[list[int], list[str]]:
     Strips leading ``v`` and any ``+build`` metadata.
     """
     s = version.strip().lstrip("vV")
+    # NuGet's whole version charset (SemVer 2 + legacy 4-part): digits,
+    # ASCII letters, ``.``, ``-``, ``+``. Enforced over the FULL string
+    # — checking only the leading segment let digit-led garbage
+    # (``9.9.9 || curl …``, ``9.9.9;curl``) through to the lenient
+    # tail-penalty ordering, where it never raised and therefore
+    # probed "parseable" at the findings layer, winning advisory
+    # combines over real fix versions.
+    if not s or not _NUGET_CHARSET_RE.fullmatch(s):
+        msg = f"not a NuGet version: {version!r} (illegal characters)"
+        raise ValueError(msg)
     s = s.split("+", 1)[0]                  # drop build metadata
     if "-" in s:
         base, pre = s.split("-", 1)
     else:
         base, pre = s, ""
+    # NuGet versions always lead with a numeric segment (SemVer 2 /
+    # legacy AssemblyVersion both require it). Raising here — instead
+    # of best-effort ordering arbitrary strings — keeps the findings
+    # layer's parse probe meaningful: a git SHA or crafted garbage
+    # ``fixed`` entry must not probe "parseable" and steer the
+    # advisory combine / fix planner at a non-version. Later
+    # non-numeric segments keep the lenient 0-with-tail-penalty
+    # handling (seen in odd registry entries).
+    first = base.split(".", 1)[0]
+    if not (first.isascii() and first.isdigit()):
+        msg = f"not a NuGet version: {version!r} (no leading numeric segment)"
+        raise ValueError(msg)
     nums: list[int] = []
     for piece in base.split("."):
         try:

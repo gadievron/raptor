@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
@@ -56,7 +57,7 @@ from .models import (
     VulnFinding,
 )
 from .osv import OsvResult
-from .versions import VersionError
+from .versions import VersionError, _canonical_ecosystem
 from .versions import compare as version_compare
 
 logger = logging.getLogger(__name__)
@@ -626,23 +627,80 @@ def _smallest_applicable_fix(
         return target_pool[0]
 
 
+# Comparators that by design order ANY string without raising (dpkg /
+# rpm / ComparableVersion semantics genuinely define a total order over
+# arbitrary text). The exception probe below is blind for them, so the
+# parseable-preference gets a probe-only plausibility floor instead.
+# RubyGems and NuGet are NOT here: their real ecosystems reject
+# non-version strings, and the comparators now raise accordingly.
+_LENIENT_COMPARATOR_ECOSYSTEMS = frozenset(
+    {"Maven", "Packagist", "Debian", "Red Hat"},
+)
+
+# Probe-only plausibility floor for the lenient comparators: an
+# optional Debian/RPM epoch, an optional ``v``, then a digit-led tail
+# drawn from ordinary version characters. Deliberately generous — it
+# only steers a PREFERENCE (all-implausible candidate groups still
+# fall back to surfacing something), so a rare letter-led real version
+# (Maven ``Hoxton.SR12``) merely loses preference against a digit-led
+# sibling, never disappears.
+_PLAUSIBLE_VERSION_RE = re.compile(r"(?:\d+:)?[vV]?\d[A-Za-z0-9.+~_-]{0,127}")
+
+# An undelimited hex run of ≥7 chars is a commit hash (git's default
+# abbreviation is 7–12 chars; full is 40), not a version — even when
+# it leads with a digit (≈62% of SHAs do, so the digit-led rule alone
+# cannot catch them). The lookahead requires at least one [a-f]:
+# enumerating the lenient set's real grammars, PURE-DECIMAL
+# undelimited tokens are legitimate versions (Debian datestamps like
+# ca-certificates ``20230311``; Maven ``20040616`` era artifacts),
+# while none of Maven / Packagist / Debian / Red Hat ever version
+# with an undelimited letter-bearing hex token — dotted, hyphenated,
+# tilde or epoch-delimited segments only.
+_HEX_BLOB_RE = re.compile(
+    r"(?:\d+:)?(?=[0-9a-f]*[a-f])[0-9a-fA-F]{7,}", re.IGNORECASE,
+)
+
+
 def _is_parseable_version(ecosystem: str, value: str) -> bool:
     """True when ``value`` parses under the ecosystem's comparator.
 
     Probes with a comparison against the universally-parseable
     sentinel ``"0"`` — NOT against ``value`` itself: most comparators
-    short-circuit ``a == b`` BEFORE parsing (semver, maven, rpm,
+    short-circuit ``a == b`` BEFORE parsing (semver, rpm,
     debian, alpine, conan, vcpkg), so a self-comparison probe
     vacuously succeeds on any string for those ecosystems and the
     parseable-preference becomes a no-op exactly where it matters
     (npm / crates.io / Go). ``value == "0"`` still hits that
     short-circuit, but ``"0"`` is genuinely parseable everywhere.
 
-    Comparators that never raise on garbage (Maven, RubyGems, NuGet,
-    Debian — they order unparseable strings best-effort by design)
-    report everything parseable here; the preference is a no-op there
-    by those comparators' own contract, not by probe failure.
+    Comparators that never raise on garbage (Maven, Packagist, Debian,
+    Red Hat — they order arbitrary strings by design) would report
+    everything parseable, so a git-SHA ``fixed`` event from an
+    alias-merged advisory could outrank a real fix for exactly those
+    ecosystems. They get a probe-only plausibility floor instead —
+    the comparator semantics used for range matching are untouched.
+
+    Range expressions (``"9.9.9 || <garbage>"``) decompose to their
+    atoms and EVERY atom must probe: a comparator that tolerates a
+    parseable prefix must not let a range-shaped value ride its first
+    atom past the probe (no single version contains whitespace in any
+    ecosystem, so a multi-atom value is only as plausible as its
+    worst atom).
     """
+    atoms = [a for a in re.split(r"\s+|\|\|", value) if a]
+    if not atoms:
+        return False
+    if len(atoms) > 1:
+        return all(_is_parseable_atom(ecosystem, a) for a in atoms)
+    return _is_parseable_atom(ecosystem, atoms[0])
+
+
+def _is_parseable_atom(ecosystem: str, value: str) -> bool:
+    if _canonical_ecosystem(ecosystem) in _LENIENT_COMPARATOR_ECOSYSTEMS:
+        return (
+            _PLAUSIBLE_VERSION_RE.fullmatch(value) is not None
+            and _HEX_BLOB_RE.fullmatch(value) is None
+        )
     try:
         version_compare(ecosystem, value, "0")
     except VersionError:

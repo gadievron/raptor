@@ -25,9 +25,26 @@ from typing import Union
 
 _Segment = Union[int, str]
 
+# Gem::Version's ANCHORED_VERSION_PATTERN: an optional version whose
+# FIRST segment is purely numeric, followed by dot-separated
+# alphanumeric segments and an optional dash-led platform/pre tail.
+# Rejecting everything else matches the real ecosystem (RubyGems
+# itself refuses these strings), and it is what makes the findings
+# layer's parse probe meaningful here: a comparator that best-effort
+# orders ANY string reports git SHAs / crafted garbage "parseable",
+# letting them outrank real fix versions in advisory combines.
+_ANCHORED_VERSION_RE = re.compile(
+    r"\s*(\d+(\.[0-9a-zA-Z]+)*(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?)?\s*\Z"
+)
+
 
 def compare(a: str, b: str) -> int:
-    """Return -1 / 0 / 1 per the standard comparator convention."""
+    """Return -1 / 0 / 1 per the standard comparator convention.
+
+    Raises ``ValueError`` (normalised to ``VersionError`` by the
+    dispatcher) when either input does not match RubyGems' own
+    version grammar.
+    """
     sa = _segments(a)
     sb = _segments(b)
     # Pad with 0s so equal-numeric tails compare equal (``1.0.0`` == ``1.0``).
@@ -49,6 +66,9 @@ def _segments(version: str) -> list[_Segment]:
     Splits on ``.`` and on transitions between digits and letters
     (``1.0.0pre1`` → ``[1, 0, 0, "pre", 1]``).
     """
+    if _ANCHORED_VERSION_RE.fullmatch(version) is None:
+        msg = f"not a RubyGems version: {version!r}"
+        raise ValueError(msg)
     out: list[_Segment] = []
     for part in version.strip().split("."):
         for sub in re.findall(r"\d+|[A-Za-z]+", part):

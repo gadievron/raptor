@@ -168,3 +168,71 @@ def test_vcpkg_version_string_scheme_raises() -> None:
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# ---------------------------------------------------------------------------
+# RubyGems / NuGet grammar strictness
+# ---------------------------------------------------------------------------
+# These two comparators best-effort ordered ANY string, so the findings
+# layer's parse probe (which detects unparseable input by the raised
+# VersionError) was blind for them — a git-SHA "fixed" event outranked
+# real fix versions. The real ecosystems reject such strings; the
+# comparators now do too.
+
+@pytest.mark.parametrize("version", [
+    "3.2.1",
+    "1.0.0.pre1",
+    "1.0.0-x86-mingw32",      # platform tail
+    "1.0.0.rc.2",
+    "2",
+])
+def test_gem_accepts_real_versions(version: str) -> None:
+    assert compare("RubyGems", version, "0.1") == 1
+
+
+@pytest.mark.parametrize(("a", "b"), [
+    ("1.0.0.pre1", "1.0.0.pre2"),
+    ("1.0.0.pre2", "1.0.0"),
+    ("1.9", "1.10"),
+])
+def test_gem_ordering_unchanged(a: str, b: str) -> None:
+    assert compare("RubyGems", a, b) == -1
+    assert compare("RubyGems", "1.0.0", "1.0") == 0
+
+
+@pytest.mark.parametrize("bad", [
+    "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b",   # git SHA (digit-led)
+    "f86d081884c7d659a2feaa0c55ad015a3bf4f1b9",   # git SHA (letter-led)
+    "pwned",
+    "1.0.0 && rm -rf /",
+])
+def test_gem_rejects_non_versions(bad: str) -> None:
+    with pytest.raises(VersionError):
+        compare("RubyGems", bad, "3.2.1")
+    with pytest.raises(VersionError):
+        compare("RubyGems", "3.2.1", bad)
+
+
+@pytest.mark.parametrize("version", [
+    "1.2.3",
+    "v1.2.3",
+    "1.2.3.4",                # legacy AssemblyVersion shape
+    "1.0.0-alpha.1",
+    "1.0.0+commit-sha",       # build metadata ignored
+    "1.0.x",                  # lenient tail segments retained
+])
+def test_nuget_accepts_real_versions(version: str) -> None:
+    assert compare("NuGet", version, "0.1") == 1
+
+
+@pytest.mark.parametrize("bad", [
+    "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b",
+    "f86d081884c7d659a2feaa0c55ad015a3bf4f1b9",
+    "pwned",
+    "",
+])
+def test_nuget_rejects_no_leading_numeric_segment(bad: str) -> None:
+    with pytest.raises(VersionError):
+        compare("NuGet", bad, "1.2.3")
+    with pytest.raises(VersionError):
+        compare("NuGet", "1.2.3", bad)
