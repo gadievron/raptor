@@ -5859,6 +5859,144 @@ class TestGapIndex:
         assert "a.py:f" in _gap_index(checklist)
 
 
+class TestChecklistItemIndex:
+    """One walking authority for checklist["files"][*] items: the
+    hand-rolled per-pass walkers had drifted on the path/file and
+    items/functions key fallbacks, and the per-outcome lookup walked
+    the whole checklist every call."""
+
+    @staticmethod
+    def _checklist():
+        return {
+            "files": [
+                {"path": "a.c", "items": [
+                    {"name": "f", "line_start": 10, "line_end": 20},
+                ]},
+            ],
+        }
+
+    def test_find_gap_resolves_legacy_file_key(self):
+        # The pre-index walker matched the strict "path" key only —
+        # a "file"-keyed record (older artifacts) silently returned
+        # None while _gap_index resolved it. One walker, one fallback.
+        from core.audit.orchestrator import _find_gap_in_checklist
+
+        checklist = {
+            "files": [
+                {"file": "a.c", "items": [
+                    {"name": "f", "line_start": 3, "line_end": 9},
+                ]},
+            ],
+        }
+        gap = _find_gap_in_checklist(checklist, "a.c", "f")
+        assert gap == {
+            "file": "a.c", "name": "f", "line_start": 3, "line_end": 9,
+        }
+
+    def test_find_gap_contract_unchanged(self):
+        from core.audit.orchestrator import _find_gap_in_checklist
+
+        gap = _find_gap_in_checklist(self._checklist(), "a.c", "f")
+        assert gap == {
+            "file": "a.c", "name": "f", "line_start": 10, "line_end": 20,
+        }
+        assert _find_gap_in_checklist(self._checklist(), "a.c", "x") is None
+        # Absent line_end stays None (not 0) — consumers distinguish.
+        gap2 = _find_gap_in_checklist(
+            {"files": [{"path": "b.c", "items": [{"name": "g"}]}]},
+            "b.c", "g",
+        )
+        assert gap2["line_start"] == 0
+        assert gap2["line_end"] is None
+
+    def test_first_match_wins_on_duplicates(self):
+        from core.audit.orchestrator import _find_gap_in_checklist
+
+        checklist = {
+            "files": [
+                {"path": "a.c", "items": [{"name": "f", "line_start": 1}]},
+                {"path": "a.c", "items": [{"name": "f", "line_start": 99}]},
+            ],
+        }
+        assert _find_gap_in_checklist(
+            checklist, "a.c", "f",
+        )["line_start"] == 1
+
+    def test_index_memoised_per_checklist_identity(self):
+        from core.audit.orchestrator import _checklist_item_index
+
+        checklist = self._checklist()
+        first = _checklist_item_index(checklist)
+        assert _checklist_item_index(checklist) is first
+        # In-place growth invalidates (fingerprint guard).
+        checklist["files"].append(
+            {"path": "b.c", "items": [{"name": "g"}]},
+        )
+        second = _checklist_item_index(checklist)
+        assert second is not first
+        assert ("b.c", "g") in second
+        # A different checklist object never reads another's index.
+        other = self._checklist()
+        other["files"][0]["items"][0]["line_start"] = 77
+        assert (
+            _checklist_item_index(other)[("a.c", "f")][1]["line_start"]
+            == 77
+        )
+
+    def test_item_append_with_stable_file_count_invalidates(self):
+        # The fingerprint covers TOTAL item count, not just the files
+        # count — an in-place item append inside an existing file
+        # record must not serve a stale index.
+        from core.audit.orchestrator import (
+            _checklist_item_index,
+            _find_gap_in_checklist,
+        )
+
+        checklist = self._checklist()
+        _checklist_item_index(checklist)
+        checklist["files"][0]["items"].append(
+            {"name": "late", "line_start": 44, "line_end": 50},
+        )
+        gap = _find_gap_in_checklist(checklist, "a.c", "late")
+        assert gap is not None
+        assert gap["line_start"] == 44
+
+    def test_colon_bearing_path_never_aliases(self):
+        # Tuple keys, not a "file:name" join: with a joined key,
+        # file "a" + function "b.c:f" and file "a:b.c" + function "f"
+        # collapse to the same spelling and serve each other's items.
+        from core.audit.orchestrator import _find_gap_in_checklist
+
+        checklist = {
+            "files": [
+                {"path": "a", "items": [
+                    {"name": "b.c:f", "line_start": 1, "line_end": 2},
+                ]},
+                {"path": "a:b.c", "items": [
+                    {"name": "f", "line_start": 30, "line_end": 40},
+                ]},
+            ],
+        }
+        gap = _find_gap_in_checklist(checklist, "a:b.c", "f")
+        assert gap is not None
+        assert gap["line_start"] == 30
+        gap2 = _find_gap_in_checklist(checklist, "a", "b.c:f")
+        assert gap2 is not None
+        assert gap2["line_start"] == 1
+
+    def test_function_line_resolves_legacy_file_key(self):
+        from core.audit.orchestrator import _checklist_function_line
+
+        checklist = {
+            "files": [
+                {"file": "a.c", "functions": [
+                    {"name": "f", "line_start": 12},
+                ]},
+            ],
+        }
+        assert _checklist_function_line(checklist, "a.c", "f") == 12
+
+
 class TestTaintApproxHasFlow:
     """_taint_approx_has_flow must handle both TaintApprox objects and
     the plain dicts the taint-approx cache round-trips through JSON on

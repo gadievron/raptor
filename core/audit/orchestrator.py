@@ -242,7 +242,7 @@ from core.inventory.binary_builder import BINARY_PATH_PREFIX
 
 if TYPE_CHECKING:
     from concurrent.futures import Future
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
     from .run_memo import BoundedMemo
     from core.audit.environment import EnvironmentGuard
@@ -6516,18 +6516,20 @@ def _checklist_function_line(
     file_path: str,
     function_name: str,
 ) -> int:
-    """Declaration line of *function_name* in *file_path*, or 0."""
-    for f in checklist.get("files", []):
-        if f.get("path") != file_path:
-            continue
-        items = f.get("items", f.get("functions", [])) or []
-        for item in items:
-            if item.get("name") == function_name:
-                try:
-                    return int(item.get("line_start") or 0)
-                except (TypeError, ValueError):
-                    return 0
-    return 0
+    """Declaration line of *function_name* in *file_path*, or 0.
+
+    Memoised-index lookup (:func:`_checklist_item_index`) — one shared
+    walk instead of a per-call hand-rolled copy.
+    """
+    hit = _checklist_item_index(checklist).get(
+        (file_path, function_name),
+    )
+    if hit is None:
+        return 0
+    try:
+        return int(hit[1].get("line_start") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _bypass_export_outcomes(
@@ -15132,6 +15134,10 @@ def _flatten_checklist_with_source(
     path discards the base under ``/`` semantics and ``../`` segments
     escape it (CWE-22).  Escaping entries keep their metadata but get
     no source body.
+
+    Kept as a bespoke walk (not :func:`_iter_checklist_items`): it
+    reads inventory-written checklists only (strict ``path``/``items``
+    keys) and interleaves the per-file source cache with the walk.
     """
     from pathlib import Path as _Path
 
@@ -17551,6 +17557,10 @@ def _checklist_line_end(
     50 of a long function were dropped. The checklist carries real
     bounds — use them. Returns 0 when unresolvable (callers keep their
     +50 fallback).
+
+    Walks ``config.inventory`` (a different artifact from the review
+    checklist the shared :func:`_checklist_item_index` serves) and has
+    its own cross-target result cache — kept bespoke.
     """
     # Keyed by target as well: the corpus runner calls the pipeline
     # repeatedly in-process, and two targets sharing a relative path +
@@ -21377,24 +21387,98 @@ def _re_review_disagreements(
     return result
 
 
+def _iter_checklist_items(
+    checklist: dict[str, Any],
+) -> "Iterator[tuple[str, dict[str, Any], dict[str, Any]]]":
+    """Single authority for walking ``checklist["files"][*]`` items.
+
+    Yields ``(file_path, file_info, item)``. Checklist file records
+    carry ``path`` (the inventory builder) with a ``file`` fallback
+    for older artifacts; function lists live under ``items`` with a
+    ``functions`` fallback. Consolidating the walk here keeps those
+    key fallbacks from drifting between hand-rolled copies (the
+    per-pass copies had already diverged on both).
+    """
+    for file_info in checklist.get("files", []) or []:
+        file_path = file_info.get("path", file_info.get("file", ""))
+        for item in (
+            file_info.get("items", file_info.get("functions", [])) or []
+        ):
+            yield file_path, file_info, item
+
+
+#: Memoised checklist item index, keyed by the identity of the
+#: checklist's ``files`` list. Each entry pins that list object with a
+#: strong reference, so an ``id()`` hit can never be a recycled
+#: address (the pinned object stays alive); the fingerprint (files
+#: count + total item count) invalidates on in-place growth at either
+#: level. In-place item RENAMES with unchanged counts would still
+#: serve a stale lookup — no such mutation exists in the run loop.
+#: Clear-on-overflow bounds the map across long in-process sessions
+#: (corpus runner). Thread-safe enough for the parallel passes: dict
+#: get/set are GIL-atomic and a lost race only costs a duplicate
+#: build.
+_CHECKLIST_INDEX_MEMO: dict[
+    int,
+    tuple[list, tuple[int, int], dict[tuple[str, str], tuple[str, dict[str, Any]]]],
+] = {}
+_CHECKLIST_INDEX_MEMO_MAX = 8
+
+
+def _checklist_item_index(
+    checklist: dict[str, Any],
+) -> dict[tuple[str, str], tuple[str, dict[str, Any]]]:
+    """``(file, function)`` → ``(file_path, item)`` for every checklist item.
+
+    TUPLE keys, not a ``file:name`` join — a colon-bearing file path
+    would alias a different (file, function) pair under the joined
+    spelling. First match wins (files order, then item order) — the
+    walkers this index replaces returned the first hit. Memoised per
+    checklist identity: the post-loop passes look an outcome up once
+    each, and the per-call full walk was the cost the index removes.
+    """
+    files = checklist.get("files", []) or []
+    key = id(files)
+    fingerprint = (
+        len(files),
+        sum(
+            len(f.get("items", f.get("functions", [])) or [])
+            for f in files
+            if isinstance(f, dict)
+        ),
+    )
+    cached = _CHECKLIST_INDEX_MEMO.get(key)
+    if (
+        cached is not None
+        and cached[0] is files
+        and cached[1] == fingerprint
+    ):
+        return cached[2]
+    index: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
+    for file_path, _file_info, item in _iter_checklist_items(checklist):
+        index.setdefault(
+            (file_path, item.get("name", "")), (file_path, item),
+        )
+    if len(_CHECKLIST_INDEX_MEMO) >= _CHECKLIST_INDEX_MEMO_MAX:
+        _CHECKLIST_INDEX_MEMO.clear()
+    _CHECKLIST_INDEX_MEMO[key] = (files, fingerprint, index)
+    return index
+
+
 def _gap_index(checklist: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Build file:function → gap dict from checklist."""
     index: dict[str, dict[str, Any]] = {}
-    for item in checklist.get("files", []):
-        # Checklist file records carry "path" (see the inventory
-        # builder and _find_gap_in_checklist) — not "file".
-        file_path = item.get("path", item.get("file", ""))
-        for func in item.get("items", item.get("functions", [])):
-            key = f"{file_path}:{func.get('name', '')}"
-            index[key] = {
-                "file": file_path,
-                "name": func.get("name", ""),
-                "line": func.get("line", 0),
-                "line_start": func.get("line_start", 0),
-                "line_end": func.get("line_end", 0),
-                "source": func.get("source", ""),
-                "language": item.get("language", ""),
-            }
+    for file_path, file_info, func in _iter_checklist_items(checklist):
+        key = f"{file_path}:{func.get('name', '')}"
+        index[key] = {
+            "file": file_path,
+            "name": func.get("name", ""),
+            "line": func.get("line", 0),
+            "line_start": func.get("line_start", 0),
+            "line_end": func.get("line_end", 0),
+            "source": func.get("source", ""),
+            "language": file_info.get("language", ""),
+        }
     return index
 
 
@@ -21802,19 +21886,25 @@ def _find_gap_in_checklist(
     file_path: str,
     function_name: str,
 ) -> dict[str, Any] | None:
-    """Find a checklist item by file + function name."""
-    for file_info in checklist.get("files", []):
-        if file_info.get("path") != file_path:
-            continue
-        for item in file_info.get("items", file_info.get("functions", [])):
-            if item.get("name") == function_name:
-                return {
-                    "file": file_path,
-                    "name": function_name,
-                    "line_start": item.get("line_start", 0),
-                    "line_end": item.get("line_end"),
-                }
-    return None
+    """Find a checklist item by file + function name.
+
+    Memoised-index lookup (:func:`_checklist_item_index`): several
+    post-loop passes call this once per outcome, and each call walked
+    the whole checklist. Returns the same four-key dict the walk
+    returned.
+    """
+    hit = _checklist_item_index(checklist).get(
+        (file_path, function_name),
+    )
+    if hit is None:
+        return None
+    _fp, item = hit
+    return {
+        "file": file_path,
+        "name": function_name,
+        "line_start": item.get("line_start", 0),
+        "line_end": item.get("line_end"),
+    }
 
 
 def _run_phase2(result, config) -> None:
@@ -27803,20 +27893,12 @@ def _callee_contract_requeue(
     effective_workers = max(1, max_workers)
     prepared = []
     cl = checklist if isinstance(checklist, dict) else {}
-    cl_entries = [
-        {**item, "file": fi.get("path", "")}
-        for fi in cl.get("files", [])
-        for item in fi.get("items", [])
-    ] if cl else []
+    cl_index = _checklist_item_index(cl) if cl else {}
     for caller_outcome, callee_name, assumption, callee_outcome in candidates:
-        gap = next(
-            (
-                e for e in cl_entries
-                if e.get("file") == caller_outcome.file
-                and e.get("name") == caller_outcome.function
-            ),
-            None,
+        hit = cl_index.get(
+            (caller_outcome.file, caller_outcome.function),
         )
+        gap = {**hit[1], "file": hit[0]} if hit is not None else None
         if gap is None:
             gap = {
                 "file": caller_outcome.file,
