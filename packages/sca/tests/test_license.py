@@ -1053,3 +1053,31 @@ def test_detect_project_license_malformed_manifest_is_skipped(tmp_path: Path):
         '[project]\nlicense = "ISC"\n', encoding="utf-8",
     )
     assert detect_project_license(tmp_path) == "ISC"
+
+
+def test_policy_matching_is_case_insensitive() -> None:
+    """SPDX ids are case-insensitive by spec and registries report
+    every casing — 'agpl-3.0' must not bypass a deny list that spells
+    it 'AGPL-3.0' (it previously fell through to the default)."""
+    from packages.sca.license import DEFAULT_POLICY, _classify
+    from packages.sca.models import Confidence, Dependency, PinStyle
+    from pathlib import Path
+
+    dep = Dependency(
+        ecosystem="PyPI", name="x", version="1.0",
+        declared_in=Path("/r/req.txt"), scope="main",
+        is_lockfile=False, pin_style=PinStyle.EXACT, direct=True,
+        purl="pkg:pypi/x@1.0",
+        parser_confidence=Confidence("high", reason="t"),
+    )
+    for spelling in ("agpl-3.0", "AGPL-3.0", "Agpl-3.0"):
+        f = _classify(dep, spelling, DEFAULT_POLICY)
+        assert f is not None and f.kind == "license_denied", spelling
+    # Warn list, both casings.
+    f = _classify(dep, "gpl-2.0", DEFAULT_POLICY)
+    assert f is not None and f.kind == "license_warned"
+    # Allow list respects folding too (no spurious default-verdicts).
+    from packages.sca.license import LicensePolicy
+    pol = LicensePolicy(allow={"MIT"}, deny=set(), warn=set(),
+                        default="deny")
+    assert _classify(dep, "mit", pol) is None

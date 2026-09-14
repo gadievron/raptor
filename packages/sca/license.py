@@ -520,11 +520,17 @@ def _classify(
     if " WITH " in spdx:
         base = spdx.split(" WITH ", 1)[0].strip()
         return _classify(dep, base, policy)
-    if spdx in policy.deny:
+    # SPDX license identifiers are case-insensitive by spec, and
+    # registries report them in every casing ("agpl-3.0",
+    # "Agpl-3.0-Only"). A case-sensitive compare silently bypassed
+    # the operator's deny/warn lists — the non-canonical spelling
+    # fell through to the (default-allow) fallback.
+    spdx_l = spdx.lower()
+    if spdx_l in {d.lower() for d in policy.deny}:
         return _deny_finding(dep, spdx)
-    if spdx in policy.warn:
+    if spdx_l in {w.lower() for w in policy.warn}:
         return _warn_finding(dep, spdx)
-    if spdx in policy.allow:
+    if spdx_l in {a.lower() for a in policy.allow}:
         return None
     # Unmatched — apply default.
     if policy.default == "deny":
