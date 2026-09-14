@@ -62,3 +62,46 @@ def test_sigterm_in_fork_child_dies_without_postmortem(
     assert os.WTERMSIG(st) == signal.SIGTERM
     out, err = capfd.readouterr()
     assert "sweep interrupted" not in out + err
+
+
+# ---------------------------------------------------------------------------
+# Same-thread lock window: the handler must never self-deadlock
+# ---------------------------------------------------------------------------
+
+def test_in_flight_bounded_acquire_when_lock_held() -> None:
+    """CPython delivers signal handlers on the main thread; the main
+    thread itself takes _ACTIVE_SCANS_LOCK every poll iteration. A
+    SIGTERM landing inside that critical section made the handler's
+    blocking acquire deadlock forever (grace window → SIGKILL, no
+    summary). With a timeout the handler-context call returns None
+    ("unavailable") instead of hanging."""
+    import time
+
+    from packages.sca.calibration import stress
+
+    assert stress._ACTIVE_SCANS_LOCK.acquire(timeout=1)
+    try:
+        t0 = time.monotonic()
+        got = stress._in_flight(timeout=0.2)
+        elapsed = time.monotonic() - t0
+        assert got is None
+        # Bounded: returned promptly after the timeout, not hung.
+        assert elapsed < 5.0
+    finally:
+        stress._ACTIVE_SCANS_LOCK.release()
+    # Lock free again → normal result resumes (both call shapes).
+    assert stress._in_flight(timeout=0.2) == []
+    assert stress._in_flight() == []
+
+
+def test_in_flight_blocking_path_unchanged() -> None:
+    from packages.sca.calibration import stress
+
+    with stress._ACTIVE_SCANS_LOCK:
+        stress._ACTIVE_SCANS["eco/proj"] = 1.0
+    try:
+        assert stress._in_flight() == ["eco/proj"]
+        assert stress._in_flight(timeout=1.0) == ["eco/proj"]
+    finally:
+        with stress._ACTIVE_SCANS_LOCK:
+            stress._ACTIVE_SCANS.clear()
