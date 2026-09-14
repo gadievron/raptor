@@ -1,0 +1,87 @@
+name: Nightly (self-test)
+
+# Runs the tier-0 self-test suite — 51 process/kernel/filesystem/network
+# boundary cases that exercise the full command surface without any LLM
+# calls. Catches sandbox regressions, CLI contract breakage, tool-path
+# drift, SARIF plumbing failures, and boundary-probe violations that
+# unit tests (which fake those boundaries) cannot.
+#
+# Tier 0 only: the suite scrubs all API keys from child environments and
+# unroutes Ollama, so every pipeline takes its documented no-LLM path.
+# No API costs.
+
+on:
+  schedule:
+    # 07:30 UTC — staggered from the slow+integration nightly (07:00)
+    # and the shuffled-fast nightly (07:15).
+    - cron: '30 7 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.14'
+  VENV_PATH: .venv
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  self-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Enable unprivileged user namespaces
+        run: |
+          sudo apt-get install -y --no-install-recommends uidmap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements*.txt"
+
+      - name: Create venv and install deps
+        run: |
+          uv venv $VENV_PATH
+          source $VENV_PATH/bin/activate
+          uv pip install -r requirements-dev.txt
+          uv pip install semgrep==1.172.0
+
+      - name: Install external tools (radare2 + gcc)
+        continue-on-error: true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends radare2 gcc
+
+      - name: Run self-test (tier 0)
+        env:
+          _RAPTOR_TRUSTED: '1'
+        run: |
+          source $VENV_PATH/bin/activate
+          python libexec/raptor-self-test \
+            --json "$RUNNER_TEMP/self-test-results.json" \
+            --timeout 600
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: self-test-results
+          path: ${{ runner.temp }}/self-test-results.json
+          retention-days: 14
+          if-no-files-found: ignore
