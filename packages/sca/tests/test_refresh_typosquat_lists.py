@@ -360,3 +360,74 @@ def test_main_all_skipped_is_ok(monkeypatch, tmp_path):
     rc = _main_with_results(monkeypatch, tmp_path, {
         "PyPI.json": "skipped", "npm.json": "skipped"})
     assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# Feed validation: grammar + churn guard
+# ---------------------------------------------------------------------------
+
+def test_feed_names_failing_grammar_are_dropped(tmp_path) -> None:
+    """The feeds are remote and seed the typosquat reference sets —
+    injected garbage (markdown, whitespace, traversal, oversize) must
+    never land in the bundle."""
+    from packages.sca.refresh_typosquat_lists import refresh_all
+
+    hostile = [
+        "requests", "flask",
+        "evil name with spaces",
+        "../../../etc/passwd",
+        "![beacon](https://evil.example)",
+        "x" * 500,
+    ]
+
+    class _Http:
+        def get_json(self, url, **kw):
+            return {"rows": [{"project": n} for n in hostile]}
+
+    out = refresh_all(_Http(), top_n=50, only=["PyPI"],
+                      data_dir=tmp_path)
+    assert out["PyPI.json"] == "updated"
+    import json as _json
+    written = _json.loads(
+        (tmp_path / "popular" / "PyPI.json").read_text())
+    assert set(written) == {"requests", "flask"}
+
+
+def test_churn_guard_refuses_wholesale_replacement(tmp_path) -> None:
+    """A hijacked feed rotating the reference set wholesale must be
+    refused; --allow-churn is the explicit operator override; and
+    ordinary drift stays under the guard (both directions)."""
+    import json as _json
+
+    from packages.sca.refresh_typosquat_lists import refresh_all
+
+    popular = tmp_path / "popular"
+    popular.mkdir(parents=True)
+    old = [f"pkg-{i}" for i in range(20)]
+    (popular / "PyPI.json").write_text(_json.dumps(old, indent=2) + "\n",
+                                       encoding="utf-8")
+
+    class _Http:
+        def __init__(self, names): self._names = names
+        def get_json(self, url, **kw):
+            return {"rows": [{"project": n} for n in self._names]}
+
+    # Wholesale replacement → refused, file untouched.
+    rotated = [f"attacker-{i}" for i in range(20)]
+    out = refresh_all(_Http(rotated), top_n=50, only=["PyPI"],
+                      data_dir=tmp_path)
+    assert out["PyPI.json"].startswith("failed: churn guard")
+    assert _json.loads((popular / "PyPI.json").read_text()) == old
+
+    # Operator override applies it.
+    out = refresh_all(_Http(rotated), top_n=50, only=["PyPI"],
+                      data_dir=tmp_path, allow_churn=True)
+    assert out["PyPI.json"] == "updated"
+
+    # Ordinary drift (a few entries rotate) stays under the guard.
+    (popular / "PyPI.json").write_text(_json.dumps(old, indent=2) + "\n",
+                                       encoding="utf-8")
+    drifted = old[:-2] + ["newpkg-1", "newpkg-2"]
+    out = refresh_all(_Http(drifted), top_n=50, only=["PyPI"],
+                      data_dir=tmp_path)
+    assert out["PyPI.json"] == "updated"

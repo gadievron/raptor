@@ -47,14 +47,14 @@ from __future__ import annotations
 
 import argparse
 import json
-
-from core.atomic_fs import write_text_atomically
 import logging
+import re
 import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from core.atomic_fs import write_text_atomically
 from core.http import (
     DEFAULT_MAX_BYTES,
     HttpClient,
@@ -255,6 +255,67 @@ def fetch_packagist(http: HttpClient, top_n: int) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Feed validation
+# ---------------------------------------------------------------------------
+
+# The feeds are REMOTE and they seed the typosquat detector's
+# reference sets — a compromised feed that injects attacker names as
+# "popular" (or wholesale-replaces the list) steers squat verdicts.
+# Every ingested name must match its ecosystem's registry grammar.
+# Longest documented registry name cap is npm's 214.
+_MAX_NAME_LEN = 214
+_NAME_GRAMMARS: dict[str, re.Pattern[str]] = {
+    # Names arrive lowercased by the fetchers.
+    "PyPI": re.compile(r"[a-z0-9]([a-z0-9._-]*[a-z0-9])?"),
+    "npm": re.compile(
+        r"(@[a-z0-9~][a-z0-9._~-]*/)?[a-z0-9~._-][a-z0-9._~-]*"),
+    "Cargo": re.compile(r"[a-z0-9][a-z0-9_-]*"),
+    "Packagist": re.compile(
+        r"[a-z0-9]([_.-]?[a-z0-9]+)*/[a-z0-9](([_.]?|-{0,2})[a-z0-9]+)*"),
+}
+
+# Churn guard: refuse an update that would replace more than this
+# fraction of an existing reference set in one refresh. Trade-off,
+# both directions: too LOW and a legitimately re-ranked feed
+# (methodology change upstream) wedges until an operator passes
+# --allow-churn; too HIGH and a hijacked feed can rotate attacker
+# names in wholesale without tripping it. Popular-package lists are
+# empirically stable week to week (a few percent), so 0.5 leaves an
+# order of magnitude of headroom while still catching replacement-
+# class tampering.
+_MAX_CHURN_FRACTION = 0.5
+
+
+def _validate_names(display: str, names: list[str]) -> list[str]:
+    """Keep only names matching the ecosystem grammar and length cap;
+    log what was dropped."""
+    pat = _NAME_GRAMMARS.get(display)
+    kept: list[str] = []
+    for n in names:
+        if len(n) > _MAX_NAME_LEN:
+            continue
+        if pat is not None and pat.fullmatch(n) is None:
+            continue
+        kept.append(n)
+    dropped = len(names) - len(kept)
+    if dropped:
+        logger.warning(
+            "%s feed: dropped %d/%d entr%s failing the name grammar",
+            display, dropped, len(names),
+            "y" if dropped == 1 else "ies",
+        )
+    return kept
+
+
+def _churn_fraction(old_names: list[str], new_names: list[str]) -> float:
+    """Fraction of the OLD reference set absent from the new one."""
+    old_set = set(old_names)
+    if not old_set:
+        return 0.0
+    return len(old_set - set(new_names)) / len(old_set)
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -277,6 +338,7 @@ def refresh_all(
     top_n: int = _DEFAULT_TOP_N,
     only: list[str] | None = None,
     data_dir: Path = _DATA_DIR,
+    allow_churn: bool = False,
 ) -> dict[str, str]:
     """Fetch every supported ecosystem and write the result to
     ``data_dir/popular/<file>``. Returns ``{file: status}`` per
@@ -300,6 +362,7 @@ def refresh_all(
             logger.warning("%s fetch failed: %s", display, e)
             out[fname] = f"failed: {type(e).__name__}: {e}"
             continue
+        names = _validate_names(display, names)
         if not names:
             out[fname] = "failed: empty result"
             continue
@@ -310,6 +373,31 @@ def refresh_all(
                     and target.read_text(encoding="utf-8") == new_blob):
                 out[fname] = "unchanged"
                 continue
+            if target.exists() and not allow_churn:
+                try:
+                    old_names = json.loads(
+                        target.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    old_names = []
+                if isinstance(old_names, list):
+                    churn = _churn_fraction(
+                        [n for n in old_names if isinstance(n, str)],
+                        names,
+                    )
+                    if churn > _MAX_CHURN_FRACTION:
+                        logger.error(
+                            "%s feed: refusing update — %.0f%% of the "
+                            "existing reference set would be replaced "
+                            "in one refresh (hijacked/rotated feed "
+                            "shape). Re-run with --allow-churn after "
+                            "reviewing the diff.",
+                            display, churn * 100,
+                        )
+                        out[fname] = (
+                            f"failed: churn guard "
+                            f"({churn:.0%} replaced)"
+                        )
+                        continue
             # Atomic: these files seed the typosquat detector's
             # reference sets — a torn write must not ship a truncated
             # popular-package list.
@@ -351,6 +439,13 @@ def main(argv: list[str] | None = None) -> int:
         "--data-dir", type=Path, default=_DATA_DIR,
         help=f"data directory root (default {_DATA_DIR})",
     )
+    p.add_argument(
+        "--allow-churn", action="store_true",
+        help="permit an update that replaces more than "
+             f"{_MAX_CHURN_FRACTION:.0%}".replace("%", "%%")
+             + " of an existing reference set (review the diff first "
+             "— replacement-class churn is the hijacked-feed shape)",
+    )
     p.add_argument("-v", "--verbose", action="count", default=0)
     args = p.parse_args(argv if argv is not None else sys.argv[1:])
 
@@ -365,7 +460,8 @@ def main(argv: list[str] | None = None) -> int:
     # the right tool — uncontended outbound HTTPS.
     http = UrllibClient()
     results = refresh_all(http, top_n=args.top_n, only=args.only,
-                           data_dir=args.data_dir)
+                           data_dir=args.data_dir,
+                           allow_churn=args.allow_churn)
     for fname, status in sorted(results.items()):
         print(f"  {fname:20s}  {status}")
 
