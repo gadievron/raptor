@@ -264,7 +264,10 @@ PRECEDENCE = (
     # binary_oracle absent is mechanically derivable from nm + DWARF —
     # stronger than build_excluded (build-config parsing heuristic), so
     # checked first among C/C++/Rust/Go dead witnesses. SOUND +
-    # corpus-earned (Inc 3d: 841/841 absent verdicts correct).
+    # corpus-earned; current attestation figures live on the
+    # ``binary_oracle_absent`` VerdictSpec in reach_witness (and the
+    # design memo) — re-measure with
+    # core/analysis/scripts/binary-oracle-precision.
     _stage_binary_oracle_absent,
     _stage_build_excluded,
     _stage_framework,

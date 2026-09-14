@@ -233,3 +233,20 @@ def test_sage_fp_skip_honours_manual_override() -> None:
     assert gate_at < recall_at, (
         "the manual_override gate must run before the SAGE recall"
     )
+
+
+def test_record_suppression_swallows_unserialisable_extra(tmp_path):
+    # The best-effort contract must be structural: a producer
+    # smuggling a non-serialisable value through ``extra`` raises
+    # TypeError/ValueError inside the JSON writer — that must be
+    # logged and swallowed, never propagate into the caller's
+    # pipeline.
+    from core.analysis.reach_chokepoint import record_suppression
+    record_suppression(
+        tmp_path, finding={"finding_id": "f1"},
+        verdict="binary_oracle_absent", reason="r",
+        extra={"bad": object()},
+    )
+    # No record written, no exception raised.
+    p = tmp_path / "suppressions.jsonl"
+    assert not p.exists() or "f1" not in p.read_text()

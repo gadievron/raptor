@@ -201,7 +201,7 @@ def record_suppression(
 
     Order of operations between verdict producers (review #6 on
     PR #794). ``suppressions.jsonl`` has a SINGLE writer — this
-    function. Two producers feed it:
+    function. Producers feeding it:
 
     * binary-oracle reachability (``verdict="binary_oracle_absent"``)
       — the LIVE producer, invoked from the /agentic and /codeql
@@ -216,6 +216,11 @@ def record_suppression(
       ``--no-sanitizer-cut-enforce``) and records ``candidate_only``
       evidence; the SMT-barrier lane
       (:mod:`core.dataflow.smt_barrier`) writes record-only entries.
+    * the audit pipeline — the /audit orchestrator's oracle-earned
+      and vendored/generated triage drops, the refutation engine's
+      witness records, and the merge fence all write the same record
+      shape here (CLAUDE.md documents the shared contract), as does
+      ``packages/source_intel``.
 
     The order between the producers is binary-oracle
     FIRST: a function absent from the binary is dropped before any
@@ -247,7 +252,12 @@ def record_suppression(
             record.update(extra)
         from core.json import append_jsonl
         append_jsonl(out_dir / "suppressions.jsonl", record)
-    except OSError as e:
+    except (OSError, TypeError, ValueError) as e:
+        # TypeError/ValueError: core.json.append_jsonl raises them for
+        # non-serialisable / NaN values a producer smuggles in through
+        # ``extra`` — the "best-effort, never propagate" contract must
+        # be structural, not dependent on every caller's enclosing
+        # except.
         logger.debug(
             "reach_chokepoint: failed to write suppression record: %s", e)
 

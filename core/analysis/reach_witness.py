@@ -18,8 +18,12 @@ Important: the ``soundness`` label here is the *candidate* class. Actual
 enforce-eligibility is gated empirically — a witness kind earns the right
 to suppress only once a labelled corpus shows zero false-suppress for it
 (see :mod:`core.analysis.reach_audit`). This module defines the chokepoint;
-the enforcement consumer wires it together with the corpus gate. Today no
-consumer hard-suppresses — the substrate is surface-only.
+the enforcement consumer wires it together with the corpus gate.
+Enforcement is LIVE: /agentic and /codeql skip the LLM on
+``check_suppress`` (pre-LLM hard-suppress over the corpus-earned
+kinds), and the scan post-pass enforces full-proof ``sanitizer_cut``
+suppress verdicts by default — see ``STRUCTURALLY_SUPPRESSIBLE_KINDS``
+and each kind's ``earns_suppression`` attestation.
 """
 
 from __future__ import annotations
