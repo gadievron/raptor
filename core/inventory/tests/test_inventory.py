@@ -577,6 +577,51 @@ class TestCoverageStats:
         update_coverage(inv, [{"file": "app.py", "function": "foo"}], "validate:stage-a")
         assert "validate:stage-a" in inv["files"][0]["functions"][0]["checked_by"]
 
+    def test_update_coverage_class_key_disambiguates_twins(self):
+        # Items carry class context as metadata.class_name (the shape
+        # the extractors serialise) — a class-carrying caller must
+        # mark ONLY its twin. Pre-fix the item side read a bare
+        # `class` key nothing writes: the documented shape matched
+        # nothing (silent total mark loss) and twins always collided.
+        inv = {
+            "files": [{
+                "path": "app.py",
+                "functions": [
+                    {"name": "do_thing", "checked_by": [],
+                     "metadata": {"class_name": "ClassA"}},
+                    {"name": "do_thing", "checked_by": [],
+                     "metadata": {"class_name": "ClassB"}},
+                ],
+            }]
+        }
+        update_coverage(
+            inv,
+            [{"file": "app.py", "function": "do_thing", "class": "ClassA"}],
+            "audit:review",
+        )
+        funcs = inv["files"][0]["functions"]
+        assert funcs[0]["checked_by"] == ["audit:review"]
+        assert funcs[1]["checked_by"] == []
+
+    def test_update_coverage_bare_name_still_matches_methods(self):
+        # Legacy callers without class info keep working (bare-name
+        # fallback) even though items now derive a class key.
+        inv = {
+            "files": [{
+                "path": "app.py",
+                "functions": [
+                    {"name": "do_thing", "checked_by": [],
+                     "metadata": {"class_name": "ClassA"}},
+                ],
+            }]
+        }
+        update_coverage(
+            inv, [{"file": "app.py", "function": "do_thing"}], "validate:stage-a",
+        )
+        assert inv["files"][0]["functions"][0]["checked_by"] == [
+            "validate:stage-a",
+        ]
+
     def test_update_coverage_deduplicates(self):
         inv = {
             "files": [{

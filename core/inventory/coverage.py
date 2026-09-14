@@ -34,16 +34,18 @@ def update_coverage(
     #
     # Coverage key includes `class` so two methods named `do_thing`
     # in different classes within the same file resolve as
-    # distinct functions. Pre-fix the key was `(path, name)`, so
-    # `ClassA.do_thing` and `ClassB.do_thing` collided — marking
-    # one checked silently marked the other too. Real-world hit:
-    # any python file with `__init__`, `__repr_`, `from_dict`,
-    # `to_dict` etc. defined on multiple classes (very common).
-    # Caller's `function` field can be either bare-name (legacy)
-    # or `Class.method` (preferred); we accept both shapes by
-    # carrying `class` separately when present and falling back
-    # to bare-name match when absent (legacy callers continue
-    # working).
+    # distinct functions when the CALLER carries class info.
+    # Real-world hit: any python file with `__init__`, `__repr__`,
+    # `from_dict`, `to_dict` etc. defined on multiple classes (very
+    # common). The item side derives its class from
+    # `metadata.class_name` — the shape the extractors actually
+    # serialise; inventory items never carry a bare `class` key, so
+    # reading only that key made the disambiguation dead (every item
+    # keyed `(path, "", name)`) and a caller passing the documented
+    # `{"class": ...}` shape matched NOTHING and silently lost all
+    # its marks. Callers without class info fall back to bare-name
+    # match (legacy callers keep working; bare names inherently
+    # smear across same-named twins — carry `class` to avoid that).
     checked_set = set()
     for f in checked_functions:
         if not (isinstance(f, dict) and f.get('file') and f.get('function')):
@@ -63,7 +65,12 @@ def update_coverage(
             name = func.get('name')
             if not name:
                 continue
-            cls = func.get('class') or ""
+            meta = func.get('metadata')
+            cls = (
+                (meta.get('class_name') if isinstance(meta, dict) else None)
+                or func.get('class')
+                or ""
+            )
             # Prefer (path, class, name); fall back to (path, "", name)
             # for legacy callers that didn't carry class info.
             key = (path, cls, name)
