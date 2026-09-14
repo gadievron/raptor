@@ -24,6 +24,23 @@ def _isolated_mac_keys(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_scorecard_sidecar(tmp_path_factory, monkeypatch):
+    """The audit pipeline records per-model reliability events into the
+    scorecard sidecar (``core.audit.scorecard_events``), whose default
+    path resolves to the shared install ledger (or a cwd-relative
+    ``out/llm_scorecard.json`` when RAPTOR_DIR is unset). Point the
+    override at a per-test tmp file so no audit test can write the
+    developer's real reliability data or drop artifacts into the repo
+    tree. Tests that need a specific path set the variable themselves
+    inside the test body, which runs after this autouse fixture and
+    wins."""
+    monkeypatch.setenv(
+        "RAPTOR_SCORECARD_PATH",
+        str(tmp_path_factory.mktemp("scorecard") / "llm_scorecard.json"),
+    )
+
+
+@pytest.fixture(autouse=True)
 def _reset_llm_egress_state(monkeypatch):
     """Audit tests construct real LLMClients (llm_review, synthesis,
     budget suites), whose enable_llm_egress side effect swaps the

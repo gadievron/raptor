@@ -199,6 +199,16 @@ from .record import (
     append_audit_log,
     load_audit_log,
 )
+# Fail-soft by contract: every scorecard_events entry point catches
+# internally, so the call sites below never need their own guard.
+from .scorecard_events import (
+    buffer_confirmed_findings as _sc_buffer_confirmed_findings,
+    flush_scorecard_events as _sc_flush_events,
+    record_adversarial_outcome as _sc_record_adversarial,
+    record_mechanical_refutation as _sc_record_refutation,
+    record_self_consistency_violation as _sc_record_self_consistency,
+    resolve_scorecard_store as _sc_resolve_store,
+)
 from .shared_state import SharedState
 # Hoisted (not lazy): the caller-gate crash handler must be able to
 # construct a fail-closed hold decision even when a lazy import of
@@ -1259,6 +1269,12 @@ class OrchestratorResult:
     # journaled as provisional findings; the finalization pass
     # resolves each to confirmed or retracted at end of run.
     provisional_promoted_keys: list[str] = field(default_factory=list)
+    # Pending per-model reliability events (``scorecard_events``
+    # producer shape) buffered at the run's graded adjudication
+    # points and flushed ONCE at end of run — one batched sidecar
+    # write, nothing on the per-function hot path. Plain
+    # ``list.append`` from parallel workers is atomic under the GIL.
+    scorecard_events: list[dict[str, Any]] = field(default_factory=list)
     _lock: _threading.Lock = field(
         default_factory=_threading.Lock,
         repr=False,
@@ -3355,6 +3371,16 @@ def review_one_function(
                 result.sweep_validated += 1
             else:
                 result.sweep_demoted += 1
+        if pre_sweep_status == "finding" and outcome.status != "finding":
+            # Graded adjudication: the mechanical sweep re-validation
+            # overturned the model's finding. The demotion reason is
+            # the body's bracketed prefix line.
+            _sc_record_refutation(
+                result.scorecard_events, outcome,
+                gate="sweep-validate",
+                reason=(outcome.body or "").split("\n", 1)[0][:200],
+                models=config.models,
+            )
 
     # ── Proactive validation ──────────────────────────────────────────
     if outcome.status in ("finding", "suspicious") and not config.blind_first_pass:
@@ -3584,6 +3610,13 @@ def review_one_function(
                     outcome, f"[{rv.gate}: {rv.reason}]",
                 )
                 outcome.status = rv.demote_to
+                # Graded adjudication: a named mechanical gate witness
+                # overturned the model's positive verdict.
+                _sc_record_refutation(
+                    result.scorecard_events, outcome,
+                    gate=str(rv.gate), reason=str(rv.reason),
+                    models=config.models,
+                )
         except Exception:
             logger.debug(
                 "refutation gate error for %s:%s",
@@ -3637,6 +3670,14 @@ def review_one_function(
                         )
                 elif dyn_result and dyn_result.evidence_strength == "refuted":
                     outcome = _demote_outcome(outcome, "[dynamic: refuted]")
+                    # Graded adjudication: the dynamic harness executed
+                    # and refuted the model's hypothesis.
+                    _sc_record_refutation(
+                        result.scorecard_events, outcome,
+                        gate="dynamic-sweep",
+                        reason="dynamic harness refuted the hypothesis",
+                        models=config.models,
+                    )
         except Exception:
             logger.debug(
                 "dynamic sweep failed for %s:%s",
@@ -8321,6 +8362,14 @@ def _run_audit_body(
                         result.findings -= 1
                         result.suspicious += 1
                         new_outcomes.append(demoted)
+                        # Graded adjudication: reachability / SMT gate
+                        # named a mechanical demotion reason for an
+                        # uncorroborated finding.
+                        _sc_record_refutation(
+                            result.scorecard_events, demoted,
+                            gate="post-deepen-sweep", reason=str(reason),
+                            models=config.models,
+                        )
                     else:
                         new_outcomes.append(checked)
             else:
@@ -9358,6 +9407,34 @@ def _run_audit_body(
         _finalize_provisional_promotions(result, config)
     except Exception:
         logger.debug("provisional finalization failed", exc_info=True)
+
+    # Per-model reliability events: add the confirmed direction (every
+    # shipped finding backed by a verification-grade receipt grades its
+    # model's hypothesis correct), then flush the whole run's buffered
+    # events in ONE batched sidecar write. Statuses are settled here —
+    # every status-mutating pass has run — so the flush can reconcile
+    # buffered refutations against the final finding set. Fail-soft by
+    # module contract; the extra guard keeps even a broken import from
+    # touching the export path.
+    try:
+        _sc_buffer_confirmed_findings(
+            result.scorecard_events, result.outcomes, models=config.models,
+        )
+        _store, _sc_disabled = _sc_resolve_store(
+            config.llm_client or config.llm_budget_client,
+        )
+        if not _sc_disabled:
+            _sc_flush_events(
+                result.scorecard_events,
+                finding_keys={
+                    f"{o.file}:{o.function}"
+                    for o in result.outcomes
+                    if o.status == "finding"
+                },
+                scorecard=_store,
+            )
+    except Exception:
+        logger.debug("audit scorecard flush failed", exc_info=True)
 
     # Re-persist findings.json now that every status-mutating pass
     # (receipt rescue, validate, error retry, dark verification,
@@ -24786,6 +24863,15 @@ def _adversarial_refute_pass(
             _increment_tier_dict(
                 result.tier_counters, "adversarial_refute", "inconclusive",
             )
+            # Graded adjudication: the refuter attacked the verdict
+            # and upheld it (could not defeat the hypothesis).
+            _sc_record_adversarial(
+                result.scorecard_events, outcome,
+                producer_model=outcome.model or "",
+                refuter_model=ref.model or refuter_model or "",
+                verdict="stands",
+                models=config.models,
+            )
             append_audit_log(config.out_dir, log_entry)
             return
 
@@ -24851,6 +24937,21 @@ def _adversarial_refute_pass(
                     )
                     log_entry["verdict"] = "refutation_overturned"
                     log_entry["evidence_tool"] = tool
+                    # Graded adjudication, both sides: the receipt
+                    # confirmed the producer's hypothesis and
+                    # contradicted the refuter's refutation claim.
+                    _sc_record_adversarial(
+                        result.scorecard_events, outcome,
+                        producer_model=outcome.model or "",
+                        refuter_model=ref.model or refuter_model or "",
+                        verdict="refuted",
+                        defeating_mechanism=(
+                            ref.defeating_mechanism
+                            or ref.counter_argument or ""
+                        ),
+                        overturned_by=tool,
+                        models=config.models,
+                    )
                     append_audit_log(config.out_dir, log_entry)
                     logger.info(
                         "adversarial refutation overturned %s:%s — tool "
@@ -24905,6 +25006,21 @@ def _adversarial_refute_pass(
                 result.adversarial_refuted += 1
             log_entry["status"] = "clean"
 
+        # Graded adjudication: the refuter overruled the verdict and
+        # the pipeline demoted on its ruling. Receipt-floored outcomes
+        # (tool_backed) stay ungraded — the refutation and the receipt
+        # conflict and re-review owns the resolution.
+        if not tool_backed:
+            _sc_record_adversarial(
+                result.scorecard_events, outcome,
+                producer_model=outcome.model or "",
+                refuter_model=ref.model or refuter_model or "",
+                verdict="refuted",
+                defeating_mechanism=(
+                    ref.defeating_mechanism or ref.counter_argument or ""
+                ),
+                models=config.models,
+            )
         _increment_tier_dict(
             result.tier_counters, "adversarial_refute", "refuted",
         )
@@ -25422,6 +25538,15 @@ def _demote_self_contradictions(result: OrchestratorResult) -> None:
         )
         result.suspicious -= 1
         result.clean += 1
+        # Graded adjudication: the verdict contradicted the model's
+        # own hypothesis record (consistency axis, not correctness).
+        _sc_record_self_consistency(
+            result.scorecard_events, outcome,
+            detail=(
+                f"all {len(hypotheses)} hypotheses marked refuted yet "
+                "the verdict was suspicious"
+            ),
+        )
         logger.info(
             "self-contradiction demotion: %s:%s — all %d hypotheses refuted",
             outcome.file, outcome.function, len(hypotheses),
@@ -25486,6 +25611,15 @@ def _promote_hypothesis_inconsistent(result: OrchestratorResult) -> None:
         result.outcomes[i] = promoted
         result.clean -= 1
         result.suspicious += 1
+        # Graded adjudication: the clean verdict contradicted the
+        # model's own live hypotheses (consistency axis).
+        _sc_record_self_consistency(
+            result.scorecard_events, outcome,
+            detail=(
+                f"clean verdict despite {len(unrefuted)} unrefuted "
+                f"high/medium-confidence hypothesis(es): {mechanism}"
+            ),
+        )
         logger.info(
             "hypothesis-consistency promotion: %s:%s — %d unrefuted "
             "high-confidence hypothesis(es) despite clean verdict (%s)",
@@ -28376,6 +28510,20 @@ def _run_dark_verification(
             else:
                 outcome.status = "clean"
                 outcome.evidence_tool = "dark_verify:refuted"
+                if prior in ("finding", "suspicious"):
+                    # Graded adjudication: the executed witness
+                    # refuted the model's positive verdict and no
+                    # deterministic receipt conflicts (the tool-backed
+                    # case above caps at suspicious, ungraded).
+                    _sc_record_refutation(
+                        result.scorecard_events, outcome,
+                        gate="dark-verify",
+                        reason=(
+                            "executed witness refuted the predicted "
+                            "signal"
+                        ),
+                        models=config.models,
+                    )
                 if prior != "clean":
                     result.clean += 1
                     if prior in ("dark", "dormant"):
