@@ -369,12 +369,38 @@ def test_only_earned_sound_kinds_can_ever_be_suppress_eligible():
 def test_verdict_map_covers_every_classifier_output():
     # Drift guard: every string classify_reachability can emit must be
     # explicitly mapped (not silently routed to the uncertain fail-safe).
-    # If classify_reachability gains a verdict, this fails until it's mapped.
-    from core.analysis.reach_audit import _DEAD_VERDICTS, _LIVE_VERDICTS
+    # If classify_reachability gains a verdict, this fails until it's
+    # mapped. The emitted set comes from the _STAGE_VERDICTS literal
+    # kept beside PRECEDENCE — deriving it from _DEAD/_LIVE themselves
+    # made the guard circular and let binary_call_edge slip through.
+    from core.analysis.reach_audit import (
+        _DEAD_VERDICTS,
+        _LIVE_VERDICTS,
+        _STAGE_VERDICTS,
+    )
     from core.analysis.reach_witness import VERDICTS
-    emitted = set(_DEAD_VERDICTS) | set(_LIVE_VERDICTS) | {"uncertain"}
+    unpartitioned = _STAGE_VERDICTS - (
+        set(_DEAD_VERDICTS) | set(_LIVE_VERDICTS) | {"uncertain"}
+    )
+    assert not unpartitioned, (
+        f"stage verdicts missing from _DEAD/_LIVE partition: "
+        f"{unpartitioned}")
+    emitted = _STAGE_VERDICTS | {"uncertain"}
     unmapped = emitted - set(VERDICTS)
     assert not unmapped, f"classifier verdicts missing from VERDICTS: {unmapped}"
+    # The stage literal itself must not rot: every PRECEDENCE stage's
+    # source contains only verdict strings the literal lists.
+    import inspect
+
+    from core.analysis import reach_audit
+    src = "".join(
+        inspect.getsource(stage) for stage in reach_audit.PRECEDENCE
+    )
+    import re
+    returned = set(re.findall(r'return "([a-z_]+)"', src))
+    assert returned <= _STAGE_VERDICTS, (
+        f"stage source returns verdicts absent from _STAGE_VERDICTS: "
+        f"{returned - _STAGE_VERDICTS}")
 
 
 def test_resolve_reachability_end_to_end():

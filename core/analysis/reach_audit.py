@@ -38,9 +38,25 @@ _DEAD_VERDICTS = frozenset({
 # Verdicts that mean "reachable / has a live path".
 _LIVE_VERDICTS = frozenset({
     "reachable", "framework_callable", "registered_via_call", "called",
-    "frida_runtime_trace", "frida_call_edge",
+    "frida_runtime_trace", "frida_call_edge", "binary_call_edge",
 })
 # "uncertain" is neither — the substrate declines to claim.
+
+# Every string a PRECEDENCE stage can return. Keep in lockstep with
+# the stage functions above. The drift guard in test_reach_witness
+# asserts this literal is fully partitioned into _DEAD_VERDICTS /
+# _LIVE_VERDICTS / {"uncertain"} AND fully mapped in
+# reach_witness.VERDICTS — a new stage verdict added without both
+# entries fails the guard instead of silently falling to the
+# uncertain fail-safe (binary_call_edge already slipped through once
+# when the guard derived the emitted set from the _DEAD/_LIVE sets
+# themselves, making its premise circular).
+_STAGE_VERDICTS = frozenset({
+    "module_aborts", "lexical_dead", "frida_runtime_trace",
+    "frida_call_edge", "binary_oracle_absent", "build_excluded",
+    "framework_callable", "registered_via_call", "binary_call_edge",
+    "reachable", "no_path_from_entry", "called", "not_called",
+})
 
 # NOTE: single-threaded use assumed — no synchronisation on this global.
 _joern_server = None
