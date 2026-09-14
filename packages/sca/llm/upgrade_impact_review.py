@@ -48,12 +48,20 @@ _MAX_CALLSITE_CHARS = 30_000
 
 def _cheap_safe_check(
     client, dep: Dependency, new_version: str, changelog: str,
-) -> UpgradeImpactPrefilter | None:
+) -> StageResult | None:
     """Ask the fast-tier model whether this upgrade is clearly safe.
     Returns ``None`` on call failure (caller treats as "no signal"
     and runs full analysis). The prompt deliberately under-specifies
     the call-site list — the cheap model decides on changelog and
-    semver alone, leaving call-site reasoning to the full review."""
+    semver alone, leaving call-site reasoning to the full review.
+
+    Returns the whole :class:`StageResult` — not just the parsed
+    model — because the caller must consult ``preflight_hit``: the
+    changelog is attacker-controlled in this threat model, and a
+    cheap ``clear_safe`` produced alongside injection indicators must
+    never be allowed to short-circuit a major bump to auto-approved
+    "safe" (every sibling stage applies the preflight haircut; the
+    short-circuit path used to discard it)."""
     blocks: list[UntrustedBlock] = []
     if changelog:
         blocks.append(UntrustedBlock(
@@ -79,7 +87,7 @@ def _cheap_safe_check(
             "sca.llm.upgrade_impact: prefilter failed: %s", result.error,
         )
         return None
-    return result.model  # type: ignore[return-value]
+    return result
 
 
 def _short_circuit_safe_result(
@@ -147,7 +155,11 @@ def assess_upgrade_impact(
     # significantly between (e.g.) PyPI and npm.
     decision_class = f"{MAJOR_BUMP_DECISION_CLASS_PREFIX}{dep.ecosystem}"
     fast_model_name = fast_tier_model_name(client.config)
-    cheap = _cheap_safe_check(client, dep, new_version, changelog)
+    cheap_result = _cheap_safe_check(client, dep, new_version, changelog)
+    cheap = cheap_result.model if cheap_result is not None else None
+    cheap_preflight_hit = bool(
+        getattr(cheap_result, "preflight_hit", False),
+    )
     # Defensive: tests sometimes stub ``run_stage`` to return the same
     # MagicMock for both the cheap and full calls, so ``cheap`` may
     # not actually be an :class:`UpgradeImpactPrefilter`. ``getattr``
@@ -168,11 +180,24 @@ def assess_upgrade_impact(
         cheap_says_fp=cheap_says_safe,    # "FP" for our gate = "safe" here
     )
     if decision.short_circuit:
-        logger.info(
-            "sca.llm.upgrade_impact: fast-tier short-circuit on %s "
-            "(cheap verdict trusted by scorecard)", decision_class,
-        )
-        return _short_circuit_safe_result(dep, cheap_reasoning)
+        if cheap_preflight_hit:
+            # The cheap stage's untrusted blocks carried injection
+            # indicators — a changelog steering the cheap model to
+            # clear_safe is exactly the fail-open this gate exists
+            # to stop. Fail closed: no auto-approve, run the full
+            # analysis (whose own preflight haircut then applies).
+            logger.info(
+                "sca.llm.upgrade_impact: refusing fast-tier "
+                "short-circuit on %s — preflight flagged injection "
+                "indicators in the untrusted input; running full "
+                "analysis", decision_class,
+            )
+        else:
+            logger.info(
+                "sca.llm.upgrade_impact: fast-tier short-circuit on %s "
+                "(cheap verdict trusted by scorecard)", decision_class,
+            )
+            return _short_circuit_safe_result(dep, cheap_reasoning)
 
     # Run full review.
     blocks: list[UntrustedBlock] = []
