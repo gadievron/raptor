@@ -133,6 +133,166 @@ class TestClassifyFunctionRouting:
         assert tr.bucket == TriageBucket.GLANCE
         assert vendor_decision(tr) == "glance"
 
+    def test_corroborated_generated_with_dangerous_callees_glances(self):
+        # Anti-evasion: corroboration is two TARGET-plantable signals
+        # (banner + generated-shaped filename). A planted protoc-
+        # bannered evil.pb.go whose functions call dangerous APIs must
+        # not be skip-invisible — the code's own live signal demotes
+        # the skip to a glance.
+        tr = classify_function(
+            file="gen/wire.pb.go", function="Unmarshal", sloc=40,
+            has_dangerous_callees=True,
+            vendor_verdict=_generated(corroborated=True),
+        )
+        assert tr.bucket == TriageBucket.GLANCE
+        assert vendor_decision(tr) == "glance"
+        assert any("dangerous callees" in r for r in tr.reasons)
+
+    def test_corroborated_generated_on_taint_path_glances(self):
+        tr = classify_function(
+            file="gen/wire.pb.go", function="Unmarshal", sloc=40,
+            on_taint_path=True,
+            vendor_verdict=_generated(corroborated=True),
+        )
+        assert tr.bucket == TriageBucket.GLANCE
+        assert vendor_decision(tr) == "glance"
+        assert any("on taint path" in r for r in tr.reasons)
+
+    def test_generated_file_aliased_import_demotes_via_resolver(
+        self, tmp_path,
+    ):
+        # The per-function mechanical signals match SURFACE spellings:
+        # `import subprocess as sp; sp.run(...)` carries zero
+        # dangerous-callee evidence, so the surface-only demotion is
+        # evadable. The file-level import-RESOLVED check closes the
+        # class.
+        from core.audit.triage import classify_all
+
+        (tmp_path / "gen").mkdir()
+        (tmp_path / "gen" / "evil_pb2.py").write_text(
+            "import subprocess as sp\n"
+            "def unmarshal(b):\n"
+            "    return sp.run(b)\n",
+            encoding="utf-8",
+        )
+        res = classify_all(
+            [{"file": "gen/evil_pb2.py", "name": "unmarshal",
+              "line_start": 2, "line_end": 3, "sloc": 2}],
+            target_path=tmp_path,
+            vendor_verdicts={"gen/evil_pb2.py": _generated(True)},
+        )
+        tr = next(iter(res.values()))
+        assert tr.bucket == TriageBucket.GLANCE
+        assert any("import-resolved" in r for r in tr.reasons)
+
+    def test_generated_file_method_value_demotes_via_resolver(
+        self, tmp_path,
+    ):
+        # A dangerous function taken as a VALUE never emits a call
+        # site; the reference scan resolves it.
+        from core.audit.triage import classify_all
+
+        (tmp_path / "gen").mkdir()
+        (tmp_path / "gen" / "evil_pb2.py").write_text(
+            "import subprocess as sp\n"
+            "def unmarshal(b):\n"
+            "    cb = sp.run\n"
+            "    return cb(b)\n",
+            encoding="utf-8",
+        )
+        res = classify_all(
+            [{"file": "gen/evil_pb2.py", "name": "unmarshal",
+              "line_start": 2, "line_end": 4, "sloc": 3}],
+            target_path=tmp_path,
+            vendor_verdicts={"gen/evil_pb2.py": _generated(True)},
+        )
+        assert next(iter(res.values())).bucket == TriageBucket.GLANCE
+
+    def test_generated_file_benign_imports_still_skip(self, tmp_path):
+        # Both directions: a genuinely benign generated file keeps
+        # the skip tier through the resolver.
+        from core.audit.triage import classify_all
+
+        (tmp_path / "gen").mkdir()
+        (tmp_path / "gen" / "wire_pb2.py").write_text(
+            "import struct\n"
+            "def unmarshal(b):\n"
+            "    return struct.unpack('<I', b)\n",
+            encoding="utf-8",
+        )
+        res = classify_all(
+            [{"file": "gen/wire_pb2.py", "name": "unmarshal",
+              "line_start": 2, "line_end": 3, "sloc": 2}],
+            target_path=tmp_path,
+            vendor_verdicts={"gen/wire_pb2.py": _generated(True)},
+        )
+        assert next(iter(res.values())).bucket == TriageBucket.SKIP
+
+    def test_go_aliased_import_resolves(self):
+        import pytest
+
+        pytest.importorskip("tree_sitter_go")
+        from core.audit.triage import _alias_resolved_dangerous
+
+        src = ('package gen\nimport zz "os/exec"\n'
+               'func Unmarshal(b []byte) { zz.Command(string(b)).Run() }\n')
+        assert _alias_resolved_dangerous(src, ".go") is True
+        mv = ('package gen\nimport zz "os/exec"\n'
+              'func Unmarshal(b []byte) { f := zz.Command; _ = f }\n')
+        assert _alias_resolved_dangerous(mv, ".go") is True
+
+    def test_go_dot_import_resolves(self):
+        # Dot import drops the qualifier: `Command(...)` is
+        # unqualified, and the extractor flags the wildcard but
+        # discards the module — the resolver recovers it lexically.
+        import pytest
+
+        pytest.importorskip("tree_sitter_go")
+        from core.audit.triage import _alias_resolved_dangerous
+
+        src = ('package gen\nimport . "os/exec"\n'
+               'func Unmarshal(b []byte) { Command(string(b)).Run() }\n')
+        assert _alias_resolved_dangerous(src, ".go") is True
+        benign = ('package gen\nimport . "strings"\n'
+                  'func F(s string) string { return ToUpper(s) }\n')
+        assert _alias_resolved_dangerous(benign, ".go") is False
+
+    def test_two_step_alias_resolves_one_hop(self):
+        from core.audit.triage import _alias_resolved_dangerous
+
+        src = ("import subprocess as sp\nq = sp\n"
+               "def unmarshal(b):\n    return q.run(b)\n")
+        assert _alias_resolved_dangerous(src, ".py") is True
+        benign = ("import math as m\nq = m\n"
+                  "def f(x):\n    return q.sqrt(x)\n")
+        assert _alias_resolved_dangerous(benign, ".py") is False
+
+    def test_python_star_import_resolves(self):
+        from core.audit.triage import _alias_resolved_dangerous
+
+        src = ("from subprocess import *\n"
+               "def unmarshal(b):\n    return run(b)\n")
+        assert _alias_resolved_dangerous(src, ".py") is True
+
+    def test_resolver_fail_direction_is_no_evidence(self):
+        from core.audit.triage import _alias_resolved_dangerous
+
+        # Unknown extension and unparseable source are no-evidence
+        # (skip stays), never an exception.
+        assert _alias_resolved_dangerous("anything", ".zig") is False
+        assert _alias_resolved_dangerous("def broken(:", ".py") is False
+
+    def test_corroborated_generated_no_live_signal_still_skips(self):
+        # Both directions: the demotion needs a live code signal —
+        # plain corroborated generated code keeps the skip tier
+        # (that is the whole point of the vendored/generated tier).
+        tr = classify_function(
+            file="gen/wire.pb.go", function="Unmarshal", sloc=40,
+            vendor_verdict=_generated(corroborated=True),
+        )
+        assert tr.bucket == TriageBucket.SKIP
+        assert vendor_decision(tr) == "skip"
+
     def test_generated_entry_point_glances(self):
         tr = classify_function(
             file="gen/wire.c", function="f", sloc=3,

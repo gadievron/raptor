@@ -134,6 +134,7 @@ def classify_function(
     branch_count: int = 0,
     caller_count: int = 0,
     vendor_verdict: VendorVerdict | None = None,
+    vendor_file_dangerous: bool = False,
 ) -> TriageResult:
     """Classify a single function into a triage bucket.
 
@@ -231,8 +232,16 @@ def classify_function(
     # provenance (two distinct signals) — a bare in-file banner, a
     # bare generated-output filename, or a structural shape (all
     # target-controlled) only ever earn GLANCE, so nothing becomes
-    # invisible on the target's say-so. Every decision leaves a
-    # suppressions.jsonl record (orchestrator side).
+    # invisible on the target's say-so. Corroboration is still two
+    # TARGET-plantable signals (banner text + generated-shaped
+    # filename), so live review signals from the code itself —
+    # dangerous callees, a taint-path position, or the file-level
+    # import-RESOLVED dangerous check (surface-spelling evidence is
+    # evadable via aliased imports / method-value references; see
+    # _alias_resolved_dangerous) — demote even the corroborated skip
+    # to GLANCE: a planted "generated" file with dangerous calls never
+    # becomes invisible. Every decision leaves a suppressions.jsonl
+    # record (orchestrator side).
     if vendor_verdict is not None:
         boundary = (
             is_entry_point or is_sink or is_trust_boundary
@@ -252,6 +261,32 @@ def classify_function(
                     vendor_tier=vendor_verdict.kind,
                 )
             if vendor_verdict.corroborated:
+                if (
+                    has_dangerous_callees
+                    or on_taint_path
+                    or vendor_file_dangerous
+                ):
+                    if has_dangerous_callees:
+                        signal = "dangerous callees"
+                    elif on_taint_path:
+                        signal = "on taint path"
+                    else:
+                        # The per-function evidence matches surface
+                        # spellings; this signal is the file-level
+                        # import-RESOLVED check (aliased imports,
+                        # method-value references).
+                        signal = "import-resolved dangerous callees"
+                    reasons.append(
+                        f"generated code ({vendor_verdict.signal}) "
+                        f"with {signal} — glance: {vendor_verdict.detail}"
+                    )
+                    return TriageResult(
+                        bucket=TriageBucket.GLANCE,
+                        reasons=tuple(reasons),
+                        token_budget=TOKEN_BUDGETS[TriageBucket.GLANCE],
+                        priority_score=priority_score,
+                        vendor_tier=vendor_verdict.kind,
+                    )
                 reasons.append(
                     f"generated code ({vendor_verdict.signal}): "
                     f"{vendor_verdict.detail}"
@@ -382,6 +417,7 @@ def classify_all(
     scores = priority_scores or {}
     prefilters = prefilter_results or {}
     results: dict[str, TriageResult] = {}
+    vendor_dangerous_files: dict[str, bool] = {}
 
     for gap in gaps:
         bare_key = f"{gap['file']}:{gap['name']}"
@@ -418,6 +454,25 @@ def classify_all(
         ):
             vendor_verdict = vendor_verdicts.get(gap["file"])
 
+        # Import-resolved dangerous-callee signal for the corroborated
+        # generated skip candidates only (the per-function mechanical
+        # signals match surface spellings — aliased imports and
+        # method-value references evade them). One resolver run per
+        # file, memoised for the call.
+        vendor_file_dangerous = False
+        if (
+            vendor_verdict is not None
+            and vendor_verdict.kind == KIND_GENERATED
+            and vendor_verdict.corroborated
+            and target_path is not None
+        ):
+            f = gap["file"]
+            if f not in vendor_dangerous_files:
+                vendor_dangerous_files[f] = _vendor_file_dangerous(
+                    f, target_path,
+                )
+            vendor_file_dangerous = vendor_dangerous_files[f]
+
         results[key] = classify_function(
             file=gap["file"],
             function=gap["name"],
@@ -438,6 +493,7 @@ def classify_all(
             branch_count=gap.get("branch_count", 0),
             caller_count=caller_count,
             vendor_verdict=vendor_verdict,
+            vendor_file_dangerous=vendor_file_dangerous,
         )
 
     return results
@@ -497,6 +553,129 @@ def detect_generated_files(
         ).items()
         if verdict.kind == KIND_GENERATED
     ]
+
+
+def _alias_resolved_dangerous(source: str, ext: str) -> bool:
+    """True when a call or reference in *source*, resolved through the
+    file's extracted import table, targets a dangerous function.
+
+    The mechanical dangerous-callee evidence the vendored tier
+    consumes matches SURFACE spellings, so a planted "generated" file
+    using an aliased import (``import zz "os/exec"``, ``import
+    subprocess as sp``) or a method-value reference (``f := zz.
+    Command``) carries zero evidence. This resolver checks the
+    RESOLVED names: every call chain and every ``alias.attr``
+    reference is rewritten through the import table (full import
+    target and its last path segment — Go's ``os/exec.Command`` and
+    ``exec.Command`` are both catalogued) and tested against
+    ``core.inventory.sink_discovery.DANGEROUS_TARGETS``. The table is
+    extended one hop through local re-aliases (``q = sp``) and, when
+    the extractor flags a wildcard import, unqualified names are
+    tried under every dot-/star-imported module.
+
+    Fail direction: unknown extension, missing grammar, unparseable
+    source → False — the tier keeps its documented skip (no invented
+    review load); the demotion only ever needs positive evidence.
+    """
+    try:
+        from core.inventory.call_graph import _extractor_for
+        from core.inventory.sink_discovery import _is_dangerous
+    except ImportError:
+        return False
+    extractor = _extractor_for(ext)
+    if extractor is None:
+        return False
+    try:
+        graph = extractor(source)
+    except Exception:  # noqa: BLE001 — parse failure is no-evidence
+        return False
+    imports: dict[str, str] = dict(graph.imports or {})
+
+    # One-hop local re-aliases: `q = sp` / `q := sp` re-binds an
+    # import alias to a name the call chains then start with. Single
+    # hop, single pass — a longer alias chain stays unresolved (the
+    # surface spelling remains visible to the per-function evidence
+    # layers, so the residual is prefilter-tier).
+    for am in re.finditer(r"(?m)^\s*(\w+)\s*:?=\s*(\w+)\s*$", source):
+        local, rhs = am.group(1), am.group(2)
+        if rhs in imports and local not in imports:
+            imports[local] = imports[rhs]
+
+    # Wildcard imports drop the qualifier entirely (Go dot-import
+    # `import . "os/exec"; Command(...)`, Python `from x import *`):
+    # the extractor flags the indirection but discards the module, so
+    # recover the module names lexically — only when the flag is set.
+    wildcard_modules: list[str] = []
+    try:
+        from core.inventory.call_graph import INDIRECTION_WILDCARD_IMPORT
+        flagged = INDIRECTION_WILDCARD_IMPORT in (graph.indirection or set())
+    except ImportError:
+        flagged = False
+    if flagged:
+        for wm in re.finditer(
+            r'(?m)^\s*(?:import\s+)?\.\s+"([^"]+)"', source,
+        ):
+            wildcard_modules.append(wm.group(1))
+        for wm in re.finditer(
+            r"(?m)^\s*from\s+([\w.]+)\s+import\s+\*", source,
+        ):
+            wildcard_modules.append(wm.group(1))
+
+    def _qualified_dangerous(target: str, rest: list[str]) -> bool:
+        if _is_dangerous([target, *rest]):
+            return True
+        seg = target.replace("::", "/").rsplit("/", 1)[-1]
+        return seg != target and _is_dangerous([seg, *rest])
+
+    def _dangerous(chain: list[str]) -> bool:
+        if _is_dangerous(chain):
+            return True
+        target = imports.get(chain[0]) if chain else None
+        if target and _qualified_dangerous(target, chain[1:]):
+            return True
+        # Unqualified name under a wildcard import: try every
+        # dot-imported / star-imported module as the qualifier.
+        if len(chain) == 1:
+            return any(
+                _qualified_dangerous(w, chain) for w in wildcard_modules
+            )
+        return False
+
+    for call in graph.calls or []:
+        if call.chain and _dangerous(list(call.chain)):
+            return True
+    # Method-value references never emit a call site (`f := zz.
+    # Command`; `r = sp.run`): scan alias.attr spellings lexically and
+    # resolve the same way. Aliases only — a bare-word scan would be
+    # noise; the from-import single-name case is covered by the call
+    # path above when called, and by this scan's alias iteration when
+    # the alias itself maps to a dangerous dotted target.
+    for alias, target in imports.items():
+        for m in re.finditer(
+            rf"\b{re.escape(alias)}\s*\.\s*(\w+)", source,
+        ):
+            if _dangerous([alias, m.group(1)]):
+                return True
+        if "." in target and _is_dangerous([target]) and re.search(
+            rf"(?<![\w.]){re.escape(alias)}\b(?!\s*\()", source,
+        ):
+            return True
+    return False
+
+
+def _vendor_file_dangerous(file_path: str, target_path: Path) -> bool:
+    """Import-resolved dangerous-callee check for one vendored file.
+
+    Containment + cap identical to :func:`_read_function_source`;
+    any read failure is no-evidence (skip stays)."""
+    resolved = safe_join(target_path, file_path)
+    if resolved is None:
+        return False
+    got = read_text_capped(resolved)
+    if got is None:
+        return False
+    ext = "." + file_path.rsplit(".", 1)[-1] if "." in file_path else ""
+    return _alias_resolved_dangerous(got[0], ext)
 
 
 def _read_function_source(gap: dict[str, Any], target_path: Path) -> str:
