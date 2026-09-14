@@ -483,12 +483,21 @@ def _expr_taint(
         recv_stamp = callable_name
         if isinstance(expr.func, ast.Lambda):
             # IIFE: the lambda body evaluates NOW over enclosing-scope
-            # names (``(lambda: a)()``); its contained names' taint
-            # flows into the result. Unstamped direct atoms — the
-            # consumer refuses, never suppresses.
+            # names (``(lambda: a)()``), and parameter DEFAULTS
+            # evaluate in the enclosing scope too (``(lambda z=a:
+            # z)()`` carries a's taint through z). Unstamped direct
+            # atoms — the consumer refuses, never suppresses.
             recv_state = _contained_name_states(
                 expr.func.body, cfg_node, in_state_fn,
             )
+            for dflt in (*expr.func.args.defaults,
+                         *expr.func.args.kw_defaults):
+                if dflt is not None:
+                    recv_state = _merge_states(
+                        recv_state, _contained_name_states(
+                            dflt, cfg_node, in_state_fn,
+                        ),
+                    )
             recv_stamp = "<lambda>"
         if isinstance(expr.func, ast.Attribute):
             recv_state = _expr_taint(

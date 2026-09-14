@@ -720,3 +720,35 @@ class TestUnmodelledShapesFallBackConservatively:
         assert self._cleanly_sanitized(
             'def h(a):\n    return f"{html.escape(a)}"\n'
         )
+
+
+class TestIifeDefaultArgsStayDirty:
+    """Lambda parameter defaults evaluate in the enclosing scope, so
+    an IIFE routing taint through a default (``(lambda z=a: z)()``)
+    carries it into the result — dropping it minted a false clean
+    binding (same class as the IIFE body)."""
+
+    @staticmethod
+    def _clean(body: str) -> bool:
+        from core.analysis.interproc import _param_cleanly_sanitized
+        _, summaries = _summaries(f"import html\n\n{body}")
+        return _param_cleanly_sanitized(
+            summaries["h"], 0, {"html.escape"},
+        )
+
+    def test_positional_default_stays_dirty(self):
+        assert not self._clean(
+            "def h(a):\n    return html.escape(a) + (lambda z=a: z)()\n"
+        )
+
+    def test_keyword_only_default_stays_dirty(self):
+        assert not self._clean(
+            "def h(a):\n"
+            "    return html.escape(a) + (lambda *, z=a: z)()\n"
+        )
+
+    def test_untainted_default_control_stays_clean(self):
+        assert self._clean(
+            "def h(a):\n"
+            "    return html.escape(a) + (lambda z=1: str(z))()\n"
+        )
