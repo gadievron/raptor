@@ -2426,7 +2426,14 @@ class WebScanner:
         research_landscape = assess_research_landscape(
             discovery=discovery,
             crawl_data=crawl_data,
-            registered_check_ids=(check.check_id for check in registry.all()),
+            # The fuzzer's confirmed-injection findings are minted
+            # under check_id V5.2.1 (see the fuzz-hit finding builder)
+            # without a registry entry — include it so the SSTI/error-
+            # oracle theme reads as covered by the capability that
+            # actually exists instead of a permanent false "gap".
+            registered_check_ids=(
+                [check.check_id for check in registry.all()] + ["V5.2.1"]
+            ),
         )
         urls = list(dict.fromkeys(
             crawl_data.get("discovered_urls")
@@ -2729,7 +2736,14 @@ class WebScanner:
         research_landscape = assess_research_landscape(
             discovery=discovery,
             crawl_data=crawl_data,
-            registered_check_ids=(check.check_id for check in registry.all()),
+            # The fuzzer's confirmed-injection findings are minted
+            # under check_id V5.2.1 (see the fuzz-hit finding builder)
+            # without a registry entry — include it so the SSTI/error-
+            # oracle theme reads as covered by the capability that
+            # actually exists instead of a permanent false "gap".
+            registered_check_ids=(
+                [check.check_id for check in registry.all()] + ["V5.2.1"]
+            ),
         )
         self._save_artifact(self.out_dir / "research_landscape.json", research_landscape)
 

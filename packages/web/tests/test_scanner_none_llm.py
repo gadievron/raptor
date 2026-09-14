@@ -760,3 +760,23 @@ class TestSensitiveCandidateHandoff(unittest.TestCase):
         # The dotfile-backup hit is a candidate; the ordinary page is not.
         self.assertIn("/.env.backup", candidates)
         self.assertNotIn("/blog", candidates)
+
+
+def test_research_landscape_themes_key_on_registerable_check_ids():
+    """The theme coverage map is only honest if every covered_by id
+    can actually appear in the registered set: V5.1.15 never existed
+    (the prototype-pollution check registers V5.3.1) and V5.2.1 is
+    minted on fuzzer findings without a registry entry — both themes
+    read as permanent "gap" with priority "high" for capabilities the
+    scanner has."""
+    from packages.web.checks import registry
+    from packages.web.research_landscape import RESEARCH_THEMES
+
+    registered = {check.check_id for check in registry.all()}
+    registered.add("V5.2.1")  # fuzzer-minted id the scanner appends
+    for theme in RESEARCH_THEMES:
+        missing = [c for c in theme.covered_by if c not in registered]
+        assert not missing, (
+            f"theme {theme.id} cites unregisterable check id(s) "
+            f"{missing} — permanent false gap"
+        )

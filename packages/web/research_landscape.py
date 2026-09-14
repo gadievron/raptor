@@ -163,7 +163,12 @@ RESEARCH_THEMES: tuple[ResearchTheme, ...] = (
             "https://portswigger.net/research/top-10-web-hacking-techniques-of-2024",
             "https://portswigger.net/research/top-10-web-hacking-techniques-of-2021",
         ),
-        covered_by=("V5.1.15",),
+        # V5.3.1 is the registered id of the server-side
+        # prototype-pollution check; the theme previously cited a
+        # V5.1.15 id no check has ever registered, minting a permanent
+        # false "gap" with priority "high" for a capability the
+        # scanner has.
+        covered_by=("V5.3.1",),
         signals=("dompurify", "__proto__", "sanitize", "innerhtml", "prototype"),
         action=(
             "Use JS route and bundle discovery to flag sanitizer usage, prototype "
