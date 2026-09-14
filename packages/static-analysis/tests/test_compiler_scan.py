@@ -14,6 +14,7 @@ Covers:
 
 from __future__ import annotations
 
+import functools
 import importlib.util
 import subprocess
 import sys
@@ -40,14 +41,30 @@ from core.audit import compiler_sweep
 from core.sarif.parser import merge_sarif
 from packages.semgrep.models import SemgrepFinding
 
-compiler_sweep._reset_probe_cache()
-HAVE_ANALYZER = (
-    compiler_sweep._gcc_analyzer() is not None
-    or compiler_sweep._clang_path() is not None
-)
-needs_analyzer = pytest.mark.skipif(
-    not HAVE_ANALYZER, reason="neither gcc -fanalyzer nor clang installed",
-)
+@functools.lru_cache(maxsize=None)
+def _have_analyzer() -> bool:
+    """Real-toolchain probe (gcc ``-fanalyzer`` test-compiles), memoised
+    and evaluated lazily from ``_analyzer_or_skip`` — a module-level
+    ``skipif`` condition would spawn the probe subprocesses at pytest
+    COLLECTION in every invocation and every xdist worker. Probes on a
+    fresh cache and resets afterwards so the test body starts from the
+    same cold-cache state ``_fresh_probe_cache`` guarantees."""
+    compiler_sweep._reset_probe_cache()
+    have = (
+        compiler_sweep._gcc_analyzer() is not None
+        or compiler_sweep._clang_path() is not None
+    )
+    compiler_sweep._reset_probe_cache()
+    return have
+
+
+@pytest.fixture
+def _analyzer_or_skip() -> None:
+    if not _have_analyzer():
+        pytest.skip("neither gcc -fanalyzer nor clang installed")
+
+
+needs_analyzer = pytest.mark.usefixtures("_analyzer_or_skip")
 
 
 @pytest.fixture(autouse=True)
