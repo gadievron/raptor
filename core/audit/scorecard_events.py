@@ -5,30 +5,42 @@ Records per-model reliability events into the shared scorecard sidecar
 stronger signal genuinely grades an earlier model decision:
 
 * ``tool_evidence`` — a deterministic receipt settled the model's
-  hypothesis: a named mechanical refutation (in-loop refutation gate,
-  sweep re-validation, dynamic harness, post-deepen demotion gate,
-  dark-verify witness) grades the positive verdict ``incorrect``; a
-  shipped finding backed by a verification-grade receipt grades the
-  hypothesis ``correct``.
-* ``judge_review`` — the adversarial refuter (a different model)
-  reviewed a positive verdict and overruled (demotion applied →
-  ``incorrect``) or upheld it (``stands`` → ``correct``). Unlike the
-  single-judge /agentic path, the audit pipeline ACTS on the refuter's
-  ruling, so the adjudication is resolved, not merely flagged.
+  hypothesis: a proof-grade mechanical refutation grades the positive
+  verdict ``incorrect``; a shipped finding backed by a promotion-grade
+  receipt grades the hypothesis ``correct``. This is the ONLY event
+  type this producer writes into ``calibrated_merge``'s
+  ``RELIABILITY_EVENT_TYPES`` pool, and it is only ever earned by a
+  receipt — never by an LLM ruling alone.
+* ``cross_family_consistency`` — a cross-model adversarial refuter
+  upheld (``stands`` → ``correct``) or overruled (demotion applied →
+  ``incorrect``) a positive verdict WITHOUT a settling receipt. A
+  1-vs-1 refuter ruling is policy, not ground truth (the registry's
+  own judge producer refuses single-judge shapes, and the
+  ``CROSS_FAMILY_CHECK`` registry comment routes 1-vs-1 disagreement
+  to this consistency axis), so the event records the dispute/uphold
+  on an axis deliberately outside the correctness-graded reliability
+  pools. "Family" here means a different configured model — the
+  independence is weaker than a true cross-family pair, which is
+  exactly why the consistency axis, not ``judge_review``, is used.
 * ``self_consistency`` — same-model adversarial re-examination
   (single-model runs are self-adversarial: held → ``correct``,
-  flipped → ``incorrect``), and mechanical verdict-vs-own-hypotheses
-  contradictions (all-refuted-yet-suspicious, clean-with-live-
-  hypotheses → ``incorrect``). Deliberately a consistency axis:
-  ``self_consistency`` is not in ``calibrated_merge``'s
-  ``RELIABILITY_EVENT_TYPES``, so these never move merge weights.
+  flipped → ``incorrect``) and verdict-vs-own-output contradictions
+  (all-refuted-yet-suspicious, clean-with-live-hypotheses,
+  safety-self-contradiction demotions → ``incorrect``). Also a
+  consistency axis, never a merge weight.
 
 Where a graded outcome does NOT genuinely exist, nothing is emitted:
-``needs_evidence`` refuter verdicts, refutations floored by a tool
-receipt (conflicting receipts, unresolved), demotion-referee floors
-(they block a demotion for missing evidence, they don't falsify it),
-and binary-oracle absent demotions (a build-reachability fact, not a
-model-competence grade).
+``needs_evidence`` refuter verdicts; refutations floored by a tool
+receipt (conflicting receipts, unresolved); heuristic-grade
+refutation-gate demotions (keyword/partial-graph/unverified-claim
+refuters — only ``refuter_grade == "proof"`` grades); reachability
+demotions (entry/sink-unreachability and binary-oracle absent
+verdicts are triage facts about the graph/build, not model
+competence); the sweep's hypothesis-less schema demotion (discipline,
+not refutation); demotion-referee floors (they block a demotion for
+missing evidence, they don't falsify it); and dark-verify refutations
+where any deterministic stamp is retained (one guessed witness input
+refutes its own prediction, not an engine receipt).
 
 Emission contract (the orchestrator depends on all three):
 
@@ -38,14 +50,18 @@ Emission contract (the orchestrator depends on all three):
   (plain ``list.append``, atomic under the GIL for the parallel
   passes) and are flushed ONCE at end of run through the public
   batch API (``ModelScorecard.record_events`` — one lock/load/write
-  cycle), so no sidecar I/O lands on the per-function hot path.
-* **Reconciled.** At flush, a ``tool_evidence``/``incorrect`` event
-  against a function that ends the run as a finding is dropped — a
-  later pass overturned the refutation, so the run no longer stands
-  behind the signal that graded the model wrong. Events grading the
-  REFUTER (its refutation contradicted by a tool receipt) are exempt:
-  that grade is settled by the receipt itself, and the finding
-  surviving is precisely the evidence.
+  cycle), after the run's primary artifacts (findings persist,
+  journal correction, graded export) are already on disk, so no
+  sidecar I/O or lock wait can stall the hot path or the exports.
+* **Reconciled.** ``tool_evidence`` grades are checked against the
+  final finding set both ways: an ``incorrect`` whose function ends
+  the run as a finding is dropped (the refutation was itself
+  overturned), and a ``correct`` whose function does NOT end as a
+  finding is dropped (the run no longer stands behind it). Events
+  grading the REFUTER are exempt — that grade is settled by the
+  receipt itself. Consistency-axis events are NOT reconciled: they
+  record that a flip/dispute/contradiction happened, which a later
+  rescue does not un-happen.
 
 Decision classes follow the audit convention (``audit:<CWE>``, falling
 back to ``audit:review``) via ``calibrated_merge.decision_class_for``,
@@ -57,14 +73,26 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from core.llm.scorecard import _MAX_REASONING_CHARS
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
 # Private bookkeeping keys stripped before the batch write.
 _PRIVATE_KEYS = ("_key", "_grades_refuter")
+
+# Cap on the ``file:function`` key. The key is target-controlled (a
+# hostile repo can mint megabyte function names) and rides into the
+# shared cross-run sidecar via the sample's ``function_id`` — every
+# future scorecard consult re-reads the whole file, so an unbounded
+# key is a permanent ledger-bloat primitive. Same budget as the
+# canonical reasoning cap so all producer-written free text shares one
+# size class.
+_MAX_KEY_CHARS = _MAX_REASONING_CHARS
 
 # Self-consistency panel handles run the SAME model under suffixed
 # names (``<model>#sc<i>``, see ``multi_review.run_self_consistency``)
@@ -72,9 +100,16 @@ _PRIVATE_KEYS = ("_key", "_grades_refuter")
 # real model, not the sample handle.
 _SC_HANDLE_SUFFIX = re.compile(r"#sc\d+$")
 
+# OrchestratorConfig's unconfigured sentinel. Not a model name: it can
+# reach ``outcome.model`` verbatim through the panel-result fallback
+# (``_outcome_to_panel_result``), so it is rejected post-normalization
+# in ``buffer_event``, not just in the ``lone_model`` fallback.
+_PLACEHOLDER_MODEL = "default"
+
 
 def _normalize_model(model: str) -> str:
-    return _SC_HANDLE_SUFFIX.sub("", str(model or "").strip())
+    name = _SC_HANDLE_SUFFIX.sub("", str(model or "").strip())
+    return "" if name == _PLACEHOLDER_MODEL else name
 
 
 def lone_model(models: Any) -> str:
@@ -83,13 +118,10 @@ def lone_model(models: Any) -> str:
     outcomes that lost their ``model`` stamp — on a single-model run
     the attribution is still factual; on a multi-model run it would
     be a guess, so the event is skipped instead. The ``"default"``
-    placeholder (OrchestratorConfig's unconfigured sentinel, not a
-    model name) never attributes."""
+    placeholder never attributes."""
     try:
         if models and len(models) == 1 and models[0]:
-            name = str(models[0])
-            if name != "default":
-                return name
+            return _normalize_model(str(models[0]))
     except Exception:  # noqa: BLE001 — attribution fallback, never raise
         logger.debug("lone_model resolution failed", exc_info=True)
     return ""
@@ -141,13 +173,16 @@ def buffer_event(
 ) -> bool:
     """Append one pending scorecard event. Returns True when buffered.
 
-    Skip cases (False): missing model attribution, or a grade outside
-    the correct/incorrect vocabulary. Never raises.
+    Skip cases (False): missing model attribution (including the
+    ``"default"`` placeholder), or a grade outside the
+    correct/incorrect vocabulary. The target-controlled key is capped
+    at :data:`_MAX_KEY_CHARS`. Never raises.
     """
     try:
         model = _normalize_model(model)
         if not model or grade not in ("correct", "incorrect"):
             return False
+        key = str(key or "")[:_MAX_KEY_CHARS]
         sample = None
         if grade == "incorrect":
             sample = {
@@ -182,8 +217,12 @@ def record_mechanical_refutation(
     reason: str,
     models: Any = None,
 ) -> bool:
-    """A named mechanical check overturned the model's positive
-    verdict → ``tool_evidence``/``incorrect``. Never raises."""
+    """A proof-grade mechanical check overturned the model's positive
+    verdict → ``tool_evidence``/``incorrect``. Callers own the grade
+    gate: only refuters that are mechanically true regardless of
+    hypothesis interpretation (proof-grade refutation gates, Z3 UNSAT,
+    guarded-sink Joern receipts, executed witnesses with no retained
+    deterministic stamp) may call this. Never raises."""
     try:
         from core.llm.scorecard import EventType
 
@@ -210,7 +249,7 @@ def record_self_consistency_violation(
     detail: str,
     models: Any = None,
 ) -> bool:
-    """The model's verdict contradicted its own hypothesis record →
+    """The model's verdict contradicted its own output →
     ``self_consistency``/``incorrect``. Never raises."""
     try:
         from core.llm.scorecard import EventType
@@ -250,13 +289,15 @@ def record_adversarial_outcome(
       ``tool_evidence``/``correct``; the refuter's refutation claim
       was contradicted by the same receipt → ``tool_evidence``/
       ``incorrect`` (flagged so flush's finding-reconciliation never
-      drops it — the surviving finding IS the evidence).
-    * ``verdict == "stands"``: upheld. Cross-model refuter →
-      ``judge_review``/``correct``; self-adversarial →
-      ``self_consistency``/``correct`` (verdict held under re-ask).
-    * ``verdict == "refuted"`` (demotion applied): overruled.
-      Cross-model → ``judge_review``/``incorrect``; self-adversarial
-      → ``self_consistency``/``incorrect`` (verdict flipped).
+      drops it — the surviving finding IS the evidence). This is the
+      only adversarial shape that reaches the reliability pool,
+      because it is the only one settled by a receipt.
+    * ``verdict == "stands"`` / ``"refuted"`` without a receipt:
+      consistency axes only. Self-adversarial (same or unresolved
+      refuter) → ``self_consistency`` held/flipped; cross-model
+      refuter → ``cross_family_consistency`` upheld/disputed. A
+      1-vs-1 LLM ruling never grades correctness, even though the
+      pipeline acts on it.
 
     Callers must NOT invoke this for ``needs_evidence`` verdicts or
     for refutations floored by an existing tool receipt — those
@@ -306,7 +347,7 @@ def record_adversarial_outcome(
         event_type = (
             EventType.SELF_CONSISTENCY
             if self_adversarial
-            else EventType.JUDGE_REVIEW
+            else EventType.CROSS_FAMILY_CONSISTENCY
         )
         n += buffer_event(
             events,
@@ -334,16 +375,29 @@ def buffer_confirmed_findings(
     outcomes: Any,
     *,
     models: Any = None,
+    receipt_check: Callable[[str], bool] | None = None,
 ) -> int:
     """End-of-run confirmed direction: every shipped finding backed by
-    a verification-grade receipt grades its model's hypothesis
-    ``tool_evidence``/``correct``. Findings without such a receipt or
-    without model attribution carry no grade and are skipped. Returns
-    the number of events buffered. Never raises."""
+    a promotion-grade receipt grades its model's hypothesis
+    ``tool_evidence``/``correct``.
+
+    ``receipt_check`` decides what counts as a receipt; the
+    orchestrator passes its ``_promotion_grade_receipt`` (verification
+    role AND not detection-only — the same bar the promotion and
+    overturn sites use), and that is also the default. A bare
+    ``is_tool_evidence`` is deliberately NOT used: it admits
+    detection-role stamps that may not convict alone, and a grade must
+    clear the same bar as the status it grades. Findings without such
+    a receipt or without model attribution carry no grade and are
+    skipped. Returns the number of events buffered. Never raises."""
     try:
         from core.llm.scorecard import EventType
 
-        from .evidence_grade import is_tool_evidence
+        if receipt_check is None:
+            # Lazy: this module is imported at orchestrator import time,
+            # so the reverse import must not run at module scope.
+            from .orchestrator import _promotion_grade_receipt
+            receipt_check = _promotion_grade_receipt
 
         n = 0
         for outcome in outcomes or ():
@@ -351,7 +405,9 @@ def buffer_confirmed_findings(
                 continue
             if not (getattr(outcome, "hypothesis", "") or "").strip():
                 continue
-            if not is_tool_evidence(getattr(outcome, "evidence_tool", "") or ""):
+            if not receipt_check(
+                getattr(outcome, "evidence_tool", "") or "",
+            ):
                 continue
             model = getattr(outcome, "model", "") or lone_model(models)
             n += buffer_event(
@@ -393,6 +449,20 @@ def resolve_scorecard_store(client: Any) -> tuple[Any, bool]:
         return None, False
 
 
+def _valid_pending(ev: dict[str, Any], all_event_types: Any) -> bool:
+    """Pre-flight the shape ``record_events`` validates pre-lock.
+
+    ``record_events`` is all-or-nothing: ONE invalid entry raises
+    before the lock and the whole batch — the run's entire telemetry —
+    is lost. Filter per entry instead so one malformed dict costs only
+    itself."""
+    if ev.get("event_type") not in all_event_types:
+        return False
+    if ev.get("outcome") not in ("correct", "incorrect"):
+        return False
+    return bool(ev.get("model")) and bool(ev.get("decision_class"))
+
+
 def flush_scorecard_events(
     events: list[dict[str, Any]],
     *,
@@ -401,12 +471,20 @@ def flush_scorecard_events(
 ) -> int:
     """Reconcile the buffered events and write them in ONE batch.
 
-    * Drops ``tool_evidence``/``incorrect`` events (except refuter
-      grades) whose function ends the run as a finding — the
-      refutation was itself overturned by a later rescue.
-    * Dedups on ``(model, decision_class, event_type, key)`` —
-      first-buffered wins, so one function demoted by several
-      mechanical passes counts one miss, not several.
+    * ``tool_evidence`` grades (except refuter grades) reconcile
+      against the final finding set both ways: ``incorrect`` dropped
+      when the function ends the run as a finding (the refutation was
+      itself overturned), ``correct`` dropped when it does not (the
+      run no longer stands behind the confirmation). Consistency-axis
+      events are never reconciled — the flip/dispute happened.
+    * Dedups on ``(model, decision_class, event_type, outcome, key)``
+      — first-buffered wins, so one function demoted by several
+      mechanical passes counts one miss, not several, while an
+      opposite-direction grade for the same cell is preserved for the
+      reconciliation above to arbitrate.
+    * Drops entries that would fail ``record_events``' pre-lock
+      validation per entry, instead of letting one malformed dict
+      abort the whole batch.
     * Resolves the default sidecar (shared-path resolver) only when
       the caller supplied no store.
 
@@ -416,25 +494,32 @@ def flush_scorecard_events(
     """
     try:
         from core.llm.scorecard import EventType, ModelScorecard
+        from core.llm.scorecard.scorecard import ALL_EVENT_TYPES
 
         keys = set(finding_keys or ())
         pending: list[dict[str, Any]] = []
-        seen: set[tuple[str, str, str, str]] = set()
+        seen: set[tuple[str, str, str, str, str]] = set()
         for ev in events or ():
             if not isinstance(ev, dict):
                 continue
             key = str(ev.get("_key") or "")
             if (
-                key in keys
-                and ev.get("outcome") == "incorrect"
-                and ev.get("event_type") == EventType.TOOL_EVIDENCE
+                ev.get("event_type") == EventType.TOOL_EVIDENCE
                 and not ev.get("_grades_refuter")
             ):
+                is_finding = key in keys
+                if ev.get("outcome") == "incorrect" and is_finding:
+                    continue
+                if ev.get("outcome") == "correct" and not is_finding:
+                    continue
+            if not _valid_pending(ev, ALL_EVENT_TYPES):
+                logger.debug("dropping malformed scorecard event: %r", ev)
                 continue
             dedup = (
                 str(ev.get("model") or ""),
                 str(ev.get("decision_class") or ""),
                 str(ev.get("event_type") or ""),
+                str(ev.get("outcome") or ""),
                 key,
             )
             if key and dedup in seen:

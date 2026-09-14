@@ -3372,15 +3372,20 @@ def review_one_function(
             else:
                 result.sweep_demoted += 1
         if pre_sweep_status == "finding" and outcome.status != "finding":
-            # Graded adjudication: the mechanical sweep re-validation
-            # overturned the model's finding. The demotion reason is
-            # the body's bracketed prefix line.
-            _sc_record_refutation(
-                result.scorecard_events, outcome,
-                gate="sweep-validate",
-                reason=(outcome.body or "").split("\n", 1)[0][:200],
-                models=config.models,
-            )
+            # Graded adjudication ONLY for the sweep's receipted
+            # refutation (Z3 UNSAT disproof; the reason is the body's
+            # bracketed prefix line). The hypothesis-less demotion is
+            # schema discipline — no tool ran, nothing was refuted —
+            # so it carries no grade; any future non-receipted sweep
+            # transition stays ungraded by the same allowlist.
+            _sweep_reason = (outcome.body or "").split("\n", 1)[0][:200]
+            if _sweep_reason.startswith("[smt-disproof:"):
+                _sc_record_refutation(
+                    result.scorecard_events, outcome,
+                    gate="sweep-validate",
+                    reason=_sweep_reason,
+                    models=config.models,
+                )
 
     # ── Proactive validation ──────────────────────────────────────────
     if outcome.status in ("finding", "suspicious") and not config.blind_first_pass:
@@ -3610,13 +3615,18 @@ def review_one_function(
                     outcome, f"[{rv.gate}: {rv.reason}]",
                 )
                 outcome.status = rv.demote_to
-                # Graded adjudication: a named mechanical gate witness
-                # overturned the model's positive verdict.
-                _sc_record_refutation(
-                    result.scorecard_events, outcome,
-                    gate=str(rv.gate), reason=str(rv.reason),
-                    models=config.models,
-                )
+                # Graded adjudication ONLY for proof-grade refuters
+                # (mechanically true regardless of hypothesis
+                # interpretation). Heuristic-grade gates rest on
+                # keyword/partial-graph/unverified-claim refuters —
+                # their demotion is pipeline policy, not ground
+                # truth, and never grades the model.
+                if getattr(rv, "refuter_grade", "heuristic") == "proof":
+                    _sc_record_refutation(
+                        result.scorecard_events, outcome,
+                        gate=str(rv.gate), reason=str(rv.reason),
+                        models=config.models,
+                    )
         except Exception:
             logger.debug(
                 "refutation gate error for %s:%s",
@@ -8362,14 +8372,32 @@ def _run_audit_body(
                         result.findings -= 1
                         result.suspicious += 1
                         new_outcomes.append(demoted)
-                        # Graded adjudication: reachability / SMT gate
-                        # named a mechanical demotion reason for an
-                        # uncorroborated finding.
-                        _sc_record_refutation(
-                            result.scorecard_events, demoted,
-                            gate="post-deepen-sweep", reason=str(reason),
-                            models=config.models,
-                        )
+                        # Grade by what the reason actually proves:
+                        # guarded-sink (Joern dominator receipt) and
+                        # SMT UNSAT refute the hypothesis itself →
+                        # tool_evidence; safety-self-contradiction is
+                        # the model contradicting its own finding
+                        # body → consistency axis; reachability
+                        # reasons (entry/sink-unreachability) are
+                        # triage facts about the call graph — the bug
+                        # may be real — and grade nothing.
+                        _r = str(reason)
+                        if _r.startswith((
+                            "[guarded-sink:",
+                            "[smt-infeasible:",
+                            "[smt-disproof:",
+                        )):
+                            _sc_record_refutation(
+                                result.scorecard_events, demoted,
+                                gate="post-deepen-sweep", reason=_r,
+                                models=config.models,
+                            )
+                        elif _r.startswith("[self-contradiction:"):
+                            _sc_record_self_consistency(
+                                result.scorecard_events, demoted,
+                                detail=_r,
+                                models=config.models,
+                            )
                     else:
                         new_outcomes.append(checked)
             else:
@@ -9408,34 +9436,6 @@ def _run_audit_body(
     except Exception:
         logger.debug("provisional finalization failed", exc_info=True)
 
-    # Per-model reliability events: add the confirmed direction (every
-    # shipped finding backed by a verification-grade receipt grades its
-    # model's hypothesis correct), then flush the whole run's buffered
-    # events in ONE batched sidecar write. Statuses are settled here —
-    # every status-mutating pass has run — so the flush can reconcile
-    # buffered refutations against the final finding set. Fail-soft by
-    # module contract; the extra guard keeps even a broken import from
-    # touching the export path.
-    try:
-        _sc_buffer_confirmed_findings(
-            result.scorecard_events, result.outcomes, models=config.models,
-        )
-        _store, _sc_disabled = _sc_resolve_store(
-            config.llm_client or config.llm_budget_client,
-        )
-        if not _sc_disabled:
-            _sc_flush_events(
-                result.scorecard_events,
-                finding_keys={
-                    f"{o.file}:{o.function}"
-                    for o in result.outcomes
-                    if o.status == "finding"
-                },
-                scorecard=_store,
-            )
-    except Exception:
-        logger.debug("audit scorecard flush failed", exc_info=True)
-
     # Re-persist findings.json now that every status-mutating pass
     # (receipt rescue, validate, error retry, dark verification,
     # absent demotion, phase 2, pre-export hooks) has run: the
@@ -9587,6 +9587,39 @@ def _run_audit_body(
             )
         except Exception:
             logger.debug("summaries.json write failed", exc_info=True)
+
+    # Per-model reliability events: add the confirmed direction (every
+    # shipped finding backed by a promotion-grade receipt grades its
+    # model's hypothesis correct), then flush the whole run's buffered
+    # events in ONE batched sidecar write. Statuses settled long ago
+    # (finalization), so the flush reconciles both grade directions
+    # against the final finding set. Placed AFTER the findings persist,
+    # journal correction and graded export: the sidecar write takes a
+    # cross-process flock, and a wedged lock-holder must be able to
+    # stall only this telemetry, never the run's primary artifacts.
+    # Fail-soft by module contract; the extra guard keeps even a
+    # broken import from touching the ledger reconciliation below.
+    try:
+        _sc_buffer_confirmed_findings(
+            result.scorecard_events, result.outcomes,
+            models=config.models,
+            receipt_check=_promotion_grade_receipt,
+        )
+        _store, _sc_disabled = _sc_resolve_store(
+            config.llm_client or config.llm_budget_client,
+        )
+        if not _sc_disabled:
+            _sc_flush_events(
+                result.scorecard_events,
+                finding_keys={
+                    f"{o.file}:{o.function}"
+                    for o in result.outcomes
+                    if o.status == "finding"
+                },
+                scorecard=_store,
+            )
+    except Exception:
+        logger.debug("audit scorecard flush failed", exc_info=True)
 
     try:
         _reconcile_cost_ledgers(config, result)
@@ -24863,8 +24896,10 @@ def _adversarial_refute_pass(
             _increment_tier_dict(
                 result.tier_counters, "adversarial_refute", "inconclusive",
             )
-            # Graded adjudication: the refuter attacked the verdict
-            # and upheld it (could not defeat the hypothesis).
+            # The refuter attacked the verdict and upheld it. No
+            # receipt settled anything, so this records on a
+            # consistency axis (self_consistency held /
+            # cross_family_consistency upheld), never a merge weight.
             _sc_record_adversarial(
                 result.scorecard_events, outcome,
                 producer_model=outcome.model or "",
@@ -25006,10 +25041,13 @@ def _adversarial_refute_pass(
                 result.adversarial_refuted += 1
             log_entry["status"] = "clean"
 
-        # Graded adjudication: the refuter overruled the verdict and
-        # the pipeline demoted on its ruling. Receipt-floored outcomes
-        # (tool_backed) stay ungraded — the refutation and the receipt
-        # conflict and re-review owns the resolution.
+        # The refuter overruled the verdict and the pipeline demoted
+        # on its ruling — but a 1-vs-1 LLM ruling is policy, not
+        # ground truth, so this records on a consistency axis
+        # (self_consistency flipped / cross_family_consistency
+        # disputed), never a merge weight. Receipt-floored outcomes
+        # (tool_backed) stay ungraded entirely — the refutation and
+        # the receipt conflict and re-review owns the resolution.
         if not tool_backed:
             _sc_record_adversarial(
                 result.scorecard_events, outcome,
@@ -28510,17 +28548,27 @@ def _run_dark_verification(
             else:
                 outcome.status = "clean"
                 outcome.evidence_tool = "dark_verify:refuted"
-                if prior in ("finding", "suspicious"):
-                    # Graded adjudication: the executed witness
-                    # refuted the model's positive verdict and no
-                    # deterministic receipt conflicts (the tool-backed
-                    # case above caps at suspicious, ungraded).
+                # An executed witness is ONE LLM-guessed input: it
+                # refutes its own prediction, not the hypothesis. It
+                # grades the model only when the outcome retained no
+                # deterministic stamp of ANY role — a detection-role
+                # receipt below the is_tool_evidence bar (which routed
+                # us into this branch) still contradicts the demotion,
+                # so those stay ungraded like the receipt-capped
+                # branch above.
+                _pe = (prior_evidence or "").strip().lower()
+                if prior in ("finding", "suspicious") and (
+                    not _pe
+                    or _pe == "none"
+                    or _pe.startswith("llm-claimed:")
+                ):
                     _sc_record_refutation(
                         result.scorecard_events, outcome,
                         gate="dark-verify",
                         reason=(
                             "executed witness refuted the predicted "
-                            "signal"
+                            "signal and no deterministic receipt was "
+                            "retained"
                         ),
                         models=config.models,
                     )
