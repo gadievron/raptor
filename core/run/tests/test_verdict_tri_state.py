@@ -17,6 +17,8 @@ import ast
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -82,9 +84,31 @@ def _is_verdict_read(node: ast.AST) -> bool:
     return False
 
 
+def _mentions_verdict_key(source: str) -> bool:
+    """Smoke-subset selector: does the raw text mention a verdict key?
+
+    Used ONLY to pick the default-tier smoke's file subset — it is NOT
+    a sound skip filter for the closure scan. The parser folds
+    adjacent string literals and escape sequences into plain
+    ``ast.Constant`` values (``r.get("is_" "exploitable")``,
+    ``"is_exploitabl\\x65"``), so a file can carry a scannable verdict
+    read whose source text never contains the key; only the full parse
+    in the nightly-tier scan catches those. Built on VERDICT_KEYS so a
+    new verdict field widens the smoke subset automatically.
+    """
+    return any(key in source for key in VERDICT_KEYS)
+
+
 def _violations_in(path: Path) -> list[str]:
+    # Deliberately no text prescreen before the parse: see
+    # _mentions_verdict_key — a "file never mentions a key" skip
+    # misses parser-folded key literals the AST scan does catch.
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    try:
+        tree = ast.parse(source)
     except (SyntaxError, UnicodeDecodeError):
         return []
     out = []
@@ -172,6 +196,71 @@ class TestVerdictIdiomClosure:
         tmp.write_text(clean, encoding="utf-8")
         assert _violations_in(tmp) == []
 
+    def test_scanner_catches_parser_folded_keys(self, tmp_path: Path):
+        # Contract against any future text prescreen: the parser folds
+        # adjacent string literals and escape sequences into a plain
+        # ast.Constant, so these misreads are scannable even though
+        # the source text never contains a VERDICT_KEYS member. A
+        # "skip files that don't mention a key" optimisation silently
+        # dropped both; the scan must flag them.
+        folded = (
+            "a = r.get('is_' 'exploitable', False)\n"
+            "b = r.get('is_exploitabl\\x65', False)\n"
+        )
+        tmp = tmp_path / "folded_shapes.py"
+        tmp.write_text(folded, encoding="utf-8")
+        assert len(_violations_in(tmp)) == 2
+
+    def test_smoke_selector_contract(self):
+        # The smoke selector must pick up every direct textual mention
+        # of every VERDICT_KEYS member (so the default-tier smoke scans
+        # all realistically-written verdict readers), and — pinned here
+        # so the docstring stays true — it does NOT see parser-folded
+        # key literals: those are exactly why the nightly full scan
+        # exists and must never be re-labelled "covered" by the smoke.
+        for key in VERDICT_KEYS:
+            assert _mentions_verdict_key(f"v = r.get('{key}', False)\n")
+        assert not _mentions_verdict_key("v = r.get('status', False)\n")
+        assert not _mentions_verdict_key(
+            "v = r.get('is_' 'exploitable', False)\n"
+        )
+
+    def test_smoke_no_misreads_in_key_mentioning_runtime_code(self):
+        # Default-tier smoke: scan only the runtime files whose text
+        # mentions a verdict key — the subset every realistically
+        # written misread lives in (the flagged idioms read the key as
+        # a string/attribute literal, which appears verbatim in source
+        # unless deliberately split/escaped). Parser-folded literals
+        # are invisible to the selector and are owned by the nightly
+        # full scan below; the folded-shapes scanner test above keeps
+        # the detection itself pinned daily.
+        subset = []
+        for f in _runtime_py_files():
+            try:
+                if _mentions_verdict_key(f.read_text(encoding="utf-8")):
+                    subset.append(f)
+            except (OSError, UnicodeDecodeError):
+                continue
+        # Vacuousness guard for the subset (mirrors
+        # test_scan_sees_the_runtime_tree).
+        assert len(subset) >= 5
+        violations = []
+        for f in subset:
+            violations.extend(_violations_in(f))
+        assert violations == [], (
+            "raw tri-state verdict misread(s); route through "
+            "core.run.finding_status.read_verdict:\n" + "\n".join(violations)
+        )
+
+    # Full-tree scan: genuinely heavy (a full AST parse + walk of every
+    # runtime module; it breached the default tier's per-test budget on
+    # CI), so it runs in the nightly tier. Trade-off, both directions:
+    # unmarking it puts a multi-second, contention-sensitive test back
+    # in every PR run; marking it WITHOUT the smoke above would leave a
+    # new misread invisible until the next nightly. The smoke covers
+    # every file that textually mentions a key on every PR; only
+    # parser-folded key literals wait for nightly.
+    @pytest.mark.slow
     def test_no_raw_tri_state_misreads_in_runtime_code(self):
         violations = []
         for f in _runtime_py_files():
