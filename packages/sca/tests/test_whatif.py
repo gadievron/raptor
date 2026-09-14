@@ -381,3 +381,61 @@ def test_explain_requires_target(tmp_path: Path, capsys) -> None:
     assert exc.value.code == 2  # argparse usage-error exit
     err = capsys.readouterr().err
     assert "--target is required with --explain" in err
+
+
+# ---------------------------------------------------------------------------
+# OSV degradation and hostile-id neutralisation
+# ---------------------------------------------------------------------------
+
+class _FailingHttp(StubHttp):
+    def post_json(self, url: str, body: dict, timeout: int = 30) -> dict:
+        from core.http import HttpError
+        raise HttpError("osv.dev unreachable", status=503)
+
+
+def test_degraded_osv_lookups_refuse_to_conclude(
+    tmp_path: Path, capsys,
+) -> None:
+    """A transient OSV failure must never render as a clean verdict
+    with exit 0 — a network outage would wave a vulnerable upgrade
+    through any CI gate built on this command."""
+    from packages.sca import whatif
+    from core.json import JsonCache
+
+    http = _FailingHttp({}, {})
+    cache = JsonCache(root=tmp_path / "cache")
+    rc = whatif.main(
+        ["npm", "x", "1.0", "2.5", "--no-kev", "--no-epss"],
+        http=http, cache=cache,
+    )
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "verdict unavailable" in out
+    assert "lookup(s) failed" in out
+
+
+def test_modal_hostile_osv_id_rendered_inert(
+    tmp_path: Path, capsys,
+) -> None:
+    """Advisory ids are remote registry content — a markdown payload
+    in one must not render live image/link syntax in the report."""
+    from packages.sca import whatif
+    from core.json import JsonCache
+
+    evil_id = "GHSA-x![beacon](https://evil.example/p)"
+    record = dict(_VULN_OLD)
+    record = {**record, "id": evil_id, "aliases": []}
+    from urllib.parse import quote
+    # The client percent-encodes the id into the per-vuln URL; key
+    # the stub's record map on the encoded form so the GET matches.
+    http = StubHttp({"1.0.0": [evil_id]},
+                    {quote(evil_id, safe=""): record})
+    cache = JsonCache(root=tmp_path / "cache")
+    rc = whatif.main(
+        ["--add", "npm:x@1.0.0", "--no-kev", "--no-epss"],
+        http=http, cache=cache,
+    )
+    out = capsys.readouterr().out
+    assert rc == 1                      # introduces advisories
+    assert "would introduce" in out
+    assert "![" not in out.replace("!\\[", "")

@@ -42,6 +42,7 @@ from core.security.log_sanitisation import escape_nonprintable
 from core.security.prompt_output_sanitise import sanitise_string
 
 from . import SCA_CACHE_ROOT, default_client
+from ._md import neutralize_inline
 from .findings import build_vuln_findings, severity_rank
 from .models import (
     Advisory,
@@ -126,6 +127,25 @@ def main(
         )
         if explain_section:
             report += explain_section
+
+    if osv.degraded:
+        # A transient OSV failure must never read as "no known
+        # advisories" with exit 0 — a network outage would wave a
+        # vulnerable upgrade through any CI gate built on this
+        # command. Refuse to conclude instead.
+        sample = ", ".join(
+            neutralize_inline(k, limit=60)
+            for k in osv.failed_dep_keys[:5]
+        )
+        report += (
+            "\n## OSV lookups degraded — verdict unavailable\n\n"
+            f"{osv.failed_lookups} advisory lookup(s) failed "
+            "transiently"
+            + (f" (e.g. {sample})" if sample else "")
+            + "; the advisory counts above may be incomplete. "
+            "Re-run when the network/OSV recovers.\n"
+        )
+        exit_code = 2
 
     if args.out:
         out = Path(args.out).resolve()
@@ -294,10 +314,14 @@ def _modal_report(
             advs = _query_one(osv, eco, name, ver)
             if advs:
                 has_introduced = True
+                # osv_id is remote registry content headed for
+                # markdown/stdout — same neutralisation as report.py.
+                ids = ", ".join(
+                    neutralize_inline(a.osv_id, limit=60) for a in advs)
                 lines.append(
                     f"- ⚠ **{eco}:{name}@{ver}** would introduce "
                     f"{len(advs)} advisor{'y' if len(advs) == 1 else 'ies'}: "
-                    f"{', '.join(a.osv_id for a in advs)}"
+                    f"{ids}"
                 )
             else:
                 lines.append(
@@ -314,7 +338,8 @@ def _modal_report(
             if advs:
                 lines.append(
                     f"- removing **{eco}:{name}** would clear "
-                    f"{len(advs)} finding(s): {', '.join(advs)}"
+                    f"{len(advs)} finding(s): "
+                    f"{', '.join(neutralize_inline(a, limit=60) for a in advs)}"
                 )
             else:
                 lines.append(
@@ -549,7 +574,9 @@ def _candidates_report(
         base_ids.items(),
         key=lambda kv: -severity_rank(kv[1].severity),
     ):
-        buf.write(f"| {adv_id} | {base_finding.severity.title()} |")
+        buf.write(
+            f"| {neutralize_inline(adv_id, limit=60)} "
+            f"| {base_finding.severity.title()} |")
         for cand in candidates:
             mark = "✓" if resolution_table[adv_id][cand] else "—"
             buf.write(f" {mark} |")
@@ -689,16 +716,21 @@ def _explain_upgrade(
         f"**Confidence:** {verdict.confidence}",
     ]
     if verdict.summary:
-        lines.append(f"\n{verdict.summary}")
+        # LLM output over hostile-influenceable inputs (changelogs,
+        # call sites) — defang before it reaches markdown/stdout.
+        lines.append(f"\n{sanitise_string(verdict.summary)}")
 
     if verdict.breaking_changes:
         lines.append("")
         lines.append("### Breaking changes")
         lines.append("")
         for bc in verdict.breaking_changes:
-            lines.append(f"- **{bc.site}**: {bc.what_breaks}")
+            lines.append(
+                f"- **{neutralize_inline(bc.site, limit=120)}**: "
+                f"{neutralize_inline(bc.what_breaks)}")
             if bc.suggested_fix:
-                lines.append(f"  - Fix: {bc.suggested_fix}")
+                lines.append(
+                    f"  - Fix: {neutralize_inline(bc.suggested_fix)}")
 
     lines.append("")
     return "\n".join(lines)
