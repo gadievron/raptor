@@ -52,6 +52,7 @@ from codeql_scope import (
 )
 from test_scope import (
     TIERS,
+    expand_conftest,
     file_in_fast_tier,
     file_matches_tier,
     is_test_file,
@@ -478,15 +479,9 @@ def main() -> int:
         cache_status = "miss"
     graph_time = time.monotonic() - t0
 
-    # conftest.py changes affect all tests in their directory tree.
-    conftest_extra: set[Path] = set()
-    for f in list(changed_py):
-        if f.name == "conftest.py":
-            pkg_dir = f.parent
-            for af in all_py:
-                if af != f and str(af).startswith(str(pkg_dir) + "/"):
-                    conftest_extra.add(af)
-    changed_py |= conftest_extra
+    # conftest.py changes affect all tests in their directory tree
+    # (the repo-root conftest's tree is the whole repo).
+    changed_py |= expand_conftest(changed_py, all_py)
 
     changed_py |= init_imports(changed_py, all_py)
 

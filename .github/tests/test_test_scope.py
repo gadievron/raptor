@@ -13,14 +13,42 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from test_scope import (
     FAST_TIER_IGNORES,
+    ROOT_HARNESS_FILES,
     TIERS,
     batch_matrix,
     compute_tier_dispatch,
+    expand_conftest,
     file_in_dir,
     file_in_fast_tier,
     file_matches_tier,
     is_test_file,
 )
+
+
+class TestExpandConftest:
+    _ALL = [
+        Path("conftest.py"),
+        Path("core/llm/client.py"),
+        Path("core/sandbox/tests/conftest.py"),
+        Path("core/sandbox/tests/test_a.py"),
+        Path("core/sandbox/context.py"),
+    ]
+
+    def test_nested_conftest_expands_to_its_tree_only(self):
+        extra = expand_conftest(
+            {Path("core/sandbox/tests/conftest.py")}, self._ALL,
+        )
+        assert extra == {Path("core/sandbox/tests/test_a.py")}
+
+    def test_root_conftest_expands_to_whole_repo(self):
+        # The root's prefix would be "./", which matches no relative
+        # path — pre-fix the expansion returned nothing and a PR
+        # touching only the root conftest dispatched zero tiers.
+        extra = expand_conftest({Path("conftest.py")}, self._ALL)
+        assert extra == set(self._ALL) - {Path("conftest.py")}
+
+    def test_non_conftest_changes_expand_nothing(self):
+        assert expand_conftest({Path("core/llm/client.py")}, self._ALL) == set()
 
 
 class TestIsTestFile:
@@ -210,6 +238,29 @@ class TestOnRealRepo:
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(_ts, "build_graph", _build_graph_cached)
             yield
+
+    @pytest.mark.parametrize("harness_file", sorted(ROOT_HARNESS_FILES))
+    def test_root_harness_change_dispatches_every_tier(
+            self, repo, harness_file):
+        """A PR touching only the repo-root conftest.py or pytest.ini
+        reconfigures the harness every tier runs under; pre-fix it
+        dispatched ZERO tiers and tests-passed went green with no
+        tests run."""
+        result = compute_tier_dispatch([harness_file], repo)
+        inactive = [t for t, i in result.items()
+                    if not t.startswith("_") and not i["run"]]
+        assert inactive == [], (
+            f"{harness_file} left tiers undispatched: {inactive}")
+        assert result["python"]["files"], "fast tier got no files"
+
+    def test_nested_conftest_still_scopes_to_its_tree(self, repo):
+        result = compute_tier_dispatch(
+            ["core/sandbox/tests/conftest.py"], repo,
+        )
+        assert result["sandbox"]["run"]
+        inactive = [t for t, i in result.items()
+                    if not t.startswith("_") and not i["run"]]
+        assert inactive, "nested conftest must not force full dispatch"
 
     def test_leaf_change_scopes_tightly(self, repo):
         result = compute_tier_dispatch(

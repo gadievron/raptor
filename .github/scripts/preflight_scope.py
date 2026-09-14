@@ -10,8 +10,10 @@ them keeps PR latency flat. Reuses ``test_scope.is_test_file`` so the
 two scopers cannot disagree about what counts as a test file.
 
 Deliberately excluded:
-  * conftest.py — not directly runnable; its blast radius is already
-    covered by the main suite's import-graph dispatch;
+  * conftest.py — not directly runnable; its blast radius is covered
+    by the main suite's dispatch (nested conftests expand to their
+    directory tree; the repo-root conftest.py and pytest.ini force a
+    full tier dispatch via ``test_scope.ROOT_HARNESS_FILES``);
   * deleted / renamed-away files (in the change list, absent on disk);
   * ``fixtures/`` trees and non-Python files (``is_test_file``).
 

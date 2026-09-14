@@ -164,6 +164,42 @@ FAST_TIER_IGNORES = {
 }
 
 
+#: Repo-root files that ARE the pytest harness: every tier runs under
+#: their configuration (fixtures, emulation/egress guards, marker
+#: filters, addopts). A change to them must dispatch the FULL tier set:
+#: the directory-tree conftest expansion cannot express that blast
+#: radius (the root's prefix "./" matches no relative path), pytest.ini
+#: is neither a .py file nor a requirements/pyproject infra trigger,
+#: and the preflight deliberately excludes conftest.py — so without
+#: this gate a PR touching only these files dispatched ZERO tiers and
+#: merged green with no tests run.
+ROOT_HARNESS_FILES = frozenset({"conftest.py", "pytest.ini"})
+
+
+def expand_conftest(changed_py: set[Path], all_py: list[Path]) -> set[Path]:
+    """Files affected by changed conftest.py files.
+
+    A conftest applies to every test in its directory tree; the
+    repo-root conftest's tree is the whole repo. Tier-dispatch callers
+    additionally treat root-harness changes as full dispatch (see
+    ``ROOT_HARNESS_FILES``); this expansion still covers the root case
+    so import-graph consumers that skip that gate stay sound.
+    """
+    extra: set[Path] = set()
+    for f in changed_py:
+        if f.name != "conftest.py":
+            continue
+        pkg_dir = f.parent
+        if pkg_dir == Path("."):
+            extra.update(af for af in all_py if af != f)
+            continue
+        prefix = str(pkg_dir) + "/"
+        for af in all_py:
+            if af != f and str(af).startswith(prefix):
+                extra.add(af)
+    return extra
+
+
 def is_test_file(path: Path) -> bool:
     """Heuristic: a .py file is a test if its name starts with test_ or
     ends with _test, or it lives under a tests/ directory.
@@ -274,6 +310,25 @@ def compute_tier_dispatch(
     The ``python`` (fast) tier additionally includes a ``"matrix"``
     key with the ``batch_matrix()`` result.
     """
+    # Root harness files reconfigure every tier's run — full dispatch.
+    harness_hits = sorted(
+        f for f in changed_files if f in ROOT_HARNESS_FILES
+    )
+    if harness_hits:
+        print(
+            f"Root harness change ({', '.join(harness_hits)}) — "
+            "full tier dispatch (see ROOT_HARNESS_FILES)"
+        )
+        result = _force_all_dispatch(repo)
+        n_all = len(discover_py_files(repo))
+        result["_stats"] = {
+            "closure": n_all,
+            "total": n_all,
+            "changed": len(changed_files),
+            "dependents": 0,
+        }
+        return result
+
     all_py = discover_py_files(repo)
     total = len(all_py)
 
@@ -281,14 +336,7 @@ def compute_tier_dispatch(
     changed_non_py = [f for f in changed_files if not f.endswith(".py")]
 
     # conftest.py changes affect all tests in their directory tree.
-    conftest_extra: set[Path] = set()
-    for f in changed_py:
-        if f.name == "conftest.py":
-            pkg_dir = f.parent
-            for af in all_py:
-                if af != f and str(af).startswith(str(pkg_dir) + "/"):
-                    conftest_extra.add(af)
-    changed_py |= conftest_extra
+    changed_py |= expand_conftest(changed_py, all_py)
 
     # __init__.py expansion.
     changed_py |= init_imports(changed_py, all_py)
