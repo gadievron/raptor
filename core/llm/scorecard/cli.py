@@ -1023,14 +1023,20 @@ def cmd_tool_evidence(args: argparse.Namespace) -> int:
         or []
     )
     for vf in val_findings:
+        if not isinstance(vf, dict):
+            # A hand-edited or corrupted report can carry non-dict
+            # list entries; same guard as the auto-back-prop walk.
+            continue
         fid = vf.get("finding_id")
         if not fid:
             continue
         verdict = vf.get("is_exploitable")
-        if verdict is None:
-            # inconclusive — skip
+        if not isinstance(verdict, bool):
+            # Inconclusive (None) or malformed (stringy "true"/"yes")
+            # — skip; same typed rule as the auto-back-prop join in
+            # tool_evidence.py.
             continue
-        val_by_id[fid] = bool(verdict)
+        val_by_id[fid] = verdict
 
     # Walk analysis records; emit one evidence record per finding the
     # validator concluded on. Skip records missing the model — without
@@ -1041,6 +1047,8 @@ def cmd_tool_evidence(args: argparse.Namespace) -> int:
     skipped_no_model = 0
     analysis_records = analysis.get("results") or []
     for r in analysis_records:
+        if not isinstance(r, dict):
+            continue
         fid = r.get("finding_id")
         if not fid or fid not in val_by_id:
             continue
@@ -1048,10 +1056,20 @@ def cmd_tool_evidence(args: argparse.Namespace) -> int:
         if not model:
             skipped_no_model += 1
             continue
+        analysis_verdict = r.get("is_exploitable")
+        if not isinstance(analysis_verdict, bool):
+            # The analysis model abstained (errored / refused /
+            # schema-failed response nulls the field): it cast no
+            # verdict, so grading it against the validator would mint
+            # a reliability event for a vote never cast. bool()
+            # coercion here previously turned that abstention into a
+            # "not exploitable" vote — same typed rule as the
+            # auto-back-prop join in tool_evidence.py.
+            continue
         records.append({
             "model": model,
             "rule_id": r.get("rule_id") or "unknown",
-            "analysis_verdict": bool(r.get("is_exploitable", False)),
+            "analysis_verdict": analysis_verdict,
             "validation_verdict": val_by_id[fid],
             "finding_id": fid,
             "analysis_reasoning": r.get("reasoning") or "",

@@ -1228,3 +1228,108 @@ def test_render_samples_defangs_control_bytes(tmp_path):
     assert "\x1b" not in rendered
     assert "\x07" not in rendered
     assert "red" in rendered  # content survives, escapes defang
+
+
+# ---------------------------------------------------------------------------
+# tool-evidence — abstentions never grade
+# ---------------------------------------------------------------------------
+
+
+class TestToolEvidenceAbstentions:
+    """A nulled ``is_exploitable`` (errored / refused / schema-failed
+    response) is an abstention, not a "not exploitable" vote — same
+    counting rule as the auto-back-prop join in ``tool_evidence.py``.
+    Grading an abstainer against the validator would mint a
+    TOOL_EVIDENCE reliability event for a vote never cast."""
+
+    def _run(self, tmp_path, analysis_results, validation_findings):
+        import json as _json
+
+        analysis = tmp_path / "orchestrated_report.json"
+        validation = tmp_path / "validation_report.json"
+        analysis.write_text(_json.dumps({"results": analysis_results}))
+        validation.write_text(
+            _json.dumps({"findings": validation_findings}))
+        sc_path = tmp_path / "sc.json"
+        args = _make_args(
+            path=sc_path, analysis=analysis, validation=validation,
+            prefix="agentic",
+        )
+        rc, out, err = _capture(cli_mod.cmd_tool_evidence, args)
+        assert rc == 0
+        return sc_path, err
+
+    def test_null_analysis_verdict_records_nothing(self, tmp_path):
+        """Pre-fix ``bool(r.get("is_exploitable", False))`` coerced a
+        nulled analysis verdict into a False vote and graded it."""
+        sc_path, _ = self._run(
+            tmp_path,
+            analysis_results=[
+                {"finding_id": "f1", "analysed_by": "claude-opus",
+                 "rule_id": "py/sqli", "is_exploitable": None,
+                 "reasoning": ""},
+            ],
+            validation_findings=[
+                {"finding_id": "f1", "is_exploitable": False},
+            ],
+        )
+        sc = ModelScorecard(sc_path)
+        assert sc.get_stat("agentic:py/sqli", "claude-opus") is None
+
+    def test_voting_record_still_grades(self, tmp_path):
+        """A real bool verdict keeps grading (both directions)."""
+        sc_path, _ = self._run(
+            tmp_path,
+            analysis_results=[
+                {"finding_id": "f1", "analysed_by": "claude-opus",
+                 "rule_id": "py/sqli", "is_exploitable": True,
+                 "reasoning": "r"},
+                {"finding_id": "f2", "analysed_by": "claude-opus",
+                 "rule_id": "py/sqli", "is_exploitable": False,
+                 "reasoning": "r"},
+            ],
+            validation_findings=[
+                {"finding_id": "f1", "is_exploitable": True},
+                {"finding_id": "f2", "is_exploitable": True},
+            ],
+        )
+        sc = ModelScorecard(sc_path)
+        stat = sc.get_stat("agentic:py/sqli", "claude-opus")
+        ev = stat.events[EventType.TOOL_EVIDENCE]
+        assert (ev.correct, ev.incorrect) == (1, 1)
+
+    def test_stringy_validation_verdict_skipped(self, tmp_path):
+        """"true"/"yes" in the validator slot must not quietly coerce
+        — typed-bool rule mirrors the auto-back-prop walk."""
+        sc_path, _ = self._run(
+            tmp_path,
+            analysis_results=[
+                {"finding_id": "f1", "analysed_by": "claude-opus",
+                 "rule_id": "py/sqli", "is_exploitable": True},
+            ],
+            validation_findings=[
+                {"finding_id": "f1", "is_exploitable": "true"},
+            ],
+        )
+        sc = ModelScorecard(sc_path)
+        assert sc.get_stat("agentic:py/sqli", "claude-opus") is None
+
+    def test_non_dict_entries_do_not_traceback(self, tmp_path):
+        """Corrupted list entries in either report degrade to a skip,
+        matching the auto-back-prop walk's shape guard."""
+        sc_path, _ = self._run(
+            tmp_path,
+            analysis_results=[
+                "junk",
+                {"finding_id": "f1", "analysed_by": "claude-opus",
+                 "rule_id": "py/sqli", "is_exploitable": True},
+            ],
+            validation_findings=[
+                42,
+                {"finding_id": "f1", "is_exploitable": True},
+            ],
+        )
+        sc = ModelScorecard(sc_path)
+        stat = sc.get_stat("agentic:py/sqli", "claude-opus")
+        ev = stat.events[EventType.TOOL_EVIDENCE]
+        assert (ev.correct, ev.incorrect) == (1, 0)
