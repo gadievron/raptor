@@ -196,9 +196,16 @@ class XFileConst:
         while stack:
             n = stack.pop()
             if n.type == "field_declaration":
-                mods = {_text(c) for c in n.children
-                        if c.type == "modifiers"}
-                modtext = " ".join(mods)
+                # Token-exact modifier children (the collection-guard
+                # twin's discipline): the modifiers run includes
+                # annotation text, so a substring check over the whole
+                # run would let an annotation containing "static" /
+                # "final" qualify a mutable field as a foldable
+                # constant.
+                mod_tokens: set[str] = set()
+                for c in n.children:
+                    if c.type == "modifiers":
+                        mod_tokens |= {_text(m) for m in c.children}
                 for ch in n.children:
                     if ch.type != "variable_declarator":
                         continue
@@ -206,8 +213,8 @@ class XFileConst:
                     value = ch.child_by_field_name("value")
                     if (name is not None and _text(name) == field
                             and value is not None
-                            and "static" in modtext
-                            and "final" in modtext):
+                            and "static" in mod_tokens
+                            and "final" in mod_tokens):
                         return value
             stack.extend(n.children)
         return None

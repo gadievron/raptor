@@ -151,6 +151,10 @@ CFG_CLASS = (
     "    public static final String SEP2 = "
     'File.separator + File.separator;\n'
     '    public static String MUTABLE = "not-final";\n'
+    # Annotation text contains "static"/"final" as substrings;
+    # the field itself is neither — token-exact modifier matching
+    # must refuse it.
+    '    @staticfinal public String TRICKY = "looks-const";\n'
     '    public String getTheValue(String p) { return "bar"; }\n'
     '    public String echo(String p) { return p; }\n'
     '    public String twoStmt(String p) { String a = "x"; return a; }\n'
@@ -205,6 +209,14 @@ class TestCrossFileField:
         assert v3 is TAINT_FREE
         v4, _ = _xfold(xroot, "Cfg.SEP2")
         assert v4 is REFUSE
+
+    def test_annotation_substring_never_qualifies(self, xroot):
+        # A lowercase annotation containing "static"/"final" as
+        # substrings must not qualify a plain mutable field as a
+        # foldable constant (token-exact modifiers, the
+        # collection-guard twin's discipline).
+        v, _ = _xfold(xroot, "Cfg.TRICKY")
+        assert v is REFUSE
 
     def test_non_final_field_refuses(self, xroot):
         v, _ = _xfold(xroot, "Cfg.MUTABLE")
