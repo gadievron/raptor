@@ -311,10 +311,14 @@ def _extract_versions(data: dict) -> list[str]:
 
     # Sort by publish time descending; versions without a publish
     # time fall back to lexical sort among themselves, after all
-    # timed versions.
+    # timed versions. The ``time`` map is untrusted registry JSON —
+    # a non-string entry (number, list, null-ish) must degrade to
+    # the untimed bucket, not raise a TypeError out of list.sort
+    # (which aborted the whole harden pass: no per-dep containment
+    # in its pool.map chain).
     def _sort_key(v: str):
         t = times.get(v)
-        return (1, t) if t else (0, v)
+        return (1, t) if isinstance(t, str) else (0, v)
     candidates.sort(key=_sort_key, reverse=True)
     return candidates
 

@@ -110,6 +110,33 @@ def test_npm_filters_prerelease_and_deprecated() -> None:
     assert client.list_versions("lodash") == ["2.0.0", "1.0.0"]
 
 
+def test_npm_hostile_time_values_never_crash_the_sort() -> None:
+    """The registry ``time`` map is untrusted JSON — mixed-type
+    entries (number / list / None beside strings) made the
+    publish-time sort raise TypeError out of list.sort, aborting the
+    whole harden pass (no per-dep containment in its pool.map chain).
+    Non-string times must degrade to the untimed bucket."""
+    http = _FakeHttp(json_payload={
+        "versions": {
+            "1.0.0": {},
+            "2.0.0": {},
+            "3.0.0": {},
+            "4.0.0": {},
+        },
+        "time": {
+            "1.0.0": "2023-01-01",
+            "2.0.0": 1700000000,          # hostile: number
+            "3.0.0": ["2024-01-01"],      # hostile: list
+            "4.0.0": "2024-06-01",
+        },
+    })
+    client = NpmClient(http)
+    got = client.list_versions("lodash")
+    assert set(got) == {"1.0.0", "2.0.0", "3.0.0", "4.0.0"}
+    # Timed (string) versions sort newest-first ahead of the rest.
+    assert got[:2] == ["4.0.0", "1.0.0"]
+
+
 def test_npm_scoped_name_url_encoded() -> None:
     http = _FakeHttp(json_payload={"versions": {"1.0.0": {}}})
     client = NpmClient(http)
