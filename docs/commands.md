@@ -454,6 +454,7 @@ code as vulnerable -- tool output is the verdict.
 | `--deepen-reserve <fraction>` | Slice of `--max-cost` held back for the deepen phase so announced re-reviews can execute (default 0.15; 0 disables) |
 | `--max-time <seconds>` | Wall-clock time limit |
 | `--review-passes <N>` | Independent review passes per function for self-consistency |
+| `--max-workers <N>` | Concurrent review workers (1-32; values above the cap are clamped). Overrides the transport-derived default — the operator owns the rate-limit consequences (the adaptive throttle still backs off on 429s). Also accepted by `resume` for a single segment |
 | `--subsystem-depth <N>` | Directory grouping depth for subsystem-ordered review (default: 0) |
 | `--max-propagation-depth <N>` | Override adaptive constraint propagation depth (default: auto-calibrated) |
 | `--include-kinds <list>` | Item kinds beyond functions/methods (default: `top_level`, `macro`, `global` — already on).  A positive list overrides the defaults, `-kind` opts one out, `none` restricts to functions/methods |
