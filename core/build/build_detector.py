@@ -993,6 +993,20 @@ class BuildDetector:
         if not source_files:
             return None
 
+        # Ancestor -I rescues point OUTSIDE repo_path by construction
+        # (in-repo include flags stay relative). The dry-run sandbox
+        # restricts reads to repo + system dirs, so the discovered
+        # ancestor include dirs must be carved out explicitly or the
+        # rescue self-defeats under the read sandbox. Absolute -I
+        # flags are exactly the _discover_ancestor_includes results —
+        # already ownership/system-path checked at discovery.
+        ancestor_read_dirs = [
+            flag[2:] for flag in include_flags
+            if isinstance(flag, str)
+            and flag.startswith("-I")
+            and os.path.isabs(flag[2:])
+        ]
+
         # Diagnostic — does NOT auto-run anything. If the target's
         # .c files reference ``*_config.h``-shaped headers that
         # don't exist on disk, surface a single WARNING listing
@@ -1066,7 +1080,10 @@ class BuildDetector:
             logger.info("Synthesised build script for %s: %s", language, script_path)
             logger.info("  Source files: %d", len(source_files))
 
-            failures = self._dry_run(script_path, language=language)
+            failures = self._dry_run(
+                script_path, language=language,
+                extra_readable=ancestor_read_dirs,
+            )
             build_type = "synthesised"
             confidence = 0.7
 
@@ -1090,7 +1107,10 @@ class BuildDetector:
                         include_flags + cc_flags.get("includes", []),
                         define_flags + cc_flags.get("defines", []),
                     )
-                    cc_failures = self._dry_run(script_path, language=language)
+                    cc_failures = self._dry_run(
+                        script_path, language=language,
+                        extra_readable=ancestor_read_dirs,
+                    )
                     if cc_failures is None:
                         logger.info("  CC retry didn't run — keeping heuristic")
                         # The script on disk currently contains the UNMEASURED
@@ -1425,7 +1445,8 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
         script_path.chmod(0o500)
         return script_path
 
-    def _dry_run(self, script_path, language: str | None = None) -> list | None:
+    def _dry_run(self, script_path, language: str | None = None,
+                 extra_readable: list[str] | None = None) -> list | None:
         """Run the build script and return compilation failures.
 
         Returns:
@@ -1450,6 +1471,16 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
         via PATH but the JDK layout (tools.jar, rt.jar on older JDKs)
         may not resolve. Scoped to this one subprocess — see
         ~/design/env-handling.md.
+
+        ``extra_readable`` names additional read-allowed roots under
+        ``restrict_reads`` — the caller passes the discovered ancestor
+        include dirs, which point outside ``repo_path`` by
+        construction. Without the carve-out the sandboxed compiler
+        gets EACCES on every ancestor header while the real CodeQL
+        build (which runs read-wide) would succeed: the dry-run then
+        reports failures the CC flag-suggest retry can never fix,
+        burning a paid dispatch and downgrading confidence for the
+        exact case the ancestor rescue exists for.
         """
         # Build env: sanitised base + toolchain auto-detection for the
         # language. For Java synthesised-build path, this is JAVA_HOME.
@@ -1459,7 +1490,7 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
         # Extra read-allowed roots under restrict_reads: user-local
         # toolchain installs (sdkman/asdf JDKs) live outside the
         # default system-dirs allowlist.
-        readable: list[str] = []
+        readable: list[str] = list(extra_readable or [])
         if language == "java":
             from core.build.toolchain import apply_toolchain_env
             apply_toolchain_env(env, ["JAVA_HOME"])
