@@ -21,6 +21,7 @@ from core.orchestration.skill_dispatch import (
     MAX_VALIDATE_FINDINGS,
     SkillDispatchResult,
     is_sandbox_setup_skip,
+    missing_validation_report,
     run_skill_dispatch,
     truncate_findings_by_signal,
 )
@@ -337,6 +338,16 @@ def _dispatch_validate_unsafe(
             block_cc_dispatch=check_repo_claude_trust(str(target_path)),
             context_dirs=(audit_out_dir,),
             stage=_stage,
+            # Success = the pipeline's actual outcome, never the CC
+            # child's exit status alone: a child whose in-run pipeline
+            # crashed can still exit 0 (it narrates the failure and
+            # exits cleanly), which used to record the pass as
+            # ran/completed while every selected finding stayed
+            # pending. The probe requires the terminal artifact
+            # (validation-report.md, non-empty) before the pass may
+            # count as ran; otherwise the lifecycle is failed and the
+            # reason reaches validate-postpass.json + the run report.
+            validate_outputs=missing_validation_report,
         )
 
     dispatch = _run_dispatch()
@@ -346,6 +357,15 @@ def _dispatch_validate_unsafe(
         # refusal can be transient host state rather than a property
         # of this pass. A second identical refusal is treated as real
         # and surfaces through the postpass record and run report.
+        #
+        # A zero-verdict outcome (missing_validation_report) is
+        # deliberately NOT retried: the child ran to completion, so
+        # the pass's LLM budget is already spent (a retry doubles it),
+        # and an in-child pipeline crash is a property of the run's
+        # inputs or host configuration rather than transient launch
+        # state — the retry would spend the same budget to hit the
+        # same wall. It surfaces as a failed pass with the reason and
+        # the exact operator follow-up command instead.
         logger.warning(
             "validate post-pass: %s — retrying once",
             dispatch.skipped_reason,

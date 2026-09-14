@@ -467,6 +467,70 @@ class TestSandboxSetupRetry:
         assert postpass.ran
 
 
+class TestZeroVerdictOutcome:
+    """The postpass's success determination consults the pipeline's
+    actual outcome, not the CC child's exit status: the dispatch wires
+    the missing_validation_report probe, and a zero-verdict pass
+    (child exited 0, no validation-report.md) fails honestly and is
+    NEVER retried — unlike a sandbox-setup skip, its LLM budget is
+    already spent, and an in-child pipeline crash is a property of the
+    run's inputs or host configuration, not transient launch state."""
+
+    @pytest.fixture(autouse=True)
+    def _open_cc_trust(self, monkeypatch):
+        monkeypatch.setattr(
+            "core.security.cc_trust.check_repo_claude_trust",
+            lambda repo_path, trust_override=None: False,
+        )
+
+    def _patch_dispatch(self, monkeypatch, results):
+        calls: list[dict] = []
+
+        def fake(**kwargs):
+            calls.append(kwargs)
+            return results[min(len(calls), len(results)) - 1]
+
+        monkeypatch.setattr("core.audit.validate.run_skill_dispatch", fake)
+        return calls
+
+    def test_outcome_probe_is_wired(self, tmp_path, monkeypatch):
+        from core.orchestration.skill_dispatch import (
+            SkillDispatchResult,
+            missing_validation_report,
+        )
+        calls = self._patch_dispatch(monkeypatch, [
+            SkillDispatchResult(ran=True, run_dir=tmp_path / "v",
+                                duration_s=1.0),
+        ])
+        _dispatch_validate(
+            target_path=tmp_path, audit_out_dir=tmp_path,
+            findings_path=tmp_path / "findings.json", findings_count=2,
+        )
+        assert calls[0]["validate_outputs"] is missing_validation_report
+
+    def test_zero_verdict_failure_not_retried(self, tmp_path, monkeypatch):
+        from core.orchestration.skill_dispatch import (
+            SkillDispatchResult,
+            missing_validation_report,
+        )
+        # The real reason string the probe emits for an empty run dir.
+        reason = missing_validation_report(tmp_path)
+        assert reason is not None
+        run_dir = tmp_path / "validate-run"
+        calls = self._patch_dispatch(monkeypatch, [
+            SkillDispatchResult(ran=False, skipped_reason=reason,
+                                run_dir=run_dir, duration_s=300.0),
+        ])
+        postpass = _dispatch_validate(
+            target_path=tmp_path, audit_out_dir=tmp_path,
+            findings_path=tmp_path / "findings.json", findings_count=2,
+        )
+        assert len(calls) == 1, "zero-verdict crash must not be retried"
+        assert not postpass.ran
+        assert postpass.skipped_reason == reason
+        assert postpass.validate_dir == str(run_dir)
+
+
 @pytest.mark.usefixtures("cc_spawn_machinery_enabled")
 class TestDispatchGates:
     """Consolidation fixes: the audit handoff shares /agentic's gate

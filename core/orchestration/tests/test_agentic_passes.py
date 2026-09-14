@@ -139,6 +139,14 @@ def _make_lifecycle_dispatcher(start_dir=None, claude_writes=None,
     return dispatcher
 
 
+# A healthy /validate child's terminal artifact. The dispatch's outcome
+# probe (missing_validation_report) requires it before the pass may
+# count as ran — the child's exit status alone is not an outcome.
+_VALIDATE_REPORT_WRITES = {
+    "validation-report.md": "# Exploitability Validation Report\n",
+}
+
+
 # ---------------------------------------------------------------------------
 # Selection logic
 # ---------------------------------------------------------------------------
@@ -574,7 +582,9 @@ class ValidatePostpassTests(unittest.TestCase):
                 {"finding_id": "FINDING-F3", "is_exploitable": False, "confidence": "low"},
             ])
             validate_dir = tmp / "validate_run"
-            dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
+            dispatcher = _make_lifecycle_dispatcher(
+                start_dir=validate_dir,
+                claude_writes=dict(_VALIDATE_REPORT_WRITES))
             with _patch_passes(dispatcher) as mock_run:
                 result = run_validate_postpass(
                     target=tmp, agentic_out_dir=tmp, analysis_report=report,
@@ -602,6 +612,26 @@ class ValidatePostpassTests(unittest.TestCase):
             self.assertNotIn("FINDING-F1", prompt)
             self.assertNotIn("FINDING-F2", prompt)
             self.assertNotIn("FINDING-F3", prompt)
+
+    def test_zero_verdict_child_fails_the_postpass(self):
+        """A child that exits 0 WITHOUT writing validation-report.md
+        must yield ran=False with the no-verdicts reason. It used to
+        yield ran=True with report_path=None — the pass read as
+        completed while every selected finding stayed pending."""
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            report = self._make_report(tmp, [
+                {"finding_id": "FINDING-F1", "is_exploitable": True},
+            ])
+            validate_dir = tmp / "validate_run"
+            dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
+            with _patch_passes(dispatcher):
+                result = run_validate_postpass(
+                    target=tmp, agentic_out_dir=tmp, analysis_report=report,
+                    claude_bin="/fake/claude",
+                )
+            self.assertFalse(result.ran)
+            self.assertIn("produced no verdicts", result.skipped_reason)
 
     def test_validate_dispatch_uses_sandbox_with_egress_proxy(self):
         with TemporaryDirectory() as tmp:
@@ -819,7 +849,9 @@ class NaNScoreTests(unittest.TestCase):
             import json as _json
             report.write_text(_json.dumps({"results": findings}))
             validate_dir = tmp / "validate_run"
-            dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
+            dispatcher = _make_lifecycle_dispatcher(
+                start_dir=validate_dir,
+                claude_writes=dict(_VALIDATE_REPORT_WRITES))
             with _patch_passes(dispatcher):
                 result = run_validate_postpass(
                     target=tmp, agentic_out_dir=tmp, analysis_report=report,
@@ -951,7 +983,9 @@ class SortKeyTypeSafetyTests(unittest.TestCase):
             report = tmp / "report.json"
             report.write_text(json.dumps({"results": findings}))
             validate_dir = tmp / "validate_run"
-            dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
+            dispatcher = _make_lifecycle_dispatcher(
+                start_dir=validate_dir,
+                claude_writes=dict(_VALIDATE_REPORT_WRITES))
             with _patch_passes(dispatcher):
                 # Must not raise — backstop would catch it but the user would
                 # see "unexpected ValueError" instead of a clean post-pass.

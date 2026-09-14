@@ -264,6 +264,32 @@ def is_sandbox_setup_skip(reason: str | None) -> bool:
         _SANDBOX_SETUP_REASON_PREFIX)
 
 
+def missing_validation_report(run_dir: Path) -> str | None:
+    """``validate_outputs`` probe for /validate skill passes.
+
+    The validation pipeline's terminal artifact is
+    ``validation-report.md`` — Stage 1 writes it only after the stage
+    verdicts are merged. A CC child can exit 0 while the pipeline
+    inside it crashed (a stage helper failing mid-run leaves the child
+    free to narrate the failure and exit cleanly), so the child's exit
+    status alone cannot stand for "verdicts were produced": a pass
+    recorded as completed on exit status alone leaves every selected
+    finding silently pending. Absent or empty report ⇒ the pass
+    failed, with the reason surfaced through the dispatch result.
+    """
+    report = Path(run_dir) / "validation-report.md"
+    try:
+        if report.is_file() and report.stat().st_size > 0:
+            return None
+    except OSError:
+        pass
+    return (
+        "validate pipeline produced no verdicts: validation-report.md "
+        "missing or empty in the run dir (in-child stage crash or "
+        "pipeline abort; the child process itself exited 0)"
+    )
+
+
 @dataclass
 class SkillDispatchResult:
     """Outcome of :func:`run_skill_dispatch`.
@@ -852,6 +878,7 @@ __all__ = [
     "build_checklist",
     "complete_lifecycle",
     "fail_lifecycle",
+    "missing_validation_report",
     "run_skill_dispatch",
     "start_lifecycle",
     "truncate_findings_by_signal",

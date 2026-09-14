@@ -46,6 +46,7 @@ from core.json import load_json, save_json
 from core.orchestration.skill_dispatch import (
     MAX_VALIDATE_FINDINGS,
     StageError,
+    missing_validation_report,
     run_skill_dispatch,
     truncate_findings_by_signal,
 )
@@ -395,6 +396,13 @@ def _run_validate_postpass_unsafe(
         context_dirs=(agentic_out_dir,),
         preflight=_preflight,
         stage=_stage,
+        # Same outcome contract as the understand pre-pass's
+        # _check_outputs: the pass counts as ran only when the
+        # pipeline's terminal artifact exists — a CC child whose
+        # in-run pipeline crashed can still exit 0, which used to
+        # record the pass as completed with every selected finding
+        # silently pending.
+        validate_outputs=missing_validation_report,
     )
     if not dispatch.ran:
         return PostpassResult(ran=False,

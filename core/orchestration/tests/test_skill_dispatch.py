@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 from core.orchestration.skill_dispatch import (
     MAX_VALIDATE_FINDINGS,
     StageError,
+    missing_validation_report,
     run_skill_dispatch,
     truncate_findings_by_signal,
 )
@@ -289,6 +290,34 @@ class DispatchFlowTests(unittest.TestCase):
             result = _run(tmp, run_dir, validate_outputs=lambda d: None)
         self.assertTrue(result.ran)
 
+    def test_zero_verdict_child_exit0_fails_the_pass(self):
+        """A /validate child that exits 0 WITHOUT writing the
+        pipeline's terminal artifact must fail the pass with the
+        no-verdicts reason — the child's exit status alone used to
+        record the pass as ran/completed while every selected finding
+        stayed pending."""
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            result = _run(tmp, run_dir,
+                          validate_outputs=missing_validation_report)
+        self.assertFalse(result.ran)
+        self.assertIn("produced no verdicts", result.skipped_reason)
+
+    def test_report_written_by_child_counts_as_ran(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            dispatcher = _lifecycle_dispatcher(run_dir)
+
+            def sandbox(cmd, *args, **kwargs):
+                (Path(run_dir) / "validation-report.md").write_text(
+                    "# Exploitability Validation Report\n")
+                return dispatcher(cmd, *args, **kwargs)
+
+            result = _run(tmp, run_dir, sandbox=sandbox,
+                          validate_outputs=missing_validation_report)
+        self.assertTrue(result.ran)
+        self.assertIsNone(result.skipped_reason)
+
     def test_keyboard_interrupt_marks_lifecycle_failed(self):
         with TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "run"
@@ -477,3 +506,37 @@ class SpawnContextTests(unittest.TestCase):
                 result = _run(tmp, run_dir, sandbox=sandbox)
             self.assertTrue(result.ran)
         self.assertIs(seen.get("mint_aws_credentials"), True)
+
+
+class MissingValidationReportTests(unittest.TestCase):
+    """missing_validation_report — the /validate outcome probe. The
+    pipeline's terminal artifact (a non-empty validation-report.md) is
+    the success evidence; a child exit status of 0 is not (an in-child
+    pipeline crash leaves the CC child free to narrate the failure and
+    exit cleanly)."""
+
+    def test_missing_report_is_an_error(self):
+        with TemporaryDirectory() as tmp:
+            reason = missing_validation_report(Path(tmp))
+        self.assertIsNotNone(reason)
+        self.assertIn("produced no verdicts", reason)
+
+    def test_empty_report_is_an_error(self):
+        with TemporaryDirectory() as tmp:
+            (Path(tmp) / "validation-report.md").write_text("")
+            self.assertIsNotNone(missing_validation_report(Path(tmp)))
+
+    def test_nonempty_report_is_success(self):
+        with TemporaryDirectory() as tmp:
+            (Path(tmp) / "validation-report.md").write_text("# Report\n")
+            self.assertIsNone(missing_validation_report(Path(tmp)))
+
+    def test_probe_reason_is_not_a_sandbox_setup_skip(self):
+        """The zero-verdict reason must never classify as a
+        sandbox-setup skip: setup skips are retried once (unbilled),
+        while a zero-verdict pass already spent its budget and must
+        not be re-dispatched by that machinery."""
+        from core.orchestration.skill_dispatch import is_sandbox_setup_skip
+        with TemporaryDirectory() as tmp:
+            reason = missing_validation_report(Path(tmp))
+        self.assertFalse(is_sandbox_setup_skip(reason))
