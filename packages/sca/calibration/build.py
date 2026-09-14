@@ -991,7 +991,12 @@ def _write_if_changed(
                 source=source, written=False, error=None,
                 record_count=record_count,
             )
-    path.write_bytes(new_bytes)
+    # Atomic (tmp + rename), like every other calibration writer: a
+    # crash mid-write left torn JSON that the ground-truth loaders
+    # warn-and-skip — silently dropping a whole label source from
+    # validation/refit until the next weekly refresh.
+    from core.atomic_fs import write_bytes_atomically
+    write_bytes_atomically(path, new_bytes)
     return BuildResult(
         source=source, written=True, error=None,
         record_count=record_count,

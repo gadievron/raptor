@@ -733,3 +733,31 @@ def test_build_vulnrichment_skips_oversized_member(
     )
     assert set(data["signals"]) == {"CVE-2024-0001", "CVE-2024-0002"}
     assert result.record_count == 2
+
+
+def test_write_if_changed_writes_atomically(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Signal files are ground truth for validation/refit — a torn
+    write is silently warn-and-skipped by the loaders, dropping a
+    whole label source. The write must go through the atomic
+    (tmp + rename) path like every other calibration writer."""
+    import core.atomic_fs as atomic_fs
+
+    calls: list = []
+    real = atomic_fs.write_bytes_atomically
+
+    def _spy(path, data, **kwargs):
+        calls.append(Path(path))
+        return real(path, data, **kwargs)
+
+    monkeypatch.setattr(atomic_fs, "write_bytes_atomically", _spy)
+    out = tmp_path / "kev_signals.json"
+    r = _write_if_changed(
+        out, {"_source": {"fetched_at": "t"}, "rows": [1]},
+        source="kev", record_count=1,
+    )
+    assert r.written is True
+    assert calls == [out]
+    import json as _json
+    assert _json.loads(out.read_text())["rows"] == [1]
