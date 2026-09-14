@@ -22,6 +22,8 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -359,6 +361,11 @@ class TestSmtPathValidatorAnonMap:
     when it bubbles up to /exploit."""
 
     def _check(self, condition_text):
+        # These three tests drive the REAL solver ("feasible is
+        # True") — without z3 the substrate degrades to
+        # feasible=None/smt_available=False, which would hard-fail
+        # rather than skip (z3 is a documented optional dep).
+        pytest.importorskip("z3")
         from core.smt_solver.path_feasibility import (
             check_path_feasibility, PathCondition,
         )
