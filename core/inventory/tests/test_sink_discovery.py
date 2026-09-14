@@ -646,6 +646,12 @@ class TestJvmMobileLanguagesEnumerated:
         assert {"kotlin", "scala", "swift"} <= langs
 
     def test_kotlin_process_builder_is_a_direct_sink(self, tmp_path):
+        # The Kotlin walker is tree-sitter-only (no regex fallback):
+        # without the runtime + grammar wheel the file degrades to an
+        # empty call graph and contributes zero sinks by design. Skip
+        # on bare installs (CI's fast tier has no tree-sitter).
+        pytest.importorskip("tree_sitter")
+        pytest.importorskip("tree_sitter_kotlin")
         from core.inventory.sink_discovery import discover_sinks_for_target
 
         target = self._target(tmp_path)
