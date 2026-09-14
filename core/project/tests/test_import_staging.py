@@ -173,3 +173,40 @@ class TestSuccessfulImportShape(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCrossProjectDirCollision(unittest.TestCase):
+    def test_force_import_refuses_before_destroying_other_project(self):
+        # The import's target dir is the REGISTERED output dir of a
+        # DIFFERENT project. Pre-fix, --force rmtree'd that tree and
+        # renamed the staging in BEFORE create()'s shared-dir refusal
+        # fired — destroy-then-fail, registry left inconsistent. The
+        # refusal must precede any destruction.
+        with TemporaryDirectory() as td:
+            d = Path(td)
+            zip_path = _make_archive(d)
+            projects_dir = d / "projects"
+            output_base = d / "out"
+            victim_dir = output_base / "myproj"
+            victim_dir.mkdir(parents=True)
+            sentinel = victim_dir / "paid-run.json"
+            sentinel.write_text("victim data")
+            mgr = ProjectManager(projects_dir)
+            mgr.create(
+                "victim", str(d), output_dir=str(victim_dir),
+                resolve_target=False,
+            )
+
+            with self.assertRaises(ValueError) as cm:
+                import_project(zip_path, projects_dir,
+                               output_base=output_base, force=True)
+            self.assertIn("victim", str(cm.exception))
+            # Nothing destroyed, registry consistent.
+            self.assertTrue(sentinel.exists())
+            self.assertEqual(sentinel.read_text(), "victim data")
+            self.assertIsNotNone(mgr.load("victim"))
+            self.assertIsNone(mgr.load("myproj"))
+            # No staging residue.
+            leftovers = [p for p in output_base.iterdir()
+                         if p.name.startswith(".import-")]
+            self.assertEqual(leftovers, [])

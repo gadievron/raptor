@@ -978,6 +978,26 @@ def import_project(zip_path: Path, projects_dir: Path,
     # and demoted; the pre-existing tree (registered project with
     # --force, or an unregistered orphan the operator --force'd over)
     # is removed at the last moment before the atomic rename.
+    #
+    # Refusal must PRECEDE destruction: create()'s shared-dir refusal
+    # fires only after the old tree is rmtree'd and the staging
+    # renamed in — reaching it then has already destroyed ANOTHER
+    # project's registered output and left the registry inconsistent
+    # (import name unregistered, dir holding the imported tree). Check
+    # ownership up front and fail closed while nothing has been
+    # touched.
+    other_owner = mgr._output_dir_owner(
+        str(output_dir), exclude=project_name,
+    )
+    if other_owner:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise ValueError(
+            f"Refusing import: output dir {output_dir} already belongs "
+            f"to project '{other_owner}' — two projects must never "
+            f"share an output directory (clean/purge on one would "
+            f"delete the other's runs). Import under a different name "
+            f"or move that project first."
+        )
     orphaned_output = None
     try:
         if existing and force:
