@@ -363,7 +363,15 @@ def test_demoted_block_network_gets_percall_tcp_deny(
     on the plain lane WITH a per-call Landlock TCP-connect deny
     (mirroring the construction-time degraded arm), loudly."""
     from core.sandbox import preexec as _preexec_mod
+    from core.sandbox import state
     _ctx = _trusted_block_network_demotion(monkeypatch, tmp_path, abi=4)
+    # The "falling back to Landlock TCP-connect deny" WARNING asserted
+    # below is once-per-PROCESS (warn_once latch); an earlier demoted
+    # call anywhere in the same process — including tests from
+    # directories whose conftest doesn't snapshot the sandbox warn-once
+    # flags — would eat the once under shuffled orders. Own the latch;
+    # this directory's autouse state guard restores the pre-test value.
+    state.reset_warn_once("_demoted_tcp_deny_warned")
     built: list[dict] = []
     real_make = _ctx._make_preexec_fn
 
