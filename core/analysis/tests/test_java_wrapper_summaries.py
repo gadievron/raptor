@@ -362,3 +362,21 @@ class TestCrossClassAndDepth2:
         assert cfg is not None
         assert not synthetic_wrapper_bindings_java(
             cfg, src, (11, 13), "CWE-79", "java")
+
+
+class TestCommentsInHelperBody:
+    def test_line_comment_does_not_refuse_the_summary(self):
+        # Comments are NAMED tree-sitter nodes; an unfiltered stmts
+        # list refused the whole summary with "unsupported body
+        # statement: line_comment" (the conduit twin already
+        # filters). FP-direction precision loss only.
+        src = _src(
+            "    private static String esc(String s) {\n"
+            "        // sanitize for HTML context\n"
+            "        String t = Encode.forHtml(s);\n"
+            "        /* block note */\n"
+            "        return t;\n"
+            "    }\n",
+            "        String y = esc(x);\n        out.println(y);\n")
+        summaries, _ = _summaries(src)
+        assert ("T", "esc", 1) in summaries

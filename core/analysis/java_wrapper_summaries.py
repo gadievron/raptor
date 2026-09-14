@@ -190,7 +190,12 @@ def _straight_line_locals(body, params: tuple[str, ...],
     or raise :class:`_Refused`. ``strict_state`` (cross-class
     instance helpers) forbids bare assignments entirely — an
     undeclared assignment target could be a field."""
-    stmts = [c for c in body.children if c.is_named]
+    # Comments are NAMED nodes in tree-sitter-java: without the
+    # filter any comment inside a helper body refused the summary
+    # ("unsupported body statement: line_comment") — the conduit twin
+    # (_walk_conduit_body) already filters them.
+    stmts = [c for c in body.children
+             if c.is_named and c.type not in _COMMENTS]
     if len(stmts) > _MAX_BODY_STATEMENTS:
         msg = "body exceeds statement cap"
         raise _Refused(msg)
