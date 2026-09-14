@@ -150,10 +150,11 @@ def load_from_paths(
     Duplicate ``finding_id`` across files is allowed and preserved in
     the RETURNED LIST — the loader stays policy-free. Consumers apply
     the panel contract: one vote per ``(finding_id, model)``, FIRST
-    record in path order wins, later duplicates counted (see
-    ``dawid_skene.estimate``'s ``duplicates_ignored`` and the
-    same-model dedupe in ``calibrated_aggregation``) — counting a
-    repeat appearance of the same model would double-weight one voter.
+    record in path order wins; later duplicates are DROPPED as votes
+    and only tallied as ignored (see ``dawid_skene.estimate``'s
+    ``duplicates_ignored`` counter and the same-model dedupe in
+    ``calibrated_aggregation``) — counting a repeat appearance of the
+    same model as a vote would double-weight one voter.
     Different MODELS re-analysing the same finding across runs all
     count; the same model re-analysing it does not add a second vote.
     """

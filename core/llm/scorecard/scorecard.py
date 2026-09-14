@@ -778,8 +778,13 @@ class ModelScorecard:
             # read landing between our lock release and the check
             # below could flip it in either direction — granting
             # trust from an unverifiable read, or clamping a
-            # verifiable one. The flock serialises reads, so inside
-            # the scope the flag is exactly THIS read's verdict.
+            # verifiable one. The read flock is SHARED (LOCK_SH), so
+            # concurrent same-instance readers can interleave — but
+            # they all parse the same locked-out-of-write bytes and
+            # compute the same verdict, so inside the scope the flag
+            # still equals THIS read's verdict; only a WRITE (which
+            # takes LOCK_EX) could change it, and writes are excluded
+            # while we hold the shared lock.
             trusted = self._last_read_trusted
         if cell is None:
             return Policy.LEARNING

@@ -24,6 +24,11 @@ The slash command is for **research and ops**, not a routing API. The actual rou
 /scorecard pin <decision_class> --model <m> --as <short-circuit|fall-through|auto>
 /scorecard unpin <decision_class> --model <m>
 /scorecard reset [<decision_class>] [--model <m>] [--older-than-days <n>] [--all]
+/scorecard adopt [--file <json>]        # re-bless an unverified sidecar (pre-MAC history
+                                        #   or a quarantined <sidecar>.<ts>.unverified file)
+                                        #   by stamping it with this install's integrity
+                                        #   token — operator asserts trust in the bytes;
+                                        #   inspect the JSON first
 ```
 
 **On a bare `/scorecard` (no args), run `libexec/raptor-llm-scorecard` directly — the CLI now defaults to `list`. Do NOT deliberate or interpret; treat the input as a natural-language question only when the user actually types one.** (Keeps `/scorecard` instant instead of pausing on an LLM round-trip.)

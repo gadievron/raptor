@@ -1113,7 +1113,14 @@ natural-language questions about model competence.
 /scorecard pin <decision_class> --model <model> --as <mode>
 /scorecard unpin <decision_class> --model <model>
 /scorecard reset [<decision_class>] [--model <model>]
+/scorecard adopt [--file <json>]
 ```
+
+`adopt` re-blesses an unverified sidecar — genuine pre-MAC history or a
+quarantined `<sidecar>.<timestamp>.unverified` file — by stamping it with
+this install's integrity token. The machinery never re-stamps unverified
+content on its own; adoption is the operator asserting trust in the bytes,
+so inspect the JSON before running it.
 
 **List flags** (default subcommand)
 

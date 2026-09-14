@@ -107,7 +107,14 @@ def record_consensus_outcomes(
             if v is None:
                 # Result missing the verdict (handler error / schema
                 # failure); can't classify against majority, skip
-                # this model for this finding.
+                # this model for this finding. Same abstention rule
+                # as ``tally_verdict_votes`` in
+                # packages/llm_analysis/correlation.py — kept local
+                # deliberately (a core/llm producer importing
+                # packages.llm_analysis would invert the layering,
+                # and per-model attribution needs the verdict map,
+                # not just counts); do NOT "unify" this onto the
+                # shared tally without solving both.
                 continue
             verdicts[str(model)] = bool(v)
         if len(verdicts) < 2:
