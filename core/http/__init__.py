@@ -78,6 +78,15 @@ class SizeLimitExceeded(HttpError):
     """Raised when a response exceeds max_bytes before we finish reading."""
 
 
+class StreamWallclockExceeded(HttpError):
+    """Raised when a streamed body exceeds the wallclock cap
+    (slowloris defence). An :class:`HttpError` subclass so every
+    consumer's existing ``except HttpError`` degradation path catches
+    the abort — a builtin ``TimeoutError`` here escaped the OCI blob
+    pull's RegistryError translation and web_fetch's best-effort body
+    fallback, crashing exactly the paths the cap protects."""
+
+
 @dataclass(frozen=True)
 class Response:
     """Lightweight HTTP response wrapper.
@@ -323,7 +332,10 @@ class HttpClient(Protocol):
         non-zero values raise :class:`ValueError` (mid-stream failures
         aren't transparently resumable). Cumulative size cap is
         enforced across yielded chunks; exceeding ``max_bytes`` raises
-        :class:`SizeLimitExceeded` mid-stream.
+        :class:`SizeLimitExceeded` mid-stream, and exceeding the
+        backend's wallclock cap raises
+        :class:`StreamWallclockExceeded` — both are
+        :class:`HttpError` subclasses.
         """
         ...
 

@@ -405,6 +405,44 @@ class TestStreamBytes:
                 pass
         resp.release_conn.assert_called_once()  # finally fires on exception
 
+    def test_wallclock_abort_is_httperror(self, monkeypatch):
+        """The slowloris wallclock abort must raise an HttpError
+        subclass: both real consumers (OCI blob pull, web_fetch's
+        best-effort body) wrap iteration in `except HttpError` only —
+        a builtin TimeoutError escaped their degradation entirely on
+        exactly the paths the cap protects."""
+        from core.http import HttpError as _HttpError
+        from core.http import StreamWallclockExceeded
+
+        def _dripping(cs, decode_content=True):
+            while True:
+                yield b"x"
+
+        resp = MagicMock()
+        resp.status = 200
+        resp.headers = {}
+        resp.stream = _dripping
+        resp.release_conn = MagicMock()
+        client = UrllibClient(
+            _http=MagicMock(request=MagicMock(return_value=resp)),
+        )
+        # Advance the stream's clock past the cap deterministically:
+        # the generator reads time.monotonic per chunk.
+        import time as _stdlib_time
+        real_monotonic = _stdlib_time.monotonic
+        clock = {"skew": 0.0}
+        monkeypatch.setattr(
+            _stdlib_time, "monotonic",
+            lambda: real_monotonic() + clock["skew"],
+        )
+        with pytest.raises(StreamWallclockExceeded) as exc_info:
+            for _ in client.stream_bytes(
+                "https://example.com/slow", total_timeout=5,
+            ):
+                clock["skew"] += 10.0  # a chunk "took" 10s
+        assert isinstance(exc_info.value, _HttpError)
+        resp.release_conn.assert_called_once()
+
     def test_url_validation_at_call_time(self):
         """URL validation must fail at call time, not deferred to
         first iteration — the generator-split must preserve fail-fast."""

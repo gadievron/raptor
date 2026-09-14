@@ -81,6 +81,7 @@ from core.http import (
     NotModified,
     Response,
     SizeLimitExceeded,
+    StreamWallclockExceeded,
 )
 
 logger = logging.getLogger(__name__)
@@ -1040,7 +1041,7 @@ class UrllibClient:
                         f"wallclock cap of {wallclock_cap}s "
                         f"(slowloris defence)"
                     )
-                    raise TimeoutError(msg)
+                    raise StreamWallclockExceeded(msg)
                 yield chunk
         finally:
             # Same bounded-drain-then-release pattern as
