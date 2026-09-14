@@ -157,6 +157,14 @@ def _load_override_config() -> list[str] | None:
 
     Future fields can be added (commit history records schema
     evolution). Unknown fields are tolerated.
+
+    ``None`` means UNCONFIGURED (file absent, malformed, or the key
+    missing / not a list) — the caller falls through to the next
+    resolution layer. A configured list is returned as-is, INCLUDING
+    when it sanitises to empty: ``{"proxy_hosts": []}`` is an explicit
+    operator deny-all, and collapsing it to None silently re-granted
+    the default GHCR hosts the operator just denied (the exact
+    inversion the cc_proxy_hosts sibling was fixed for).
     """
     if not _OVERRIDE_CONFIG_PATH.exists():
         return None
@@ -175,7 +183,7 @@ def _load_override_config() -> list[str] | None:
         if isinstance(h, str) and h and h not in seen:
             seen.add(h)
             result.append(h)
-    return result or None
+    return result
 
 
 def _calibrated_proxy_hosts(

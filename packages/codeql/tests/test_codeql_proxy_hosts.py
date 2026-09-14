@@ -225,17 +225,27 @@ class TestOverrideConfig:
         monkeypatch.setattr(mod, "_OVERRIDE_CONFIG_PATH", config_path)
         assert proxy_hosts_for_codeql() == ["a.example", "b.example"]
 
-    def test_empty_override_falls_back(
+    def test_empty_override_is_operator_deny_all(
         self, isolated_env, monkeypatch, tmp_path, no_calibrate,
     ):
         config_path = tmp_path / "codeql-proxy-hosts.json"
         config_path.write_text(json.dumps({"proxy_hosts": []}))
         monkeypatch.setattr(mod, "_OVERRIDE_CONFIG_PATH", config_path)
-        # Empty override is a misconfig — fall through rather than
-        # allowlisting nothing (which would deny every pack
-        # download). Same shape as cc_proxy_hosts.
-        hosts = proxy_hosts_for_codeql()
-        assert _hostname_in(hosts, "ghcr.io")
+        # {"proxy_hosts": []} is an explicit operator deny-all;
+        # collapsing it to None silently re-granted the default GHCR
+        # hosts the operator just denied. Same semantics as the fixed
+        # cc_proxy_hosts sibling: only absent/malformed falls through.
+        assert proxy_hosts_for_codeql() == []
+
+    def test_all_entries_invalid_override_is_still_deny_all(
+        self, isolated_env, monkeypatch, tmp_path, no_calibrate,
+    ):
+        # A configured list whose entries all sanitise away is still a
+        # CONFIGURED (deny-all) list, not an unconfigured fall-through.
+        config_path = tmp_path / "codeql-proxy-hosts.json"
+        config_path.write_text(json.dumps({"proxy_hosts": [7, "", None]}))
+        monkeypatch.setattr(mod, "_OVERRIDE_CONFIG_PATH", config_path)
+        assert proxy_hosts_for_codeql() == []
 
     def test_malformed_override_falls_back(
         self, isolated_env, monkeypatch, tmp_path, no_calibrate,
