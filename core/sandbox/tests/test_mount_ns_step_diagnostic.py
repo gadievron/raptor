@@ -40,10 +40,13 @@ _MOUNT_NS = Path(__file__).resolve().parent.parent / "mount_ns.py"
 
 
 def _read_extra_ro_block() -> str:
-    """Return the slice of mount_ns.py that handles extra_ro_paths."""
+    """Return the slice of mount_ns.py that handles extra_ro_paths —
+    the per-entry bind helper (the plan itself is normalised and
+    ancestor-ordered before step 8; every entry funnels through this
+    helper, so the step-diagnostic machinery lives here)."""
     src = _MOUNT_NS.read_text()
-    start = src.index("Bind any extra read-only paths")
-    end = src.index("# 9. pivot_root")
+    start = src.index("def _bind_one_extra_ro")
+    end = src.index("# Split the plan")
     return src[start:end]
 
 

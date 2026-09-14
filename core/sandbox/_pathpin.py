@@ -82,7 +82,31 @@ import errno
 import os
 import stat as _stat
 
-__all__ = ["is_per_process_procfs", "open_pinned"]
+__all__ = ["canonical_bind_path", "is_per_process_procfs", "open_pinned"]
+
+
+def canonical_bind_path(path: str) -> str:
+    """``os.path.abspath`` plus leading-double-slash collapse.
+
+    POSIX reserves an exactly-two-slash prefix as implementation-
+    defined, so ``abspath`` (and ``normpath``) PRESERVE it: ``//tmp``
+    stays ``//tmp`` while naming the same file as ``/tmp``. Every
+    exact-string policy comparison over bind paths — the per-ns
+    shadow-path refusal, ancestor classification, masked-path
+    refusal, target/output identity checks — must therefore run on
+    ONE spelling, or the two-slash form walks around the policy
+    (e.g. ``//tmp`` in readable_paths binding HOST /tmp over the
+    fresh per-sandbox tmpfs). Same class as the collapse inside
+    :func:`is_per_process_procfs` below — centralised here so the
+    next path consumer doesn't re-grow the hole.
+
+    Fork-safe (str ops + ``os.path`` only), same contract as the rest
+    of this module.
+    """
+    path = os.path.abspath(path)
+    if path.startswith("//"):
+        path = "/" + path.lstrip("/")
+    return path
 
 # procfs magic links whose resolution is a property of the WALKING
 # process: /proc/self and /proc/thread-self name a different pid dir

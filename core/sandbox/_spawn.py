@@ -75,6 +75,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from . import _pathpin, state
+from ._pathpin import canonical_bind_path as _canonical_bind_path
 from ._pathpin import is_per_process_procfs as _is_per_process_procfs
 from ._fork_safe_warn import warn_post_fork
 from ._unix_scope import UnixScopeSupervisor as _UnixScopeSupervisor
@@ -880,8 +881,10 @@ def _pin_bind_sources(
     held fd also keeps the validation-time inode allocated, so its
     (st_dev, st_ino) identity cannot be recycled by a replacement.
 
-    Keys are ``os.path.abspath`` of the caller path (matching the
-    child-side absolutisation in ``setup_mount_ns``). ``target`` /
+    Keys are ``canonical_bind_path`` of the caller path — abspath
+    plus leading-double-slash collapse, matching the child-side
+    canonicalisation in ``setup_mount_ns`` (a ``//``-spelled path
+    must find its pin under the same key the child looks up). ``target`` /
     ``output`` / ``rootfs`` pins are REQUIRED — a failure to pin (the
     path vanished, or a component swapped to a symlink mid-walk)
     raises the corresponding OSError, before any fork happens; the
@@ -910,14 +913,14 @@ def _pin_bind_sources(
         for req in (target, output, rootfs):
             if not req:
                 continue
-            key = os.path.abspath(req)
+            key = _canonical_bind_path(req)
             if key in fds:
                 continue
             fds[key] = open_pinned(os.path.realpath(key))
         for extra in (readable_paths or ()):
             if not extra:
                 continue
-            key = os.path.abspath(extra)
+            key = _canonical_bind_path(extra)
             if key in fds:
                 continue
             if _is_per_process_procfs(key):
