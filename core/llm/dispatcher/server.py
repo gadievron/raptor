@@ -57,6 +57,7 @@ bytes upstream.
 
 from __future__ import annotations
 
+import contextlib
 import http.server
 import json
 import logging
@@ -850,7 +851,24 @@ class LLMDispatcher:
         self._loopback_lock = threading.Lock()
 
         # L1 — filesystem isolation.
-        self._sock_dir = Path(tempfile.mkdtemp(prefix=f"raptor-llm-{run_id}-"))
+        # AF_UNIX sun_path tops out around 108 bytes: a deep TMPDIR
+        # (nested session/pytest scratch layers) pushes
+        # ``<dir>/llm-child.sock`` past it and bind() fails at init.
+        # Fall back to the system-global /tmp (short by construction)
+        # with the SAME 0700 + owner-marker discipline; the run-id
+        # part of the prefix is clamped so a pathological run_id can't
+        # re-create the overflow. Residual: a SIGKILL'd owner's
+        # fallback dir is reclaimed by the dead-owner sweep only when
+        # gettempdir() is /tmp — bounded by the owner marker either
+        # way.
+        _sock_prefix = f"raptor-llm-{run_id[:40]}-"
+        sock_dir = Path(tempfile.mkdtemp(prefix=_sock_prefix))
+        if len(str(sock_dir / "llm-child.sock").encode()) > 100:
+            fallback = Path(tempfile.mkdtemp(prefix=_sock_prefix, dir="/tmp"))
+            with contextlib.suppress(OSError):
+                os.rmdir(sock_dir)
+            sock_dir = fallback
+        self._sock_dir = sock_dir
         # 0o700 = owner-only — the socket lives here and must not be
         # group/other-readable on a multi-user host.
         os.chmod(self._sock_dir, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions

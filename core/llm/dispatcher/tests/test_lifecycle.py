@@ -318,3 +318,39 @@ class TestAuditTrailHardening:
             assert getattr(d, "_audit_warned", False) is True
         finally:
             d.shutdown()
+
+
+class TestSocketPathBudget:
+    def test_deep_tmpdir_still_binds(self, monkeypatch, tmp_path):
+        """AF_UNIX sun_path tops out around 108 bytes: a deep TMPDIR
+        (nested session/pytest scratch layers) used to push
+        <sock_dir>/llm-child.sock past the limit and bind() failed at
+        dispatcher init. The fallback must land the socket somewhere
+        bindable."""
+        import tempfile as _tempfile
+
+        from core.llm.dispatcher.auth import CredentialStore
+        from core.llm.dispatcher.server import LLMDispatcher
+
+        creds = CredentialStore.__new__(CredentialStore)
+        creds._keys = {}
+
+        deep = tmp_path
+        for i in range(12):
+            deep = deep / f"layer-{i:02d}"
+        deep.mkdir(parents=True)
+        monkeypatch.setenv("TMPDIR", str(deep))
+        _tempfile.tempdir = None  # re-derive gettempdir from env
+        try:
+            d = LLMDispatcher(
+                run_id="deep-tmpdir-e2e",
+                creds=creds,
+                audit_path=tmp_path / "audit.jsonl",
+            )
+            try:
+                assert d.socket_path.exists()
+                assert len(str(d.child_socket_path).encode()) <= 104
+            finally:
+                d.shutdown()
+        finally:
+            _tempfile.tempdir = None
