@@ -14,9 +14,58 @@ from packages.sca.platform_matrix.glibc_db import (
     lookup_runner_libc,
 )
 from packages.sca.platform_matrix.matrix import (
+    PlatformPair,
     ProjectPlatformMatrix,
     _walk_devcontainer,
 )
+
+
+# ---------------------------------------------------------------------------
+# PlatformPair identity — source is diagnostic-only
+# ---------------------------------------------------------------------------
+
+def test_pair_identity_ignores_source() -> None:
+    """Two pairs differing only in ``source`` are the same platform:
+    equal AND hash-equal, so set membership dedups them. With source
+    in the identity, N declaration sites of one (arch, libc) made N
+    'distinct' pairs and the compat checker emitted N findings with
+    identical finding_ids."""
+    libc = LibcVersion("glibc", (2, 36))
+    a = PlatformPair(arch="x86_64", libc=libc,
+                     source="Dockerfile FROM debian:bookworm")
+    b = PlatformPair(arch="x86_64", libc=libc,
+                     source="GHA runs-on: ubuntu-22.04")
+    assert a == b
+    assert hash(a) == hash(b)
+
+
+def test_matrix_dedups_same_pair_from_many_sources() -> None:
+    """The matrix keeps ONE pair per genuine (arch, libc) combo and
+    retains the FIRST-discovered source (set.add keeps the existing
+    element on equality) so reports still say where it came from."""
+    libc = LibcVersion("glibc", (2, 36))
+    matrix = ProjectPlatformMatrix()
+    matrix.add(PlatformPair(arch="x86_64", libc=libc,
+                            source="first-seen"))
+    matrix.add(PlatformPair(arch="x86_64", libc=libc,
+                            source="later-duplicate"))
+    assert len(matrix) == 1
+    [pair] = matrix
+    assert pair.source == "first-seen"
+
+
+def test_pair_identity_still_distinguishes_real_axes() -> None:
+    """compare=False on source must not collapse genuinely different
+    platforms: arch, libc, and macos_version still participate."""
+    libc = LibcVersion("glibc", (2, 36))
+    base = PlatformPair(arch="x86_64", libc=libc, source="s")
+    assert base != PlatformPair(arch="aarch64", libc=libc, source="s")
+    assert base != PlatformPair(
+        arch="x86_64", libc=LibcVersion("glibc", (2, 39)), source="s",
+    )
+    assert base != PlatformPair(
+        arch="x86_64", libc=None, source="s", macos_version=(13, 0),
+    )
 
 
 # ---------------------------------------------------------------------------

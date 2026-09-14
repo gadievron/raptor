@@ -87,7 +87,16 @@ class PlatformPair:
     # "GHA runs-on: ubuntu-22.04", etc.). Not used by the compat
     # checker; surfaces in operator-facing reports so a flagged
     # incompat says WHERE the platform came from.
-    source: str = ""
+    #
+    # ``compare=False``: the source is diagnostic-only and must not
+    # participate in eq/hash. With it in the identity, N declaration
+    # sites of the same (arch, libc) made N "distinct" pairs in the
+    # ProjectPlatformMatrix set, and check_compat emitted one verdict
+    # — and one finding with an IDENTICAL finding_id — per copy.
+    # Since ``set.add`` keeps the existing element on equality, the
+    # FIRST-discovered source (module-docstring walk order) is the
+    # one retained and reported.
+    source: str = field(default="", compare=False)
     # macOS minimum version the project accepts wheels against. A
     # project on a macos-13 runner has macos_version=(13, 0); a wheel
     # tagged ``macosx_14_0_arm64`` is too new and gets refused. ``None``

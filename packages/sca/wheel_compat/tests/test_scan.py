@@ -85,6 +85,47 @@ def test_z3_solver_4_16_0_0_high_finding_with_recommendation(
     assert "Recommended: pin z3-solver==4.15.0.0" in f.detail
 
 
+def test_same_pair_from_many_sources_yields_one_finding(
+    tmp_path: Path,
+) -> None:
+    """A platform declared at many sites (every K8s manifest, GHA
+    workflow, Dockerfile naming the same base) is ONE platform: the
+    scan emits ONE finding per genuine (arch, libc) pair, not one
+    per declaration site. The duplicates all carried the same
+    finding_id — pure noise multiplication downstream."""
+    from packages.sca.wheel_compat.compat import clear_recommendation_cache
+    clear_recommendation_cache()
+    pypi = _StubPyPI({
+        "z3-solver": {
+            "releases": {
+                "4.16.0.0": [
+                    {"filename":
+                     "z3_solver-4.16.0.0-py3-none-manylinux_2_38_aarch64.whl"},
+                ],
+            },
+        },
+    })
+    libc = LibcVersion("glibc", (2, 36))
+    matrix = ProjectPlatformMatrix()
+    for i in range(55):
+        matrix.add(PlatformPair(
+            arch="aarch64", libc=libc, source=f"manifest-{i}.yaml",
+        ))
+    assert len(matrix) == 1, "matrix must dedup source-only variants"
+
+    findings = evaluate_platform_compat(
+        [_dep("z3-solver", "4.16.0.0")], target=tmp_path,
+        pypi_client=pypi, platform_matrix=matrix,
+    )
+    assert len(findings) == 1, (
+        f"expected one finding for one genuine pair, got "
+        f"{len(findings)}"
+    )
+    # The surviving pair still reports a source (first-seen wins).
+    [pair] = matrix
+    assert pair.source == "manifest-0.yaml"
+
+
 def test_pure_python_pin_no_finding(tmp_path: Path) -> None:
     """``any``-tagged wheels satisfy every platform pair."""
     pypi = _StubPyPI({
