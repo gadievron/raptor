@@ -496,20 +496,27 @@ def _merge_expanded_view_sinks(
         r"\b(" + "|".join(re.escape(t) for t in c_targets) + r")\s*\("
     )
 
+    # The walk runs over the SCANNED (untrusted) target in the
+    # unsandboxed parent: use the symlink-safe capped enumerator (a
+    # hostile ``dir -> /`` symlink must not steer the walk across the
+    # host fs) and cap each read (a planted multi-GB .c file must not
+    # be loaded whole). Sorted for deterministic candidate selection
+    # under the file cap, as the rglob-sorted predecessor was.
+    from core.inventory._walk import iter_regular_files
+    from core.source import read_text_capped
+
     candidates: list[tuple] = []
     try:
-        source_files = sorted(target_path.rglob("*"))
+        source_files = sorted(iter_regular_files(target_path, _C_SUFFIXES))
     except OSError:
         return 0
     for f in source_files:
         if len(candidates) >= EXPANDED_SINK_FILE_CAP:
             break
-        if f.suffix not in _C_SUFFIXES or not f.is_file():
+        got = read_text_capped(f)
+        if got is None:
             continue
-        try:
-            raw = f.read_text(errors="replace")
-        except OSError:
-            continue
+        raw = got[0]
         if _MACRO_CALL_RE.search(raw):
             candidates.append((str(f.relative_to(target_path)), raw))
 

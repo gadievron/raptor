@@ -747,3 +747,62 @@ class TestMergeIrisSinks:
             context_map, target, extra_sinks=frozenset({"safe_copy"}),
         )
         assert len(context_map["sink_details"]) == n
+
+
+class TestExpandedViewWalkSafety:
+    """The expanded-view candidate walk runs over the UNTRUSTED target
+    in the unsandboxed parent: a hostile directory symlink must not
+    steer it out of the tree (rglob follows dir symlinks on py<=3.12),
+    and a planted huge .c file must not be read whole."""
+
+    def test_dir_symlink_not_followed(self, tmp_path: Path, monkeypatch):
+        import core.audit.preprocessor_view as pv
+        from core.orchestration.context_map_sinks import (
+            _merge_expanded_view_sinks,
+        )
+
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "evil.c").write_text("#define M(x) strcpy(x, x)\nM(d);\n")
+        target = tmp_path / "cproj"
+        target.mkdir()
+        (target / "link").symlink_to(outside)
+
+        seen: list[str] = []
+
+        def _expand(**kw):
+            seen.append(kw.get("file_path"))
+            return None
+
+        monkeypatch.setattr(pv, "expand_translation_unit", _expand)
+        context_map = {"entry_points": [], "sink_details": [], "meta": {}}
+        added = _merge_expanded_view_sinks(context_map, target)
+        assert added == 0
+        assert seen == []  # nothing outside the tree was even considered
+
+    def test_candidate_reads_are_capped(self, tmp_path: Path, monkeypatch):
+        import core.orchestration.context_map_sinks as mod
+
+        target = tmp_path / "cproj"
+        target.mkdir()
+        # A file over the cap: read must be truncated, not loaded whole.
+        (target / "big.c").write_text("#define M(x) x\n" + "y" * 4096)
+
+        captured: dict = {}
+        real = mod.__dict__.get("_merge_expanded_view_sinks")
+        assert real is not None
+
+        from core import source as src_mod
+
+        real_read = src_mod.read_text_capped
+
+        def _capped(path, max_chars=None, **kw):
+            captured["max_chars"] = max_chars
+            return real_read(path) if max_chars is None else real_read(
+                path, max_chars, **kw)
+
+        monkeypatch.setattr(src_mod, "read_text_capped", _capped)
+        context_map = {"entry_points": [], "sink_details": [], "meta": {}}
+        mod._merge_expanded_view_sinks(context_map, target)
+        # The read went through the capped chokepoint.
+        assert "max_chars" in captured
