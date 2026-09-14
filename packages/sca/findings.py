@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from core.cve import EpssClient, KevClient
-from core.cve.vulnrichment import VulnrichmentClient
+from core.cve.vulnrichment import SSVCDecision, VulnrichmentClient
 
 from ._atomic import atomic_write_text
 from .kinds import (
@@ -81,6 +81,24 @@ _DEFAULT_REACHABILITY = Reachability(
 # bounded navigational sample (deterministic: group order).
 _MAX_RELATED_FINDINGS = 25
 
+# Per-scan cap on UNCACHED Vulnrichment SSVC fetches (cache hits are
+# free and never count — repeat scans progressively warm past the
+# line). Trade-off, both directions:
+#   * Higher: more SSVC coverage per cold scan on container-image
+#     targets (10^4+ distro CVE findings), at the cost of wall-clock
+#     and load on raw.githubusercontent.com — each uncached CVE is
+#     one ~50 ms GET, so 1000 across the 8-worker pool is ~10 s cold.
+#   * Lower: faster cold scans, but the SSVC signal degrades to
+#     no-signal on exactly the large scans where per-CVE triage help
+#     matters most, and cache warm-up across runs takes more scans.
+# 1000 keeps non-container scans (typically well under a thousand
+# unique CVEs) fully enriched while bounding a 40k-CVE distro scan's
+# cold cost to seconds instead of hours.
+_SSVC_FETCH_BUDGET = 1000
+# Same worker count as the license-enrichment / registry-metadata
+# scan-wide passes — HTTP-bound, independent GETs.
+_SSVC_FETCH_WORKERS = 8
+
 
 # ---------------------------------------------------------------------------
 # Building VulnFindings
@@ -93,6 +111,8 @@ def build_vuln_findings(
     epss: EpssClient | None = None,
     reachability: dict[str, Reachability] | None = None,
     vulnrichment: VulnrichmentClient | None = None,
+    *,
+    ssvc_fetch_budget: int | None = _SSVC_FETCH_BUDGET,
 ) -> list[VulnFinding]:
     """Combine signal layers into one ``VulnFinding`` per (dep, advisory).
 
@@ -108,6 +128,20 @@ def build_vuln_findings(
             the cold-start eco gap (Cargo / NuGet / Packagist) where
             KEV / EPSS / EDB / MSF / PoC return nothing for the
             majority of advisories. ``None`` skips the SSVC layer.
+        ssvc_fetch_budget: per-scan cap on UNCACHED Vulnrichment
+            fetches (see ``_SSVC_FETCH_BUDGET``); ``None`` = unbounded.
+
+    EPSS and SSVC are fetched in ONE scan-wide pre-pass over the
+    unique CVE ids and only then joined per finding. Container-image
+    scans carry 10^4+ distro CVE findings, each with a CVE-shaped id
+    — fetching inside the per-finding assembly loop issued one EPSS
+    request per finding (the client's 100-id batching never engaged
+    across findings) plus one raw.githubusercontent.com GET per
+    uncached CVE, serially: hours of HTTPS round-trips on a cold
+    cache, and a hammering of two external services. The pre-pass
+    costs ceil(unique/100) EPSS requests and at most
+    ``ssvc_fetch_budget`` parallel Vulnrichment GETs, with identical
+    enrichment data on every finding that gets enriched.
     """
     out: list[VulnFinding] = []
 
@@ -127,6 +161,15 @@ def build_vuln_findings(
     # positive class.  Re-validate API-returned advisories here so
     # both the offline-DB and live-API paths get the same result.
     deduped_results = _filter_fork_tag_false_positives(deps, deduped_results)
+
+    # Scan-wide enrichment pre-pass (post-filter, so dropped groups
+    # cost nothing): collect the unique CVE ids once, fetch EPSS in
+    # batched calls and SSVC on a budgeted parallel pool, then let the
+    # per-finding assembly below join against the in-memory maps.
+    epss_scores, ssvc_map = _prefetch_enrichment(
+        deps, deduped_results, kev=kev, epss=epss,
+        vulnrichment=vulnrichment, ssvc_fetch_budget=ssvc_fetch_budget,
+    )
 
     # First pass: compute related-finding IDs per dep so each finding can
     # carry the cross-references in one shot.
@@ -164,11 +207,114 @@ def build_vuln_findings(
                 this_id=this_id,
                 related_ids=related,
                 kev=kev,
-                epss=epss,
+                epss_scores=epss_scores,
                 reachability=reachability,
-                vulnrichment=vulnrichment,
+                ssvc=ssvc_map,
             ))
     return out
+
+
+def _group_cve_union(group: list[Advisory]) -> list[str]:
+    """Union of CVE-shaped ids across an alias-merged advisory group,
+    first-seen order. The alias-graph grouping merges members whose
+    CVE sets intersect without being identical, so the union (not the
+    representative's own list) is what keeps KEV / EPSS / SSVC
+    enrichment complete. ``cve_ids`` folds in each member's PRIMARY id
+    too — OSV serves CVE-primary records with no self-alias (distro
+    secdb / kernel-CNA), and keying enrichment off aliases alone
+    rendered those ``in_kev=false`` while the exploit-evidence
+    annotation on the same finding (which does read ``osv_id``) said
+    KEV-listed.
+    """
+    union: list[str] = []
+    for a in group:
+        for alias in cve_ids(a):
+            if alias not in union:
+                union.append(alias)
+    return union
+
+
+def _prefetch_enrichment(
+    deps: Sequence[Dependency],
+    deduped_results: dict[str, list[list[Advisory]]],
+    *,
+    kev: KevClient | None,
+    epss: EpssClient | None,
+    vulnrichment: VulnrichmentClient | None,
+    ssvc_fetch_budget: int | None,
+) -> tuple[dict[str, float], dict[str, SSVCDecision]]:
+    """One scan-wide fetch pass over the unique CVE ids.
+
+    Returns ``(epss_scores, ssvc_decisions)`` keyed by CVE id; absent
+    keys mean "no signal" and the per-finding join degrades to the
+    same ``None`` the per-finding fetch produced on a miss.
+
+    EPSS goes through ``EpssClient.scores`` once, so its within-call
+    100-id batching finally engages across findings (a finding carries
+    1-2 CVEs — per-finding calls made every request a singleton).
+
+    SSVC fetches are budget-capped, so the CVE order handed to
+    ``lookup_many`` decides who gets enriched on a cold cache.
+    Priority follows the signal's consumer (``packages/sca/risk.py``
+    applies the SSVC tier only when ``not finding.in_kev`` — for
+    KEV-listed findings the KEV multiplier already dominates and the
+    decision is display-only):
+
+      1. CVEs seen on at least one non-KEV-listed advisory group —
+         where SSVC can change the risk verdict — before KEV-only
+         CVEs. KEV membership comes from the budget-independent KEV
+         catalog, so this band split is not steerable by advisory
+         content, and "skipping" a KEV CVE hides nothing: ``in_kev``
+         is computed regardless.
+      2. Within a band: highest group-maximum severity first. The
+         group combine is conservative (a crafted advisory can only
+         RAISE its own group's severity, promoting scrutiny of its
+         own CVEs — it cannot demote a victim group).
+      3. Tie-breaks: higher EPSS first (external FIRST.org signal),
+         then lexicographic CVE id for determinism.
+    """
+    unique_cves: list[str] = []
+    # cve -> (kev_band, severity_rank); band 0 = seen on a non-KEV
+    # group, band 1 = KEV-listed groups only.
+    priority: dict[str, tuple[int, int]] = {}
+    for d in deps:
+        for group in deduped_results.get(d.key()) or []:
+            cves = _group_cve_union(group)
+            if not cves:
+                continue
+            sev = max(
+                _SEVERITY_RANK[_severity_for_advisory(a)] for a in group
+            )
+            band = 1 if (kev and any(kev.contains(c) for c in cves)) else 0
+            for c in cves:
+                known = priority.get(c)
+                if known is None:
+                    unique_cves.append(c)
+                    priority[c] = (band, sev)
+                else:
+                    priority[c] = (min(known[0], band), max(known[1], sev))
+
+    epss_scores: dict[str, float] = {}
+    if epss and unique_cves:
+        epss_scores = epss.scores(unique_cves)
+
+    ssvc_map: dict[str, SSVCDecision] = {}
+    if vulnrichment is not None and unique_cves:
+        ordered = sorted(
+            unique_cves,
+            key=lambda c: (
+                priority[c][0],
+                -priority[c][1],
+                -epss_scores.get(c, 0.0),
+                c,
+            ),
+        )
+        ssvc_map = vulnrichment.lookup_many(
+            ordered,
+            fetch_budget=ssvc_fetch_budget,
+            max_workers=_SSVC_FETCH_WORKERS,
+        )
+    return epss_scores, ssvc_map
 
 
 def _filter_fork_tag_false_positives(
@@ -397,9 +543,9 @@ def _assemble_finding(
     this_id: str,
     related_ids: list[str],
     kev: KevClient | None,
-    epss: EpssClient | None,
+    epss_scores: dict[str, float],
     reachability: dict[str, Reachability] | None,
-    vulnrichment: VulnrichmentClient | None = None,
+    ssvc: dict[str, SSVCDecision],
 ) -> VulnFinding:
     """Assemble one finding from an alias-merged advisory ``group``.
 
@@ -411,35 +557,27 @@ def _assemble_finding(
     smallest-applicable fix. A crafted advisory sharing a real CVE
     alias can therefore add scrutiny but never defang the genuine
     record's severity, fix version, or summary.
+
+    ``epss_scores`` and ``ssvc`` are the scan-wide prefetched maps
+    from ``_prefetch_enrichment`` — assembly never fetches; a CVE
+    absent from a map is "no signal" for that layer.
     """
-    # Union of CVE-shaped ids across the group, first-seen order. The
-    # alias-graph grouping merges members whose CVE sets intersect
-    # without being identical, so the union (not the representative's
-    # own list) is what keeps KEV / EPSS / SSVC enrichment complete.
-    # ``cve_ids`` folds in each member's PRIMARY id too — OSV serves
-    # CVE-primary records with no self-alias (distro secdb /
-    # kernel-CNA), and keying enrichment off aliases alone rendered
-    # those ``in_kev=false`` while the exploit-evidence annotation on
-    # the same finding (which does read ``osv_id``) said KEV-listed.
-    cve_aliases: list[str] = []
-    for a in group:
-        for alias in cve_ids(a):
-            if alias not in cve_aliases:
-                cve_aliases.append(alias)
+    cve_aliases = _group_cve_union(group)
     in_kev = bool(kev and any(kev.contains(c) for c in cve_aliases))
     epss_score: float | None = None
-    if epss and cve_aliases:
-        scores = epss.scores(cve_aliases)
-        if scores:
-            epss_score = max(scores.values())
+    finding_scores = [
+        epss_scores[c] for c in cve_aliases if c in epss_scores
+    ]
+    if finding_scores:
+        epss_score = max(finding_scores)
     # CISA Vulnrichment SSVC — broadest cross-eco exploitation
     # signal, covering the ~60% of cold-start eco CVEs (Cargo /
     # NuGet / Packagist) that KEV / EPSS / EDB / MSF / PoC skip.
     # Pick the strongest signal across the advisory's CVE aliases:
     # ``active`` > ``poc`` > ``none``. Any miss (CISA hasn't
-    # enriched, or no CVE aliases at all) leaves
-    # ``ssvc_exploitation`` as ``None`` so the risk formula's
-    # "no signal" branch fires.
+    # enriched, over the scan's fetch budget, or no CVE aliases at
+    # all) leaves ``ssvc_exploitation`` as ``None`` so the risk
+    # formula's "no signal" branch fires.
     #
     # ``Automatable`` is captured independently. ``yes`` from
     # ANY alias attributes to the finding — a CVE chain where
@@ -449,11 +587,8 @@ def _assemble_finding(
     # SSVC tier when Exploitation>=poc.
     ssvc_exploitation: str | None = None
     ssvc_automatable: str | None = None
-    if vulnrichment is not None and cve_aliases:
-        decisions = [
-            vulnrichment.lookup(c) for c in cve_aliases
-        ]
-        decisions = [d for d in decisions if d is not None]
+    if cve_aliases:
+        decisions = [ssvc[c] for c in cve_aliases if c in ssvc]
         if any(d.is_active for d in decisions):
             ssvc_exploitation = "active"
         elif any(d.has_exploit for d in decisions):

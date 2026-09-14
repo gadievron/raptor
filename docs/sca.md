@@ -104,7 +104,16 @@ Recognised commands across all four shapes: `pip`, `pipx`, `uv pip`,
 | OSV.dev (`/v1/querybatch`, `/v1/vulns/<id>`) | Advisory and affected ranges | 24h disk |
 | CISA KEV catalogue | Known-exploited filter | 24h disk |
 | FIRST.org EPSS | Exploitation probability | 24h disk |
+| CISA Vulnrichment | SSVC exploitation decision (`active`/`poc`/`none`) | 7d disk (1d for upstream misses) |
 | Per-ecosystem registries | Version listing for fix | 24h disk |
+
+EPSS and Vulnrichment are fetched once per scan over the unique CVE
+set: EPSS in 100-id batches, Vulnrichment SSVC in parallel under a
+per-scan budget of 1000 uncached fetches (container-image scans can
+carry tens of thousands of distro CVE findings). The budget is spent
+on the highest-value CVEs first — non-KEV before KEV-listed, then by
+severity and EPSS; findings past the budget simply show no SSVC
+signal for that run, and later runs pick them up as the cache warms.
 
 Registries supported: PyPI, npm, crates.io, RubyGems,
 Go (proxy.golang.org), Maven Central, Packagist, NuGet, Debian Sources,

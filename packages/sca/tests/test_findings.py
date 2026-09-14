@@ -133,6 +133,14 @@ def test_cve_primary_advisory_gets_kev_epss_ssvc() -> None:
         def lookup(self, cve: str):
             return FakeDecision() if cve == "CVE-2024-31337" else None
 
+        def lookup_many(self, cves, *, fetch_budget=None, max_workers=8):
+            out = {}
+            for c in cves:
+                d = self.lookup(c)
+                if d is not None:
+                    out[c] = d
+            return out
+
     d = _dep()
     adv = _adv(osv_id="CVE-2024-31337", aliases=[])
     osv = [OsvResult(dep_key=d.key(), advisories=[adv])]
