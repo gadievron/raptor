@@ -253,17 +253,24 @@ def _read_license_head(path: Path) -> str:
     text (original case preserved — SPDX ids are case-sensitive).
     Best-effort: binary files and encoding errors return ``""`` so
     the caller's pattern matching falls through to
-    ``classification="unknown"`` cleanly."""
+    ``classification="unknown"`` cleanly.
+
+    Size-capped: line iteration buffers a whole line per step, so a
+    planted LICENSE that is one multi-GB line loaded itself into host
+    memory at lifecycle start — before any analysis ran — on every
+    untrusted target. The sibling ``_read_license_full`` is byte-
+    capped at 256 KB; the same bound (as a character cap here — with
+    ``errors="replace"`` every character decodes from at least one
+    byte, so memory stays within a small constant factor) dwarfs any
+    legitimate 50-line license header.
+    """
     try:
         with path.open("r", encoding="utf-8", errors="replace") as f:
-            lines = []
-            for i, line in enumerate(f):
-                if i >= _LICENSE_READ_LINES:
-                    break
-                lines.append(line)
-            return "".join(lines)
+            text = f.read(_INDIRECTION_FILE_BYTES)
     except OSError:
         return ""
+    lines = text.splitlines(keepends=True)[:_LICENSE_READ_LINES]
+    return "".join(lines)
 
 
 def _classify_text(text: str) -> tuple:

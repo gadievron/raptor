@@ -922,3 +922,31 @@ class TestReadLicenseFullHardening:
         f = tmp_path / "LICENSE"
         f.write_text("A" * 100)
         assert _read_license_full(f, 10) == "A" * 10
+
+
+class TestHeadReaderBounded:
+    def test_single_giant_line_read_is_capped(self, tmp_path, monkeypatch):
+        # A planted LICENSE that is ONE huge line: line iteration
+        # buffered the whole line, OOMing the run at lifecycle start.
+        # The head reader must load at most the byte cap.
+        import core.license.detector as det
+
+        monkeypatch.setattr(det, "_INDIRECTION_FILE_BYTES", 4096)
+        lic = tmp_path / "LICENSE"
+        lic.write_text("MIT License " + "x" * 100_000)  # one line
+        head = det._read_license_head(lic)
+        assert len(head) <= 4096
+        assert head.startswith("MIT License")
+
+    def test_normal_license_header_unchanged(self, tmp_path):
+        import core.license.detector as det
+
+        lic = tmp_path / "LICENSE"
+        lic.write_text(
+            "MIT License\n\nPermission is hereby granted...\n"
+            + "".join(f"line {i}\n" for i in range(200)),
+        )
+        head = det._read_license_head(lic)
+        # Line cap still applies on top of the byte cap.
+        assert len(head.splitlines()) == det._LICENSE_READ_LINES
+        assert head.startswith("MIT License")
