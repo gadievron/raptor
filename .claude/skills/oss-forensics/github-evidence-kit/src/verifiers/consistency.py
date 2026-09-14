@@ -3,16 +3,109 @@ Verification Service - Verify evidence against original sources.
 """
 from __future__ import annotations
 
+import json
 
 from ..clients.gharchive import GHArchiveClient
 from ..clients.github import GitHubClient
 from ..schema.common import EvidenceSource, VerificationResult
 from ..schema.events import Event
 from ..schema.observations import Observation
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+
+
+# Kit event_type -> GH Archive `type` column value (the reverse of
+# parsers._PARSERS). Verification must filter on it: repo + actor +
+# minute alone is not evidence — any unrelated event in the same busy
+# minute (a WatchEvent) would "verify" a fabricated event of any type.
+_GHARCHIVE_TYPE_BY_EVENT_TYPE: dict[str, str] = {
+    "push": "PushEvent",
+    "issue": "IssuesEvent",
+    "create": "CreateEvent",
+    "delete": "DeleteEvent",
+    "pull_request": "PullRequestEvent",
+    "issue_comment": "IssueCommentEvent",
+    "watch": "WatchEvent",
+    "fork": "ForkEvent",
+    "member": "MemberEvent",
+    "public": "PublicEvent",
+    "release": "ReleaseEvent",
+    "workflow_run": "WorkflowRunEvent",
+}
+
+
+def _row_payload(row: dict[str, Any]) -> dict[str, Any]:
+    """Decode a GH Archive row's payload column (JSON string, dict, or
+    absent) to a dict; malformed payloads read as empty (they then
+    fail any discriminator comparison — never verify on garbage)."""
+    raw = row.get("payload")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    return {}
+
+
+def _sub(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    value = payload.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _num(value: Any) -> int | None:
+    """GH Archive numerics are JSON numbers on modern rows, strings on
+    some pre-2015 rows (same coercion the parsers apply)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _discriminator_pair(event: Event, payload: dict[str, Any]) -> tuple[Any, Any] | None:
+    """(row value, expected value) for the event type's discriminating
+    payload field, or None when the type has no per-event payload to
+    compare (watch/public — type + repo/actor + minute is all GH
+    Archive carries for those)."""
+    event_type = getattr(event, "event_type", None)
+    if event_type == "push":
+        return (payload.get("head", payload.get("after")),
+                getattr(event, "after_sha", None))
+    if event_type == "pull_request":
+        return (_num(_sub(payload, "pull_request").get("number")),
+                getattr(event, "pr_number", None))
+    if event_type == "issue":
+        return (_num(_sub(payload, "issue").get("number")),
+                getattr(event, "issue_number", None))
+    if event_type == "issue_comment":
+        return (_num(_sub(payload, "comment").get("id")),
+                getattr(event, "comment_id", None))
+    if event_type in ("create", "delete"):
+        return payload.get("ref"), getattr(event, "ref_name", None)
+    if event_type == "fork":
+        return (_sub(payload, "forkee").get("full_name"),
+                getattr(event, "fork_full_name", None))
+    if event_type == "release":
+        return (_sub(payload, "release").get("tag_name"),
+                getattr(event, "tag_name", None))
+    if event_type == "workflow_run":
+        return (_sub(payload, "workflow_run").get("head_sha"),
+                getattr(event, "head_sha", None))
+    if event_type == "member":
+        member = getattr(event, "member", None)
+        return (_sub(payload, "member").get("login"),
+                getattr(member, "login", None))
+    return None
 
 
 class ConsistencyVerifier:
@@ -334,7 +427,15 @@ class ConsistencyVerifier:
             return False
 
     def _verify_gharchive_event(self, event: Event) -> VerificationResult:
-        """Verify event against GH Archive BigQuery."""
+        """Verify event against GH Archive BigQuery.
+
+        Type-aware: the query filters on the event's GH Archive type,
+        and where the type carries a discriminating payload field
+        (SHA, issue/PR number, ref, tag, member login) at least one
+        returned row must match it. A same-minute repo/actor
+        existence check alone would let ANY event in a busy minute
+        "verify" a fabricated event of any type.
+        """
         if not event.verification.bigquery_table:
             return VerificationResult(is_valid=False, errors=["No BigQuery table specified"])
 
@@ -344,15 +445,44 @@ class ConsistencyVerifier:
                 warnings=["GH Archive verification skipped - no credentials - not checked"],
             )
 
+        event_type = getattr(event, "event_type", None)
+        gharchive_type = _GHARCHIVE_TYPE_BY_EVENT_TYPE.get(event_type or "")
+        if gharchive_type is None:
+            # Fail closed — this verifier is the anti-fabrication
+            # chokepoint; an event type it cannot discriminate must
+            # not read as verified.
+            return VerificationResult(
+                is_valid=False,
+                errors=[f"GH Archive verification unsupported for event type {event_type!r}"],
+            )
+
         try:
             rows = self.gharchive_client.query_events(
                 repo=event.repository.full_name if event.repository else None,
                 actor=event.who.login if event.who else None,
+                event_type=gharchive_type,
                 from_date=event.when.strftime("%Y%m%d%H%M"),
             )
             if not rows:
                 return VerificationResult(is_valid=False, errors=["No matching event found in GH Archive"])
-            return VerificationResult(is_valid=True, errors=[])
+            expected = None
+            for row in rows:
+                pair = _discriminator_pair(event, _row_payload(row))
+                if pair is None:
+                    # watch/public — type + repo/actor + minute is the
+                    # strongest check GH Archive supports.
+                    return VerificationResult(is_valid=True, errors=[])
+                found, expected = pair
+                if found is not None and found == expected:
+                    return VerificationResult(is_valid=True, errors=[])
+            return VerificationResult(
+                is_valid=False,
+                errors=[
+                    f"GH Archive rows of type {gharchive_type} exist for the "
+                    f"repo/actor/minute, but none carries the event's "
+                    f"discriminating payload value ({expected!r})"
+                ],
+            )
         except Exception as e:
             return VerificationResult(is_valid=False, errors=[f"GH Archive verification error: {e}"])
 
