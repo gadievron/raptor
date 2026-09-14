@@ -542,7 +542,7 @@ def run_sca(
 
     # 2. Hygiene (mechanical, no network).
     progress.stage("hygiene")
-    hygiene_findings = evaluate_hygiene(manifests, joined)
+    hygiene_findings = evaluate_hygiene(manifests, joined, root=target)
     progress.done(f"{len(hygiene_findings)} findings")
 
     # 2a. Supply-chain mechanical heuristics (install hooks, typosquat,

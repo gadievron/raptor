@@ -80,12 +80,15 @@ _UNPINNED: set[PinStyle] = {PinStyle.WILDCARD, PinStyle.UNKNOWN}
 def evaluate(
     manifests: Iterable[Manifest],
     deps: Iterable[Dependency],
+    *,
+    root: Path | None = None,
 ) -> list[HygieneFinding]:
     """Run every hygiene check; return one finding list."""
     manifests_list = list(manifests)
     deps_list = list(deps)
     out: list[HygieneFinding] = []
-    out.extend(check_lockfile_missing(manifests_list, deps_list))
+    out.extend(check_lockfile_missing(manifests_list, deps_list,
+                                       root=root))
     out.extend(check_lockfile_drift(deps_list))
     out.extend(check_unpinned(deps_list))
     out.extend(check_loose_pin(deps_list))
@@ -102,21 +105,35 @@ def _included_dir_has_lockfile(
     expected: tuple[str, ...],
     lockfile_dirs: set[tuple[str, Path]],
     ecosystem: str,
+    root: Path | None = None,
 ) -> bool:
     """Check whether a pip ``-r`` include points to a directory that has
     a lockfile sibling.  Resolves at most one level of ``-r`` to avoid
-    runaway chains in adversarial manifests."""
+    runaway chains in adversarial manifests.
+
+    ``root`` (the scanned target) bounds where an include may point:
+    the traversal "defence" here used to be a no-op (both arms of an
+    if/else were byte-identical), so a hostile ``-r ../../../...``
+    steered the lockfile probe anywhere on the host. Monorepo-style
+    ``-r ../common/requirements.txt`` includes must keep working, so
+    the rule is CONTAINMENT (resolved path stays under ``root``), not
+    a blanket ``..`` refusal. ``None`` (direct/legacy callers) keeps
+    the historic unbounded behaviour.
+    """
     try:
         text = manifest_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
-    from pathlib import PurePosixPath
     for m in _R_INCLUDE_RE.finditer(text):
         rel = m.group(1)
-        if ".." not in PurePosixPath(rel).parts:
-            included = (manifest_path.parent / rel).resolve()
-        else:
-            included = (manifest_path.parent / rel).resolve()
+        included = (manifest_path.parent / rel).resolve()
+        if root is not None:
+            try:
+                included.relative_to(root.resolve())
+            except ValueError:
+                # Escapes the scanned target (traversal or absolute
+                # include, symlinks resolved) — never probe there.
+                continue
         inc_dir = included.parent if included.is_file() else included
         if (ecosystem, inc_dir) in lockfile_dirs:
             return True
@@ -128,6 +145,7 @@ def _included_dir_has_lockfile(
 def check_lockfile_missing(
     manifests: list[Manifest],
     deps: list[Dependency],
+    root: Path | None = None,
 ) -> list[HygieneFinding]:
     """Surface any manifest whose ecosystem expects a sibling lockfile."""
     out: list[HygieneFinding] = []
@@ -153,7 +171,7 @@ def check_lockfile_missing(
         # references another via ``-r <path>``, check the included
         # file's directory for lockfile siblings too.
         if m.ecosystem == "PyPI" and _included_dir_has_lockfile(
-            m.path, expected, lockfile_dirs, m.ecosystem,
+            m.path, expected, lockfile_dirs, m.ecosystem, root=root,
         ):
             continue
         # Use the first manifest dep for the finding's dep slot, to keep

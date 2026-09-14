@@ -375,3 +375,46 @@ def test_lockfile_missing_still_fires_when_r_include_target_has_no_lockfile(
         deps,
     )
     assert any(f.kind == "lockfile_missing" for f in findings)
+
+
+def test_r_include_with_traversal_is_skipped(tmp_path) -> None:
+    """A hostile ``-r ../../...`` include must not steer the lockfile
+    probe outside the scanned target (the old guard's two branches
+    were byte-identical — a no-op). Containment, not a ``..`` ban:
+    monorepo includes inside the root keep working."""
+    from packages.sca.hygiene import _included_dir_has_lockfile
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "requirements.lock").write_text("x==1\n", encoding="utf-8")
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    manifest = proj / "requirements.txt"
+    manifest.write_text("-r ../outside/requirements.txt\n",
+                        encoding="utf-8")
+    (outside / "requirements.txt").write_text("x==1\n", encoding="utf-8")
+
+    assert _included_dir_has_lockfile(
+        manifest, ("requirements.lock",), set(), "PyPI", root=proj,
+    ) is False
+
+    # Direction two: a legitimate same-tree include still counts.
+    sub = proj / "sub"
+    sub.mkdir()
+    (sub / "requirements.txt").write_text("y==1\n", encoding="utf-8")
+    (sub / "requirements.lock").write_text("y==1\n", encoding="utf-8")
+    manifest.write_text("-r sub/requirements.txt\n", encoding="utf-8")
+    assert _included_dir_has_lockfile(
+        manifest, ("requirements.lock",), set(), "PyPI", root=proj,
+    ) is True
+    # Monorepo direction: a ``..`` include that stays INSIDE the
+    # scanned root keeps counting (containment, not a ``..`` ban).
+    common = tmp_path / "common"
+    common.mkdir()
+    (common / "requirements.txt").write_text("z==1\n", encoding="utf-8")
+    (common / "requirements.lock").write_text("z==1\n", encoding="utf-8")
+    manifest.write_text("-r ../common/requirements.txt\n",
+                        encoding="utf-8")
+    assert _included_dir_has_lockfile(
+        manifest, ("requirements.lock",), set(), "PyPI", root=tmp_path,
+    ) is True
