@@ -487,7 +487,14 @@ def cmd_list(args: argparse.Namespace) -> int:
             (s.decision_class, s.model): _policy_for_stats(s)
             for s in baseline
         }
-    since = _parse_since(args.since) if args.since else None
+    # ``--since`` is declared ``type=str`` (handlers are also driven
+    # programmatically with pre-parsed namespaces), so argparse never
+    # converts it — surface a typo as a usage error, not a traceback.
+    try:
+        since = _parse_since(args.since) if args.since else None
+    except argparse.ArgumentTypeError as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 2
     stats = _filter_stats(
         stats,
         consumer=args.consumer,

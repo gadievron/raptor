@@ -1333,3 +1333,23 @@ class TestToolEvidenceAbstentions:
         stat = sc.get_stat("agentic:py/sqli", "claude-opus")
         ev = stat.events[EventType.TOOL_EVIDENCE]
         assert (ev.correct, ev.incorrect) == (1, 0)
+
+
+def test_list_since_typo_is_usage_error_not_traceback(seeded_scorecard):
+    """`--since 7days` must print the N[smhd] hint and exit 2 —
+    _parse_since raises ArgumentTypeError, which argparse never
+    converts for a type=str argument."""
+    rc, _, err = _capture(
+        cli_mod.cmd_list,
+        _make_args(path=seeded_scorecard, since="7days"),
+    )
+    assert rc == 2
+    assert "N[smhd]" in err
+
+
+def test_list_since_valid_window_still_filters(seeded_scorecard):
+    rc, out, _ = _capture(
+        cli_mod.cmd_list,
+        _make_args(path=seeded_scorecard, since="365d"),
+    )
+    assert rc == 0
