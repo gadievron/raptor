@@ -1689,6 +1689,60 @@ def _java_b27_fixtures() -> list[CutFixture]:
               + "            return \"safe\";\n        }\n"
               + "    }\n"),
         "public void handle", "out.println(bar)"))
+    # ---- composed pins: conduit pick × sink-sibling taint ----
+    # The conduit door must obey the same sibling-argument guard the
+    # flat value-bound path applies: proving the picked argument
+    # through conduit hops says nothing about taint riding a sibling
+    # of the same sink call. Helper-fed sibling taint is invisible to
+    # the local taint front — the b34/b41 incident shape restated
+    # through the b27 door.
+    j.append(_marked(
+        "java_conduit_sanitized_sibling_helper_taint", "xss", "CWE-79",
+        "conduit_sanitized_sibling_helper_taint",
+        LABEL_MUST_NOT_SUPPRESS,
+        cls_t(handle
+              + "        String clean = Encode.forHtml(x);\n"
+              + "        String bar = new W().pass(clean);\n"
+              + "        String pre = fetch(request);\n"
+              + "        out.println(pre + bar);\n    }\n"
+              + "    private class W {\n"
+              + "        public String pass(String p) {\n"
+              + "            return p;\n        }\n"
+              + "    }\n"
+              + "    private static String fetch("
+              "HttpServletRequest r) {\n"
+              + "        return r.getParameter(\"h\");\n    }\n"),
+        "request.getParameter(\"q\")", "out.println(pre + bar)"))
+    j.append(_marked(
+        "java_conduit_sanitized_sibling_direct_taint", "xss", "CWE-79",
+        "conduit_sanitized_sibling_direct_taint",
+        LABEL_MUST_NOT_SUPPRESS,
+        cls_t(handle
+              + "        String clean = Encode.forHtml(x);\n"
+              + "        String bar = new W().pass(clean);\n"
+              + "        String pre = x;\n"
+              + "        out.println(pre + bar);\n    }\n"
+              + "    private class W {\n"
+              + "        public String pass(String p) {\n"
+              + "            return p;\n        }\n"
+              + "    }\n"),
+        "request.getParameter(\"q\")", "out.println(pre + bar)"))
+    # Constant-sibling control: the guard folds the sibling and the
+    # conduit suppression survives — pins that the sibling guard
+    # refuses taint, not mere sibling presence.
+    j.append(_marked(
+        "java_conduit_sanitized_sibling_const", "xss", "CWE-79",
+        "conduit_sanitized_sibling_const", LABEL_MAY_SUPPRESS,
+        cls_t(handle
+              + "        String clean = Encode.forHtml(x);\n"
+              + "        String bar = new W().pass(clean);\n"
+              + "        String pre = \"Result: \";\n"
+              + "        out.println(pre + bar);\n    }\n"
+              + "    private class W {\n"
+              + "        public String pass(String p) {\n"
+              + "            return p;\n        }\n"
+              + "    }\n"),
+        "request.getParameter(\"q\")", "out.println(pre + bar)"))
     return j
 
 

@@ -1785,6 +1785,47 @@ def evaluate_finding(
             candidate_callables, array_index,
         )
         if transparent is not None:
+            # Sibling-argument guard on the conduit door — the same
+            # fold-or-refuse polarity the flat value-bound path
+            # applies below (b41): proving the picked argument
+            # constant or sanitizer-fed through conduit hops says
+            # nothing about taint riding a SIBLING argument of the
+            # sink call, and the conduit helper's own front-only
+            # check is blind to helper-fed siblings. Downgrade,
+            # never drop: the conduit value binding held, only the
+            # sibling proof is missing.
+            if (
+                transparent.verdict == VERDICT_SUPPRESS
+                and not _vertex_cut_siblings_clean(
+                    graph, rd, sink, sink_arg,
+                    matched_bindings, candidate_callables,
+                    java_source_text=java_source_text,
+                    java_file_path=java_file_path,
+                    repo_root=repo_root,
+                    ban_tf_system_reads=ban_tf_system_reads,
+                    union_member_check=_union_member_check(cwe),
+                )
+            ):
+                return SanitizerCutResult(
+                    suppress=False,
+                    reason=(
+                        "candidate_only: conduit-transparent value "
+                        "binding held but a sibling argument of the "
+                        "sink call is neither constant-foldable nor "
+                        "a catalog-sanitizer output; taint could "
+                        "ride it past the proven argument"
+                    ),
+                    cut_set=frozenset(),
+                    candidate_callables=frozenset(candidate_callables),
+                    verdict=VERDICT_CANDIDATE_ONLY,
+                    value_bound_bindings=(
+                        transparent.value_bound_bindings
+                    ),
+                    all_matched_bindings=(
+                        transparent.all_matched_bindings
+                    ),
+                    sink_arg=sink_arg,
+                )
             return transparent
 
     if value_bound_cut:
