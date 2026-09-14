@@ -125,6 +125,43 @@ class TestStaleCorruptKey:
         assert "wrong length (5 bytes" in warn_calls[0][1]
         assert key_path.read_bytes() == b"short"
 
+    def test_far_future_mtime_reads_stale_and_refuses(
+            self, key_path: Path, warn_calls: list[tuple],
+            monkeypatch: pytest.MonkeyPatch) -> None:
+        """A torn key whose mtime landed in the FAR future (corrupt
+        timestamp / gross clock skew) cannot be a peer writing "just
+        now" — pre-fix the negative age read as fresh forever, so
+        every call re-entered the race poll instead of refusing with
+        the operator-visible wrong-length warning."""
+        key_path.parent.mkdir(mode=0o700, parents=True)
+        key_path.write_bytes(b"short")
+        key_path.chmod(0o600)
+        future = time.time() + 3600
+        os.utime(key_path, (future, future))
+        sleeps: list[float] = []
+        monkeypatch.setattr(time, "sleep", sleeps.append)
+
+        got = mac_key.load_or_create_key(
+            key_path, key_len=_KEY_LEN, warn=_warn_into(warn_calls))
+
+        assert got is None
+        assert sleeps == []
+        assert len(warn_calls) == 1
+        assert "wrong length (5 bytes" in warn_calls[0][1]
+        assert key_path.read_bytes() == b"short"
+
+    def test_slightly_future_mtime_still_reads_fresh(
+            self, key_path: Path, warn_calls: list[tuple]) -> None:
+        """Skew INSIDE the window keeps the fresh classification — a
+        racing peer on an NFS mount with sub-window clock skew must
+        not be misdiagnosed as a stale torn key."""
+        key_path.parent.mkdir(mode=0o700, parents=True)
+        key_path.write_bytes(b"")
+        key_path.chmod(0o600)
+        near_future = time.time() + 1.0
+        os.utime(key_path, (near_future, near_future))
+        assert mac_key._recently_modified(key_path) is True
+
     def test_recreate_hint_lands_in_remedy(
             self, key_path: Path, warn_calls: list[tuple]) -> None:
         key_path.parent.mkdir(mode=0o700, parents=True)

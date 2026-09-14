@@ -98,16 +98,23 @@ _FRESH_WINDOW_S = 5.0
 def _recently_modified(path: Path) -> bool:
     """Whether *path* was modified within :data:`_FRESH_WINDOW_S`.
 
-    Fails toward "fresh": a vanished or unstatable file (or a clock
-    that makes the age negative) routes to the create path, which
-    resolves every shape safely — O_EXCL either wins on the vanished
-    file or loses into the bounded poll.
+    Fails toward "fresh": a vanished or unstatable file routes to the
+    create path, which resolves every shape safely — O_EXCL either
+    wins on the vanished file or loses into the bounded poll.
+
+    Mtime skew is bounded in BOTH directions: a slightly-future mtime
+    (NFS / clock skew inside the window) still reads fresh so a
+    racing peer's mid-write isn't misdiagnosed, but a FAR-future
+    mtime cannot be a peer writing "just now" on this clock — treat
+    it stale so a torn key with corrupt timestamps refuses loudly
+    (operator-visible warning) instead of re-entering the race poll
+    on every call forever.
     """
     try:
         st = os.lstat(path)
     except OSError:
         return True
-    return (time.time() - st.st_mtime) < _FRESH_WINDOW_S
+    return abs(time.time() - st.st_mtime) < _FRESH_WINDOW_S
 
 
 def read_existing_key(
