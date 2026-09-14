@@ -10204,7 +10204,13 @@ def _run_mechanical_detectors(
       2. A set of "file:function" keys that are mechanically clean — all
          sinks had sufficient guards with no detector findings.
 
-    Design ref: ~/design/audit.md lines 782-813.
+    Results ride the cross-run detector cache
+    (:mod:`core.audit.detector_cache`): per-file condition/cocci
+    entries and per-detector structural records reload when their
+    content hashes and lane input digests match, so an unchanged tree
+    collapses this pass to hash checks + cache loads. Anything a
+    fingerprint cannot cover (a live Joern server's CPG, the
+    return-domain root walks) recomputes every run.
     """
     mechanical_findings: dict[str, list[dict[str, Any]]] = {}
     guard_clean_keys: set[str] = set()
@@ -10244,6 +10250,26 @@ def _run_mechanical_detectors(
         from .gaps import extract_context_map_set
 
         sinks_set = frozenset(extract_context_map_set(context_map, "sinks"))
+
+    from .detector_cache import (
+        MechanicalDetectorCache,
+        call_graph_inputs_fingerprint,
+        digest_strings,
+        file_content_sha,
+        gap_spans_digest,
+        source_fingerprint,
+        spatch_marker,
+        tree_sitter_marker,
+        vocabulary_digest,
+        z3_marker,
+    )
+
+    det_cache = MechanicalDetectorCache.open(
+        getattr(config, "out_dir", None),
+    )
+    content_shas = {
+        fp: file_content_sha(src) for fp, src in source_texts.items()
+    }
 
     # --- L0/L1/L2/L3: condition chain (parallelised per file) ---
     guard_cache: dict[str, list] = {}
@@ -10294,18 +10320,36 @@ def _run_mechanical_detectors(
                 guard_cache[fp] = []
         return guard_cache[fp]
 
-    def _process_file_conditions(fp, src):
-        findings = []
+    def _process_file_conditions(fp: str, src: str) -> dict[str, Any]:
+        """Per-file condition-chain entry: replayable finding records
+        plus this file's guard bookkeeping (keys are ``fp``-prefixed,
+        so per-file merges can never collide across files)."""
+        findings: list[Any] = []
+        file_guarded: set[str] = set()
+        file_sufficient: dict[str, bool] = {}
+        file_decorative: set[str] = set()
+        file_smt_insufficient: set[str] = set()
+
+        def _entry() -> dict[str, Any]:
+            return {
+                "content": content_shas[fp],
+                "findings": findings,
+                "guarded": sorted(file_guarded),
+                "sufficient": file_sufficient,
+                "decorative": sorted(file_decorative),
+                "smt_insufficient": sorted(file_smt_insufficient),
+            }
+
         guards = _guards_for(fp, src)
         if not guards:
-            return findings
+            return _entry()
 
         for sg in guards:
             if sg.guards:
                 gkey = f"{fp}:{sg.sink_function}"
-                _guarded_funcs.add(gkey)
-                if gkey not in _sufficient_funcs:
-                    _sufficient_funcs[gkey] = True
+                file_guarded.add(gkey)
+                if gkey not in file_sufficient:
+                    file_sufficient[gkey] = True
 
         if _assess_guards is not None:
             try:
@@ -10316,7 +10360,7 @@ def _run_mechanical_detectors(
                         v = v.value
                     gkey = f"{fp}:{sg.sink_function}"
                     if v != "sufficient":
-                        _sufficient_funcs[gkey] = False
+                        file_sufficient[gkey] = False
                     if v in ("irrelevant", "insufficient", "unknown"):
                         notes = "; ".join(ar.notes) if ar.notes else ""
                         findings.append((
@@ -10342,7 +10386,7 @@ def _run_mechanical_detectors(
                 for sg, ba in zip(guards, binding_analyses):
                     if ba.all_guards_decorative:
                         gkey = f"{fp}:{sg.sink_function}"
-                        _decorative_funcs.add(gkey)
+                        file_decorative.add(gkey)
                         findings.append((
                             fp, sg.sink_function, "unbound_guard",
                             sg.sink_line,
@@ -10355,7 +10399,7 @@ def _run_mechanical_detectors(
                 logger.debug("condition binding failed for %s", fp, exc_info=True)
 
         # SMT first — proven-sufficient guards skip the expensive CPG round
-        _smt_cleared = set()
+        _smt_cleared: set[int] = set()
         if _check_sufficiency is not None:
             try:
                 smt_per_guard = _check_sufficiency(guards)
@@ -10365,7 +10409,7 @@ def _run_mechanical_detectors(
                         if sr.feasible is True:
                             has_insufficient = True
                             gkey = f"{fp}:{sg.sink_function}"
-                            _smt_insufficient_funcs.add(gkey)
+                            file_smt_insufficient.add(gkey)
                             detail = sr.reasoning or ""
                             if sr.concrete_values:
                                 vals = ", ".join(
@@ -10454,96 +10498,201 @@ def _run_mechanical_detectors(
             except Exception:
                 logger.debug("condition_smt L3b failed for %s", fp, exc_info=True)
 
-        return findings
+        return _entry()
+
+    # A live Joern server adds whole-program CPG verdicts no content
+    # fingerprint can cover — under Joern the lane recomputes and
+    # stores nothing.
+    condition_key = digest_strings([
+        "sinks", *sorted(sinks_set),
+        "caps",
+        str(_extract_sg is not None), str(_assess_guards is not None),
+        str(_check_bindings is not None),
+        str(_check_sufficiency is not None),
+        str(_check_pf is not None), str(_check_sm is not None),
+        tree_sitter_marker(), z3_marker(),
+    ])
+    condition_cacheable = det_cache.enabled and joern_server is None
 
     if _extract_sg is not None:
         from concurrent.futures import ThreadPoolExecutor
 
         file_items = list(source_texts.items())
-        with ThreadPoolExecutor(max_workers=min(8, len(file_items) or 1)) as pool:
-            futures = {
-                pool.submit(_process_file_conditions, fp, src): fp
-                for fp, src in file_items
-            }
-            for fut, fut_fp in futures.items():
-                try:
-                    for finding_tuple in fut.result():
-                        _add(*finding_tuple)
-                except Exception:
-                    fp = fut_fp
-                    logger.debug("condition chain failed for %s", fp, exc_info=True)
+        condition_entries: dict[str, dict[str, Any]] = {}
+        to_compute: list[tuple[str, str]] = []
+        for fp, src in file_items:
+            cached_entry = (
+                det_cache.cached_condition(
+                    condition_key, fp, content_shas[fp],
+                ) if condition_cacheable else None
+            )
+            if cached_entry is not None:
+                condition_entries[fp] = cached_entry
+            else:
+                to_compute.append((fp, src))
+        if to_compute:
+            with ThreadPoolExecutor(
+                max_workers=min(8, len(to_compute)),
+            ) as pool:
+                futures = {
+                    pool.submit(_process_file_conditions, fp, src): fp
+                    for fp, src in to_compute
+                }
+                for fut, fut_fp in futures.items():
+                    try:
+                        condition_entries[fut_fp] = fut.result()
+                    except Exception:
+                        logger.debug(
+                            "condition chain failed for %s",
+                            fut_fp, exc_info=True,
+                        )
+        # Merge in file order (matching the fresh path's submission
+        # order) so hit/miss mixes reproduce a fully-fresh run's
+        # finding order byte-for-byte.
+        for fp, _src in file_items:
+            entry = condition_entries.get(fp)
+            if entry is None:
+                continue
+            for finding_tuple in entry["findings"]:
+                _add(*finding_tuple)
+            _guarded_funcs.update(entry["guarded"])
+            _sufficient_funcs.update(entry["sufficient"])
+            _decorative_funcs.update(entry["decorative"])
+            _smt_insufficient_funcs.update(entry["smt_insufficient"])
+            if condition_cacheable:
+                det_cache.store_condition(condition_key, fp, entry)
 
     # --- Structural detectors ---
-    call_graphs = None
     # Pure-AST extraction over hostile source: IO errors, parse quirks
     # and pathological nesting are the legitimate set. The checklist
     # bounds extraction to in-scope files (a bare tree walk loses
-    # in-scope files to the file cap on large targets).
-    with contextlib.suppress(OSError, ValueError, RecursionError):
-        call_graphs = _load_call_graphs_cached(config.target_path, checklist)
+    # in-scope files to the file cap on large targets). Lazy: on a
+    # full structural cache hit no detector block runs and the graphs
+    # are never parsed (the cache key covers their input BYTES via
+    # call_graph_inputs_fingerprint, which is a plain read + hash).
+    _cg_state: dict[str, Any] = {}
 
+    def _get_call_graphs() -> dict[str, Any] | None:
+        if "graphs" not in _cg_state:
+            graphs = None
+            with contextlib.suppress(OSError, ValueError, RecursionError):
+                graphs = _load_call_graphs_cached(
+                    config.target_path, checklist,
+                )
+            _cg_state["graphs"] = graphs
+        return _cg_state["graphs"]
+
+    # Callback-lifetime vocabulary up front: its digest is part of the
+    # structural lane's cache key. A failed build is distinguished
+    # from a legitimately-empty vocabulary — the run skips the
+    # callback block (pre-cache behaviour), so serving records that
+    # were computed WITH a vocabulary would diverge from fresh.
+    cb_vocab = None
+    cb_vocab_failed = False
     try:
+        from .condition_smt import DomainVocabulary
+        cb_vocab = DomainVocabulary.from_domain_model(
+            _load_domain_model(config),
+            target_path=config.target_path,
+        )
+    except OSError:
+        pass
+    except Exception:
+        cb_vocab_failed = True
+        logger.debug(
+            "mechanical: callback-lifetime vocabulary build failed",
+            exc_info=True,
+        )
+
+    structural_key: str | None = None
+    if det_cache.enabled:
+        _cg_fp = call_graph_inputs_fingerprint(
+            config.target_path, checklist,
+        )
+        # An undigestable vocabulary (digest None) keeps the lane
+        # uncacheable this run — a failure constant in its place would
+        # collide two DIFFERENT undigestable vocabularies into one key
+        # component. A build failure is a distinguished marker: the
+        # callback block skips, so its records are never stored, and
+        # the other detectors' results do not depend on the vocab.
+        _vocab_component = (
+            "vocab:error" if cb_vocab_failed
+            else vocabulary_digest(cb_vocab)
+        )
+        if _cg_fp is not None and _vocab_component is not None:
+            structural_key = digest_strings([
+                "sources", source_fingerprint(source_texts),
+                "gaps", gap_spans_digest(gaps),
+                "call-graphs", _cg_fp,
+                "vocab", _vocab_component,
+                tree_sitter_marker(),
+            ])
+
+    def _det_sentinel_collapse() -> list[Any]:
         from .sentinel_collapse import detect_sentinel_collapses
 
-        for sc in detect_sentinel_collapses(source_texts, call_graphs):
-            _add(
+        return [
+            (
                 sc.file,
                 sc.function,
                 "sentinel_collapse",
                 sc.line,
-                f"{sc.write_value} coerced via {sc.read_coercion}: {sc.semantic_loss}",
+                f"{sc.write_value} coerced via {sc.read_coercion}: "
+                f"{sc.semantic_loss}",
             )
-    except Exception:
-        logger.debug("mechanical: sentinel_collapse failed", exc_info=True)
+            for sc in detect_sentinel_collapses(
+                source_texts, _get_call_graphs(),
+            )
+        ]
 
-    try:
+    def _det_fail_open() -> list[Any]:
         from .fail_open_detector import detect_fail_open_patterns
 
-        for fo in detect_fail_open_patterns(source_texts, call_graphs):
-            _add(fo.file, fo.function, "fail_open", fo.line, fo.description)
-    except Exception:
-        logger.debug("mechanical: fail_open failed", exc_info=True)
+        return [
+            (fo.file, fo.function, "fail_open", fo.line, fo.description)
+            for fo in detect_fail_open_patterns(
+                source_texts, _get_call_graphs(),
+            )
+        ]
 
-    try:
+    def _det_return_domain() -> list[Any]:
         from .return_domain import detect_return_domain_mismatches
 
         _rd_roots = [config.target_path]
         if getattr(config, "study_root", None):
             _rd_roots.append(Path(config.study_root))
-        for rdm in detect_return_domain_mismatches(
-            source_texts, roots=_rd_roots,
-        ):
-            _add(
+        return [
+            (
                 rdm.file,
                 rdm.function,
                 "return_domain",
                 rdm.line,
                 rdm.description,
             )
-    except Exception:
-        logger.debug("mechanical: return_domain failed", exc_info=True)
+            for rdm in detect_return_domain_mismatches(
+                source_texts, roots=_rd_roots,
+            )
+        ]
 
-    try:
+    def _det_pattern_completeness() -> list[Any]:
         from .pattern_completeness import detect_pattern_gaps
 
-        for pg in detect_pattern_gaps(source_texts):
-            _add(
+        return [
+            (
                 pg.file,
                 pg.function,
                 "pattern_gap",
                 pg.line,
                 f"{pg.gap_type}: {pg.pattern} — {pg.suggestion}",
             )
-    except Exception:
-        logger.debug("mechanical: pattern_completeness failed", exc_info=True)
+            for pg in detect_pattern_gaps(source_texts)
+        ]
 
-    try:
+    def _det_callsite_consistency() -> list[Any]:
         from .callsite_consistency import detect_callsite_deviations
 
-        for cd in detect_callsite_deviations(
-            source_texts, joern_server=joern_server,
-        ):
-            _add(
+        return [
+            (
                 cd.file,
                 cd.enclosing_function,
                 "callsite_deviation",
@@ -10551,14 +10700,18 @@ def _run_mechanical_detectors(
                 f"{cd.callee}: {cd.discarded_count}/{cd.total_sites} "
                 f"sites discard return value",
             )
-    except Exception:
-        logger.debug("mechanical: callsite_consistency failed", exc_info=True)
+            for cd in detect_callsite_deviations(
+                source_texts, joern_server=joern_server,
+            )
+        ]
 
-    try:
-        from .block_sibling_analysis import detect_block_sibling_asymmetries
+    def _det_block_sibling() -> list[Any]:
+        from .block_sibling_analysis import (
+            detect_block_sibling_asymmetries,
+        )
 
-        for bs in detect_block_sibling_asymmetries(source_texts):
-            _add(
+        return [
+            (
                 bs.file,
                 bs.function,
                 "block_sibling",
@@ -10566,17 +10719,14 @@ def _run_mechanical_detectors(
                 f"branch '{bs.branch_label}' deviates from its "
                 f"siblings: {bs.explanation}",
             )
-    except Exception:
-        logger.debug("mechanical: block_sibling failed", exc_info=True)
+            for bs in detect_block_sibling_asymmetries(source_texts)
+        ]
 
-    try:
+    def _det_dispatch_completeness() -> list[Any]:
         from .dispatch_completeness import find_dispatch_gaps
 
-        for dg in find_dispatch_gaps(
-            call_graphs or {}, source_texts,
-            target_root=config.target_path,
-        ):
-            _add(
+        return [
+            (
                 dg.table.file,
                 dg.table.function,
                 "dispatch_gap",
@@ -10585,64 +10735,68 @@ def _run_mechanical_detectors(
                 f"produced at {dg.produced_by} "
                 f"(confidence {dg.confidence})",
             )
-    except Exception:
-        logger.debug("mechanical: dispatch_completeness failed", exc_info=True)
+            for dg in find_dispatch_gaps(
+                _get_call_graphs() or {}, source_texts,
+                target_root=config.target_path,
+            )
+        ]
 
-    try:
+    def _det_transform_sequence() -> list[Any]:
         from .transform_sequence import detect_transform_order_violations
 
-        for tv in detect_transform_order_violations(source_texts):
-            _add(
+        return [
+            (
                 tv.file,
                 tv.function,
                 "transform_order",
                 tv.line,
                 f"{tv.violation} — fix: {tv.fix}",
             )
-    except Exception:
-        logger.debug("mechanical: transform_sequence failed", exc_info=True)
+            for tv in detect_transform_order_violations(source_texts)
+        ]
 
-    try:
+    def _det_value_space_checker() -> list[Any]:
         from .value_space_checker import detect_value_space_mismatches
 
-        for vm in detect_value_space_mismatches(source_texts, call_graphs):
+        records: list[Any] = []
+        for vm in detect_value_space_mismatches(
+            source_texts, _get_call_graphs(),
+        ):
             unhandled = ", ".join(vm.unhandled[:5])
-            _add(
+            records.append((
                 vm.consumer_file,
                 vm.consumer_function,
                 "value_space_mismatch",
                 0,
                 f"producer {vm.producer_function} emits values "
                 f"not handled by consumer: [{unhandled}]",
-            )
-    except Exception:
-        logger.debug("mechanical: value_space_checker failed", exc_info=True)
+            ))
+        return records
 
-    try:
+    def _det_type_confusion() -> list[Any]:
         from .type_confusion import detect_type_confusion
 
-        for tcf in detect_type_confusion(source_texts, call_graphs, joern_server):
-            _add(
+        return [
+            (
                 tcf.file,
                 tcf.function,
                 "type_confusion",
                 tcf.line,
                 tcf.describe(),
             )
-    except Exception:
-        logger.debug("mechanical: type_confusion failed", exc_info=True)
+            for tcf in detect_type_confusion(
+                source_texts, _get_call_graphs(), joern_server,
+            )
+        ]
 
-    try:
+    def _det_callback_lifetime() -> list[Any]:
+        if cb_vocab_failed:
+            raise RuntimeError(
+                "callback-lifetime vocabulary build failed",
+            )
         from .callback_lifetime import check_callback_lifetime_local
 
-        cb_vocab = None
-        with contextlib.suppress(OSError):
-            from .condition_smt import DomainVocabulary
-            cb_vocab = DomainVocabulary.from_domain_model(
-                _load_domain_model(config),
-                target_path=config.target_path,
-            )
-
+        records: list[Any] = []
         for fp in source_texts:
             if not any(fp.endswith(ext) for ext in _C_EXTS):
                 continue
@@ -10663,37 +10817,37 @@ def _run_mechanical_detectors(
                     detector = "callback_lifetime_local"
                     if clr.rcu_kfree_mismatch:
                         detector = "rcu_kfree_mismatch"
-                    _add(fp, func_name, detector, line_start, desc)
-    except Exception:
-        logger.debug("mechanical: callback_lifetime failed", exc_info=True)
+                    records.append(
+                        (fp, func_name, detector, line_start, desc),
+                    )
+        return records
 
-    # --- Auth-dismissal witnesses (Java) ---
-    try:
+    def _det_auth_witnesses() -> list[Any]:
+        # Auth-dismissal witnesses (Java).
         from .auth_witnesses import scan_gaps as _authw_scan
 
-        for aw in _authw_scan(gaps, source_texts):
-            _add(aw.file, aw.function, aw.detector, aw.line, aw.description)
-    except Exception:
-        logger.debug("mechanical: auth_witnesses failed", exc_info=True)
+        return [
+            (aw.file, aw.function, aw.detector, aw.line, aw.description)
+            for aw in _authw_scan(gaps, source_texts)
+        ]
 
-    # --- Check-then-create compound (keyed registration race) ---
-    try:
+    def _det_check_then_create() -> list[Any]:
+        # Check-then-create compound (keyed registration race).
         from .check_then_create import scan_gaps as _ctc_scan
 
-        for cf in _ctc_scan(gaps, source_texts):
-            _add(
+        return [
+            (
                 cf.file, cf.function, "check_then_create",
                 cf.write_line, cf.description(),
             )
-    except Exception:
-        logger.debug(
-            "mechanical: check_then_create failed", exc_info=True,
-        )
+            for cf in _ctc_scan(gaps, source_texts)
+        ]
 
-    # --- ASN.1 template declared-vs-accessed type witness ---
-    try:
+    def _det_asn1_template_mismatch() -> list[Any]:
+        # ASN.1 template declared-vs-accessed type witness.
         from .asn1_template_mismatch import scan_sources as _asn1_scan
 
+        records: list[Any] = []
         for am in _asn1_scan(source_texts):
             func_name = ""
             for gap in gaps:
@@ -10705,14 +10859,62 @@ def _run_mechanical_detectors(
                     func_name = gap.get("name", "")
                     break
             if func_name:
-                _add(
+                records.append((
                     am.file, func_name, "asn1_template_mismatch",
                     am.line, am.description(),
-                )
-    except Exception:
-        logger.debug(
-            "mechanical: asn1_template_mismatch failed", exc_info=True,
+                ))
+        return records
+
+    # Battery order is replay order — cached and fresh records must
+    # interleave exactly as a fully-fresh run would emit them. The
+    # cache_ok flags mark what a fingerprint can honestly cover:
+    # return_domain walks every root on its own wall-clock budget
+    # (inputs outside any fingerprint) so it always recomputes;
+    # callsite_consistency and type_confusion consult the live Joern
+    # CPG when a server is present, so they cache only without one.
+    battery: list[tuple[str, bool, Callable[[], list[Any]]]] = [
+        ("sentinel_collapse", True, _det_sentinel_collapse),
+        ("fail_open", True, _det_fail_open),
+        ("return_domain", False, _det_return_domain),
+        ("pattern_completeness", True, _det_pattern_completeness),
+        (
+            "callsite_consistency", joern_server is None,
+            _det_callsite_consistency,
+        ),
+        ("block_sibling", True, _det_block_sibling),
+        ("dispatch_completeness", True, _det_dispatch_completeness),
+        ("transform_sequence", True, _det_transform_sequence),
+        ("value_space_checker", True, _det_value_space_checker),
+        ("type_confusion", joern_server is None, _det_type_confusion),
+        ("callback_lifetime", True, _det_callback_lifetime),
+        ("auth_witnesses", True, _det_auth_witnesses),
+        ("check_then_create", True, _det_check_then_create),
+        (
+            "asn1_template_mismatch", True,
+            _det_asn1_template_mismatch,
+        ),
+    ]
+    for det_name, cache_ok, det_block in battery:
+        cache_key = structural_key if cache_ok else None
+        records = (
+            det_cache.cached_structural(cache_key, det_name)
+            if cache_key is not None else None
         )
+        if records is None:
+            try:
+                records = det_block()
+            except Exception:
+                # A raised block stores nothing: freezing a transient
+                # failure's empty result into the cache would turn it
+                # into a silent skip on every later run.
+                logger.debug(
+                    "mechanical: %s failed", det_name, exc_info=True,
+                )
+                continue
+        for rec in records:
+            _add(*rec)
+        if cache_key is not None:
+            det_cache.store_structural(cache_key, det_name, records)
 
     # --- Standing Coccinelle templates ---
     try:
@@ -10743,14 +10945,51 @@ def _run_mechanical_detectors(
                     if rule_path.is_file():
                         standing_rules.add(str(rule_path))
             if standing_rules:
+                cocci_key: str | None = None
+                if det_cache.enabled:
+                    from .prep_cache import content_fingerprint
+
+                    def _rule_bytes(rule_path_str: str) -> bytes:
+                        try:
+                            return Path(rule_path_str).read_bytes()
+                        except OSError:
+                            return b"<unreadable>"
+
+                    cocci_key = digest_strings([
+                        "rules",
+                        content_fingerprint(
+                            (p, _rule_bytes(p))
+                            for p in sorted(standing_rules)
+                        ),
+                        spatch_marker(),
+                    ])
                 c_files = [
-                    config.target_path / fp
+                    (fp, config.target_path / fp)
                     for fp in source_texts
                     if any(fp.endswith(ext) for ext in _C_EXTS)
                 ]
-                for c_file in c_files:
+                for src_fp, c_file in c_files:
                     if not c_file.is_file():
                         continue
+                    file_gaps_sha = gap_spans_digest(
+                        g for g in gaps if g.get("file") == src_fp
+                    )
+                    if cocci_key is not None:
+                        cached_recs = det_cache.cached_cocci(
+                            cocci_key, src_fp,
+                            content_shas[src_fp], file_gaps_sha,
+                        )
+                        if cached_recs is not None:
+                            for rec in cached_recs:
+                                _add(*rec)
+                            det_cache.store_cocci(
+                                cocci_key, src_fp,
+                                content_shas[src_fp], file_gaps_sha,
+                                cached_recs,
+                            )
+                            continue
+                    file_records: list[Any] = []
+                    file_complete = True
                     for rule_path_str in sorted(standing_rules):
                         sr = _run_cocci_rule(
                             c_file, Path(rule_path_str),
@@ -10759,6 +10998,12 @@ def _run_mechanical_detectors(
                             # (code trust) — @script:python trusted.
                             allow_scripting=True,
                         )
+                        if sr.errors:
+                            # Timeout partials / spatch errors are not
+                            # a stable result — cache nothing so the
+                            # next run retries instead of replaying a
+                            # truncated match set.
+                            file_complete = False
                         for match in sr.matches:
                             f_file = match.file or str(c_file)
                             f_line = match.line or 0
@@ -10780,12 +11025,22 @@ def _run_mechanical_detectors(
                                     break
                             if func_name:
                                 desc = match.message or str(match)
-                                _add(
+                                rec = (
                                     rel, func_name,
                                     f"cocci:{f_rule}", f_line, desc,
                                 )
+                                file_records.append(rec)
+                                _add(*rec)
+                    if cocci_key is not None and file_complete:
+                        det_cache.store_cocci(
+                            cocci_key, src_fp,
+                            content_shas[src_fp], file_gaps_sha,
+                            file_records,
+                        )
     except Exception:
         logger.debug("mechanical: standing_cocci failed", exc_info=True)
+
+    det_cache.save()
 
     # inject-mode detectors moved to lazy evaluation — see _InjectModeResolver
 

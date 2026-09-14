@@ -466,6 +466,11 @@
     "kind": "literal",
     "note": "ISO C keyword set (language constant, not target API names): a macro NAMED after a keyword is conditional instrumentation the definite-assignment prover must never expand; misses only widen refusal, never a proof"
   },
+  "core/audit/detector_cache.py::DETECTOR_ENTRY_POINTS": {
+    "count": 21,
+    "kind": "literal",
+    "note": "closed infrastructure-module registry: the entry points whose transitive in-repo import closure forms the mechanical-detector cache's detector-set identity (any closure-module code change invalidates the whole cache) \u2014 module paths, not a learned name vocabulary; same class as core/analysis/_reach_cache.py::_GRAMMAR_MODULES"
+  },
   "core/audit/edge_obligations.py::build_edge_obligations": {
     "count": 10,
     "kind": "literal",
