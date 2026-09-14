@@ -176,3 +176,68 @@ def test_same_name_specs_do_not_cross_bleed() -> None:
         {"message": msg}, [snk, twin_other_file, twin_other_role],
     )
     assert keys == [_spec_key(snk)]
+
+
+# ---------------------------------------------------------------------------
+# make_codeql_tool_runner construction path
+# ---------------------------------------------------------------------------
+# The unit-level spec join above is only reachable if the runner can be
+# BUILT. Pre-fix, construction called a QueryRunner.is_available()
+# method that has never existed: with codeql installed it crashed with
+# AttributeError, without it QueryRunner() raised RuntimeError — either
+# way the caller's broad except buried it and the CodeQL-backed
+# XREF_BACKED confirmation lane stayed dead end-to-end on every host.
+
+
+def test_tool_runner_none_when_codeql_unavailable(tmp_path, monkeypatch):
+    import packages.codeql
+
+    from core.iris.codeql_runner import make_codeql_tool_runner
+    monkeypatch.setattr(packages.codeql, "is_available", lambda: False)
+    db = tmp_path / "db"
+    db.mkdir()
+    assert make_codeql_tool_runner(db, tmp_path) is None
+
+
+def test_tool_runner_none_when_constructor_raises(tmp_path, monkeypatch):
+    import packages.codeql
+    import packages.codeql.query_runner as qr
+
+    from core.iris.codeql_runner import make_codeql_tool_runner
+    monkeypatch.setattr(packages.codeql, "is_available", lambda: True)
+
+    class _Boom:
+        def __init__(self) -> None:
+            raise RuntimeError("CodeQL CLI not found")
+
+    monkeypatch.setattr(qr, "QueryRunner", _Boom)
+    db = tmp_path / "db"
+    db.mkdir()
+    assert make_codeql_tool_runner(db, tmp_path) is None
+
+
+def test_tool_runner_constructs_with_stub_cli(tmp_path, monkeypatch):
+    """End-to-end construction smoke: a stub codeql on PATH must yield
+    a CALLABLE runner (the lane exists), not a crash and not None."""
+    from core.iris.codeql_runner import make_codeql_tool_runner
+    stub = tmp_path / "bin" / "codeql"
+    stub.parent.mkdir()
+    stub.write_text("#!/bin/sh\nexit 0\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", str(stub.parent))
+    monkeypatch.delenv("CODEQL_CLI", raising=False)
+    db = tmp_path / "db"
+    db.mkdir()
+    runner = make_codeql_tool_runner(db, tmp_path)
+    assert callable(runner)
+
+
+def test_tool_runner_none_when_db_missing(tmp_path, monkeypatch):
+    from core.iris.codeql_runner import make_codeql_tool_runner
+    stub = tmp_path / "bin" / "codeql"
+    stub.parent.mkdir()
+    stub.write_text("#!/bin/sh\nexit 0\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", str(stub.parent))
+    monkeypatch.delenv("CODEQL_CLI", raising=False)
+    assert make_codeql_tool_runner(tmp_path / "nodb", tmp_path) is None

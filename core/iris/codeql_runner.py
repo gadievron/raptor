@@ -134,14 +134,25 @@ def make_codeql_tool_runner(
     Returns ``None`` if CodeQL CLI is not available.
     """
     try:
+        from packages.codeql import is_available as codeql_available
         from packages.codeql.query_runner import QueryRunner as CodeQLRunner
     except ImportError:
         logger.debug("CodeQL runner not importable")
         return None
 
-    runner = CodeQLRunner()
-    if not runner.is_available():
+    # Availability is a module-level probe; the runner class itself
+    # RAISES from __init__ when the CLI is missing (it has no
+    # is_available method), so the gate must run before construction
+    # and the constructor stays wrapped — an unconstructible runner
+    # must degrade to None per this function's contract, never crash
+    # the caller.
+    if not codeql_available():
         logger.debug("CodeQL CLI not available for IRIS runner")
+        return None
+    try:
+        runner = CodeQLRunner()
+    except RuntimeError:
+        logger.debug("CodeQL runner construction failed", exc_info=True)
         return None
 
     if not db_path.is_dir():

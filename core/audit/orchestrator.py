@@ -6941,7 +6941,17 @@ def _iris_refine_and_bypass(
                         out_dir=config.out_dir,
                     )
                 except Exception:
-                    logger.debug("IRIS CodeQL runner init failed", exc_info=True)
+                    # make_codeql_tool_runner degrades to None for every
+                    # EXPECTED unavailability (no CLI, no db); an
+                    # exception here is a construction bug that silently
+                    # kills the CodeQL-backed XREF_BACKED lane for the
+                    # whole run — that must be operator-visible, not
+                    # DEBUG-buried.
+                    logger.warning(
+                        "IRIS CodeQL runner init failed — CodeQL-backed "
+                        "confirmation lane disabled for this run",
+                        exc_info=True,
+                    )
 
             iris_tool_runner = _composite_tool_runner(
                 joern_tool_runner,
