@@ -41,20 +41,35 @@ def _make_finding(finding_id: str) -> dict:
 class TestErrorDictRoutedToFailurePath:
 
     def test_error_envelopes_are_failure_records(self):
+        import time
+
         findings = [_make_finding(f"f-{i:03d}") for i in range(10)]
         calls = []
+        tracker = CostTracker(0)
 
         def dead_transport(prompt, schema, system_prompt, temperature, model):
+            n_prior = len(calls)
             calls.append(1)
-            # Slow failure: keeps the worker busy long enough for the
-            # drain loop to process the previous failure and mark the
-            # model dead before the next dead-check runs (same
-            # race-avoidance as the raised-exception breaker test).
-            import time
-            time.sleep(0.15)
+            # Deterministic drain sync (replaces a sleep-won race with
+            # a fixed tolerance band, which a starved CI host could
+            # lose): the drain loop books each error envelope's tokens
+            # into the cost tracker, so block until every PRIOR
+            # failure has been booked — the dead-set is then current
+            # before the next worker's dead-check can run. Reaching
+            # the breaker threshold is therefore timing-independent.
+            # Post-abort stragglers (see the count assertion below)
+            # wait on a booking that never comes — give them a short
+            # deadline so each stall also gives the drain thread ample
+            # time to land cancel_futures, instead of hanging to a
+            # long timeout.
+            deadline = time.monotonic() + (10.0 if n_prior < 3 else 0.5)
+            while (tracker.get_summary()["total_tokens"] < n_prior
+                    and time.monotonic() < deadline):
+                time.sleep(0.002)
             return DispatchResult(
                 result={"error": "timeout after 300s"},
                 model="claude-code",
+                tokens=1,
             )
 
         results = dispatch_task(
@@ -63,14 +78,19 @@ class TestErrorDictRoutedToFailurePath:
             dispatch_fn=dead_transport,
             role_resolution={},  # CC shape: model=None work items
             prior_results={},
-            cost_tracker=CostTracker(0),
+            cost_tracker=tracker,
             max_parallel=1,
         )
 
         # Circuit breaker fired: a never-succeeded model is declared
         # dead after 3 consecutive failures — the whole run must not
-        # pay one timeout per finding.
-        assert len(calls) <= 5
+        # pay one timeout per finding. One extra call (the worker whose
+        # dead-check preceded the third failure's drain) always gets
+        # in; when the all-models abort shuts the pool down, at most a
+        # couple of already-dequeued futures can slip the
+        # cancel-futures window, and each straggler's 0.5s stall gives
+        # the drain thread that long to land the cancellation.
+        assert 4 <= len(calls) <= 6
         assert len(results) == 10
 
         errored = [r for r in results if "error" in r]

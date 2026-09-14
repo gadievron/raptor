@@ -653,18 +653,34 @@ class TestCircuitBreakerEnforcement:
     """A dead model's pre-submitted futures must not keep dispatching."""
 
     def test_dead_model_futures_short_circuit(self):
+        from core.security.prompt_telemetry import defense_telemetry
+        defense_telemetry.reset()
+
         model_a = MagicMock(model_name="model-a")
         model_b = MagicMock(model_name="model-b")
         findings = [_make_finding(f"f-{i:03d}") for i in range(12)]
         a_calls = []
 
+        def _drained_a_failures() -> int:
+            models = defense_telemetry.summary()[
+                "defense_telemetry"]["models"]
+            return models.get("model-a", {}).get("schema_failed", 0)
+
         def mock_fn(prompt, schema, system_prompt, temperature, model):
             if model is model_a:
+                n_prior = len(a_calls)
                 a_calls.append(1)
-                # Slow failure: keeps the worker busy long enough for
-                # the drain loop to process the previous failure and
-                # mark the model dead before the NEXT dead-check runs.
-                time.sleep(0.15)
+                # Deterministic drain sync (replaces a sleep-won race
+                # with a fixed tolerance band, which a starved CI host
+                # could lose): block until the drain loop has recorded
+                # every PRIOR model-a failure into telemetry, so the
+                # dead-set is current before the next worker's
+                # dead-check can run. Bounded so a regression fails
+                # loudly instead of hanging the suite.
+                deadline = time.monotonic() + 10.0
+                while (_drained_a_failures() < n_prior
+                        and time.monotonic() < deadline):
+                    time.sleep(0.002)
                 raise RuntimeError("model-a keeps exploding")
             return _make_dispatch_result(
                 exploitable=False, score=0.1, model="model-b",
@@ -679,16 +695,17 @@ class TestCircuitBreakerEnforcement:
             cost_tracker=CostTracker(0),
             max_parallel=1,  # sequential: model-a items drain first
         )
+        defense_telemetry.reset()
 
         # Without enforcement every one of the 12 model-a futures called
         # dispatch_fn (12 wasted API calls). With it the circuit opens
-        # after 3 consecutive failures; at most one extra call can race
-        # in before the dead-set write lands.
-        assert 3 <= len(a_calls) <= 5
+        # after 3 consecutive failures; exactly one extra call (the one
+        # whose dead-check preceded the third failure's drain) gets in.
+        assert len(a_calls) == 4
 
         skipped = [r for r in results
                    if r.get("error_type") == "circuit_breaker"]
-        assert len(skipped) >= 7
+        assert len(skipped) == 8
         assert all(r["analysed_by"] == "model-a" for r in skipped)
         assert all("circuit-broken" in r["error"] for r in skipped)
 
