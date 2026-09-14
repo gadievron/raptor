@@ -95,34 +95,52 @@ class TestComputeRates:
             MatchTriage(match=Match(file="a.py", line=1), status="variant", reasoning=""),
             MatchTriage(match=Match(file="b.py", line=2), status="variant", reasoning=""),
         ]
-        tp, fp, count = _compute_rates(triage)
+        tp, fp, count, classified = _compute_rates(triage)
         assert tp == 1.0
         assert fp == 0.0
         assert count == 2
+        assert classified == 2
 
     def test_mixed(self):
         triage = [
             MatchTriage(match=Match(file="a.py", line=1), status="variant", reasoning=""),
             MatchTriage(match=Match(file="b.py", line=2), status="false_positive", reasoning=""),
         ]
-        tp, fp, count = _compute_rates(triage)
+        tp, fp, count, classified = _compute_rates(triage)
         assert tp == 0.5
         assert fp == 0.5
         assert count == 1
+        assert classified == 2
 
     def test_uncertain_excluded(self):
         triage = [
             MatchTriage(match=Match(file="a.py", line=1), status="variant", reasoning=""),
             MatchTriage(match=Match(file="b.py", line=2), status="uncertain", reasoning=""),
         ]
-        tp, _fp, count = _compute_rates(triage)
+        tp, _fp, count, classified = _compute_rates(triage)
         assert tp == 1.0
         assert count == 1
+        assert classified == 1
 
     def test_empty(self):
-        tp, _fp, count = _compute_rates([])
+        tp, _fp, count, classified = _compute_rates([])
         assert tp == 0.0
         assert count == 0
+        assert classified == 0
+
+    def test_all_uncertain_classifies_nothing(self):
+        # LLM transport failure stamps every match uncertain: no rate
+        # exists — classified 0 is the signal callers gate on.
+        triage = [
+            MatchTriage(match=Match(file="a.py", line=1),
+                        status="uncertain", reasoning=""),
+            MatchTriage(match=Match(file="b.py", line=2),
+                        status="skipped", reasoning=""),
+        ]
+        tp, _fp, count, classified = _compute_rates(triage)
+        assert tp == 0.0
+        assert count == 0
+        assert classified == 0
 
 
 class TestRuleLibraryPromote:
@@ -281,6 +299,33 @@ class TestRuleLibraryUpdate:
         assert entry is not None
         assert len(entry.targets) == 2
         assert entry.targets[1].target_hash == "t2"
+
+    def test_all_uncertain_update_records_no_rate(self, tmp_path):
+        # An outage-shaped triage (all uncertain, matches present)
+        # must persist tp_rate=None on the target record — pre-fix the
+        # truthy triage LIST minted tp_rate=0.0, matches-weighted hard
+        # negative evidence feeding the replay gate and retirement.
+        lib = RuleLibrary(tmp_path / "lib")
+        result = _result()
+        rule_file = tmp_path / "r1.yml"
+        rule_file.write_text(result.rule.body)
+        result.rule_path = rule_file
+        lib.promote(result, target_hash="t1")
+        entry0 = lib.find(cwe="CWE-89", engine="semgrep")[0]
+        agg_before = entry0.tp_rate
+
+        matches = [Match(file="new.py", line=5),
+                   Match(file="new2.py", line=6)]
+        triage = [
+            MatchTriage(match=m, status="uncertain", reasoning="outage")
+            for m in matches
+        ]
+        entry = lib.update("r1", "t2", matches, triage, timestamp="ts2")
+        assert entry is not None
+        rec = [t for t in entry.targets if t.target_hash == "t2"][0]
+        assert rec.tp_rate is None
+        # No-evidence must not drag the aggregate.
+        assert entry.tp_rate == agg_before
 
     def test_update_unknown_rule_returns_none(self, tmp_path):
         lib = RuleLibrary(tmp_path / "lib")

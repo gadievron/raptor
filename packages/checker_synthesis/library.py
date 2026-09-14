@@ -226,14 +226,25 @@ class LibraryEntry:
 
 def _compute_rates(
     triage: list[MatchTriage],
-) -> tuple[float, float, int]:
+) -> tuple[float, float, int, int]:
+    """Rates over the CLASSIFIED subset plus the classified count.
+
+    ``uncertain``/``skipped`` rows are excluded from the denominator,
+    so a triage that classified NOTHING (LLM transport failure stamps
+    every match ``uncertain``) carries no rate at all — the returned
+    classified count is what callers must gate their ``tp_rate``
+    persistence on. A truthiness check on the triage LIST minted an
+    outage as matches-weighted 0% precision, dragging the aggregate
+    toward the replay gate and retirement for rules whose mechanical
+    controls all passed.
+    """
     classified = [t for t in triage if t.status in ("variant", "false_positive")]
     if not classified:
-        return 0.0, 0.0, 0
+        return 0.0, 0.0, 0, 0
     variants = sum(1 for t in classified if t.status == "variant")
     fps = sum(1 for t in classified if t.status == "false_positive")
     total = len(classified)
-    return variants / total, fps / total, variants
+    return variants / total, fps / total, variants, total
 
 
 class RuleLibrary:
@@ -461,7 +472,7 @@ class RuleLibrary:
         else:
             write_text_atomically(dest, rule.body, tmp_prefix=".rule-")
 
-        tp_rate, fp_rate, variant_count = _compute_rates(result.triage)
+        tp_rate, fp_rate, variant_count, classified = _compute_rates(result.triage)
 
         targets: list[TargetRecord] = []
         if target_hash:
@@ -470,7 +481,7 @@ class RuleLibrary:
                 ts=timestamp,
                 matches=len(result.matches),
                 variants=variant_count,
-                tp_rate=tp_rate if result.triage else None,
+                tp_rate=tp_rate if classified else None,
             ))
 
         entry = LibraryEntry(
@@ -508,7 +519,7 @@ class RuleLibrary:
         target_hash: str,
         timestamp: str,
     ) -> None:
-        tp_rate, _fp_rate, variant_count = _compute_rates(result.triage)
+        tp_rate, _fp_rate, variant_count, classified = _compute_rates(result.triage)
         if target_hash:
             already = {t.target_hash for t in entry.targets}
             if target_hash not in already:
@@ -517,7 +528,7 @@ class RuleLibrary:
                     ts=timestamp,
                     matches=len(result.matches),
                     variants=variant_count,
-                    tp_rate=tp_rate if result.triage else None,
+                    tp_rate=tp_rate if classified else None,
                 ))
         entry.total_variants += variant_count
         entry.total_matches += len(result.matches)
@@ -551,7 +562,7 @@ class RuleLibrary:
             if entry is None:
                 return None
 
-            tp_rate, _fp_rate, variant_count = _compute_rates(triage)
+            tp_rate, _fp_rate, variant_count, classified = _compute_rates(triage)
             already = {t.target_hash for t in entry.targets}
             if target_hash and target_hash not in already:
                 entry.targets.append(TargetRecord(
@@ -559,7 +570,7 @@ class RuleLibrary:
                     ts=timestamp,
                     matches=len(matches),
                     variants=variant_count,
-                    tp_rate=tp_rate if triage else None,
+                    tp_rate=tp_rate if classified else None,
                 ))
             entry.total_variants += variant_count
             entry.total_matches += len(matches)
