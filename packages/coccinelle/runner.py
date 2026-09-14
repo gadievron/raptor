@@ -848,9 +848,27 @@ def run_rules_batched(
         # batch path), and every SpatchResult gets its OWN errors
         # list — passing one shared list object meant a consumer
         # mutating one result's errors silently edited all of them.
-        batch_examined = _collect_files_examined(
-            target, {m.file for m in all_matches},
-        )
+        #
+        # Engine failure must never read as verified silence — the
+        # same rc-synthesis run_rule applies: a nonzero batch exit
+        # whose stderr matches no known error pattern previously
+        # yielded errors=[] with the full tree in files_examined, so
+        # coverage/refutation consumers read a crashed sweep as
+        # examined-clean.
+        if proc.returncode != 0 and not errors:
+            stderr_tail = (proc.stderr or "").strip()[-500:]
+            errors.append(
+                f"spatch exited with code {proc.returncode}"
+                + (f": {stderr_tail}" if stderr_tail else "")
+            )
+        if proc.returncode == 0:
+            batch_examined = _collect_files_examined(
+                target, {m.file for m in all_matches},
+            )
+        else:
+            # Died mid-tree: nothing beyond the actual matches is
+            # verified (same stance as run_rule and the timeout path).
+            batch_examined = sorted({m.file for m in all_matches})
         out = {
             s: SpatchResult(
                 rule=s, rule_path=str(r),

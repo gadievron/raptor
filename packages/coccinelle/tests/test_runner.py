@@ -2068,3 +2068,46 @@ class TestDefaultRunnerConfinement:
 
         assert "target" not in seen
         assert "output" not in seen
+
+
+class TestBatchNonzeroExitVisibility:
+    """The batch path must apply the same rc-synthesis as run_rule: a
+    quiet spatch crash previously yielded every per-rule SpatchResult
+    with errors=[] and the whole C/H tree in files_examined —
+    verified silence for a sweep that analysed nothing."""
+
+    def _run_batch(self, tmp_path, *, returncode, stderr="", stdout=""):
+        r1 = tmp_path / "rule_x.cocci"
+        r1.write_text("@r@\nposition p;\n@@\nmalloc@p(...)\n")
+        target = tmp_path / "test.c"
+        target.write_text("void f() { void *p = malloc(10); }\n")
+
+        def mock_run(cmd, **kwargs):
+            proc = MagicMock()
+            proc.stdout = stdout
+            proc.stderr = stderr
+            proc.returncode = returncode
+            return proc
+
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True), \
+             patch("packages.coccinelle.runner._sandboxed_run",
+                   side_effect=mock_run):
+            return run_rules_batched(
+                target, [r1], env=dict(os.environ),
+            )
+
+    def test_quiet_crash_synthesizes_error_per_rule(self, tmp_path):
+        out = self._run_batch(tmp_path, returncode=-11)
+        result = out["rule_x"]
+        assert result.errors == ["spatch exited with code -11"]
+        assert result.ok is False
+
+    def test_quiet_crash_does_not_claim_files_examined(self, tmp_path):
+        out = self._run_batch(tmp_path, returncode=-9)
+        assert out["rule_x"].files_examined == []
+
+    def test_clean_exit_keeps_full_files_examined(self, tmp_path):
+        out = self._run_batch(tmp_path, returncode=0)
+        assert any(f.endswith("test.c")
+                   for f in out["rule_x"].files_examined)
