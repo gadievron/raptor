@@ -48,6 +48,24 @@ def test_extract_validator_rejects_non_anchored_re_match():
     assert sb.extract_validator(diff) is None
 
 
+def test_extract_validator_fullmatch_named_variable_stays_match():
+    """The match/fullmatch classification must come from the CALLED
+    function, not from anywhere in the matched span — a variable named
+    ``*fullmatch*`` must not lift an unanchored ``re.match`` prefix
+    guard into a whole-string charset proof (a validator that accepts
+    ``abc/../../x`` would be modelled as rejecting it)."""
+    diff = "+if not re.match(r'[a-z]+', fullmatch_input): raise X\n"
+    assert sb.extract_validator(diff) is None
+
+
+def test_extract_validator_fullmatch_named_variable_anchored_ok():
+    """Control: with explicit anchors, the same variable name is fine —
+    anchored ``re.match`` is whole-string regardless of classification."""
+    diff = "+if not re.match(r'^[a-z]+$', fullmatch_input): raise X\n"
+    spec = sb.extract_validator(diff)
+    assert spec is not None and spec.var_name == "fullmatch_input"
+
+
 def test_extract_validator_ignores_non_added_lines():
     """Lines starting with ' ' or '-' (context / removed) must be ignored;
     only '+' lines are part of the fix."""

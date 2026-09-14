@@ -221,7 +221,12 @@ _STR_LITERAL = (
 # spec-lift (Tier 2 takes the case).  The Ruby extractor refuses
 # line-anchored guards for exactly this hazard.
 _RE_MATCH_CALL = _re.compile(
-    r"re\.(?:match|fullmatch)\s*\(\s*"
+    # The called function is captured as a group: classification must
+    # read the CALL, never a substring of the whole matched span — the
+    # span includes the variable name, and a variable named
+    # ``*fullmatch*`` would otherwise lift an unanchored ``re.match``
+    # prefix guard to whole-string fullmatch semantics.
+    r"re\.(?P<kind>fullmatch|match)\s*\(\s*"
     rf"(?P<pat>{_STR_LITERAL})"
     r"\s*,\s*"
     r"(?P<var>[A-Za-z_][A-Za-z0-9_]*)"
@@ -431,7 +436,7 @@ def _try_charset_validator(line: str) -> ValidatorSpec | None:
     m = _RE_MATCH_CALL.search(line)
     if not m:
         return None
-    call_kind = "fullmatch" if "fullmatch" in line[m.start():m.end()] else "match"
+    call_kind = m.group("kind")
     pattern = _strip_string_literal(m.group("pat"))
     var_name = m.group("var")
     cs = _ANCHORED_CHARSET.match(pattern)
