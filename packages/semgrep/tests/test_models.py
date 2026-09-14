@@ -391,3 +391,61 @@ class TestRegionCoercion:
         }
         f = SemgrepFinding.from_sarif_result(result)
         assert (f.line, f.column, f.line_end, f.column_end) == (1, 2, 3, 4)
+
+
+class TestSeverityInheritance:
+    """Semgrep's SARIF never sets result.level — severity lives in the
+    rules table (defaultConfiguration.level). The parser must inherit
+    it; defaulting straight to "warning" flattens every rule-declared
+    severity, including HIGH (error) rules."""
+
+    @staticmethod
+    def _semgrep_shaped_sarif() -> str:
+        def result(rule_id):
+            # No "level" key — the shape semgrep 1.172.0 emits.
+            return {
+                "ruleId": rule_id,
+                "message": {"text": "m"},
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": "app.py"},
+                        "region": {"startLine": 3},
+                    }
+                }],
+            }
+
+        return json.dumps({
+            "runs": [{
+                "tool": {"driver": {"name": "semgrep", "rules": [
+                    {"id": "high-rule",
+                     "defaultConfiguration": {"level": "error"}},
+                    {"id": "info-rule",
+                     "defaultConfiguration": {"level": "note"}},
+                    {"id": "bare-rule"},
+                ]}},
+                "results": [
+                    result("high-rule"),
+                    result("info-rule"),
+                    result("bare-rule"),
+                ],
+            }],
+        })
+
+    def test_rule_declared_severity_survives(self):
+        levels = {f.rule_id: f.level
+                  for f in parse_sarif(self._semgrep_shaped_sarif())}
+        assert levels["high-rule"] == "error"
+        assert levels["info-rule"] == "note"
+
+    def test_rule_without_default_configuration_stays_warning(self):
+        levels = {f.rule_id: f.level
+                  for f in parse_sarif(self._semgrep_shaped_sarif())}
+        assert levels["bare-rule"] == "warning"
+
+    def test_explicit_result_level_wins(self):
+        f = SemgrepFinding.from_sarif_result(
+            {"ruleId": "high-rule", "level": "note",
+             "message": {"text": "m"}},
+            rule_levels={"high-rule": "error"},
+        )
+        assert f.level == "note"

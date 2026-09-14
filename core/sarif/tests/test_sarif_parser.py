@@ -1082,3 +1082,83 @@ class TestCollidedIdNotStampedOut(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSeverityInheritance(unittest.TestCase):
+    """Results without an explicit level inherit the rule's
+    defaultConfiguration.level (SARIF severity inheritance). Semgrep's
+    emitter never sets result.level, so without inheritance every
+    rule-declared severity — including error-severity rules — flattens
+    to warning."""
+
+    @staticmethod
+    def _semgrep_shaped(results, rules):
+        # Semgrep-shaped: results carry NO level; rules carry
+        # defaultConfiguration.level.
+        return {
+            "version": "2.1.0",
+            "runs": [{
+                "tool": {"driver": {"name": "semgrep", "rules": rules}},
+                "results": results,
+            }],
+        }
+
+    def _levelless_result(self, rule_id):
+        r = _result(rule_id=rule_id)
+        del r["level"]
+        return r
+
+    def test_rule_declared_error_severity_survives(self):
+        from core.sarif.parser import parse_sarif_findings
+
+        doc = self._semgrep_shaped(
+            [self._levelless_result("high-rule"),
+             self._levelless_result("info-rule")],
+            [
+                {"id": "high-rule", "defaultConfiguration": {"level": "error"}},
+                {"id": "info-rule", "defaultConfiguration": {"level": "note"}},
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            findings = parse_sarif_findings(_write_sarif(tmpdir, doc))
+        levels = {f["rule_id"]: f["level"] for f in findings}
+        self.assertEqual(levels["high-rule"], "error")
+        self.assertEqual(levels["info-rule"], "note")
+
+    def test_explicit_result_level_wins_over_rule_default(self):
+        from core.sarif.parser import parse_sarif_findings
+
+        result = _result(rule_id="high-rule")
+        result["level"] = "note"  # explicit override
+        doc = self._semgrep_shaped(
+            [result],
+            [{"id": "high-rule", "defaultConfiguration": {"level": "error"}}],
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            findings = parse_sarif_findings(_write_sarif(tmpdir, doc))
+        self.assertEqual(findings[0]["level"], "note")
+
+    def test_no_level_anywhere_defaults_to_warning(self):
+        from core.sarif.parser import parse_sarif_findings
+
+        doc = self._semgrep_shaped(
+            [self._levelless_result("bare-rule")],
+            [{"id": "bare-rule"}],
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            findings = parse_sarif_findings(_write_sarif(tmpdir, doc))
+        self.assertEqual(findings[0]["level"], "warning")
+
+    def test_metrics_count_inherited_severity(self):
+        from core.sarif.parser import generate_scan_metrics
+
+        doc = self._semgrep_shaped(
+            [self._levelless_result("high-rule")],
+            [{"id": "high-rule", "defaultConfiguration": {"level": "error"}}],
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            metrics = generate_scan_metrics(
+                [str(_write_sarif(tmpdir, doc))],
+            )
+        self.assertEqual(metrics["findings_by_severity"]["error"], 1)
+        self.assertEqual(metrics["findings_by_severity"]["warning"], 0)

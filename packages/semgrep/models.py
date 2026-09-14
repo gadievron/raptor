@@ -36,8 +36,20 @@ class SemgrepFinding:
     level: str = "warning"
 
     @classmethod
-    def from_sarif_result(cls, result: dict) -> "SemgrepFinding":
-        """Build from a single SARIF runs[].results[] entry."""
+    def from_sarif_result(
+        cls,
+        result: dict,
+        rule_levels: dict[str, str] | None = None,
+    ) -> "SemgrepFinding":
+        """Build from a single SARIF runs[].results[] entry.
+
+        ``rule_levels`` maps rule id → the rule's
+        ``defaultConfiguration.level`` from the run's rules table.
+        Semgrep's SARIF emitter never sets ``result.level`` (SARIF
+        severity inheritance; verified against semgrep 1.172.0), so
+        without the table every rule-declared severity — including
+        error-severity rules — flattens to "warning".
+        """
         if not result or not isinstance(result, dict):
             return cls(file="", line=0)
 
@@ -49,7 +61,9 @@ class SemgrepFinding:
         elif isinstance(msg, str):
             message = msg
 
-        level = result.get("level", "warning")
+        level = result.get("level")
+        if not isinstance(level, str) or not level:
+            level = (rule_levels or {}).get(rule_id) or "warning"
 
         file = ""
         line = 0
@@ -161,17 +175,26 @@ def parse_sarif(text: str) -> list[SemgrepFinding]:
     if not isinstance(data, dict):
         return []
 
+    from core.sarif.parser import get_rules, rule_default_level
+
     findings: list[SemgrepFinding] = []
     runs = data.get("runs") or []
     for run in runs:
         if not isinstance(run, dict):
             continue
+        # Rule-declared severities from the run's rules table — the
+        # only place semgrep's SARIF carries them (results omit level).
+        rule_levels = {
+            rid: level
+            for rid, rule in get_rules(run).items()
+            if (level := rule_default_level(rule))
+        }
         results = run.get("results") or []
         # Skip non-dict / empty entries outright: converting them
         # produced phantom SemgrepFinding(file='', line=0) records that
         # inflated finding_count downstream.
         findings.extend(
-            SemgrepFinding.from_sarif_result(result)
+            SemgrepFinding.from_sarif_result(result, rule_levels)
             for result in results
             if result and isinstance(result, dict)
         )

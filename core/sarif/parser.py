@@ -559,6 +559,23 @@ def get_rules(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+def rule_default_level(rule: dict[str, Any]) -> str | None:
+    """The rule's ``defaultConfiguration.level``, or None.
+
+    Per the SARIF spec, a result without an explicit ``level`` inherits
+    it from its rule's defaultConfiguration. Semgrep's SARIF emitter
+    relies on this — results never carry ``level`` (verified against
+    semgrep 1.172.0) — so a parser that defaults straight to "warning"
+    flattens every rule-declared severity, including error-severity
+    rules, to warning.
+    """
+    cfg = rule.get("defaultConfiguration")
+    level = cfg.get("level") if isinstance(cfg, dict) else None
+    if isinstance(level, str) and level:
+        return level
+    return None
+
+
 def _uri_escapes_root(uri: str, source_root: Path) -> bool:
     """Containment check for a resolved artifact URI against a known
     source root — same defence as ``import_normalizer._is_under_root``,
@@ -636,7 +653,10 @@ def parse_sarif_findings(
         for rid, rule in get_rules(run).items():
             cwe_id = _extract_cwe_from_rule(rule)
             if rid:
-                rules_by_id[rid] = {"cwe_id": cwe_id}
+                rules_by_id[rid] = {
+                    "cwe_id": cwe_id,
+                    "default_level": rule_default_level(rule),
+                }
 
         # Per-run originalUriBaseIds for relative-URI resolution.
         # SARIF emitters commonly emit `result.locations[*].artifactLocation
@@ -773,9 +793,12 @@ def parse_sarif_findings(
             message_text = _as_dict(result.get("message")).get("text")
             if not isinstance(message_text, str):
                 message_text = None
-            level = result.get("level", "warning")
-            if not isinstance(level, str):
-                level = "warning"
+            level = result.get("level")
+            if not isinstance(level, str) or not level:
+                # SARIF severity inheritance: absent result.level means
+                # the rule's defaultConfiguration.level (semgrep never
+                # emits result.level).
+                level = rule_meta.get("default_level") or "warning"
 
             findings.append(
                 {
@@ -951,12 +974,25 @@ def generate_scan_metrics(sarif_paths: list[str]) -> dict[str, Any]:
                 metrics["findings_by_tool"].get(tool_key, 0) + len(results)
             )
 
+            # SARIF severity inheritance for results without an
+            # explicit level (semgrep never emits result.level).
+            default_levels = {
+                rid: rule_default_level(rule)
+                for rid, rule in get_rules(run).items()
+            }
+
             for result in results:
                 if not isinstance(result, dict):
                     continue
                 # Count by severity
-                level = result.get("level", "warning")
-                if isinstance(level, str) and level in metrics["findings_by_severity"]:
+                level = result.get("level")
+                if not isinstance(level, str) or not level:
+                    rid = result.get("ruleId")
+                    level = (
+                        default_levels.get(rid)
+                        if isinstance(rid, str) else None
+                    ) or "warning"
+                if level in metrics["findings_by_severity"]:
                     metrics["findings_by_severity"][level] += 1
 
                 # Count by rule
