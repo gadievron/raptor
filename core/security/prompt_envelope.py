@@ -270,9 +270,12 @@ _ENVELOPE_TAG_RE = re.compile(
     # `<untrusted_tool_output>`, ...).  A previous `untrusted[-_]`
     # pattern required a suffix, so the exact bare closing tag those
     # callers wrap evidence in passed through unneutralised.
-    r'</?\s*untrusted'
-    r'|</?\s*slots?\b'
-    r'|</?\s*document(?:_content)?\b'
+    # `<\s*/?` (not `</?`): whitespace is legal between `<` and `/` in
+    # HTML/XML-ish parsers, so `< /untrusted-XXXX>` reads as a closing
+    # tag downstream while a `</?` pattern passes it through raw.
+    r'<\s*/?\s*untrusted'
+    r'|<\s*/?\s*slots?\b'
+    r'|<\s*/?\s*document(?:_content)?\b'
     # Bracket-style markers used by the PASSTHROUGH / [MARK_INPT]
     # envelope (prompt_envelope._render_passthrough). Without these,
     # untrusted content containing the literal `[MARK_INPT]` or

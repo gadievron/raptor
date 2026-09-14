@@ -308,6 +308,7 @@ def build_edge_prompt(
     """Contract-audit prompt with both endpoint bodies. Plaintext;
     target-derived strings pass the shared prompt defences."""
     from core.audit.prompt_defence import sanitise_for_prompt
+    from core.security.prompt_envelope import wrap_untrusted
     loc = (f"{rec['caller_file']}:{rec['caller']} -> "
            f"{rec['callee_file']}:{rec['callee']} "
            f"(call at line {rec.get('call_line', '?')})")
@@ -322,14 +323,26 @@ def build_edge_prompt(
         # fields inside ``loc`` above — a crafted repo path in the
         # raw interpolation could forge heading text in this trusted
         # region.
+        #
+        # Source bodies get the nonce-tagged envelope, not bare ```
+        # fences: a fence is forgeable from the content side (a ```
+        # inside the body closes the block and everything after it
+        # renders as trusted-shaped prose), while the envelope's
+        # per-call random nonce cannot be closed by target bytes —
+        # the same construction as the knowledge block below and the
+        # function-review source injection.
         f"\n### Caller: {sanitise_for_prompt(rec['caller'], 'identifier', rec['caller_file'])} ({sanitise_for_prompt(rec['caller_file'], 'path', rec['caller_file'])})",
-        "```",
-        sanitise_for_prompt(caller_src, "source", rec["caller_file"]),
-        "```",
+        wrap_untrusted(
+            sanitise_for_prompt(caller_src, "source", rec["caller_file"]),
+            kind="source-code",
+            origin=f"{rec['caller_file']}:{rec['caller']}",
+        ),
         f"\n### Callee: {sanitise_for_prompt(rec['callee'], 'identifier', rec['callee_file'])} ({sanitise_for_prompt(rec['callee_file'], 'path', rec['callee_file'])})",
-        "```",
-        sanitise_for_prompt(callee_src, "source", rec["callee_file"]),
-        "```",
+        wrap_untrusted(
+            sanitise_for_prompt(callee_src, "source", rec["callee_file"]),
+            kind="source-code",
+            origin=f"{rec['callee_file']}:{rec['callee']}",
+        ),
     ]
     if knowledge:
         # Already enveloped by wrap_untrusted at build time — study
