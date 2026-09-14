@@ -95,7 +95,14 @@ logger = logging.getLogger(__name__)
 # module docstring's threat model). Legacy pickle entries are ignored
 # — different fingerprint (the version salts it), different suffix,
 # different magic — and regenerated.
-_CACHE_VERSION = 10
+# V11 (2026-09-14): extractor identity now probes grammars by actual
+# import (the extractor's own probe) instead of find_spec. find_spec
+# succeeds on any FINDABLE module — including import-time-failing
+# stubs and broken wheels — so a degraded-extraction index could be
+# persisted under the full-toolchain fingerprint and served to later
+# full-toolchain runs. Bump flushes any entry persisted under an
+# over-claimed identity.
+_CACHE_VERSION = 11
 
 _CACHE_DIR = Path.home() / ".cache" / "raptor" / "reachability"
 
@@ -104,7 +111,7 @@ _CACHE_DIR = Path.home() / ".cache" / "raptor" / "reachability"
 # entry of the same name. Also doubles as a cheap "is this a raptor
 # cache file" check before handing bytes to the JSON decoder. The
 # numeric suffix tracks ``_CACHE_VERSION``.
-_HEADER_MAGIC = b"RAPTOR-REACHABILITY-CACHE-V10\n"
+_HEADER_MAGIC = b"RAPTOR-REACHABILITY-CACHE-V11\n"
 
 # Suffix of current-format entries. Legacy ``.pickle`` entries are
 # never loaded, but eviction / clearing still sweeps them so retired
@@ -165,15 +172,20 @@ def _extractor_identity() -> str:
     global _EXTRACTOR_IDENTITY
     if _EXTRACTOR_IDENTITY is not None:
         return _EXTRACTOR_IDENTITY
-    import importlib.util
-    available: list[str] = []
-    for mod in _GRAMMAR_MODULES:
-        try:
-            found = importlib.util.find_spec(mod) is not None
-        except (ImportError, ValueError):
-            found = False
-        if found:
-            available.append(mod)
+    # Probe by ACTUAL import via the extractor's own shared,
+    # failure-caching importer — not importlib.util.find_spec.
+    # find_spec answers "is a module by this name findable?", which is
+    # true for import-time-failing stubs and broken wheels alike; the
+    # extractor only gets call graphs from grammars it can IMPORT. A
+    # findable-but-unimportable grammar would make the identity claim
+    # a toolchain the extraction never had, letting a degraded index
+    # be persisted under (and served from) the full-toolchain
+    # fingerprint. Sharing import_grammar makes this signature
+    # definitionally the set the extractors saw in this process.
+    from core.inventory._ts_cache import import_grammar
+    available = [
+        mod for mod in _GRAMMAR_MODULES if import_grammar(mod) is not None
+    ]
     _EXTRACTOR_IDENTITY = ",".join(available)
     return _EXTRACTOR_IDENTITY
 

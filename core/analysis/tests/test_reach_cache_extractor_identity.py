@@ -2,7 +2,10 @@
 :mod:`core.analysis._reach_cache`."""
 from __future__ import annotations
 
+import sys
+
 import core.analysis._reach_cache as rc_mod
+import core.inventory._ts_cache as ts_cache
 
 
 def _inv():
@@ -42,3 +45,39 @@ def test_fingerprint_still_changes_on_content_change():
     inv["files"][0]["sha256"] = "cc" * 32
     fp2 = rc_mod.compute_fingerprint(inv)
     assert fp1 != fp2
+
+
+def test_identity_excludes_findable_but_unimportable_grammar(
+    tmp_path, monkeypatch,
+):
+    # A module that is FINDABLE but raises at import time (a
+    # dependency-simulation stub, a broken wheel) must not count as
+    # available: the extractor probes by import, so an identity that
+    # over-claims lets a degraded index be persisted under — and
+    # served from — the full-toolchain fingerprint.
+    stub_name = "tree_sitter_reachfp_stub"
+    (tmp_path / f"{stub_name}.py").write_text(
+        'raise ModuleNotFoundError("No module named '
+        f'{stub_name}", name="{stub_name}")\n',
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(rc_mod, "_EXTRACTOR_IDENTITY", None)
+    monkeypatch.setattr(
+        rc_mod, "_GRAMMAR_MODULES", (*rc_mod._GRAMMAR_MODULES, stub_name),
+    )
+    # Fresh probe state for the stub: neither the shared grammar-import
+    # cache nor sys.modules may carry a verdict from another test.
+    monkeypatch.delitem(ts_cache._GRAMMAR_CACHE, stub_name, raising=False)
+    monkeypatch.delitem(sys.modules, stub_name, raising=False)
+
+    identity = rc_mod._extractor_identity()
+
+    assert stub_name not in identity.split(",")
+    # And the real runtime module, when importable, still registers —
+    # the probe rejects import failure, not the mechanism itself.
+    try:
+        import tree_sitter  # noqa: F401
+    except ImportError:
+        pass
+    else:
+        assert "tree_sitter" in identity.split(",")
