@@ -1501,7 +1501,12 @@ def extract_verdicts(inventory: dict) -> dict[str, str]:
             bo = (item.get("metadata") or {}).get("binary_oracle")
             if not (bo and isinstance(bo, dict)):
                 continue
-            classification = bo["classification"]
+            # .get: a hand-edited inventory record without the key
+            # must skip, not KeyError — every other field access in
+            # this loop is already guarded.
+            classification = bo.get("classification")
+            if not classification:
+                continue
             if (classification == "absent"
                     and not absent_earns_suppression(bo.get("binaries"))):
                 absent_blocked.add(name)

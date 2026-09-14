@@ -657,11 +657,13 @@ def _method_params(decl) -> tuple[str, ...]:
         name_node = p.child_by_field_name("name")
         if name_node is None:
             # spread_parameter nests its name inside a
-            # variable_declarator.
-            decl = next(
+            # variable_declarator. (Named ``spread_decl`` — rebinding
+            # the function's own ``decl`` parameter here was a trap
+            # for the next loop iteration's reader.)
+            spread_decl = next(
                 (c for c in p.children if c.type == _VAR_DECLARATOR), None)
-            if decl is not None:
-                name_node = decl.child_by_field_name("name")
+            if spread_decl is not None:
+                name_node = spread_decl.child_by_field_name("name")
         if name_node is not None:
             out.append(_node_text(name_node))
     return tuple(out)

@@ -282,7 +282,6 @@ def _try_graph_store(binary_path: Path) -> BinaryEdgeIndex | None:
                 latest = summary.get("latest_snapshot") or {}
                 if latest.get("binary_sha256") != requested_sha256:
                     continue
-                _CALL_KINDS = {"CALLS", "CALLS_FUNCTION", "CALLS_SURFACE"}
                 raw_edges = query_edges(gpath, kind=None)
             except Exception as exc:  # noqa: BLE001 - best-effort cache reuse only
                 logger.debug(
@@ -596,6 +595,9 @@ def _parse_vtable_output(
         ))
     return edges
 
+
+# Graph-store edge kinds that represent calls (vs contains/xref rows).
+_CALL_KINDS = frozenset({"CALLS", "CALLS_FUNCTION", "CALLS_SURFACE"})
 
 _R2_PREFIXES = ("sym.", "method.", "func.", "fcn.", "dbg.", "imp.")
 
