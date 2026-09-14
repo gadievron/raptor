@@ -275,6 +275,49 @@ class TestDbFreshness:
         os.utime(src, (future, future))
         assert _db_is_stale(db, repo) is True
 
+    def test_git_metadata_never_mints_staleness(self, tmp_path):
+        """Any git operation after the DB build touches `.git/`
+        objects — pre-fix the unfiltered first-200 rglob sample read
+        that as source freshness and warned on every post-build
+        fetch/gc/status."""
+        import os
+
+        db = tmp_path / "db"
+        db.mkdir()
+        (db / "codeql-database.yml").write_text("")
+        repo = tmp_path / "repo"
+        (repo / ".git" / "objects").mkdir(parents=True)
+        (repo / "a.py").write_text("# old")
+        git_obj = repo / ".git" / "objects" / "pack1"
+        git_obj.write_text("packed")
+        future = git_obj.stat().st_mtime + 7200
+        os.utime(git_obj, (future, future))
+        assert _db_is_stale(db, repo) is False
+
+    def test_deep_source_edit_still_sampled(self, tmp_path):
+        """Mirror direction: skipping metadata dirs frees the sample
+        budget for real source — a fresh edit under a skipped-dir
+        SIBLING must still classify stale even when `.git/` carries
+        more than the whole sample cap."""
+        import os
+
+        db = tmp_path / "db"
+        db.mkdir()
+        (db / "codeql-database.yml").write_text("")
+        repo = tmp_path / "repo"
+        (repo / ".git" / "objects").mkdir(parents=True)
+        # More .git entries than the 200-file cap: pre-fix these
+        # exhausted the sample before any source file was seen.
+        for i in range(250):
+            (repo / ".git" / "objects" / f"o{i:03d}").write_text("x")
+        deep = repo / "src" / "pkg" / "mod"
+        deep.mkdir(parents=True)
+        src = deep / "edited.py"
+        src.write_text("# fresh edit")
+        future = src.stat().st_mtime + 7200
+        os.utime(src, (future, future))
+        assert _db_is_stale(db, repo) is True
+
     def test_within_grace_period_not_stale(self, tmp_path):
         db = tmp_path / "db"
         db.mkdir()

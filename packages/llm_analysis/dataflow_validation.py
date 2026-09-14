@@ -2547,14 +2547,24 @@ def _db_is_stale(db_path: Path, repo_path: Path) -> bool:
     if not repo_path or not repo_path.exists():
         return False
 
-    # Sample up to ~200 files; covers typical-sized repos and gives a
-    # reasonable freshness signal without walking massive monorepos.
+    # Sample up to ~200 SOURCE files; covers typical-sized repos and
+    # gives a reasonable freshness signal without walking massive
+    # monorepos. VCS/build metadata is excluded: `.git/` objects are
+    # touched by any git operation (fetch, gc, status refreshing the
+    # index) after the DB build, so an unfiltered first-200 sample
+    # minted false staleness warnings while deep-tree source edits
+    # were never sampled at all.
+    skip_dirs = {".git", ".hg", ".svn", "node_modules", "__pycache__",
+                 "build", "dist", ".venv", "venv"}
     newest_source = 0.0
     sampled = 0
     sample_cap = 200
     for child in repo_path.rglob("*"):
         if sampled >= sample_cap:
             break
+        rel_parts = child.relative_to(repo_path).parts
+        if any(part in skip_dirs for part in rel_parts[:-1]):
+            continue
         if child.is_file():
             try:
                 st = child.stat().st_mtime
