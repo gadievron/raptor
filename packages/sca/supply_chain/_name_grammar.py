@@ -38,9 +38,15 @@ _GRAMMARS: dict[str, re.Pattern[str]] = {
     "PyPI": re.compile(r"^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$"),
     # crates.io: alphanumeric plus - and _ (stored lowercased).
     "Cargo": re.compile(r"^[a-z0-9][a-z0-9_-]*$"),
-    # Composer vendor/package rule.
+    # Composer vendor/package rule: alnum runs joined by single
+    # ``_``/``.``/``-`` separators (the package half also allows
+    # ``--``).  Written with a mandatory separator per repetition —
+    # the optional-separator form Composer publishes is ambiguous
+    # (an alnum run splits into repetitions many ways) and
+    # backtracks exponentially on hostile feed rows; this form
+    # accepts the same language in linear time.
     "Packagist": re.compile(
-        r"^[a-z0-9]([_.-]?[a-z0-9]+)*/[a-z0-9](([_.]|-{1,2})?[a-z0-9]+)*$",
+        r"^[a-z0-9]+([_.-][a-z0-9]+)*/[a-z0-9]+(([_.]|-{1,2})[a-z0-9]+)*$",
     ),
     # Go module path (host/path segments).
     "Go": re.compile(
