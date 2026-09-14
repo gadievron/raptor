@@ -885,7 +885,30 @@ class _Scanner(ast.NodeVisitor):
 def _mermaid_scan(tree: ast.AST, rel: str) -> list[Violation]:
     """Flag f-string interpolations inside ```mermaid fences that are
     not sanitiser calls."""
-    out: list[Violation] = []
+    # First pass: collect hits without attribution. The parents map
+    # used only to name the enclosing function costs O(nodes) dict
+    # inserts per module — building it eagerly dominated whole-tree
+    # scans (the closure gate walks every candidate file, and almost
+    # all of them are fence-free) — so it is built lazily, only when
+    # a violation actually needs a function name.
+    hits: list[tuple[ast.FormattedValue, ast.JoinedStr]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.JoinedStr):
+            continue
+        in_fence = False
+        for part in node.values:
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                text = part.value
+                if in_fence and "```" in text:
+                    in_fence = False
+                if "```mermaid" in text:
+                    in_fence = True
+            elif isinstance(part, ast.FormattedValue) and in_fence:
+                if _call_name(part.value) not in _SANITISERS:
+                    hits.append((part, node))
+    if not hits:
+        return []
+
     # Track enclosing function names for the report.
     parents: dict = {}
     for parent in ast.walk(tree):
@@ -901,30 +924,19 @@ def _mermaid_scan(tree: ast.AST, rel: str) -> list[Violation]:
             cur = parents.get(cur)
         return ".".join(reversed(names)) or "<module>"
 
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.JoinedStr):
-            continue
-        in_fence = False
-        for part in node.values:
-            if isinstance(part, ast.Constant) and isinstance(part.value, str):
-                text = part.value
-                if in_fence and "```" in text:
-                    in_fence = False
-                if "```mermaid" in text:
-                    in_fence = True
-            elif isinstance(part, ast.FormattedValue) and in_fence:
-                if _call_name(part.value) not in _SANITISERS:
-                    try:
-                        src = ast.unparse(part.value)
-                    except (AttributeError, ValueError):
-                        src = "<expr>"
-                    out.append(Violation(
-                        file=rel,
-                        line=part.lineno,
-                        kind="unsanitised_mermaid_embed",
-                        detail=src[:80],
-                        func_name=_func_of(node),
-                    ))
+    out: list[Violation] = []
+    for part, node in hits:
+        try:
+            src = ast.unparse(part.value)
+        except (AttributeError, ValueError):
+            src = "<expr>"
+        out.append(Violation(
+            file=rel,
+            line=part.lineno,
+            kind="unsanitised_mermaid_embed",
+            detail=src[:80],
+            func_name=_func_of(node),
+        ))
     return out
 
 

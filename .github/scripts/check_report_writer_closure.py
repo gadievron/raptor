@@ -39,14 +39,72 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _DEFAULT_ROOT = _SCRIPT_DIR.parents[1]
 _BASELINE_PATH = _SCRIPT_DIR / "report_writer_closure_baseline.json"
+
+# Worker-side state, set by _init_worker (module global so the worker
+# function stays picklable under any multiprocessing start method).
+_WORKER_ROOT: Path | None = None
+
+
+def _init_worker(root_str: str) -> None:
+    """Make the scanned tree's own audit module importable in this
+    process (the gate audits scratch trees carrying their own copy)."""
+    global _WORKER_ROOT
+    _WORKER_ROOT = Path(root_str)
+    if root_str not in sys.path:
+        sys.path.insert(0, root_str)
+
+
+def _audit_one(rel: str) -> list:
+    """Audit one candidate file; returns its allowlist-filtered
+    violations.
+
+    Every candidate gets the full AST scan — deliberately no content
+    prescreen. A text-level "file never mentions a foreign key /
+    fence" skip is unsound: the parser folds adjacent string literals
+    and escape sequences into plain ``ast.Constant`` values
+    (``f["tit" "le"]``, ``f["\\x74itle"]``), so the detectors catch
+    key/fence literals whose source text never contains the token,
+    and a prescreen would skip exactly those files. The process pool
+    below is what keeps the whole-tree walk inside the CI budget.
+    """
+    import core.security.report_writer_audit as rwa
+
+    assert _WORKER_ROOT is not None
+    try:
+        source = (_WORKER_ROOT / rel).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return rwa.filter_allowlisted(rwa.audit_source(source, rel))
+
+
+def _audit_candidates(root: Path, rels: list[str]) -> list[list]:
+    """Per-file violation lists, in ``rels`` order. Parallel across a
+    small process pool (the scan is CPU-bound pure Python); falls back
+    to a serial in-process scan when a pool cannot be created or dies
+    (restricted sandboxes without working /dev/shm semaphores)."""
+    workers = min(8, len(rels) or 1, os.cpu_count() or 1)
+    if workers > 1:
+        try:
+            with ProcessPoolExecutor(
+                    max_workers=workers,
+                    initializer=_init_worker,
+                    initargs=(str(root),)) as pool:
+                return list(pool.map(_audit_one, rels, chunksize=16))
+        except Exception as exc:  # noqa: BLE001 — any pool failure degrades to serial
+            print(f"note: parallel scan unavailable ({exc.__class__.__name__}); "
+                  f"scanning serially", file=sys.stderr)
+    _init_worker(str(root))
+    return [_audit_one(rel) for rel in rels]
 
 
 def _candidates(root: Path) -> list[str]:
@@ -108,8 +166,8 @@ def main(argv: list[str] | None = None) -> int:
 
     registered_hits = []
     unregistered: dict[str, list] = {}
-    for rel in _candidates(root):
-        vs = rwa.filter_allowlisted(rwa.audit_file(root / rel))
+    candidates = _candidates(root)
+    for rel, vs in zip(candidates, _audit_candidates(root, candidates)):
         if not vs:
             continue
         if rel in registered:
@@ -166,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {k}")
 
     counts = Counter(v.file for vs in unregistered.values() for v in vs)
-    print(f"closure scan: {len(_candidates(root))} candidates, "
+    print(f"closure scan: {len(candidates)} candidates, "
           f"{len(registered)} registered writers, "
           f"{sum(counts.values())} baselined hits in {len(counts)} files, "
           f"{len(new)} new, {len(stale)} stale")
