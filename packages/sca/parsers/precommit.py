@@ -251,6 +251,13 @@ def _classify_addl_spec(
     if not m:
         return "", None, PinStyle.UNKNOWN
     name = m.group(1)
+    if ecosystem == "PyPI":
+        # Every other PyPI parser emits PEP 503-normalised names —
+        # OSV keys PyPI advisories on the normalised spelling, so an
+        # as-written ``types-PyYAML`` / ``Flask_SQLAlchemy`` here got
+        # zero advisory coverage and broke join-key parity.
+        from ..naming import pep503_name
+        name = pep503_name(name)
     rest = m.group(3).strip()
     # ``name@<spec>`` (npm tag-separator form): drop the separator
     # BEFORE classification. Leaving it attached meant ``pkg@^1.0`` /

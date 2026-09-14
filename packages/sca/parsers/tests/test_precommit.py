@@ -326,7 +326,10 @@ repos:
     # The mypy main row + two additional dep rows.
     assert "mypy" in by_name
     assert "pydantic" in by_name
-    assert "types-PyYAML" in by_name
+    # PEP 503-normalised, like every other PyPI parser — OSV keys
+    # PyPI advisories on the normalised spelling.
+    assert "types-pyyaml" in by_name
+    assert "types-PyYAML" not in by_name
     assert by_name["pydantic"].ecosystem == "PyPI"
     assert by_name["pydantic"].version == ">=2.5"
     assert by_name["pydantic"].pin_style == PinStyle.RANGE
@@ -442,7 +445,7 @@ repos:
     deps = parse(p)
     addl = {d.name: d for d in deps if d.source_kind == "precommit_additional"}
     assert addl["pydantic"].source_extra["hook_id"] == "mypy"
-    assert addl["types-PyYAML"].source_extra["hook_id"] == "mypy-strict"
+    assert addl["types-pyyaml"].source_extra["hook_id"] == "mypy-strict"
 
 
 # ---------------------------------------------------------------------------
@@ -487,3 +490,23 @@ def test_addl_at_bare_version_stays_exact(tmp_path: Path) -> None:
     d = next(d for d in parse(p) if d.name == "eslint-config-x")
     assert d.pin_style is PinStyle.EXACT
     assert d.version == "8.57.0"
+
+
+def test_additional_dependencies_pypi_names_pep503_normalised(tmp_path):
+    """Non-canonical PyPI spellings in additional_dependencies must be
+    PEP 503-folded — the as-written form breaks OSV matching and
+    join-key parity with every other PyPI parser."""
+    p = _write(tmp_path, """\
+repos:
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.2
+    hooks:
+      - id: mypy
+        additional_dependencies: ["Flask_SQLAlchemy==3.1.1"]
+""")
+    deps = parse(p)
+    by_name = {d.name: d for d in deps}
+    assert "flask-sqlalchemy" in by_name
+    assert by_name["flask-sqlalchemy"].version == "3.1.1"
+    # npm scoped names keep their as-published spelling (npm is
+    # case-sensitive for legacy names; only PyPI folds here).

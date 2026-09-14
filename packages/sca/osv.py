@@ -127,8 +127,20 @@ def _canonical_name(ecosystem: str, name: str) -> str:
 
     Beyond the shared rule, OSV case-folds crates.io names — the
     registry walk deliberately keeps Cargo case-sensitive, so the
-    fold is an OSV-boundary opt-in, not part of the shared rule."""
+    fold is an OSV-boundary opt-in, not part of the shared rule.
+    GitHub Actions advisories are keyed on the parent ``owner/repo``
+    — a sub-action ref (``github/codeql-action/init``) must collapse
+    to it or its advisories silently never match (the registry client
+    already parents at fetch; this is the OSV-side twin)."""
+    if ecosystem == "GitHub Actions":
+        name = _gha_parent_repo(name)
     return fold_name(name, ecosystem, extra_lower=("Cargo",))
+
+
+def _gha_parent_repo(name: str) -> str:
+    """Collapse a GHA sub-action ref to its ``owner/repo`` parent."""
+    parts = name.split("/")
+    return "/".join(parts[:2]) if len(parts) > 2 else name
 
 
 def _has_corridor(dep: Dependency) -> bool:
@@ -343,9 +355,18 @@ class OsvClient:
             for chunk in _chunked(queryable, _BATCH_CHUNK_SIZE):
                 queries = []
                 for d in chunk:
+                    # GHA sub-action refs must query the parent repo
+                    # — OSV has no package named owner/repo/sub, so
+                    # the raw name returned no advisories, ever.
+                    # Other ecosystems keep the parser-canonical name
+                    # verbatim (parsers own per-ecosystem folding).
+                    query_name = (
+                        _gha_parent_repo(d.name)
+                        if d.ecosystem == "GitHub Actions" else d.name
+                    )
                     q: dict[str, Any] = {
                         "package": {
-                            "name": d.name,
+                            "name": query_name,
                             "ecosystem": _to_osv_ecosystem(d.ecosystem),
                         },
                     }
@@ -461,7 +482,11 @@ class OsvClient:
                     continue
                 try:
                     advs = self._offline_db.query(
-                        dep.ecosystem, dep.name, dep.version,
+                        dep.ecosystem,
+                        (_gha_parent_repo(dep.name)
+                         if dep.ecosystem == "GitHub Actions"
+                         else dep.name),
+                        dep.version,
                     )
                 except Exception as e:                  # noqa: BLE001
                     logger.warning(
