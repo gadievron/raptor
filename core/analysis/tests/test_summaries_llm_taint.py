@@ -29,6 +29,11 @@ def _review_result_with_flow() -> dict:
                              "function": "parse_header"},
                 "expect_absent": False,
                 "parameter": "buf",
+                # Propagation needs a CONCRETE index — an indexless
+                # precondition defaults to -1 (unknown) and never
+                # binds (see test_indexless_precondition_never_binds
+                # _to_arg_zero).
+                "param_index": 0,
             },
             {
                 "assumption": "caller does not null-terminate buf",
@@ -111,3 +116,53 @@ def test_sink_name_extraction_preference_order():
     assert _sink_name_from_assumption(
         "passes the value to a dangerous API"
     ) == "unspecified_sink"
+
+
+def test_indexless_precondition_never_binds_to_arg_zero():
+    """A review precondition with NO param_index must default to -1
+    (unknown), matching the taint-rule branch. Defaulting to 0 minted
+    a concrete index that _param_index_of "recovered" for the named
+    param, so an inherited rule bound to whichever caller symbol
+    feeds callee arg 0 — a fabricated flow in the reviewer prompt."""
+    rr = {
+        "preconditions": [
+            {
+                "parameter": "second",
+                "assumption": "flows into memcpy",
+                "check_type": "function_reaches_sink",
+            },
+        ],
+    }
+    callee = summary_from_review_result("callee_fn", "src/x.c", rr)
+    assert callee is not None
+    # The precondition record itself carries the unknown marker.
+    assert all(p.param_index == -1 for p in callee.preconditions)
+    caller = FunctionSummary(function="caller_fn", file="src/y.c")
+    inherited = propagate_taint_upward(
+        callee, caller,
+        [{"callee_index": 0, "caller_param": "first_arg"}],
+    )
+    # Nothing pins ``second`` to index 0 — no inherited rule.
+    assert inherited == []
+
+
+def test_explicit_param_index_still_binds():
+    rr = {
+        "preconditions": [
+            {
+                "parameter": "buf",
+                "assumption": "flows into memcpy",
+                "check_type": "function_reaches_sink",
+                "param_index": 0,
+            },
+        ],
+    }
+    callee = summary_from_review_result("callee_fn", "src/x.c", rr)
+    assert callee is not None
+    caller = FunctionSummary(function="caller_fn", file="src/y.c")
+    inherited = propagate_taint_upward(
+        callee, caller,
+        [{"callee_index": 0, "caller_param": "user_input"}],
+    )
+    assert len(inherited) == 1
+    assert inherited[0].source_param == "user_input"

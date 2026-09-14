@@ -363,9 +363,14 @@ def summary_from_review_result(
         param = pc.get("parameter", pc.get("param", ""))
         assumption = pc.get("assumption", "")
         if param and assumption:
+            # Default -1 (unknown), matching the taint-rule branch
+            # below: defaulting to 0 fabricated a concrete index that
+            # _param_index_of then "recovered" for ANY named param,
+            # binding inherited taint to whichever caller symbol
+            # feeds callee arg 0.
             preconditions.append(Precondition(
                 param=param,
-                param_index=pc.get("param_index", 0),
+                param_index=pc.get("param_index", -1),
                 conditions=[assumption],
                 evidence_tier=EvidenceTier.HEURISTIC,
             ))
