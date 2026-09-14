@@ -268,8 +268,8 @@ def test_e2e_gradle_kts_resolves_catalog(repo):
     # Gradle deps key by ``{group}/{artifact}`` so that group-scoped
     # collisions stay distinct (e.g. multiple ``commons-*`` packages
     # under different orgs). Look up via the full coord.
-    junit_key = "org.junit.jupiter/junit-jupiter"
-    kotlinx_key = "org.jetbrains.kotlinx/kotlinx-coroutines-core"
+    junit_key = "org.junit.jupiter:junit-jupiter"
+    kotlinx_key = "org.jetbrains.kotlinx:kotlinx-coroutines-core"
 
     # libs.junit.jupiter → junit-jupiter (catalog) → version.ref=junit
     # → 5.9.0 from [versions].

@@ -324,7 +324,13 @@ def _build_dep(
     only the inline DSL forms keep the ``medium`` confidence
     from the regex-parse heuristic.
     """
-    coord = f"{group}/{name}"
+    # Maven combined name is ``groupId:artifactId`` — the shape every
+    # consumer joins on: OSV names Maven packages that way, the Maven
+    # registry client requires it (``list_versions("group:artifact")``),
+    # pom.py / gradle_lockfile.py emit it, and the manifest↔lockfile
+    # join keys on ``(ecosystem, name)``. A ``group/artifact`` name
+    # matches none of them and silently loses all advisory coverage.
+    coord = f"{group}:{name}"
     pin_style = _classify_version(version)
     purl = build_purl(_PURL_TYPE, name, version, namespace=group)
     is_catalog = source_origin.startswith("gradle_catalog")

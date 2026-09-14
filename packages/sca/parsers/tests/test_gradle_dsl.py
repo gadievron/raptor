@@ -23,9 +23,9 @@ dependencies {
 """
     p = _write(tmp_path, body)
     by_name = {d.name: d for d in parse(p)}
-    assert by_name["org.springframework/spring-core"].version == "6.0.0"
-    assert by_name["org.springframework/spring-core"].pin_style is PinStyle.EXACT
-    assert by_name["com.google.guava/guava"].version == "32.1.0-jre"
+    assert by_name["org.springframework:spring-core"].version == "6.0.0"
+    assert by_name["org.springframework:spring-core"].pin_style is PinStyle.EXACT
+    assert by_name["com.google.guava:guava"].version == "32.1.0-jre"
 
 
 def test_kotlin_dsl_parens_form(tmp_path: Path) -> None:
@@ -37,7 +37,7 @@ dependencies {
 """
     p = _write(tmp_path, body, name="build.gradle.kts")
     by_name = {d.name: d for d in parse(p)}
-    assert by_name["org.springframework/spring-core"].version == "6.0.0"
+    assert by_name["org.springframework:spring-core"].version == "6.0.0"
 
 
 def test_named_args_groovy(tmp_path: Path) -> None:
@@ -49,9 +49,9 @@ dependencies {
 """
     p = _write(tmp_path, body)
     by_name = {d.name: d for d in parse(p)}
-    assert by_name["org.foo/bar"].scope == "main"
-    assert by_name["junit/junit"].scope == "test"
-    assert by_name["junit/junit"].version == "4.13.2"
+    assert by_name["org.foo:bar"].scope == "main"
+    assert by_name["junit:junit"].scope == "test"
+    assert by_name["junit:junit"].version == "4.13.2"
 
 
 def test_string_interpolation_unknown_pin(tmp_path: Path) -> None:
@@ -99,7 +99,7 @@ dependencies {
     p = _write(tmp_path, body)
     deps = parse(p)
     assert len(deps) == 1
-    assert deps[0].name == "org.foo/keep"
+    assert deps[0].name == "org.foo:keep"
 
 
 def test_unversioned_dep(tmp_path: Path) -> None:
@@ -137,7 +137,7 @@ def test_dispatch_via_discovery(tmp_path: Path) -> None:
     bg = next(m for m in manifests if m.path.name == "build.gradle")
     assert bg.ecosystem == "Maven"
     deps = dispatch(bg)
-    assert deps and deps[0].name == "g/a"
+    assert deps and deps[0].name == "g:a"
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +157,7 @@ def test_adversarial_keyword_space_run_parses_fast(tmp_path: Path) -> None:
     deps = parse(p)
     assert time.monotonic() - t0 < 2.0
     # Matching semantics preserved on the real declaration.
-    assert [(d.name, d.version) for d in deps] == [("org.x/y", "1.0")]
+    assert [(d.name, d.version) for d in deps] == [("org.x:y", "1.0")]
 
 
 def test_paren_forms_still_match(tmp_path: Path) -> None:
@@ -169,7 +169,7 @@ def test_paren_forms_still_match(tmp_path: Path) -> None:
     )
     p = _write(tmp_path, body)
     got = {(d.name, d.version) for d in parse(p)}
-    assert got == {("g/a", "1.0"), ("g/b", "2.0"), ("g/c", "3.0")}
+    assert got == {("g:a", "1.0"), ("g:b", "2.0"), ("g:c", "3.0")}
 
 
 def test_paren_without_quote_does_not_match(tmp_path: Path) -> None:
@@ -195,4 +195,64 @@ def test_settings_gradle_routes_to_this_parser(tmp_path: Path) -> None:
         name="settings.gradle.kts",
     )
     assert _resolve(kts) is not None
-    assert [(d.name, d.version) for d in parse(kts)] == [("g/a", "1.0")]
+    assert [(d.name, d.version) for d in parse(kts)] == [("g:a", "1.0")]
+
+
+# ---------------------------------------------------------------------------
+# Join-key parity — the name a build.gradle row carries must be the
+# exact key every consumer joins on
+# ---------------------------------------------------------------------------
+
+def test_name_joins_osv_registry_and_lockfile_keys(tmp_path: Path) -> None:
+    """A build.gradle dep name must match its consumers' join keys.
+
+    OSV names Maven packages ``groupId:artifactId``; the Maven registry
+    client requires the same combined form; the manifest↔lockfile join
+    keys on ``(ecosystem, name)``. A parser emitting any other shape
+    (e.g. ``group/artifact``) silently loses ALL advisory coverage for
+    build.gradle-declared deps — OSV returns no rows for the wrong name
+    and the scan reads clean.
+    """
+    from packages.sca.join import join
+    from packages.sca.osv import _canonical_name
+    from packages.sca.parsers.gradle_lockfile import parse as parse_lockfile
+
+    p = _write(
+        tmp_path,
+        "dependencies {\n"
+        "    implementation 'org.springframework:spring-core:6.0.0'\n"
+        "}\n",
+    )
+    (dep,) = parse(p)
+
+    # Fixture shape of a real OSV Maven advisory's affected-package
+    # block (e.g. GHSA-4wp7-92pw-q264 for spring-core): the package
+    # name OSV keys on is the colon-combined coordinate.
+    osv_affected_package = {
+        "ecosystem": "Maven",
+        "name": "org.springframework:spring-core",
+    }
+    assert dep.ecosystem == osv_affected_package["ecosystem"]
+    assert _canonical_name(dep.ecosystem, dep.name) == (
+        osv_affected_package["name"]
+    )
+
+    # Registry-client contract: MavenRegistry.list_versions() refuses
+    # names without the ``group:artifact`` combined form.
+    group, _, artifact = dep.name.partition(":")
+    assert group == "org.springframework" and artifact == "spring-core"
+
+    # Manifest↔lockfile join: the resolved gradle.lockfile row for the
+    # same coordinate must be promoted to direct=True (same-name key).
+    lock = tmp_path / "gradle.lockfile"
+    lock.write_text(
+        "org.springframework:spring-core:6.0.0=compileClasspath\n",
+        encoding="utf-8",
+    )
+    joined = join([dep, *parse_lockfile(lock)])
+    lock_rows = [d for d in joined if d.is_lockfile]
+    assert lock_rows, "lockfile row missing from join output"
+    assert all(d.direct for d in lock_rows), (
+        "manifest name did not key the lockfile join — direct-flag "
+        "promotion failed"
+    )

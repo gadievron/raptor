@@ -249,7 +249,7 @@ dependencies {
     deps = parse(script)
     assert len(deps) == 1
     d = deps[0]
-    assert d.name == "org.springframework.boot/spring-boot-starter"
+    assert d.name == "org.springframework.boot:spring-boot-starter"
     assert d.version == "3.1.0"
     assert d.source_extra["origin"] == "gradle_catalog_ref"
     assert d.source_extra["catalog_alias"] == "spring-boot-starter"
@@ -301,7 +301,7 @@ plugins {
     # name is ``<plugin_id>.gradle.plugin`` under the group
     # equal to the plugin id.
     assert d.name == (
-        "org.jetbrains.kotlin.jvm/org.jetbrains.kotlin.jvm.gradle.plugin"
+        "org.jetbrains.kotlin.jvm:org.jetbrains.kotlin.jvm.gradle.plugin"
     )
     assert d.version == "1.9.0"
     assert d.source_extra["origin"] == "gradle_catalog_plugin_ref"
