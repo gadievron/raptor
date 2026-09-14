@@ -73,6 +73,11 @@ def test_per_call_opt_out_still_runs(darwin_no_seatbelt):
 
 def test_operator_waiver_downgrades_to_loud_warning(
         darwin_no_seatbelt, monkeypatch, caplog):
+    # The warning is warn_once-gated: an earlier consumer anywhere in
+    # the same process eats the once and this assertion goes latent.
+    # Own the latch state regardless of suite order.
+    from core.sandbox import state
+    state.reset_warn_once("_degraded_net_open_override_warned")
     monkeypatch.setenv("RAPTOR_ALLOW_DEGRADED_UNTRUSTED", "1")
     with caplog.at_level(logging.WARNING, logger="core.sandbox.context"), \
             context.sandbox(block_network=True) as run:
