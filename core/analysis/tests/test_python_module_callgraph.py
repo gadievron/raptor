@@ -391,3 +391,14 @@ class TestConditionalRedefinition:
         s = _compute_one_summary(cg, "f", {})
         assert s.summary_unknown
         assert "variant" in (s.summary_unknown_reason or "")
+
+
+def test_non_utf8_file_degrades_instead_of_raising(tmp_path):
+    # A latin-1 byte in a scanned file must not raise
+    # UnicodeDecodeError through the builder — decode with
+    # replacement and let the parse decide.
+    p = tmp_path / "m.py"
+    p.write_bytes(b"# caf\xe9\ndef f(x):\n    return x\n")
+    cg = build_python_module_callgraph(p)
+    assert cg is not None
+    assert cg.find("f") is not None

@@ -482,7 +482,13 @@ def build_python_module_callgraph(
     """
     if isinstance(source, Path):
         file_path = str(source)
-        source_text = source.read_text(encoding="utf-8")
+        # errors="replace": a non-UTF-8 target file must degrade to
+        # the parse-failure None path (or parse what it can), not
+        # raise UnicodeDecodeError into the caller — the resolver's
+        # blanket except would silently drop the file's summaries,
+        # and new callers would crash outright.
+        source_text = source.read_text(encoding="utf-8",
+                                       errors="replace")
     else:
         file_path = "<string>"
         source_text = source
