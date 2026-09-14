@@ -158,6 +158,38 @@ class TestUnwrap:
         assert isinstance(unwrap_structured_response(None),
                           StructuredCallResult)
 
+    def test_bare_dict_is_already_unwrapped(self):
+        # Twin-parity: structured_result treats a bare dict as an
+        # already-unwrapped payload; pre-unification this helper
+        # tried response[0], hit KeyError, and silently returned the
+        # sentinel — the exact sibling-drift shape the consolidation
+        # was meant to end.
+        payload = {"verdict": "sound"}
+        call = unwrap_structured_response(payload, empty_result="x")
+        assert call.result == payload
+
+    def test_result_shape_never_drifts_from_structured_result(self):
+        # Drift guard: for every tolerated response shape, the result
+        # this wrapper reports must equal what the canonical
+        # structured_result extracts (this wrapper only ADDS the
+        # cost/model/usage view).
+        from core.llm.coerce import structured_result
+        sentinel = {"status": "error"}
+        shapes = [
+            None,
+            (),
+            ({"b": 2}, "raw"),
+            {"bare": "dict"},
+            _FakeResponse(result={"a": 1}),
+            object(),
+            "",
+            [{"first": 1}, "rest"],
+        ]
+        for shape in shapes:
+            assert unwrap_structured_response(
+                shape, empty_result=sentinel,
+            ).result == structured_result(shape, default=sentinel), shape
+
 
 class TestChainWalkingClassifiers:
     """Shared home for the blocked/refused predicates: every consumer

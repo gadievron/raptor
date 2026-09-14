@@ -233,15 +233,19 @@ def unwrap_structured_response(
     tuple. ``empty_result`` is what ``result`` becomes when the
     response is falsy or unsubscriptable (callers pick their own
     sentinel: an error dict, ``None``, ...).
+
+    Result extraction DELEGATES to
+    :func:`core.llm.coerce.structured_result` — the one spelling of
+    the ``.result``-or-``(result, raw)`` tolerance — so the two
+    helpers cannot drift on shape semantics (pre-unification a bare
+    dict unwrapped fine through one and became ``empty_result``
+    through the other). This wrapper adds only the cost/model/usage
+    view; callers that need the result alone should use
+    ``structured_result`` directly.
     """
-    result = empty_result
-    if hasattr(response, "result"):
-        result = response.result
-    elif response:
-        try:
-            result = response[0]
-        except (TypeError, KeyError, IndexError):
-            result = empty_result
+    from core.llm.coerce import structured_result
+
+    result = structured_result(response, default=empty_result)
     try:
         cost = float(getattr(response, "cost", 0.0) or 0.0)
     except (TypeError, ValueError):

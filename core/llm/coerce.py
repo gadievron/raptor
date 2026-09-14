@@ -146,6 +146,10 @@ def structured_result(response: Any, *, default: Any = None) -> Any:
 
     Never raises — the hand-rolled copies sat inside broad ``try``
     blocks and an unwrap failure must stay non-fatal.
+
+    :func:`core.llm.structured_call.unwrap_structured_response` builds
+    its result field on THIS helper (it adds the cost/model/usage
+    view) — shape-tolerance changes belong here, in one place.
     """
     if response is None:
         return default
