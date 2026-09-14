@@ -219,6 +219,71 @@ class TestCorruptLineCounting:
         ]
         assert agg, "aggregate corrupt-line warning expected"
 
+    def test_planted_unknown_schema_version_row_quarantined(
+        self, tmp_path: Path, caplog,
+    ) -> None:
+        # The journal lives inside the run dir — SANDBOX-WRITABLE —
+        # so a planted schema_version!=1 row must be skipped with a
+        # warning. Pre-fix _entry_from_dict's ValueError escaped
+        # load_entries and persistently crashed every journal
+        # consumer (audit resume, reports, completion merge).
+        append_entry(tmp_path, _entry(1))
+        journal = tmp_path / "review-journal.jsonl"
+        with open(journal, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"schema_version": 999}) + "\n")
+        append_entry(tmp_path, _entry(2))
+
+        with caplog.at_level(logging.WARNING, logger="core.coverage.journal"):
+            entries = load_entries(tmp_path)
+
+        assert len(entries) == 2
+        assert any(
+            "skipping malformed entry" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_planted_non_dict_json_rows_quarantined(
+        self, tmp_path: Path, caplog,
+    ) -> None:
+        # Valid JSON that is NOT a dict (null / list / string / bare
+        # number) parses fine but has no .get — pre-gate it raised
+        # AttributeError past the per-row except tuple and crashed
+        # load_entries. All four shapes must quarantine per-row.
+        append_entry(tmp_path, _entry(1))
+        journal = tmp_path / "review-journal.jsonl"
+        with open(journal, "a", encoding="utf-8") as f:
+            for planted in ("null", "[1, 2, 3]", '"x"', "12345"):
+                f.write(planted + "\n")
+        append_entry(tmp_path, _entry(2))
+
+        with caplog.at_level(logging.WARNING, logger="core.coverage.journal"):
+            entries = load_entries(tmp_path)
+
+        assert len(entries) == 2
+        non_dict = [
+            r for r in caplog.records
+            if "skipping non-dict entry" in r.getMessage()
+        ]
+        assert len(non_dict) == 4
+
+    def test_planted_null_row_never_persistently_crashes_consumers(
+        self, tmp_path: Path,
+    ) -> None:
+        # The journal lives inside the sandbox-writable run dir: one
+        # planted 5-byte row ("null\n") must not wedge the journal —
+        # every subsequent load AND append must keep working, with the
+        # legit rows intact.
+        append_entry(tmp_path, _entry(1))
+        journal = tmp_path / "review-journal.jsonl"
+        with open(journal, "a", encoding="utf-8") as f:
+            f.write("null\n")
+
+        assert len(load_entries(tmp_path)) == 1
+        append_entry(tmp_path, _entry(2))
+        assert len(load_entries(tmp_path)) == 2
+        assert len(load_entries(tmp_path)) == 2
+
+
 
 class TestJournalByteBudget:
     """Journal + index loads are size-gated before any read."""

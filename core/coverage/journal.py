@@ -520,9 +520,27 @@ def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
                     "journal: skipping corrupt line %d in %s", i + 1, journal_path,
                 )
             continue
+        if not isinstance(raw, dict):
+            # Valid JSON is not necessarily a dict: ``null``, a list,
+            # a string, or a bare number parses fine but would raise
+            # AttributeError inside _entry_from_dict — past any except
+            # tuple keyed on the dict schema. Quarantine the row
+            # BEFORE handing it over: anything that is not a validated
+            # dict is contained here.
+            logger.warning(
+                "journal: skipping non-dict entry on line %d: %s",
+                i + 1, type(raw).__name__,
+            )
+            continue
         try:
             entries.append(_entry_from_dict(raw))
-        except (TypeError, KeyError) as exc:
+        except (TypeError, KeyError, ValueError) as exc:
+            # ValueError included: _entry_from_dict raises it for an
+            # unknown schema_version (and forged line spans). The
+            # journal lives inside the run dir — SANDBOX-WRITABLE —
+            # so ONE planted row must quarantine (skip + warn), never
+            # persistently crash every journal consumer (audit
+            # resume, reports, completion merge).
             logger.warning(
                 "journal: skipping malformed entry on line %d: %s", i + 1, exc,
             )
