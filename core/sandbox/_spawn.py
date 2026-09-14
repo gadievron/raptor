@@ -130,6 +130,93 @@ CLONE_NEWCGROUP = getattr(os, "CLONE_NEWCGROUP", 0x02000000)
 CLONE_NEWNET  = getattr(os, "CLONE_NEWNET",  0x40000000)
 
 
+# ---------------------------------------------------------------------------
+# Death-pipe write-end registry: cross-spawn fd hygiene.
+#
+# Every live parent-held death-pipe write end in THIS process is
+# registered here — _spawn's per-call pipe and context.py's reaper-cell
+# pipe alike. os.pipe() fds are close-on-exec, but fork(2) copies the
+# whole fd table regardless: a never-exec'ing fork child (the
+# intermediate watcher below, and the plain-lane sweeper it mirrors)
+# forked while another spawn is in flight inherits a copy of that
+# SIBLING's death_w. The sibling's watcher then never reads EOF while
+# this child lives — concurrent spawns mutually pin each other's
+# orphan-teardown signal, and a hard-killed orchestrator leaves the
+# whole cohort running to completion. The registry lets the forked
+# child close every death-pipe write end it inherited (its own owning
+# parent keeps the only surviving copy), restoring the "parent dies →
+# EOF" contract under concurrency.
+#
+# Consistency contract: registration (pipe creation), unregistration
+# (close), and the intermediate fork all happen under _DEATH_W_LOCK.
+# That makes the child's fork-time snapshot of _LIVE_DEATH_W exactly
+# match its inherited fd table — no window where an fd is open but
+# unregistered (the child would skip it) or closed-and-reused but
+# still registered (the child would close an unrelated fd of the same
+# number). The forked child reads the snapshot WITHOUT the lock: it is
+# single-threaded, and the forking thread's `with` block releases the
+# inherited lock before the child branch runs.
+# ---------------------------------------------------------------------------
+
+_DEATH_W_LOCK = threading.Lock()
+_LIVE_DEATH_W: set[int] = set()
+
+
+def open_death_pipe() -> tuple[int, int]:
+    """``os.pipe()`` for a death pipe, registering the write end.
+
+    Creation and registration are atomic w.r.t. the intermediate fork
+    (same lock), so a concurrently-forked child either never inherits
+    the fd or sees it registered and closes its copy.
+    """
+    with _DEATH_W_LOCK:
+        death_r, death_w = os.pipe()
+        _LIVE_DEATH_W.add(death_w)
+    return death_r, death_w
+
+
+def close_death_w(fd: int) -> bool:
+    """Close and unregister a registered death-pipe write end.
+
+    Returns False (and closes nothing) when *fd* is not registered:
+    every close of a death_w routes through here, so an unregistered
+    number means it was already closed — and possibly reused for an
+    unrelated fd — making this idempotent against the double-close
+    paths (timeout teardown then the outer ``finally``, in either
+    order).
+    """
+    with _DEATH_W_LOCK:
+        if fd not in _LIVE_DEATH_W:
+            return False
+        _LIVE_DEATH_W.discard(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        return True
+
+
+def _close_inherited_death_w_post_fork() -> None:
+    """Forked-child side: close EVERY registered death-pipe write end.
+
+    Post-fork safe (os.close + iteration over an inherited set — no
+    locks, no allocation beyond the list). Includes this spawn's own
+    death_w: the child watches death_r only, and the owning parent's
+    copy is the one that must be the last to close.
+
+    Clears the inherited registry afterwards: the entries describe
+    the PARENT's fd table, and in this child every one is now closed
+    — a stale entry re-consulted later (its number possibly reused by
+    a child-side fd) would close an unrelated descriptor.
+    """
+    for _dw in list(_LIVE_DEATH_W):
+        try:
+            os.close(_dw)
+        except OSError:
+            pass
+    _LIVE_DEATH_W.clear()
+
+
 def _scrub_env_image_values(names: Iterable[bytes]) -> None:
     """Zero the VALUES of the named variables in this process's
     execve-time environment image (``mm->env_start..env_end``).
@@ -702,10 +789,7 @@ def _teardown_target(child_pid: int, death_w: int, parent_fds: set,
         pgid = None
     reaped = False
     if death_w in parent_fds:
-        try:
-            os.close(death_w)
-        except OSError:
-            pass
+        close_death_w(death_w)
         parent_fds.discard(death_w)
         deadline = time.monotonic() + grace_s
         while time.monotonic() < deadline:
@@ -1551,10 +1635,18 @@ def run_sandboxed(
 
     def _close_leftover() -> None:
         for fd in list(_parent_fds):
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+            # A registered death-pipe write end must unregister under
+            # the registry lock as it closes (close_death_w) — a bare
+            # close would leave a stale registry entry whose fd number
+            # can be reused, steering a sibling's forked child into
+            # closing an unrelated fd. Non-death fds can never collide
+            # with a registered number (both are live fds in one
+            # table), so the fallthrough close is safe.
+            if not close_death_w(fd):
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
             _parent_fds.discard(fd)
 
     try:
@@ -1620,7 +1712,11 @@ def run_sandboxed(
         # death_r via select(). If the orchestrator is hard-killed
         # (SIGKILL/OOM/crash), death_w auto-closes → child reads EOF →
         # SIGKILLs the grandchild so the pid-namespace doesn't leak.
-        death_r, death_w = os.pipe()
+        # Registered creation: concurrently-forked sibling children
+        # must close their inherited copies of THIS death_w, or its
+        # EOF is pinned for as long as any sibling lives (see the
+        # registry block at module top).
+        death_r, death_w = open_death_pipe()
         _parent_fds.update({death_r, death_w})
 
         # Exec-pid pipe (optional): when exec_pid_callback is supplied,
@@ -2073,7 +2169,13 @@ def run_sandboxed(
         # need raw fork; the multi-threaded-fork DeprecationWarning is
         # filtered once at module level (fork-safety contract in the
         # module docstring).
-        child_pid = os.fork()
+        # Forked under the death-pipe registry lock so the child's
+        # inherited _LIVE_DEATH_W snapshot exactly matches its
+        # inherited fd table (registration and close both take the
+        # same lock); the `with` exit releases the lock in BOTH
+        # processes before either branch runs.
+        with _DEATH_W_LOCK:
+            child_pid = os.fork()
     except BaseException:
         # Any failure before fork returns: close opened pipes, release
         # the audit-config fd and evidence file if created, and remove
@@ -2104,9 +2206,13 @@ def run_sandboxed(
         # read end. status_w is kept open through setup and auto-closes on
         # a successful execvpe (its default O_CLOEXEC) → parent reads EOF.
         os.close(status_r)
-        # Death pipe: child watches death_r; close the write end so only
-        # the parent holds it. Parent dying → death_w closes → EOF.
-        os.close(death_w)
+        # Death pipes: child watches death_r; close the write end so
+        # only the parent holds it. Parent dying → death_w closes →
+        # EOF. The sweep covers our own death_w AND every sibling
+        # spawn's registered write end we inherited across the fork —
+        # a retained sibling copy would pin that sibling's EOF (and
+        # its orphan teardown) to this child's lifetime.
+        _close_inherited_death_w_post_fork()
         # Exec-pid pipe: the child side only WRITES (pid_w, from the
         # intermediate after the grandchild fork); close the read end.
         if pid_r is not None:
@@ -3851,12 +3957,10 @@ def run_sandboxed(
         # execed (hence the timeout) → the 'G' confirmation → None.
         setup_status = _drain_status_pipe(status_r, _parent_fds)
         # Death pipe write end: child has exited (or been killed), no
-        # longer needed. Close it so the fd doesn't leak.
+        # longer needed. Close it so the fd doesn't leak (registry-
+        # routed: unregisters atomically with the close).
         if death_w in _parent_fds:
-            try:
-                os.close(death_w)
-            except OSError:
-                pass
+            close_death_w(death_w)
             _parent_fds.discard(death_w)
         # Unix-scope supervisor: the run is over — close the notify fd
         # so any straggler's connect(2) gets ENOSYS from the kernel
