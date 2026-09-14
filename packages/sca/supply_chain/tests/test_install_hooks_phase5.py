@@ -200,6 +200,85 @@ def test_worm_shape_suppressed_on_vendored_scoped_publish_helper(
     assert findings[0].severity == "low"
 
 
+def test_planted_gems_dir_does_not_attest(tmp_path: Path) -> None:
+    """The gems-workspace evasion: a hostile repo commits
+    ``gems/np/package.json`` (name ``np``) with a worm postinstall
+    and pulls it into the install graph via
+    ``"workspaces": ["gems/*"]``.  ``gems`` is a directory the
+    discovery walk descends into, so its layout is attacker-chosen —
+    it must NOT attest the self-declared allowlist name."""
+    pkg_dir = tmp_path / "gems" / "np"
+    pkg_dir.mkdir(parents=True)
+    pkg = pkg_dir / "package.json"
+    pkg.write_text(
+        json.dumps({
+            "name": "np", "version": "1.0.0",
+            "scripts": {"postinstall": "cat ~/.npmrc && npm publish"},
+        }),
+        encoding="utf-8",
+    )
+    findings = install_hooks.scan_manifests(
+        [_manifest(pkg)], [_dep("np", declared_in=pkg)],
+    )
+    assert len(findings) == 1
+    assert findings[0].severity == "high"
+    assert "self-replication" in findings[0].confidence.reason
+
+
+def test_github_actions_vendor_dir_does_not_attest(tmp_path: Path) -> None:
+    """Discovery's composite-actions carve-out suspends the generic
+    exclude list for immediate children of ``.github/actions``, so an
+    action dir literally NAMED ``node_modules`` used to survive
+    pruning and self-attest.  Both layers must hold: the walk prunes
+    install-dir names even there, and attestation refuses any
+    ``.github``-routed path regardless."""
+    pkg_dir = tmp_path / ".github" / "actions" / "node_modules" / "np"
+    pkg_dir.mkdir(parents=True)
+    pkg = pkg_dir / "package.json"
+    pkg.write_text(
+        json.dumps({
+            "name": "np", "version": "1.0.0",
+            "scripts": {"postinstall": "cat ~/.npmrc && npm publish"},
+        }),
+        encoding="utf-8",
+    )
+    # Walk layer: discovery must not yield the planted manifest.
+    from packages.sca.discovery import find_manifests
+    assert all(
+        "node_modules" not in m.path.parts for m in find_manifests(tmp_path)
+    )
+    # Attestation layer: even handed the manifest directly (as the
+    # adapters are, from any future walk carve-out), the .github
+    # segment refuses attestation → worm-shape stays high.
+    findings = install_hooks.scan_manifests(
+        [_manifest(pkg)], [_dep("np", declared_in=pkg)],
+    )
+    assert len(findings) == 1
+    assert findings[0].severity == "high"
+    assert "self-replication" in findings[0].confidence.reason
+
+
+def test_github_segment_refuses_attestation_at_any_depth(
+    tmp_path: Path,
+) -> None:
+    """Segment variants: the guard is over every path segment, so
+    deeper nesting under ``.github`` can't dodge it."""
+    from packages.sca.supply_chain import _hook_patterns
+    for shape in (
+        (".github", "actions", "vendor", "np"),
+        (".github", "actions", "release", "stuff", "node_modules", "np"),
+        (".github", "node_modules", "np"),
+    ):
+        pkg = tmp_path.joinpath(*shape) / "package.json"
+        dep = _dep("np", declared_in=pkg)
+        assert not _hook_patterns.is_attested_publish_helper(dep), shape
+    # Control: the same chain WITHOUT .github still attests.
+    control = _dep(
+        "np", declared_in=tmp_path / "node_modules" / "np" / "package.json",
+    )
+    assert _hook_patterns.is_attested_publish_helper(control)
+
+
 def test_self_declared_allowlist_name_does_not_suppress(
     tmp_path: Path,
 ) -> None:
@@ -332,9 +411,14 @@ def test_host_attribution_falls_back_when_name_missing(
 
 def test_publish_helpers_allowlist_loads() -> None:
     """The data file loads without crashing and contains at least
-    the canonical entries."""
+    the canonical entries, keyed per ecosystem."""
     from packages.sca.supply_chain import _hook_patterns
-    exact, scopes = _hook_patterns.load_publish_helpers()
+    per_eco = _hook_patterns.load_publish_helpers()
+    exact, scopes = per_eco["npm"]
     assert "semantic-release" in exact
     assert "release-it" in exact
     assert any(s.startswith("@semantic-release/") for s in scopes)
+    pypi_exact, _pypi_scopes = per_eco["PyPI"]
+    assert "twine" in pypi_exact
+    # Ecosystem keying: the PyPI tools must not appear on npm's list.
+    assert "twine" not in exact

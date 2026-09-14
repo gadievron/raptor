@@ -29,11 +29,20 @@ logger = logging.getLogger(__name__)
 # These are package install dirs, build outputs, VCS metadata, editor
 # state. Skipping them is a 10-100x speedup on real repos and avoids
 # treating vendored copies as direct deps.
-EXCLUDED_DIR_NAMES: set[str] = {
-    # Per-ecosystem package install dirs
+# Package-manager install directories. Split out from the general
+# exclusion set because they are NEVER walked, not even inside the
+# composite-actions carve-out below: the publish-helper attestation
+# (supply_chain._hook_patterns) trusts that a manifest under one of
+# these names cannot have come from the discovery walk — an action
+# directory literally named ``node_modules`` must not re-open that
+# hole.
+VENDOR_INSTALL_DIR_NAMES: frozenset[str] = frozenset({
     "node_modules",
     "vendor",
     "bower_components",
+})
+
+EXCLUDED_DIR_NAMES: set[str] = set(VENDOR_INSTALL_DIR_NAMES) | {
     # NB: ``packages`` is NOT excluded — it's a legitimate top-level
     # directory in many monorepos (raptor, rush, lerna, etc.). Skipping
     # it silently dropped real manifests in the wild.
@@ -411,7 +420,16 @@ def _walk(root: Path, max_depth: int, excludes: set[str]) -> Iterator[Path]:
             # ``dist`` / ``out`` that collide with EXCLUDED_DIR_NAMES;
             # pruning them silently drops the embedded
             # ``action.yml``.
-            pass
+            #
+            # The package-install names stay pruned even here: no
+            # legitimate composite action is NAMED ``node_modules``,
+            # and suspending them let a hostile repo walk a committed
+            # ``.github/actions/node_modules/<name>/package.json``
+            # into the scan — self-attesting a publish-helper name
+            # the attestation layer trusts to be walk-unreachable.
+            dirnames[:] = [
+                d for d in dirnames if d not in VENDOR_INSTALL_DIR_NAMES
+            ]
         else:
             # In-place prune.
             dirnames[:] = [d for d in dirnames if not _should_skip_dir(d, excludes)]

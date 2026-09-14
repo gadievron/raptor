@@ -108,9 +108,11 @@ def _scan_script(
         reads_credentials=analysis.reads_credentials,
         has_publish_action=analysis.has_publish_action,
     )
+    worm_conjunction = (
+        analysis.reads_credentials and analysis.has_publish_action
+    )
     worm_shape = (
-        analysis.reads_credentials
-        and analysis.has_publish_action
+        worm_conjunction
         and not _hook_patterns.is_attested_publish_helper(host)
     )
     if analysis.reasons:
@@ -129,6 +131,23 @@ def _scan_script(
                 reason=(
                     "extconf.rb reads credentials AND invokes a "
                     "publish action (self-replication shape)"
+                ),
+            ),
+        )]
+    if worm_conjunction:
+        # Worm conjunction fired but the host is an ATTESTED publish
+        # helper — suppress the HIGH promotion, but keep a
+        # low-severity row (parity with the npm adapter's
+        # fall-through) so the HOOK family survives for the composite
+        # chokepoint and the suppression stays operator-visible.
+        return [RubyGemsLifecycleFinding(
+            dependency=host, hit=hit, severity="low",
+            confidence=Confidence(
+                "medium",
+                reason=(
+                    "extconf.rb reads credentials and invokes a "
+                    "publish action, but the gem is an attested "
+                    "publish helper — worm-shape promotion suppressed"
                 ),
             ),
         )]

@@ -334,12 +334,15 @@ def test_python_worm_suppression_keys_on_own_name_not_first_dep(
 def test_python_worm_suppression_requires_attested_helper(
     tmp_path: Path,
 ) -> None:
-    """A VENDORED copy of an allowlisted helper (site-packages entry
-    named by the installer) keeps the suppression."""
-    pkg_dir = tmp_path / "site-packages" / "np"
+    """A VENDORED copy of an allowlisted PyPI helper (``vendor/``
+    entry named by the installer, in a directory the discovery walk
+    never yields from an in-tree plant) suppresses the promotion —
+    but still emits a LOW row so the HOOK family survives for the
+    composite chokepoint."""
+    pkg_dir = tmp_path / "vendor" / "twine"
     pkg_dir.mkdir(parents=True)
     py = pkg_dir / "pyproject.toml"
-    py.write_text("[project]\nname = 'np'\n", encoding="utf-8")
+    py.write_text("[project]\nname = 'twine'\n", encoding="utf-8")
     setup_py = pkg_dir / "setup.py"
     setup_py.write_text(
         "import subprocess\n"
@@ -350,7 +353,61 @@ def test_python_worm_suppression_requires_attested_helper(
     findings = python_lifecycle_hooks.scan_manifests(
         [_manifest(py, "PyPI")], [],
     )
-    assert findings == []
+    assert len(findings) == 1
+    assert findings[0].severity == "low"
+    assert "suppressed" in findings[0].confidence.reason
+
+
+def test_python_worm_suppression_not_granted_by_walked_vendor_dir(
+    tmp_path: Path,
+) -> None:
+    """``site-packages`` (and ``gems`` / ``dist-packages``) ARE walked
+    by discovery, so a committed ``site-packages/twine/`` tree is
+    attacker-plantable layout — it must NOT attest the self-declared
+    allowlist name."""
+    pkg_dir = tmp_path / "site-packages" / "twine"
+    pkg_dir.mkdir(parents=True)
+    py = pkg_dir / "pyproject.toml"
+    py.write_text("[project]\nname = 'twine'\n", encoding="utf-8")
+    setup_py = pkg_dir / "setup.py"
+    setup_py.write_text(
+        "import subprocess\n"
+        "subprocess.run(['cat', '~/.pypirc'])\n"
+        "subprocess.run(['twine', 'upload', 'dist/*'])\n",
+        encoding="utf-8",
+    )
+    findings = python_lifecycle_hooks.scan_manifests(
+        [_manifest(py, "PyPI")], [],
+    )
+    assert len(findings) == 1
+    assert findings[0].severity == "high"
+    assert "self-replication" in findings[0].confidence.reason
+
+
+def test_allowlist_is_ecosystem_keyed(tmp_path: Path) -> None:
+    """A RubyGems gem naming itself after an npm / PyPI publish
+    helper (``np``) must not inherit those ecosystems' suppression —
+    even from a gems-style vendored path."""
+    from packages.sca.supply_chain import _hook_patterns
+    gem_manifest = (
+        tmp_path / "vendor" / "np-1.0.0" / "Gemfile"
+    )
+    dep = _dep("np", "RubyGems", declared_in=gem_manifest)
+    assert not _hook_patterns.is_publish_helper(dep)
+    assert not _hook_patterns.is_attested_publish_helper(dep)
+    # Same name in its OWN ecosystem still matches (name check only).
+    npm_dep = _dep("np", "npm", declared_in=tmp_path / "package.json")
+    assert _hook_patterns.is_publish_helper(npm_dep)
+
+
+def test_vendor_attestation_dirs_are_discovery_excluded() -> None:
+    """Drift guard for the attestation invariant: every directory
+    name that can attest a publish helper must be excluded from the
+    discovery walk — otherwise a hostile repo can commit a fake
+    vendor tree that discovery hands straight to the adapters."""
+    from packages.sca import discovery
+    from packages.sca.supply_chain import _hook_patterns
+    assert _hook_patterns._VENDOR_DIR_NAMES <= discovery.EXCLUDED_DIR_NAMES
 
 
 def test_python_self_declared_helper_name_does_not_suppress(

@@ -60,9 +60,11 @@ def scan_manifests(
             continue
         analysis = _hook_patterns.analyse_body(body)
         host = _host_dep(deps_list, m)
+        worm_conjunction = (
+            analysis.reads_credentials and analysis.has_publish_action
+        )
         worm_shape = (
-            analysis.reads_credentials
-            and analysis.has_publish_action
+            worm_conjunction
             and not _hook_patterns.is_attested_publish_helper(host)
         )
         if analysis.reasons:
@@ -94,6 +96,32 @@ def scan_manifests(
                     "Cargo build script reads publish credentials "
                     "AND invokes a publish action — Iron Worm-class "
                     f"shape; body preview: {body[:200]!r}"
+                ),
+            ))
+        elif worm_conjunction:
+            # Worm conjunction fired but the host is an ATTESTED
+            # publish helper — suppress the HIGH promotion, but keep
+            # a low-severity row (parity with the npm adapter's
+            # fall-through) so the HOOK family survives for the
+            # composite chokepoint and the suppression stays visible
+            # to operators instead of silently deleting the signal.
+            out.append(CargoBuildScriptFinding(
+                dependency=host,
+                severity="low",
+                confidence=Confidence(
+                    "medium",
+                    reason=(
+                        "build.rs reads credentials and invokes a "
+                        "publish action, but the crate is an attested "
+                        "publish helper — worm-shape promotion "
+                        "suppressed"
+                    ),
+                ),
+                detail=(
+                    "Cargo build script reads publish credentials AND "
+                    "invokes a publish action; host is an attested "
+                    "publish helper so the self-replication promotion "
+                    f"is suppressed; body preview: {body[:200]!r}"
                 ),
             ))
         # Mere-presence row REMOVED — every published crate has a

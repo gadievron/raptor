@@ -131,9 +131,11 @@ def _scan_one(
                 reads_credentials=analysis.reads_credentials,
                 has_publish_action=analysis.has_publish_action,
             )
+            worm_conjunction = (
+                analysis.reads_credentials and analysis.has_publish_action
+            )
             worm_shape = (
-                analysis.reads_credentials
-                and analysis.has_publish_action
+                worm_conjunction
                 and not _hook_patterns.is_attested_publish_helper(host)
             )
             if analysis.reasons:
@@ -156,6 +158,25 @@ def _scan_one(
                             "composer.json script reads credentials "
                             "AND invokes a publish action "
                             "(self-replication shape)"
+                        ),
+                    ),
+                ))
+            elif worm_conjunction:
+                # Worm conjunction fired but the host is an ATTESTED
+                # publish helper — suppress the HIGH promotion, but
+                # keep a low-severity row (parity with the npm
+                # adapter's fall-through) so the HOOK family survives
+                # for the composite chokepoint and the suppression
+                # stays operator-visible.
+                out.append(ComposerLifecycleFinding(
+                    dependency=host, hit=hit, severity="low",
+                    confidence=Confidence(
+                        "medium",
+                        reason=(
+                            "composer.json script reads credentials "
+                            "and invokes a publish action, but the "
+                            "package is an attested publish helper — "
+                            "worm-shape promotion suppressed"
                         ),
                     ),
                 ))
