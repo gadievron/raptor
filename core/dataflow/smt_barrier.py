@@ -907,8 +907,15 @@ def _validator_in_branch(
                     continue
                 if _spans(stmt.body, target) or _spans(stmt.orelse, target):
                     return True
-            elif isinstance(stmt, (ast.For, ast.While)):
-                if _spans(stmt.body, target):
+            elif isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
+                # A loop body may run ZERO times, and the ``else:``
+                # clause is skipped whenever the loop ``break``s —
+                # both are conditional placements for a validator
+                # (async-for included: aiohttp-style retry wrappers
+                # are exactly the loop-wrapped-sanitizer shape).
+                # Conservative refuse — the sound tier's bar is zero
+                # false suppression.
+                if _spans(stmt.body, target) or _spans(stmt.orelse, target):
                     return True
             elif isinstance(stmt, _TRY_NODES):
                 for handler in stmt.handlers:

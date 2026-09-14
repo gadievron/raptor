@@ -2660,3 +2660,46 @@ def test_value_bound_gate_kwargs_match_parity_shadow(monkeypatch, tmp_path):
     # passes java_file_path=<finding file>; production must match.
     assert captured.get("java_file_path") == str(src)
     assert captured.get("java_source_text") == "class App {}\n"
+
+
+def test_substitution_in_async_for_body_does_not_dominate():
+    """An async-for body may iterate ZERO times — a sanitizer inside
+    it leaves the raw value live at the sink. Pre-fix the statement
+    walk had no ast.AsyncFor arm, fell through, and dominance
+    certified on the live prescreen path."""
+    src = (
+        "async def f():\n"
+        "    x = req()\n"
+        "    async for _ in retry():\n"        # line 3
+        "        x = re.sub('[<>]', '', x)\n"  # line 4 — sub in body
+        "    return render(x)\n"               # line 5 — sink
+    )
+    assert sb.substitution_dominates_sink(src, 4, 5, "x") is False
+
+
+def test_substitution_in_loop_else_does_not_dominate():
+    """for...else: the else clause is skipped whenever the loop
+    breaks — a sanitizer there is conditional relative to the sink."""
+    src = (
+        "def f(items):\n"
+        "    x = req()\n"
+        "    for item in items:\n"             # line 3
+        "        if item:\n"                   # line 4
+        "            break\n"                  # line 5
+        "    else:\n"                          # line 6
+        "        x = re.sub('[<>]', '', x)\n"  # line 7 — sub in else
+        "    return render(x)\n"               # line 8 — sink
+    )
+    assert sb.substitution_dominates_sink(src, 7, 8, "x") is False
+
+
+def test_substitution_in_plain_for_body_still_refused():
+    # Two-direction anchor: the pre-existing For arm keeps refusing.
+    src = (
+        "def f(items):\n"
+        "    x = req()\n"
+        "    for item in items:\n"             # line 3
+        "        x = re.sub('[<>]', '', x)\n"  # line 4
+        "    return render(x)\n"               # line 5
+    )
+    assert sb.substitution_dominates_sink(src, 4, 5, "x") is False
