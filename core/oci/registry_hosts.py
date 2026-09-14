@@ -370,12 +370,20 @@ _REGISTRY_FAMILIES: list[tuple[Callable[[str], bool], list[str]]] = [
     # Elastic's container registry — manifests on docker.elastic.co,
     # tokens on docker-auth.elastic.co. Same auth-host split as Docker
     # Hub. Missing from the registry-family map was surfaced by the
-    # May 2026 200-project sweep: any project with
+    # May 2026 200-project sweep; any project with
     # ``FROM docker.elastic.co/...`` (multiple Maven-Elasticsearch
     # variants) emitted repeated egress-proxy DENYs on
     # ``docker-auth.elastic.co``.
+    # Blob GETs redirect to Cloudflare R2 storage — same CDN-redirect
+    # pattern as Docker Hub (which 307s to CloudFront/Cloudflare).
+    # Without the R2 host the proxy denies every layer fetch.
+    # Observed target:
+    #   docker-registry-production.<acct>.r2.cloudflarestorage.com
     (lambda r: r == "docker.elastic.co",
-     ["docker.elastic.co", "docker-auth.elastic.co"]),
+     ["docker.elastic.co", "docker-auth.elastic.co",
+      "docker-registry-production"
+      ".d24a988e385e0074d717b6bdaea58f0d"
+      ".r2.cloudflarestorage.com"]),
 ]
 
 

@@ -305,6 +305,44 @@ def _validate_blob_redirect_target(location: str, *, base_url: str) -> str:
     return target
 
 
+# CDN hosts already on the proxy — avoids repeated get_proxy calls.
+_cdn_hosts_extended: set[str] = set()
+
+
+def _extend_proxy_for_cdn_host(cdn_host: str, ref: "ImageRef") -> None:
+    """Dynamically extend the egress proxy allowlist for a CDN host
+    that appeared in a blob redirect.
+
+    Called ONLY after ``_validate_blob_redirect_target`` has passed —
+    the host is already SSRF-validated (HTTPS, hostname grammar, all
+    resolved addresses global).
+
+    The trust chain:
+      operator chose target → target references registry →
+      registry already on allowlist → registry redirects to CDN →
+      CDN host SSRF-validated here → added to proxy.
+
+    No-op when the proxy singleton is not running (plain UrllibClient
+    path, tests), or when the host was already extended.
+    """
+    host = cdn_host.lower()
+    if host in _cdn_hosts_extended:
+        return
+    try:
+        from core.sandbox.proxy import get_proxy
+        get_proxy([host])
+        _cdn_hosts_extended.add(host)
+        logger.info(
+            "oci.client: extended proxy allowlist with CDN host %s "
+            "(blob redirect from %s)", host, ref.registry,
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug(
+            "oci.client: could not extend proxy for CDN host %s "
+            "(proxy may not be running)", host,
+        )
+
+
 def _validate_link_next(
     raw: str | None, *, repository: str,
 ) -> str | None:
@@ -819,6 +857,7 @@ class OciRegistryClient:
             # ``stream_bytes`` cannot expose a further redirect's
             # status — a misbehaving chain surfaces as the loud
             # empty-body error below.
+            _extend_proxy_for_cdn_host(parsed.netloc, ref)
             cdn_stream = self.http.stream_bytes(
                 current_url,
                 headers={"Accept-Encoding": "identity"},

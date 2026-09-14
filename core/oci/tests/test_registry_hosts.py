@@ -145,17 +145,22 @@ def test_gitlab_saas():
 # ---------------------------------------------------------------------------
 
 
-def test_elastic_registry_returns_two_hosts():
-    """``docker.elastic.co`` uses a separate ``docker-auth.elastic.co``
-    for token issuance — same auth-host split as Docker Hub. Both
-    hosts must be in the sandbox allowlist; an absent auth host
-    surfaces as repeated proxy DENYs during manifest fetch. Surfaced
-    by the May 2026 200-project sweep against Elasticsearch
-    Maven artefacts that pull this base image."""
+def test_elastic_registry_returns_auth_and_cdn_hosts():
+    """``docker.elastic.co`` needs auth + CDN hosts on the allowlist.
+
+    Auth: ``docker-auth.elastic.co`` (same split as Docker Hub).
+    CDN: blob GETs 307-redirect to Cloudflare R2 storage; without it
+    the proxy denies every layer fetch (Sep 2026 stress sweep)."""
     hosts = registry_hosts_for(
         "docker.elastic.co/elasticsearch/elasticsearch:8.13.0",
     )
-    assert hosts == ["docker.elastic.co", "docker-auth.elastic.co"]
+    assert hosts == [
+        "docker.elastic.co",
+        "docker-auth.elastic.co",
+        "docker-registry-production"
+        ".d24a988e385e0074d717b6bdaea58f0d"
+        ".r2.cloudflarestorage.com",
+    ]
 
 
 # ---------------------------------------------------------------------------

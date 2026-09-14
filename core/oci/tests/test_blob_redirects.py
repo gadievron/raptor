@@ -255,6 +255,65 @@ def test_cdn_error_carries_status_detail() -> None:
         b"".join(client.stream_blob(_ref(), _DIGEST))
 
 
+def test_offsite_redirect_extends_proxy_allowlist(monkeypatch) -> None:
+    """When the blob redirect targets an off-origin CDN host, the
+    proxy allowlist is dynamically extended so stream_bytes can reach
+    it."""
+    import core.oci.client as _mod
+
+    extended_hosts: list[str] = []
+
+    def fake_get_proxy(hosts):
+        extended_hosts.extend(hosts)
+
+    monkeypatch.setattr(
+        "core.sandbox.proxy.get_proxy", fake_get_proxy,
+    )
+    # Clear any prior CDN-host cache so the extension fires.
+    monkeypatch.setattr(_mod, "_cdn_hosts_extended", set())
+
+    http = _StubHttp({
+        _REGISTRY_URL: [_StubResponse(
+            307, headers={"Location": _CDN_URL},
+        )],
+        _CDN_URL: [_StubResponse(200, _BODY)],
+    })
+    client = OciRegistryClient(http)
+    got = b"".join(client.stream_blob(_ref(), _DIGEST))
+    assert got == _BODY
+    assert "cdn.example" in extended_hosts
+
+
+def test_offsite_redirect_proxy_extend_idempotent(monkeypatch) -> None:
+    """Second redirect to the same CDN host does NOT call get_proxy
+    again — the host-cache dedup works."""
+    import core.oci.client as _mod
+
+    call_count = 0
+
+    def fake_get_proxy(hosts):
+        nonlocal call_count
+        call_count += 1
+
+    monkeypatch.setattr(
+        "core.sandbox.proxy.get_proxy", fake_get_proxy,
+    )
+    monkeypatch.setattr(_mod, "_cdn_hosts_extended", set())
+
+    http = _StubHttp({
+        _REGISTRY_URL: [_StubResponse(
+            307, headers={"Location": _CDN_URL},
+        )],
+        _CDN_URL: [_StubResponse(200, _BODY)],
+    })
+    client = OciRegistryClient(http)
+    b"".join(client.stream_blob(_ref(), _DIGEST))
+    assert call_count == 1
+    # Second call — host already cached.
+    b"".join(client.stream_blob(_ref(), _DIGEST))
+    assert call_count == 1
+
+
 def test_origin_empty_body_error_carries_status_detail() -> None:
     """A bodyless non-200 from the registry itself must not produce
     a message trailing off into ': ' — the status is named."""
