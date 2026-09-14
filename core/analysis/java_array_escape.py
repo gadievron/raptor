@@ -144,6 +144,13 @@ class LocalArrayIndex:
     def element_writes(self, name: str, index: int) -> list[_ElementWrite]:
         return list(self._writes.get((name, index), ()))
 
+    def writes_of(self, name: str) -> list[_ElementWrite]:
+        """Every recorded element write to ``name`` across all
+        indices — the whole-array taint-freedom check's view (a
+        public accessor so consumers stay off the private map)."""
+        return [w for (n, _i), ws in self._writes.items()
+                if n == name for w in ws]
+
     def element_reads_at(self, lineno: int, name: str) -> set[int] | None:
         """Indices of ``name`` read on ``lineno``; None when the line
         carries no recorded element read of that name."""

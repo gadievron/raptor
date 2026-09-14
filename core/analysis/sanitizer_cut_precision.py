@@ -23,12 +23,15 @@ fixture — only ``suppress`` fails the gate.
 shapes the gate actually suppresses); a miss there is reported but is
 NOT a gate failure — soundness first.
 
-Until a run of this harness is clean across every covered sink class
-AND its report is recorded alongside the flip, the
-``sanitizer_dominated`` entry in :mod:`core.analysis.reach_witness`
-stays ``earns_suppression=False`` and the live producer
-(:func:`core.dataflow.smt_barrier._record_value_bound_audit`) writes
-record-only evidence (``dropped: false``).
+The flip happened 2026-08-19: a clean run across every covered sink
+class was recorded alongside it, the ``sanitizer_dominated`` entry in
+:mod:`core.analysis.reach_witness` carries ``earns_suppression=True``,
+and the scan post-pass enforces full-proof suppress verdicts by
+default. This harness remains the regression gate: any change to the
+cut, its resolvers, or the corpus must keep the run clean, and the
+SMT-barrier lane
+(:func:`core.dataflow.smt_barrier._record_value_bound_audit`) still
+writes record-only evidence (``dropped: false``).
 
 Run via ``core/analysis/scripts/sanitizer-cut-precision``.
 """
@@ -1653,11 +1656,10 @@ def _java_b27_fixtures() -> list[CutFixture]:
               + "        public String pick(String p) {\n"
               + "            String bar;\n"
               + "            int num = 106;\n"
-              + "            return_helper: ;\n"
               + "            bar = (7 * 18) + num > 200 ?"
               " \"always\" : p;\n"
               + "            return bar;\n        }\n"
-              + "    }\n").replace("            return_helper: ;\n", ""),
+              + "    }\n"),
         "public void handle", "out.println(bar)"))
     j.append(_marked(
         "java_conduit_ifelse_folded_const", "xss", "CWE-79",

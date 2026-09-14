@@ -510,7 +510,6 @@ def _fold_stack(graph, java_source_text: str,
             from core.analysis.java_collection_index import (
                 CollectionFoldResolver,
                 build_local_collection_index,
-                compose_invocation_hooks,
             )
             coll_index = build_local_collection_index(
                 java_source_text, span,
@@ -1108,10 +1107,7 @@ def _whole_array_taint_free_reason(
         )
         if arr is None or not arr.ok or not arr.whole_pass_ok(sink_arg):
             return None
-        writes = [
-            w for (name, _i), ws in arr._writes.items()
-            if name == sink_arg for w in ws
-        ]
+        writes = arr.writes_of(sink_arg)
         if not writes:
             return None
         stack = _fold_stack(graph, java_source_text,
