@@ -331,3 +331,19 @@ class TestRustMutPrefix:
         # removeprefix("mut") turned "mutation" into "ation".
         assert _parse_rust_params("mutation: u32") == ["mutation"]
         assert _parse_rust_params("mutex: &Mutex<()>") == ["mutex"]
+
+
+class TestJsExtractorKeywordGuard:
+    def test_switch_and_catch_are_not_functions(self):
+        from core.analysis.taint_multi_lang import _extract_js_functions
+        content = (
+            "function real(a) { return a; }\n"
+            "function other(x) {\n"
+            "  switch (x) { default: break; }\n"
+            "  try { x(); } catch (e) { log(e); }\n"
+            "}\n"
+        )
+        names = {r[0] for r in _extract_js_functions(content)}
+        assert "real" in names and "other" in names
+        assert "switch" not in names
+        assert "catch" not in names

@@ -346,9 +346,17 @@ def _extract_js_functions(
         r"(?:\(([^)]*)\)|(\w+))\s*=>|:\s*(?:async\s+)?function\s*\(([^)]*)\)\s*\{"
         r"|\(([^)]*)\)\s*\{)",
     )
+    seen = {r[0] for r in results}
     for match in method_re.finditer(content):
         name = match.group(1)
-        if not name or name in ("if", "for", "while", "return"):
+        # Keyword guard: the method regex's bare ``(...) {`` arm also
+        # matches control-flow headers — ``switch (x) {`` and
+        # ``catch (e) {`` read as functions named switch/catch
+        # without their entries here.
+        if not name or name in (
+            "if", "for", "while", "return", "switch", "catch",
+            "do", "else",
+        ):
             continue
         params_str = (
             match.group(2) or match.group(3) or
@@ -357,7 +365,8 @@ def _extract_js_functions(
         params = _parse_js_params(params_str)
         body_start = match.end()
         body_end = _find_brace_end(content, match.end() - 1)
-        if body_end > body_start and name not in [r[0] for r in results]:
+        if body_end > body_start and name not in seen:
+            seen.add(name)
             results.append((name, params, body_start, body_end))
 
     return results
