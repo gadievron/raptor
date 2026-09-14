@@ -195,6 +195,7 @@ class TestIdentifierGate:
         "a b",            # whitespace
         "a\\|kfree",      # alternation injection
         "a\nb",           # newline
+        "kfree\n",        # trailing newline ($-anchored .match accepts it)
         'a"b',            # quote
         "a@p",            # position-metavariable syntax
         "",               # empty

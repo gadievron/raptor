@@ -50,8 +50,12 @@ _BUCKET_MAP = {
 # scanned repo; the rendered rule runs under allow_scripting=True, so
 # any name that could carry SmPL/Python syntax (quotes, braces, ``@``,
 # newlines) must be rejected here even if an upstream gate already
-# validated it (defense in depth for U12-F260).
-_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+# validated it (defense in depth for U12-F260). Matched with
+# fullmatch(): re.match + '$' accepts a trailing newline
+# (``"kfree\n"``), which splices a literal line break into the
+# rendered alternation and turns the whole sweep into an spatch parse
+# error — api_pack_renderer documents the same trap.
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 
 # Scripting-block header matcher — keep in sync with the canonical
 # copy in packages.coccinelle.runner._SCRIPT_BLOCK_RE (engine/ does
@@ -72,7 +76,7 @@ def _get_bucket(vocab: Any, bucket_name: str) -> frozenset[str]:
         return frozenset()
     names = getattr(vocab, bucket_attr, frozenset())
     safe = frozenset(
-        n for n in names if isinstance(n, str) and _IDENT_RE.match(n)
+        n for n in names if isinstance(n, str) and _IDENT_RE.fullmatch(n)
     )
     rejected = set(names) - set(safe)
     if rejected:
