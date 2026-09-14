@@ -445,23 +445,39 @@ jobs:
               m = re.match(r"sarif-in/sarif-([^/]+)/", artifact_path)
               return f"/language:{m.group(1)}/" if m else None
 
+          # Diagnostic: list everything the download produced.
+          all_files = sorted(glob.glob("sarif-in/**/*", recursive=True))
+          print(
+              f"::notice::sarif-in contents ({len(all_files)} files): "
+              + ", ".join(all_files),
+              file=sys.stderr,
+          )
+
+          sarif_paths = sorted(glob.glob("sarif-in/sarif-*/*.sarif"))
+          if not sarif_paths:
+              sarif_paths = sorted(
+                  glob.glob("sarif-in/**/*.sarif", recursive=True),
+              )
+              if sarif_paths:
+                  print(
+                      "::notice::flat glob empty, recursive found: "
+                      + ", ".join(sarif_paths),
+                      file=sys.stderr,
+                  )
+
           runs = []
-          for path in sorted(glob.glob("sarif-in/sarif-*/*.sarif")):
-              # CodeQL >=2.26 may emit .quality.sarif alongside the
-              # standard .sarif — those target a separate upload
-              # endpoint and must not be merged into the code-scanning
-              # multi-run file.
-              if path.endswith(".quality.sarif") or path.endswith(".csra.sarif"):
-                  continue
+          for path in sarif_paths:
+              sz = os.path.getsize(path)
               with open(path) as f:
                   doc = json.load(f)
+              n_runs = len(doc.get("runs", []))
+              print(
+                  f"::notice::SARIF {path} ({sz} bytes, {n_runs} runs)",
+                  file=sys.stderr,
+              )
               for run in doc.get("runs", []):
                   aid = run.get("automationDetails", {}).get("id")
                   if not aid:
-                      # CodeQL CLI >=2.26.2 may omit automationDetails.id
-                      # from raw SARIF when the action uses upload:never.
-                      # Synthesize from the artifact directory name so the
-                      # upload still carries the correct category.
                       aid = _infer_category(path)
                       if aid:
                           run.setdefault("automationDetails", {})["id"] = aid
@@ -482,6 +498,11 @@ jobs:
 
           if not runs:
               print("::error::No valid SARIF runs to upload", file=sys.stderr)
+              print(
+                  f"::error::Matched {len(sarif_paths)} SARIF file(s); "
+                  f"check notices above for per-file run counts",
+                  file=sys.stderr,
+              )
               sys.exit(1)
 
           out = {
