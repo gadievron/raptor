@@ -85,14 +85,14 @@ class TestReplayExceptNarrowing(_ReplayCase):
         result = self._run_with_sandbox_raising(
             OSError("simulated FS failure"),
         )
-        entries = result.get(str(self.crash_file), [])
+        entries = result.get(self.crash_file.name, [])
         self.assertTrue(any(e.get("error") for e in entries),
                         f"OSError should be caught + logged: {entries}")
 
     def test_subprocess_called_process_error_is_caught(self):
         exc = subprocess.CalledProcessError(returncode=1, cmd="x")
         result = self._run_with_sandbox_raising(exc)
-        entries = result.get(str(self.crash_file), [])
+        entries = result.get(self.crash_file.name, [])
         self.assertTrue(any(e.get("error") for e in entries),
                         f"CalledProcessError should be caught: {entries}")
 
@@ -100,7 +100,7 @@ class TestReplayExceptNarrowing(_ReplayCase):
         result = self._run_with_sandbox_raising(
             ValueError("simulated bad arg"),
         )
-        entries = result.get(str(self.crash_file), [])
+        entries = result.get(self.crash_file.name, [])
         self.assertTrue(any(e.get("error") for e in entries),
                         f"ValueError should be caught: {entries}")
 
@@ -194,12 +194,38 @@ class TestReplaySandboxIsolation(_ReplayCase):
         stdout/stderr logs written, reproduced flag derived from crash
         evidence (the fixture exits -11 = SIGSEGV, a reproduction)."""
         result, _ = self._replay_and_capture_kwargs()
-        entries = result.get(str(self.crash_file), [])
+        entries = result.get(self.crash_file.name, [])
         self.assertTrue(entries, "no replay entries recorded")
         for entry in entries:
             self.assertTrue(entry.get("reproduced"), entry)
             self.assertTrue(Path(entry["stdout"]).exists())
             self.assertTrue(Path(entry["stderr"]).exists())
+
+    def test_result_keyed_by_crash_basename(self):
+        """The replay contract keys entries by crash-file BASENAME
+        (stable across run-dir moves/adoption and symlinked tmp
+        components), never the replay-time absolute path — consumers
+        (fuzz_evidence, the crash-context join) join on the basename."""
+        result, _ = self._replay_and_capture_kwargs()
+        self.assertIn(self.crash_file.name, result)
+        self.assertNotIn(str(self.crash_file), result)
+
+    def test_missing_crash_file_keyed_by_basename_too(self):
+        """The not-a-file early-out records under the SAME basename
+        key — a mixed absolute-path/basename summary would detach the
+        entry from every basename-joining consumer."""
+        from raptor_agentic import _replay_fuzz_crashes
+        ghost = Path(self.tmp) / "crash-ghost"
+        with patch("core.sandbox.run", side_effect=AssertionError(
+                "sandbox must not run for a missing crash file")):
+            result = _replay_fuzz_crashes(
+                binary_path=self.binary,
+                crash_files=[ghost],
+                out_dir=self.out_dir,
+            )
+        self.assertIn(ghost.name, result)
+        self.assertNotIn(str(ghost), result)
+        self.assertEqual(result[ghost.name], [])
 
     def test_exit_one_reproduced_only_with_sanitizer_report(self):
         """Two-direction pin for the plain-nonzero exit: exit 1 with
@@ -220,7 +246,7 @@ class TestReplaySandboxIsolation(_ReplayCase):
                     crash_files=[self.crash_file],
                     out_dir=self.out_dir,
                 )
-            entries = result.get(str(self.crash_file), [])
+            entries = result.get(self.crash_file.name, [])
             self.assertTrue(entries, "no replay entries recorded")
             for entry in entries:
                 self.assertIs(
@@ -247,7 +273,7 @@ class TestReplayTimeoutStillIsolated(_ReplayCase):
                 crash_files=[timeout_input],
                 out_dir=self.out_dir,
             )
-        entries = result.get(str(timeout_input), [])
+        entries = result.get(timeout_input.name, [])
         self.assertTrue(entries)
         self.assertEqual(entries[0]["returncode"], "timeout")
         self.assertTrue(entries[0]["reproduced"])
@@ -262,7 +288,7 @@ class TestReplayTimeoutStillIsolated(_ReplayCase):
                 crash_files=[self.crash_file],
                 out_dir=self.out_dir,
             )
-        entries = result.get(str(self.crash_file), [])
+        entries = result.get(self.crash_file.name, [])
         self.assertTrue(entries)
         self.assertEqual(entries[0]["returncode"], "timeout")
         # crash-class input that merely hangs: partial logs kept, but

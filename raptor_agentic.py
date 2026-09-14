@@ -1021,7 +1021,10 @@ def _replay_fuzz_crashes(*, binary_path: Path, crash_files: list[Path], out_dir:
     for crash_file in crash_files:
         entries = []
         if not crash_file.is_file():
-            results[str(crash_file)] = entries
+            # Same basename key as the replayed path below — a mixed
+            # absolute-path/basename summary would silently detach
+            # this entry from every basename-joining consumer.
+            results[crash_file.name] = entries
             continue
         for candidate in candidates:
             label = f"{crash_file.name}__{candidate.name}".replace("/", "_")
