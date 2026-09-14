@@ -26,8 +26,10 @@ semgrep is not installed — the pure-Python layers are always exercised.
 from __future__ import annotations
 
 import difflib
+import functools
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -106,12 +108,34 @@ def _fenced_response(diff: str) -> str:
     return f"Here is the fix.\n\n```diff\n{diff}```\n\nBounded copy now.\n"
 
 
+@functools.lru_cache(maxsize=None)
 def _sandbox_available() -> bool:
+    """Functional probe: can the gate's sandbox invocation run here?
+
+    Probes the same profile ``_make_runner`` uses for the real gate
+    commands (network blocked, target/output confinement, throwaway
+    HOME) — the guarded tests need exactly that shape to work, and a
+    bare ``run()`` would consume the once-per-process bare-run posture
+    advisory, leaving the first genuine bare-run caller unattributed.
+    Memoised: at most one sandboxed subprocess per process, and only
+    when a sandbox-marked test is actually about to run.
+    """
     run = patch_gate._import_sandbox_run()
     if run is None:
         return False
     try:
-        return run(["true"], capture_output=True, timeout=30).returncode == 0
+        with tempfile.TemporaryDirectory(prefix="raptor_pg_probe_") as td:
+            return run(
+                ["true"],
+                block_network=True,
+                target=td,
+                output=td,
+                fake_home=True,
+                caller_label="patch-gate-test-probe",
+                env_caller_filtered=True,
+                capture_output=True,
+                timeout=30,
+            ).returncode == 0
     except Exception:  # noqa: BLE001 — any sandbox failure means "not usable here"
         return False
 
@@ -120,9 +144,21 @@ def _semgrep_available() -> bool:
     return shutil.which("semgrep") is not None
 
 
-needs_sandbox = pytest.mark.skipif(
-    not _sandbox_available(), reason="core.sandbox not runnable on this host",
-)
+@pytest.fixture
+def _sandbox_or_skip() -> None:
+    """Skip sandbox-dependent tests lazily, at test-setup time.
+
+    A module-level ``skipif(not _sandbox_available(), ...)`` evaluates
+    its condition during import — i.e. at pytest COLLECTION — spawning
+    a sandboxed subprocess in every pytest invocation and every xdist
+    worker before a single test runs. The fixture defers the probe to
+    the first test that needs it.
+    """
+    if not _sandbox_available():
+        pytest.skip("core.sandbox not runnable on this host")
+
+
+needs_sandbox = pytest.mark.usefixtures("_sandbox_or_skip")
 needs_semgrep = pytest.mark.skipif(
     not _semgrep_available(), reason="semgrep not installed",
 )
