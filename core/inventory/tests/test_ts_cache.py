@@ -50,6 +50,20 @@ def import_counter(monkeypatch):
     return calls
 
 
+@pytest.fixture
+def runtime_gate_open(monkeypatch):
+    """Pin extractors' tree_sitter-runtime gate open.
+
+    The failure-cache defence exists for runtime-PRESENT, grammar-less
+    installs; the loader's mixed-install guard answers None before the
+    shared cache when the runtime itself is absent. Bare environments
+    (CI installs requirements-dev.txt only — no tree_sitter) would
+    otherwise exercise the guard instead of the cache path these tests
+    pin. The grammar import below is force-failed either way, so the
+    ``Language(...)`` wrap the gate protects is never reached."""
+    monkeypatch.setattr(extractors, "_TS_AVAILABLE", True)
+
+
 def test_failed_import_runs_import_machinery_once(
         fresh_caches, import_counter, caplog):
     with caplog.at_level(logging.DEBUG, logger=_ts_cache.__name__):
@@ -64,7 +78,7 @@ def test_failed_import_runs_import_machinery_once(
 
 
 def test_extractors_loader_inherits_the_failure_cache(
-        fresh_caches, import_counter):
+        fresh_caches, import_counter, runtime_gate_open):
     """The historical gap: extractors._ts_language re-imported per
     call on a grammar-less install."""
     for _ in range(5):
@@ -73,14 +87,14 @@ def test_extractors_loader_inherits_the_failure_cache(
 
 
 def test_extractors_parser_path_inherits_the_failure_cache(
-        fresh_caches, import_counter):
+        fresh_caches, import_counter, runtime_gate_open):
     for _ in range(5):
         assert extractors._ts_parser_for("go") is None
     assert import_counter == ["tree_sitter_go"]
 
 
 def test_call_graph_loader_shares_the_same_cache(
-        fresh_caches, import_counter):
+        fresh_caches, import_counter, runtime_gate_open):
     assert extractors._ts_language("go") is None
     assert call_graph._import_grammar("tree_sitter_go") is None
     assert import_counter == ["tree_sitter_go"], (
