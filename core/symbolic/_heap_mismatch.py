@@ -187,6 +187,23 @@ def _install_heap_hooks(project) -> int:
                 if not overflow_feasible:
                     continue
 
+                # PIN the overflow condition into the path constraints.
+                # The satisfiable() call above used TEMPORARY
+                # extra_constraints; without solver.add the stdin
+                # witness dumped from the found state concretises under
+                # the bare path constraints, where a benign count (0)
+                # is an equally valid model — and the result would
+                # still claim "concrete stdin witness triggers
+                # heap-copy overflow". If pinning fails, skip the
+                # allocation rather than record an unpinned mismatch:
+                # never mint witness-grade evidence the solve doesn't
+                # actually constrain.
+                try:
+                    self.state.solver.add(dst == alloc_ptr)
+                    self.state.solver.add(claripy.UGT(count, alloc_size))
+                except Exception:  # noqa: BLE001
+                    continue
+
                 # Record the mismatch — exploration will pick it up
                 self.state.globals[_MISMATCH_KEY] = {
                     "copy_fn": self._base_name,

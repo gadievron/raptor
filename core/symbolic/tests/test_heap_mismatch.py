@@ -76,6 +76,13 @@ def test_missing_binary_returns_failure_result(tmp_path: Path) -> None:
 #: One symbolic-length copy into a smaller heap allocation: the copy
 #: hook's ``count > alloc_size`` query is satisfiable at the first
 #: memcpy call, so the solve stays fast and deterministic.
+#:
+#: The ``n > 9`` guard makes the witness assertion sharp: the path
+#: constraints admit ten models (n in 0..9) of which exactly ONE
+#: overflows the 8-byte allocation. A witness concretised under path
+#: constraints alone lands on a benign n most of the time (observed
+#: 5/6 runs); a witness pinned to the overflow condition must carry
+#: n == 9.
 _HEAP_MISMATCH_SOURCE = r"""
 #include <stdlib.h>
 #include <string.h>
@@ -86,6 +93,7 @@ int main(void) {
     char src[256];
     if (read(0, &n, 1) != 1) return 1;
     if (read(0, src, sizeof src) < 0) return 1;
+    if (n > 9) return 1;
     char *dst = malloc(8);
     if (!dst) return 1;
     memcpy(dst, src, n);
@@ -117,9 +125,16 @@ def test_heap_mismatch_witness_end_to_end(tmp_path: Path) -> None:
     assert result.concrete_input is not None
     assert result.metadata.get("copy_fn") == "memcpy"
     assert result.metadata.get("call_addr") is not None
-    # NOT asserted: that the witness's length byte itself exceeds the
-    # allocation. The copy hook checks ``count > alloc_size``
-    # SATISFIABILITY without pinning it, so the dumped stdin is any
-    # model of the path — the engine's witness contract is "reaches
-    # the feasible-mismatch copy", not "this exact input overflows"
-    # (verified empirically: the first byte varies run to run).
+    # The witness must itself trigger the overflow. Byte 0 of stdin is
+    # the copy count ``n`` and the tracked allocation is 8 bytes, so a
+    # witness pinned to ``count > alloc_size`` always carries n > 8.
+    # An engine that only checks satisfiability without pinning dumps
+    # ANY model of the bare path constraints (n == 0 reaches the same
+    # copy), laundering a feasibility check into a "concrete stdin
+    # witness triggers heap-copy overflow" confirmation.
+    assert len(result.concrete_input) >= 1
+    assert result.concrete_input[0] > 8, (
+        f"witness copy count {result.concrete_input[0]} does not "
+        "exceed the 8-byte allocation — the overflow condition was "
+        "not pinned into the witness solve"
+    )
