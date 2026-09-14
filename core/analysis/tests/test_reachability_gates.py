@@ -1,12 +1,7 @@
 """Tests for core.analysis.reachability_gates — generic finding gates."""
 
 import json
-import sys
-from pathlib import Path
 from typing import ClassVar
-
-# core/inventory/tests/ → repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import core.analysis.reachability_gates as rg
 from core.analysis.reachability_gates import (
