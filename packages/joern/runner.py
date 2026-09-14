@@ -114,7 +114,22 @@ def _default_sandbox_runner():
     except ImportError as exc:
         from core.run.sandbox_policy import require_sandbox_or_optout
         require_sandbox_or_optout("joern (CPG build / query runner)", exc)
-        return subprocess.run
+
+        def _unsandboxed_run(cmd, **kwargs):
+            # The opt-out waives the sandbox, never environment
+            # hygiene: joern parses untrusted source, and the bare
+            # subprocess.run fallback handed it the operator's FULL
+            # environment (tokens, GIT_* overrides). The stall-monitor
+            # twin already uses the sanitised env.
+            try:
+                from core.config import RaptorConfig
+                kwargs.setdefault("env", RaptorConfig.get_safe_env())
+            except ImportError:
+                pass
+            return subprocess.run(cmd, **kwargs)
+
+        _unsandboxed_run._raptor_unsandboxed = True
+        return _unsandboxed_run
 
 
 _STALL_CALIBRATION_FILES = 10
@@ -614,7 +629,7 @@ def build_cpg(
     start = time.monotonic()
 
     if on_progress is not None and subprocess_runner is None:
-        if runner is subprocess.run:
+        if getattr(runner, "_raptor_unsandboxed", False):
             # core.sandbox is unavailable — the stall-monitor's raw
             # Popen is the same trust level as the subprocess.run
             # fallback the non-monitor branch would use.

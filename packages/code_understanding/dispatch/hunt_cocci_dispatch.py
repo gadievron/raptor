@@ -321,7 +321,22 @@ def _make_locked_sandbox_runner(
     except Exception as exc:  # noqa: BLE001 — any import failure means no isolation
         from core.run.sandbox_policy import require_sandbox_or_optout
         require_sandbox_or_optout(f"{caller_label} (locked sandbox runner)", exc)
-        return subprocess.run
+
+        def _unsandboxed_runner(cmd, **kwargs):
+            # The opt-out waives the sandbox, never environment
+            # hygiene: spatch parses hostile target source and
+            # executes an LLM-emitted rule, and bare subprocess.run
+            # handed it the operator's FULL environment (tokens,
+            # GIT_* overrides). Same fix shape as the joern opt-out
+            # lane.
+            try:
+                from core.config import RaptorConfig
+                kwargs.setdefault("env", RaptorConfig.get_safe_env())
+            except ImportError:
+                pass
+            return subprocess.run(cmd, **kwargs)
+
+        return _unsandboxed_runner
 
     def _runner(cmd, **kwargs):
         sandbox_kwargs: dict[str, Any] = {

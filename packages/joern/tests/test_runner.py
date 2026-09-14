@@ -971,9 +971,16 @@ class TestBuildCpgSandbox:
         target = tmp_path / "src"
         target.mkdir()
 
+        def _fake_optout_runner(cmd, **kwargs):
+            return subprocess.run(cmd, **kwargs)
+
+        # The opt-out lane is detected by the marker attribute, not
+        # by identity with subprocess.run (the fallback now wraps it
+        # to inject the sanitised env).
+        _fake_optout_runner._raptor_unsandboxed = True
         monkeypatch.setattr(
             "packages.joern.runner._default_sandbox_runner",
-            lambda: subprocess.run,
+            lambda: _fake_optout_runner,
         )
 
         called: dict = {}
@@ -1063,8 +1070,19 @@ class TestDefaultSandboxRunnerFailClosed:
         )
         with _patch.dict(_sys.modules, {"core.sandbox": None}):
             runner = _default_sandbox_runner()
-        assert runner is subprocess.run
         assert events == ["unsandboxed_tool_fallback"]
+        # The opt-out waives the sandbox, never env hygiene: the
+        # fallback must hand joern-parse a SANITISED environment, not
+        # the operator's full credential env.
+        assert getattr(runner, "_raptor_unsandboxed", False)
+        monkeypatch.setenv("SUPER_SECRET_TOKEN", "hunter2")
+        proc = runner(
+            [_sys.executable, "-c",
+             "import os,sys; sys.exit("
+             "1 if 'SUPER_SECRET_TOKEN' in os.environ else 0)"],
+            capture_output=True, timeout=30,
+        )
+        assert proc.returncode == 0, "operator env leaked to joern-parse"
 
 
 # ── Failed builds must never poison the cache ───────────────────────

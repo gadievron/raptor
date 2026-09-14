@@ -558,16 +558,24 @@ def test_locked_runner_fails_closed_without_sandbox(tmp_path, monkeypatch):
 
 def test_locked_runner_explicit_optout_falls_back(tmp_path, monkeypatch):
     """core.sandbox unimportable + RAPTOR_ALLOW_UNSANDBOXED_TOOLS=1 →
-    bare subprocess.run fallback (loud, but functional)."""
-    import subprocess
-
+    unsandboxed fallback (loud, but functional) that still hands the
+    child a SANITISED environment — the opt-out waives isolation,
+    never env hygiene (spatch parses hostile source and executes an
+    LLM-emitted rule; the bare subprocess.run fallback inherited the
+    operator's full credential env)."""
     import core
 
     monkeypatch.setenv("RAPTOR_ALLOW_UNSANDBOXED_TOOLS", "1")
+    monkeypatch.setenv("SUPER_SECRET_TOKEN", "hunter2")
     monkeypatch.setitem(sys.modules, "core.sandbox", None)
     monkeypatch.delattr(core, "sandbox", raising=False)
     runner = mod._make_locked_sandbox_runner(tmp_path, tmp_path)
-    assert runner is subprocess.run
+    proc = runner(
+        [sys.executable, "-c",
+         "import os,sys; sys.exit(1 if 'SUPER_SECRET_TOKEN' in os.environ else 0)"],
+        capture_output=True, timeout=30,
+    )
+    assert proc.returncode == 0, "operator env leaked into the opt-out child"
 
 
 def _dispatch_with_captured_runner(tmp_path, exercise_runner):
