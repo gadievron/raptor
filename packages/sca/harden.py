@@ -1713,6 +1713,22 @@ def _default_out_dir(target: Path) -> Path:
 # Reporting
 # ---------------------------------------------------------------------------
 
+def _md_pkg(c: HardenCandidate) -> str:
+    """eco:name for markdown — the name is an attacker-authored
+    manifest key; every renderer fragment shares one neutraliser."""
+    return _neut(f"{c.ecosystem}:{c.name}", limit=120)
+
+
+def _md_code(value: object) -> str:
+    from ._md import inline_code
+    return inline_code(value, limit=120)
+
+
+def _neut(value: object, limit: int = 300) -> str:
+    from ._md import neutralize_inline
+    return neutralize_inline(value, limit=limit)
+
+
 def _write_report(
     path: Path,
     candidates: list[HardenCandidate],
@@ -1752,7 +1768,7 @@ def _write_report(
     lines.append("|---|---|")
     lines.extend(f"| {status} | {len(by_status[status])} |" for status in (
         "promoted", "degraded_safety", "downgraded_safety",
-        "review_required", "up_to_date",
+        "review_required", "demoted_safety", "up_to_date",
         "skipped_loose_pin", "unsupported_manifest",
         "library_floor_raise_unsupported",
         "pinning_deferred",
@@ -1772,31 +1788,34 @@ def _write_report(
         lines.append("")
         for c in by_status["promoted"]:
             cleared = (
-                f" — clears {', '.join(c.cve_cleared)}"
+                " — clears "
+                + ", ".join(_neut(a, limit=60) for a in c.cve_cleared)
                 if c.cve_cleared else ""
             )
             lines.append(
-                f"- **{c.ecosystem}:{c.name}** "
-                f"`{c.from_version or '*'}` → `{c.to_version}` "
-                f"in `{c.manifest}`{cleared}"
+                f"- **{_md_pkg(c)}** "
+                f"{_md_code(c.from_version or '*')} → "
+                f"{_md_code(c.to_version)} "
+                f"in {_md_code(c.manifest)}{cleared}"
             )
         lines.append("")
 
     if "review_required" in by_status:
         lines.append("## Review required (major bump — LLM impact analysis pending)")
         lines.append("")
-        lines.extend(f"- **{c.ecosystem}:{c.name}** "
-                f"`{c.from_version or '*'}` → `{c.to_version}` "
-                f"in `{c.manifest}` — {c.detail}" for c in by_status["review_required"])
+        lines.extend(f"- **{_md_pkg(c)}** "
+                f"{_md_code(c.from_version or '*')} → {_md_code(c.to_version)} "
+                f"in {_md_code(c.manifest)} — {_neut(c.detail)}"
+                for c in by_status["review_required"])
         lines.append("")
 
     if "demoted_safety" in by_status:
         lines.append(
             "## Demoted by promotion-safety signals (never auto-applied)")
         lines.append("")
-        lines.extend(f"- **{c.ecosystem}:{c.name}** "
-                f"`{c.from_version or '*'}` → `{c.to_version}` "
-                f"in `{c.manifest}` — {c.detail}"
+        lines.extend(f"- **{_md_pkg(c)}** "
+                f"{_md_code(c.from_version or '*')} → {_md_code(c.to_version)} "
+                f"in {_md_code(c.manifest)} — {_neut(c.detail)}"
                 for c in by_status["demoted_safety"])
         lines.append("")
 
@@ -1812,10 +1831,11 @@ def _write_report(
                      "(`RAPTOR_TARGET_KIND=application`).")
         lines.append("")
         for c in by_status["library_floor_raise_unsupported"]:
-            tgt = f"would-be → `{c.to_version}`" if c.to_version else "no safe target"
+            tgt = (f"would-be → {_md_code(c.to_version)}"
+                   if c.to_version else "no safe target")
             lines.append(
-                f"- **{c.ecosystem}:{c.name}** `{c.from_version or '*'}` "
-                f"({tgt}) in `{c.manifest}` — {c.detail}"
+                f"- **{_md_pkg(c)}** {_md_code(c.from_version or '*')} "
+                f"({tgt}) in {_md_code(c.manifest)} — {_neut(c.detail)}"
             )
         lines.append("")
 
@@ -1829,11 +1849,13 @@ def _write_report(
                      "acceptable for the project.")
         lines.append("")
         for c in by_status["degraded_safety"]:
-            residuals = ", ".join(c.cve_remaining)
+            residuals = ", ".join(
+                _neut(a, limit=60) for a in c.cve_remaining)
             lines.append(
-                f"- **{c.ecosystem}:{c.name}** "
-                f"`{c.from_version or '*'}` → `{c.to_version}` "
-                f"in `{c.manifest}` — residuals: {residuals}"
+                f"- **{_md_pkg(c)}** "
+                f"{_md_code(c.from_version or '*')} → "
+                f"{_md_code(c.to_version)} "
+                f"in {_md_code(c.manifest)} — residuals: {residuals}"
             )
         lines.append("")
 
@@ -1845,9 +1867,10 @@ def _write_report(
                      "version within the recorded floor corridor. Apply with "
                      "`--allow-degraded` if the version regression is acceptable.")
         lines.append("")
-        lines.extend(f"- **{c.ecosystem}:{c.name}** "
-                f"`{c.from_version or '*'}` → `{c.to_version}` "
-                f"in `{c.manifest}` — {c.detail}" for c in by_status["downgraded_safety"])
+        lines.extend(f"- **{_md_pkg(c)}** "
+                f"{_md_code(c.from_version or '*')} → {_md_code(c.to_version)} "
+                f"in {_md_code(c.manifest)} — {_neut(c.detail)}"
+                for c in by_status["downgraded_safety"])
         lines.append("")
 
     # Atomic like the sibling JSON artifacts — a crash mid-write must

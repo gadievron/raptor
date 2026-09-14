@@ -276,3 +276,70 @@ def test_verify_row_sweep_no_live_markdown() -> None:
         },
     }
     _assert_inert(_row_line(row))
+
+
+# ---------------------------------------------------------------------------
+# update / optimise / harden renderers (the fix/harden artifact family)
+# ---------------------------------------------------------------------------
+
+def _hostile_change(skipped: bool):
+    from packages.sca.update import UpgradeChange
+    return UpgradeChange(
+        ecosystem="npm",
+        name=_PAYLOAD,
+        old_version=_PAYLOAD,
+        new_version="2.0.0",
+        manifest=Path(f"/repo/{_PAYLOAD}/package.json"),
+        advisory_ids=(_PAYLOAD,),
+        skipped_reason=(_PAYLOAD if skipped else None),
+    )
+
+
+def test_update_pr_comment_sweep_no_live_markdown() -> None:
+    from packages.sca.update import _render_pr_comment
+    md = _render_pr_comment([_hostile_change(False),
+                             _hostile_change(True)])
+    _assert_inert(md)
+
+
+def test_update_changes_md_sweep_no_live_markdown() -> None:
+    from packages.sca.update import _render_changes_markdown
+    md = _render_changes_markdown([_hostile_change(False),
+                                   _hostile_change(True)])
+    _assert_inert(md)
+
+
+def test_optimise_changes_md_sweep_no_live_markdown() -> None:
+    from packages.sca.optimise import _render_optimise_markdown
+    changes = [_hostile_change(False), _hostile_change(True)]
+    from dataclasses import replace
+    # A pin-tightening row has no advisory ids.
+    changes.append(replace(_hostile_change(False), advisory_ids=()))
+    md = _render_optimise_markdown(changes)
+    _assert_inert(md)
+
+
+def test_harden_report_sweep_no_live_markdown(tmp_path) -> None:
+    from packages.sca.harden import HardenCandidate, _write_report
+
+    def _cand(status: str) -> HardenCandidate:
+        return HardenCandidate(
+            ecosystem="npm", name=_PAYLOAD,
+            manifest=f"/repo/{_PAYLOAD}/package.json",
+            pin_style="exact", from_version=_PAYLOAD,
+            to_version="2.0.0", crosses_major=True, status=status,
+            detail=_PAYLOAD,
+            cve_cleared=[_PAYLOAD], cve_remaining=[_PAYLOAD],
+        )
+
+    report = tmp_path / "report.md"
+    _write_report(
+        report,
+        [_cand(s) for s in (
+            "promoted", "review_required", "demoted_safety",
+            "degraded_safety", "downgraded_safety",
+            "library_floor_raise_unsupported",
+        )],
+        [],
+    )
+    _assert_inert(report.read_text(encoding="utf-8"))

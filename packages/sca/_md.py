@@ -83,4 +83,15 @@ def inline_code(value: Any, *, limit: int = MD_INLINE_LIMIT) -> str:
     return f"`{text}`"
 
 
-__all__ = ["MD_INLINE_LIMIT", "inline_code", "neutralize_inline"]
+def code_cell(value: Any, *, limit: int = MD_INLINE_LIMIT) -> str:
+    """An untrusted value as a code span INSIDE a table cell.
+
+    ``inline_code`` alone is NOT table-safe: GFM parses table
+    structure before inline spans, so a raw ``|`` inside a code span
+    still splits the row (forged report cells). Escape it on top of
+    the code-span neutralisation.
+    """
+    return inline_code(value, limit=limit).replace("|", "\\|")
+
+
+__all__ = ["MD_INLINE_LIMIT", "code_cell", "inline_code", "neutralize_inline"]

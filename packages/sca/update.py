@@ -40,6 +40,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
+from ._md import code_cell, neutralize_inline
 from .naming import pep503_name
 from .parsers._npm_alias import split_npm_alias
 from .rows import FindingRow
@@ -437,10 +438,15 @@ def _render_pr_comment(changes: list[UpgradeChange]) -> str:
         out.append("| Ecosystem | Package | From | To | Advisories |")
         out.append("|---|---|---|---|---|")
         for c in applied:
-            advs = ", ".join(c.advisory_ids) if c.advisory_ids else "—"
+            # Name / versions / advisory ids are manifest- and
+            # registry-sourced — neutralise like the report renderers.
+            advs = (", ".join(
+                neutralize_inline(a, limit=60) for a in c.advisory_ids)
+                if c.advisory_ids else "—")
             out.append(
-                f"| {c.ecosystem} | `{c.name}` | {c.old_version} | "
-                f"{c.new_version} | {advs} |"
+                f"| {c.ecosystem} | {code_cell(c.name)} "
+                f"| {neutralize_inline(c.old_version, limit=60)} | "
+                f"{neutralize_inline(c.new_version, limit=60)} | {advs} |"
             )
         out.append("</details>")
         out.append("")
@@ -448,9 +454,11 @@ def _render_pr_comment(changes: list[UpgradeChange]) -> str:
         out.append("<details>")
         out.append("<summary>Skipped (with reason)</summary>")
         out.append("")
-        out.extend(f"- `{c.ecosystem}:{c.name}` "
-                f"({c.old_version} → {c.new_version}): "
-                f"{c.skipped_reason}" for c in skipped)
+        out.extend(
+            f"- {code_cell(f'{c.ecosystem}:{c.name}')} "
+            f"({neutralize_inline(c.old_version, limit=60)} → "
+            f"{neutralize_inline(c.new_version, limit=60)}): "
+            f"{neutralize_inline(c.skipped_reason)}" for c in skipped)
         out.append("</details>")
     return "\n".join(out) + "\n"
 
@@ -2419,9 +2427,12 @@ def _render_changes_markdown(
                         f"{'s' if len(rep.risks) > 1 else ''})"
                     )
             parts.append(
-                f"| {c.ecosystem} | {c.name} | {c.old_version} → "
-                f"{c.new_version} | `{c.manifest}` | "
-                f"{', '.join(c.advisory_ids) or '—'} | {compat_cell} |"
+                f"| {c.ecosystem} | {code_cell(c.name)} | "
+                f"{neutralize_inline(c.old_version, limit=60)} → "
+                f"{neutralize_inline(c.new_version, limit=60)} | "
+                f"{code_cell(c.manifest)} | "
+                f"{', '.join(neutralize_inline(a, limit=60) for a in c.advisory_ids) or '—'}"
+                f" | {compat_cell} |"
             )
         parts.append("")
         # Detail block for any change with non-empty compat risks.
@@ -2447,17 +2458,23 @@ def _render_changes_markdown(
             parts.append("")
             for c, rep in risky:
                 parts.append(
-                    f"**{c.ecosystem}:{c.name}** "
-                    f"({c.old_version} → {c.new_version})"
+                    f"**{neutralize_inline(f'{c.ecosystem}:{c.name}', limit=120)}** "
+                    f"({neutralize_inline(c.old_version, limit=60)} → "
+                    f"{neutralize_inline(c.new_version, limit=60)})"
                 )
-                parts.extend(f"- _{r.severity}_ — {r.detail}" for r in rep.risks)
+                parts.extend(
+                    f"- _{r.severity}_ — {neutralize_inline(r.detail)}"
+                    for r in rep.risks)
                 parts.append("")
     if skipped:
         parts.append("## Skipped")
         parts.append("")
-        parts.extend(f"- **{c.ecosystem}:{c.name}** "
-                f"({c.old_version} → {c.new_version}, `{c.manifest}`): "
-                f"{c.skipped_reason}" for c in skipped)
+        parts.extend(
+            f"- **{neutralize_inline(f'{c.ecosystem}:{c.name}', limit=120)}** "
+            f"({neutralize_inline(c.old_version, limit=60)} → "
+            f"{neutralize_inline(c.new_version, limit=60)}, "
+            f"{code_cell(c.manifest)}): "
+            f"{neutralize_inline(c.skipped_reason)}" for c in skipped)
         parts.append("")
     return "\n".join(parts)
 

@@ -52,6 +52,7 @@ from .update import (
     _rewrite_one,
     refuse_unsafe_target,
 )
+from ._md import code_cell, neutralize_inline
 from .versions import VersionError
 from .versions import compare as version_compare
 
@@ -928,8 +929,12 @@ def _render_optimise_markdown(changes: list[UpgradeChange]) -> str:
         parts.append("")
         parts.append("| Ecosystem | Name | Old | New | Advisories |")
         parts.append("|---|---|---|---|---|")
-        parts.extend(f"| {c.ecosystem} | {c.name} | {c.old_version} | "
-                f"{c.new_version} | {', '.join(c.advisory_ids)} |" for c in vuln_applied)
+        parts.extend(
+            f"| {c.ecosystem} | {code_cell(c.name)} | "
+            f"{neutralize_inline(c.old_version, limit=60)} | "
+            f"{neutralize_inline(c.new_version, limit=60)} | "
+            f"{', '.join(neutralize_inline(a, limit=60) for a in c.advisory_ids)} |"
+            for c in vuln_applied)
         parts.append("")
 
     if pin_applied:
@@ -937,16 +942,21 @@ def _render_optimise_markdown(changes: list[UpgradeChange]) -> str:
         parts.append("")
         parts.append("| Ecosystem | Name | Pinned To | Manifest |")
         parts.append("|---|---|---|---|")
-        parts.extend(f"| {c.ecosystem} | {c.name} | {c.new_version} | "
-                f"`{c.manifest}` |" for c in pin_applied)
+        parts.extend(
+            f"| {c.ecosystem} | {code_cell(c.name)} | "
+            f"{neutralize_inline(c.new_version, limit=60)} | "
+            f"{code_cell(c.manifest)} |" for c in pin_applied)
         parts.append("")
 
     if skipped:
         parts.append("## Skipped")
         parts.append("")
-        parts.extend(f"- **{c.ecosystem}:{c.name}** "
-                f"({c.old_version} → {c.new_version}, `{c.manifest}`): "
-                f"{c.skipped_reason}" for c in skipped)
+        parts.extend(
+            f"- **{neutralize_inline(f'{c.ecosystem}:{c.name}', limit=120)}** "
+            f"({neutralize_inline(c.old_version, limit=60)} → "
+            f"{neutralize_inline(c.new_version, limit=60)}, "
+            f"{code_cell(c.manifest)}): "
+            f"{neutralize_inline(c.skipped_reason)}" for c in skipped)
         parts.append("")
 
     return "\n".join(parts)
