@@ -426,20 +426,35 @@ class ToolUseLoop:
                     known_values |= _extract_tokens_from_text(block.text)
                 elif isinstance(block, ToolResult) and not block.is_error:
                     # The loop persists the messages-bound tool-result
-                    # copy envelope-WRAPPED (wrap_tool_result below),
-                    # while in-run discovery extracts from the RAW
-                    # content. Unwrap before extraction so resume
-                    # applies the same JSON-leaf rule: extracting from
-                    # the wrapped string made json.loads fail and fall
+                    # copy envelope-WRAPPED (wrap_tool_result below)
+                    # and records the raw bytes on ``raw_content`` —
+                    # in-run discovery extracted from those exact
+                    # bytes, so resume must too (extracting from the
+                    # wrapped string made json.loads fail and fall
                     # back to tokenisation, which both seeded tokens
-                    # the in-run gate refuses (JSON key names,
-                    # punctuation-split fragments of hostile tool
-                    # output) and dropped multi-word leaf values the
-                    # run legitimately discovered. Raw (unwrapped)
-                    # histories pass through unchanged.
-                    known_values |= _extract_values_from_json(
-                        unwrap_untrusted(block.content)
-                    )
+                    # the in-run gate refuses and dropped multi-word
+                    # leaf values the run legitimately discovered).
+                    #
+                    # Without ``raw_content`` the shapes are
+                    # ambiguous: a textual unwrap heuristic cannot
+                    # distinguish a loop-wrapped result from attacker
+                    # output that ARRIVED envelope-shaped, and
+                    # unwrapping the latter would seed inner values
+                    # (whitespace-containing JSON leaves) the in-run
+                    # tokenisation rule refused — laundering. So:
+                    # envelope-shaped content with no raw provenance
+                    # seeds NOTHING (fail closed — only the safe
+                    # false-block direction, and only for histories
+                    # that violated the persistence contract); plain
+                    # raw content seeds under the in-run rule
+                    # unchanged.
+                    raw = getattr(block, "raw_content", None)
+                    if raw is not None:
+                        known_values |= _extract_values_from_json(raw)
+                    elif unwrap_untrusted(block.content) == block.content:
+                        known_values |= _extract_values_from_json(
+                            block.content
+                        )
 
         for iteration in range(self._max_iterations):
             # ---- pre-flight: caller-supplied give-up predicate ---------
@@ -940,6 +955,10 @@ class ToolUseLoop:
                         tool_use_id=result.tool_use_id,
                         content=wrap_tool_result(raw_content, call.name),
                         is_error=result.is_error,
+                        # Provenance for resume-time x-source seeding:
+                        # the exact raw bytes in-run discovery
+                        # extracted from (see run_with_history).
+                        raw_content=raw_content,
                     )
 
                 tool_results.append(message_result)

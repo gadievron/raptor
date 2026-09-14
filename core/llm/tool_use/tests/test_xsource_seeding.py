@@ -214,7 +214,11 @@ def _run_resumed_with(history: list[Message], call_input: dict):
     return blocked, returned
 
 
-def _wrapped_history(result_json: str) -> list[Message]:
+def _wrapped_history(result_json: str, *,
+                     with_raw: bool = True) -> list[Message]:
+    """The shape the loop itself persists: wrapped content plus the
+    raw provenance on ``raw_content`` (omit it to model a history
+    that violated the persistence contract)."""
     return [
         Message(role="user", content=[TextBlock(text="analyse this")]),
         Message(role="assistant", content=[
@@ -222,7 +226,8 @@ def _wrapped_history(result_json: str) -> list[Message]:
         ]),
         Message(role="user", content=[
             ToolResult(tool_use_id="c0",
-                       content=wrap_tool_result(result_json, "discover")),
+                       content=wrap_tool_result(result_json, "discover"),
+                       raw_content=result_json if with_raw else None),
         ]),
     ]
 
@@ -290,3 +295,63 @@ class TestWrappedHistorySeeding:
                                               {"note": MULTIWORD})
         assert blocked == []
         assert any(MULTIWORD in r.result.content for r in returned)
+
+
+class TestSeedingProvenance:
+    """Resume seeding trusts ``raw_content`` provenance, never a
+    textual unwrap heuristic: a loop-wrapped result and attacker
+    output that ARRIVED envelope-shaped are byte-indistinguishable, so
+    envelope-shaped content without raw provenance seeds nothing
+    (fail closed — the safe, false-block direction, and only for
+    histories that violated the persistence contract)."""
+
+    def test_attacker_envelope_shaped_raw_history_seeds_nothing(self):
+        """Reviewer shape: a hand-built raw history whose ToolResult
+        content IS a pristine envelope wrapping JSON. Unwrapping it
+        would seed the whitespace-containing inner leaf — a value the
+        in-run tokenisation rule refused for this raw shape."""
+        from core.security.prompt_envelope import wrap_untrusted
+
+        attacker_content = wrap_untrusted(
+            f'{{"note": "{MULTIWORD}"}}', kind="tool-result",
+            origin="discover",
+        )
+        history = [
+            Message(role="user", content=[TextBlock(text="analyse this")]),
+            Message(role="assistant", content=[
+                ToolCall(id="c0", name="discover", input={}),
+            ]),
+            Message(role="user", content=[
+                ToolResult(tool_use_id="c0", content=attacker_content),
+            ]),
+        ]
+        blocked, returned = _run_resumed_with(history,
+                                              {"note": MULTIWORD})
+        assert len(blocked) == 1
+        assert all(r.result.is_error for r in returned)
+
+    def test_wrapped_without_raw_provenance_seeds_nothing(self):
+        """A loop-shaped wrapped block that lost its raw_content (a
+        consumer that serialised only role/content) fails closed —
+        even the legitimate leaf value stays undiscovered rather than
+        risking the unwrap-laundering direction."""
+        history = _wrapped_history('{"note": "smallvalue"}',
+                                   with_raw=False)
+        blocked, _ = _run_resumed_with(history, {"note": "smallvalue"})
+        assert len(blocked) == 1
+
+    def test_plain_raw_history_still_seeds_in_run_rule(self):
+        """Control: non-envelope raw content keeps the exact in-run
+        rule (JSON-leaf extraction on the content itself)."""
+        history = [
+            Message(role="user", content=[TextBlock(text="analyse this")]),
+            Message(role="assistant", content=[
+                ToolCall(id="c0", name="discover", input={}),
+            ]),
+            Message(role="user", content=[
+                ToolResult(tool_use_id="c0",
+                           content=f'{{"note": "{MULTIWORD}"}}'),
+            ]),
+        ]
+        blocked, _ = _run_resumed_with(history, {"note": MULTIWORD})
+        assert blocked == []

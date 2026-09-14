@@ -136,11 +136,22 @@ class ToolResult:
     """Caller's response to a :class:`ToolCall`, fed back to the model
     on the next turn. Carried as a content block of a user-role
     :class:`Message`. ``is_error=True`` lets the model distinguish
-    legitimate empty results from handler failures."""
+    legitimate empty results from handler failures.
+
+    ``raw_content`` is loop-internal provenance, never sent on the
+    wire (providers read ``content`` only): when the loop persists the
+    messages-bound copy envelope-WRAPPED, it records the raw tool
+    output here so resume-time x-source seeding extracts from exactly
+    the bytes in-run discovery saw. Textual unwrap heuristics cannot
+    distinguish a loop-wrapped result from attacker output that
+    arrived envelope-shaped, so the raw bytes ride alongside instead.
+    Consumers persisting histories to disk must round-trip this field
+    with the rest of the block."""
 
     tool_use_id: str
     content: str
     is_error: bool = False
+    raw_content: str | None = None
 
 
 @dataclass(frozen=True)
