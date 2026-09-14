@@ -17,8 +17,12 @@ from core.analysis.binary_oracle_autodetect import (
 
 _GC_SECTIONS = "-Wl,-dead_strip" if sys.platform == "darwin" else "-Wl,--gc-sections"
 
+# readelf joins the compiler: every consumer of a compiled fixture in
+# this module probes DWARF via ``_has_dwarf``, which fail-closes when
+# readelf is missing — the assertion would FAIL instead of skipping.
 _needs_gcc = pytest.mark.skipif(
-    not shutil.which("gcc"), reason="gcc not available",
+    not all(shutil.which(t) for t in ("gcc", "readelf")),
+    reason="gcc/readelf not available",
 )
 
 
@@ -26,8 +30,8 @@ _needs_gcc = pytest.mark.skipif(
 def build_tree(tmp_path: Path) -> Path:
     """A target tree shaped like a real autotools / CMake build.
     Synthesises ELF binaries with DWARF via a tiny compile."""
-    if not shutil.which("gcc"):
-        pytest.skip("gcc not available")
+    if not all(shutil.which(t) for t in ("gcc", "readelf")):
+        pytest.skip("gcc/readelf not available")
     import subprocess as _sp
 
     # Source file shared by all binaries.
@@ -229,7 +233,10 @@ def test_has_dwarf_distinguishes_stripped(tmp_path: Path) -> None:
 
 @_needs_gcc
 @pytest.mark.slow
-@pytest.mark.skipif(not shutil.which("make"), reason="make not available")
+@pytest.mark.skipif(
+    not all(shutil.which(t) for t in ("make", "nm", "readelf")),
+    reason="make/nm/readelf not available",
+)
 def test_detect_finds_makefile_built_binary(tmp_path: Path) -> None:
     """A target with a Makefile that builds into build/ — autodetect
     must find the resulting debug binary after ``make`` runs. This is

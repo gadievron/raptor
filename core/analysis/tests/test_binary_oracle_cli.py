@@ -4,9 +4,12 @@ message split."""
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+
+import pytest
 
 from core.analysis.binary_oracle_cli import (
     _filter_locally_built,
@@ -149,6 +152,8 @@ class TestGitTrackedProvenanceGate:
 
     def _git_init(self, tmp_path: Path) -> Path:
         import subprocess
+        if not shutil.which("git"):
+            pytest.skip("git not available")
         subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
         subprocess.run(["git", "config", "user.email", "t@example.com"],
                        cwd=tmp_path, check=True)
@@ -291,6 +296,8 @@ class TestAutodetectIntegratesGate:
     ):
         # Set up: git repo with a tracked binary + an untracked one.
         import subprocess
+        if not shutil.which("git"):
+            pytest.skip("git not available")
         subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
         subprocess.run(["git", "config", "user.email", "t@example.com"],
                        cwd=tmp_path, check=True)

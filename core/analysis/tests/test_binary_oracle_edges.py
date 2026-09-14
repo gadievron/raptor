@@ -482,6 +482,10 @@ def test_graph_store_reuse_requires_matching_binary_sha_and_keeps_requested_path
     reason="radare2 (r2) not installed — direct-edge extraction returns an "
     "empty index by design, so there is nothing to assert",
 )
+@pytest.mark.skipif(
+    shutil.which("gcc") is None,
+    reason="gcc not available — the fixture binary can't be built",
+)
 def test_extract_direct_call_edges_on_synthetic_fixture(
     tmp_path: Path,
 ) -> None:
