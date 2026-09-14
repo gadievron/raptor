@@ -567,39 +567,47 @@ class CodeQLAgent:
             logger.info("PHASE 3: DATABASE CREATION")
             logger.info("%s", '=' * 70)
 
-            db_results = self.database_manager.create_databases_parallel(
-                self.repo_path,
-                language_build_map,
-                force=force_db_creation,
-                audit_run_dir=self.out_dir,
-                traced_languages=traced_languages,
-            )
-
-            # Clean up synthesised build artifacts. Per-path try
-            # / except so one cleanup failure doesn't abort the
-            # whole sweep, and `is_dir()` / `is_file()` short-
-            # circuit if the path was already removed (idempotent
-            # under retry). `is_*` follows symlinks by default —
-            # use `follow_symlinks=False`-equivalent behaviour
-            # via `is_symlink()` short-circuit so we DELETE the
-            # symlink itself rather than its target (which could
-            # be in the user's repo or somewhere else entirely
-            # that we never put data into).
-            import shutil
-            for bs in language_build_map.values():
-                for p in getattr(bs, 'cleanup_paths', None) or []:
-                    try:
-                        # Symlink → unlink the link, never follow.
-                        if p.is_symlink():
-                            p.unlink()
-                        elif p.is_dir():
-                            shutil.rmtree(p)
-                        elif p.is_file():
-                            p.unlink()
-                    except OSError as e:
-                        logger.debug(
-                            "cleanup of %s failed: %s — continuing", p, e,
-                        )
+            try:
+                db_results = self.database_manager.create_databases_parallel(
+                    self.repo_path,
+                    language_build_map,
+                    force=force_db_creation,
+                    audit_run_dir=self.out_dir,
+                    traced_languages=traced_languages,
+                )
+            finally:
+                # Clean up synthesised build artifacts. In a `finally`
+                # because the cleanup paths live UNDER the scanned
+                # repo (.raptor_build_* script + build dir): an
+                # exception escaping database creation would otherwise
+                # leak them into the target tree, and the next scan
+                # inventories RAPTOR's own build script as project
+                # source. Per-path try / except so one cleanup failure
+                # doesn't abort the whole sweep, and `is_dir()` /
+                # `is_file()` short-circuit if the path was already
+                # removed (idempotent under retry). `is_*` follows
+                # symlinks by default — use
+                # `follow_symlinks=False`-equivalent behaviour via
+                # `is_symlink()` short-circuit so we DELETE the
+                # symlink itself rather than its target (which could
+                # be in the user's repo or somewhere else entirely
+                # that we never put data into).
+                import shutil
+                for bs in language_build_map.values():
+                    for p in getattr(bs, 'cleanup_paths', None) or []:
+                        try:
+                            # Symlink → unlink the link, never follow.
+                            if p.is_symlink():
+                                p.unlink()
+                            elif p.is_dir():
+                                shutil.rmtree(p)
+                            elif p.is_file():
+                                p.unlink()
+                        except OSError as e:
+                            logger.debug(
+                                "cleanup of %s failed: %s — continuing",
+                                p, e,
+                            )
 
             # Check for failures
             successful_dbs = {
