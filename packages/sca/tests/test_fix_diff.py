@@ -207,3 +207,32 @@ def test_subcommand_registered():
     # the unknown-subcommand branch.
     with pytest.raises(SystemExit):
         _dispatch("fix-diff", ["--definitely-not-a-flag"])
+
+
+def test_run_one_child_env_is_llm_composed_not_ambient(
+    monkeypatch, tmp_path,
+) -> None:
+    """The agentic child must get the composed LLM env (safe allowlist
+    + credentials + proxy), never the operator's full ambient
+    environment — unrelated tokens have no business reaching it."""
+    from packages.sca import fix_diff
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-must-not-leak")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-llm-needed")
+    seen: dict = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _fake_run(cmd, **kw):
+        seen["env"] = kw["env"]
+        return _Proc()
+
+    monkeypatch.setattr(fix_diff.subprocess, "run", _fake_run)
+    fix_diff.run_one("CVE-2024-0001", tmp_path)
+    env = seen["env"]
+    assert env["_RAPTOR_TRUSTED"] == "1"
+    assert "GITHUB_TOKEN" not in env
+    assert env.get("ANTHROPIC_API_KEY") == "sk-llm-needed"

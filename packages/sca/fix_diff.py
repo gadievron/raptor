@@ -25,7 +25,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import re
 import subprocess
 import sys
@@ -108,7 +107,14 @@ def run_one(cve_id: str, output_dir: Path, *, budget_multiplier: float = 1.0,
         cmd += ["--budget-multiplier", str(budget_multiplier)]
     if model:
         cmd += ["--model", model]
-    env = dict(os.environ)
+    # Repo standard: children derive from the allowlisted safe env,
+    # never the operator's full ambient environment (unrelated tokens,
+    # cloud creds, editor/browser hooks). This child is an LLM tool —
+    # get_llm_env() is the documented composition: safe allowlist +
+    # proxy preservation + the LLM credential/routing family, nothing
+    # else.
+    from core.config import RaptorConfig
+    env = RaptorConfig.get_llm_env()
     env["_RAPTOR_TRUSTED"] = "1"
     try:
         proc = subprocess.run(

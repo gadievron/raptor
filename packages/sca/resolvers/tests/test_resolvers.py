@@ -1343,3 +1343,37 @@ def test_pip_set_allow_sdist_builds_process_default():
     finally:
         pip_mod.set_allow_sdist_builds(False)
     assert r.allow_sdist_builds is False
+
+
+def test_yarn_env_overlays_safe_env(monkeypatch, tmp_path) -> None:
+    """The Berry scripts-off variable must OVERLAY the allowlisted
+    safe environment — a bare one-key dict replaced get_safe_env()
+    wholesale (the sandbox passes caller env verbatim), dropping
+    PATH/locale and bypassing the repo's one child-env chokepoint."""
+    from packages.sca.resolvers import yarn as yarn_mod
+
+    seen: dict = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = "{}"
+        stderr = ""
+
+    def _fake_run(cmd, **kw):
+        seen["env"] = kw.get("env")
+        return _Proc()
+
+    monkeypatch.setattr(yarn_mod, "_run", _fake_run)
+    monkeypatch.setattr(yarn_mod, "_check_tool", lambda *a, **k: True)
+    monkeypatch.setattr(
+        yarn_mod.YarnResolver, "_detect_major_version",
+        lambda self=None: 3, raising=False)
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "yarn.lock").write_text("", encoding="utf-8")
+    resolver = yarn_mod.YarnResolver()
+    resolver.dry_run(tmp_path)
+    env = seen.get("env")
+    assert env is not None
+    assert env.get("YARN_ENABLE_SCRIPTS") == "false"
+    assert "PATH" in env, "safe-env base missing — bare dict again"
+

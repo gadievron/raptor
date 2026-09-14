@@ -86,7 +86,16 @@ class YarnResolver:
         # Berry (2.x+) removed --ignore-scripts; the equivalent is the
         # YARN_ENABLE_SCRIPTS env var.  Set it unconditionally — harmless
         # on classic (ignores unknown env), load-bearing on Berry.
-        env = {"YARN_ENABLE_SCRIPTS": "false"}
+        # Overlay on the allowlisted safe environment — the sandbox
+        # passes a caller-supplied env dict VERBATIM, so a bare
+        # ``{"YARN_ENABLE_SCRIPTS": ...}`` replaced get_safe_env()
+        # wholesale (dropping PATH/locale and, more importantly,
+        # bypassing the one place env hygiene for children is
+        # defined; repo standard: every child env derives from
+        # RaptorConfig.get_safe_env()).
+        from core.config import RaptorConfig
+        env = RaptorConfig.get_safe_env()
+        env["YARN_ENABLE_SCRIPTS"] = "false"
 
         # Copy manifest files into a writable tempdir — the sandbox
         # only allows writes to the output dir and /tmp, not cwd.
