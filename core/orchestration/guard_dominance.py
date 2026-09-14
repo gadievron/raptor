@@ -237,7 +237,17 @@ def apply_to_findings(
             continue
         if finding.get("status") == "disproven":
             continue
-        if (finding.get("ruling") or {}).get("status") == "ruled_out":
+        # Rulings arrive in TWO documented shapes: /agentic emits bare
+        # STRINGS ("validated"/"false_positive"), /validate emits
+        # dicts with a "status" key. A .get() on the string crashed
+        # Stage-D prep pre-save; tolerate both (same pattern as the
+        # validation-report renderer).
+        ruling = finding.get("ruling")
+        if isinstance(ruling, dict):
+            ruling_status = ruling.get("status")
+        else:
+            ruling_status = ruling if isinstance(ruling, str) else None
+        if ruling_status == "ruled_out":
             continue
         if finding.get("manual_override"):
             continue

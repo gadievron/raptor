@@ -1386,7 +1386,15 @@ def prepare_D(workdir, target=None):
             }
 
     # --- Guard-dominance refuter (P23, pre-LLM, warm CPG only) ---
-    _run_guard_dominance(workdir, target, data)
+    # Best-effort: the refuter is an enrichment. A crash here (odd
+    # finding shape, joern hiccup) previously killed Stage-D prep
+    # AFTER evidence-card assembly but BEFORE _save_findings — losing
+    # the whole run's evidence synthesis and test-filter flags.
+    try:
+        _run_guard_dominance(workdir, target, data)
+    except Exception as exc:  # noqa: BLE001 — enrichment must not kill the save
+        print(f"WARNING: guard-dominance refuter skipped: {exc}",
+              file=sys.stderr)
 
     _save_findings(workdir, data)
     flagged = sum(1 for f in data["findings"] if f.get("test_code_flag"))

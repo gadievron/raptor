@@ -156,6 +156,9 @@ class TestApplyToFindings:
     @pytest.mark.parametrize("mutate", [
         {"status": "disproven"},
         {"ruling": {"status": "ruled_out"}},
+        # /agentic emits bare-STRING rulings (documented shape);
+        # pre-fix the dict .get() crashed on them mid-Stage-D prep.
+        {"ruling": "ruled_out"},
         {"manual_override": True},
         {"guard_dominance": {"outcome": "refuted"}},
     ])
@@ -165,6 +168,18 @@ class TestApplyToFindings:
         stats = apply_to_findings([finding], [], Path("/t"), object())
         assert stats["checked"] == 0
         assert calls == []
+
+    @pytest.mark.parametrize("ruling", [
+        "validated", "false_positive", None, 7,
+    ])
+    def test_non_ruled_out_ruling_shapes_stay_in_play(
+            self, monkeypatch, ruling):
+        # String and junk rulings that are not "ruled_out" must keep
+        # the finding checkable, never crash the pre-filter.
+        _patch_query(monkeypatch, "inconclusive")
+        finding = _finding(ruling=ruling)
+        stats = apply_to_findings([finding], [], Path("/t"), object())
+        assert stats["checked"] == 1
 
     def test_cap_bounds_queries(self, monkeypatch):
         calls = _patch_query(monkeypatch, "inconclusive")
