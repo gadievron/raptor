@@ -1553,13 +1553,19 @@ def _process_single_file(
         except OSError:
             file_stat = None
 
-        # Fast path: if stat (mtime_ns + size) matches old entry, reuse
-        # without reading the file at all — skips I/O, hash, and parsing.
-        if old_files and rel_path in old_files:
-            old_entry = old_files[rel_path]
-            old_stat = old_entry.get('_stat')
-            if file_stat and old_stat and file_stat == old_stat:
-                return old_entry
+        # A stat (mtime_ns + size) match against the old entry is a
+        # HINT, never proof of identity: a same-size edit with a
+        # preserved mtime (rsync -a, cp -p, archive extraction,
+        # os.utime restore, sub-clock-granularity edits) is invisible
+        # to stat, and serving the old parse attaches coverage marks
+        # and span hashes to code that no longer exists. Reuse
+        # therefore always goes through the SHA-256 compare below —
+        # the module's documented contract. A content match still
+        # skips tree-sitter parsing (the dominant cost); the price is
+        # re-reading each unchanged file's bytes every incremental
+        # run. Trading that read back for a stat-only trust fast path
+        # re-opens the stale-entry hole in both the timestamp-
+        # preserving-sync and same-instant-edit shapes.
 
         # Bounded read. `read_bytes()` loads the whole file into
         # memory before any size check — a 10 GB binary, malformed
@@ -1633,7 +1639,9 @@ def _process_single_file(
         line_count = content.count('\n') + 1
         sha256 = sha256_bytes(raw_bytes)
 
-        # Fall back to SHA-256 comparison when stat changed but content didn't
+        # The one reuse gate: content identity by SHA-256 (see the
+        # stat-is-a-hint rationale above). Skips the parse, refreshes
+        # the recorded stat.
         if old_files and rel_path in old_files:
             old_entry = old_files[rel_path]
             if old_entry.get('sha256') == sha256:
