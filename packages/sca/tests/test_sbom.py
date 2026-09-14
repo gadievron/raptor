@@ -483,3 +483,34 @@ def test_fingerprint_buckets_sorted_for_stable_diff() -> None:
     comp = bom["components"][0]
     props = {p["name"]: p["value"] for p in comp["properties"]}
     assert props["raptor:cap_fp:buckets"] == "alpha,middle,zebra"
+
+
+def test_vex_justification_enum_conformant() -> None:
+    """CycloneDX's impact-analysis JUSTIFICATION enum has only
+    not-affected reasons; "in_triage" is a STATE. Emitting it as a
+    justification made strict consumers (Dependency-Track,
+    cyclonedx-cli validate) reject the whole BOM. Every emitted
+    justification must come from the real enum."""
+    valid = {
+        "code_not_present", "code_not_reachable",
+        "requires_configuration", "requires_dependency",
+        "requires_environment", "protected_by_compiler",
+        "protected_at_runtime", "protected_at_perimeter",
+        "protected_by_mitigating_control",
+    }
+    for verdict in ("likely_called", "imported", "not_reachable",
+                    "called_in_dead_code", "unknown"):
+        d = _dep()
+        findings = build_vuln_findings(
+            [d], [OsvResult(d.key(), [_adv()])],
+            reachability={d.key(): Reachability(
+                verdict=verdict,
+                confidence=Confidence("medium", reason="t"),
+                evidence=[],
+            )},
+        )
+        bom = build_bom(deps=[d], vuln_findings=findings)
+        for vuln in bom.get("vulnerabilities", []):
+            analysis = vuln.get("analysis") or {}
+            j = analysis.get("justification")
+            assert j is None or j in valid, (verdict, analysis)
