@@ -282,21 +282,32 @@ def _build_clusters(
         # Hoist the reference once before the all(). dict insertion
         # order is preserved (Python 3.7+), so `next(iter(...))`
         # gives the same "first model" choice deterministically.
-        first_value = next(iter(per_model.values()), {})
-        first_is_exploitable = first_value.get("is_exploitable")
-        models_agreed = all(
-            v.get("is_exploitable") == first_is_exploitable
-            for v in per_model.values()
+        # Abstention-aware agreement (same counting rule as
+        # ``tally_verdict_votes``): a None verdict (errored / refused /
+        # schema-failed model) is not a vote. Pre-fix an all-abstain
+        # panel satisfied None == None and minted a "unanimous"
+        # cluster from zero actual verdicts on the operator triage
+        # surface, while the same finding's confidence signal
+        # correctly read "no-verdict".
+        tally = tally_verdict_votes(
+            v.get("is_exploitable") for v in per_model.values()
         )
+        models_agreed = tally.unanimous
         shared_rules = set()
         for fid in fids:
             rule = results_by_id.get(fid, {}).get("rule_id", "")
             if rule:
                 shared_rules.add(rule)
 
+        if tally.voted == 0:
+            # Zero real verdicts — neither unanimous nor split;
+            # mirror the confidence-signal vocabulary.
+            pattern = "no-verdict"
+        else:
+            pattern = "unanimous" if models_agreed else "split"
         clusters.append({
             "finding_ids": sorted(fids),
-            "pattern": "unanimous" if models_agreed else "split",
+            "pattern": pattern,
             "shared_rules": sorted(shared_rules),
             "models_agreed": models_agreed,
         })

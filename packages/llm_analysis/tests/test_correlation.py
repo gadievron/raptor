@@ -192,6 +192,40 @@ class TestBuildClusters:
         assert clusters[0]["pattern"] == "split"
         assert clusters[0]["models_agreed"] is False
 
+    def test_all_abstain_panel_is_not_unanimous(self):
+        """A panel where every member abstained (None verdicts —
+        errored / refused / schema-failed models) must not mint a
+        "unanimous" cluster from zero actual verdicts: pre-fix
+        None == None satisfied the agreement check while the same
+        findings' confidence signals correctly read no-verdict."""
+        matrix = {
+            "f-001": {"gemini": {"is_exploitable": None},
+                      "gpt-5": {"is_exploitable": None}},
+            "f-002": {"gemini": {"is_exploitable": None},
+                      "gpt-5": {"is_exploitable": None}},
+        }
+        clusters = _build_clusters(matrix, {})
+        assert len(clusters) == 1
+        assert clusters[0]["pattern"] == "no-verdict"
+        assert clusters[0]["models_agreed"] is False
+
+    def test_abstainer_does_not_break_unanimity(self):
+        """Mirror direction: real voters agreeing + one abstainer is
+        still unanimous — abstentions never create (or mask) a
+        dispute (the tally contract)."""
+        matrix = {
+            "f-001": {"gemini": {"is_exploitable": True},
+                      "gpt-5": {"is_exploitable": True},
+                      "mistral": {"is_exploitable": None}},
+            "f-002": {"gemini": {"is_exploitable": True},
+                      "gpt-5": {"is_exploitable": True},
+                      "mistral": {"is_exploitable": None}},
+        }
+        clusters = _build_clusters(matrix, {})
+        assert len(clusters) == 1
+        assert clusters[0]["pattern"] == "unanimous"
+        assert clusters[0]["models_agreed"] is True
+
     def test_multiple_clusters(self):
         matrix = {
             "f-001": {"gemini": {"is_exploitable": True}, "gpt-5": {"is_exploitable": True}},
