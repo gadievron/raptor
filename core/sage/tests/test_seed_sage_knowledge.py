@@ -187,8 +187,9 @@ class TestScriptModePathSetup(unittest.TestCase):
         "core/sage/scripts/register_agents.py",
     )
 
-    def _run(self, script: str, with_raptor_dir: bool):
-        import subprocess
+    def _run(
+        self, script: str, with_raptor_dir: bool
+    ) -> subprocess.CompletedProcess[str]:
         import sys as _sys
         repo_root = ssk.REPO_ROOT
         env = {k: v for k, v in os.environ.items() if k != "RAPTOR_DIR"}
@@ -210,9 +211,14 @@ class TestScriptModePathSetup(unittest.TestCase):
         for script in self._SCRIPTS:
             with self.subTest(script=script):
                 r = self._run(script, with_raptor_dir=True)
+                # Both streams, repr'd: a script that dies with its
+                # error on stdout (the pre-fix missing-SDK gate did
+                # exactly that) otherwise yields an empty-looking
+                # diagnostic that hides the actual cause.
                 self.assertEqual(
                     r.returncode, 0,
-                    f"--help failed: {r.stderr[:500]}",
+                    f"--help failed: stderr={r.stderr[:500]!r} "
+                    f"stdout={r.stdout[:500]!r}",
                 )
 
 
@@ -253,9 +259,12 @@ class TestMissingSdkGating(unittest.TestCase):
         for script in self._SCRIPTS:
             with self.subTest(script=script):
                 r = self._run_without_sdk(script, "--help")
+                # Both streams, repr'd — same rationale as
+                # test_runs_with_raptor_dir.
                 self.assertEqual(
                     r.returncode, 0,
-                    f"--help failed: {r.stderr[:500]}",
+                    f"--help failed: stderr={r.stderr[:500]!r} "
+                    f"stdout={r.stdout[:500]!r}",
                 )
                 self.assertIn("usage:", r.stdout)
 
