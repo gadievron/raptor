@@ -557,6 +557,10 @@ def _payload_from_local_var_decl(decl, resolver):
             css.extend(_walk_call_sites(
                 val, resolver, assigned_for_root=assigned))
             uses |= _walk_uses(val, resolver)
+            # Embedded stores in the INITIALIZER (``String z =
+            # (y = x);``) — same invisible-definer hazard as the
+            # condition contexts; see _embedded_store_names.
+            defs |= _embedded_store_names(val)
     calls = {cs.name for cs in css}
     return frozenset(calls), frozenset(defs), frozenset(uses), tuple(css)
 
@@ -581,6 +585,9 @@ def _payload_from_assignment(expr: Node, resolver):
         assigned = defs if clean_lhs else frozenset()
         css.extend(_walk_call_sites(rhs, resolver, assigned_for_root=assigned))
         uses |= _walk_uses(rhs, resolver)
+        # Embedded stores in the RHS (``z = (y = x);``) — defs only,
+        # never assigned_names; see _embedded_store_names.
+        defs = defs | _embedded_store_names(rhs)
     if lhs is not None and lhs.type != _IDENT:
         uses |= _walk_uses(lhs, resolver)
     calls = {cs.name for cs in css}
@@ -1000,12 +1007,15 @@ class _JavaCFGBuilder:
             msg = "enhanced_for value"
             raise _RefusedConstruct(msg)
         var = _node_text(name_node) if name_node is not None else None
-        calls, _d, uses, css = _payload_from_subtree(value, self.resolver)
+        calls, embedded_defs, uses, css = _payload_from_subtree(
+            value, self.resolver)
+        header_defs = (
+            frozenset({var}) if var else frozenset()) | embedded_defs
         header = self._make_node(
             lineno=stmt.start_point[0] + 1,
             label=f"for {var} : {self._short_label(value)}",
             calls=calls,
-            defs=frozenset({var}) if var else frozenset(),
+            defs=header_defs,
             uses=uses, call_sites=css,
             may_escape=_subtree_may_escape(value, self.resolver),
         )

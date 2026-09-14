@@ -312,6 +312,47 @@ def _java_fixtures() -> list[CutFixture]:
                    params="String x, boolean flag, "
                           "java.io.PrintWriter out"),
         3, 6, language="java", suffix=".java"))
+    # The condition pin's EXPRESSION-CONTEXT siblings: the same
+    # embedded assignment write in a declaration initializer, a plain
+    # assignment RHS, a ternary initializer, and an array-store RHS —
+    # every payload extractor must surface embedded stores, not an
+    # enumerated subset of contexts.
+    j.append(_fx(
+        "java_xss_decl_init_rebind", "xss", "CWE-79",
+        "sanitized_then_decl_initializer_rebound",
+        LABEL_MUST_NOT_SUPPRESS,
+        imp + meth("        String y = Encode.forHtml(x);\n"
+                   "        String z = (y = x);\n"
+                   "        out.println(y);\n"),
+        3, 6, language="java", suffix=".java"))
+    j.append(_fx(
+        "java_xss_assign_rhs_rebind", "xss", "CWE-79",
+        "sanitized_then_assignment_rhs_rebound",
+        LABEL_MUST_NOT_SUPPRESS,
+        imp + meth("        String y = Encode.forHtml(x);\n"
+                   "        String z;\n"
+                   "        z = (y = x);\n"
+                   "        out.println(y);\n"),
+        3, 7, language="java", suffix=".java"))
+    j.append(_fx(
+        "java_xss_ternary_decl_rebind", "xss", "CWE-79",
+        "sanitized_then_ternary_initializer_rebound",
+        LABEL_MUST_NOT_SUPPRESS,
+        imp + meth("        String y = Encode.forHtml(x);\n"
+                   "        String z = flag ? (y = x) : \"s\";\n"
+                   "        out.println(y);\n",
+                   params="String x, boolean flag, "
+                          "java.io.PrintWriter out"),
+        3, 6, language="java", suffix=".java"))
+    j.append(_fx(
+        "java_xss_array_store_rhs_rebind", "xss", "CWE-79",
+        "sanitized_then_array_store_rhs_rebound",
+        LABEL_MUST_NOT_SUPPRESS,
+        imp + meth("        String y = Encode.forHtml(x);\n"
+                   "        String[] a = new String[1];\n"
+                   "        a[0] = (y = x);\n"
+                   "        out.println(y);\n"),
+        3, 7, language="java", suffix=".java"))
     j.append(_fx(
         "java_xss_wrong_variable", "xss", "CWE-79",
         "wrong_variable_sanitized", LABEL_MUST_NOT_SUPPRESS,

@@ -572,6 +572,9 @@ def _payload_from_declaration(decl) -> tuple[frozenset[str], frozenset[str],
                 )
                 calls_acc |= _walk_subtree_for_calls(val)
                 uses_acc |= _walk_subtree_for_uses(val)
+                # Embedded stores in the INITIALIZER (``char *z =
+                # (y = x);``) — see _embedded_store_names.
+                defs |= _embedded_store_names(val)
         elif child.type in (
             _IDENT, _POINTER_DECLARATOR,
             "array_declarator", "function_declarator",
@@ -610,6 +613,9 @@ def _payload_from_assignment(expr: Node) -> tuple[frozenset[str], frozenset[str]
         )
         calls_acc |= _walk_subtree_for_calls(rhs)
         uses_acc |= _walk_subtree_for_uses(rhs)
+        # Embedded stores in the RHS (``z = (y = x);``) — defs only,
+        # never assigned_names; see _embedded_store_names.
+        defs = defs | _embedded_store_names(rhs)
     # The LHS may also contain uses — e.g. ``arr[i] = ...`` reads
     # ``arr`` and ``i``. Walk it but exclude the bare LHS target.
     if lhs is not None and lhs.type != _IDENT:

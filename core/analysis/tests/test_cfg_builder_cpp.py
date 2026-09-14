@@ -582,3 +582,44 @@ class TestEmbeddedStoreDefs:
         )
         cond = next(n for n in cfg.nodes() if n.lineno == 2)
         assert cond.defs == frozenset()
+
+
+class TestEmbeddedStoreDefsExpressionContexts:
+    """Expression-context siblings of the condition fix: embedded
+    assignments in declaration initializers and assignment RHS must
+    surface their target as a def."""
+
+    def test_decl_initializer_embedded_assignment_defines(self):
+        cfg = _build(
+            "void f(char *src) {\n"
+            "  char *y = clean(src);\n"
+            "  char *z = (y = src);\n"
+            "  use(y);\n"
+            "}\n",
+        )
+        decl = next(n for n in cfg.nodes() if n.lineno == 3)
+        assert {"y", "z"} <= decl.defs
+
+    def test_assignment_rhs_embedded_assignment_defines(self):
+        cfg = _build(
+            "void f(char *src) {\n"
+            "  char *y = clean(src);\n"
+            "  char *z;\n"
+            "  z = (y = src);\n"
+            "  use(y);\n"
+            "}\n",
+        )
+        assign = next(n for n in cfg.nodes() if n.lineno == 4)
+        assert {"y", "z"} <= assign.defs
+
+    def test_embedded_rhs_store_earns_no_assigned_names(self):
+        cfg = _build(
+            "void f(char *src) {\n"
+            "  char *y = src;\n"
+            "  char *z = (y = clean(src));\n"
+            "}\n",
+        )
+        decl = next(n for n in cfg.nodes() if n.lineno == 3)
+        assert "y" in decl.defs
+        for cs in decl.call_sites:
+            assert "y" not in cs.assigned_names

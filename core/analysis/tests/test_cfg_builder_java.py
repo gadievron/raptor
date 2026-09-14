@@ -303,3 +303,58 @@ class TestEmbeddedStoreDefs:
         )
         cond = next(n for n in cfg.nodes() if n.label.startswith("if"))
         assert cond.defs == frozenset()
+
+
+class TestEmbeddedStoreDefsExpressionContexts:
+    """The condition fix's expression-context siblings: an embedded
+    assignment writes its target in EVERY context — declaration
+    initializers and assignment RHS included, not an enumerated
+    subset (`String z = (y = x);` left y's rebind invisible)."""
+
+    def test_decl_initializer_embedded_assignment_defines(self):
+        cfg, _ = _cfg(
+            "        String y = Encode.forHtml(x);\n"
+            "        String z = (y = x);\n"
+            "        out.println(y);\n",
+        )
+        decl = next(n for n in cfg.nodes() if "z" in n.defs)
+        assert "y" in decl.defs
+
+    def test_assignment_rhs_embedded_assignment_defines(self):
+        cfg, _ = _cfg(
+            "        String y = Encode.forHtml(x);\n"
+            "        String z;\n"
+            "        z = (y = x);\n"
+            "        out.println(y);\n",
+        )
+        assign = next(
+            n for n in cfg.nodes() if n.lineno == 6 and "z" in n.defs
+        )
+        assert "y" in assign.defs
+
+    def test_embedded_store_earns_no_assigned_names_in_initializer(self):
+        cfg, _ = _cfg(
+            "        String y = x;\n"
+            "        String z = (y = Encode.forHtml(x));\n"
+            "        out.println(y);\n",
+        )
+        decl = next(n for n in cfg.nodes() if "z" in n.defs)
+        assert "y" in decl.defs
+        # The call's return flows into the embedded target, but the
+        # gate must not treat that as a clean rebinding of z OR y
+        # through this statement's call site beyond the z slot it
+        # already owns.
+        for cs in decl.call_sites:
+            assert "y" not in cs.assigned_names
+
+    def test_enhanced_for_iterable_embedded_assignment_defines(self):
+        cfg, _ = _cfg(
+            "        String[] arr = new String[1];\n"
+            "        String y = Encode.forHtml(x);\n"
+            "        for (String s : (arr = new String[]{(y = x)})) { }\n"
+            "        out.println(y);\n",
+        )
+        header = next(
+            n for n in cfg.nodes() if n.label.startswith("for ")
+        )
+        assert "y" in header.defs and "arr" in header.defs
