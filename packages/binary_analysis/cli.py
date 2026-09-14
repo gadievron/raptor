@@ -34,6 +34,10 @@ from typing import Any, TYPE_CHECKING
 sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.hash import sha256_file
+from core.security.log_sanitisation import (
+    escape_nonprintable,
+    sanitise_for_terminal,
+)
 from core.json import dumps_display
 from core.config import RaptorConfig
 from core.json import load_json, save_json
@@ -334,32 +338,40 @@ def _print_investigation_summary(investigation: dict[str, Any], out_dir: Path) -
     leads = investigation.get("ranked_surfaces") or []
     ingress = investigation.get("ranked_ingress") or []
     parser_boundaries = investigation.get("ranked_parser_boundaries") or []
+    # Names come from the analysed binary (symbols, imports, plist
+    # strings) — hostile bytes incl. raw ESC/OSC survive r2's iij, so
+    # every name is scrubbed+bounded before it reaches the terminal.
+    _t = sanitise_for_terminal
     if ingress:
         print("Top ingress:")
         for item in ingress[:3]:
             print(
-                f"  - {item['name']} "
-                f"({item['kind']}, boundary={item['boundary']})"
+                f"  - {_t(str(item['name']))} "
+                f"({_t(str(item['kind']))}, boundary={_t(str(item['boundary']))})"
             )
     if leads:
         print("Top leads:")
         for item in leads[:3]:
             print(
-                f"  - {item['name']} "
-                f"({item['category']}, direct_callers={item['direct_callers']})"
+                f"  - {_t(str(item['name']))} "
+                f"({_t(str(item['category']))}, direct_callers={item['direct_callers']})"
             )
     if parser_boundaries:
         print("Top parser boundaries:")
         for item in parser_boundaries[:3]:
             print(
-                f"  - {item['boundary_function_name']} -> {item['parser_surface_name']} "
-                f"(ingress={item['ingress_name']}, depth={item['path']['depth']})"
+                f"  - {_t(str(item['boundary_function_name']))} -> "
+                f"{_t(str(item['parser_surface_name']))} "
+                f"(ingress={_t(str(item['ingress_name']))}, depth={item['path']['depth']})"
             )
     actions = investigation.get("priority_queue") or []
     if actions:
         print("Next actions:")
         for item in actions[:3]:
-            print(f"  - {item['command']}")
+            # Commands embed shlex.quote()d artifact paths from the
+            # hostile bundle — quoting preserves control bytes, so the
+            # command needs the same scrub as the names above.
+            print(f"  - {_t(str(item['command']))}")
     print(f"Output: {out_dir}")
     print(f"Investigation report: {out_dir / 'binary-investigation-report.md'}")
     print(f"Investigation JSON: {out_dir / 'binary-investigation.json'}")
@@ -738,7 +750,15 @@ def _print_file(run_dir: str, filename: str, *, json_output: bool = False) -> in
         print(f"raptor-binary: missing {filename}: {path}", file=sys.stderr)
         return 1
     if not json_output:
-        print(path.read_text(encoding="utf-8"), end="")
+        # Report files embed binary-derived names; the writers scrub,
+        # but this print is the last line of defence for the terminal
+        # (control/bidi bytes in older or hand-edited artifacts).
+        print(
+            escape_nonprintable(
+                path.read_text(encoding="utf-8"), preserve_newlines=True,
+            ),
+            end="",
+        )
         return 0
     try:
         # Run artifact written by this package's own pipeline.

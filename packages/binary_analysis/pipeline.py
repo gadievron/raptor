@@ -24,6 +24,7 @@ from core.artifacts.provenance import (
 from core.evidence import BinaryEvidenceRecord, EvidenceTier, make_evidence
 from core.hash import sha256_file
 from core.json import load_json, save_json
+from core.security.log_sanitisation import escape_nonprintable
 
 from ._symbols import symbol_base_name
 from .constraints import validate_constraint_file
@@ -1100,6 +1101,15 @@ def _context_map(
     }, generated_evidence
 
 
+def _esc(value: Any) -> str:
+    """Escape control/bidi bytes in binary-derived strings bound for
+    the operator-facing report. A hostile binary controls names and
+    Info.plist strings end-to-end (plistlib and r2's iij preserve raw
+    ESC/BEL); the report is catted to terminals, so those bytes must
+    be neutralised at this emission chokepoint."""
+    return escape_nonprintable(str(value))
+
+
 def _write_report(result: BinaryAnalysisResult, out_dir: Path) -> None:
     context = result.context_map
     coverage = result.decompilations.get("coverage", {})
@@ -1146,11 +1156,11 @@ def _write_report(result: BinaryAnalysisResult, out_dir: Path) -> None:
             "",
             "## App Bundle",
             "",
-            f"- Identifier: `{bundle.identifier or 'unknown'}`",
-            f"- Version: `{bundle.short_version or 'unknown'}` build `{bundle.build_version or 'unknown'}`",
-            f"- Privileged executables: {', '.join(bundle.privileged_executables) or 'none declared'}",
-            f"- XPC services: {', '.join(bundle.xpc_services) or 'none declared'}",
-            f"- ATS exception domains: {', '.join(bundle.ats_exception_domains) or 'none declared'}",
+            f"- Identifier: `{_esc(bundle.identifier or 'unknown')}`",
+            f"- Version: `{_esc(bundle.short_version or 'unknown')}` build `{_esc(bundle.build_version or 'unknown')}`",
+            f"- Privileged executables: {_esc(', '.join(bundle.privileged_executables)) or 'none declared'}",
+            f"- XPC services: {_esc(', '.join(bundle.xpc_services)) or 'none declared'}",
+            f"- ATS exception domains: {_esc(', '.join(bundle.ats_exception_domains)) or 'none declared'}",
         ])
     if context.get("notes"):
         lines.extend([
@@ -1158,7 +1168,7 @@ def _write_report(result: BinaryAnalysisResult, out_dir: Path) -> None:
             "## Analysis Notes",
             "",
         ])
-        lines.extend(f"- {note}" for note in context["notes"])
+        lines.extend(f"- {_esc(note)}" for note in context["notes"])
     callbacks = context.get("framework_callback_candidates", [])
     if callbacks:
         lines.extend([
@@ -1167,7 +1177,7 @@ def _write_report(result: BinaryAnalysisResult, out_dir: Path) -> None:
             "",
         ])
         lines.extend(
-            f"- `{item['class_name']}.{item['method_name']}` @ `{item['address']}`"
+            f"- `{_esc(item['class_name'])}.{_esc(item['method_name'])}` @ `{_esc(item['address'])}`"
             for item in callbacks[:10]
         )
         lines.append("")
@@ -1180,8 +1190,8 @@ def _write_report(result: BinaryAnalysisResult, out_dir: Path) -> None:
             "",
         ])
         lines.extend(
-            f"- `{item['kind']}` `{item['name']}` via `{item['boundary']}` "
-            f"(control: `{item['external_control']}`)"
+            f"- `{_esc(item['kind'])}` `{_esc(item['name'])}` via `{_esc(item['boundary'])}` "
+            f"(control: `{_esc(item['external_control'])}`)"
             for item in ingress[:10]
         )
         lines.append("")
@@ -1194,8 +1204,8 @@ def _write_report(result: BinaryAnalysisResult, out_dir: Path) -> None:
             "",
         ])
         lines.extend(
-            f"- `{item['boundary_function_name']}` behind `{item['ingress_name']}` calls "
-            f"`{item['parser_surface_name']}` (depth {item['path']['depth']}, tier `{item['evidence_tier']}`)"
+            f"- `{_esc(item['boundary_function_name'])}` behind `{_esc(item['ingress_name'])}` calls "
+            f"`{_esc(item['parser_surface_name'])}` (depth {item['path']['depth']}, tier `{_esc(item['evidence_tier'])}`)"
             for item in parser_boundaries[:10]
         )
         lines.append("")
@@ -1206,12 +1216,12 @@ def _write_report(result: BinaryAnalysisResult, out_dir: Path) -> None:
             "",
             "## Fuzz Strategy",
             "",
-            f"- Strategy: `{suitability.get('strategy')}`",
+            f"- Strategy: `{_esc(suitability.get('strategy'))}`",
             f"- Direct campaign recommended: {'yes' if suitability.get('direct_campaign_recommended') else 'no'}",
-            f"- Runtime collection: `{suitability.get('runtime_strategy', 'direct_process')}`",
-            f"- Runtime reason: {suitability.get('runtime_reason')}",
-            f"- Reason: {suitability.get('reason')}",
-            f"- Next step: {suitability.get('next_step')}",
+            f"- Runtime collection: `{_esc(suitability.get('runtime_strategy', 'direct_process'))}`",
+            f"- Runtime reason: {_esc(suitability.get('runtime_reason'))}",
+            f"- Reason: {_esc(suitability.get('reason'))}",
+            f"- Next step: {_esc(suitability.get('next_step'))}",
         ])
     lines.extend([
         "",

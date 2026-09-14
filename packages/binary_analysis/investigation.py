@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.json import save_json
+from core.security.log_sanitisation import escape_nonprintable
 
 if TYPE_CHECKING:
     from .pipeline import BinaryAnalysisResult
@@ -623,7 +624,12 @@ def build_investigation(
 
 
 def _md_escape(value: Any) -> str:
-    return str(value).replace("|", "\\|").replace("\n", " ")
+    # escape_nonprintable is load-bearing: a hostile binary controls
+    # symbol/import names end-to-end (r2's iij preserves raw ESC/BEL
+    # bytes from ELF dynstr) and this report is catted to operator
+    # terminals — control/bidi bytes must never survive into it.
+    text = escape_nonprintable(str(value))
+    return text.replace("|", "\\|").replace("\n", " ")
 
 
 def render_investigation_report(investigation: dict[str, Any]) -> str:
@@ -699,12 +705,15 @@ def render_investigation_report(investigation: dict[str, Any]) -> str:
 
     lines.extend(["", "## Facts", ""])
     lines.extend(
-        f"- [{item['evidence_tier']}] {item['statement']}"
+        f"- [{_md_escape(item['evidence_tier'])}] {_md_escape(item['statement'])}"
         for item in investigation["facts"]
     )
     lines.extend(["", "## Structural Inferences (Not Findings)", ""])
     if investigation["structural_inferences"]:
-        lines.extend(f"- {item['statement']} {item['not_a_claim']}" for item in investigation["structural_inferences"])
+        lines.extend(
+            f"- {_md_escape(item['statement'])} {_md_escape(item['not_a_claim'])}"
+            for item in investigation["structural_inferences"]
+        )
     else:
         lines.append("- No structural inferences were strong enough to surface.")
 
@@ -745,7 +754,10 @@ def render_investigation_report(investigation: dict[str, Any]) -> str:
     if investigation["hypotheses"]:
         for item in investigation["hypotheses"]:
             missing = "; ".join(item["missing_evidence"])
-            lines.append(f"- `{item['id']}` {item['title']}. Missing: {missing}.")
+            lines.append(
+                f"- `{_md_escape(item['id'])}` {_md_escape(item['title'])}. "
+                f"Missing: {_md_escape(missing)}."
+            )
     else:
         lines.append("- No hypotheses generated from the current evidence.")
 

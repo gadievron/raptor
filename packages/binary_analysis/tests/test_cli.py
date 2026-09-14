@@ -320,6 +320,61 @@ def test_report_prefers_investigation_report(tmp_path: Path, capsys) -> None:
     assert capsys.readouterr().out == "investigation report\n"
 
 
+def test_report_print_scrubs_terminal_escapes(tmp_path: Path, capsys) -> None:
+    # Last line of defence: even if a report artifact carries raw
+    # control bytes (older run, hand-edited file), the terminal print
+    # must escape them.
+    (tmp_path / "binary-analysis-report.md").write_text(
+        "before\x1b]0;pwn\x07after\n",
+    )
+    assert _print_report(str(tmp_path)) == 0
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "\x07" not in out
+    assert "before" in out and "after" in out
+    assert out.endswith("\n")
+
+
+def test_investigation_summary_scrubs_hostile_names_and_commands(capsys) -> None:
+    """Every summary field derived from the analysed binary — names AND
+    the priority-queue commands (which embed shlex.quote()d artifact
+    paths; quoting preserves control bytes) — must reach the terminal
+    scrubbed."""
+    from packages.binary_analysis.cli import _print_investigation_summary
+
+    investigation = {
+        "status": "static_only",
+        "summary": {
+            "surface_candidates": 1,
+            "candidate_flows": 0,
+            "ranked_ingress": 1,
+            "runtime_input_flows": 0,
+            "fuzz_witnesses": 0,
+            "discovered_artifacts": 0,
+        },
+        "ranked_surfaces": [{
+            "name": "parse\x1b[2Jbuf", "category": "parser",
+            "direct_callers": 2,
+        }],
+        "ranked_ingress": [{
+            "name": "recv\x1b]0;pwn\x07loop", "kind": "socket",
+            "boundary": "network\x1b[8m",
+        }],
+        "ranked_parser_boundaries": [{
+            "boundary_function_name": "read\x1bcfg",
+            "parser_surface_name": "parse\x07hdr",
+            "ingress_name": "recv\x1b[1mloop",
+            "path": {"depth": 2},
+        }],
+        "priority_queue": [{
+            "command": "raptor-binary fuzz 'evil\x1b]0;pwned\x07.bin'",
+        }],
+    }
+    _print_investigation_summary(investigation, Path("/nonexistent-out"))
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "\x07" not in out
+    assert "raptor-binary fuzz" in out
+
+
 def test_investigate_active_does_not_fuzz_whole_app_without_harness_boundary(tmp_path: Path) -> None:
     binary = tmp_path / "sample"
     binary.write_bytes(b"\xcf\xfa\xed\xfe" + b"\x00" * 32)

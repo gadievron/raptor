@@ -105,3 +105,54 @@ def test_quick_investigation_does_not_claim_xref_analysis(tmp_path: Path) -> Non
     assert "Metadata-only intake ran" in report
     assert "No deep function/xref analysis was attempted." in report
     assert "Deep analysis ran for no architecture" not in report
+
+
+def test_md_escape_scrubs_control_and_bidi_bytes() -> None:
+    from packages.binary_analysis.investigation import _md_escape
+
+    escaped = _md_escape("evil\x1b]0;pwn\x07name")
+    assert "\x1b" not in escaped and "\x07" not in escaped
+    assert "evil" in escaped and "name" in escaped
+    assert "‮" not in _md_escape("a‮b")
+    assert _md_escape("a|b") == "a\\|b"
+
+
+@pytest.mark.slow
+def test_hostile_binary_strings_scrubbed_from_reports(tmp_path: Path) -> None:
+    """A hostile binary controls import names and Info.plist strings
+    end-to-end (r2's iij preserves raw ESC/BEL from ELF dynstr); the
+    operator-facing markdown reports are catted to terminals, so no
+    control byte may survive into them."""
+    app = tmp_path / "Evil.app" / "Contents"
+    binary = _write_binary(app / "MacOS" / "Evil")
+    (app / "Info.plist").write_bytes(plistlib.dumps({
+        "CFBundleIdentifier": "com.evil\x1b]0;pwned\x07.app",
+        "CFBundleExecutable": "Evil",
+    }, fmt=plistlib.FMT_BINARY))
+    out = tmp_path / "out"
+    ctx = BinaryContextMap(
+        binary_path=binary, arch="arm64", bits=64, binary_format="mach0",
+    )
+    runner = FunctionInfo(
+        name="run\x1b[1mcmd", address=0x100001000, size=64,
+        calls_dangerous=["NSTask"],
+    )
+    sink = FunctionInfo(
+        name="sym.imp.NSTask\x1b[2J\x07", address=0x100002000, size=16,
+        is_imported=True,
+    )
+    ctx.interesting_functions = [runner]
+    ctx.dangerous_sinks = [sink]
+    ctx.imports = ["sym.imp.NSTask\x1b[2J\x07"]
+
+    with patch(
+        "packages.binary_analysis.pipeline.analyse_binary_context",
+        return_value=ctx,
+    ):
+        result = analyse_blackbox_binary(binary, out_dir=out)
+    write_investigation(result, out)
+
+    for name in ("binary-analysis-report.md", "binary-investigation-report.md"):
+        text = (out / name).read_text(encoding="utf-8")
+        assert "\x1b" not in text, f"raw ESC survived into {name}"
+        assert "\x07" not in text, f"raw BEL survived into {name}"
