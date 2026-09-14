@@ -61,6 +61,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Iterable
 
+from core.source.contained import read_contained
+
 from packages.sca.platform_matrix.glibc_db import (
     LibcVersion,
     lookup_distro_libc,
@@ -183,14 +185,33 @@ def _from_image_to_distro(image_ref: str) -> str | None:
     return ref
 
 
+def _read_discovered(root: Path, path: Path) -> str | None:
+    """Containment-checked, size-capped read of a file discovered
+    under the scanned target.
+
+    Every file this module reads was found under (or referenced
+    from) the untrusted target tree — the same file classes the
+    parsers read through their bounded reader. A bare ``read_text``
+    here followed symlinks (a hostile ``devcontainer.json ->
+    /dev/stdin`` or an out-of-tree ``build.dockerfile`` reference
+    pulled operator files into the discovery pass) and loaded
+    multi-GB planted files whole into memory before the sandbox
+    limit."""
+    text = read_contained(root, path)
+    if text is None:
+        logger.debug(
+            "platform_matrix: refused or failed to read %s "
+            "(outside target, non-regular, or unreadable)", path,
+        )
+    return text
+
+
 def _walk_dockerfile(
-    path: Path, matrix: ProjectPlatformMatrix,
+    path: Path, matrix: ProjectPlatformMatrix, root: Path,
 ) -> None:
     """Parse FROM lines + add discovered (arch, libc) pairs."""
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.debug("platform_matrix: failed to read %s: %s", path, e)
+    text = _read_discovered(root, path)
+    if text is None:
         return
 
     known_stages: set = set()
@@ -236,7 +257,7 @@ def _walk_dockerfile(
 # ---------------------------------------------------------------------------
 
 def _walk_devcontainer(
-    path: Path, matrix: ProjectPlatformMatrix,
+    path: Path, matrix: ProjectPlatformMatrix, root: Path,
 ) -> None:
     """Parse a ``devcontainer.json`` and lift the ``image:`` /
     ``build.dockerfile`` reference into the matrix.
@@ -244,10 +265,8 @@ def _walk_devcontainer(
     devcontainer.json technically supports comments (JSONC); we
     try standard JSON first and fall back to a comment-strip pass.
     """
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.debug("platform_matrix: failed to read %s: %s", path, e)
+    text = _read_discovered(root, path)
+    if text is None:
         return
 
     # devcontainer.json is JSONC (comments + trailing commas). Use the shared
@@ -283,9 +302,12 @@ def _walk_devcontainer(
     if isinstance(build, dict):
         dockerfile_rel = build.get("dockerfile")
         if isinstance(dockerfile_rel, str):
+            # Containment is enforced by the read itself: a hostile
+            # "dockerfile": "../../..." reference resolves outside
+            # the target and _read_discovered refuses it.
             dockerfile_path = (path.parent / dockerfile_rel).resolve()
             if dockerfile_path.exists():
-                _walk_dockerfile(dockerfile_path, matrix)
+                _walk_dockerfile(dockerfile_path, matrix, root)
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +372,7 @@ def _extract_platforms_from_text(captured: str) -> Iterable[str]:
 
 
 def _walk_bake_hcl(
-    path: Path, matrix: ProjectPlatformMatrix,
+    path: Path, matrix: ProjectPlatformMatrix, root: Path,
 ) -> None:
     """Parse a ``docker-bake.hcl`` and lift any ``platforms = [...]``
     into the matrix.
@@ -369,10 +391,8 @@ def _walk_bake_hcl(
       file-level comments are irrelevant — we only look at
       ``platforms = [...]`` shapes.
     """
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.debug("platform_matrix: failed to read %s: %s", path, e)
+    text = _read_discovered(root, path)
+    if text is None:
         return
 
     for match in _BAKE_PLATFORMS_RE.finditer(text):
@@ -390,7 +410,7 @@ def _walk_bake_hcl(
 
 
 def _walk_bake_json(
-    path: Path, matrix: ProjectPlatformMatrix,
+    path: Path, matrix: ProjectPlatformMatrix, root: Path,
 ) -> None:
     """Same as :func:`_walk_bake_hcl` but for the JSON variant.
 
@@ -400,10 +420,12 @@ def _walk_bake_json(
     refs not platforms, so we ignore them.
     """
     import json
+    text = _read_discovered(root, path)
+    if text is None:
+        return
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
         data = json.loads(text)
-    except (OSError, json.JSONDecodeError) as e:
+    except json.JSONDecodeError as e:
         logger.debug(
             "platform_matrix: failed to parse %s as bake JSON: %s",
             path, e,
@@ -441,11 +463,11 @@ def _walk_bake_configs(
     for name in _BAKE_HCL_NAMES:
         path = target / name
         if path.is_file():
-            _walk_bake_hcl(path, matrix)
+            _walk_bake_hcl(path, matrix, target)
     for name in _BAKE_JSON_NAMES:
         path = target / name
         if path.is_file():
-            _walk_bake_json(path, matrix)
+            _walk_bake_json(path, matrix, target)
 
 
 # ---------------------------------------------------------------------------
@@ -476,9 +498,8 @@ def _walk_gha_workflows(
     )
 
     for wf in sorted(workflows_dir.glob("*.yml")) + sorted(workflows_dir.glob("*.yaml")):
-        try:
-            text = wf.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        text = _read_discovered(target, wf)
+        if text is None:
             continue
 
         # Collect all bare runs-on: values (scalar form).
@@ -686,11 +707,11 @@ def discover_platform_matrix(target: Path) -> ProjectPlatformMatrix:
     matrix = ProjectPlatformMatrix()
 
     for dockerfile in _iter_dockerfiles(target):
-        _walk_dockerfile(dockerfile, matrix)
+        _walk_dockerfile(dockerfile, matrix, target)
 
     devcontainer = target / ".devcontainer" / "devcontainer.json"
     if devcontainer.exists():
-        _walk_devcontainer(devcontainer, matrix)
+        _walk_devcontainer(devcontainer, matrix, target)
 
     # buildx bake configs at the repo root — declares multi-arch
     # release targets independently of the Dockerfile. Read BEFORE

@@ -202,7 +202,7 @@ def test_devcontainer_unknown_libc_logs_debug(tmp_path: Path, caplog) -> None:
     matrix = ProjectPlatformMatrix()
     with caplog.at_level(logging.DEBUG,
                          logger="packages.sca.platform_matrix.matrix"):
-        _walk_devcontainer(path, matrix)
+        _walk_devcontainer(path, matrix, tmp_path)
     assert any(
         "unknown libc" in rec.getMessage()
         for rec in caplog.records
@@ -216,7 +216,7 @@ def test_devcontainer_unknown_libc_still_registers_pairs(
     register the same pair set (both arches, libc=None)."""
     path = _write_devcontainer(tmp_path, "totally-unknown-image:v1")
     matrix = ProjectPlatformMatrix()
-    _walk_devcontainer(path, matrix)
+    _walk_devcontainer(path, matrix, tmp_path)
     assert len(matrix) == 2
     assert {p.arch for p in matrix} == {"x86_64", "aarch64"}
     assert all(p.libc is None for p in matrix)
@@ -229,7 +229,7 @@ def test_devcontainer_known_image_does_not_log_unknown(
     matrix = ProjectPlatformMatrix()
     with caplog.at_level(logging.DEBUG,
                          logger="packages.sca.platform_matrix.matrix"):
-        _walk_devcontainer(path, matrix)
+        _walk_devcontainer(path, matrix, tmp_path)
     resolved = [p for p in matrix if p.libc is not None]
     if resolved:            # glibc DB knows bookworm
         assert not any(
@@ -540,3 +540,65 @@ def test_is_dockerfile_accepts_capital_d_suffix_variant() -> None:
     assert _is_dockerfile(Path("Dockerfile.slim"))
     assert _is_dockerfile(Path("app.dockerfile"))
     assert not _is_dockerfile(Path("dockerfile_notes.md"))
+
+
+# ---------------------------------------------------------------------------
+# Discovery reads are containment-checked (never follow escapes)
+# ---------------------------------------------------------------------------
+
+def test_walk_dockerfile_refuses_symlink_escape(tmp_path: Path) -> None:
+    """A symlinked Dockerfile resolving outside the scanned target
+    must be refused — the discovery pass previously read it bare
+    (symlink-following, unbounded), unlike every parser in the
+    package."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "Dockerfile").write_text(
+        "FROM debian:bookworm\n", encoding="utf-8")
+    target = tmp_path / "repo"
+    target.mkdir()
+    link = target / "Dockerfile"
+    link.symlink_to(outside / "Dockerfile")
+
+    from packages.sca.platform_matrix.matrix import _walk_dockerfile
+    matrix = ProjectPlatformMatrix()
+    _walk_dockerfile(link, matrix, target)
+    assert len(matrix) == 0
+
+
+def test_devcontainer_dockerfile_reference_cannot_escape_target(
+    tmp_path: Path,
+) -> None:
+    """A hostile devcontainer.json "build.dockerfile" pointing above
+    the target must not pull out-of-tree files into discovery."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "Dockerfile").write_text(
+        "FROM debian:bookworm\n", encoding="utf-8")
+    target = tmp_path / "repo"
+    (target / ".devcontainer").mkdir(parents=True)
+    (target / ".devcontainer" / "devcontainer.json").write_text(
+        '{"build": {"dockerfile": "../../outside/Dockerfile"}}',
+        encoding="utf-8",
+    )
+    from packages.sca.platform_matrix.matrix import discover_platform_matrix
+    matrix = discover_platform_matrix(target)
+    # Only the no-signal default may appear — never bookworm pairs
+    # sourced from the out-of-tree Dockerfile.
+    assert not any("Dockerfile" in p.source for p in matrix)
+
+
+def test_walk_gha_refuses_symlinked_workflow(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "ci.yml").write_text(
+        "jobs:\n  a:\n    runs-on: ubuntu-22.04\n", encoding="utf-8")
+    target = tmp_path / "repo"
+    wfdir = target / ".github" / "workflows"
+    wfdir.mkdir(parents=True)
+    (wfdir / "ci.yml").symlink_to(outside / "ci.yml")
+
+    from packages.sca.platform_matrix.matrix import _walk_gha_workflows
+    matrix = ProjectPlatformMatrix()
+    _walk_gha_workflows(target, matrix)
+    assert len(matrix) == 0
