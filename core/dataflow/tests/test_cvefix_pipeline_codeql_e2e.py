@@ -69,6 +69,30 @@ def _query_pack_available() -> bool:
 _QUERY_PACK_AVAILABLE = _query_pack_available()
 
 
+def _library_pack_available() -> bool:
+    """True only if the ``codeql/python-all`` LIBRARY pack resolves.
+
+    It ships with the full CodeQL bundle but not with a bare CLI
+    install; on such hosts the synthesized-barrier compile hard-fails
+    with "pack ... cannot be found" and the capstone test reported a
+    soundness failure for what is a host-provisioning gap. Same
+    skip-or-hermetic rule as the query-pack probe above.
+    """
+    if _CODEQL is None:
+        return False
+    try:
+        out = subprocess.run(
+            [_CODEQL, "resolve", "qlpacks"],
+            capture_output=True, text=True, timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.returncode == 0 and "codeql/python-all" in out.stdout
+
+
+_LIBRARY_PACK_AVAILABLE = _library_pack_available()
+
+
 def _build_db(src: Path, db: Path) -> None:
     subprocess.run(
         [_CODEQL, "database", "create", str(db), "--language=python",
@@ -107,6 +131,10 @@ def test_pipeline_labels_post_fix_finding_as_missing_sanitizer_fp(codeql_dbs, tm
     assert by_verdict["true_positive"][0].sink.file_path == "app.py"
 
 
+@pytest.mark.skipif(
+    not _LIBRARY_PACK_AVAILABLE,
+    reason="codeql/python-all library pack not resolvable on this host",
+)
 def test_synthesized_barrier_suppresses_fp_and_preserves_tp(codeql_dbs, tmp_path):
     """The sound-tier capstone, regression-guarded: the assembled barrier query
     must compile under real CodeQL and suppress the FP (after=0) without
