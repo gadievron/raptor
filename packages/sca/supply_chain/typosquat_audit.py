@@ -214,6 +214,17 @@ def audit(
     return results
 
 
+def _md_escape(name: str) -> str:
+    """Neutralise the characters that would break out of the
+    backtick-wrapped table cell in the auto-PR body.  Candidate names
+    come from the popularity feeds — remote input — so they must not
+    be able to inject markdown / table structure into the PR."""
+    return (name.replace("`", "\\`")
+                .replace("|", "\\|")
+                .replace("\n", " ")
+                .replace("\r", " "))
+
+
 def render_markdown(results: dict[str, list[Candidate]]) -> str:
     """Markdown for the refresh PR body. Returns ``""`` when nothing is pending
     (so the workflow can skip the nudge entirely)."""
@@ -239,8 +250,10 @@ def render_markdown(results: dict[str, list[Candidate]]) -> str:
         lines.append("")
         lines.append("| candidate | rank | near-twin | twin rank | dist |")
         lines.append("|---|--:|---|--:|--:|")
-        lines.extend(f"| `{c.name}` | {c.rank} | `{c.near_twin}` "
-                f"| {c.twin_rank} | {c.distance} |" for c in cands)
+        lines.extend(
+            f"| `{_md_escape(c.name)}` | {c.rank} "
+            f"| `{_md_escape(c.near_twin)}` "
+            f"| {c.twin_rank} | {c.distance} |" for c in cands)
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

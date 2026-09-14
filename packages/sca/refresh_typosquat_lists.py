@@ -64,6 +64,8 @@ from core.http import (
 from core.http.urllib_backend import UrllibClient
 from core.run.retry import RetryPolicy, retry_call
 
+from .supply_chain._name_grammar import valid_feed_name
+
 logger = logging.getLogger(__name__)
 
 # Default top-N. The design specifies 5000 per ecosystem; we let the
@@ -138,6 +140,23 @@ def _get_json(
     )
 
 
+def _grammar_filtered(names: list[str], ecosystem: str) -> list[str]:
+    """Drop feed rows failing the ecosystem's package-name grammar.
+
+    Feed content is unvalidated remote input and every kept name
+    becomes a trusted exact-match in the typosquat detector — the
+    npm bundle has already shipped scraped markup
+    (``"equire('express'"``).  Rank order is preserved."""
+    kept = [n for n in names if valid_feed_name(ecosystem, n)]
+    dropped = len(names) - len(kept)
+    if dropped:
+        logger.warning(
+            "%s feed: dropped %d row(s) failing the package-name "
+            "grammar", ecosystem, dropped,
+        )
+    return kept
+
+
 def _fetch_pypi_ranked(http: HttpClient, top_n: int) -> list[str]:
     """Rank-ordered (most-popular-first) PyPI names — the order the typosquat
     curation audit needs (rank is the signal it reasons about). May contain
@@ -151,7 +170,7 @@ def _fetch_pypi_ranked(http: HttpClient, top_n: int) -> list[str]:
         n = r.get("project") or r.get("name")
         if isinstance(n, str) and n:
             names.append(n.lower())
-    return names
+    return _grammar_filtered(names, "PyPI")
 
 
 def fetch_pypi(http: HttpClient, top_n: int) -> list[str]:
@@ -178,7 +197,7 @@ def _fetch_npm_ranked(http: HttpClient, top_n: int) -> list[str]:
         except (TypeError, ValueError):
             continue
     scored.sort(key=lambda ns: ns[1], reverse=True)
-    return [n for n, _ in scored[:top_n]]
+    return _grammar_filtered([n for n, _ in scored[:top_n]], "npm")
 
 
 def fetch_npm(http: HttpClient, top_n: int) -> list[str]:
@@ -213,7 +232,7 @@ def _fetch_crates_ranked(
                 names.append(n.lower())
         if len(crates) < per_page:
             break
-    return names
+    return _grammar_filtered(names, "Cargo")
 
 
 def fetch_crates(
@@ -247,7 +266,7 @@ def _fetch_packagist_ranked(http: HttpClient, top_n: int) -> list[str]:
         page += 1
         if page > 200:               # safety: 200 pages × 12/pg ≈ 2400
             break
-    return names
+    return _grammar_filtered(names, "Packagist")
 
 
 def fetch_packagist(http: HttpClient, top_n: int) -> list[str]:

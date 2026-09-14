@@ -31,6 +31,7 @@ from core.json import load_json_bounded
 
 from ..models import Confidence, Dependency
 from ._edit_distance import damerau_levenshtein as _damerau_levenshtein
+from ._name_grammar import valid_feed_name
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -275,9 +276,23 @@ def _load_popular(ecosystem: str) -> list[str]:
     # popularity feed into the list (npm ``loadash``) is no longer a trusted
     # exact-match — the detector then evaluates it as distance-1 from its
     # near-twin. See ``_DENYLIST_PATH``.
+    #
+    # Grammar gate: every kept row becomes a TRUSTED exact-match, and
+    # the bundles are refreshed from unvalidated remote feeds — the
+    # npm bundle has shipped scraped markup (``"equire('express'"``).
+    # Load-time filtering covers bundles written before the fetch-time
+    # gate (or edited by hand); see ``_name_grammar``.
     denied = _load_denylist(ecosystem)
     cleaned = [n.lower() for n in data
-               if isinstance(n, str) and n.lower() not in denied]
+               if isinstance(n, str) and n.lower() not in denied
+               and valid_feed_name(ecosystem, n.lower())]
+    dropped = sum(1 for n in data if isinstance(n, str)
+                  and not valid_feed_name(ecosystem, n.lower()))
+    if dropped:
+        logger.warning(
+            "sca.supply_chain.typosquat: dropped %d %s popular-list "
+            "row(s) failing the package-name grammar", dropped, ecosystem,
+        )
     _POPULAR_BY_ECO[ecosystem] = cleaned
     return cleaned
 
