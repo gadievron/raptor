@@ -283,6 +283,18 @@ def run_parallel(
     list[T]:
         One result per item, positionally matched.  Failed items are
         ``None`` (or whatever *on_error* returned).
+
+    Exception contract
+    ------------------
+    EVERY exception from *fn* is converted into the item's *on_error*
+    result — the pool never re-raises. That INCLUDES the typed
+    terminal ``LLMBudgetExceededError``, whose own contract says loop
+    dispatchers must stop when they see it: a caller that needs
+    budget-stop semantics must classify it inside *fn* or *on_error*
+    (the way ``core/iris/synthesise.py`` and ``core/llm/ranking.py``
+    do). Post-exhaustion items refuse cheaply at ``_check_budget``, so
+    the damage of not classifying is bounded to per-item results that
+    cannot distinguish "budget stop" from "analysis failed".
     """
     if not items:
         return []
