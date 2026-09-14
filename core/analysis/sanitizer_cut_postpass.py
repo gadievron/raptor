@@ -395,6 +395,8 @@ def _candidate_source_lines_with_kinds(
     file_path: Path, sink_line: int, language: str,
     _cache: dict[Path, list[tuple] | None],
     extra_patterns: tuple = (),
+    method_span: tuple[int, int] | None = None,
+    on_scoped=None,
 ) -> list[tuple]:
     """Source-shaped lines before the sink with their source kinds.
 
@@ -404,6 +406,14 @@ def _candidate_source_lines_with_kinds(
     caller enforces all-must-suppress. Zero candidates, an unreadable
     file, or more than :data:`_MAX_CANDIDATE_SOURCES` return ``[]``
     (refusal).
+
+    ``method_span`` (sink method's ``(start_line, end_line)``) scopes
+    the candidate set BEFORE the cap: a candidate outside the sink's
+    enclosing method cannot be the withheld source (traceless
+    findings are intra-procedural), and cap-then-scope refused
+    exactly the source-dense files (Juliet-style batteries) the
+    scoping exists to serve. ``on_scoped`` is called once per
+    scoped-out candidate so the caller's telemetry survives the move.
     """
     if file_path not in _cache:
         _cache[file_path] = _scan_file_for_kinds(
@@ -412,6 +422,16 @@ def _candidate_source_lines_with_kinds(
     if entries is None:
         return []
     before_sink = [(ln, kinds) for ln, kinds in entries if ln < sink_line]
+    if method_span is not None:
+        span_start, span_end = method_span
+        in_method = [
+            (ln, kinds) for ln, kinds in before_sink
+            if span_start <= ln <= span_end
+        ]
+        if on_scoped is not None:
+            for _ in range(len(before_sink) - len(in_method)):
+                on_scoped()
+        before_sink = in_method
     if not before_sink or len(before_sink) > _MAX_CANDIDATE_SOURCES:
         return []
     return before_sink
@@ -620,43 +640,39 @@ def run_postpass(
                     source_cache, learned_patterns,
                 )
         else:
-            with_kinds = _candidate_source_lines_with_kinds(
-                resolved_path, int(sink_line), language, source_cache,
-                learned_patterns if language == "java" else (),
-            )
-            source_lines = [ln for ln, _ in with_kinds]
-            for kind in sorted({k for _, ks in with_kinds for k in ks}):
-                stats.source_kind(kind)
-            if language == "java" and source_lines:
-                # Traceless findings come from intra-procedural taint
-                # (trace-capable producers emit traces, which take the
-                # branch above), so a candidate outside the sink's
-                # enclosing method cannot be the withheld source —
-                # scope it out. See core.analysis.cross_method_java.
+            # Traceless findings come from intra-procedural taint
+            # (trace-capable producers emit traces, which take the
+            # branch above), so a candidate outside the sink's
+            # enclosing method cannot be the withheld source — scope
+            # it out BEFORE the candidate cap (cap-then-scope refused
+            # exactly the source-dense files the scoping serves). See
+            # core.analysis.cross_method_java.
+            method_span = None
+            if language == "java":
                 span = _sink_method_span(
                     resolved_path, int(sink_line), text_cache,
                 )
                 if span is not None:
                     _name, span_start, span_end = span
-                    in_method = [
-                        ln for ln in source_lines
-                        if span_start <= ln <= span_end
-                    ]
-                    scoped_out = len(source_lines) - len(in_method)
-                    if scoped_out:
-                        for _i in range(scoped_out):
-                            stats.mechanism("cross-method:candidate-scoped")
-                        source_lines = in_method
-            surviving = set(source_lines)
-            for ln, ks in with_kinds:
-                if ln in surviving:
-                    finding_kinds |= set(ks)
-                    # Caller-mediated taint needs no extra candidate:
-                    # the gate's definer-exclusivity condition is
-                    # source-agnostic, so a sink argument reachable
-                    # from a method parameter fails condition 3 under
-                    # EVERY candidate (pinned by
-                    # test_params_entry_redundant_with_condition3).
+                    method_span = (span_start, span_end)
+            with_kinds = _candidate_source_lines_with_kinds(
+                resolved_path, int(sink_line), language, source_cache,
+                learned_patterns if language == "java" else (),
+                method_span=method_span,
+                on_scoped=lambda: stats.mechanism(
+                    "cross-method:candidate-scoped"),
+            )
+            source_lines = [ln for ln, _ in with_kinds]
+            for kind in sorted({k for _, ks in with_kinds for k in ks}):
+                stats.source_kind(kind)
+            for _ln, ks in with_kinds:
+                finding_kinds |= set(ks)
+                # Caller-mediated taint needs no extra candidate:
+                # the gate's definer-exclusivity condition is
+                # source-agnostic, so a sink argument reachable
+                # from a method parameter fails condition 3 under
+                # EVERY candidate (pinned by
+                # test_params_entry_redundant_with_condition3).
         if not source_lines:
             stats.refuse("no-source-candidates")
             continue

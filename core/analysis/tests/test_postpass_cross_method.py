@@ -165,3 +165,59 @@ class TestCrossMethodScoping:
                           trace_line=6)
         assert stats["recorded_suppress"] == 0
         assert stats["refused_reasons"].get("resolver-refused", 0) == 1
+
+
+# Source-DENSE file: five source-shaped lines before the sink across
+# unrelated methods, but only ONE inside the sink's method. Scoping
+# must run BEFORE the candidate cap — cap-then-scope refused this
+# outright ("too many candidates") in exactly the Juliet-style files
+# the scoping exists to serve.
+_SOURCE_DENSE_SAFE = """import org.owasp.encoder.Encode;
+import javax.servlet.http.HttpServletRequest;
+import java.io.PrintWriter;
+public class Test {
+    void u1(HttpServletRequest r) {
+        String a = r.getParameter("a");
+        String b = r.getParameter("b");
+        String c = r.getParameter("c");
+        String d = r.getParameter("d");
+        System.err.println(a + b + c + d);
+    }
+    void doPost(HttpServletRequest request, PrintWriter out) {
+        String p = request.getParameter("q");
+        String safe = Encode.forHtml(p);
+        out.println(safe);
+    }
+}
+"""
+
+
+class TestScopeBeforeCap:
+    def test_source_dense_file_scopes_then_suppresses(self, tmp_path):
+        stats, out = _run(tmp_path, _SOURCE_DENSE_SAFE, sink_line=15)
+        assert stats["refused_reasons"].get("no-source-candidates", 0) == 0
+        assert stats["recorded_suppress"] == 1
+        assert stats["mechanism_counts"].get(
+            "cross-method:candidate-scoped", 0) >= 4
+
+    def test_cap_still_bounds_in_method_candidates(self, tmp_path):
+        # Both directions: >cap source-shaped lines INSIDE the sink's
+        # own method still refuse (the fan-out bound is per gate run).
+        dense_in_method = """import org.owasp.encoder.Encode;
+import javax.servlet.http.HttpServletRequest;
+import java.io.PrintWriter;
+public class Test {
+    void doPost(HttpServletRequest request, PrintWriter out) {
+        String a = request.getParameter("a");
+        String b = request.getParameter("b");
+        String c = request.getParameter("c");
+        String d = request.getParameter("d");
+        String e = request.getParameter("e");
+        String safe = Encode.forHtml(a);
+        out.println(safe);
+    }
+}
+"""
+        stats, _out = _run(tmp_path, dense_in_method, sink_line=12)
+        assert stats["recorded_suppress"] == 0
+        assert stats["refused_reasons"].get("no-source-candidates", 0) == 1
