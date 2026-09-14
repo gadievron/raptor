@@ -236,3 +236,23 @@ class TestWriterHardening:
         tree = write_decomp_tree(db, tmp_path)
         assert tree.truncated
         assert not (tmp_path / TYPES_HEADER).exists()
+
+
+def test_body_control_is_match_control_minus_structural_ws() -> None:
+    # ``_BODY_CONTROL`` must scrub exactly what ``match._CONTROL``
+    # scrubs, minus \t and \n (structural in multi-line decompiled C).
+    # Exact set equality over every codepoint: neither layer may gain
+    # or lose a control/bidi/invisible character without the other —
+    # a silent divergence would let a hostile binary pick whichever
+    # emission path forgot a character.
+    from packages.ghidra.decomp_tree import _BODY_CONTROL
+    from packages.ghidra.match import _CONTROL
+    every_codepoint = "".join(map(chr, range(0x110000)))
+    body = set(_BODY_CONTROL.findall(every_codepoint))
+    ctrl = set(_CONTROL.findall(every_codepoint))
+    assert body == ctrl - {"\t", "\n"}
+    # Spot anchors: terminal-escape (ESC, CSI), bidi override, BOM and
+    # C0 boundaries stay scrubbed; structural whitespace stays legal.
+    assert {"\x00", "\x0b", "\x1b", "\x7f", "\x9b",
+            "‮", "﻿"} <= body
+    assert "\t" not in body and "\n" not in body

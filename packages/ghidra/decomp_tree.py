@@ -32,12 +32,16 @@ from .match import _CONTROL
 # out. Decompiled C is multi-line; raw control/bidi bytes are never
 # legal in it (r2's pdc/pdg reproduce string-literal bytes from the
 # hostile binary verbatim), and the .c tree is catted by operators and
-# fed to raptor-study-prep.
+# fed to raptor-study-prep. Regex-level escapes (not Python-decoded
+# literals), matching match._CONTROL's style: the range boundaries
+# stay greppable, and range linters can see the control-char spans
+# are deliberate. Exact-set parity with match._CONTROL minus \t/\n
+# is asserted in tests so the two layers cannot drift.
 _BODY_CONTROL = re.compile(
-    "[\x00-\x08\x0b-\x1f\x7f-\x9f"
-    "\u200b-\u200f\u2028\u2029"
-    "\u202a-\u202e\u2066-\u2069"
-    "\ufeff]")
+    "[\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f"    # C0 minus \t\n; DEL + C1 (incl. ESC)
+    "\\u200b-\\u200f\\u2028\\u2029"          # zero-width, marks, line/para sep
+    "\\u202a-\\u202e\\u2066-\\u2069"         # bidi embedding/override/isolate
+    "\\ufeff]")                              # zero-width no-break space / BOM
 from .model import REDatabase, REFunction
 
 logger = logging.getLogger(__name__)
