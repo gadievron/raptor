@@ -1356,22 +1356,28 @@ class TestCheckEvidenceStaleness:
         assert strict[0]["status"] == "unconfined"
         assert strict[0]["concept_id"] == "c1"
 
-    def test_strict_reports_unknown_span_status(
+    def test_span_past_eof_is_stale_in_both_modes(
         self, tmp_path: Path,
     ) -> None:
+        # A hashed evidence line wholly past EOF means the file was
+        # rewritten shorter than the quote — positive drift evidence.
+        # check_batch reports it "modified", so BOTH modes flag it:
+        # pre-fix it read "unknown" and the lenient quarantine kept
+        # the [verbatim] entry fresh.
         (tmp_path / "a.c").write_text("int x;\n", encoding="utf-8")
         model = DomainModel(concepts=[Concept(
             id="c1", description="d",
             evidence=[Evidence(
-                # Line past EOF: check_batch says "unknown".
                 type="code_path", file="a.c",
                 observation="obs", line=999, hash="beefbeefbeef",
             )],
         )])
-        assert check_evidence_staleness(model, tmp_path) == []
+        lenient = check_evidence_staleness(model, tmp_path)
+        assert len(lenient) == 1
+        assert lenient[0]["status"] == "modified"
         strict = check_evidence_staleness(model, tmp_path, strict=True)
         assert len(strict) == 1
-        assert strict[0]["status"] == "unknown"
+        assert strict[0]["status"] == "modified"
 
     def test_strict_reports_unconfined_contract_span(
         self, tmp_path: Path,

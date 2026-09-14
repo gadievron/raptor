@@ -81,7 +81,10 @@ class SpanResult:
     Status values:
     - ``"current"`` — hash matches, no change
     - ``"modified"`` — hash differs (real code change, or cosmetic
-      detection not requested / not conclusive)
+      detection not requested / not conclusive), or the stored span
+      now lies wholly past EOF on a readable file (rewritten
+      shorter/stubbed — the span provably no longer exists, which is
+      positive drift evidence, never "cannot determine")
     - ``"cosmetic"`` — hash differs but normalised hash matches stored
       norm hash (comment/whitespace only change)
     - ``"deleted"`` — file no longer exists
@@ -371,8 +374,15 @@ def _check_file_batch(
         current_hash = _hash_from_lines(lines, item.start_line, item.end_line)
 
         if not current_hash:
+            # Empty slice on a READABLE file: the span lies wholly
+            # past EOF (file rewritten shorter, replaced with a
+            # stub). With a stored hash that is POSITIVE evidence the
+            # quoted span no longer exists — report modified so the
+            # lenient quarantine (which keeps "unknown" fresh) demotes
+            # the entry's [verbatim]/receipt authority. Only a span
+            # with nothing stored to compare against stays unknown.
             results[idx] = SpanResult(
-                status="unknown",
+                status="modified" if item.stored_hash else "unknown",
                 current_hash="",
                 current_norm_hash="",
                 span=span,

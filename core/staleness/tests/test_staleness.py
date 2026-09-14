@@ -162,6 +162,28 @@ class TestCheckSpans:
         assert results[0].status == "unknown"
         assert results[0].current_hash != ""
 
+    def test_span_wholly_past_eof_is_modified(self, tmp_path: Path):
+        # The file was rewritten SHORTER than the evidence line: the
+        # span provably no longer exists — positive drift evidence.
+        # Pre-fix this read "unknown", which the lenient quarantine
+        # keeps FRESH, so a stubbed/truncated file kept its [verbatim]
+        # receipt authority.
+        f = tmp_path / "a.c"
+        f.write_text("l1\nl2\nl3\nl4\nl5\n")
+        h = hash_span(f, 4, 5)
+        f.write_text("l1\n")  # rewritten shorter; span 4-5 gone
+        results = check_spans(f, [Span(4, 5, h)])
+        assert results[0].status == "modified"
+        assert results[0].current_hash == ""
+
+    def test_span_past_eof_without_stored_hash_stays_unknown(
+            self, tmp_path: Path):
+        # Nothing stored to compare against: no drift claim possible.
+        f = tmp_path / "a.c"
+        f.write_text("l1\n")
+        results = check_spans(f, [Span(4, 5, "")])
+        assert results[0].status == "unknown"
+
     def test_multiple_spans_mixed(self, tmp_path: Path):
         f = tmp_path / "a.c"
         f.write_text("int a;\nint b;\nint c;\n")
@@ -430,11 +452,13 @@ class TestEdgeCases:
             os.chmod(f, 0o644)
 
     def test_empty_file_check(self, tmp_path: Path):
-        """Empty file: span 1-1 is unknown (no lines)."""
+        """Empty file with a stored hash: the span provably no longer
+        exists (readable file, no lines) — that is drift, not "cannot
+        determine"."""
         f = tmp_path / "empty.c"
         f.write_text("")
         results = check_batch([CheckItem(f, 1, 1, "abc")])
-        assert results[0].status == "unknown"
+        assert results[0].status == "modified"
 
     def test_single_line_file(self, tmp_path: Path):
         f = tmp_path / "one.c"
