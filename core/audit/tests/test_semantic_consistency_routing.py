@@ -94,6 +94,9 @@ def prep_result(tmp_path_factory):
     assert r.returncode == 0, f"build-checklist failed: {r.stderr}"
     assert (out / "checklist.json").exists()
 
+    from unittest import mock
+
+    from core.audit.capabilities import AuditCapabilities
     from core.audit.orchestrator import (
         OrchestratorConfig,
         _compute_audit_prep,
@@ -108,7 +111,41 @@ def prep_result(tmp_path_factory):
         enable_session_context=False,
         propagate_constraints=False,
     )
-    prep = _compute_audit_prep(config)
+    # Pin external tooling to all-absent for the prep run. The wiring
+    # under test (source-map hydration → check_semantic_consistency →
+    # mechanical-findings routing) is pure Python and never consults a
+    # tool; letting prep probe the host instead made the fixture take
+    # a different (and multi-second — angr import probe, joern CPG
+    # build via a JVM, semgrep startup) path on every host with those
+    # tools installed. All-absent matches the minimal-host CI path and
+    # keeps this a wiring test, not a tool-availability integration.
+    no_caps = AuditCapabilities(
+        joern=False,
+        joern_issues=("pinned absent for this wiring test",),
+        r2=False,
+        frida=False,
+        semgrep=False,
+        coccinelle=False,
+        codeql=False,
+        ghidra=False,
+        cxxfilt=False,
+        objdump=False,
+        readelf=False,
+        binary_available=False,
+        dwarf_available=False,
+        angr=False,
+    )
+    with mock.patch(
+        "core.audit.capabilities.probe_capabilities",
+        return_value=no_caps,
+    ), mock.patch(
+        # run_joern_pre_sweep's own availability gate (independent of
+        # the capability probe): without this, hosts with joern on
+        # PATH pay a doomed JVM CPG build inside the fixture.
+        "packages.joern.prereqs.is_available",
+        return_value=False,
+    ):
+        prep = _compute_audit_prep(config)
     assert prep is not None, "prep returned None (checklist missing?)"
     return prep, out
 
