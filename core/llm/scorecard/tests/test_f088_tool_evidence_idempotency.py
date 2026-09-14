@@ -413,3 +413,39 @@ class TestSeenSetCap:
         assert sc.claim_and_record_tool_evidence(
             "dc", "m1", "f-0", "correct",
         )
+
+
+class TestNoOpPathDoesNotRewrite:
+    def test_already_seen_finding_does_not_touch_the_file(
+        self, scorecard, tmp_path,
+    ):
+        """The idempotent no-op path must not pay a full write cycle:
+        pre-fix the already-seen probe exited the write context
+        cleanly, so every re-import of an old run re-stamped and
+        atomically replaced the sidecar (new inode) for a read-only
+        decision."""
+        import os
+
+        path = tmp_path / "scorecard.json"
+        assert scorecard.claim_and_record_tool_evidence(
+            "agentic:py/sqli", "m1", "f-1", "correct",
+        ) is True
+        before = os.stat(path)
+
+        assert scorecard.claim_and_record_tool_evidence(
+            "agentic:py/sqli", "m1", "f-1", "correct",
+        ) is False
+        after = os.stat(path)
+        # Same inode → no atomic-replace write happened.
+        assert after.st_ino == before.st_ino
+        assert after.st_size == before.st_size
+
+    def test_fresh_finding_still_records(self, scorecard):
+        """Control: the probe never blocks a genuinely new claim."""
+        assert scorecard.claim_and_record_tool_evidence(
+            "agentic:py/sqli", "m1", "f-1", "correct",
+        ) is True
+        assert scorecard.claim_and_record_tool_evidence(
+            "agentic:py/sqli", "m1", "f-2", "incorrect",
+        ) is True
+        assert _stat(scorecard, "agentic:py/sqli", "m1") == (1, 1)

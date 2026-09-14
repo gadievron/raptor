@@ -935,6 +935,19 @@ class ModelScorecard:
         if outcome not in ("correct", "incorrect"):
             msg = f"outcome must be 'correct' or 'incorrect', got {outcome!r}"
             raise ValueError(msg)
+        # Cheap read-locked membership probe first: the idempotent
+        # no-op path (re-importing an already-recorded run) must not
+        # pay a full write cycle — exiting the write context cleanly
+        # persists (stamp + fsync + rename + auto-GC) even when
+        # nothing changed. TOCTOU-safe: the write path below re-checks
+        # under the exclusive lock; the probe only short-circuits the
+        # already-seen case, it never grants the claim.
+        with self._with_lock(write=False) as data:
+            cell = self._read_cell(data, model, decision_class)
+            if cell and finding_id in (
+                cell.get("tool_evidence_finding_ids") or []
+            ):
+                return False
         with self._with_lock() as data:
             cell = self._ensure_cell(data, model, decision_class)
             seen = cell.setdefault("tool_evidence_finding_ids", [])
