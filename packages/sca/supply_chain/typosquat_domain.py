@@ -38,6 +38,7 @@ from ..discovery import EXCLUDED_DIR_NAMES
 from ..models import PinStyle, Confidence, Dependency, Manifest
 from ..parsers import _safe_read
 from ._edit_distance import damerau_levenshtein
+from ._source_exts import SOURCE_CODE_EXTS as _SOURCE_CODE_EXTS
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -66,8 +67,12 @@ _SKIP_HOSTS = {
 # decoy name while the runtime connects to the real one. The group
 # requires a literal ``@`` to consume anything, so plain URLs are
 # unaffected.
+# IGNORECASE: URL schemes are case-insensitive at runtime —
+# ``HTTPS://pastebin.com/x`` fetches exactly like the lowercase
+# spelling, so a cased scheme must not slip past the extractor.
 _URL_RE = re.compile(
     r"https?://(?:[A-Za-z0-9._%+:\-]*@)?(?P<host>[A-Za-z0-9._\-]+)",
+    re.IGNORECASE,
 )
 
 # Test-path detection is delegated to the shared ``_test_paths``
@@ -82,9 +87,10 @@ _TEST_DIR_NAMES = _SHARED_TEST_DIR_NAMES | _LOCAL_FIXTURE_DIRS
 # Canonical skip set — drift-free with discovery.EXCLUDED_DIR_NAMES.
 _SKIP_DIRS = EXCLUDED_DIR_NAMES
 
-_EXTENSIONS = {".py", ".js", ".ts", ".sh", ".bash", ".rb", ".go",
-                ".rs", ".php", ".cs", ".java", ".kt", ".gradle",
-                ".dockerfile", ".yml", ".yaml", ".json"}
+# Shared with exfil_destinations — see ``_source_exts`` (the two
+# walkers drifted; the typosquat one was missing the primary npm
+# hook-payload extensions .mjs/.cjs/.jsx/.tsx).
+_EXTENSIONS = _SOURCE_CODE_EXTS
 
 
 @dataclass

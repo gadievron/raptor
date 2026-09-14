@@ -371,3 +371,19 @@ E = "https://termbin.com/three"
     # Every flagged URL sits on the line the finding reports.
     assert by_line == expected
     assert len(findings) == len(expected)
+
+
+def test_uppercase_scheme_still_detected(tmp_path: Path) -> None:
+    """``HTTPS://pastebin.com/x`` is fully functional at runtime —
+    a cased scheme must not slip past the extractor."""
+    _write(tmp_path / "src" / "x.py",
+           'URL = "HTTPS://pastebin.com/raw/abc"\n')
+    findings = scan_target(tmp_path, [])
+    assert any("pastebin.com" in f.detail for f in findings)
+
+
+def test_scan_extensions_superset_of_shared_source_set() -> None:
+    """Drift guard: this walker must cover at least the shared
+    source-extension set typosquat_domain scans."""
+    from packages.sca.supply_chain._source_exts import SOURCE_CODE_EXTS
+    assert SOURCE_CODE_EXTS <= exfil_destinations._SCAN_EXTS

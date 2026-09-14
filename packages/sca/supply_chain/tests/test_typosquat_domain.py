@@ -232,3 +232,23 @@ def test_subdomain_of_popular_domain_not_flagged(tmp_path: Path) -> None:
         "URL = 'https://scan.aquasecurity.org/x'\n", encoding="utf-8")
     out = scan_target(tmp_path, _manifests(tmp_path))
     assert out == []
+
+
+def test_uppercase_scheme_still_detected(tmp_path: Path) -> None:
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "src.py").write_text(
+        "URL = 'HTTPS://aquasecurtiy.org/payload'\n", encoding="utf-8")
+    out = scan_target(tmp_path, _manifests(tmp_path))
+    assert len(out) == 1
+    assert out[0].suspect_host == "aquasecurtiy.org"
+
+
+def test_esm_extension_scanned(tmp_path: Path) -> None:
+    """.mjs / .cjs / .jsx / .tsx are the primary npm hook-payload
+    extensions — the walker must not skip them."""
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "hook.mjs").write_text(
+        "const u = 'https://aquasecurtiy.org/x';\n", encoding="utf-8")
+    out = scan_target(tmp_path, _manifests(tmp_path))
+    assert len(out) == 1
+    assert out[0].path.name == "hook.mjs"
