@@ -191,6 +191,29 @@ class TestClassifierPoisoningResistance:
 
         assert is_auth_refusal(_Err("refused"))
 
+    def test_genai_code_attr_is_structural_auth(self):
+        """google-genai's APIError carries the HTTP status on
+        ``.code``, not ``.status_code`` — a dead Gemini credential
+        must still trip the tracker structurally."""
+        class _GenaiErr(Exception):
+            code = 401
+
+        assert is_auth_refusal(_GenaiErr("refused"))
+
+        class _GenaiQuota(Exception):
+            code = 429
+
+        assert not is_auth_refusal(_GenaiQuota("slow down"))
+
+    def test_genai_status_text_is_strict_auth(self):
+        from core.llm.structured_call import is_auth_status_text
+
+        assert is_auth_status_text("401 UNAUTHENTICATED. {...}")
+        assert is_auth_status_text("403 PERMISSION_DENIED")
+        assert not is_auth_status_text('File "x.py", line 401, in foo')
+        # Quota stays out of the STRICT refusal class.
+        assert not is_auth_status_text("429 RESOURCE_EXHAUSTED")
+
     def test_rate_limit_is_not_persistent_auth(self):
         # Quota/rate-limit vocabulary belongs to the auth/billing
         # UNION classifier, not the strict refusal class — a burst of

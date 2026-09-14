@@ -44,6 +44,21 @@ class TestClassifier:
         assert is_auth_error_text("rate limit exceeded")
         assert not is_auth_error_text("credentials.py had a typo")
 
+    def test_genai_leading_status_auth_shapes(self):
+        """google-genai renders errors as ``"<code> <STATUS>. {...}"``
+        — the message-leading 401/403 and gRPC reason vocabulary must
+        classify auth, same SDK shape the 429/500 arms already model
+        (``429 RESOURCE_EXHAUSTED``, ``500 INTERNAL``)."""
+        assert classify_error_text(
+            "401 UNAUTHENTICATED. {'error': {'code': 401}}") == "auth"
+        assert classify_error_text(
+            "403 PERMISSION_DENIED. {'error': {'code': 403}}") == "auth"
+        assert is_auth_error_text("401 UNAUTHENTICATED")
+        # Boundary discipline holds: stack-trace 40x stays unclassified.
+        assert classify_error_text(
+            'File "x.py", line 403, in forbidden_fruit') == "error"
+        assert classify_error_text("processed 401 records") == "error"
+
     def test_timeout(self):
         assert classify_error_text("read timed out") == "timeout"
         assert classify_error_text("deadline exceeded") == "timeout"

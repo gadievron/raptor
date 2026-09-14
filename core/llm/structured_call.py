@@ -51,13 +51,26 @@ from typing import Any
 # optional colon (`\s*:?\s*`): the genuine SDK shape is
 # ``Error code: 401 - ...`` and a plain `\s+` never matched it.
 _STATUS_40X = r"(?:http|status|code)\s*:?\s*40[13]\b"
+# google-genai renders errors as ``"<code> <STATUS>. {...}"`` —
+# message-leading status position plus the gRPC SCREAMING_SNAKE
+# reason vocabulary ("401 UNAUTHENTICATED", "403 PERMISSION_DENIED").
+# Mirrors the sibling anchors that already model this SDK shape:
+# RATE_LIMIT_KEYWORDS_RE's ``^\s*429\b`` arm and _HTTP_500_STATUS_RE's
+# ``500 INTERNAL`` arm in client.py. Kept OUTSIDE the ``\b(...)\b``
+# wrapper below — a leading ``\b`` never matches before ``^``.
+_STATUS_40X_LEADING = r"^\s*40[13]\b"
+_AUTH_40X_REASONS = (
+    r"40[13]\s+(?:unauthorized|forbidden|unauthenticated|"
+    r"permission[_ ]denied)"
+)
 
 AUTH_KEYWORDS_RE = re.compile(
-    r"\b(" + _STATUS_40X + r"|"
-    r"40[13]\s+(?:unauthorized|forbidden)|"
-    r"authentication|unauthorized|invalid api key|billing|"
+    r"\b(" + _STATUS_40X + r"|" + _AUTH_40X_REASONS + r"|"
+    r"authentication|unauthorized|unauthenticated|invalid api key|"
+    r"billing|"
     r"quota|rate limit|insufficient_quota|credits?|"
-    r"api[_ ]?key (?:invalid|expired|missing))\b",
+    r"api[_ ]?key (?:invalid|expired|missing))\b"
+    r"|" + _STATUS_40X_LEADING,
     re.IGNORECASE,
 )
 
@@ -67,13 +80,13 @@ AUTH_KEYWORDS_RE = re.compile(
 # tracker) must not trip on a burst of 429s or a billing cap, which
 # are transient/budget classes with their own handling.
 AUTH_STATUS_RE = re.compile(
-    r"\b(" + _STATUS_40X + r"|"
-    r"40[13]\s+(?:unauthorized|forbidden)|"
-    r"authentication(?:[_ ]error)?|unauthorized|"
-    r"permission denied|access denied|"
+    r"\b(" + _STATUS_40X + r"|" + _AUTH_40X_REASONS + r"|"
+    r"authentication(?:[_ ]error)?|unauthorized|unauthenticated|"
+    r"permission[_ ]denied|access denied|"
     r"invalid (?:api[_ ]?key|x-api-key)|"
     r"api[_ ]?key (?:invalid|expired|missing|not valid)|"
-    r"incorrect api key)\b",
+    r"incorrect api key)\b"
+    r"|" + _STATUS_40X_LEADING,
     re.IGNORECASE,
 )
 

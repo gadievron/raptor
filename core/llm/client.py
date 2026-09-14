@@ -236,13 +236,17 @@ def is_auth_refusal(exc: BaseException) -> bool:
                     return True
             except AttributeError:
                 pass
-        status = getattr(e, "status_code", None)
-        if (
-            isinstance(status, int)
-            and not isinstance(status, bool)
-            and status in (401, 403)
-        ):
-            return True
+        # ``status_code`` covers the openai/anthropic/httpx shapes;
+        # ``code`` covers google-genai's APIError (and urllib's
+        # HTTPError), which carries the HTTP status there instead.
+        for attr in ("status_code", "code"):
+            status = getattr(e, attr, None)
+            if (
+                isinstance(status, int)
+                and not isinstance(status, bool)
+                and status in (401, 403)
+            ):
+                return True
     from core.llm.structured_call import is_auth_status_text
     return is_auth_status_text(str(exc))
 
