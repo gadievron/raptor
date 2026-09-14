@@ -138,6 +138,44 @@ class TestCollectionResolution:
                    '"a", "b"));\n')
         assert collection_guard_reason(src, 5, "x", "CWE-79")
 
+    def test_shadowing_local_never_resolves_the_field(self):
+        # Java scoping: a method-local declarator shadows the
+        # same-named static final field, so the guard's runtime
+        # receiver is the (attacker-influenced) local. The
+        # local->field fallback must fire only when NO local
+        # declarator exists.
+        src = _src(
+            "        java.util.List<String> allowed = getUserList();\n"
+            "        if (allowed.contains(x)) {\n"
+            "            out.println(x);\n        }\n",
+            fields=('    static final java.util.List<String> allowed'
+                    ' = java.util.List.of("home", "about");\n'),
+        )
+        helper = ("    private java.util.List<String> getUserList()"
+                  " { return null; }\n}\n")
+        src = src[:-len("}\n")] + helper
+        # Sink is the println INSIDE the guard (line 6: class=1,
+        # field=2, handle=3, decl=4, if=5, println=6) — a wrong sink
+        # line refuses for unrelated reasons and made this test pass
+        # even against the unfixed fallback.
+        assert 'out.println(x);' in src.splitlines()[5]
+        assert collection_guard_reason(src, 6, "x", "CWE-79") is None
+
+    def test_shadowing_local_with_mutation_refusal_never_falls_back(self):
+        # A local that exists but refuses for ANY reason (here:
+        # non-literal initializer) must refuse the guard outright,
+        # not consult the field.
+        src = _src(
+            "        java.util.List<String> allowed = "
+            "java.util.Arrays.asList(x);\n"
+            "        if (allowed.contains(x)) {\n"
+            "            out.println(x);\n        }\n",
+            fields=('    static final java.util.List<String> allowed'
+                    ' = java.util.List.of("home", "about");\n'),
+        )
+        assert 'out.println(x);' in src.splitlines()[5]
+        assert collection_guard_reason(src, 6, "x", "CWE-79") is None
+
     def test_nonfinal_field_refuses(self):
         src = _src("        if (!ALLOWED.contains(x)) { return; }\n"
                    + "        out.println(x);\n",

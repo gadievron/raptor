@@ -107,6 +107,15 @@ class _Refused(Exception):
         self.reason = reason
 
 
+class _NoLocalDeclaration(_Refused):
+    """The method declares NO local by this name — the only local
+    refusal that may fall back to a class field. Any other refusal
+    means a local declarator EXISTS; Java scoping makes that local
+    the guard's runtime receiver, and resolving a same-named
+    ``static final`` field instead would bound the guard to the
+    wrong (possibly attacker-influenced) collection."""
+
+
 # ---------------------------------------------------------------------------
 # AST helpers
 # ---------------------------------------------------------------------------
@@ -339,7 +348,7 @@ def _resolve_local_collection(method, name: str, resolver) -> list[str]:
             raise _Refused(msg)
     if decl_elems is None:
         msg = "no local declaration for the collection"
-        raise _Refused(msg)
+        raise _NoLocalDeclaration(msg)
     if not _occurrences_contains_only(method, name):
         msg = (
             "collection name used beyond contains() — "
@@ -632,7 +641,11 @@ def collection_guard_reason(
                 name = _text(recv_u)
                 try:
                     elems = _resolve_local_collection(method, name, resolver)
-                except _Refused:
+                except _NoLocalDeclaration:
+                    # Only the no-local-at-all refusal may consult the
+                    # class field — a declared local SHADOWS the field
+                    # (see _NoLocalDeclaration); its refusal reasons
+                    # must refuse the guard outright.
                     elems = _resolve_static_field(root, name, resolver)
             elif recv_u is not None and recv_u.type in (
                     "field_access", "scoped_identifier"):
