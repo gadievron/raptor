@@ -12,6 +12,8 @@ from __future__ import annotations
 import gzip
 import io
 import tarfile
+
+import pytest
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -318,6 +320,70 @@ def test_find_dockerfiles_excludes_test_ci_parents(tmp_path: Path):
     found_names = {p.parent.name + "/" + p.name for p in found}
     assert found_names == {tmp_path.name + "/Dockerfile"}, (
         f"expected only the root Dockerfile, got: {found_names}"
+    )
+
+
+def test_find_dockerfiles_excludes_testdata_parent(tmp_path: Path):
+    """``testdata/`` is the Go-idiomatic fixture directory —
+    Dockerfiles under it are test fixtures, never the project's
+    runtime image. A Dockerfile in a sibling non-testdata dir is
+    still found (the exclusion is name-exact, not prefix)."""
+    from packages.sca.dockerfile_from import find_dockerfiles
+    # Production Dockerfiles (kept)
+    (tmp_path / "Dockerfile").write_text("FROM debian:12\n")
+    docker_dir = tmp_path / "pilot" / "docker"
+    docker_dir.mkdir(parents=True)
+    (docker_dir / "Dockerfile.app").write_text("FROM ubuntu:22.04\n")
+    # Go test fixture (skipped)
+    td_dir = tmp_path / "pilot" / "testdata" / "gateway"
+    td_dir.mkdir(parents=True)
+    (td_dir / "Dockerfile").write_text("FROM alpine\n")
+
+    found = {
+        p.relative_to(tmp_path).as_posix() for p in find_dockerfiles(tmp_path)
+    }
+    assert found == {"Dockerfile", "pilot/docker/Dockerfile.app"}, (
+        f"testdata Dockerfile must be skipped, siblings kept; got: {found}"
+    )
+
+
+def test_find_kubernetes_image_refs_excludes_testdata_parent(
+    tmp_path: Path,
+):
+    """K8s manifest fixtures under ``testdata/`` are the dominant
+    image-ref source on Go projects (istio-shaped trees carry
+    hundreds, with floating tags) — they must not feed base-image
+    SBOM scanning. The same manifest in a non-testdata dir is
+    still discovered."""
+    pytest.importorskip("yaml")
+    from packages.sca.dockerfile_from import find_kubernetes_image_refs
+
+    manifest = (
+        "apiVersion: apps/v1\n"
+        "kind: Deployment\n"
+        "spec:\n"
+        "  template:\n"
+        "    spec:\n"
+        "      containers:\n"
+        "        - name: web\n"
+        "          image: {image}\n"
+    )
+    # Fixture manifest (skipped)
+    td_dir = tmp_path / "cmd" / "testdata" / "uninject"
+    td_dir.mkdir(parents=True)
+    (td_dir / "job.yaml").write_text(manifest.format(image="perl"))
+    # Deploy manifest (kept)
+    deploy_dir = tmp_path / "deploy"
+    deploy_dir.mkdir()
+    (deploy_dir / "app.yaml").write_text(
+        manifest.format(image="nginx:1.25")
+    )
+
+    refs = find_kubernetes_image_refs(tmp_path)
+    images = {r.image for r in refs}
+    assert images == {"nginx:1.25"}, (
+        f"testdata manifest must be skipped, deploy manifest kept; "
+        f"got: {images}"
     )
 
 

@@ -146,6 +146,23 @@ _IMAGE_DISCOVERY_EXCLUDE_PARENT_DIRS = frozenset({
     "ci",            # CI infrastructure dockerfiles, not the app
     "fixtures", "fixture",
     "examples", "example", "sample", "samples",
+    # "testdata" is the Go-idiomatic fixture directory (the Go
+    # toolchain ignores it entirely — it can never hold production
+    # build inputs). Trade-off, both directions:
+    # - Excluding: a production image ref under a dir literally
+    #   named testdata would be missed. Effectively nil — Go
+    #   tooling reserves the name for compiler-ignored fixtures,
+    #   and non-Go projects follow the same convention.
+    # - NOT excluding: K8s YAML fixtures under testdata/ dominate
+    #   image discovery on Go projects. Measured on istio
+    #   release-1.4: 113 of 155 discovered image refs and 17 of 25
+    #   unique resolvable images (floating alpine/busybox/nginx/perl
+    #   tags plus the literal placeholder ``image``) were reachable
+    #   only via testdata paths, and 78% of 41,633 vuln findings
+    #   (32,664) were declared in testdata files — fixture-image
+    #   SBOMs swamping the real base-image signal and the scan
+    #   budget.
+    "testdata",
 })
 
 
