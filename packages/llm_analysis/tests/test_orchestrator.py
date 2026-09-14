@@ -172,6 +172,26 @@ def _mock_subprocess_ok(results_by_call):
     return mock_run
 
 
+@pytest.fixture(autouse=True)
+def _clear_prep_caches():
+    """orchestrate() drives the real prepare_source_intel /
+    prepare_flow_context, which populate process-global caches keyed by
+    repo path — clear around every test (matching
+    test_source_intel_inject) so entries neither accumulate for process
+    life nor cross-pollinate same-path tests."""
+    from packages.llm_analysis.flow_context_inject import (
+        clear_flow_context_cache,
+    )
+    from packages.llm_analysis.source_intel_inject import (
+        clear_si_result_cache,
+    )
+    clear_si_result_cache()
+    clear_flow_context_cache()
+    yield
+    clear_si_result_cache()
+    clear_flow_context_cache()
+
+
 class TestOrchestrate:
     """Test the main orchestrate() function routing."""
 
