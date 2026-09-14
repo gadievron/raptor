@@ -11,6 +11,7 @@ Two families:
 
 from __future__ import annotations
 
+import functools
 import shutil
 import subprocess
 import sys
@@ -820,12 +821,18 @@ def test_attach_reproduction_keeps_tier_when_not_reproduced(tmp_path):
 # ----------------------------------------------------------------------
 
 
+@functools.lru_cache(maxsize=None)
 def _untrusted_contract_available() -> bool:
     """The integration tests execute witness code under
     ``run_untrusted()``, which fails closed on Linux hosts without
     unprivileged user namespaces unless the operator opted into
     degraded containment. Skip there — the refusal is the sandbox's
-    contract working as designed, not a reproduction failure."""
+    contract working as designed, not a reproduction failure.
+
+    Memoised and evaluated lazily from ``_untrusted_contract_or_skip``:
+    ``check_net_available()`` is a subprocess probe (cached, but up to
+    seconds cold), and a module-level ``skipif`` condition would run it
+    at pytest COLLECTION in every invocation and every xdist worker."""
     if sys.platform == "darwin":
         return True
     from core.sandbox import check_net_available
@@ -837,7 +844,10 @@ def _untrusted_contract_available() -> bool:
     ).strip().lower() in ("1", "true", "yes", "on")
 
 
+@functools.lru_cache(maxsize=None)
 def _has_libasan() -> bool:
+    # Real ASAN test-compile (subprocess) — memoised, and evaluated
+    # lazily from ``_libasan_or_skip`` so collection never spawns it.
     cxx = next((c for c in ("c++", "g++", "clang++") if shutil.which(c)), None)
     if cxx is None:
         return False
@@ -854,6 +864,18 @@ def _has_libasan() -> bool:
         return False
 
 
+@pytest.fixture
+def _untrusted_contract_or_skip() -> None:
+    if not _untrusted_contract_available():
+        pytest.skip("no unprivileged userns and no degraded opt-in")
+
+
+@pytest.fixture
+def _libasan_or_skip() -> None:
+    if not _has_libasan():
+        pytest.skip("gcc -fsanitize=address not usable")
+
+
 _BOF_SOURCE = """
 #include <cstring>
 #include <iostream>
@@ -868,10 +890,7 @@ int main() {
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not _has_libasan(),
-                    reason="gcc -fsanitize=address not usable")
-@pytest.mark.skipif(not _untrusted_contract_available(),
-                    reason="no unprivileged userns and no degraded opt-in")
+@pytest.mark.usefixtures("_libasan_or_skip", "_untrusted_contract_or_skip")
 def test_real_sanitizer_witness_reproduces(tmp_path):
     """End-to-end: an LLM_EMIT_RUN witness whose bytes are a BOF
     source recorded as SANITIZER_REPORT must reproduce — recompile
@@ -912,8 +931,7 @@ int main(void){
 @pytest.mark.skipif(shutil.which("gcc") is None and
                     shutil.which("cc") is None,
                     reason="no C compiler")
-@pytest.mark.skipif(not _untrusted_contract_available(),
-                    reason="no unprivileged userns and no degraded opt-in")
+@pytest.mark.usefixtures("_untrusted_contract_or_skip")
 def test_real_fuzz_replay_reproduces(tmp_path):
     """End-to-end Mode B: a FUZZ witness (crash input) replayed
     against the actual binary N times. Build a stdin crasher,
@@ -960,8 +978,7 @@ def _mount_ns_spawn_lane_usable() -> bool:
 @pytest.mark.skipif(shutil.which("gcc") is None and
                     shutil.which("cc") is None,
                     reason="no C compiler")
-@pytest.mark.skipif(not _untrusted_contract_available(),
-                    reason="no unprivileged userns and no degraded opt-in")
+@pytest.mark.usefixtures("_untrusted_contract_or_skip")
 def test_real_replay_first_run_etxtbsy_is_spawn_failure_not_outcome(
         tmp_path, monkeypatch):
     """End-to-end through the REAL spawn plumbing: run 1 execs the
