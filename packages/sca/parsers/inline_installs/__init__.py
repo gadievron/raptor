@@ -67,6 +67,7 @@ from pathlib import Path
 
 from core.json.jsonc import load_jsonc
 
+from ... import _gha_uses as _gha_uses_walk
 from ...models import Confidence, Dependency, PinStyle
 from ...naming import fold_name
 from .. import register
@@ -521,10 +522,11 @@ def parse_gha_workflow(path: Path) -> list[Dependency]:
         deprecation / functionality-preservation alerts.
 
     A workflow can contain both shapes; the parser returns a flat
-    union. We don't need a full YAML parser — both ``run:`` blocks
-    and ``uses:`` lines are recognisable syntactically, and the
-    best-effort extractor is more robust against ad-hoc YAML
-    conventions in real workflows than a strict parser anyway.
+    union. ``uses:`` extraction is two-pass: the syntactic per-line
+    pass (robust against ad-hoc YAML conventions, exact line
+    numbers) unioned with a YAML document walk so non-plain
+    serializations (block scalars, flow maps, anchors) — which
+    GitHub runs identically — still produce Dependency rows.
     """
     text = _safe_read(path)
     if text is None:
@@ -581,20 +583,18 @@ def _extract_gha_uses(
       * else → UNKNOWN (branch / odd ref)
     """
     out: list[Dependency] = []
-    for line_no, raw in enumerate(text.splitlines(), start=1):
-        m = _GHA_USES_RE.match(raw)
-        if not m:
-            continue
-        spec = m.group("spec")
+    seen_specs: set[str] = set()
+
+    def _spec_to_dep(spec: str, line_no: int) -> Dependency | None:
         if spec.startswith(("./", "../", "docker://")):
-            continue
+            return None
         if "@" not in spec:
-            continue
+            return None
         action, ref = spec.rsplit("@", 1)
         if "/" not in action:
-            continue
+            return None
         pin_style, version = classify_action_ref(ref)
-        out.append(Dependency(
+        return Dependency(
             ecosystem="GitHub Actions",
             name=action,
             version=version,
@@ -612,7 +612,35 @@ def _extract_gha_uses(
             ),
             source_kind="gha_uses",
             source_extra={"ref": ref, "line": line_no},
-        ))
+        )
+
+    for line_no, raw in enumerate(text.splitlines(), start=1):
+        m = _GHA_USES_RE.match(raw)
+        if not m:
+            continue
+        spec = m.group("spec")
+        seen_specs.add(spec)
+        dep = _spec_to_dep(spec, line_no)
+        if dep is not None:
+            out.append(dep)
+    # Second pass: YAML-walk the document so non-plain serializations
+    # (block scalars, flow mappings, quoted keys, anchors/aliases) —
+    # which GitHub runs identically — still become Dependency rows;
+    # without this an attacker-chosen serialization removed the
+    # action from OSV matching, sentinel pairing, sunset and
+    # freshness checks.  The regex pass keeps exact line numbers for
+    # plain shapes; walk-only specs get a best-effort line.  A YAML
+    # parse failure degrades to the regex-only behaviour.
+    walked = _gha_uses_walk.extract_uses_specs(text)
+    if walked:
+        for spec in dict.fromkeys(walked):
+            if spec in seen_specs:
+                continue
+            dep = _spec_to_dep(
+                spec, _gha_uses_walk.best_effort_line(text, spec),
+            )
+            if dep is not None:
+                out.append(dep)
     return out
 
 
