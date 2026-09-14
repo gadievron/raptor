@@ -949,3 +949,28 @@ def test_dedup_across_multiple_project_dirs_unchanged(
     # survives (once per project_dir, as before).
     assert {d.name for d in deps} == {"c"}
     assert all(s.method == "cascade_resolver" for s in statuses)
+
+
+class TestCanonicalNameSharedRule:
+    """The detector must join on the SAME canonical form as the rest
+    of the pipeline (packages/sca/naming.py) — its hand-rolled fold
+    diverged both ways."""
+
+    def test_pypi_dotted_name_folds_per_pep503(self):
+        from packages.sca.transitive_drop.detector import _canonical_name
+        # Pre-fix: "foo.bar" stayed "foo.bar" while the pipeline
+        # folded it to "foo-bar" — a dotted transitive dep evaded
+        # drop detection.
+        assert _canonical_name("PyPI", "Foo.Bar") == "foo-bar"
+        assert _canonical_name("PyPI", "foo_bar") == "foo-bar"
+
+    def test_case_sensitive_ecosystems_pass_through(self):
+        from packages.sca.transitive_drop.detector import _canonical_name
+        # Pre-fix: Cargo/Go names were lowercased here and nowhere
+        # else, minting false matches at this boundary only.
+        assert _canonical_name("Go", "github.com/Foo/Bar") == "github.com/Foo/Bar"
+        assert _canonical_name("Maven", "com.Example:Artifact") == "com.Example:Artifact"
+
+    def test_npm_lowercases(self):
+        from packages.sca.transitive_drop.detector import _canonical_name
+        assert _canonical_name("npm", "@Scope/Pkg") == "@scope/pkg"

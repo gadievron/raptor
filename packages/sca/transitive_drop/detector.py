@@ -27,6 +27,7 @@ import re
 from dataclasses import dataclass
 
 from packages.sca.findings import severity_rank
+from packages.sca.naming import fold_name, pep503_name
 from packages.sca.versions import VersionError
 from packages.sca.versions import compare as version_compare
 
@@ -252,12 +253,15 @@ def detect_droppable_transitives(
 # ---------------------------------------------------------------------------
 
 def _canonical_name(ecosystem: str, name: str) -> str:
-    """Per-ecosystem canonical-name normalisation. Most ecosystems
-    case-fold + treat ``_`` ≡ ``-``; Maven keeps ``groupId:artifactId``
-    case-sensitive."""
-    if ecosystem == "Maven":
-        return name.strip()
-    return name.lower().replace("_", "-")
+    """Per-ecosystem canonical name — delegates to the shared rule
+    (:mod:`packages.sca.naming`) so the detector joins on the SAME
+    form as the rest of the pipeline. The hand-rolled
+    ``lower().replace("_", "-")`` fold diverged both ways: a dotted
+    PyPI name (``foo.bar`` ≡ ``foo-bar`` under PEP 503) evaded drop
+    detection, and case-sensitive ecosystems (Cargo/Go/Maven) were
+    folded here and nowhere else, minting false matches at this
+    boundary only."""
+    return fold_name(name.strip(), ecosystem)
 
 
 def _max_severity(a: str | None, b: str) -> str:
@@ -398,7 +402,7 @@ def _dep_state_pypi(
     if requires_dist is None:
         return None
 
-    transitive_canon = transitive_name.lower().replace("_", "-")
+    transitive_canon = pep503_name(transitive_name)
     extras: list[str] = []
     unconditional = False
     for req in requires_dist:
@@ -410,7 +414,7 @@ def _dep_state_pypi(
         )
         if not name_match:
             continue
-        req_name = name_match.group(1).lower().replace("_", "-")
+        req_name = pep503_name(name_match.group(1))
         if req_name != transitive_canon:
             continue
         if marker.strip():
@@ -507,14 +511,19 @@ def _dep_state_cargo(
     deps = client.get_version_dependencies(parent_name, parent_version)
     if not isinstance(deps, list):
         return None
-    transitive_canon = transitive_name.lower().replace("_", "-")
+    # crates.io rejects new names that collide under case or -/_
+    # swaps, so the SYMMETRIC equivalence fold on both sides of this
+    # registry join is deliberate; pep503_name is byte-equivalent for
+    # crate names (dots are not legal in them) and keeps the rule in
+    # one module.
+    transitive_canon = pep503_name(transitive_name)
     extras: list[str] = []
     unconditional = False
     for d in deps:
         if not isinstance(d, dict):
             continue
         name = d.get("crate_id") or d.get("name") or ""
-        if name.lower().replace("_", "-") != transitive_canon:
+        if pep503_name(name) != transitive_canon:
             continue
         kind = d.get("kind") or "normal"
         is_optional = bool(d.get("optional"))
