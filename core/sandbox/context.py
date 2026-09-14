@@ -356,10 +356,13 @@ def _run_teardown_first_timeout(
         _death_w = death_w_holder[0]
         if _death_w is not None:
             death_w_holder[0] = None
-            try:
-                os.close(_death_w)
-            except OSError:
-                pass
+            # Registry-routed close (see _spawn's death-pipe write-end
+            # registry): unregisters atomically with the close so a
+            # concurrently-forked spawn child neither pins this pipe's
+            # EOF nor closes a reused fd number. Idempotent against
+            # run()'s finally close in either order.
+            from ._spawn import close_death_w as _close_death_w
+            _close_death_w(_death_w)
         try:
             out, err = proc.communicate(
                 timeout=_TEARDOWN_SWEEP_GRACE_S,
@@ -6539,7 +6542,17 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                         _penv = dict(_env_for_target)
                         _penv["_SBX_RUN_ID"] = _reap_token
                     if _reaper_cell is not None:
-                        _death_r, _death_w = os.pipe()
+                        # Registered creation (see _spawn's death-pipe
+                        # write-end registry): a mount-ns intermediate
+                        # forked while this run is in flight inherits
+                        # a copy of _death_w and must close it, or the
+                        # sweeper's EOF — the teardown signal for this
+                        # lane — stays pinned to that sibling spawn's
+                        # lifetime.
+                        from ._spawn import (
+                            open_death_pipe as _open_death_pipe,
+                        )
+                        _death_r, _death_w = _open_death_pipe()
                         # Thread-local slot — see the cell's
                         # construction comment for why this must
                         # not be a plain shared key.
@@ -6605,12 +6618,19 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     finally:
                         if _reaper_cell is not None:
                             _reaper_cell["death_local"].fd = None
-                        for _dfd in (_death_w_holder[0], _death_r):
-                            if _dfd is not None:
-                                try:
-                                    os.close(_dfd)
-                                except OSError:
-                                    pass
+                        if _death_w_holder[0] is not None:
+                            # Registry-routed (idempotent with the
+                            # teardown-first timeout close, either
+                            # order — see close_death_w).
+                            from ._spawn import (
+                                close_death_w as _close_death_w,
+                            )
+                            _close_death_w(_death_w_holder[0])
+                        if _death_r is not None:
+                            try:
+                                os.close(_death_r)
+                            except OSError:
+                                pass
                         if _reap_token is not None:
                             _sweep_marked_processes(_reap_token)
         finally:
