@@ -1130,32 +1130,41 @@ def _binary_capability_delta_for_candidate(
         current_ref = f"{cand.locator}:{cand.current_version}"
         target_ref = f"{cand.locator}:{cand.target_version}"
 
-    current_bin = fetch_image_binary(
-        current_ref, client=oci_client,
-    )
-    if current_bin is None:
-        logger.debug(
-            "sca.bump.binary_capability_delta: could not extract "
-            "current binary from %s", current_ref,
+    from .image_binary_extract import cleanup_extracted_binary
+    current_bin = None
+    target_bin = None
+    try:
+        current_bin = fetch_image_binary(
+            current_ref, client=oci_client,
         )
-        return None
-    target_bin = fetch_image_binary(
-        target_ref, client=oci_client,
-    )
-    if target_bin is None:
-        logger.debug(
-            "sca.bump.binary_capability_delta: could not extract "
-            "target binary from %s", target_ref,
+        if current_bin is None:
+            logger.debug(
+                "sca.bump.binary_capability_delta: could not extract "
+                "current binary from %s", current_ref,
+            )
+            return None
+        target_bin = fetch_image_binary(
+            target_ref, client=oci_client,
         )
-        return None
-    return binary_capability_delta_finding(
-        ecosystem=ecosystem,
-        name=cand.locator,
-        current_version=cand.current_version,
-        target_version=cand.target_version,
-        current_binary=current_bin,
-        target_binary=target_bin,
-    )
+        if target_bin is None:
+            logger.debug(
+                "sca.bump.binary_capability_delta: could not extract "
+                "target binary from %s", target_ref,
+            )
+            return None
+        return binary_capability_delta_finding(
+            ecosystem=ecosystem,
+            name=cand.locator,
+            current_version=cand.current_version,
+            target_version=cand.target_version,
+            current_binary=current_bin,
+            target_binary=target_bin,
+        )
+    finally:
+        # Extracted binaries previously accumulated in the system
+        # tempdir across runs, unbounded; the diff is done, drop them.
+        cleanup_extracted_binary(current_bin)
+        cleanup_extracted_binary(target_bin)
 
 
 def _resolve_gha_image_refs(

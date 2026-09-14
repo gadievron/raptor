@@ -33,7 +33,10 @@ from core.binary import (
     load_fingerprint,
     save_fingerprint,
 )
-from .bump.image_binary_extract import fetch_image_binary
+from .bump.image_binary_extract import (
+    cleanup_extracted_binary,
+    fetch_image_binary,
+)
 from .dockerfile_from import find_all_image_refs
 from .kinds import SCAN_ID_PREFIX
 from .models import (
@@ -144,12 +147,10 @@ def _drift_for_ref(
     try:
         current = capability_fingerprint(binary)
     finally:
-        # The extracted binary is in a tempdir; clean up so a
-        # full scan doesn't accumulate gigabytes.
-        try:
-            binary.unlink()
-        except OSError:
-            pass
+        # The extracted binary is in a per-extraction tempdir; clean
+        # up (file + owned dir) so a full scan doesn't accumulate
+        # gigabytes.
+        cleanup_extracted_binary(binary)
     if current is None:
         logger.debug(
             "sca.image_drift: could not fingerprint %s", ref,

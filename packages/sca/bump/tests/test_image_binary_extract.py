@@ -455,3 +455,108 @@ class TestFetchImageBinary:
             c.isalnum() or c in "._-" for c in basename
         ), f"unsanitised char in {basename!r}"
         assert len(basename) <= 64
+
+
+# ---------------------------------------------------------------------------
+# Shared-tempdir hardening: owned dir, O_EXCL writes, cleanup
+# ---------------------------------------------------------------------------
+
+def _stub_client_with_binary(binary_bytes: bytes) -> "_StubClient":
+    client = _StubClient()
+    layer_bytes = _make_layer_tar({"usr/bin/foo": binary_bytes})
+    client.blobs["sha256:layer1"] = layer_bytes
+    client.blobs["sha256:cfg"] = _make_config_blob(
+        entrypoint=["/usr/bin/foo"],
+    )
+    client.manifests["library/test:1"] = _make_manifest_resp(
+        config_digest="sha256:cfg",
+        layers=[{
+            "digest": "sha256:layer1", "size": len(layer_bytes),
+            "mediaType":
+                "application/vnd.docker.image.rootfs.diff.tar.gzip",
+        }],
+    )
+    return client
+
+
+class TestSharedTempdirHardening:
+    def test_default_out_dir_is_private_per_extraction(self) -> None:
+        """No out_dir → the file must NOT land directly in the shared
+        system tempdir (predictable name, multi-user host): it goes
+        in a fresh mode-0700 directory owned by us."""
+        import os
+        import stat
+        import tempfile
+        from pathlib import Path
+
+        from packages.sca.bump.image_binary_extract import (
+            cleanup_extracted_binary,
+        )
+        client = _stub_client_with_binary(b"\x7fELF" + b"y" * 64)
+        out = fetch_image_binary("docker.io/library/test:1", client=client)
+        try:
+            assert out is not None
+            assert out.parent != Path(tempfile.gettempdir())
+            assert out.parent.name.startswith("raptor-sca-bump-")
+            mode = stat.S_IMODE(out.parent.stat().st_mode)
+            assert mode & 0o077 == 0, oct(mode)
+            assert out.parent.stat().st_uid == os.getuid()
+        finally:
+            cleanup_extracted_binary(out)
+        assert out is not None and not out.exists()
+        assert not out.parent.exists()
+
+    def test_pre_created_plant_is_not_truncated_or_followed(
+        self, tmp_path,
+    ) -> None:
+        """An attacker pre-creating the predicted content-hash name in
+        a shared out_dir must not win: the extractor refuses to reuse
+        a file whose bytes differ (O_EXCL — no truncate-over, no
+        follow), so the plant can never become the diffed binary."""
+        import hashlib
+
+        binary_bytes = b"\x7fELF" + b"z" * 64
+        content_hash = hashlib.sha256(binary_bytes).hexdigest()[:32]
+        plant = tmp_path / f"{content_hash}-foo"
+        plant.write_bytes(b"ATTACKER")
+
+        client = _stub_client_with_binary(binary_bytes)
+        out = fetch_image_binary(
+            "docker.io/library/test:1", client=client, out_dir=tmp_path,
+        )
+        # Refused (plant bytes differ) — never silently overwritten,
+        # never returned as if it were our extraction.
+        assert out is None
+        assert plant.read_bytes() == b"ATTACKER"
+
+    def test_symlink_plant_is_refused(self, tmp_path) -> None:
+        import hashlib
+
+        binary_bytes = b"\x7fELF" + b"w" * 64
+        content_hash = hashlib.sha256(binary_bytes).hexdigest()[:32]
+        victim = tmp_path / "victim"
+        victim.write_bytes(b"precious")
+        (tmp_path / f"{content_hash}-foo").symlink_to(victim)
+
+        client = _stub_client_with_binary(binary_bytes)
+        out = fetch_image_binary(
+            "docker.io/library/test:1", client=client, out_dir=tmp_path,
+        )
+        assert out is None
+        assert victim.read_bytes() == b"precious"
+
+    def test_own_identical_extraction_is_reused(self, tmp_path) -> None:
+        """Idempotent re-run against the same operator out_dir: our
+        own earlier extraction (same bytes, our uid, tight mode) is
+        reused rather than erroring."""
+        client = _stub_client_with_binary(b"\x7fELF" + b"v" * 64)
+        first = fetch_image_binary(
+            "docker.io/library/test:1", client=client, out_dir=tmp_path,
+        )
+        assert first is not None
+        second = fetch_image_binary(
+            "docker.io/library/test:1",
+            client=_stub_client_with_binary(b"\x7fELF" + b"v" * 64),
+            out_dir=tmp_path,
+        )
+        assert second == first

@@ -203,8 +203,18 @@ def fetch_image_binary(
 
     try:
         if out_dir is None:
-            out_dir = Path(tempfile.gettempdir())
-        out_dir.mkdir(parents=True, exist_ok=True)
+            # Fresh mode-0700 directory per extraction — NEVER the
+            # shared system tempdir directly: the content hash of a
+            # public image is attacker-predictable, so on a multi-user
+            # host another user could pre-create the predicted file,
+            # keep ownership, and rewrite the bytes between our write
+            # and the capability diff (verdict steering), or use
+            # fs.protected_regular to deterministically suppress the
+            # detector. mkdtemp is owned by us and unreadable to
+            # others by construction.
+            out_dir = Path(tempfile.mkdtemp(prefix=_OWNED_DIR_PREFIX))
+        else:
+            out_dir.mkdir(parents=True, exist_ok=True)
         # Name the file by the CONTENT hash + a sanitised basename so
         # two different versions of the same image can coexist on disk
         # without collision when the same out_dir is reused. The
@@ -226,7 +236,28 @@ def fetch_image_binary(
                 "write for %s", image_ref_str,
             )
             return None
-        out_path.write_bytes(final_bytes)
+        # O_EXCL|O_NOFOLLOW: never truncate or follow a pre-existing
+        # entry (a plain write_bytes was O_CREAT|O_TRUNC and followed
+        # symlinks — a resolve-then-write ordering an attacker's
+        # pre-created file or link wins). A pre-existing file is only
+        # reused when it is verifiably OUR earlier extraction of the
+        # same bytes.
+        try:
+            fd = os.open(
+                str(out_path),
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+            )
+        except FileExistsError:
+            if _is_reusable_extraction(out_path, final_bytes):
+                return out_path
+            logger.debug(
+                "sca.bump.image_binary_extract: refusing pre-existing "
+                "path %s (not our extraction)", out_path,
+            )
+            return None
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(final_bytes)
         return out_path
     except OSError as e:
         logger.debug(
@@ -234,6 +265,57 @@ def fetch_image_binary(
             image_ref_str, e,
         )
         return None
+
+
+# Prefix for the per-extraction directories this module owns.
+# ``cleanup_extracted_binary`` only removes directories carrying it.
+_OWNED_DIR_PREFIX = "raptor-sca-bump-"
+
+
+def _is_reusable_extraction(path: Path, expected: bytes) -> bool:
+    """True when ``path`` is verifiably OUR earlier extraction of the
+    same bytes: a regular non-symlink file, owned by this uid, not
+    group/other-writable, byte-identical content. Anything else —
+    another owner, looser mode, different bytes — is refused (a
+    predictable-name plant on a shared out_dir)."""
+    import stat as _stat
+    try:
+        st = path.lstat()
+    except OSError:
+        return False
+    if not _stat.S_ISREG(st.st_mode):
+        return False
+    if st.st_uid != os.getuid():
+        return False
+    if st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH):
+        return False
+    if st.st_size != len(expected):
+        return False
+    try:
+        with path.open("rb") as fh:
+            return fh.read(len(expected) + 1) == expected
+    except OSError:
+        return False
+
+
+def cleanup_extracted_binary(path: Path | None) -> None:
+    """Remove an extracted binary and, when it sits in a directory
+    this module created (``mkdtemp`` with our prefix), the directory
+    too. Callers invoke this after the capability diff / fingerprint
+    — extracted binaries previously accumulated in the system tempdir
+    across runs, unbounded."""
+    if path is None:
+        return
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    parent = path.parent
+    if parent.name.startswith(_OWNED_DIR_PREFIX):
+        try:
+            parent.rmdir()
+        except OSError:
+            pass
 
 
 # Characters allowed to pass through from a remote-influenced binary

@@ -199,10 +199,8 @@ def _fingerprint_image_ref(ref: str, _args):
     try:
         return capability_fingerprint(binary)
     finally:
-        try:
-            binary.unlink()
-        except OSError:
-            pass
+        from .bump.image_binary_extract import cleanup_extracted_binary
+        cleanup_extracted_binary(binary)
 
 
 def _emit_json(payload: dict, out_path: str | None) -> int:
