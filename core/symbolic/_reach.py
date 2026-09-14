@@ -105,13 +105,14 @@ def _find_reaching_input_impl(
 
     deadline = t0 + timeout
 
+    step = _engine.budget_step(deadline)
     try:
         with z3_call_budget(deadline):
             simgr.explore(
                 find=target_address,
                 avoid=avoid_addresses or [],
                 num_find=1,
-                step_func=_engine.budget_step(deadline),
+                step_func=step,
             )
     except Exception as exc:  # noqa: BLE001 — angr's exploration may raise
         return _engine.raised_result(
@@ -128,6 +129,7 @@ def _find_reaching_input_impl(
             timeout_reason=f"timeout after {wall:.1f}s",
             no_path_reason="no path to target",
             metadata={"target_address": target_address},
+            step=step,
         )
 
     found = simgr.found[0]

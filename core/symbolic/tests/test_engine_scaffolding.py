@@ -258,3 +258,77 @@ def test_impl_regates_and_resolves_by_dispatch_names(
     assert result.succeeded is False
     assert result.metadata.get("unavailable_dep") == "angr"
     assert result.metadata.get("primitive") == public_name
+
+
+# ---------------------------------------------------------------------------
+# Cap-abort honesty: a state-explosion prune is never "explored fully"
+# ---------------------------------------------------------------------------
+# budget_step's active-cap arm silently moved ALL active states to
+# deadended; unfound_result then reported the engine's no_path_reason
+# ("no path to target" / "explored fully; ...") — refutation-grade
+# language for an exploration aborted at the state ceiling. The step
+# object now records the abort and unfound_result reports it.
+
+
+class _FakeStash(list):
+    pass
+
+
+class _FakeSimgr:
+    def __init__(self, n_active: int) -> None:
+        self.active = _FakeStash(range(n_active))
+        self.moves: list = []
+
+    def move(self, from_stash: str, to_stash: str):
+        self.moves.append((from_stash, to_stash))
+        return self
+
+
+def test_cap_abort_reported_as_state_explosion():
+    import time
+
+    from core.symbolic import _engine
+
+    step = _engine.budget_step(time.monotonic() + 100, max_active=2)
+    step(_FakeSimgr(3))
+    assert step.cap_aborted is True
+    r = _engine.unfound_result(
+        deadline=time.monotonic() + 100, wall=1.0, states=3,
+        timeout_reason="timeout", no_path_reason="no path to target",
+        metadata={}, step=step,
+    )
+    assert "state explosion" in r.reason
+    assert "not exhaustive" in r.reason
+    assert r.metadata.get("cap_aborted") is True
+
+
+def test_full_exploration_keeps_no_path_reason():
+    import time
+
+    from core.symbolic import _engine
+
+    step = _engine.budget_step(time.monotonic() + 100, max_active=8)
+    step(_FakeSimgr(2))  # under the cap — no abort
+    assert step.cap_aborted is False
+    r = _engine.unfound_result(
+        deadline=time.monotonic() + 100, wall=1.0, states=2,
+        timeout_reason="timeout", no_path_reason="no path to target",
+        metadata={}, step=step,
+    )
+    assert r.reason == "no path to target"
+    assert "cap_aborted" not in r.metadata
+
+
+def test_timeout_reason_wins_over_cap_abort():
+    import time
+
+    from core.symbolic import _engine
+
+    step = _engine.budget_step(time.monotonic() - 1, max_active=2)
+    step.cap_aborted = True
+    r = _engine.unfound_result(
+        deadline=time.monotonic() - 1, wall=9.0, states=3,
+        timeout_reason="timeout after 9.0s", no_path_reason="no path",
+        metadata={}, step=step,
+    )
+    assert r.reason == "timeout after 9.0s"

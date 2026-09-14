@@ -167,26 +167,58 @@ def make_entry_state(project: Any) -> Any:
     )
 
 
+class _BudgetStep:
+    """Exploration ``step_func`` that records WHY it aborted.
+
+    Deadline and active-cap aborts both flush the active stash, which
+    downstream read as "explored fully" — but a cap abort is a
+    state-explosion prune, and reporting it as a definitive "no path"
+    hands refutation-grade evidence to consumers for an exploration
+    that was cut off at ``max_active`` states. ``unfound_result``
+    consults :attr:`cap_aborted` to report it honestly (parallel to
+    the overflow engine's own "state explosion" reporting).
+    """
+
+    def __init__(
+        self,
+        deadline: float,
+        *,
+        max_active: int = MAX_ACTIVE_STATES,
+        on_continue: Optional[Callable[[Any], Any]] = None,
+    ) -> None:
+        self.deadline = deadline
+        self.max_active = max_active
+        self.on_continue = on_continue
+        self.cap_aborted = False
+
+    def __call__(self, sg: Any) -> Any:
+        if time.monotonic() >= self.deadline:
+            return sg.move(from_stash="active", to_stash="deadended")
+        if len(sg.active) > self.max_active:
+            self.cap_aborted = True
+            return sg.move(from_stash="active", to_stash="deadended")
+        if self.on_continue is not None:
+            return self.on_continue(sg)
+        return sg
+
+
 def budget_step(
     deadline: float,
     *,
     max_active: int = MAX_ACTIVE_STATES,
     on_continue: Optional[Callable[[Any], Any]] = None,
-) -> Callable[[Any], Any]:
+) -> "_BudgetStep":
     """Build the exploration ``step_func``: bail cleanly on deadline
     (angr polls between step batches, so we stop between states, not
     mid-state) and bound RAM via the active-stash ceiling. When the
     budget still has room, ``on_continue`` lets an engine append its
-    own per-step work (e.g. the heap engine's mismatch scan)."""
-    def _step(sg: Any) -> Any:
-        if time.monotonic() >= deadline:
-            return sg.move(from_stash="active", to_stash="deadended")
-        if len(sg.active) > max_active:
-            return sg.move(from_stash="active", to_stash="deadended")
-        if on_continue is not None:
-            return on_continue(sg)
-        return sg
-    return _step
+    own per-step work (e.g. the heap engine's mismatch scan). The
+    returned object records a cap abort — pass it to
+    :func:`unfound_result` so the abort is never reported as a
+    definitive negative."""
+    return _BudgetStep(
+        deadline, max_active=max_active, on_continue=on_continue,
+    )
 
 
 def raised_result(
@@ -217,15 +249,28 @@ def unfound_result(
     timeout_reason: str,
     no_path_reason: str,
     metadata: dict[str, Any],
+    step: Optional["_BudgetStep"] = None,
 ) -> SymbolicResult:
     """Nothing-found result: distinguish "timed out with active
-    states remaining" from "explored fully and found nothing". The
-    engines supply their own reason texts (the wording is part of
-    the public surface)."""
+    states remaining", "aborted at the active-state cap", and
+    "explored fully and found nothing". The engines supply their own
+    reason texts for the first and last (the wording is part of the
+    public surface); the cap abort is reported here so no engine can
+    mint a pruned exploration as a definitive negative."""
     timed_out = time.monotonic() >= deadline
+    if timed_out:
+        reason = timeout_reason
+    elif step is not None and step.cap_aborted:
+        reason = (
+            f"state explosion — exploration aborted at "
+            f"{step.max_active} active states; not exhaustive"
+        )
+        metadata = {**metadata, "cap_aborted": True}
+    else:
+        reason = no_path_reason
     return SymbolicResult(
         succeeded=False,
-        reason=timeout_reason if timed_out else no_path_reason,
+        reason=reason,
         wall_seconds=wall,
         states_explored=states,
         metadata=metadata,

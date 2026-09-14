@@ -224,12 +224,13 @@ def _discover_fmtstr_slots_impl(
 
     deadline = t0 + timeout
 
+    step = _engine.budget_step(deadline)
     try:
         with z3_call_budget(deadline):
             simgr.explore(
                 find=sink_addr,
                 num_find=1,
-                step_func=_engine.budget_step(deadline),
+                step_func=step,
             )
     except Exception as exc:  # noqa: BLE001
         return _engine.raised_result(
@@ -246,6 +247,7 @@ def _discover_fmtstr_slots_impl(
             timeout_reason=f"timeout after {wall:.1f}s (never reached sink)",
             no_path_reason="no path from entry to sink_addr",
             metadata={"sink_addr": sink_addr},
+            step=step,
         )
 
     state = simgr.found[0]

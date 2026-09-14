@@ -308,14 +308,13 @@ def _find_heap_mismatch_impl(
                 break
         return sg
 
+    step = _engine.budget_step(deadline, on_continue=_scan_for_mismatch)
     try:
         with z3_call_budget(deadline):
             simgr.explore(
                 find=lambda s: _has_mismatch(s),
                 num_find=1,
-                step_func=_engine.budget_step(
-                    deadline, on_continue=_scan_for_mismatch,
-                ),
+                step_func=step,
             )
     except Exception as exc:  # noqa: BLE001
         return _engine.raised_result(
@@ -332,6 +331,7 @@ def _find_heap_mismatch_impl(
             timeout_reason=f"timeout after {wall:.1f}s",
             no_path_reason="no heap-copy mismatch on any explored path",
             metadata={"target_address": target_address},
+            step=step,
         )
 
     found = simgr.found[0]

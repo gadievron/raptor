@@ -139,12 +139,13 @@ def _extract_path_constraints_impl(
 
     deadline = t0 + timeout
 
+    step = _engine.budget_step(deadline)
     try:
         with z3_call_budget(deadline):
             simgr.explore(
                 find=target_address,
                 num_find=max_paths,
-                step_func=_engine.budget_step(deadline),
+                step_func=step,
             )
     except Exception as exc:  # noqa: BLE001
         return _engine.raised_result(
@@ -170,6 +171,7 @@ def _extract_path_constraints_impl(
             timeout_reason=f"timeout after {wall:.1f}s with no path found",
             no_path_reason="explored fully; no path reaches target",
             metadata={"target_address": target_address, "paths": []},
+            step=step,
         )
 
     paths: list[dict[str, Any]] = []
