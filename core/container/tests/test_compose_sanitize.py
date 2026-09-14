@@ -1000,3 +1000,54 @@ def test_same_service_overlap_with_restart_refused(tmp_path: Path) -> None:
                         "volumes": ["./www:/w", "./www/conf:/c:ro"]},
             },
         })
+
+
+def test_secret_file_under_cross_service_writable_bind_refused(
+    tmp_path: Path,
+) -> None:
+    """Non-swarm compose implements file-based secrets/configs as bind
+    mounts re-resolved by the daemon at container start — the same
+    swap channel as volumes. A secret file nesting under another
+    service's writable bind must refuse like any other bind."""
+    (tmp_path / "dir").mkdir()
+    (tmp_path / "dir" / "tok").write_text("s")
+    with pytest.raises(cco.ComposeError, match="writable bind"):
+        _sanitize(tmp_path, {
+            "services": {
+                "a": {"image": "x", "volumes": ["./dir:/d"]},
+                "b": {"image": "y", "secrets": ["s1"],
+                      "depends_on": ["a"]},
+            },
+            "secrets": {"s1": {"file": "./dir/tok"}},
+        })
+
+
+def test_config_attachment_dict_form_under_writable_bind_refused(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "dir").mkdir()
+    (tmp_path / "dir" / "cfg").write_text("c")
+    with pytest.raises(cco.ComposeError, match="writable bind"):
+        _sanitize(tmp_path, {
+            "services": {
+                "a": {"image": "x", "volumes": ["./dir:/d"]},
+                "b": {"image": "y",
+                      "configs": [{"source": "c1", "target": "/c"}]},
+            },
+            "configs": {"c1": {"file": "./dir/cfg"}},
+        })
+
+
+def test_secret_file_outside_writable_binds_kept(tmp_path: Path) -> None:
+    (tmp_path / "dir").mkdir()
+    (tmp_path / "sec").mkdir()
+    (tmp_path / "sec" / "tok").write_text("s")
+    doc = _sanitize(tmp_path, {
+        "services": {
+            "a": {"image": "x", "volumes": ["./dir:/d"]},
+            "b": {"image": "y", "secrets": ["s1"]},
+        },
+        "secrets": {"s1": {"file": "./sec/tok"}},
+    })
+    assert doc["secrets"]["s1"]["file"] == "./sec/tok"
+    assert "s1" in doc["services"]["b"]["secrets"]

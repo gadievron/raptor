@@ -891,6 +891,7 @@ def _bind_mounts(
 
 def _refuse_writable_bind_overlaps(
     services: dict[str, Any], staging: Path,
+    file_source_defs: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Refuse bind layouts a container can re-point between sanitize
     time and daemon mount time (bind-source TOCTOU).
@@ -930,6 +931,34 @@ def _refuse_writable_bind_overlaps(
             spec.get("volumes"), staging_real,
         ):
             binds.append((svc, source, resolved, writable))
+        # Non-swarm ``docker compose`` implements file-based
+        # configs/secrets as BIND MOUNTS of the source file,
+        # re-resolved by the daemon at container start — the same
+        # swap channel as volumes. Feed each service's attached file
+        # sources in as read-only binds so a source nesting under
+        # another service's writable bind refuses like any other
+        # bind (service A binds ./dir rw, secret file ./dir/tok
+        # attached to a later-starting service B: A swaps tok for a
+        # symlink before B starts).
+        for section in ("configs", "secrets"):
+            defs = (file_source_defs or {}).get(section) or {}
+            for att in spec.get(section) or []:
+                if isinstance(att, str):
+                    ref_name = att
+                elif isinstance(att, dict):
+                    ref_name = str(att.get("source") or "")
+                else:
+                    continue
+                file_ref = (defs.get(ref_name) or {}).get("file")
+                if not file_ref:
+                    continue
+                file_ref = str(file_ref)
+                if file_ref.startswith("/"):
+                    resolved = os.path.realpath(file_ref)
+                else:
+                    resolved = os.path.realpath(
+                        os.path.join(staging_real, file_ref))
+                binds.append((svc, file_ref, resolved, False))
     for svc_w, src_w, res_w, writable in binds:
         if not writable:
             continue
@@ -1293,9 +1322,22 @@ def _sanitize_model(
             str(name), spec, staging,
             labels=labels, allow_devices=allow_devices,
         )
+    # Sanitize configs/secrets BEFORE the stack-wide bind pass: their
+    # file sources are daemon-re-resolved binds and must join the
+    # writable-overlap refusal below.
+    for section in ("configs", "secrets"):
+        if section in data:
+            out[section] = _sanitize_file_source_defs(
+                data[section], staging, what=section)
     # Stack-wide pass: per-service volume filtering cannot see the
     # bind-source TOCTOU one service sets up against another.
-    _refuse_writable_bind_overlaps(out["services"], staging)
+    _refuse_writable_bind_overlaps(
+        out["services"], staging,
+        file_source_defs={
+            "configs": out.get("configs") or {},
+            "secrets": out.get("secrets") or {},
+        },
+    )
     if "volumes" in data:
         out["volumes"] = _sanitize_volume_defs(data["volumes"])
     # Egress isolation: every stack network — including the implicit
@@ -1310,10 +1352,6 @@ def _sanitize_model(
     # authority (a DOCKER-USER rule) RAPTOR does not own.
     out["networks"] = _sanitize_network_defs(data.get("networks") or {})
     out["networks"].setdefault("default", {"internal": True})
-    for section in ("configs", "secrets"):
-        if section in data:
-            out[section] = _sanitize_file_source_defs(
-                data[section], staging, what=section)
     dropped = sorted(
         set(data) - set(out) - {"version"}
     )
