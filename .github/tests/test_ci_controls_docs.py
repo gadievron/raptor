@@ -85,3 +85,17 @@ def test_documented_control_paths_exist() -> None:
 
     missing = [path for path in required if not (REPO / path).exists()]
     assert not missing, f"CI controls docs point at missing paths: {missing}"
+
+
+def test_project_samples_collector_total_failure_reddens() -> None:
+    # Partial failure proceeds to the diff/PR step; TOTAL failure
+    # (nonzero collector exit AND no sample file changed) must fail
+    # the step — an unconditional exit-code discard made a dead
+    # collector (crash-at-import, all samples failed) read green
+    # forever, the rot class the calibration refresh already guards.
+    wf = _read(".github/workflows/refresh-sca-project-samples.yml")
+    step = wf.split("- name: Collect samples", 1)[1].split("- name:", 1)[0]
+    assert "rc=$?" in step
+    assert 'exit "$rc"' in step
+    assert "git diff --quiet -- packages/sca/data/calibration/project_samples/" in step
+    assert "\n          true\n" not in step

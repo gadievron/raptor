@@ -95,18 +95,27 @@ jobs:
       - name: Collect samples
         # ``-v`` emits per-sample status lines so the PR body can
         # quote them. Exits 0 when all samples succeeded; 1 when at
-        # least one failed (others may still have written). Either
-        # way we proceed to the diff/PR step — partial refresh is
-        # better than no refresh.
+        # least one failed (others may still have written). PARTIAL
+        # failure proceeds to the diff/PR step — partial refresh is
+        # better than no refresh — but TOTAL failure (nonzero exit
+        # AND no sample file changed) must redden the run: a
+        # crash-at-import or all-samples-failed collector writes
+        # nothing, the diff is empty, and an unconditional ``true``
+        # here made a dead collector read green forever (the rot
+        # class the calibration sibling's refresh already guards).
         run: |
           set +e
           # ``--jobs 4`` matches the ubuntu-latest vCPU count. Each project
           # scans in its own process (full isolation; the egress proxy binds
           # an ephemeral per-process port) and they share the on-disk cache.
           packages/sca/scripts/raptor-sca-collect-samples -v --jobs 4
-          # Don't propagate the per-sample exit code — partial
-          # success still produces a useful diff.
-          true
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] && \
+             git diff --quiet -- packages/sca/data/calibration/project_samples/; then
+            echo "::error::sample collector exited $rc and wrote no sample changes — total failure, not an empty refresh"
+            exit "$rc"
+          fi
 
       - name: License-compliance check
         # Same gate the calibration-corpus refresh uses — verifies
