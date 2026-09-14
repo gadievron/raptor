@@ -723,18 +723,28 @@ class DataflowVisualizer:
         """
         output_file = self.output_dir / f"{finding_id}_dataflow.txt"
 
+        # Same provenance and threat as the mermaid sibling above:
+        # labels/snippets come from SARIF over the UNTRUSTED repo
+        # (snippet text IS target source) and this block is echoed
+        # line-by-line through logger.info to the operator terminal —
+        # core/logging does no control/bidi scrubbing of its own.
+        from core.security.prompt_output_sanitise import sanitise_string
+
+        def _clean(value, cap=256):
+            return sanitise_string(str(value), max_chars=cap)
+
         lines = []
         lines.append("=" * 80)
         lines.append("CODEQL DATAFLOW VISUALIZATION")
         lines.append("=" * 80)
         lines.append("")
-        lines.append(f"Rule: {dataflow.rule_id}")
-        lines.append(f"Message: {dataflow.message}")
+        lines.append(f"Rule: {_clean(dataflow.rule_id)}")
+        lines.append(f"Message: {_clean(dataflow.message, 1024)}")
         lines.append("")
 
         if dataflow.sanitizers:
             lines.append("Detected Sanitizers:")
-            lines.extend(f"  • {san}" for san in dataflow.sanitizers)
+            lines.extend(f"  • {_clean(san)}" for san in dataflow.sanitizers)
             lines.append("")
 
         lines.append("=" * 80)
@@ -746,10 +756,10 @@ class DataflowVisualizer:
         lines.append("┌─────────────────────────────────────────────────────────────────────────────┐")
         lines.append("│ ⚠️ SOURCE (User-Controlled Input)                                          │")
         lines.append("└─────────────────────────────────────────────────────────────────────────────┘")
-        lines.append(f"  Location: {dataflow.source.file_path}:{dataflow.source.line}:{dataflow.source.column}")
-        lines.append(f"  Label: {dataflow.source.label}")
+        lines.append(f"  Location: {_clean(dataflow.source.file_path)}:{dataflow.source.line}:{dataflow.source.column}")
+        lines.append(f"  Label: {_clean(dataflow.source.label)}")
         if dataflow.source.snippet:
-            lines.append(f"  Snippet: {dataflow.source.snippet[:70]}")
+            lines.append(f"  Snippet: {_clean(dataflow.source.snippet, 70)}")
         lines.append("")
         lines.append("       │")
         lines.append("       │  Data flows through...")
@@ -769,10 +779,10 @@ class DataflowVisualizer:
                 lines.append(f"│ ⚙️  STEP {i}: Intermediate Processing                                       │")
                 lines.append("└─────────────────────────────────────────────────────────────────────────────┘")
 
-            lines.append(f"  Location: {step.file_path}:{step.line}:{step.column}")
-            lines.append(f"  Label: {step.label}")
+            lines.append(f"  Location: {_clean(step.file_path)}:{step.line}:{step.column}")
+            lines.append(f"  Label: {_clean(step.label)}")
             if step.snippet:
-                lines.append(f"  Snippet: {step.snippet[:70]}")
+                lines.append(f"  Snippet: {_clean(step.snippet, 70)}")
             lines.append("")
             lines.append("       │")
             lines.append("       ▼")
@@ -782,10 +792,10 @@ class DataflowVisualizer:
         lines.append("┌─────────────────────────────────────────────────────────────────────────────┐")
         lines.append("│ 🔥 SINK (Dangerous Operation)                                              │")
         lines.append("└─────────────────────────────────────────────────────────────────────────────┘")
-        lines.append(f"  Location: {dataflow.sink.file_path}:{dataflow.sink.line}:{dataflow.sink.column}")
-        lines.append(f"  Label: {dataflow.sink.label}")
+        lines.append(f"  Location: {_clean(dataflow.sink.file_path)}:{dataflow.sink.line}:{dataflow.sink.column}")
+        lines.append(f"  Label: {_clean(dataflow.sink.label)}")
         if dataflow.sink.snippet:
-            lines.append(f"  Snippet: {dataflow.sink.snippet[:70]}")
+            lines.append(f"  Snippet: {_clean(dataflow.sink.snippet, 70)}")
         lines.append("")
 
         lines.append("=" * 80)

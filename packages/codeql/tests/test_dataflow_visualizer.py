@@ -127,3 +127,39 @@ class TestSanitizersSanitised:
         assert "![](http://collector.invalid/x)" not in text
         # The label itself still appears (defanged), not dropped.
         assert "validate_x" in text
+
+
+class TestAsciiControlScrub:
+    def test_ascii_output_scrubs_control_bytes(self, visualizer):
+        # generate_ascii echoes its block line-by-line through
+        # logger.info to the operator terminal, and labels/snippets
+        # come from SARIF over the UNTRUSTED repo (snippet text IS
+        # target source). ESC/BEL/bidi must not survive — the mermaid
+        # sibling already sanitises the same fields.
+        from types import SimpleNamespace
+
+        evil = "san\x1b]0;pwn\x07itize"
+        step = SimpleNamespace(
+            label="mid\x1b[2J", file_path="a\x07.c", line=3, column=1,
+            snippet="x = re.sub('\x1b[31m', '', y)",
+        )
+        dataflow = SimpleNamespace(
+            source=SimpleNamespace(
+                label="src‮lbl", file_path="s.c", line=1, column=1,
+                snippet="get\x1b(input)",
+            ),
+            sink=SimpleNamespace(
+                label="snk", file_path="k.c", line=9, column=2,
+                snippet="run(x)\x07",
+            ),
+            intermediate_steps=[step],
+            rule_id="cpp/rule\x1b",
+            message="msg\x1b[1m",
+            sanitizers=[evil],
+        )
+        out = visualizer.generate_ascii(dataflow, "f2")
+        text = Path(out).read_text()
+        assert "\x1b" not in text
+        assert "\x07" not in text
+        assert "‮" not in text
+        assert "itize" in text  # content survives, escaped
