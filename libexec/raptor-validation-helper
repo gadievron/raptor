@@ -341,10 +341,24 @@ def _import_findings_file(
     import shutil
 
     src = Path(findings_path)
+
+    def _write_import_marker(count: int) -> None:
+        # Durable findings-driven marker: the container itself is
+        # rebuilt by the stage-A merge, so mode detection cannot ride
+        # a top-level container key. The report generator reads this
+        # to suppress sweep-shaped coverage stats ("Functions checked
+        # 0/N") that are meaningless for a findings-driven run.
+        save_json(dest.parent / "findings-import.json", {
+            "mode": "findings",
+            "source_file": src.name,
+            "imported": count,
+        })
+
     container, shape_note = _coerce_findings_container(
         load_json(src), target_path=target)
     if container is None:
         shutil.copy2(src, dest)
+        _write_import_marker(0)
         print(f"  ⚠️  {src.name}: no recognisable findings/variants "
               f"shape — copied verbatim", file=sys.stderr)
         print(f"Pre-existing findings: 0 from {src.name}")
@@ -359,6 +373,7 @@ def _import_findings_file(
               f"id(s) to FIND-<n> (originals kept as "
               f"source_id)")
     _save_artifact(dest, container)
+    _write_import_marker(len(container["findings"]))
     print(f"Pre-existing findings: {len(container['findings'])} "
           f"from {src.name}")
 

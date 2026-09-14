@@ -137,6 +137,61 @@ class TestGetDisplayStatus(unittest.TestCase):
             {"is_true_positive": True, "is_exploitable": False, "ruling": "test_code"}
         ), "Confirmed")
 
+    def test_true_positive_with_ruled_out_ruling_renders_ruled_out(self):
+        # A real bug whose Stage-D security ruling rules it out (D-4
+        # no security impact, D-2 unreachable) must not render as
+        # Confirmed — the ruling decides the display status.
+        self.assertEqual(get_display_status({
+            "is_true_positive": True,
+            "ruling": {"status": "ruled_out", "disqualifier": "D-4",
+                       "reason": "real bug, no security impact"},
+        }), "Ruled Out")
+
+    def test_true_positive_with_blocked_final_status(self):
+        self.assertEqual(get_display_status({
+            "is_true_positive": True,
+            "is_exploitable": False,
+            "final_status": "confirmed_blocked",
+        }), "Confirmed (Blocked)")
+
+    def test_true_positive_with_confirmed_ruling_stays_confirmed(self):
+        self.assertEqual(get_display_status({
+            "is_true_positive": True,
+            "ruling": {"status": "confirmed"},
+        }), "Confirmed")
+
+    def test_true_positive_provenance_dict_ruling_keeps_boolean(self):
+        # The agentic→validate bridge wraps string rulings into dicts;
+        # a provenance status (test_code / dead_code / validated) is
+        # not a security ruling and still defers to the boolean
+        # verdict fields.
+        self.assertEqual(get_display_status({
+            "is_true_positive": True,
+            "ruling": {"status": "test_code",
+                       "agentic_ruling": "test_code"},
+        }), "Confirmed")
+
+    def test_false_positive_boolean_still_wins_over_ruling(self):
+        self.assertEqual(get_display_status({
+            "is_true_positive": False,
+            "ruling": {"status": "confirmed"},
+        }), "False Positive")
+
+    def test_true_positive_with_top_level_disproven_renders_ruled_out(self):
+        # IRIS Tier-1 refutation sets top-level status only (no ruling
+        # object); an agentic-imported is_true_positive=True must not
+        # override the refutation.
+        self.assertEqual(get_display_status({
+            "is_true_positive": True,
+            "status": "disproven",
+        }), "Ruled Out")
+
+    def test_true_positive_with_disproven_dict_ruling_renders_ruled_out(self):
+        self.assertEqual(get_display_status({
+            "is_true_positive": True,
+            "ruling": {"status": "disproven"},
+        }), "Ruled Out")
+
 
 class TestTitleCaseType(unittest.TestCase):
 

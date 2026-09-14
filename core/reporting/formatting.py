@@ -43,6 +43,41 @@ def display_rule_id(rule_id: str | None) -> str:
     return short
 
 
+#: Security verdicts a validate-pipeline stage can issue. Provenance
+#: strings (test_code / dead_code / validated) are deliberately absent
+#: — see _stage_ruling_status.
+_SECURITY_RULING_STATUSES = frozenset({
+    "ruled_out", "disproven", "confirmed", "exploitable",
+})
+
+
+def _stage_ruling_status(finding: dict[str, Any]) -> str:
+    """A validate-pipeline security ruling for the finding, or "".
+
+    Present when Stage E/F set a ``final_status``, Stage D issued a
+    dict ruling whose status is one of the security verdicts, or the
+    top-level ``status`` carries one (the IRIS Tier-1 gate refutes by
+    setting top-level ``status="disproven"`` only, with no ruling
+    object). The agentic pipeline's provenance rulings (``test_code``,
+    ``dead_code``, ``validated`` — bare strings, or dict-wrapped by
+    the agentic→validate bridge) do not count: they describe code
+    provenance, not exploitability, and must not outrank the boolean
+    verdict fields.
+    """
+    final = finding.get("final_status", "")
+    if final:
+        return str(final)
+    ruling = finding.get("ruling")
+    if isinstance(ruling, dict):
+        status = ruling.get("status", "")
+        if status in _SECURITY_RULING_STATUSES:
+            return status
+    status = finding.get("status", "")
+    if status in _SECURITY_RULING_STATUSES:
+        return status
+    return ""
+
+
 def get_display_status(finding: dict[str, Any]) -> str:
     """Derive human-readable display status from a finding dict.
 
@@ -87,9 +122,20 @@ def get_display_status(finding: dict[str, Any]) -> str:
         ex = _coerce_bool(finding.get("is_exploitable"))
         if tp is False:
             return "False Positive"
+        # is_exploitable=True beside a ruled_out/disproven ruling is a
+        # contradictory shape no mechanical stage produces (prepare_F
+        # derives is_exploitable FROM final_status, and the provenance
+        # chokepoint demotes forged feasibility claims) — the boolean
+        # keeps priority here rather than guessing which side lied.
         if ex is True:
             return "Exploitable"
-        if tp is True:
+        # is_true_positive means "real bug", not "security-confirmed":
+        # a validate finding can be a true positive whose Stage-D
+        # ruling still rules it out (D-4 no security impact, D-2
+        # unreachable). When a security ruling exists it decides the
+        # display status; the bare boolean only stands in when no
+        # ruling was issued (agentic pipeline, mid-pipeline states).
+        if tp is True and not _stage_ruling_status(finding):
             return "Confirmed"
 
     # final_status is authoritative (set after Stage E feasibility adjustment)
