@@ -4,6 +4,7 @@ GH Archive Collector.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 
 from ..clients.gharchive import GHArchiveClient
@@ -15,8 +16,10 @@ from ..helpers import (
     make_repo,
     parse_datetime_strict,
 )
-from ..parsers import parse_gharchive_event
+from ..parsers import is_supported_event_type, parse_gharchive_event
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..schema.events import AnyEvent
@@ -190,8 +193,34 @@ class GHArchiveCollector:
             to_date=timestamp,
         )
 
+        # Unsupported GH Archive event types (GollumEvent, the
+        # PR-review events, CommitCommentEvent, ...) are ROUTINE in an
+        # unfiltered repo-minute; one of them must not abort the whole
+        # collection — the same one-event-kills-ingest class the
+        # member-edited action fix closed, left open for type
+        # dispatch. Skip-and-log those per row (the ingest script does
+        # the same); malformed rows of SUPPORTED types still raise,
+        # per the comment below.
+        supported_rows = []
+        skipped: dict[str, int] = {}
+        for row in rows:
+            etype = row.get("type", "") if isinstance(row, dict) else ""
+            if not is_supported_event_type(etype):
+                key = etype or "<missing type>"
+                skipped[key] = skipped.get(key, 0) + 1
+                continue
+            supported_rows.append(row)
+        if skipped:
+            detail = ", ".join(
+                f"{k} x{v}" for k, v in sorted(skipped.items())
+            )
+            logger.warning(
+                "collect_events: skipped %d unsupported event row(s): %s",
+                sum(skipped.values()), detail,
+            )
+
         # Raise error on malformed rows instead of silently skipping
-        events = [parse_gharchive_event(row) for row in rows]
+        events = [parse_gharchive_event(row) for row in supported_rows]
 
         return events
 

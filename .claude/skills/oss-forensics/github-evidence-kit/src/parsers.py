@@ -468,6 +468,16 @@ _PARSERS = {
 }
 
 
+def is_supported_event_type(event_type: str) -> bool:
+    """True when a dedicated parser exists for *event_type*.
+
+    Collectors use this to skip-and-log routine-but-unmodeled GH
+    Archive types (GollumEvent, the PR-review events, ...) instead of
+    letting :func:`parse_gharchive_event`'s unsupported-type
+    ValueError abort a whole ingest."""
+    return event_type in _PARSERS
+
+
 def parse_gharchive_event(row: dict[str, Any], table: str | None = None) -> Any:
     """Parse any GH Archive event by dispatching to appropriate parser.
 
