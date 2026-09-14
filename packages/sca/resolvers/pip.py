@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -413,7 +414,16 @@ class PipResolver:
         # name is pre-plantable in shared-/tmp sandbox lanes).
         venv_dir = self._venv_dir()
 
-        script = self._build_batch_script(venv_dir, manifests)
+        # Per-invocation random marker nonce: the batch markers
+        # frame attacker-influenceable pip-compile output (a hostile
+        # manifest can make pip-compile echo chosen text), and the
+        # parser takes the FIRST occurrence of each marker — a
+        # forged plaintext marker shifted every following section,
+        # attributing attacker-chosen 'lockfiles' to other
+        # manifests. Fresh randomness per run is unforgeable from
+        # inside the batch.
+        nonce = secrets.token_hex(16)
+        script = self._build_batch_script(venv_dir, manifests, nonce)
         try:
             proc = _run(
                 ["sh", "-c", script],
@@ -445,11 +455,13 @@ class PipResolver:
 
         return self._parse_batch_output(
             proc.stdout, proc.stderr, proc.returncode, manifests,
+            nonce,
         )
 
     def _build_batch_script(
         self, venv_dir: Path,
         manifests: list[tuple[Path, Path, Path | None]],
+        nonce: str,
     ) -> str:
         """Generate the combined sh script. One venv build, then N
         parallel pip-compile invocations writing to per-manifest
@@ -496,18 +508,19 @@ class PipResolver:
         # output (no pip-compile error message uses these literal
         # tokens).
         for i in range(len(manifests)):
-            parts.append(f"echo '===RAPTOR_BATCH_OUT_{i}==='")
+            parts.append(f"echo '===RAPTOR_BATCH_{nonce}_OUT_{i}==='")
             parts.append(f"cat {results_dir}/{i}.out 2>/dev/null || true")
-            parts.append(f"echo '===RAPTOR_BATCH_RC_{i}==='")
+            parts.append(f"echo '===RAPTOR_BATCH_{nonce}_RC_{i}==='")
             parts.append(f"cat {results_dir}/{i}.rc 2>/dev/null || echo 99")
-            parts.append(f"echo '===RAPTOR_BATCH_ERR_{i}==='")
+            parts.append(f"echo '===RAPTOR_BATCH_{nonce}_ERR_{i}==='")
             parts.append(f"cat {results_dir}/{i}.err 2>/dev/null || true")
-        parts.append("echo '===RAPTOR_BATCH_END==='")
+        parts.append(f"echo '===RAPTOR_BATCH_{nonce}_END==='")
         return "\n".join(parts)
 
     def _parse_batch_output(
         self, stdout: str, stderr: str, _returncode: int,
         manifests: list[tuple[Path, Path, Path | None]],
+        nonce: str,
     ) -> list[ResolverResult]:
         """Split the batch sh stdout back into per-manifest
         ResolverResults. The script emitted three markers per index
@@ -526,7 +539,7 @@ class PipResolver:
                 )
                 for _ in manifests
             ]
-        if "===RAPTOR_BATCH_END===" not in stdout:
+        if f"===RAPTOR_BATCH_{nonce}_END===" not in stdout:
             # Pipeline died before reaching the end marker. Fall back
             # to per-result failure with the raw output so the
             # operator can diagnose.
@@ -547,13 +560,13 @@ class PipResolver:
         # marker offsets and slice the stdout between them.
         results: list[ResolverResult] = []
         for i in range(len(manifests)):
-            out_marker = f"===RAPTOR_BATCH_OUT_{i}==="
-            rc_marker = f"===RAPTOR_BATCH_RC_{i}==="
-            err_marker = f"===RAPTOR_BATCH_ERR_{i}==="
+            out_marker = f"===RAPTOR_BATCH_{nonce}_OUT_{i}==="
+            rc_marker = f"===RAPTOR_BATCH_{nonce}_RC_{i}==="
+            err_marker = f"===RAPTOR_BATCH_{nonce}_ERR_{i}==="
             next_marker = (
-                f"===RAPTOR_BATCH_OUT_{i + 1}==="
+                f"===RAPTOR_BATCH_{nonce}_OUT_{i + 1}==="
                 if i + 1 < len(manifests)
-                else "===RAPTOR_BATCH_END==="
+                else f"===RAPTOR_BATCH_{nonce}_END==="
             )
             sections = _slice_between(
                 stdout, out_marker, rc_marker, err_marker, next_marker,

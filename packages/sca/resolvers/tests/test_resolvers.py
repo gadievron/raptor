@@ -542,17 +542,25 @@ def test_pip_batch_venv_uses_mkdtemp_and_cleans_up(
     def fake_run(cmd, **kwargs):
         if cmd[0] == "sh":
             scripts.append(cmd[2])
+            # Markers carry a per-invocation random nonce — recover
+            # it from the generated script the way the real shell
+            # output would echo it.
+            import re as _re
+            m = _re.search(r"===RAPTOR_BATCH_([0-9a-f]+)_OUT_0===",
+                           cmd[2])
+            assert m, "nonce marker missing from batch script"
+            n = m.group(1)
             return _FakeProc(
                 returncode=0,
-                stdout=("===RAPTOR_BATCH_OUT_0===\n"
+                stdout=(f"===RAPTOR_BATCH_{n}_OUT_0===\n"
                         "django==4.2.10\n"
-                        "===RAPTOR_BATCH_RC_0===\n0\n"
-                        "===RAPTOR_BATCH_ERR_0===\n"
-                        "===RAPTOR_BATCH_OUT_1===\n"
+                        f"===RAPTOR_BATCH_{n}_RC_0===\n0\n"
+                        f"===RAPTOR_BATCH_{n}_ERR_0===\n"
+                        f"===RAPTOR_BATCH_{n}_OUT_1===\n"
                         "django==4.2.10\n"
-                        "===RAPTOR_BATCH_RC_1===\n0\n"
-                        "===RAPTOR_BATCH_ERR_1===\n"
-                        "===RAPTOR_BATCH_END===\n"),
+                        f"===RAPTOR_BATCH_{n}_RC_1===\n0\n"
+                        f"===RAPTOR_BATCH_{n}_ERR_1===\n"
+                        f"===RAPTOR_BATCH_{n}_END===\n"),
             )
         return _FakeProc(returncode=0, stdout="pip 23.0")
 
@@ -1318,11 +1326,11 @@ def test_pip_batch_script_exports_only_binary(tmp_path):
     per-manifest pip-compile subshell inherits the wheels-only policy."""
     manifests = [(tmp_path, Path("."), Path("requirements.txt"))]
     venv_dir = Path("/tmp/raptor-test-venv")
-    script = PipResolver()._build_batch_script(venv_dir, manifests)
+    script = PipResolver()._build_batch_script(venv_dir, manifests, "ab12")
     assert "export PIP_ONLY_BINARY=:all:; " in script
     script_sdist = PipResolver(
         allow_sdist_builds=True,
-    )._build_batch_script(venv_dir, manifests)
+    )._build_batch_script(venv_dir, manifests, "ab12")
     assert "PIP_ONLY_BINARY" not in script_sdist
 
 
@@ -1377,3 +1385,58 @@ def test_yarn_env_overlays_safe_env(monkeypatch, tmp_path) -> None:
     assert env.get("YARN_ENABLE_SCRIPTS") == "false"
     assert "PATH" in env, "safe-env base missing — bare dict again"
 
+
+def test_pip_batch_markers_unforgeable_from_manifest_output(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """A hostile manifest can make pip-compile ECHO chosen text — a
+    plaintext '===RAPTOR_BATCH_OUT_1===' forged inside project 0's
+    output section used to shift every following section, attributing
+    attacker-chosen 'lockfiles' to other manifests. With the random
+    per-invocation nonce the forged legacy marker is inert data."""
+    projects = []
+    for name in ("victim-a", "victim-b"):
+        proj = tmp_path / name
+        proj.mkdir()
+        (proj / "requirements.txt").write_text("django>=4.0\n",
+                                               encoding="utf-8")
+        projects.append(proj)
+
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == "sh":
+            import re as _re
+            m = _re.search(r"===RAPTOR_BATCH_([0-9a-f]+)_OUT_0===",
+                           cmd[2])
+            assert m
+            n = m.group(1)
+            # Project 0's output embeds a forged LEGACY marker plus a
+            # poisoned lockfile aimed at project 1's slot.
+            return _FakeProc(
+                returncode=0,
+                stdout=(f"===RAPTOR_BATCH_{n}_OUT_0===\n"
+                        "django==4.2.10\n"
+                        "===RAPTOR_BATCH_OUT_1===\n"      # forged
+                        "evil==6.6.6\n"
+                        f"===RAPTOR_BATCH_{n}_RC_0===\n0\n"
+                        f"===RAPTOR_BATCH_{n}_ERR_0===\n"
+                        f"===RAPTOR_BATCH_{n}_OUT_1===\n"
+                        "django==4.2.10\n"
+                        f"===RAPTOR_BATCH_{n}_RC_1===\n0\n"
+                        f"===RAPTOR_BATCH_{n}_ERR_1===\n"
+                        f"===RAPTOR_BATCH_{n}_END===\n"),
+            )
+        return _FakeProc(returncode=0, stdout="pip 23.0")
+
+    _patch_exec(monkeypatch, fake_run)
+    results = PipResolver().dry_run_batch(projects, common_root=tmp_path)
+    assert len(results) == 2
+    assert all(r.success for r in results)
+    # Project 1's lockfile is its own — never the forged payload.
+    lock1 = (results[1].proposed_lockfile or b"").decode(
+        "utf-8", errors="replace")
+    assert "evil==6.6.6" not in lock1
+    assert "django==4.2.10" in lock1
+    # The forged marker stays inside project 0's data.
+    lock0 = (results[0].proposed_lockfile or b"").decode(
+        "utf-8", errors="replace")
+    assert "RAPTOR_BATCH_OUT_1" in lock0 or "evil" in lock0
