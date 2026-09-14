@@ -22,8 +22,6 @@ operator's scorecard sidecar as a side effect.
 from __future__ import annotations
 
 import logging
-import os
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover — type-only import
@@ -35,23 +33,15 @@ DECISION_CLASS = "cve-diff:discovery"
 
 
 def _default_scorecard() -> ModelScorecard:
-    """Resolve the shared scorecard sidecar.
-
-    Same convention as ``core/llm/scorecard/tool_evidence.py``:
-    ``RAPTOR_SCORECARD_PATH`` override first (tests, sandboxed runs),
-    then ``RAPTOR_DIR/out/llm_scorecard.json`` so a run started from
-    any cwd writes to the sidecar the rest of RAPTOR reads, then a
-    bare relative default.
-    """
+    """Resolve the shared scorecard sidecar through the shared
+    resolver (``RAPTOR_SCORECARD_PATH`` override first, then
+    ``RAPTOR_DIR/out/llm_scorecard.json``, then a bare relative
+    default) — an inline copy of that convention is exactly the drift
+    ``core/llm/scorecard/paths.py`` exists to prevent."""
+    from core.llm.scorecard.paths import default_scorecard_path
     from core.llm.scorecard.scorecard import ModelScorecard
 
-    override = os.environ.get("RAPTOR_SCORECARD_PATH")
-    if override:
-        return ModelScorecard(Path(override))
-    raptor_dir = os.environ.get("RAPTOR_DIR")
-    if raptor_dir:
-        return ModelScorecard(Path(raptor_dir) / "out" / "llm_scorecard.json")
-    return ModelScorecard(Path("out/llm_scorecard.json"))
+    return ModelScorecard(default_scorecard_path())
 
 
 def record_discovery_outcome(

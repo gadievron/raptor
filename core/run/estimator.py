@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -59,14 +58,13 @@ def estimate_from_scorecard(
     except ImportError:
         return None
     if scorecard_path is None:
-        # Same sidecar the rest of RAPTOR reads/writes: anchor on
+        # Same sidecar the rest of RAPTOR reads/writes — the shared
+        # resolver honours RAPTOR_SCORECARD_PATH (isolated runs must
+        # estimate from their isolated ledger) and anchors on
         # RAPTOR_DIR so a run started from any cwd finds the shared
         # scorecard, not a stray ./out/llm_scorecard.json.
-        raptor_dir = os.environ.get("RAPTOR_DIR")
-        scorecard_path = (
-            Path(raptor_dir) / "out" / "llm_scorecard.json"
-            if raptor_dir else Path("out/llm_scorecard.json")
-        )
+        from core.llm.scorecard.paths import default_scorecard_path
+        scorecard_path = default_scorecard_path()
     try:
         sc = ModelScorecard(scorecard_path)
         stats = sc.get_stats()

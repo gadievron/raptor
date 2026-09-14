@@ -127,6 +127,26 @@ class TestEstimateFromScorecard:
         assert est is not None
         assert est.cost_low > 0
 
+    def test_default_path_honours_scorecard_override(
+        self, tmp_path, monkeypatch,
+    ):
+        """``RAPTOR_SCORECARD_PATH`` isolates the ledger; the estimator
+        must read the isolated sidecar, not the install one. Pre-fix
+        the estimator hand-rolled the RAPTOR_DIR resolution and
+        silently ignored the override."""
+        install = tmp_path / "install"
+        (install / "out").mkdir(parents=True)
+        isolated = tmp_path / "isolated_scorecard.json"
+        self._write_scorecard(isolated, "test-model", 100, 10.0, 500000)
+        monkeypatch.setenv("RAPTOR_DIR", str(install))
+        monkeypatch.setenv("RAPTOR_SCORECARD_PATH", str(isolated))
+        est = estimate_from_scorecard("test-model", 20, max_parallel=1)
+        assert est is not None
+        assert est.cost_low > 0
+        # And nothing was resolved via the install ledger (it doesn't
+        # even exist — a fallback there would have returned None).
+        assert not (install / "out" / "llm_scorecard.json").exists()
+
     def test_default_path_missing_scorecard_returns_none(
         self, tmp_path, monkeypatch,
     ):

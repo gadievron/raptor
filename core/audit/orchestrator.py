@@ -13615,14 +13615,12 @@ def _record_study_scorecard(
     (study_question decision class).  Best-effort — never blocks the
     consumer."""
     try:
+        # Shared resolver — honours RAPTOR_SCORECARD_PATH so isolated
+        # runs never write study events into the real install ledger.
+        from core.llm.scorecard.paths import default_scorecard_path
         from core.llm.scorecard.scorecard import EventType, ModelScorecard
 
-        raptor_dir = os.environ.get("RAPTOR_DIR")
-        path = (
-            Path(raptor_dir) / "out" / "llm_scorecard.json"
-            if raptor_dir else Path("out/llm_scorecard.json")
-        )
-        sc = ModelScorecard(path)
+        sc = ModelScorecard(default_scorecard_path())
         sc.record_event(
             "study_question",
             model or "default",
@@ -13638,13 +13636,12 @@ def _record_study_flip(config: OrchestratorConfig, outcome: Any) -> None:
     """Register a study-answer-driven verdict flip on the scorecard
     (volume signal under the study_question decision class)."""
     try:
+        # Shared resolver — same override contract as
+        # ``_record_study_scorecard`` above.
+        from core.llm.scorecard.paths import default_scorecard_path
         from core.llm.scorecard.scorecard import ModelScorecard
 
-        raptor_dir = os.environ.get("RAPTOR_DIR")
-        path = (
-            Path(raptor_dir) / "out" / "llm_scorecard.json"
-            if raptor_dir else Path("out/llm_scorecard.json")
-        )
+        path = default_scorecard_path()
         model = (
             getattr(outcome, "model", "")
             or (config.models[0] if config.models else "default")
