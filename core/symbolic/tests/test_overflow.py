@@ -259,13 +259,28 @@ def test_fails_on_heap_uaf_target(tmp_path: Path):
     )
 
 
-def test_cache_reuses_project_across_calls(tmp_path: Path):
-    """Project cache: two consecutive calls on the same binary +
-    same mtime hit the cache. Measured indirectly: second call
-    should be much faster than the first (angr load is ~50-200ms;
-    cache hit is microseconds)."""
-    import time
+def _counting_project(monkeypatch) -> list:
+    """Patch ``angr.Project`` with a counting wrapper and return the
+    call log. Construction count is the cache's observable behaviour:
+    hit = no new Project, miss = exactly one. Wall-clock ratios (the
+    previous approach) depend on host load and flake on busy runners."""
+    import angr
 
+    real_project = angr.Project
+    calls: list = []
+
+    def counting(*args, **kwargs):
+        calls.append(args)
+        return real_project(*args, **kwargs)
+
+    monkeypatch.setattr(angr, "Project", counting)
+    return calls
+
+
+def test_cache_reuses_project_across_calls(tmp_path: Path, monkeypatch):
+    """Project cache: two consecutive calls on the same binary +
+    same mtime hit the cache — the second call constructs no new
+    ``angr.Project``."""
     from core.symbolic import (
         clear_cache,
         load_binary,
@@ -275,23 +290,19 @@ def test_cache_reuses_project_across_calls(tmp_path: Path):
         "int main(void) { return 0; }", tmp_path,
     )
     clear_cache()
+    calls = _counting_project(monkeypatch)
 
-    t0 = time.monotonic()
     load_binary(binary)
-    first_wall = time.monotonic() - t0
+    assert len(calls) == 1
 
-    t0 = time.monotonic()
     load_binary(binary)
-    second_wall = time.monotonic() - t0
-
-    # Cache-hit should be at least 10× faster; typical is 100×+.
-    assert second_wall < first_wall / 5, (
-        f"cache didn't seem to hit: first={first_wall*1000:.1f}ms "
-        f"second={second_wall*1000:.1f}ms"
+    assert len(calls) == 1, (
+        "second load constructed a fresh angr.Project — cache miss "
+        "on identical path + mtime"
     )
 
 
-def test_cache_invalidates_on_mtime_change(tmp_path: Path):
+def test_cache_invalidates_on_mtime_change(tmp_path: Path, monkeypatch):
     """Rebuilding the target changes mtime → cache miss → fresh
     Project load. Prevents "stale project" bugs where an operator
     rebuilds the target between calls and the cache serves the
@@ -303,20 +314,18 @@ def test_cache_invalidates_on_mtime_change(tmp_path: Path):
 
     binary = _compile("int main(void) { return 0; }", tmp_path)
     clear_cache()
+    calls = _counting_project(monkeypatch)
     first = load_binary(binary)
+    assert len(calls) == 1
 
     # Rebuild — same source, but new mtime.
     time.sleep(0.01)  # ensure mtime granularity
     os.utime(binary, None)  # touch mtime
-    second_load_t = time.monotonic()
     second = load_binary(binary)
-    second_wall = time.monotonic() - second_load_t
 
-    # Fresh load takes >10ms; a cache-hit is under 1ms. If mtime
-    # invalidation works, second load is fresh.
-    assert second_wall > 0.005, (
-        "mtime touch didn't invalidate cache; second load was too "
-        f"fast ({second_wall*1000:.3f}ms) to be a fresh angr.Project"
+    assert len(calls) == 2, (
+        "mtime touch didn't invalidate cache; second load reused the "
+        "stale angr.Project"
     )
     # Contents match (same binary), only load path differs.
     assert first.entry_point == second.entry_point
