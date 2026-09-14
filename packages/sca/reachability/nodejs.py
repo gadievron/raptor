@@ -42,6 +42,16 @@ logger = logging.getLogger(__name__)
 
 # Match imports with single, double, or backtick quoted strings (no
 # interpolation handled). A capturing group on the specifier is enough.
+#
+# The re-export branch is statement-local: the previous ``.+?`` with
+# re.DOTALL never stopped at ``;`` / quotes, so on from-less
+# export-heavy code (minified / codegen ``export const`` runs) every
+# ``export`` token rescanned to the next quote in the FILE —
+# measured quadratic (3000 lines → 1.03s, 6000 → 4.11s) — and a
+# match could span unrelated statements, mis-attributing the
+# evidence line.  ``[^'";]*?`` stops at the first quote or statement
+# terminator while still allowing multi-line ``export { a,\n b }
+# from 'x'`` shapes.
 _REQUIRE_RE = re.compile(
     r"""
     (?:                                       # match either:
@@ -49,10 +59,16 @@ _REQUIRE_RE = re.compile(
       | \bimport\s*\(\s*['"`]([^'"`]+)['"`]\s*\)          # import(...)
       | \bimport\s+(?:[^'";]+?\bfrom\s+)?['"`]([^'"`]+)['"`]
                                                           # static import
-      | \bexport\s+(?:.+?\s+from\s+)['"`]([^'"`]+)['"`]   # re-export
+      | \bexport\s+(?:(?:[^'";]|"[^"\n;]*"|'[^'\n;]*')*?\bfrom\s+)
+            ['"`]([^'"`]+)['"`]                               # re-export
+            # The quoted-string alternatives keep ES2022 string-named
+            # re-exports (``export { a as "x y" } from 'm'``) matched
+            # without re-admitting cross-statement scans: a complete
+            # single-line quoted token is consumed atomically, and
+            # everything else still stops at quotes / ``;``.
     )
     """,
-    re.VERBOSE | re.MULTILINE | re.DOTALL,
+    re.VERBOSE | re.MULTILINE,
 )
 
 # Directory exclusions live in ``_walker.py`` now — sourced from

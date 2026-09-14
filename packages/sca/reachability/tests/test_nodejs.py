@@ -122,3 +122,57 @@ def test_test_classification_conventions_unchanged(tmp_path: Path) -> None:
         "b.js": True,
         "c.cjs": True,
     }
+
+
+# ---------------------------------------------------------------------------
+# Re-export branch — statement-local, linear-time
+# ---------------------------------------------------------------------------
+
+def test_export_heavy_source_scans_in_linear_time(tmp_path):
+    """From-less ``export const`` runs (minified / codegen output)
+    made the re-export branch rescan to the next quote in the file
+    per ``export`` token — measured 1.03s at 3000 lines and 4.11s at
+    6000 pre-fix.  Budget: CPU time, generous for CI variability."""
+    import time
+    lines = [f"export const x{i} = {i};" for i in range(6000)]
+    lines.append("import lodash from 'lodash';")
+    (tmp_path / "gen.js").write_text("\n".join(lines), encoding="utf-8")
+    start = time.process_time()
+    scan = scan_imports(tmp_path)
+    elapsed = time.process_time() - start
+    assert "lodash" in scan
+    assert elapsed < 0.5, f"export-heavy scan took {elapsed:.2f}s CPU"
+
+
+def test_export_branch_does_not_span_statements(tmp_path):
+    """Pre-fix the DOTALL ``.+?`` let ``export`` on line 1 pair with
+    a quote on a LATER line, mis-attributing the import evidence."""
+    (tmp_path / "a.js").write_text(
+        "export const banner = 1;\n"
+        "const other = 2;\n"
+        "import lodash from 'lodash';\n",
+        encoding="utf-8",
+    )
+    scan = scan_imports(tmp_path)
+    assert [(p.name, line) for p, line, _ in scan["lodash"]] == [("a.js", 3)]
+
+
+def test_multiline_reexport_still_detected(tmp_path):
+    (tmp_path / "b.js").write_text(
+        "export {\n  a,\n  b\n} from 'left-pad';\n",
+        encoding="utf-8",
+    )
+    scan = scan_imports(tmp_path)
+    assert "left-pad" in scan
+
+
+def test_es2022_string_named_reexport_detected(tmp_path):
+    """``export { a as "string name" } from 'mod'`` — the quoted
+    export name must not stop the statement-local scan short of the
+    ``from`` specifier."""
+    (tmp_path / "c.js").write_text(
+        'export { a as "weird name" } from \'left-pad\';\n',
+        encoding="utf-8",
+    )
+    scan = scan_imports(tmp_path)
+    assert "left-pad" in scan
