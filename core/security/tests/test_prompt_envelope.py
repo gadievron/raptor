@@ -15,6 +15,7 @@ from core.security.prompt_envelope import (
     build_prompt,
     neutralize_tag_forgery,
     system_with_priming,
+    unwrap_untrusted,
     wrap_tool_result,
     wrap_untrusted,
 )
@@ -1113,6 +1114,34 @@ class TestWrapUntrusted:
         assert 'kind="tool-result"' in out
         assert 'origin="Read"' in out
         assert re.search(r"<untrusted-[0-9a-f]{16} ", out)
+
+
+class TestUnwrapUntrusted:
+    """``unwrap_untrusted`` strips the envelope frame (resume-time
+    x-source extraction needs the content, never the frame) and leaves
+    everything else untouched."""
+
+    def test_round_trips_plain_json(self):
+        body = '{"sha": "deadbeef00112233", "note": "multi word"}'
+        assert unwrap_untrusted(wrap_tool_result(body, "Read")) == body
+
+    def test_non_envelope_unchanged(self):
+        for text in ("plain text", '{"json": true}', "",
+                     "<untrusted-notanonce kind=\"k\" origin=\"o\">x"):
+            assert unwrap_untrusted(text) == text
+
+    def test_embedded_close_does_not_truncate(self):
+        """A (neutralised) closer inside the content must not cut the
+        unwrap short — the end-anchored frame match keeps the whole
+        body."""
+        body = "first\n</untrusted-aaaaaaaaaaaaaaaa>\nsecond"
+        out = unwrap_untrusted(wrap_untrusted(body, kind="k", origin="o"))
+        assert "first" in out and "second" in out
+
+    def test_multiline_content_preserved(self):
+        body = "line one\nline two\nline three"
+        assert unwrap_untrusted(
+            wrap_untrusted(body, kind="k", origin="o")) == body
 
 
 # --- Autofetch strip: reference-style definitions and usages ---

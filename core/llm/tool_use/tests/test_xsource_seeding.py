@@ -165,3 +165,128 @@ class TestResumedSeeding:
         loop.run("go")
         blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
         assert len(blocked) == 1
+
+
+# ---------------------------------------------------------------------------
+# Envelope-wrapped persisted histories — the shape the loop itself
+# persists (``ToolLoopResult.messages`` carries wrap_tool_result output,
+# not raw JSON). Seeding must unwrap before extraction so resume applies
+# the same JSON-leaf rule as in-run discovery.
+# ---------------------------------------------------------------------------
+
+from core.security.prompt_envelope import wrap_tool_result  # noqa: E402
+
+MULTIWORD = "multi word value"
+
+
+def _use_note_tool() -> ToolDef:
+    return ToolDef(
+        name="use_note",
+        description="uses a discovered note",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "note": {"type": "string", "x-source": "discovered"},
+            },
+        },
+        handler=lambda inp: f"got {inp.get('note')}",
+    )
+
+
+def _run_resumed_with(history: list[Message], call_input: dict):
+    events: list = []
+    fp = _FakeProvider([
+        TurnResponse(
+            content=[ToolCall(id="c1", name="use_note", input=call_input)],
+            stop_reason=StopReason.NEEDS_TOOL_CALL,
+            input_tokens=1, output_tokens=1,
+        ),
+        TurnResponse(
+            content=[TextBlock(text="done")],
+            stop_reason=StopReason.COMPLETE,
+            input_tokens=1, output_tokens=1,
+        ),
+    ])
+    loop = ToolUseLoop(fp, [_use_note_tool()], events=events.append)
+    loop.run_with_history(history, "continue the analysis")
+    blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
+    returned = [e for e in events if isinstance(e, ToolCallReturned)]
+    return blocked, returned
+
+
+def _wrapped_history(result_json: str) -> list[Message]:
+    return [
+        Message(role="user", content=[TextBlock(text="analyse this")]),
+        Message(role="assistant", content=[
+            ToolCall(id="c0", name="discover", input={}),
+        ]),
+        Message(role="user", content=[
+            ToolResult(tool_use_id="c0",
+                       content=wrap_tool_result(result_json, "discover")),
+        ]),
+    ]
+
+
+class TestWrappedHistorySeeding:
+    def test_multiword_leaf_survives_persist_resume(self):
+        """False-block direction: a whitespace-containing JSON leaf the
+        run legitimately discovered must stay discovered after
+        persist/resume. Pre-fix the wrapped string failed json.loads,
+        the tokenisation fallback split the leaf apart, and the resumed
+        dispatch was spuriously blocked."""
+        history = _wrapped_history(f'{{"note": "{MULTIWORD}"}}')
+        blocked, returned = _run_resumed_with(history,
+                                              {"note": MULTIWORD})
+        assert blocked == []
+        assert any(MULTIWORD in r.result.content for r in returned)
+
+    def test_json_key_does_not_launder_through_resume(self):
+        """Laundering direction: in-run discovery seeds JSON leaf
+        strings only — key names never seed. Pre-fix the tokenisation
+        fallback over the wrapped string seeded key names from
+        attacker-controllable tool output, so a value the in-run gate
+        refused dispatched after a persist/resume cycle."""
+        history = _wrapped_history('{"secretkey987": "smallvalue"}')
+        blocked, returned = _run_resumed_with(history,
+                                              {"note": "secretkey987"})
+        assert len(blocked) == 1
+        assert blocked[0].call.name == "use_note"
+        assert all(r.result.is_error for r in returned)
+
+    def test_leaf_value_still_seeds_when_wrapped(self):
+        """The leaf VALUE of the same wrapped result stays discovered —
+        unwrapping restores the in-run JSON-leaf rule symmetrically."""
+        history = _wrapped_history('{"secretkey987": "smallvalue"}')
+        blocked, _ = _run_resumed_with(history, {"note": "smallvalue"})
+        assert blocked == []
+
+    def test_round_trip_result_messages_reseed_like_in_run(self):
+        """Feed ``ToolLoopResult.messages`` straight back into
+        ``run_with_history`` — the docstring's persist/resume contract
+        ("SAME trust rule as in-run discovery") on the loop's own
+        persisted shape."""
+        discover = ToolDef(
+            name="discover",
+            description="returns a note",
+            input_schema={"type": "object", "properties": {}},
+            handler=lambda inp: f'{{"note": "{MULTIWORD}"}}',
+        )
+        fp1 = _FakeProvider([
+            TurnResponse(
+                content=[ToolCall(id="c0", name="discover", input={})],
+                stop_reason=StopReason.NEEDS_TOOL_CALL,
+                input_tokens=1, output_tokens=1,
+            ),
+            TurnResponse(
+                content=[TextBlock(text="found it")],
+                stop_reason=StopReason.COMPLETE,
+                input_tokens=1, output_tokens=1,
+            ),
+        ])
+        loop1 = ToolUseLoop(fp1, [discover, _use_note_tool()])
+        first = loop1.run("go")
+
+        blocked, returned = _run_resumed_with(list(first.messages),
+                                              {"note": MULTIWORD})
+        assert blocked == []
+        assert any(MULTIWORD in r.result.content for r in returned)

@@ -55,7 +55,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from core.llm.providers import LLMProvider
 
-from core.security.prompt_envelope import wrap_tool_result
+from core.security.prompt_envelope import unwrap_untrusted, wrap_tool_result
 from core.security.prompt_input_preflight import preflight
 
 from .types import (
@@ -425,7 +425,21 @@ class ToolUseLoop:
                 if isinstance(block, TextBlock):
                     known_values |= _extract_tokens_from_text(block.text)
                 elif isinstance(block, ToolResult) and not block.is_error:
-                    known_values |= _extract_values_from_json(block.content)
+                    # The loop persists the messages-bound tool-result
+                    # copy envelope-WRAPPED (wrap_tool_result below),
+                    # while in-run discovery extracts from the RAW
+                    # content. Unwrap before extraction so resume
+                    # applies the same JSON-leaf rule: extracting from
+                    # the wrapped string made json.loads fail and fall
+                    # back to tokenisation, which both seeded tokens
+                    # the in-run gate refuses (JSON key names,
+                    # punctuation-split fragments of hostile tool
+                    # output) and dropped multi-word leaf values the
+                    # run legitimately discovered. Raw (unwrapped)
+                    # histories pass through unchanged.
+                    known_values |= _extract_values_from_json(
+                        unwrap_untrusted(block.content)
+                    )
 
         for iteration in range(self._max_iterations):
             # ---- pre-flight: caller-supplied give-up predicate ---------

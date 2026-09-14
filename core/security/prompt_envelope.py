@@ -363,6 +363,36 @@ def wrap_untrusted(content: str, *, kind: str, origin: str) -> str:
     )
 
 
+# Full-string frame produced by ``wrap_untrusted``: nonce-tagged open
+# line, content, nonce-matched close. Greedy inner group + end anchor
+# means a content-embedded (neutralised) closer can never truncate the
+# unwrap — only the real final close tag matches.
+_ENVELOPE_FRAME_RE = re.compile(
+    r'\A<untrusted-([0-9a-f]{' + str(_NONCE_BYTES * 2) + r'}) '
+    r'kind="[^"]*" origin="[^"]*">\n'
+    r'(.*)'
+    r'\n</untrusted-\1>\Z',
+    re.DOTALL,
+)
+
+
+def unwrap_untrusted(text: str) -> str:
+    """Strip the ``wrap_untrusted`` / ``wrap_tool_result`` frame from
+    *text*; return *text* unchanged when it is not a single
+    well-formed envelope.
+
+    Returns the envelope's inner content as persisted — i.e. AFTER the
+    wrap-time floor defences (autofetch strip, non-printable escape,
+    tag-forgery neutralisation), not a byte-exact inverse of the
+    original. That is the honest fidelity for the intended consumer:
+    resume-time x-source value extraction needs the same content shape
+    in-run extraction saw (typical JSON round-trips untouched), never
+    the envelope frame itself.
+    """
+    m = _ENVELOPE_FRAME_RE.match(text)
+    return m.group(2) if m else text
+
+
 _HEX_DIGITS = frozenset('0123456789abcdefABCDEF')
 
 
