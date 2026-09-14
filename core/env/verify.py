@@ -387,6 +387,19 @@ def check_http(
             "reason": f"connection error: {exc}",
             "details": {"url": url, "error": str(exc)[:400]},
         }
+    except (ValueError, TypeError) as exc:
+        # http.client validates header names/values (and the request
+        # line) at send time: a plan step carrying "a\r\nInj: b" in a
+        # header raises ValueError from putheader. Plans are untrusted
+        # (LLM-authored / on-disk replay), so a malformed step is a
+        # failed CHECK — provision's failures-are-data contract — not
+        # an exception escaping verify_plan.
+        return {
+            "type": "http_check",
+            "passed": False,
+            "reason": f"invalid request shape: {exc}",
+            "details": {"url": url, "error": str(exc)[:400]},
+        }
 
     response_size_bytes = len(content)
     details: dict[str, Any] = {
@@ -678,6 +691,17 @@ def check_http_request(
             "type": "http_request_check",
             "passed": False,
             "reason": f"connection error: {exc}",
+            "details": {"url": url, "error": str(exc)[:400]},
+        }
+    except (ValueError, TypeError) as exc:
+        # Same failures-are-data fold as check_http: hostile plan
+        # headers (CRLF in a value, an illegal name, a non-string
+        # type) raise ValueError/TypeError from http.client's send
+        # validation and must degrade to a failed check.
+        return {
+            "type": "http_request_check",
+            "passed": False,
+            "reason": f"invalid request shape: {exc}",
             "details": {"url": url, "error": str(exc)[:400]},
         }
 
