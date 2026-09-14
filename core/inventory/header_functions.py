@@ -14,6 +14,8 @@ import re
 from collections import OrderedDict
 from typing import TYPE_CHECKING
 
+from core.inventory._walk import iter_regular_files
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -87,9 +89,9 @@ def build_header_function_index(
 
     index: dict[str, tuple[str, str]] = {}
     try:
-        for p in target_path.rglob("*"):
-            if not p.is_file() or p.is_symlink() or p.suffix not in _HEADER_EXTENSIONS:
-                continue
+        # Symlink-safe enumeration — a hostile `dir -> /` in the
+        # target must not walk the host fs into audit context.
+        for p in iter_regular_files(target_path, _HEADER_EXTENSIONS):
             try:
                 if p.stat().st_size > 1_048_576:  # 1 MB cap
                     continue

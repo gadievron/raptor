@@ -15,6 +15,8 @@ import re
 from collections import OrderedDict
 from typing import TYPE_CHECKING
 
+from core.inventory._walk import iter_regular_files
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -117,9 +119,9 @@ def build_rust_macro_table(target_path: Path) -> dict[str, str]:
 
     table: dict[str, str] = {}
     try:
-        for p in target_path.rglob("*"):
-            if not p.is_file() or p.is_symlink() or p.suffix not in _RUST_EXTENSIONS:
-                continue
+        # Symlink-safe enumeration — a hostile `dir -> /` in the
+        # target must not walk the host fs into audit context.
+        for p in iter_regular_files(target_path, _RUST_EXTENSIONS):
             try:
                 if p.stat().st_size > 1_048_576:  # 1 MB cap
                     continue
@@ -203,9 +205,8 @@ def build_macro_table(target_path: Path) -> dict[str, tuple[str, str]]:
 
     table: dict[str, tuple[str, str]] = {}
     try:
-        for p in target_path.rglob("*"):
-            if not p.is_file() or p.is_symlink() or p.suffix not in _C_EXTENSIONS:
-                continue
+        # Symlink-safe enumeration — same class as the rust walk above.
+        for p in iter_regular_files(target_path, _C_EXTENSIONS):
             try:
                 if p.stat().st_size > 1_048_576:  # 1 MB cap
                     continue
