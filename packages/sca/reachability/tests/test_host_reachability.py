@@ -193,6 +193,30 @@ def test_dunder_named_host_with_no_callers_is_dead():
     assert is_host_dead(inv, fn) is True
 
 
+def test_dunder_protocol_host_is_alive():
+    """``__init__`` (and every ``__x__`` protocol method) is invoked
+    by the runtime through syntax the call graph records no edge for
+    (``ClassName(...)``) — zero static callers is NOT dead-code
+    evidence, so constructors must never earn the dead-host demotion."""
+    inv = _inv(_file("src/a.py",
+        "class C:\n"
+        "    def __init__(self):\n"
+        "        pass\n"
+    ))
+    fn = InternalFunction("src/a.py", "__init__", 2)
+    assert is_host_dead(inv, fn) is False
+
+
+def test_dunder_enter_host_is_alive():
+    inv = _inv(_file("src/a.py",
+        "class C:\n"
+        "    def __enter__(self):\n"
+        "        pass\n"
+    ))
+    fn = InternalFunction("src/a.py", "__enter__", 2)
+    assert is_host_dead(inv, fn) is False
+
+
 def test_test_file_callers_dont_keep_host_alive():
     """A private host called only from a test file is still
     considered dead — test-only callers don't count toward

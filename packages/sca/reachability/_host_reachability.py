@@ -132,8 +132,20 @@ def _looks_internal(name: str) -> bool:
     are tolerable (we miss some dead code), but false
     positives in "internal" let us downgrade severity for
     code that's actually live API surface — worse outcome.
+
+    Dunder names (``__init__``, ``__enter__``, ``__eq__``, …)
+    are NOT internal despite the leading underscores: they are
+    the language's public protocol surface, invoked by the
+    runtime through syntax the static call graph never records
+    as an edge (``ClassName(...)`` produces no caller row for
+    ``__init__``).  Treating them as internal demoted every dep
+    call inside an instantiated-everywhere constructor to
+    ``called_in_dead_code``.  The call-graph substrate encodes
+    the same convention.
     """
     if not name:
+        return False
+    if name.startswith("__") and name.endswith("__"):
         return False
     return name.startswith("_")
 
