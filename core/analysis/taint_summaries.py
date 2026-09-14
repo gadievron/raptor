@@ -444,7 +444,11 @@ def _expr_taint(
     if isinstance(expr, ast.Attribute):
         chain = _attribute_chain_str(expr)
         if chain is None:
-            return _empty_state()
+            # Non-Name-rooted chain (``a[0].b``, ``f().b``): the base
+            # expression's taint still flows into the attribute read —
+            # returning empty dropped it (false clean-wrapper hazard).
+            return _expr_taint(expr.value, cfg_node, in_state_fn,
+                               summaries)
         base = chain.split(".", 1)[0]
         return in_state_fn(cfg_node, base)
     if isinstance(expr, ast.Call):
@@ -477,6 +481,15 @@ def _expr_taint(
         # sanitizer, so the consumer refuses rather than suppresses.
         recv_state = _empty_state()
         recv_stamp = callable_name
+        if isinstance(expr.func, ast.Lambda):
+            # IIFE: the lambda body evaluates NOW over enclosing-scope
+            # names (``(lambda: a)()``); its contained names' taint
+            # flows into the result. Unstamped direct atoms — the
+            # consumer refuses, never suppresses.
+            recv_state = _contained_name_states(
+                expr.func.body, cfg_node, in_state_fn,
+            )
+            recv_stamp = "<lambda>"
         if isinstance(expr.func, ast.Attribute):
             recv_state = _expr_taint(
                 expr.func.value, cfg_node, in_state_fn, summaries,
@@ -554,12 +567,21 @@ def _expr_taint(
         out = _empty_state()
         for v in expr.values:
             if isinstance(v, ast.FormattedValue):
+                # Recurse on the FormattedValue NODE (not just its
+                # value) so nested format specs contribute too.
                 out = _merge_states(
-                    out, _expr_taint(v.value, cfg_node, in_state_fn, summaries),
+                    out, _expr_taint(v, cfg_node, in_state_fn, summaries),
                 )
         return out
     if isinstance(expr, ast.FormattedValue):
-        return _expr_taint(expr.value, cfg_node, in_state_fn, summaries)
+        out = _expr_taint(expr.value, cfg_node, in_state_fn, summaries)
+        if expr.format_spec is not None:
+            # ``f"{v:{width}}"`` — the format spec's interpolations
+            # carry their inputs' taint into the rendered result.
+            out = _merge_states(out, _expr_taint(
+                expr.format_spec, cfg_node, in_state_fn, summaries,
+            ))
+        return out
     if isinstance(expr, ast.BinOp):
         return _merge_states(
             _expr_taint(expr.left, cfg_node, in_state_fn, summaries),
@@ -606,6 +628,12 @@ def _expr_taint(
                     out, _expr_taint(e, cfg_node, in_state_fn, summaries),
                 )
         return out
+    if isinstance(expr, ast.NamedExpr):
+        # ``(t := v)`` evaluates to v — keep v's chains intact so a
+        # walrus-wrapped sanitizer stays clean.
+        return _expr_taint(expr.value, cfg_node, in_state_fn, summaries)
+    if isinstance(expr, ast.Await):
+        return _expr_taint(expr.value, cfg_node, in_state_fn, summaries)
     if isinstance(
         expr, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp),
     ):
@@ -626,7 +654,33 @@ def _expr_taint(
                 out, _expr_taint(e, cfg_node, in_state_fn, summaries),
             )
         return out
-    return _empty_state()
+    if isinstance(expr, (ast.Constant, ast.Lambda)):
+        # A literal carries no param taint; a lambda OBJECT does not
+        # evaluate its body here (calling it does — see the IIFE arm).
+        return _empty_state()
+    # Conservative fallback for every OTHER expression kind (Compare,
+    # Slice bounds, and any future node): union the in-states of all
+    # contained Names, unstamped. Returning empty here DROPS real
+    # flows — the dirty atom vanishes and _param_cleanly_sanitized
+    # mints a false clean-sanitizer binding the enforced
+    # sanitizer-cut consumes (the JoinedStr hazard, generalised).
+    # Unstamped direct atoms only ever make the consumer refuse.
+    return _contained_name_states(expr, cfg_node, in_state_fn)
+
+
+def _contained_name_states(
+    expr: ast.AST,
+    cfg_node: PyCFGNode,
+    in_state_fn,
+) -> TaintState:
+    """Union of the in-states of every ``ast.Name`` under ``expr`` —
+    the refusal-direction over-approximation for expression shapes
+    :func:`_expr_taint` has no structural model for."""
+    out = _empty_state()
+    for sub in ast.walk(expr):
+        if isinstance(sub, ast.Name):
+            out = _merge_states(out, in_state_fn(cfg_node, sub.id))
+    return out
 
 
 def _find_assignment_value_at(

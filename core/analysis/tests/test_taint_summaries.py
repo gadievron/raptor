@@ -659,3 +659,64 @@ class TestDirtySiblingShapesStayDirty:
     def test_clean_wrapper_still_reads_clean(self):
         # Direction check: the pure sanitizer wrapper keeps minting.
         assert self._cleanly_sanitized("html.escape(a)")
+
+
+class TestUnmodelledShapesFallBackConservatively:
+    """Round-2 closure of the dirty-sibling-drop class: expression
+    kinds without a structural model must PROPAGATE contained-name
+    taint (unstamped — the consumer refuses), never return empty."""
+
+    @staticmethod
+    def _cleanly_sanitized(src_body: str) -> bool:
+        from core.analysis.interproc import _param_cleanly_sanitized
+        _, summaries = _summaries(f"import html\n\n{src_body}")
+        return _param_cleanly_sanitized(
+            summaries["h"], 0, {"html.escape"},
+        )
+
+    def test_non_name_rooted_attribute_stays_dirty(self):
+        assert not self._cleanly_sanitized(
+            "def h(a):\n    return html.escape(a) + a[0].b\n"
+        )
+
+    def test_namedexpr_sibling_stays_dirty(self):
+        assert not self._cleanly_sanitized(
+            "def h(a):\n    return html.escape(a) + (t := a)\n"
+        )
+
+    def test_iife_lambda_body_stays_dirty(self):
+        assert not self._cleanly_sanitized(
+            "def h(a):\n    return html.escape(a) + (lambda: a)()\n"
+        )
+
+    def test_await_sibling_stays_dirty(self):
+        assert not self._cleanly_sanitized(
+            "async def h(a):\n    return html.escape(a) + await a\n"
+        )
+
+    def test_slice_bound_taint_survives(self):
+        assert not self._cleanly_sanitized(
+            "def h(a):\n    return html.escape(a) + d[a:2]\n"
+        )
+
+    def test_compare_operand_taint_survives(self):
+        assert not self._cleanly_sanitized(
+            "def h(a):\n    return html.escape(a) + str(a == 'x')\n"
+        )
+
+    def test_format_spec_taint_survives(self):
+        assert not self._cleanly_sanitized(
+            'def h(a):\n    return html.escape(a) + f"{1:{a}}"\n'
+        )
+
+    def test_walrus_wrapped_sanitizer_stays_clean(self):
+        # Precision pins: explicit NamedExpr/Await arms keep chains
+        # intact rather than degrading to direct atoms.
+        assert self._cleanly_sanitized(
+            "def h(a):\n    return (t := html.escape(a))\n"
+        )
+
+    def test_fstring_wrapped_sanitizer_stays_clean(self):
+        assert self._cleanly_sanitized(
+            'def h(a):\n    return f"{html.escape(a)}"\n'
+        )
