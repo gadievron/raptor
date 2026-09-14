@@ -1116,7 +1116,8 @@ def cmd_adopt(args: argparse.Namespace) -> int:
     if not adopted:
         print(
             "nothing to adopt — no quarantine file "
-            f"({args.path}.unverified) and no sidecar content",
+            f"({args.path}.<timestamp>.unverified) and no sidecar "
+            "content",
         )
         return 1
     print(f"adopted scorecard content into {args.path} (stamped).")
@@ -1472,9 +1473,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_adopt.add_argument(
         "--file", type=Path, default=None,
         help=(
-            "explicit source JSON to adopt (default: the "
-            "quarantine file <sidecar>.unverified when present, "
-            "else the sidecar itself)"
+            "explicit source JSON to adopt (default: the newest "
+            "quarantine file <sidecar>.<timestamp>.unverified when "
+            "present, else the sidecar itself)"
         ),
     )
     p_adopt.set_defaults(handler=cmd_adopt)

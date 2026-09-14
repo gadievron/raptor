@@ -110,6 +110,15 @@ def test_stamped_then_tampered_content_discarded(tmp_path):
     ) == Policy.LEARNING
 
 
+def _quarantines(path):
+    """All quarantine files for *path* (timestamped + legacy name)."""
+    found = sorted(path.parent.glob(path.name + ".*.unverified"))
+    legacy = path.with_suffix(path.suffix + ".unverified")
+    if legacy.exists():
+        found.append(legacy)
+    return found
+
+
 def test_unverified_content_never_restamped_by_write(tmp_path):
     # The laundering path: plant a forged file, then let an honest
     # writer record an event. The forged cells must NOT come back
@@ -126,9 +135,9 @@ def test_unverified_content_never_restamped_by_write(tmp_path):
     assert integrity.verify(
         on_disk, integrity.extract_token(on_disk),
     )
-    quarantine = path.with_suffix(path.suffix + ".unverified")
-    assert quarantine.exists()
-    saved = json.loads(quarantine.read_text(encoding="utf-8"))
+    quarantines = _quarantines(path)
+    assert len(quarantines) == 1
+    saved = json.loads(quarantines[0].read_text(encoding="utf-8"))
     assert "m" in saved["models"]                # audit trail kept
 
 
@@ -139,9 +148,7 @@ def test_read_only_paths_do_not_mutate_the_file(tmp_path):
     sc = ModelScorecard(path)
     assert sc.get_stats() == []                  # discarded in memory
     assert path.read_text(encoding="utf-8") == forged  # file untouched
-    assert not path.with_suffix(
-        path.suffix + ".unverified",
-    ).exists()
+    assert _quarantines(path) == []
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +190,7 @@ def test_empty_or_absent_sidecar_is_fresh_not_suspect(tmp_path):
     ) == Policy.LEARNING
     path.write_text("", encoding="utf-8")
     assert ModelScorecard(path).get_stats() == []
-    assert not path.with_suffix(path.suffix + ".unverified").exists()
+    assert _quarantines(path) == []
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +213,7 @@ def test_key_unusable_clamps_but_keeps_content(tmp_path, _unusable_key):
     # ...but the trust surface clamps: no short-circuit.
     assert sc.should_short_circuit("x:y", "m") == Policy.LEARNING
     # No quarantine — this is an operator-side condition.
-    assert not path.with_suffix(path.suffix + ".unverified").exists()
+    assert _quarantines(path) == []
 
 
 def test_key_unusable_pin_clamp_directions(tmp_path, _unusable_key):
@@ -248,9 +255,8 @@ def test_adopt_from_quarantine_file(tmp_path):
     sc = ModelScorecard(path)
     # A write quarantines the unverified original...
     sc.record_event("a:b", "m2", EventType.JUDGE_REVIEW, "correct")
-    quarantine = path.with_suffix(path.suffix + ".unverified")
-    assert quarantine.exists()
-    # ...and adopt (defaulting to the quarantine) restores it.
+    assert len(_quarantines(path)) == 1
+    # ...and adopt (defaulting to the newest quarantine) restores it.
     assert sc.adopt_unverified() is True
     assert ModelScorecard(path).get_stat("x:y", "m") is not None
 
@@ -418,3 +424,38 @@ def test_persistent_wrong_length_warns_after_retries(
     assert integrity._load_or_create_key() is None
     assert len(_race_warn_calls) == 1
     assert "wrong length" in _race_warn_calls[0][1]
+
+
+def test_repeated_quarantines_preserve_each_other(tmp_path, monkeypatch):
+    """Repeated tamper-then-rewrite cycles must not clobber earlier
+    quarantine evidence — each cycle gets its own timestamped file,
+    mirroring the ``.corrupt`` sibling. Pre-fix the fixed
+    ``.unverified`` name left only the LAST forgery for the operator
+    to inspect."""
+    import itertools
+
+    path = tmp_path / "sc.json"
+    # Distinct second per call — two quarantines within the same
+    # wall-clock second would share a name (same granularity
+    # trade-off as the .corrupt sibling).
+    ticks = itertools.count(1_000_000_001)
+
+    import core.llm.scorecard.scorecard as sc_mod
+    monkeypatch.setattr(sc_mod.time, "time", lambda: float(next(ticks)))
+
+    # First tamper + honest write → first quarantine.
+    path.write_text(json.dumps(_forged_cells()), encoding="utf-8")
+    sc = ModelScorecard(path)
+    sc.record_event("a:b", "m2", EventType.JUDGE_REVIEW, "correct")
+    assert len(_quarantines(path)) == 1
+
+    # Second tamper of the (now honest) sidecar + another write —
+    # the first quarantine must survive.
+    path.write_text(json.dumps(_forged_cells()), encoding="utf-8")
+    sc2 = ModelScorecard(path)
+    sc2.record_event("a:b", "m2", EventType.JUDGE_REVIEW, "correct")
+    q = _quarantines(path)
+    assert len(q) == 2
+    for f in q:
+        saved = json.loads(f.read_text(encoding="utf-8"))
+        assert "m" in saved["models"]

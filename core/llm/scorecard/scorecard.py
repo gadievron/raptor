@@ -1076,8 +1076,9 @@ class ModelScorecard:
     def adopt_unverified(self, source: Path | None = None) -> bool:
         """Operator-deliberate re-blessing of an unverified sidecar.
 
-        Reads the raw JSON at *source* — default: the quarantine file
-        ``<sidecar>.unverified`` when present, else the sidecar
+        Reads the raw JSON at *source* — default: the newest
+        quarantine file ``<sidecar>.<timestamp>.unverified`` (or the
+        legacy untimestamped name) when present, else the sidecar
         itself — and REPLACES the sidecar's content with it, stamped
         with this install's integrity token. This is the sanctioned
         path for keeping genuine pre-MAC calibration history (or a
@@ -1095,10 +1096,21 @@ class ModelScorecard:
         import json
 
         if source is None:
-            quarantine = self.path.with_suffix(
+            # Newest timestamped quarantine first (epoch-second names
+            # sort lexicographically), then the legacy untimestamped
+            # name, then the sidecar itself.
+            candidates = sorted(
+                self.path.parent.glob(self.path.name + ".*.unverified"),
+            )
+            legacy = self.path.with_suffix(
                 self.path.suffix + ".unverified",
             )
-            source = quarantine if quarantine.exists() else self.path
+            if candidates:
+                source = candidates[-1]
+            elif legacy.exists():
+                source = legacy
+            else:
+                source = self.path
         source = Path(source)
         try:
             content = source.read_text(encoding="utf-8")
@@ -1392,7 +1404,7 @@ class ModelScorecard:
               content is discarded in memory (merging or re-stamping
               it would launder a forgery on the first honest write)
               and, when we hold the write lock, the file is
-              quarantined to ``<sidecar>.unverified`` so the
+              quarantined to ``<sidecar>.<timestamp>.unverified`` so the
               operator can inspect and deliberately re-adopt genuine
               pre-MAC history via ``scorecard adopt``.
             * fails under an UNUSABLE key — operator-side condition;
@@ -1410,8 +1422,15 @@ class ModelScorecard:
                 self.data.pop(integrity.TOKEN_KEY, None)
                 self.scorecard._last_read_trusted = False
                 return
-            # Usable key, unverified content: quarantine.
-            quarantine = path.with_suffix(path.suffix + ".unverified")
+            # Usable key, unverified content: quarantine. Timestamped
+            # like the ``.corrupt`` sibling above — repeated
+            # tamper-then-rewrite cycles must not clobber earlier
+            # quarantines, which are exactly the evidence a
+            # post-incident investigation wants (second-granularity:
+            # same trade-off as the corrupt path).
+            quarantine = path.with_suffix(
+                path.suffix + f".{int(time.time())}.unverified",
+            )
             if str(path) not in _unverified_warned_paths:
                 _unverified_warned_paths.add(str(path))
                 logger.warning(
