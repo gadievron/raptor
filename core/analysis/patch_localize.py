@@ -161,16 +161,20 @@ def localize(
             )
     chains = build_chains(candidates, edges)
     chains_truncated = 0
-    if len(chains) > max(1, max_chains):
+    # The floor and the slice must agree: guarding with max(1, ...)
+    # but slicing with the raw value emptied the chain list for
+    # max_chains=0 instead of keeping one chain.
+    chain_cap = max(1, max_chains)
+    if len(chains) > chain_cap:
         # Singles come first from build_chains, so every candidate
         # stays represented; excess pair chains are dropped loudly.
-        chains_truncated = len(chains) - max_chains
+        chains_truncated = len(chains) - chain_cap
         logger.warning(
             "localize: %d chains exceed the %d-chain cap; dropping %d "
             "pair chains (pass max_chains to raise)",
-            len(chains), max_chains, chains_truncated,
+            len(chains), chain_cap, chains_truncated,
         )
-        chains = chains[:max_chains]
+        chains = chains[:chain_cap]
     query = DEFAULT_QUERY_PREFIX + advisory
 
     result = rank_items(

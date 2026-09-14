@@ -194,3 +194,27 @@ def test_localize_caps_candidate_text():
         client=client, seed=1, max_workers=1,
     )
     assert captured["len"] < 10_000  # cap applied, prompt stays small
+
+
+def test_chain_cap_floor_keeps_one_chain_for_zero_cap():
+    # Both directions of the floor: max_chains=0 must keep exactly one
+    # chain (the floor's promise), not empty the list — the guard used
+    # max(1, max_chains) while the slice used the raw value.
+    candidates = [_cand(f"f{i}", i) for i in range(3)]
+    edges = [("f0", "f1"), ("f1", "f2")]
+    report = localize(
+        candidates, edges, "advisory", client=FakeRankClient(),
+        max_chains=0, seed=1, max_workers=1,
+    )
+    assert report["stats"]["chains_total"] == 1
+    assert report["chains"], "the floor must keep one chain"
+
+
+def test_chain_cap_above_total_truncates_nothing():
+    candidates = [_cand(f"f{i}", i) for i in range(3)]
+    report = localize(
+        candidates, [], "advisory", client=FakeRankClient(),
+        max_chains=50, seed=1, max_workers=1,
+    )
+    assert report["stats"]["chains_truncated"] == 0
+    assert report["stats"]["chains_total"] == 3
