@@ -524,15 +524,59 @@ class TestResolveCrossFamilyChecker:
 # ---------------------------------------------------------------------------
 
 class TestDispatchQualityPersistence:
-    """Verify that _quality and _nonce_leaked are set on processed results."""
+    """_quality / _nonce_leaked persist onto PROCESSED result dicts
+    through the real ``dispatch_task`` loop — the named contract that
+    feeds CrossFamilyCheckTask.select_items. The previous tests
+    asserted a dataclass field the test itself had just set, so the
+    persistence seam could regress without a failure."""
 
-    def test_quality_on_dispatch_result(self):
-        dr = DispatchResult(
-            result={"is_exploitable": True, "reasoning": "test"},
-            quality=0.65,
+    @staticmethod
+    def _dispatch(quality: float = 0.65, echo_prompt: bool = False):
+        from packages.llm_analysis.dispatch import dispatch_task
+        from packages.llm_analysis.orchestrator import CostTracker
+        from packages.llm_analysis.tasks import AnalysisTask
+
+        finding = {
+            "finding_id": "F1",
+            "rule_id": "CWE-120",
+            "file_path": "src/parse.c",
+            "start_line": 42,
+            "end_line": 45,
+            "level": "high",
+            "message": "Potential CWE-120",
+            "code": "strcpy(buf, input);",
+            "surrounding_context": "void parse(char *input) { ... }",
+        }
+
+        def dispatch_fn(prompt, schema, system_prompt, temperature, model):
+            content = prompt if echo_prompt else "ok"
+            return DispatchResult(
+                result={"content": content, "is_exploitable": True,
+                        "exploitability_score": 0.9, "reasoning": "test",
+                        "is_true_positive": True},
+                cost=0.0, tokens=1, model="test-model", duration=0.1,
+                quality=quality,
+            )
+
+        task = AnalysisTask()
+        results = dispatch_task(
+            task, [finding], dispatch_fn, {"analysis_model": None},
+            {}, CostTracker(), max_parallel=1,
         )
-        assert dr.quality == 0.65
+        assert len(results) == 1
+        return results[0]
 
-    def test_quality_default(self):
-        dr = DispatchResult(result={"is_exploitable": True})
-        assert dr.quality == 1.0
+    def test_quality_persisted_onto_processed_result(self):
+        processed = self._dispatch(quality=0.65)
+        assert processed["_quality"] == 0.65
+
+    def test_nonce_leak_flag_persisted_when_response_echoes_envelope(self):
+        """A response that echoes the prompt (envelope nonce included)
+        must be stamped ``_nonce_leaked`` — the low-quality/leak signal
+        CrossFamilyCheckTask selects on."""
+        processed = self._dispatch(echo_prompt=True)
+        assert processed.get("_nonce_leaked") is True
+
+    def test_no_leak_flag_on_clean_response(self):
+        processed = self._dispatch()
+        assert processed.get("_nonce_leaked") is not True

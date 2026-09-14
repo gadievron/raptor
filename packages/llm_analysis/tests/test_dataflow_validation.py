@@ -2631,35 +2631,40 @@ class TestCrossFamilyResolution:
 class TestCLIFlag:
     """CLI flag wiring after the rename: --no-validate-dataflow opts
     OUT (default is on), --deep-validate opts INTO Tier 2/3 LLM tiers,
-    --deep-validate-budget caps Tier 2/3 LLM cost."""
+    --deep-validate-budget caps Tier 2/3 LLM cost.
+
+    Asserted against the REAL /agentic parser
+    (``raptor_agentic.build_parser``) — the previous tests declared
+    fresh look-alike parsers inline, certifying argparse itself while
+    RAPTOR's actual flag declarations went untested."""
+
+    @staticmethod
+    def _parse(*argv):
+        import raptor_agentic
+        return raptor_agentic.build_parser().parse_args(
+            ["--repo", "x", *argv],
+        )
 
     def test_no_validate_dataflow_flag_default_is_false(self):
-        import argparse
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--no-validate-dataflow", action="store_true")
-        args = parser.parse_args([])
-        assert args.no_validate_dataflow is False
+        assert self._parse().no_validate_dataflow is False
 
     def test_no_validate_dataflow_flag_when_set_is_true(self):
-        import argparse
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--no-validate-dataflow", action="store_true")
-        args = parser.parse_args(["--no-validate-dataflow"])
-        assert args.no_validate_dataflow is True
+        assert self._parse(
+            "--no-validate-dataflow").no_validate_dataflow is True
 
     def test_deep_validate_flag_default_is_false(self):
-        import argparse
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--deep-validate", action="store_true")
-        args = parser.parse_args([])
+        args = self._parse()
         assert args.deep_validate is False
+        assert args.no_deep_validate is False
 
     def test_deep_validate_flag_when_set_is_true(self):
-        import argparse
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--deep-validate", action="store_true")
-        args = parser.parse_args(["--deep-validate"])
-        assert args.deep_validate is True
+        assert self._parse("--deep-validate").deep_validate is True
+
+    def test_deep_validate_mutex_rejects_contradiction(self):
+        """--deep-validate + --no-deep-validate is argparse-rejected
+        (the mutex group), not silently resolved downstream."""
+        with pytest.raises(SystemExit):
+            self._parse("--deep-validate", "--no-deep-validate")
 
     def test_orchestrate_signature_accepts_new_flags(self):
         """orchestrate() must accept the new flag shape without TypeError."""
@@ -2688,26 +2693,10 @@ class TestOrchestratorIntegration:
     run_validation_pass and reconcile_dataflow_validation in the right
     order. Heavy mocking — full orchestration is too much surface."""
 
-    def test_validate_dataflow_false_skips_helpers(self, tmp_path):
-        """When validate_dataflow=False, neither helper should be called."""
-        # We can't easily mount a full orchestrate() call, but we can
-        # verify that a False flag doesn't trigger the import path.
-        # This is a smoke check; full integration is left to manual /agentic.
-        import packages.llm_analysis.dataflow_validation as dv
-        with patch.object(dv, "run_validation_pass") as mock_run, \
-             patch.object(dv, "reconcile_dataflow_validation") as mock_reconcile:
-            # Simulate: orchestrator gates on validate_dataflow before calling.
-            validate_dataflow = False
-            if validate_dataflow:  # pragma: no cover
-                dv.run_validation_pass(
-                    findings=[], results_by_id={}, out_dir=tmp_path,
-                    repo_path=tmp_path, dispatch_fn=MagicMock(),
-                    analysis_model=None, role_resolution={},
-                    dispatch_mode="external_llm",
-                )
-                dv.reconcile_dataflow_validation({})
-            mock_run.assert_not_called()
-            mock_reconcile.assert_not_called()
+    # The former "validate_dataflow=False skips helpers" test asserted
+    # mocks stayed uncalled after a test-local dead branch — vacuous.
+    # The real gate is now driven end-to-end through orchestrate() in
+    # test_orchestrator.py::TestDataflowValidationGate.
 
     def test_reconciliation_runs_after_validation(self, tmp_path):
         """Reconciliation must be applied AFTER all analysis-stage tasks
@@ -3228,16 +3217,29 @@ class TestUsageDrivenDeepValidate:
     Tri-state precedence: disabled > forced-on > auto."""
 
     def _decide(self, *, analysis, deep_validate=False, deep_validate_disabled=False):
-        """Mirror the production decision logic."""
-        if deep_validate_disabled:
-            return False
-        if deep_validate:
-            return True
-        nested_dv = (analysis or {}).get("dataflow_validation") or {}
-        return bool(
-            nested_dv.get("path_conditions")
-            or (analysis or {}).get("path_conditions")
+        """Drive the PRODUCTION tri-state gate (a local re-implementation
+        here previously asserted on its own copy — regressions in the
+        real precedence logic could not fire)."""
+        import packages.llm_analysis.dataflow_validation as dv
+        effective, _auto = dv._effective_deep_validate(
+            analysis,
+            deep_validate=deep_validate,
+            deep_validate_disabled=deep_validate_disabled,
         )
+        return effective
+
+    def test_auto_enable_flag_reported_only_for_auto(self):
+        """auto_enabled feeds the n_deep_validate_auto_enabled metric:
+        True only on the signal-driven path, never for forced-on."""
+        import packages.llm_analysis.dataflow_validation as dv
+        assert dv._effective_deep_validate(
+            {"path_conditions": ["x > 1"]},
+            deep_validate=False, deep_validate_disabled=False,
+        ) == (True, True)
+        assert dv._effective_deep_validate(
+            {"path_conditions": ["x > 1"]},
+            deep_validate=True, deep_validate_disabled=False,
+        ) == (True, False)
 
     def test_disabled_overrides_forced_on(self):
         """--no-deep-validate is the hard kill switch — wins even

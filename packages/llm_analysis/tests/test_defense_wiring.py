@@ -676,7 +676,7 @@ class TestMultiFindingDispatchTelemetry:
         model_stats = list(summary["defense_telemetry"]["models"].values())[0]
         assert model_stats["responses"] == 5
 
-    def test_failed_dispatch_not_recorded(self):
+    def test_failed_dispatch_recorded_as_schema_failure(self):
         from core.security.prompt_telemetry import defense_telemetry
 
         task = AnalysisTask(profile=CONSERVATIVE)
@@ -697,30 +697,26 @@ class TestMultiFindingDispatchTelemetry:
 
         summary = defense_telemetry.summary()
         models = summary["defense_telemetry"]["models"]
-        if models:
-            total_responses = sum(s["responses"] for s in models.values())
-            assert total_responses <= 3
+        # Exact accounting (the previous `<= 3` bound held under any
+        # mis-recording, and the `if models:` guard passed silently
+        # when nothing recorded at all): the two successful dispatches
+        # record schema-ACCEPTED responses; the raised third records
+        # deliberately as a schema-failure response (dispatch.py's
+        # "Record schema failure telemetry" arm — non-auth/timeout
+        # failures feed the rejection-rate signal), never as an
+        # accepted one.
+        assert models, "dispatches must record telemetry"
+        assert sum(s["responses"] for s in models.values()) == 3
+        assert sum(s["schema_accepted"] for s in models.values()) == 2
+        assert sum(s["schema_failed"] for s in models.values()) == 1
 
 
 # ============================================================
 # 11. Defense telemetry in orchestrator output
 # ============================================================
 
-class TestDefenseTelemetryInOutput:
-
-    def test_no_telemetry_key_when_no_warnings(self, tmp_path):
-        """orchestration dict should not include defense_telemetry when clean."""
-        from core.security.prompt_telemetry import defense_telemetry
-        defense_telemetry.reset()
-
-        result = {
-            "orchestration": {
-                "mode": "external_llm",
-                "defense_profile": "conservative",
-            }
-        }
-        if defense_telemetry.has_warnings:
-            result["orchestration"]["defense_telemetry"] = defense_telemetry.summary()
-
-        assert "defense_telemetry" not in result["orchestration"]
-        defense_telemetry.reset()
+# TestDefenseTelemetryInOutput's former "no telemetry key when clean"
+# test re-implemented the orchestrator's conditional inline and
+# asserted on the copy — vacuous. The real attach site is now driven
+# end-to-end through orchestrate() in
+# test_orchestrator.py::TestDefenseTelemetryKey (both directions).

@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # packages/llm_analysis/tests/test_orchestrator.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
@@ -1089,3 +1091,108 @@ class TestWeakenedDefenses:
         assert result is not None
         assert result["orchestration"]["defense_profile"] == "passthrough"
         assert result["orchestration"]["weakened_defenses"] is True
+
+
+class TestDataflowValidationGate:
+    """``dataflow_validation_enabled`` routes the REAL orchestrate()
+    around run_validation_pass. The previous coverage asserted mocks
+    stayed uncalled after a test-local dead branch — the production
+    gate could regress without a failure."""
+
+    def _drive(self, tmp_path, **kw):
+        import packages.llm_analysis.dataflow_validation as dv_mod
+
+        report = _make_prep_report()
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(report))
+        cc_result = json.dumps(_make_cc_result("finding-001"))
+        with patch.dict(os.environ, {"CLAUDECODE": "1"}), \
+             patch("core.llm.cc_adapter.resolve_claude_cli",
+                   return_value="/usr/bin/claude"), \
+             patch("core.sandbox.run_untrusted_networked",
+                   side_effect=_mock_subprocess_ok([cc_result])), \
+             patch.object(dv_mod, "run_validation_pass",
+                          return_value=None) as mock_run:
+            result = orchestrate(
+                prep_report_path=report_path,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "orch",
+                **kw,
+            )
+        assert result is not None
+        return mock_run
+
+    def test_disabled_skips_validation_pass(self, tmp_path):
+        mock_run = self._drive(tmp_path, dataflow_validation_enabled=False)
+        mock_run.assert_not_called()
+
+    def test_enabled_by_default_runs_validation_pass(self, tmp_path):
+        mock_run = self._drive(tmp_path)
+        mock_run.assert_called_once()
+
+
+class TestDefenseTelemetryKey:
+    """The orchestration dict carries ``defense_telemetry`` iff
+    warnings fired — driven through the REAL orchestrate() attach site
+    (the previous coverage re-implemented the conditional inline in
+    the test and asserted on the copy)."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_telemetry(self):
+        from core.security.prompt_telemetry import defense_telemetry
+        defense_telemetry.reset()
+        yield
+        defense_telemetry.reset()
+
+    def _orchestration(self, tmp_path, during_dispatch=None):
+        report = _make_prep_report()
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(report))
+        cc_result = json.dumps(_make_cc_result("finding-001"))
+        inner = _mock_subprocess_ok([cc_result])
+
+        def _side(cmd, **kw):
+            # orchestrate() resets the telemetry singleton at entry,
+            # so warnings must fire DURING the run (as real weakened
+            # overrides do — mid-dispatch).
+            if during_dispatch is not None:
+                during_dispatch()
+            return inner(cmd, **kw)
+
+        with patch.dict(os.environ, {"CLAUDECODE": "1"}), \
+             patch("core.llm.cc_adapter.resolve_claude_cli",
+                   return_value="/usr/bin/claude"), \
+             patch("core.sandbox.run_untrusted_networked",
+                   side_effect=_side):
+            # The session conftest sets the CC transport kill switch;
+            # this harness needs the (mocked) dispatch to actually
+            # run. patch.dict restores the pre-patch environ on exit.
+            os.environ.pop("RAPTOR_CC_TRANSPORT_DISABLED", None)
+            result = orchestrate(
+                prep_report_path=report_path,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "orch",
+            )
+        assert result is not None
+        return result["orchestration"]
+
+    def test_no_telemetry_key_when_clean(self, tmp_path):
+        orch = self._orchestration(tmp_path)
+        assert "defense_telemetry" not in orch
+
+    def test_telemetry_key_present_on_warning(self, tmp_path):
+        from core.security.prompt_telemetry import defense_telemetry
+
+        orch = self._orchestration(
+            tmp_path,
+            during_dispatch=lambda: defense_telemetry.record_weakened_override(
+                "test-model", "profile downgraded for test",
+            ),
+        )
+        assert "defense_telemetry" in orch
+        # summary() nests its payload under its own top-level key.
+        payload = orch["defense_telemetry"]["defense_telemetry"]
+        assert any(
+            w["type"] == "weakened_defenses"
+            for w in payload["warnings"]
+        )

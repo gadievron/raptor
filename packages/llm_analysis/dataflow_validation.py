@@ -338,6 +338,41 @@ _MAX_CLAIM_LENGTH = 1500
 _MAX_REASONING_EXCERPT = 800
 
 
+def _effective_deep_validate(
+    analysis: dict | None,
+    *,
+    deep_validate: bool,
+    deep_validate_disabled: bool,
+) -> tuple[bool, bool]:
+    """Tri-state Tier 2/3 decision for ONE finding.
+
+    Returns ``(effective, auto_enabled)``:
+
+      --no-deep-validate  → never (opt-out, hard kill — wins even
+                            against --deep-validate)
+      --deep-validate     → always (opt-in, force-on)
+      neither (default)   → auto: enabled iff the LLM emitted
+                            ``path_conditions`` (top-level or nested
+                            under ``dataflow_validation``); an empty
+                            list means "no applicable conditions",
+                            not "extracted some", so it does NOT
+                            auto-enable.
+
+    Module-level (not inlined at the call site) so the precedence
+    contract is directly testable.
+    """
+    if deep_validate_disabled:
+        return False, False
+    if deep_validate:
+        return True, False
+    nested_dv = (analysis or {}).get("dataflow_validation") or {}
+    effective = bool(
+        nested_dv.get("path_conditions")
+        or (analysis or {}).get("path_conditions")
+    )
+    return effective, effective
+
+
 def validate_dataflow_claims(
     findings: list[dict],
     results_by_id: dict[str, dict],
@@ -617,18 +652,11 @@ def validate_dataflow_claims(
         # key, so a duplicate-claim finding whose analysis would run
         # deeper tiers never silently reuses a shallower finding's
         # result (verdicts must not depend on iteration order).
-        auto_enabled = False
-        if deep_validate_disabled:
-            effective_deep_validate = False
-        elif deep_validate:
-            effective_deep_validate = True
-        else:
-            nested_dv = (analysis or {}).get("dataflow_validation") or {}
-            effective_deep_validate = bool(
-                nested_dv.get("path_conditions")
-                or (analysis or {}).get("path_conditions")
-            )
-            auto_enabled = effective_deep_validate
+        effective_deep_validate, auto_enabled = _effective_deep_validate(
+            analysis,
+            deep_validate=deep_validate,
+            deep_validate_disabled=deep_validate_disabled,
+        )
 
         cache_key = _hypothesis_cache_key(
             hypothesis,

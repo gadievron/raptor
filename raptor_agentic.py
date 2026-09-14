@@ -1694,7 +1694,14 @@ def run_audit_postpass(args: argparse.Namespace, target: Path, out_dir: Path) ->
         return phase
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """Build the /agentic CLI parser.
+
+    Factored out of main() so tests exercise the REAL flag
+    declarations (defaults, store_true wiring, the
+    --deep-validate/--no-deep-validate mutex) instead of
+    re-declaring look-alike parsers.
+    """
     parser = argparse.ArgumentParser(
         description="RAPTOR Agentic Security Testing - Scan, Analyse, Exploit, Patch",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -2277,8 +2284,16 @@ Examples:
     parser.add_argument("--skip-sca-triage", action="store_true",
                         help="Skip LLM triage stage in /sca")
 
-    from core.sandbox import add_cli_args, apply_cli_args
+    from core.sandbox import add_cli_args
     add_cli_args(parser)
+    return parser
+
+
+def main() -> int:
+    from core.dataflow import sanitizer_cut_config
+    from core.sandbox import apply_cli_args
+
+    parser = build_parser()
     args = parser.parse_args()
 
     apply_cli_args(args, parser=parser)
