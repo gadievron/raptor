@@ -1448,6 +1448,13 @@ def _value_bound_dominates(
             # telemetry used for the strict-promotion decision.
             extra_bindings=resolved.inter_proc_bindings,
             java_source_text=java_text,
+            # Keep the kwarg set in lockstep with the Phase-15 parity
+            # shadow (sanitizer_cut_parity.value_bound_verdict_for):
+            # java_file_path activates the bounded cross-file constant
+            # resolver, so omitting it here while the shadow passes it
+            # makes the telemetry that gates Phase-16 lexical removal
+            # measure a DIFFERENT gate than production runs.
+            java_file_path=file_path,
         )
     except Exception:                                       # noqa: BLE001
         return None

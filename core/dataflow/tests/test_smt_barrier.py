@@ -2615,3 +2615,48 @@ def test_try_tier0_declined_on_prev_line_wrapped_java_guard(tmp_path: Path):
         language="java",
     )
     assert r.status is sb.Tier0Status.NOT_APPLICABLE
+
+
+def test_value_bound_gate_kwargs_match_parity_shadow(monkeypatch, tmp_path):
+    """The production value-bound gate and the Phase-15 parity shadow
+    must call evaluate_finding with the same behaviour-affecting
+    kwargs. The shadow's records gate the Phase-16 lexical-removal
+    decision; if production omits ``java_file_path`` (which activates
+    the cross-file constant resolver) while the shadow passes it, the
+    telemetry measures a DIFFERENT gate than the one production runs,
+    and the promotion decision drifts."""
+    from core.analysis import finding_resolver as fr
+    from core.analysis import sanitizer_cut as sc
+
+    src = tmp_path / "App.java"
+    src.write_text("class App {}\n", encoding="utf-8")
+
+    resolved = fr.ResolvedFinding(
+        file=str(src), enclosing_function="f", source_lineno=1,
+        source_symbols=frozenset({"x"}), sink_lineno=2, sink_arg="x",
+        cwe="CWE-79", language="java", cfg=object(), source_node=object(),
+        sink_node=object(),
+    )
+    monkeypatch.setattr(fr, "resolve_finding", lambda finding: resolved)
+
+    captured: dict = {}
+
+    def fake_evaluate(graph, sources, sink, **kwargs):
+        captured.update(kwargs)
+        return sc.SanitizerCutResult(
+            suppress=True, reason="test", cut_set=frozenset(),
+            candidate_callables=frozenset(),
+        )
+
+    monkeypatch.setattr(sc, "evaluate_finding", fake_evaluate)
+    monkeypatch.setattr(sb._sc_config, "value_bound_enabled", lambda: True)
+
+    out = sb._value_bound_dominates(
+        file_path=str(src), validator_line=1, sink_line=2,
+        cwe="CWE-79", language="java",
+    )
+    assert out is True
+    # The parity shadow (sanitizer_cut_parity.value_bound_verdict_for)
+    # passes java_file_path=<finding file>; production must match.
+    assert captured.get("java_file_path") == str(src)
+    assert captured.get("java_source_text") == "class App {}\n"
