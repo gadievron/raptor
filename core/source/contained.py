@@ -15,6 +15,15 @@ SARIF locations, finding records, crash artifacts:
   still races a growing plant). Without it, a multi-hundred-MB
   generated/planted file is loaded whole into host memory per
   finding.
+- **Regular files only, race-free** — the open itself carries
+  ``O_NOFOLLOW | O_NONBLOCK`` and the opened fd is ``fstat``-checked
+  ``S_ISREG`` before any read. A plain ``open()`` on a repo-planted
+  reader-less FIFO blocks the analyser forever, and any check-by-name
+  (``is_file()``) can be swapped between check and open — the guard
+  must live on the fd. Symlinks at the FINAL path component are
+  refused by the capped readers; callers that legitimately read
+  through symlinks resolve first (``read_contained`` does, via
+  ``confine``), which also keeps resolved in-root symlinks working.
 
 Sites that need distinct refusal messaging (outside-root vs
 unreadable) compose :func:`core.paths.confine` with
@@ -24,7 +33,10 @@ one-call form for callers that treat every failure the same way.
 
 from __future__ import annotations
 
+import os
+import stat
 from pathlib import Path
+from typing import IO
 
 from core.paths import confine
 
@@ -45,6 +57,35 @@ __all__ = [
 DEFAULT_MAX_SOURCE_CHARS = 10 * 1024 * 1024
 
 
+def _open_regular(path: str | Path, mode: str, **kwargs) -> IO | None:
+    """Open *path* for reading iff it is a regular file, without ever
+    blocking or following a final-component symlink.
+
+    ``O_NONBLOCK`` makes the open of a reader-less FIFO return instead
+    of hanging; the ``fstat(S_ISREG)`` check on the OPENED fd (not a
+    by-name stat, which races a swap) then refuses FIFOs/devices;
+    ``O_NOFOLLOW`` refuses a symlink swapped in at the final
+    component. Regular-file reads ignore ``O_NONBLOCK``, so the flag
+    costs nothing on the accept path. Mirrors
+    ``core.license.detector._read_license_full``.
+    """
+    try:
+        fd = os.open(
+            str(path),
+            os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0),
+        )
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            return None
+        return os.fdopen(fd, mode, **kwargs)
+    except OSError:
+        os.close(fd)
+        return None
+
+
 def read_text_capped(
     path: str | Path,
     max_chars: int = DEFAULT_MAX_SOURCE_CHARS,
@@ -54,14 +95,19 @@ def read_text_capped(
     """Read at most *max_chars* characters of UTF-8 text from *path*.
 
     Returns ``(text, truncated)``, or ``None`` when the file cannot be
-    opened or read (``OSError``). On truncation the trailing partial
+    opened or read (``OSError``), is not a regular file (FIFO, device,
+    directory), or is a symlink at the final path component (resolve
+    first when reading through symlinks is intended). On truncation the trailing partial
     line is dropped (avoids splitting mid-token in rendered context);
     when the capped read contains no newline at all the raw capped
     text is kept — returning ``""`` would turn a pathological
     single-line file into a silent empty read.
     """
+    f = _open_regular(path, "r", encoding="utf-8", errors=errors)
+    if f is None:
+        return None
     try:
-        with Path(path).open(encoding="utf-8", errors=errors) as f:
+        with f:
             content = f.read(max_chars + 1)
     except OSError:
         return None
@@ -81,13 +127,17 @@ def read_bytes_capped(
 
     Returns ``(data, truncated)`` where ``truncated`` means the file
     held MORE than *max_bytes* (``data`` carries exactly the first
-    *max_bytes*), or ``None`` when the file cannot be opened or read.
+    *max_bytes*), or ``None`` when the file cannot be opened or read,
+    is not a regular file, or is a final-component symlink.
     Callers with refuse-on-oversize semantics raise on
     ``truncated=True``; callers with degrade semantics keep the
     prefix.
     """
+    f = _open_regular(path, "rb")
+    if f is None:
+        return None
     try:
-        with Path(path).open("rb") as f:
+        with f:
             data = f.read(max_bytes + 1)
     except OSError:
         return None

@@ -120,3 +120,47 @@ class TestReadContained:
         p = tmp_path / "big.c"
         p.write_text("line1\nline2\nline3\n", encoding="utf-8")
         assert read_contained(tmp_path, "big.c", max_chars=8) == "line1\n"
+
+
+class TestRegularFileGuard:
+    """The capped readers are the load-bearing chokepoint for
+    hostile-repo-derived paths: a planted reader-less FIFO must not
+    hang the analyser, and the regularity check must live on the
+    OPENED fd (a by-name check races a swap)."""
+
+    def test_fifo_refused_promptly(self, tmp_path):
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("no mkfifo on this platform")
+        fifo = tmp_path / "plant.c"
+        os.mkfifo(fifo)
+        # Pre-fix this open blocked forever (reader-less FIFO).
+        assert read_text_capped(fifo) is None
+        assert read_bytes_capped(fifo, 100) is None
+
+    def test_final_component_symlink_refused(self, tmp_path):
+        target = tmp_path / "real.c"
+        target.write_text("int x;")
+        link = tmp_path / "link.c"
+        link.symlink_to(target)
+        assert read_text_capped(link) is None
+        assert read_bytes_capped(link, 100) is None
+
+    def test_read_contained_still_reads_in_root_symlink(self, tmp_path):
+        # read_contained resolves via confine() before the open, so a
+        # legitimate in-root symlink keeps working — only the raw
+        # capped readers refuse final-component symlinks.
+        target = tmp_path / "real.c"
+        target.write_text("int x;")
+        link = tmp_path / "link.c"
+        link.symlink_to(target)
+        assert read_contained(tmp_path, "link.c") == "int x;"
+
+    def test_directory_refused(self, tmp_path):
+        assert read_text_capped(tmp_path) is None
+        assert read_bytes_capped(tmp_path, 100) is None
+
+    def test_regular_file_still_reads(self, tmp_path):
+        p = tmp_path / "ok.c"
+        p.write_text("int y;")
+        assert read_text_capped(p) == ("int y;", False)
+        assert read_bytes_capped(p, 100) == (b"int y;", False)
