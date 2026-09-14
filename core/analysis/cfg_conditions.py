@@ -95,8 +95,12 @@ def extract_references(text: str) -> frozenset[str]:
     return frozenset(refs)
 
 
+# ``For`` labels from the C/C++ builder carry a BARE condition
+# ("for x < n" — the tree-sitter condition field excludes parens,
+# unlike if/while whose condition node includes them), so the paren
+# form alone never extracted a C for-loop guard.
 _CONDITION_LABEL_RE = re.compile(
-    r"^(?:If|While|ElIf|For)\s*\((.+)\)$",
+    r"^(?:If|While|ElIf|For)(?:\s*\((.+)\)|\s+(\S.*))$",
     re.IGNORECASE,
 )
 
@@ -123,7 +127,7 @@ def extract_conditions_from_cfg(cfg) -> list[ConditionEdge]:
         m = _CONDITION_LABEL_RE.match(node.label.strip())
 
         if m and len(successors) >= 2:
-            cond_text = m.group(1).strip()
+            cond_text = (m.group(1) or m.group(2) or "").strip()
             refs = extract_references(cond_text)
             smt = _is_smt_parseable(cond_text)
 

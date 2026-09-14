@@ -146,7 +146,13 @@ def build_sink_reachable_set(
 
     sink_fns: set[str] = set()
     if sinks_list:
-        sink_fns = {s["function"] for s in sinks_list if "function" in s}
+        # isinstance guard: a context-map that ever carries string
+        # sink entries would pass the substring test ("function" in
+        # <str>) and then explode on s["function"].
+        sink_fns = {
+            s["function"] for s in sinks_list
+            if isinstance(s, dict) and "function" in s
+        }
 
     all_callees: set[str] = set()
     forward: dict[str, set[str]] = {}

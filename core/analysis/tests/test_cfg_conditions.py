@@ -178,3 +178,25 @@ class TestExtractConditions:
         edges = extract_conditions_from_cfg(cfg)
         cond_edges = [e for e in edges if e.condition is not None]
         assert not any(e.condition.smt_parseable for e in cond_edges)
+
+
+class TestConditionLabelShapes:
+    def test_bare_c_for_label_extracts_condition(self):
+        # The C/C++ builder's for labels carry a BARE condition
+        # ("for x < n" — its condition field excludes parens); the
+        # paren-only regex never extracted a C for-loop guard.
+        from core.analysis.cfg_conditions import _CONDITION_LABEL_RE
+        m = _CONDITION_LABEL_RE.match("for x < n")
+        assert m is not None
+        assert (m.group(1) or m.group(2)) == "x < n"
+
+    def test_join_and_case_labels_do_not_match(self):
+        from core.analysis.cfg_conditions import _CONDITION_LABEL_RE
+        for label in ("for-exit (line 3)", "case (line 5)",
+                      "format(x)"):
+            assert _CONDITION_LABEL_RE.match(label) is None, label
+
+    def test_paren_forms_still_match(self):
+        from core.analysis.cfg_conditions import _CONDITION_LABEL_RE
+        m = _CONDITION_LABEL_RE.match("If (x > 0)")
+        assert m is not None and m.group(1) == "x > 0"
