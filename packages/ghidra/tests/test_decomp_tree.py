@@ -84,6 +84,28 @@ class TestWriter:
         # filesystem-safe, bounded filename
         assert len(fname) < 100
 
+    def test_hostile_names_control_scrubbed_like_match_layer(
+        self, tmp_path,
+    ):
+        # Same scrub class as match._clip / diff._display, "so the
+        # layers cannot drift": names land in the jq'd sidecar, in .c
+        # doc-comment headers, and in the byte-ceiling warning — none
+        # may carry raw ESC/BEL/bidi bytes.
+        db = _db(functions=[
+            _fn("evil\x1b]0;pwn\x07‮name", 0x1000,
+                sig="void evil\x1b[2J(void)",
+                decomp="void f(void){}"),
+        ])
+        tree = write_decomp_tree(db, tmp_path)
+        fname = [f for f in tree.files if f.endswith(".c")][0]
+        text = (tmp_path / fname).read_text()
+        sidecar = tree.sidecar_path.read_text()
+        for emitted in (text, sidecar):
+            assert "\x1b" not in emitted
+            assert "\x07" not in emitted
+            assert "‮" not in emitted
+        assert "evil" in text
+
     def test_byte_ceiling_truncates_loudly(self, tmp_path, monkeypatch):
         import packages.ghidra.decomp_tree as mod
         monkeypatch.setattr(mod, "_MAX_TREE_BYTES", 512)

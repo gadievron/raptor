@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from .match import _CONTROL
 from .model import REDatabase, REFunction
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,14 @@ TYPES_HEADER = "types.h"
 
 
 def _clip(text: object, limit: int) -> str:
-    s = str(text or "")
+    """Clip AND control/bidi-scrub binary-derived text for emission.
+
+    Shares ``match._CONTROL`` so the layers cannot drift: names land
+    in the decomp-map.json sidecar operators ``jq`` to a terminal, in
+    the .c doc-comment headers, and in the byte-ceiling
+    ``logger.warning`` — the console formatter does no scrubbing of
+    its own, so a hostile ESC/bidi-laden symbol name must die here."""
+    s = _CONTROL.sub(" ", str(text or ""))
     return s if len(s) <= limit else s[:limit] + "…"
 
 
