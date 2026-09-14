@@ -204,6 +204,19 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
     # ----- packages/codeql/autonomous_analyzer.py -----
     AllowlistEntry(
         file='packages/codeql/autonomous_analyzer.py',
+        func_name='_artifact_safe_id',
+        attr='start_line',
+        expr_text='{finding.start_line}',
+        audit_note=(
+            'filesystem artifact-stem construction (per-finding '
+            'analysis/exploit/visualization names), not an LLM '
+            'prompt; start_line is the int-typed dataclass field and '
+            'the sibling stem components are sanitised (basename '
+            'filtered, path digested, rule id slash mapped)'
+        ),
+    ),
+    AllowlistEntry(
+        file='packages/codeql/autonomous_analyzer.py',
         func_name='AutonomousCodeQLAnalyzer.analyze_vulnerability',
         attr='rule_id',
         expr_text='{finding.rule_id}',
