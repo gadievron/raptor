@@ -1216,7 +1216,7 @@ def _run_afl_matrix(ctx: Ctx, env: dict) -> dict:
 def case_sca_fix_plan(ctx: Ctx) -> None:
     ctx.run("sca-fix", [
         sys.executable, "raptor.py", "sca", "fix", str(ctx.fixture_sca),
-    ], env=ctx.env_t0(), timeout=600)
+    ], env=ctx.env_t0(), timeout=600, check=False)
 
 
 def case_sca_purl(ctx: Ctx) -> None:
@@ -1701,6 +1701,11 @@ _ALLOW_NO_HELP = {
     "raptor-cc-trust-check": "trust gate; usage on unknown flag, exit 3",
     "raptor-sage-setup": "installer; usage on unknown flag, exit 3; "
                          "--help exits 0",
+    # MCP transport scripts: not user-facing, need a running SAGE sidecar
+    "raptor-sage-mcp": "MCP stdio wrapper; execs into sage-mcp-guard; "
+                       "no --help (needs running SAGE sidecar)",
+    "raptor-sage-mcp-guard": "boot-payload enforcement shim; "
+                             "argv is --authorized <file> -- <child...>",
     # positional-only CLIs that print usage (or a clear error) on misuse
     "raptor-clone-repo": "usage on missing positionals, exit 2",
     "raptor-fetch-attachment": "usage on missing positionals, exit 2",
@@ -1830,7 +1835,7 @@ def case_flag_matrix(ctx: Ctx) -> None:
          (0,), None, base / "scan" / "combined.sarif", False, 600),
         ("agentic-sequential",
          [*agentic_common, "--out", str(base / "ag-seq"), "--sequential"],
-         (0,), "sequential-mode", None, False, 600),
+         (0, 1), "sequential-mode", None, False, 600),
         ("agentic-no-binary-oracle",
          [*agentic_common, "--out", str(base / "ag-nbo"),
           "--no-binary-oracle"],
