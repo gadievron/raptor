@@ -250,6 +250,10 @@ _REPORT_WRITER_FILES = (
     # same finding-derived interpolations, must stay under audit.
     "packages/exploitability_validation/orchestrator.py",
     "packages/frida/cli.py",
+    # Patch oracle: captured target stdio rides RuntimeError text to
+    # the operator terminal; escaped at construction and at the CLI
+    # print. Terminal writer — sanitise_for_terminal grade.
+    "packages/frida/patch_oracle.py",
     "packages/frida/runner.py",
     "packages/ghidra/decomp_tree.py",
     "packages/llm_analysis/agent.py",

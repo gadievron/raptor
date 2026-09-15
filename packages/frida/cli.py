@@ -13,6 +13,8 @@ import os
 import sys
 from pathlib import Path
 
+from core.security.log_sanitisation import sanitise_for_terminal as _sft
+
 from .runner import (
     RunConfig,
     list_templates,
@@ -93,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         target = parse_target(args.target)
     except ValueError as e:
-        print(f"frida: invalid --target: {e}", file=sys.stderr)
+        print(f"frida: invalid --target: {_sft(str(e))}", file=sys.stderr)
         return 2
 
     # A PID identifies an already-running process; you cannot spawn it.
@@ -121,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             source, origin = load_script_source(args.template, args.script)
     except (FileNotFoundError, ValueError) as e:
-        print(f"frida: {e}", file=sys.stderr)
+        print(f"frida: {_sft(str(e))}", file=sys.stderr)
         return 2
 
     cfg = RunConfig(
@@ -145,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             fd = os.open(args.stdin_file, os.O_RDONLY)
         except OSError as e:
-            print(f"frida: unreadable --stdin file: {e}", file=sys.stderr)
+            print(f"frida: unreadable --stdin file: {_sft(str(e))}", file=sys.stderr)
             return 2
         os.dup2(fd, 0)
         if fd != 0:
@@ -154,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = run(cfg)
     except FridaUnavailable as e:
-        print(f"frida: {e}", file=sys.stderr)
+        print(f"frida: {_sft(str(e))}", file=sys.stderr)
         return 3
 
     if not result.ok:
@@ -187,7 +189,9 @@ def _maybe_correlate_io(out_dir: Path) -> None:
 
         manifest = correlate_run(out_dir)
     except Exception as e:  # noqa: BLE001 — correlation is additive
-        print(f"frida: io-correlation skipped: {e}", file=sys.stderr)
+        # The correlate/harvest parsers read target-controlled
+        # events.jsonl — the exception text can quote hostile bytes.
+        print(f"frida: io-correlation skipped: {_sft(str(e))}", file=sys.stderr)
         return
     if manifest["match_count"]:
         print(f"frida: {manifest['match_count']} I/O correlation(s) — "
@@ -208,7 +212,7 @@ def _maybe_harvest_seeds(out_dir: Path) -> None:
 
         manifest = extract_seeds(out_dir)
     except Exception as e:  # noqa: BLE001 — harvest is additive
-        print(f"frida: seed harvest skipped: {e}", file=sys.stderr)
+        print(f"frida: seed harvest skipped: {_sft(str(e))}", file=sys.stderr)
         return
     if manifest["seed_count"]:
         print(f"frida: {manifest['seed_count']} unique seeds harvested → "

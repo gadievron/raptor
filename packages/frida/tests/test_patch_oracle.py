@@ -327,3 +327,55 @@ class TestRunSideEnvHygiene:
         env = seen["env"]
         assert env["RAPTOR_DIR"]
         assert env["PYTHONPATH"] == env["RAPTOR_DIR"]
+
+
+class TestTerminalEscapeScrub:
+    """Captured target stdio rides RuntimeError text onto the operator
+    terminal — both the construction site and the CLI print must
+    escape hostile bytes."""
+
+    def test_failed_session_tail_is_escaped(self, tmp_path, monkeypatch):
+        import subprocess as sp
+
+        monkeypatch.setenv(
+            "RAPTOR_DIR", str(Path(__file__).resolve().parents[3]))
+
+        def fake_run(cmd, **kwargs):
+            return sp.CompletedProcess(
+                cmd, 1, stdout="", stderr="boom \x1b[2J\x9bpwned")
+
+        monkeypatch.setattr(patch_oracle.subprocess, "run", fake_run)
+        binary = tmp_path / "vuln"
+        binary.write_bytes(b"\x7fELF")
+        script = tmp_path / "watch.js"
+        script.write_text("// noop")
+        with pytest.raises(RuntimeError) as exc_info:
+            patch_oracle._run_side(binary, script, tmp_path / "side",
+                                   poc=None, duration=1.0)
+        msg = str(exc_info.value)
+        assert "\x1b" not in msg
+        assert "\x9b" not in msg
+        assert "boom" in msg and "pwned" in msg
+
+    def test_main_error_print_is_escaped(self, tmp_path, monkeypatch,
+                                         capsys):
+        monkeypatch.setenv(
+            "RAPTOR_DIR", str(Path(__file__).resolve().parents[3]))
+
+        def raise_hostile(*a, **kw):
+            raise RuntimeError("fail \x1b]0;evil\x07\x9b31m")
+
+        monkeypatch.setattr(patch_oracle, "verify_patch", raise_hostile)
+        before = tmp_path / "before"
+        after = tmp_path / "after"
+        for b in (before, after):
+            b.write_bytes(b"\x7fELF")
+        rc = patch_oracle.main([
+            "--before", str(before), "--after", str(after),
+            "--sink", "system", "--out", str(tmp_path / "out"),
+        ])
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "\x1b" not in err
+        assert "\x9b" not in err
+        assert "\x07" not in err

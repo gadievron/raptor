@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Sequence
 
 from core.logging import get_logger
+from core.security.log_sanitisation import sanitise_for_terminal as _sft
 
 log = get_logger("frida.patch_oracle")
 
@@ -111,14 +112,19 @@ def _run_side(binary: Path, script_path: Path, side_dir: Path,
         )
     except subprocess.TimeoutExpired as e:
         # An infrastructure hang must surface as an error, never leak
-        # out as a verdict-bearing exit code.
-        msg = f"frida session against {binary} hung: {e}"
+        # out as a verdict-bearing exit code. The exception text quotes
+        # the (target-derived) command line — escape it.
+        msg = f"frida session against {binary} hung: {_sft(str(e))}"
         raise RuntimeError(msg) from e
     finally:
         if stdin_ctx is not None:
             stdin_ctx.close()
     if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout or "").strip()[-400:]
+        # The captured streams carry hostile-target bytes (the spawned
+        # target inherits the frida CLI's stdio) — escape before the
+        # tail rides the exception onto the operator terminal.
+        tail = _sft((proc.stderr or proc.stdout or "").strip()[-400:],
+                    max_len=500)
         msg = f"frida session against {binary} failed: {tail}"
         raise RuntimeError(msg)
 
@@ -321,7 +327,10 @@ def main(argv: list[str] | None = None) -> int:
             poc=args.poc, finding_location=args.location,
             duration=args.duration)
     except (ValueError, RuntimeError) as e:
-        print(f"patch-verify: {e}", file=sys.stderr)
+        # Belt-and-braces: the message may embed captured target
+        # output (escaped at construction above, but any other raise
+        # path lands here too).
+        print(f"patch-verify: {_sft(str(e), max_len=600)}", file=sys.stderr)
         return 2
 
     status = {"closed": "Closed", "still_fires": "Still Fires",
