@@ -150,6 +150,69 @@ def test_verified_store_without_target_binding_floors(
     assert names == frozenset()
 
 
+def test_persist_floors_unbound_store_before_rebinding(
+    tmp_path: Path,
+) -> None:
+    """persist_refined_specs re-saves the merged envelope WITH a fresh
+    target binding: a verified-but-UNBOUND pre-existing store (validly
+    MAC'd on this install, e.g. built for another target and dropped
+    into this project's dir) must floor exactly like the load path
+    floors it — otherwise its tiers launder into a freshly stamped,
+    target-bound envelope that every later load honours."""
+    proj, run, target = _project(tmp_path)
+    save_specs(
+        run,
+        [TaintSpec(function="laundered", file="a.c", role="sanitiser",
+                   evidence_tier=EvidenceTier.XREF_BACKED)],
+        target_path=None,
+    )
+    # The spec's file exists in the target, so stale-file eviction
+    # cannot mask the laundering question.
+    (target / "a.c").write_text("int x;\n")
+
+    persist_refined_specs(
+        run,
+        [TaintSpec(function="fresh", file="b.c", role="source",
+                   evidence_tier=EvidenceTier.HEURISTIC)],
+        target_path=target,
+    )
+    # The merged envelope is now stamped AND bound — loads honour its
+    # tiers, so the pre-merge floor was the only guard.
+    names = get_project_sanitisers(out_dir=run, target_path=target)
+    assert "laundered" not in names
+    by_fn = {s.function: s for s in load_specs(run, target_path=target)}
+    assert by_fn["laundered"].evidence_tier == EvidenceTier.HEURISTIC
+
+
+def test_persist_without_any_target_stays_unbound_and_honest(
+    tmp_path: Path,
+) -> None:
+    """No target anywhere (run nor store): the merge must NOT floor —
+    but it must also re-save UNBOUND, so target-scoped loads keep
+    flooring and nothing is laundered."""
+    proj, run, target = _project(tmp_path)
+    save_specs(
+        run,
+        [TaintSpec(function="clean_it", file="a.c", role="sanitiser",
+                   evidence_tier=EvidenceTier.XREF_BACKED)],
+        target_path=None,
+    )
+    persist_refined_specs(
+        run,
+        [TaintSpec(function="fresh", file="b.c", role="source",
+                   evidence_tier=EvidenceTier.HEURISTIC)],
+        target_path=None,
+    )
+    data = json.loads((proj / "iris-specs" / "specs.json").read_text())
+    assert not data.get("target_path")
+    # Target-less load: tier honoured (same trust decision as before).
+    by_fn = {s.function: s for s in load_specs(run)}
+    assert by_fn["clean_it"].evidence_tier == EvidenceTier.XREF_BACKED
+    # Target-scoped load still floors the unbound envelope.
+    names = get_project_sanitisers(out_dir=run, target_path=target)
+    assert "clean_it" not in names
+
+
 def test_merge_does_not_launder_unverified_tiers(tmp_path: Path) -> None:
     """persist_refined_specs re-saves (and re-stamps) the merged
     envelope — forged tiers in the pre-existing store must floor

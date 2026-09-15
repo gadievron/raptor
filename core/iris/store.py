@@ -417,8 +417,25 @@ def persist_refined_specs(
             )
             return None
 
+        # Resolved BEFORE the tier floor because the floor decision
+        # depends on it: the merge below re-saves with this binding, so
+        # a verified-but-UNBOUND store must floor here exactly like the
+        # load path floors it — otherwise its tiers launder into a
+        # freshly stamped, target-bound envelope (a validly-MAC'd store
+        # built for another target dropped into this project's dir
+        # would gain suppression authority after one refine persist).
+        # When neither the run nor the store carries a target, the
+        # save below re-stamps unbound and loads keep flooring — no
+        # binding is laundered, so the binding check stays off (None),
+        # matching a load with target_path=None.
+        resolved_target: Path | None = None
+        if target_path is not None:
+            resolved_target = Path(target_path)
+        elif stored_target:
+            resolved_target = Path(stored_target)
+
         existing = _specs_from_list(meta.get("specs", []))
-        reason = _tier_floor_reason(meta, target_path=None)
+        reason = _tier_floor_reason(meta, target_path=resolved_target)
         if reason:
             # Never launder: an unverified store's tiers must not survive
             # into the (freshly stamped) merged envelope.
@@ -460,12 +477,6 @@ def persist_refined_specs(
             prior_round = int(meta.get("round", 0) or 0)
         except (TypeError, ValueError):
             prior_round = 0
-
-        resolved_target: Path | None = None
-        if target_path is not None:
-            resolved_target = Path(target_path)
-        elif stored_target:
-            resolved_target = Path(stored_target)
 
         # Evict specs whose file vanished from the target tree. Like the
         # refuted drop above this used to exist with zero persistence-path
