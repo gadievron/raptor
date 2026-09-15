@@ -238,3 +238,41 @@ def test_rule_ignores_string_method_calls():
         '    lines.append(f"## {severity.title()}")\n'
     )
     assert audit_source(src) == []
+
+
+def test_rule_catches_bullets_receiver_accumulator():
+    """packages/sca/report.py's per-finding renderer accumulates its
+    markdown through a ``bullets`` list. Without the receiver token
+    the file's registration was vacuous — reverting its summary
+    sanitiser never fired the audit."""
+    src = (
+        "def render(f, primary):\n"
+        "    bullets = []\n"
+        '    bullets.append(f"- Summary: {primary.summary}")\n'
+    )
+    vs = audit_source(src)
+    assert any(v.detail == "summary" for v in vs)
+
+
+def test_rule_catches_advisory_details_taint_into_bullets():
+    """OSV advisory ``details`` is attacker-writable free text; a
+    tainted local reaching the accumulator without the sanitiser must
+    fire (the <details>-embed revert shape in packages/sca/report.py)."""
+    src = (
+        "def render(primary, bullets):\n"
+        "    detail = primary.details or ''\n"
+        "    clipped = detail.strip()\n"
+        '    bullets.append(f"<details>{clipped}</details>")\n'
+    )
+    vs = audit_source(src)
+    assert any(v.detail in ("details", "clipped") for v in vs)
+
+
+def test_rule_passes_sanitised_bullets_append():
+    # Two-direction guard: the sanitised shape the fixed writer
+    # actually uses stays clean under the new receiver token.
+    src = (
+        "def render(f, primary, bullets):\n"
+        '    bullets.append(f"- Summary: {sanitise_string(primary.summary)}")\n'
+    )
+    assert audit_source(src) == []

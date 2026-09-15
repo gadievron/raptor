@@ -837,7 +837,19 @@ def _print_dry_run(
     llm_approved: set | None = None,
     llm_verdicts: dict | None = None,
 ) -> None:
-    """Print what fix *would* do, grouped by manifest file."""
+    """Print what fix *would* do, grouped by manifest file.
+
+    Every interpolated value below is untrusted for TERMINAL purposes:
+    plan names / installed versions come from the scanned manifests,
+    targets from OSV ``fixed`` strings (the ``refuse_unsafe_target``
+    grammar gate runs only at rewrite time, after this print), verdict
+    summaries / breaking-change notes from the LLM. Escape
+    non-printables (ANSI / OSC) before they reach the operator's
+    terminal; LLM free text takes the full output sanitiser.
+    """
+    from core.security.log_sanitisation import escape_nonprintable
+    from core.security.prompt_output_sanitise import sanitise_string
+
     all_plans = list(vuln_plans.values()) + list(hygiene_plans.values())
     vuln_keys = set(vuln_plans)
 
@@ -859,17 +871,20 @@ def _print_dry_run(
         plans = sorted(by_manifest[manifest], key=lambda p: p.name)
         label = (str(manifest) if name_count[manifest.name] > 1
                  else manifest.name)
-        print(f"  {label}")
+        print(f"  {escape_nonprintable(label)}")
         for plan in plans:
             key = (plan.ecosystem, plan.name, str(plan.manifest))
             if key in vuln_keys:
-                ids = ", ".join(plan.advisory_ids)
+                ids = escape_nonprintable(", ".join(plan.advisory_ids))
                 suffix = ""
                 if llm_approved and key in llm_approved:
                     suffix = "  (LLM: safe to bump)"
-                print(f"    {plan.name} {plan.installed} → {plan.target}  [{ids}]{suffix}")
+                line = (f"{plan.name} {plan.installed} → "
+                        f"{plan.target}")
+                print(f"    {escape_nonprintable(line)}  [{ids}]{suffix}")
             else:
-                print(f"    {plan.name} → =={plan.target}")
+                print(f"    {escape_nonprintable(plan.name)} "
+                      f"→ =={escape_nonprintable(plan.target)}")
         print()
 
     if major_blocked:
@@ -877,17 +892,20 @@ def _print_dry_run(
               f"(require major version bump):\n")
         for plan in sorted(major_blocked.values(), key=lambda p: p.name):
             key = (plan.ecosystem, plan.name, str(plan.manifest))
-            ids = ", ".join(plan.advisory_ids)
-            print(f"    {plan.name} {plan.installed} → {plan.target}  "
-                  f"[{ids}]")
+            ids = escape_nonprintable(", ".join(plan.advisory_ids))
+            line = f"{plan.name} {plan.installed} → {plan.target}"
+            print(f"    {escape_nonprintable(line)}  [{ids}]")
             if llm_verdicts and key in llm_verdicts:
                 v = llm_verdicts[key]
-                label = v.verdict.replace("_", " ")
-                print(f"      LLM: {label} ({v.confidence})")
+                label = escape_nonprintable(v.verdict.replace("_", " "))
+                print(f"      LLM: {label} "
+                      f"({escape_nonprintable(str(v.confidence))})")
                 if v.summary:
-                    print(f"      {v.summary}")
+                    print(f"      {sanitise_string(v.summary)}")
                 for bc in v.breaking_changes[:3]:
-                    print(f"        {bc.site}: {bc.what_breaks}")
+                    site = sanitise_string(bc.site, max_chars=200)
+                    breaks = sanitise_string(bc.what_breaks, max_chars=300)
+                    print(f"        {site}: {breaks}")
         print("\n  Re-run with --allow-major to include these.\n")
 
     print("Run with --apply to modify files in-place, "

@@ -1281,3 +1281,51 @@ class TestPinStagingAnchors:
         assert "requests==2.31.0" in final, (
             "CVE-phase rewrite lost — pin staging did not compose"
         )
+
+
+class TestDryRunTerminalEscaping:
+    """Default dry-run output interpolates manifest-, OSV-, and
+    LLM-derived strings: ANSI/OSC sequences in any of them must never
+    reach the operator's terminal raw."""
+
+    _ANSI = "\x1b]0;pwned\x07\x1b[31m"
+
+    def _plan(self, **kw):
+        base = dict(
+            ecosystem="PyPI", name=f"evil{self._ANSI}pkg",
+            installed="1.0.0", target=f"2.0.0{self._ANSI}",
+            manifest=Path("/p/requirements.txt"),
+            advisory_ids=[f"GHSA-{self._ANSI}x"],
+        )
+        base.update(kw)
+        return _PlanEntry(**base)
+
+    def test_plan_lines_escaped(self, capsys):
+        key = ("PyPI", f"evil{self._ANSI}pkg", "/p/requirements.txt")
+        optimise._print_dry_run({key: self._plan()}, {})
+        out = capsys.readouterr().out
+        assert "\x1b" not in out
+        assert "\x07" not in out
+
+    def test_llm_verdict_text_escaped(self, capsys):
+        from packages.sca.llm.schemas import BreakingChange, UpgradeImpactVerdict
+
+        key = ("PyPI", "flask", "/p/requirements.txt")
+        plan = self._plan(name="flask")
+        verdict = UpgradeImpactVerdict(
+            verdict="major_migration",
+            confidence="low",
+            breaking_changes=[BreakingChange(
+                site=f"src/x.py:1{self._ANSI}",
+                what_breaks=f"api gone{self._ANSI}",
+            )],
+            summary=f"looks fine{self._ANSI} ![b](https://evil.example/p)",
+        )
+        optimise._print_dry_run(
+            {}, {}, {key: plan}, llm_verdicts={key: verdict},
+        )
+        out = capsys.readouterr().out
+        assert "\x1b" not in out
+        assert "\x07" not in out
+        # LLM free text also gets the markdown/autofetch defang.
+        assert "![b](" not in out

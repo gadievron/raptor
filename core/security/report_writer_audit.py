@@ -89,6 +89,9 @@ _LLM_DERIVED_KEYS = frozenset({
     "stage_f_review",
     "stage_f_summary",
     "error",
+    # OSV advisory free text (attacker-writable markdown; the sca
+    # report embeds it inside a <details> block).
+    "details",
 })
 
 
@@ -115,6 +118,14 @@ _SANITISERS = frozenset({
     "_md_escape_inline",
     "_md_table_cell",
     "_render_detail",
+    # packages/sca's shared markdown neutralisers (packages.sca._md):
+    # escape structural markdown/HTML + non-printables for inline text
+    # and code spans/cells; every sca renderer routes untrusted values
+    # through them.
+    "neutralize_inline",
+    "inline_code",
+    "code_cell",
+    "md_cell",
 })
 
 
@@ -122,7 +133,11 @@ _SANITISERS = frozenset({
 _SINK_FUNCTIONS = frozenset({"print"})
 _SINK_METHODS = frozenset({"write", "write_text"})
 _ACCUMULATE_METHODS = frozenset({"append", "extend"})
-_ACCUMULATOR_TOKENS = ("lines", "rows", "sections", "parts")
+# ``bullets``: packages/sca/report.py's per-finding renderer
+# accumulates its markdown through a ``bullets`` list — without the
+# token the file's registration was vacuous (reverting its sanitiser
+# calls never fired the audit; only the regression tests caught it).
+_ACCUMULATOR_TOKENS = ("lines", "rows", "sections", "parts", "bullets")
 _REPORT_CONSTRUCTORS = frozenset({"ReportSection"})
 
 
@@ -144,6 +159,14 @@ _REPORT_WRITER_FILES = (
     "libexec/raptor-annotate",
     "libexec/raptor-coverage-summary",
     "libexec/raptor-llm-ask",
+    # packages/sca operator-facing renderers / CLI printers: report.md
+    # and terminal output interpolate manifest-, OSV-, and LLM-derived
+    # strings.
+    "packages/sca/report.py",
+    "packages/sca/optimise.py",
+    "packages/sca/health.py",
+    "packages/sca/diff.py",
+    "packages/sca/review.py",
 )
 
 
