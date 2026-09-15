@@ -22,9 +22,8 @@ from core.analysis.cfg_node_tables import (
 
 def _language(grammar_module: str):
     mod = pytest.importorskip(grammar_module)
-    from tree_sitter import Language
-
-    return Language(mod.language())
+    ts = pytest.importorskip("tree_sitter")
+    return ts.Language(mod.language())
 
 
 # ---------------------------------------------------------------------------

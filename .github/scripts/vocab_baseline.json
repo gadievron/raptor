@@ -26,14 +26,14 @@
     "count": 25,
     "kind": "literal"
   },
-  "core/analysis/cfg_builder_java.py::_LOCAL_SCOPE_BOUNDS": {
-    "count": 12,
-    "kind": "literal",
-    "note": "tree-sitter-java GRAMMAR node-type set bounding a declarator's scope window (language grammar taxonomy, not target API names; over-inclusion only narrows vouch windows \u2014 refusal direction)"
-  },
   "core/analysis/cfg_conditions.py::keywords": {
     "count": 29,
     "kind": "literal"
+  },
+  "core/analysis/cfg_node_tables.py::JAVA_TABLES": {
+    "count": 12,
+    "kind": "literal",
+    "note": "closed grammar-node-type taxonomy: the tree-sitter-java node kinds the CFG builder keys refusal/scope tables on; every entry is asserted producible by the installed grammar (core/analysis/tests/test_cfg_node_tables.py) \u2014 grammar structure names, not a learned name vocabulary"
   },
   "core/analysis/peer_groups.py::_NON_DISTINCTIVE_TYPES": {
     "count": 156,
@@ -1199,11 +1199,6 @@
     "count": 10,
     "kind": "literal"
   },
-  "core/inventory/js_lexer.py::_REGEX_PRECEDER_KEYWORDS": {
-    "count": 14,
-    "kind": "literal",
-    "note": "ECMA-262 keywords after which a '/' token lexes as a regex literal (return, case, typeof, ...) \u2014 fixed language grammar for the JS dead-scope lexer, not an API vocabulary"
-  },
   "core/inventory/languages.py::LANG_DISPLAY": {
     "count": 25,
     "kind": "literal"
@@ -1212,6 +1207,11 @@
     "count": 10,
     "kind": "literal",
     "note": "OS-level interpreter basename -> inventory language map for extensionless-script shebang detection (sh/bash/dash/ksh/zsh, python, node, perl, ruby); platform vocabulary like libc names, not project API names for DomainVocabulary/IRIS to learn"
+  },
+  "core/inventory/lexical_view.py::NONCODE_NODE_MODES": {
+    "count": 11,
+    "kind": "literal",
+    "note": "closed grammar-node-type taxonomy: per-grammar non-code (comment/string/heredoc) node kinds the tokenizer-grade blanker spaces out; every entry is asserted producible by the installed grammar (core/inventory/tests/test_lexical_view.py) \u2014 grammar structure names, not a learned name vocabulary"
   },
   "core/inventory/macro_resolve.py::_SKIP_IDENTS_C": {
     "count": 46,
