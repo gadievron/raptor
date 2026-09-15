@@ -3,12 +3,39 @@
 ``read_verdict`` is the one shared read for the ``VERDICT_KEYS``
 boolean fields (``is_true_positive`` / ``is_exploitable``). Those
 fields are tri-state: True / False / abstained (missing, schema-nulled
-None, or malformed shape). Reading an abstention as a NEGATIVE verdict
-— via a bool ``.get`` default, ``not``, or an ``==`` bool compare —
-has repeatedly demoted findings whose analysis response was merely
-malformed. The closure test scans every runtime module for those
-idioms so a new member of the class cannot be written without either
-routing through the accessor or consciously editing this test.
+None, or malformed shape). Reading an abstention as a verdict — via a
+verdict-fabricating ``.get`` default, ``not``, an ``==``/``!=``
+compare against a bool or ``None`` constant, direct truthiness
+(including the positive ternary, ``bool()``, and walrus-wrapped
+reads), a membership test, a direct ``is None`` identity check, or an
+attribute read off a splat-constructed object — has repeatedly demoted
+findings
+whose analysis response was merely malformed. The closure test scans
+every runtime module (including the repo-root ``raptor*.py`` entry
+modules) for those idiom families so a new member of the class cannot
+be written without either routing through the accessor or consciously
+editing this test.
+
+The scan also covers the GRADED string tri-state field
+(``exploitability``: high/medium/low with ``"unknown"`` as the
+producer's abstention value): truthiness, membership splits, and
+non-abstention defaults on a raw read of it collapse "unknown" into
+whichever side of the split it happens to fall on. The blessed
+spelling binds the read to a name first and maps each level
+explicitly, with the unknown/absent arm preserved.
+
+Scope boundary (deliberate, keep this docstring honest): the scan
+flags the enumerated idiom families applied DIRECTLY to a raw read —
+including through a walrus wrapper (``if (v := r.get(k)):``), which
+is still a direct read. Outside its vocabulary: variable-mediated
+consumption via a separate-statement binding (``v = r.get(k)`` …
+``if v:``); raw values forwarded into ``tally_verdict_votes`` (which
+applies its own documented counting contract); ``any()`` / ``all()``
+/ ``filter(None, …)`` consuming reads yielded from comprehensions;
+and positive graded equality with a fabricating ``else`` arm
+(``== 'high' … else <verdict>`` — an AST lint cannot see the else's
+semantics; only the negative-equality split is mechanically a
+misread).
 """
 
 from __future__ import annotations
@@ -59,29 +86,78 @@ class TestReadVerdict:
 #: Runtime trees the verdict-record dicts flow through (producers and
 #: consumers of analysis/finding records). Test dirs, scripts/ dev
 #: harnesses, and conftest files are excluded below — fixtures may
-#: legitimately build records with literal defaults.
+#: legitimately build records with literal defaults. The repo-root
+#: ``raptor*.py`` entry modules join via _runtime_py_files: the
+#: fuzzing entry point consumed a graded verdict outside every
+#: earlier sweep precisely because the roots stopped at the package
+#: trees.
 _SCAN_ROOTS = ("core", "packages", "plugins")
 
-#: (path-suffix, lineno) pairs reviewed and deliberately exempted.
-#: Keep this empty unless a site has a documented reason the shared
-#: accessor cannot express (none known today).
-_ALLOWLIST: frozenset[tuple[str, int]] = frozenset()
+#: Graded string tri-state verdict fields and their abstention
+#: spellings: a raw read yields None when absent and the producers
+#: (packages/autonomous/dialogue.py, crash-context consumers) keep
+#: "unknown" as the explicit non-verdict. Any other constant default,
+#: a truthiness read, or a membership split of a raw read collapses
+#: the abstention. There is deliberately no shared accessor for these
+#: (the levels are surface-specific); the blessed spelling binds the
+#: read to a name and maps each level explicitly.
+_GRADED_VERDICT_KEYS: frozenset[str] = frozenset({"exploitability"})
+_GRADED_ABSTENTION_DEFAULTS = (None, "unknown")
+
+#: (repo-relative path, lineno) pairs reviewed and deliberately
+#: exempted, each with its rationale. Keep entries rare — an entry
+#: must explain why the flagged idiom does NOT consume the verdict.
+#: Known key weakness: the lineno key means an edit above the entry
+#: surfaces it loudly for re-adjudication (fail-closed), but a NEW
+#: misread landing exactly on the exempted line would inherit the
+#: exemption while the displaced original resurfaces — the scan
+#: still fails overall, so silent re-arm needs a careless
+#: re-adjudication on top; re-verify the rationale whenever an
+#: entry's file moves.
+_ALLOWLIST: frozenset[tuple[str, int]] = frozenset({
+    # Display-only interpolation: the graded level is embedded in a
+    # human-readable seed-reasoning string next to sibling fields
+    # that share the module's "?" placeholder convention; no verdict
+    # semantics are consumed and "?" reads as absent, not as a level.
+    ("core/audit/synthesis_seeds.py", 257),
+})
 
 
-def _is_verdict_read(node: ast.AST) -> bool:
-    """True for ``X.get("<verdict key>"[, d])`` or ``X["<verdict key>"]``."""
+def _read_key(node: ast.AST, keys) -> str | None:
+    """The verdict key when ``node`` is ``X.get("<key>"[, d])`` or a
+    Load-context ``X["<key>"]``; None otherwise. A walrus wrapper is
+    unwrapped first: ``(v := r.get(k))`` in a flagged position is
+    still a direct read of the raw value (the binding does not
+    launder it), unlike a separate-statement binding."""
+    while isinstance(node, ast.NamedExpr):
+        node = node.value
     if (isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
             and node.func.attr == "get"
             and node.args
             and isinstance(node.args[0], ast.Constant)
-            and node.args[0].value in VERDICT_KEYS):
-        return True
+            and node.args[0].value in keys):
+        return node.args[0].value
     if (isinstance(node, ast.Subscript)
+            and isinstance(node.ctx, ast.Load)
             and isinstance(node.slice, ast.Constant)
-            and node.slice.value in VERDICT_KEYS):
-        return True
-    return False
+            and node.slice.value in keys):
+        return node.slice.value
+    return None
+
+
+def _is_verdict_read(node: ast.AST) -> bool:
+    """True for a raw read (``.get``/subscript) of a bool verdict key."""
+    return _read_key(node, VERDICT_KEYS) is not None
+
+
+def _is_graded_read(node: ast.AST) -> bool:
+    """True for a raw read of a graded (string) verdict key."""
+    return _read_key(node, _GRADED_VERDICT_KEYS) is not None
+
+
+def _is_any_verdict_read(node: ast.AST) -> bool:
+    return _is_verdict_read(node) or _is_graded_read(node)
 
 
 def _mentions_verdict_key(source: str) -> bool:
@@ -93,10 +169,12 @@ def _mentions_verdict_key(source: str) -> bool:
     ``ast.Constant`` values (``r.get("is_" "exploitable")``,
     ``"is_exploitabl\\x65"``), so a file can carry a scannable verdict
     read whose source text never contains the key; only the full parse
-    in the nightly-tier scan catches those. Built on VERDICT_KEYS so a
-    new verdict field widens the smoke subset automatically.
+    in the nightly-tier scan catches those. Built on the scanned key
+    sets (bool + graded) so a new verdict field widens the smoke
+    subset automatically.
     """
-    return any(key in source for key in VERDICT_KEYS)
+    return any(key in source
+               for key in (*VERDICT_KEYS, *_GRADED_VERDICT_KEYS))
 
 
 def _violations_in(path: Path) -> list[str]:
@@ -122,36 +200,123 @@ def _violations_in(path: Path) -> list[str]:
             rel = path
         if (str(rel), node.lineno) in _ALLOWLIST:
             return
-        out.append(f"{rel}:{node.lineno}: {why} — use "
-                   f"core.run.finding_status.read_verdict")
+        out.append(f"{rel}:{node.lineno}: {why}")
+
+    def truth_tested(node: ast.AST) -> list[ast.AST]:
+        """Sub-expressions this node reads for their truth value."""
+        tests: list[ast.AST] = []
+        if isinstance(node, (ast.If, ast.While, ast.IfExp, ast.Assert)):
+            tests.append(node.test)
+        if isinstance(node, ast.BoolOp):
+            # and/or truth-test every operand — this is also the
+            # or-literal fabrication (`r.get(k) or False`).
+            tests.extend(node.values)
+        if isinstance(node, ast.comprehension):
+            tests.extend(node.ifs)
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "bool"
+                and len(node.args) == 1
+                and not node.keywords):
+            tests.append(node.args[0])
+        return tests
 
     for node in ast.walk(tree):
-        # A bool default turns an abstention into a fabricated verdict.
+        # Verdict-fabricating .get defaults. Bool keys: only an
+        # explicit None default preserves the abstention (and equals
+        # the no-default read). Graded keys: only None/"unknown" do.
         if (isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "get"
                 and node.args
                 and isinstance(node.args[0], ast.Constant)
-                and node.args[0].value in VERDICT_KEYS
-                and len(node.args) >= 2
-                and isinstance(node.args[1], ast.Constant)
-                and isinstance(node.args[1].value, bool)):
-            bad(node, f"bool default on .get({node.args[0].value!r}, ...)")
+                and len(node.args) >= 2):
+            key = node.args[0].value
+            default = node.args[1]
+            if key in VERDICT_KEYS and not (
+                    isinstance(default, ast.Constant)
+                    and default.value is None):
+                bad(node, f"verdict-fabricating default on "
+                          f".get({key!r}, ...)")
+            elif key in _GRADED_VERDICT_KEYS and not (
+                    isinstance(default, ast.Constant)
+                    and default.value in _GRADED_ABSTENTION_DEFAULTS):
+                bad(node, f"non-abstention default on .get({key!r}, "
+                          f"...) — use None or \"unknown\"")
         # `not <raw read>` reads an abstention as an explicit negative.
         if (isinstance(node, ast.UnaryOp)
                 and isinstance(node.op, ast.Not)
-                and _is_verdict_read(node.operand)):
+                and _is_any_verdict_read(node.operand)):
             bad(node, "`not` on a raw verdict read")
         # ==/!= against a bool constant silently mishandles None
-        # (and non-bool junk); identity checks on read_verdict()'s
-        # result are the explicit form.
+        # (and non-bool junk), and `== None` / `!= None` is the
+        # Eq-spelling of the is-None misread (no E711 lint backstop
+        # in this repo's ruff selection); identity checks on
+        # read_verdict()'s result are the explicit form.
         if isinstance(node, ast.Compare) and all(
                 isinstance(op, (ast.Eq, ast.NotEq)) for op in node.ops):
             sides = [node.left, *node.comparators]
             if (any(_is_verdict_read(s) for s in sides)
                     and any(isinstance(s, ast.Constant)
-                            and isinstance(s.value, bool) for s in sides)):
-                bad(node, "==/!= bool compare on a raw verdict read")
+                            and (isinstance(s.value, bool)
+                                 or s.value is None)
+                            for s in sides)):
+                bad(node, "==/!= bool/None compare on a raw verdict "
+                          "read")
+        # Graded-key negative-equality split: `.get('exploitability')
+        # != 'low'` sends "unknown"/absent down the truthy side — the
+        # membership misread in negative spelling. Positive
+        # single-level equality (`== 'high'`) does NOT split the
+        # domain (an abstention falls through safely) and stays
+        # legal, as does `!= 'unknown'` (an abstention-presence
+        # check, not a level split).
+        if isinstance(node, ast.Compare) and all(
+                isinstance(op, ast.NotEq) for op in node.ops):
+            sides = [node.left, *node.comparators]
+            if (any(_is_graded_read(s) for s in sides)
+                    and any(isinstance(s, ast.Constant)
+                            and isinstance(s.value, str)
+                            and s.value != "unknown" for s in sides)):
+                bad(node, "!= level compare on a raw graded-verdict "
+                          "read")
+        # `is None` / `is not None` directly on a raw read: correct
+        # for missing/null but reads a junk shape as a voted verdict
+        # — read_verdict(...) is None is the junk-safe spelling.
+        if isinstance(node, ast.Compare) and all(
+                isinstance(op, (ast.Is, ast.IsNot)) for op in node.ops):
+            sides = [node.left, *node.comparators]
+            if (any(_is_verdict_read(s) for s in sides)
+                    and any(isinstance(s, ast.Constant)
+                            and s.value is None for s in sides)):
+                bad(node, "is/is-not None identity check on a raw "
+                          "verdict read")
+        # Truthiness (if/while/assert/comprehension-if tests, the
+        # positive ternary, and/or operands, bool()): an abstention
+        # and an explicit False are indistinguishable, and for the
+        # graded keys "unknown" is truthy.
+        for t in truth_tested(node):
+            if _is_verdict_read(t):
+                bad(t, "truthiness on a raw verdict read")
+            elif _is_graded_read(t):
+                bad(t, "truthiness on a raw graded-verdict read")
+        # Membership split of a tri-state domain: `.get(k) in [...]`
+        # sends the abstention down whichever branch the container
+        # doesn't name. Bind to a name and map each level explicitly.
+        if isinstance(node, ast.Compare) and any(
+                isinstance(op, (ast.In, ast.NotIn)) for op in node.ops):
+            if _is_any_verdict_read(node.left):
+                bad(node, "membership test on a raw verdict read")
+        # Splat-latent: an attribute named like a verdict key on an
+        # object constructed from a splatted mapping
+        # (SimpleNamespace(**record).is_exploitable) carries the raw
+        # value where the dict-read arms above can no longer see it.
+        if (isinstance(node, ast.Attribute)
+                and isinstance(node.ctx, ast.Load)
+                and node.attr in VERDICT_KEYS
+                and isinstance(node.value, ast.Call)
+                and any(kw.arg is None for kw in node.value.keywords)):
+            bad(node, "verdict attribute read on a splat-constructed "
+                      "object")
     return out
 
 
@@ -165,6 +330,10 @@ def _runtime_py_files() -> list[Path]:
             if p.name.startswith("test_") or p.name == "conftest.py":
                 continue
             files.append(p)
+    # Repo-root entry modules (raptor.py, raptor_fuzzing.py, …):
+    # they consume verdict records directly and sat outside every
+    # package-rooted sweep.
+    files.extend(sorted(REPO_ROOT.glob("raptor*.py")))
     return files
 
 
@@ -175,24 +344,94 @@ class TestVerdictIdiomClosure:
         files = _runtime_py_files()
         assert len(files) > 100
         assert any("llm_analysis" in str(f) for f in files)
+        # Entry modules are in scope — the fuzzing entry point held a
+        # misread no package-rooted sweep could see.
+        assert any(f.name == "raptor_fuzzing.py" for f in files)
 
     def test_scanner_catches_each_hostile_idiom(self, tmp_path: Path):
-        # The scanner itself is behaviour under test: feed it the
-        # three hostile shapes and one clean shape. Written under
-        # tmp_path, never the live repo tree — a hostile temp file
-        # inside REPO_ROOT would race the closure scan in a parallel
-        # worker and, if orphaned by a crash, permanently fail it.
-        hostile = (
-            "x = r.get('is_exploitable', False)\n"
-            "y = not r.get('is_true_positive')\n"
-            "z = r['is_exploitable'] == True\n"
+        # The scanner itself is behaviour under test: feed it one
+        # planted mutation per idiom family and a set of clean
+        # shapes. Written under tmp_path, never the live repo tree —
+        # a hostile temp file inside REPO_ROOT would race the closure
+        # scan in a parallel worker and, if orphaned by a crash,
+        # permanently fail it.
+        family_shapes = [
+            # (planted shape, expected violation-count)
+            ("x = r.get('is_exploitable', False)\n", 1),      # bool default
+            ("x = r.get('is_true_positive', 'unknown')\n", 1),  # non-None default
+            ("x = r.get('is_exploitable', fallback)\n", 1),   # expr default
+            ("y = not r.get('is_true_positive')\n", 1),       # negation
+            ("z = r['is_exploitable'] == True\n", 1),         # bool compare
+            ("a = r.get('is_exploitable') is None\n", 1),     # is-None ident
+            ("if r.get('is_exploitable'):\n    pass\n", 1),   # truthiness
+            ("b = 'x' if r.get('is_exploitable') else 'y'\n", 1),  # ternary
+            ("c = r.get('is_exploitable') or False\n", 1),    # or-literal
+            ("d = bool(r.get('is_true_positive'))\n", 1),     # bool()
+            ("e = [f for f in fs if f.get('is_exploitable')]\n", 1),
+            ("g = r.get('is_exploitable') in [True, None]\n", 1),  # membership
+            ("h = SimpleNamespace(**r).is_exploitable\n", 1),  # splat latent
+            # Walrus is a DIRECT read, not variable mediation.
+            ("if (v := r.get('is_exploitable')):\n    pass\n", 1),
+            ("while (v := r.get('is_true_positive')):\n    pass\n", 1),
+            # Eq-spelling of the is-None misread (no E711 backstop).
+            ("j = r.get('is_exploitable') == None\n", 1),
+            ("j2 = r.get('is_true_positive') != None\n", 1),
+        ]
+        for i, (shape, expected) in enumerate(family_shapes):
+            tmp = tmp_path / f"hostile_{i}.py"
+            tmp.write_text(shape, encoding="utf-8")
+            found = _violations_in(tmp)
+            assert len(found) == expected, (shape, found)
+        clean = (
+            "v = read_verdict(r, 'is_exploitable')\n"
+            "ok = v is False\n"
+            "maybe = v is None\n"
+            # Value pass-through preserves the tri-state — legal.
+            "rec = {'is_exploitable': r.get('is_exploitable')}\n"
+            # Bare read bound to a name: outside the scan's
+            # vocabulary by design (see module docstring).
+            "raw = r.get('is_true_positive')\n"
+            # Writes are not reads.
+            "r['is_exploitable'] = True\n"
         )
-        tmp = tmp_path / "hostile_shapes.py"
-        tmp.write_text(hostile, encoding="utf-8")
-        found = _violations_in(tmp)
-        assert len(found) == 3
-        clean = "v = read_verdict(r, 'is_exploitable')\nok = v is False\n"
         tmp = tmp_path / "clean_shape.py"
+        tmp.write_text(clean, encoding="utf-8")
+        assert _violations_in(tmp) == []
+
+    def test_scanner_catches_graded_key_idioms(self, tmp_path: Path):
+        # The graded string tri-state ("unknown" = abstention): one
+        # planted mutation per flagged family, plus the blessed
+        # spellings staying clean.
+        hostile = (
+            "a = d.get('exploitability') in ['high', 'medium']\n"
+            "b = d.get('exploitability', 'none')\n"
+            "c = d.get('exploitability', level_default)\n"
+            "if d.get('exploitability'):\n    pass\n"
+            "e = not d.get('exploitability')\n"
+            "f = bool(d['exploitability'])\n"
+            # Negative-equality level split — the membership misread
+            # in `!=` spelling.
+            "k = d.get('exploitability') != 'low'\n"
+            # Walrus-wrapped graded truthiness is a direct read.
+            "if (lvl := d.get('exploitability')):\n    pass\n"
+        )
+        tmp = tmp_path / "graded_hostile.py"
+        tmp.write_text(hostile, encoding="utf-8")
+        assert len(_violations_in(tmp)) == 8
+        clean = (
+            "level = d.get('exploitability')\n"
+            "level2 = d.get('exploitability', 'unknown')\n"
+            "level3 = d.get('exploitability', None)\n"
+            "hit = level == 'high'\n"
+            "miss = level != 'low'\n"
+            # Positive single-level equality on a direct read does
+            # not split the tri-state domain.
+            "pos = d.get('exploitability') == 'high'\n"
+            # Abstention-presence check, not a level split.
+            "present = d.get('exploitability') != 'unknown'\n"
+            "d['exploitability'] = 'low'\n"
+        )
+        tmp = tmp_path / "graded_clean.py"
         tmp.write_text(clean, encoding="utf-8")
         assert _violations_in(tmp) == []
 
@@ -218,7 +457,7 @@ class TestVerdictIdiomClosure:
         # so the docstring stays true — it does NOT see parser-folded
         # key literals: those are exactly why the nightly full scan
         # exists and must never be re-labelled "covered" by the smoke.
-        for key in VERDICT_KEYS:
+        for key in (*VERDICT_KEYS, *_GRADED_VERDICT_KEYS):
             assert _mentions_verdict_key(f"v = r.get('{key}', False)\n")
         assert not _mentions_verdict_key("v = r.get('status', False)\n")
         assert not _mentions_verdict_key(
@@ -248,8 +487,10 @@ class TestVerdictIdiomClosure:
         for f in subset:
             violations.extend(_violations_in(f))
         assert violations == [], (
-            "raw tri-state verdict misread(s); route through "
-            "core.run.finding_status.read_verdict:\n" + "\n".join(violations)
+            "raw tri-state verdict misread(s); route bool verdict "
+            "keys through core.run.finding_status.read_verdict, and "
+            "bind graded keys to a name with an explicit unknown "
+            "arm:\n" + "\n".join(violations)
         )
 
     # Full-tree scan: genuinely heavy (a full AST parse + walk of every
@@ -266,6 +507,8 @@ class TestVerdictIdiomClosure:
         for f in _runtime_py_files():
             violations.extend(_violations_in(f))
         assert violations == [], (
-            "raw tri-state verdict misread(s); route through "
-            "core.run.finding_status.read_verdict:\n" + "\n".join(violations)
+            "raw tri-state verdict misread(s); route bool verdict "
+            "keys through core.run.finding_status.read_verdict, and "
+            "bind graded keys to a name with an explicit unknown "
+            "arm:\n" + "\n".join(violations)
         )
