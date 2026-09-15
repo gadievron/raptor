@@ -17,8 +17,19 @@ the cross-language resolver against OSV symbol data.
 NuGet OSV records ship symbols as fully-qualified .NET method
 paths (``System.Text.Json.JsonSerializer.Deserialize``). The C#
 extractor binds ``using System.Text;`` -> ``imports["Text"] =
-"System.Text"``; chains like ``["JsonSerializer", "Deserialize"]``
-resolve via the import map.
+"System.Text"``; a fully-qualified call chain resolves via the
+import map.
+
+The DOMINANT C# shape, however, is a bare namespace ``using``
+(``using Newtonsoft.Json;`` + ``JsonConvert.DeserializeObject(s)``)
+— C# brings every type of the namespace into scope WITHOUT binding
+the class name, so the chain head (``JsonConvert``) is unbound and
+the import-map resolver reads the call as NOT_CALLED. That is
+resolver blindness, not evidence of absence: when a non-test file
+binds the symbol's namespace and carries a class-shaped call chain
+matching the affected symbol, this tier treats the symbol as
+UNCERTAIN and preserves the prior verdict rather than minting a
+high-confidence ``not_function_reachable`` on called code.
 
 Limitation: instance-method calls and complex expression chains
 (``Activator.CreateInstance(t).GetType().GetMethod(...)``) are
@@ -128,6 +139,11 @@ def refine_nuget_verdicts(
         if not paired:
             continue
         verdicts = {r.verdict for _, r in paired}
+        bare_using_masked = any(
+            r.verdict == Verdict.NOT_CALLED
+            and _bare_using_masks(inventory, qn)
+            for qn, r in paired
+        )
         if Verdict.CALLED in verdicts:
             evidence: list[str] = []
             called: list[str] = []
@@ -145,7 +161,12 @@ def refine_nuget_verdicts(
                 ),
                 affected_summary=affected,
             )
-        elif Verdict.UNCERTAIN in verdicts:
+        elif Verdict.UNCERTAIN in verdicts or bare_using_masked:
+            # UNCERTAIN → preserve, per the tier's honesty rule.
+            # bare_using_masked is the same epistemic state: the
+            # resolver returned NOT_CALLED only because a bare
+            # namespace ``using`` leaves the class name unbound —
+            # the matching call chain is right there in the file.
             continue
         else:
             out[d.key()] = Reachability(
@@ -160,6 +181,46 @@ def refine_nuget_verdicts(
                 ),
                 evidence=[],
             )
+
+
+def _bare_using_masks(
+    inventory: dict[str, Any], qualified_name: str,
+) -> bool:
+    """True when a non-test file both binds ``qualified_name``'s
+    namespace via a bare ``using`` AND carries a class-shaped call
+    chain matching the affected symbol (head == class, tail ==
+    method). In that shape the import-map resolver CANNOT resolve
+    the call — ``using Newtonsoft.Json;`` brings ``JsonConvert``
+    into scope without binding it — so its NOT_CALLED answer is
+    blindness, not evidence. Both conditions are required: a bound
+    namespace alone (symbol's class never mentioned) leaves
+    NOT_CALLED well-supported and the downgrade correct."""
+    from core.analysis.reachability import _is_test_file
+
+    parts = qualified_name.split(".")
+    if len(parts) < 3:
+        # Need namespace + class + method to describe the shape.
+        return False
+    func = parts[-1]
+    klass = parts[-2]
+    namespace = ".".join(parts[:-2])
+    for file_record in inventory.get("files") or []:
+        if not isinstance(file_record, dict):
+            continue
+        if _is_test_file(file_record.get("path") or ""):
+            continue
+        cg = file_record.get("call_graph")
+        if not cg:
+            continue
+        imports = cg.get("imports") or {}
+        if namespace not in imports.values():
+            continue
+        for call in cg.get("calls") or []:
+            chain = call.get("chain") or []
+            if len(chain) >= 2 and chain[0] == klass \
+                    and chain[-1] == func:
+                return True
+    return False
 
 
 __all__ = ["build_nuget_symbol_map", "refine_nuget_verdicts"]

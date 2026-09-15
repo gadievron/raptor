@@ -289,10 +289,12 @@ def test_nuget_refine_likely_called_explicit_class_alias(tmp_path: Path):
 
 
 def test_nuget_bare_namespace_using_preserves_imported(tmp_path: Path):
-    """Bare ``using Namespace`` shape — chain head ``JsonConvert``
-    isn't bound (only ``Json`` is, mapping to ``Newtonsoft.Json``),
-    so the function-level match doesn't fire. Verdict stays at
-    the prior tier's value rather than incorrectly downgrading."""
+    """Bare ``using Namespace`` shape — the DOMINANT C# import
+    shape: ``using Newtonsoft.Json;`` binds only ``Json``, so the
+    chain head ``JsonConvert`` is unbound and the resolver cannot
+    see the call. The fixture plainly CALLS the affected function,
+    so the tier must preserve ``imported`` — a NOT_CALLED-driven
+    downgrade here is a false high-confidence suppression."""
     from packages.sca.reachability.nuget_function_level import (
         refine_nuget_verdicts,
     )
@@ -310,17 +312,34 @@ def test_nuget_bare_namespace_using_preserves_imported(tmp_path: Path):
                 ["Newtonsoft.Json.JsonConvert.DeserializeObject"],
         },
     )
-    # Without an explicit class binding, the call doesn't resolve.
-    # That returns NOT_CALLED → all-NOT_CALLED → the tier
-    # downgrades to ``not_function_reachable``. This is the
-    # documented C# limitation; operators see the verdict +
-    # reason, but the function isn't actually called from this
-    # stub. Either ``not_function_reachable`` or ``imported`` is
-    # an acceptable answer here — what we want to assert is that
-    # the call path doesn't crash and yields a stable verdict.
-    assert out[deps[0].key()].verdict in (
-        "imported", "not_function_reachable",
+    assert out[deps[0].key()].verdict == "imported"
+
+
+def test_nuget_bare_namespace_without_class_call_still_downgrades(
+    tmp_path: Path,
+):
+    """Counter-direction: the namespace is ``using``-bound but the
+    affected class/method is never mentioned — NOT_CALLED is
+    well-supported and the downgrade must still fire (the
+    bare-using mask may not disable the tier's suppression arm)."""
+    from packages.sca.reachability.nuget_function_level import (
+        refine_nuget_verdicts,
     )
+    (tmp_path / "X.cs").write_text(
+        "using Newtonsoft.Json;\n"
+        "class C { void M() { Other.DoThing(s); } }\n"
+    )
+    deps = [_dep("Newtonsoft.Json", "13.0.1", "NuGet")]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_nuget_verdicts(
+        deps, out,
+        target=tmp_path,
+        nuget_symbol_map={
+            deps[0].key():
+                ["Newtonsoft.Json.JsonConvert.DeserializeObject"],
+        },
+    )
+    assert out[deps[0].key()].verdict == "not_function_reachable"
 
 
 # ---------------------------------------------------------------------------
