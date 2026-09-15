@@ -62,6 +62,7 @@ from typing import (
 )
 from collections.abc import Iterable
 
+from core.analysis.cfg_node_tables import CPP_TABLES as _NODE_TABLES
 from core.analysis.cfg_builder import (
     ENTRY_LINENO,
     EXIT_LINENO,
@@ -807,28 +808,17 @@ def _function_params(fn_def: Node) -> tuple[str, ...]:
 # bodies (C++ local classes) likewise bind their own members and
 # method locals — without the barrier a local class's declarations
 # leaked into the outer function's local set.
-_LOCAL_SCOPE_BARRIERS = frozenset({
-    "lambda_expression",
-    "class_specifier",
-    "struct_specifier",
-    "union_specifier",
-})
+# Single-homed in cfg_node_tables (grammar-validated by its closure
+# test — a dead / renamed node name fails CI instead of silently
+# disarming the barrier).
+_LOCAL_SCOPE_BARRIERS = _NODE_TABLES.scope_barriers
 
 # Constructs that bound a declarator's vouch window: a declaration
 # inside one of these is out of scope past its end. Missing a member
 # here widens a window toward the function end (suppression-ward),
 # so the set errs inclusive — an over-narrow window only refuses.
-_LOCAL_SCOPE_BOUNDS = frozenset({
-    "compound_statement",
-    "for_statement",
-    "for_range_loop",
-    "while_statement",
-    "do_statement",
-    "if_statement",
-    "switch_statement",
-    "case_statement",
-    "catch_clause",
-})
+# Single-homed in cfg_node_tables (grammar-validated).
+_LOCAL_SCOPE_BOUNDS = _NODE_TABLES.scope_bounds
 
 # Storage-class specifiers whose block-scope declarations do NOT bind
 # a function-local object: ``extern`` declares the GLOBAL itself

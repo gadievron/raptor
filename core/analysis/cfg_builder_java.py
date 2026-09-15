@@ -71,6 +71,8 @@ from typing import (
 )
 from collections.abc import Iterable, Mapping
 
+from core.analysis.cfg_node_tables import JAVA_TABLES as _NODE_TABLES
+
 from core.analysis.cfg_builder import (
     ENTRY_LINENO,
     EXIT_LINENO,
@@ -190,27 +192,15 @@ _PARENS = "parenthesized_expression"
 # this set so a switch nested in VALUE position (inside any
 # expression payload) refuses via _subtree_has_refused; statement-
 # position switch is dispatched to _build_switch BEFORE this check.
-_REFUSED_NODE_TYPES = frozenset({
-    "lambda_expression",
-    "method_reference",
-    "switch_expression",
-    "switch_statement",
-    "class_declaration",         # local class inside a method body
-    # Class-like BODIES, not declaration kinds: refusing the body node
-    # covers every spelling that can nest one in a method — anonymous
-    # classes (object_creation_expression carrying a class_body, the
-    # only class-shaped construct with no declaration node), local
-    # records (class_body), local enums / interfaces / annotations.
-    # A declarator inside any of these binds a MEMBER of the nested
-    # type, not a method local; modelling it as a local hands
-    # field-grade names the "locals are unaliasable" premise.
-    "class_body",
-    "enum_body",
-    "interface_body",
-    "annotation_type_body",
-})
+# Single-homed in cfg_node_tables (grammar-validated by its closure
+# test — a dead / renamed node name fails CI instead of silently
+# disarming the refusal).
+_REFUSED_NODE_TYPES = _NODE_TABLES.refused
 
-_SWITCH_TYPES = ("switch_expression", "switch_statement")
+# The pinned grammar emits ``switch_expression`` for BOTH statement-
+# and value-position switches (``switch_statement`` is not a node kind
+# it produces — the cfg_node_tables closure test enforces liveness).
+_SWITCH_TYPES = ("switch_expression",)
 _SWITCH_GROUP = "switch_block_statement_group"
 _SWITCH_RULE = "switch_rule"
 _SWITCH_LABEL = "switch_label"
@@ -717,42 +707,19 @@ def _method_params(decl) -> tuple[str, ...]:
 
 
 # Nested scopes whose declarations are NOT locals of the enclosing
-# method (a local class's fields/locals, a lambda's parameters). The
+# method (a local class's fields/locals, an anonymous class's or local
+# record/enum/interface body's members, a lambda's parameters). The
 # builder refuses methods containing these anyway; the collector still
 # stops at them so the const-index reuse stays sound on its own.
-_LOCAL_SCOPE_BARRIERS = frozenset({
-    "class_declaration",
-    # Class-like bodies (see _REFUSED_NODE_TYPES): an anonymous class
-    # or local record/enum/interface body declares MEMBERS — its
-    # declarators must never earn a method-local vouch window (a
-    # same-named bare-name store would then read as an unaliasable
-    # local while it is really a field any interleaved call rewrites).
-    "class_body",
-    "enum_body",
-    "interface_body",
-    "annotation_type_body",
-    "lambda_expression",
-    "method_reference",
-})
+# Single-homed in cfg_node_tables (grammar-validated).
+_LOCAL_SCOPE_BARRIERS = _NODE_TABLES.scope_barriers
 
 # Constructs that bound a declarator's vouch window: a declaration
 # inside one of these is out of scope past its end. Missing a member
 # here widens a window toward the method end (suppression-ward), so
 # the set errs inclusive — an over-narrow window only refuses.
-_LOCAL_SCOPE_BOUNDS = frozenset({
-    _BLOCK,
-    "for_statement",
-    _ENHANCED_FOR,
-    "while_statement",
-    "do_statement",
-    "if_statement",
-    "switch_expression",
-    "switch_block",
-    "try_statement",
-    "try_with_resources_statement",
-    "catch_clause",
-    "synchronized_statement",
-})
+# Single-homed in cfg_node_tables (grammar-validated).
+_LOCAL_SCOPE_BOUNDS = _NODE_TABLES.scope_bounds
 
 
 class _LocalNameScopes:
