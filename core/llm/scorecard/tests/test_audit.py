@@ -218,3 +218,72 @@ def test_decision_class_summary_counts_models_per_class(tmp_path):
     assert len(dcs) == 1
     assert dcs[0].distinct_models == 3
     assert dcs[0].median_obs_primary == 50.0
+
+
+# ---------------------------------------------------------------------------
+# Integrity demotion — the raw walk must not reopen the door the
+# stats view's HMAC gate closed.
+# ---------------------------------------------------------------------------
+
+
+class TestIntegrityDemotion:
+    def test_forged_sidecar_is_demoted_and_never_rendered(self, tmp_path):
+        """An unstamped (tamper-or-legacy) sidecar under a usable key
+        contributes to NEITHER half of the report: no raw event-type
+        keys (attacker-chosen strings) in the summaries or markdown,
+        no raw schema_version, and a verdict reason that names the
+        integrity failure instead of a producer that never ran."""
+        path = tmp_path / "forged.json"
+        hostile = "evil\x1b[31m_event"
+        path.write_text(json.dumps({
+            "version": 2,
+            "models": {"m1": {"dc:x": {"events": {
+                hostile: {"2026-01": {"correct": 100000, "incorrect": 0}},
+            }}}},
+        }), encoding="utf-8")
+        report = audit_mod.audit(path)
+        assert report.sidecar_demoted is True
+        assert report.schema_version is None
+        assert all(
+            s.event_type != hostile for s in report.event_type_summaries
+        )
+        assert report.verdict == "no-data"
+        assert "integrity" in report.verdict_reason
+        assert hostile not in audit_mod.render_markdown(report)
+
+    def test_stamped_sidecar_is_not_demoted(self, red_scorecard):
+        report = audit_mod.audit(red_scorecard)
+        assert report.sidecar_demoted is False
+        assert report.verdict == "red"
+
+    def test_key_unusable_clamp_keeps_raw_readable(
+            self, tmp_path, monkeypatch):
+        """Unusable key = operator-side condition, not tampering: the
+        raw walk mirrors ``get_stats()``'s introspection clamp and
+        keeps counting (rendering hygiene is the sanitiser layer's
+        job, not this gate's)."""
+        import core.llm.scorecard.integrity as integrity
+        path = tmp_path / "unverified.json"
+        path.write_text(json.dumps({
+            "version": 2,
+            "models": {"m1": {"dc:x": {"events": {
+                "novel_future_signal": {"correct": 3, "incorrect": 1},
+            }}}},
+        }), encoding="utf-8")
+        monkeypatch.setattr(integrity, "key_usable", lambda: False)
+        report = audit_mod.audit(path)
+        assert report.sidecar_demoted is False
+        by_type = {
+            s.event_type: s for s in report.event_type_summaries
+        }
+        assert by_type["novel_future_signal"].total_observations == 4
+        # The clamp is flagged: the report says these numbers include
+        # unverified content instead of presenting them as verified.
+        assert report.key_unusable is True
+        assert "unverified" in audit_mod.render_markdown(report)
+
+    def test_usable_key_report_carries_no_clamp_banner(
+            self, red_scorecard):
+        report = audit_mod.audit(red_scorecard)
+        assert report.key_unusable is False
+        assert "unverified" not in audit_mod.render_markdown(report)

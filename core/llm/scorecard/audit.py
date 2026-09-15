@@ -98,6 +98,17 @@ class AuditReport:
     primary_event_type: str
     verdict: str  # "green" | "amber" | "red" | "no-data"
     verdict_reason: str
+    # True when the sidecar failed HMAC verification under a usable
+    # key (tamper-or-legacy): the raw walk's content was discarded,
+    # mirroring the stats view's demotion. Additive field — JSON
+    # consumers tolerate extra keys.
+    sidecar_demoted: bool = False
+    # True when the integrity key itself was unusable: verification
+    # could not run at all, and the counts above include UNVERIFIED
+    # sidecar content (the introspection clamp, mirroring
+    # ``get_stats()``). Additive field — JSON consumers tolerate
+    # extra keys.
+    key_unusable: bool = False
 
 
 def _empty_event_summary(event_type: str) -> EventTypeSummary:
@@ -164,10 +175,9 @@ def audit(path: Path | None = None) -> AuditReport:
     Pure function modulo file IO — given identical input, output is
     identical. No mutation; the stats half does take the shared read
     flock (``ModelScorecard.get_stats``), while the raw event walk
-    reads the file directly — so the two halves of one report can
-    disagree on totals when the sidecar fails verification (the stats
-    view discards unverified content, the raw walk counts it; the raw
-    numbers are diagnostic, not trust-bearing).
+    reads the file directly — both halves apply the SAME integrity
+    demotion (see the gate below), so a sidecar that fails
+    verification under a usable key contributes to neither.
 
     ``path=None`` resolves through the shared resolver at CALL time so
     a ``RAPTOR_SCORECARD_PATH`` override set after import still wins.
@@ -194,7 +204,23 @@ def audit(path: Path | None = None) -> AuditReport:
             ),
         )
 
-    schema_version = raw.get("version")
+    # Integrity gate for the RAW half of the report. The stats view
+    # below verifies through ``ModelScorecard`` and discards unverified
+    # content; reading the sidecar directly must not reopen that door —
+    # the raw walk's event-type keys (and ``version``) are otherwise
+    # attacker-chosen bytes from a same-user forger that end up counted
+    # and rendered. Mirror the scorecard's demotion semantics exactly:
+    # verified → full raw walk; unverified under a USABLE key
+    # (tamper-or-legacy) → discard; unusable key → operator-side
+    # condition, content stays readable for introspection, matching
+    # ``get_stats()``'s key-unusable clamp.
+    from core.llm.scorecard import integrity
+    key_usable = integrity.key_usable()
+    sidecar_demoted = (
+        not integrity.verify(raw, integrity.extract_token(raw))
+        and key_usable
+    )
+    schema_version = None if sidecar_demoted else raw.get("version")
 
     # Use ``ModelScorecard.get_stats()`` for the per-cell view — it handles
     # the v2 age-bucket flattening and the migration path. The audit cares
@@ -247,7 +273,8 @@ def audit(path: Path | None = None) -> AuditReport:
     # silently dropped. Types already summarised above are skipped so
     # nothing double-counts.
     raw_only: set[str] = set()
-    for event_type, n in _iter_raw_event_counts(raw):
+    raw_events = () if sidecar_demoted else _iter_raw_event_counts(raw)
+    for event_type, n in raw_events:
         if event_type in event_summaries and event_type not in raw_only:
             continue  # already summarised via the stats view
         raw_only.add(event_type)
@@ -290,7 +317,19 @@ def audit(path: Path | None = None) -> AuditReport:
     # populated only via ``cheap_short_circuit`` would look like red rather
     # than no-data.
     cells_with_data = primary.cells_with_any_data
-    if cells_with_data == 0:
+    if sidecar_demoted:
+        # The stats view discarded the same content, so the counts
+        # above are (near-)empty either way — but the REASON must name
+        # the integrity failure, not masquerade as a producer that
+        # never ran.
+        verdict = "no-data"
+        reason = (
+            "sidecar failed integrity verification (missing or invalid "
+            "provenance token) — its content is demoted, not counted. "
+            "Re-bless genuine pre-MAC history with: "
+            "raptor-llm-scorecard adopt"
+        )
+    elif cells_with_data == 0:
         verdict = "no-data"
         reason = (
             f"no cells carry any {PRIMARY_EVENT_TYPE} events; the panel "
@@ -335,6 +374,8 @@ def audit(path: Path | None = None) -> AuditReport:
         primary_event_type=PRIMARY_EVENT_TYPE,
         verdict=verdict,
         verdict_reason=reason,
+        sidecar_demoted=sidecar_demoted,
+        key_unusable=not key_usable,
     )
 
 
@@ -364,6 +405,18 @@ def render_markdown(report: AuditReport) -> str:
     lines.append("")
     lines.append(report.verdict_reason)
     lines.append("")
+    if report.sidecar_demoted:
+        lines.append(
+            "⚠️ Sidecar content failed integrity verification and was "
+            "excluded from every count above."
+        )
+        lines.append("")
+    if report.key_unusable:
+        lines.append(
+            "⚠️ Integrity key unusable — verification could not run; "
+            "every count above includes unverified sidecar content."
+        )
+        lines.append("")
     lines.append("## Per-event-type coverage")
     lines.append("")
     lines.append(
