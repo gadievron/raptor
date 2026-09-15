@@ -9,6 +9,18 @@ documents WHY the call is safe (per library docs / known semantics) so
 reviewers can sanity-check the claim.  Keep the table small and well-
 justified; growth should be driven by concrete corpus cases.
 
+Immutable-return invariant: every transform entry's return value must
+be an IMMUTABLE value (str / str subclass; for C, a newly-allocated
+string the callee never retains).  The chain trackers and the
+sanitizer-cut value gate reason about NAME bindings only — they cannot
+see mutation through an alias.  A sanitizer returning a mutable
+container would let ``alias = clean_list; alias += [tainted]``
+re-taint the "sanitized" value while every name-level check still
+holds (the exclusivity condition would certify over the alias
+mutation).  Every current entry satisfies the invariant; reviewers
+must reject mutable-container-returning candidates or land
+alias-aware tracking first.
+
 Lookup contract:
   ``find(library_call: str, sink_class: str, language: str)`` returns
   the matching :class:`KnownSafeCall` entry or ``None``.  Matching is by
