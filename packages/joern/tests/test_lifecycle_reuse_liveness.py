@@ -172,7 +172,7 @@ class TestNoteServerReplaced(_StateDirFixture):
         srv = JoernServer()
         srv._cpg_path = cpg
         proc = MagicMock()
-        proc.pid = 111
+        proc.pid = 2_000_000_000  # inert: beyond pid_max
         srv._proc = proc
         srv._port = 8800
         with patch.object(srv, "stop"), \
@@ -180,7 +180,9 @@ class TestNoteServerReplaced(_StateDirFixture):
                 patch.object(srv, "import_cpg", return_value=True), \
                 patch.object(lifecycle, "note_server_replaced") as note:
             assert srv.restart() is True
-        note.assert_called_once_with(old_pid=111, old_port=8800, srv=srv)
+        note.assert_called_once_with(
+            old_pid=2_000_000_000, old_port=8800, srv=srv,
+        )
 
 
 class TestKillServerSignalsGroup(_StateDirFixture):

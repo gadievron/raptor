@@ -195,7 +195,7 @@ class TestTierSelection:
         def fake_popen(cmd, **kwargs):
             captured.extend(cmd)
             proc = MagicMock()
-            proc.pid = 12345
+            proc.pid = 2_000_000_000  # inert: beyond pid_max
             proc.poll.return_value = None
             proc.stderr = MagicMock()
             proc.wait = MagicMock()

@@ -21,7 +21,7 @@ class _SlowExitProc:
     """poll()s alive; timed waits expire; untimed wait reaps."""
 
     def __init__(self):
-        self.pid = 424242
+        self.pid = 2_000_000_000  # inert: beyond pid_max
         self.reaped = threading.Event()
         self.killed = False
         self.terminated = False

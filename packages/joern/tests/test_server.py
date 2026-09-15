@@ -466,7 +466,7 @@ class TestJoernServerZGCFlags:
         def fake_popen(cmd, **kwargs):
             captured_cmd.extend(cmd)
             mock_proc = MagicMock()
-            mock_proc.pid = 12345
+            mock_proc.pid = 2_000_000_000  # inert: beyond pid_max
             mock_proc.poll.return_value = None
             mock_proc.stderr = MagicMock()
             mock_proc.wait = MagicMock()
@@ -517,7 +517,7 @@ class TestJoernServerZGCFlags:
         def fake_popen(cmd, **kwargs):
             captured_env.update(kwargs.get("env") or {})
             mock_proc = MagicMock()
-            mock_proc.pid = 12345
+            mock_proc.pid = 2_000_000_000  # inert: beyond pid_max
             mock_proc.poll.return_value = None
             mock_proc.stderr = MagicMock()
             mock_proc.wait = MagicMock()
@@ -566,7 +566,7 @@ class TestJoernServerZGCFlags:
         def fake_popen(cmd, **kwargs):
             launches.append(list(cmd))
             mock_proc = MagicMock()
-            mock_proc.pid = 12345
+            mock_proc.pid = 2_000_000_000  # inert: beyond pid_max
             # First launch: dead process; second: alive.
             mock_proc.poll.return_value = 1 if len(launches) == 1 else None
             mock_proc.stderr = MagicMock()
@@ -872,7 +872,7 @@ class TestJoernServerIsolatedWorkspace:
         def fake_popen(cmd, **kwargs):
             captured.update(kwargs)
             mock_proc = MagicMock()
-            mock_proc.pid = 12345
+            mock_proc.pid = 2_000_000_000  # inert: beyond pid_max
             mock_proc.poll.return_value = None
             mock_proc.stderr = MagicMock()
             mock_proc.wait = MagicMock()
@@ -952,7 +952,7 @@ class TestJoernServerAuth:
         def fake_popen(cmd, **kwargs):
             captured_cmd.extend(cmd)
             mock_proc = MagicMock()
-            mock_proc.pid = 12345
+            mock_proc.pid = 2_000_000_000  # inert: beyond pid_max
             mock_proc.poll.return_value = None
             mock_proc.stderr = MagicMock()
             mock_proc.wait = MagicMock()
