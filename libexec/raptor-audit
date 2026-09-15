@@ -123,9 +123,13 @@ def cmd_gaps(args: argparse.Namespace) -> int:
                 )
                 return 1
             if cp.returncode != 0:
-                print(f"error: checklist build failed: {cp.stderr.strip()}", file=sys.stderr)
+                # Builder stderr can quote hostile-tree bytes.
+                print("error: checklist build failed: "
+                      f"{sanitise_for_terminal(cp.stderr.strip(), max_len=500)}",
+                      file=sys.stderr)
                 return 1
-            print(cp.stdout.strip(), file=sys.stderr)
+            for _ln in cp.stdout.strip().splitlines():
+                print(sanitise_for_terminal(_ln, max_len=300), file=sys.stderr)
             checklist = load_checklist(out_dir)
         if not checklist:
             print(f"error: no checklist.json in {out_dir} and no --target to build one",
@@ -1552,7 +1556,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         return 1
     if lifecycle.returncode != 0:
-        print(f"lifecycle start failed: {lifecycle.stderr.strip()}",
+        print("lifecycle start failed: "
+              f"{sanitise_for_terminal(lifecycle.stderr.strip(), max_len=500)}",
               file=sys.stderr)
         return 1
     out_dir = None
@@ -1586,12 +1591,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             _lifecycle_fail(out_dir, "checklist build timed out")
             return 1
         if ck.returncode != 0:
-            print(f"checklist build failed: {ck.stderr.strip()}",
+            print("checklist build failed: "
+                  f"{sanitise_for_terminal(ck.stderr.strip(), max_len=500)}",
                   file=sys.stderr)
             _lifecycle_fail(out_dir, "checklist build failed")
             return 1
         for line in ck.stdout.strip().splitlines():
-            print(line)
+            print(sanitise_for_terminal(line, max_len=300))
 
     # --- context map ---
     # /audit .md runs /understand --map before dispatching here, so
@@ -1635,7 +1641,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     if project_dir is not None:
         legacy_diag = _check_legacy_state(project_dir)
         if legacy_diag:
-            print(f"error: {legacy_diag}", file=sys.stderr)
+            print(f"error: {sanitise_for_terminal(legacy_diag, max_len=500)}",
+                  file=sys.stderr)
             _lifecycle_fail(out_dir, "legacy /audit state — migration required")
             return 1
 
@@ -2013,7 +2020,8 @@ def _finalize_run(
                 file=sys.stderr, flush=True,
             )
         elif interrupt_cp.returncode != 0:
-            detail = (interrupt_cp.stderr or "").strip()
+            detail = sanitise_for_terminal(
+                (interrupt_cp.stderr or "").strip(), max_len=500)
             print(
                 f"lifecycle interrupt failed (exit {interrupt_cp.returncode})"
                 + (f": {detail}" if detail else ""),
@@ -2052,7 +2060,8 @@ def _finalize_run(
             file=sys.stderr, flush=True,
         )
     elif lifecycle_cp.returncode != 0:
-        detail = (lifecycle_cp.stderr or "").strip()
+        detail = sanitise_for_terminal(
+            (lifecycle_cp.stderr or "").strip(), max_len=500)
         print(
             f"lifecycle complete failed (exit {lifecycle_cp.returncode})"
             + (f": {detail}" if detail else ""),

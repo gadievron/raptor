@@ -2599,7 +2599,10 @@ def main() -> int:
                 print("  Temporary git repo created for scanning")
                 logger.debug("Using temp git repo: %s", temp_repo)
             else:
-                print(f"  ✗ Failed to initialize git repository: {result.stderr}", file=sys.stderr)
+                from core.security.log_sanitisation import sanitise_for_terminal
+                print("  ✗ Failed to initialize git repository: "
+                      f"{sanitise_for_terminal(str(result.stderr), max_len=300)}",
+                      file=sys.stderr)
                 logger.error("Git init failed: %s", result.stderr)
                 sys.exit(1)
 

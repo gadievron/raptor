@@ -129,10 +129,20 @@ def _echo_flow_md(output_dir: Path, cve_id: str, quiet: bool) -> None:
             body = flow_md_path.read_text(encoding="utf-8")
         except OSError:
             return
+    # flow.md content is producer-escaped (telemetry escapes tool args
+    # and stage signals before they reach the file), but this relay is
+    # the terminal sink — escape here too so a producer regression (or
+    # a hand-edited flow.md) cannot drive the operator's TTY. Newlines
+    # are structural in the trace body and kept; the body is already
+    # display-capped above.
+    from core.security.log_sanitisation import (
+        escape_nonprintable,
+        sanitise_for_terminal,
+    )
     typer.echo("")
-    typer.echo(f"=== {cve_id} — pipeline trace ===")
+    typer.echo(f"=== {sanitise_for_terminal(str(cve_id), max_len=128)} — pipeline trace ===")
     typer.echo("")
-    typer.echo(body.rstrip())
+    typer.echo(escape_nonprintable(body.rstrip(), preserve_newlines=True))
     typer.echo("")
     typer.echo("=== Artifacts ===")
 

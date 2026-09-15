@@ -16,11 +16,15 @@ Mechanism — deliberately explicit and low-maintenance:
   explicitly, which forces a security review at file-add time — the
   same opt-in discipline as ``_PROMPT_CONSTRUCTION_FILES`` in the
   envelope audit.
-* **Known-LLM-derived value detection** (:data:`_LLM_DERIVED_KEYS`):
-  the rule looks for reads of free-text fields that carry LLM output
-  (``title``, ``claim``, ``body``, ``reasoning``, ...) via attribute
-  access (``entry.body``), string-key subscript (``f["title"]``),
-  ``.get("title")`` calls, and ``getattr(x, "body")``.
+* **Known-foreign-value detection** (:data:`_LLM_DERIVED_KEYS` +
+  :data:`_TOOL_OUTPUT_KEYS`): the rule looks for reads of free-text
+  fields that carry LLM output (``title``, ``claim``, ``body``,
+  ``reasoning``, ...) or tool output (``stderr``, ``stdout`` —
+  subprocess streams quote hostile-target bytes) via attribute access
+  (``entry.body``, ``proc.stderr``), string-key subscript
+  (``f["title"]``), ``.get("title")`` calls, and ``getattr(x,
+  "body")``. ``sys.stderr``/``sys.stdout`` (the streams themselves)
+  are excluded.
 * **Write-sink detection**: a violation fires only when such a value
   reaches a write sink — ``print(...)``, ``.write(...)`` /
   ``.write_text(...)``, ``.append(...)`` / ``.extend(...)`` on a
@@ -45,7 +49,8 @@ Extending:
   :data:`_REPORT_WRITER_FILES` and route every LLM-derived value
   through ``core.security.prompt_output_sanitise`` (free text) or a
   single-line helper (headings / labels / table cells).
-* New LLM-derived field name → add to :data:`_LLM_DERIVED_KEYS`.
+* New LLM-derived field name → add to :data:`_LLM_DERIVED_KEYS`
+  (tool-output field names go to :data:`_TOOL_OUTPUT_KEYS`).
 * New sanitising helper → add its (function) name to
   :data:`_SANITISERS`; the helper must itself call
   ``sanitise_string`` / ``sanitise_code``.
@@ -95,6 +100,22 @@ _LLM_DERIVED_KEYS = frozenset({
 })
 
 
+# Tool-output field names: subprocess/tool stdout+stderr carry
+# target-derived bytes (compiler diagnostics quote hostile source,
+# `git apply` failures quote hostile context lines, ASAN reports quote
+# hostile data). core.security.log_sanitisation names subprocess
+# stderr a canonical untrusted input; the audit treats reads of these
+# fields exactly like LLM-derived free text. Kept as a separate set so
+# the two provenance classes stay individually documentable, merged at
+# detection time.
+_TOOL_OUTPUT_KEYS = frozenset({
+    "stderr",
+    "stdout",
+})
+
+_FOREIGN_KEYS = _LLM_DERIVED_KEYS | _TOOL_OUTPUT_KEYS
+
+
 # Calls recognised as neutralising a value for report / terminal
 # rendering. A subtree rooted at one of these calls is considered
 # sanitised. ``escape_nonprintable`` is intentionally NOT in this set:
@@ -120,6 +141,9 @@ _SANITISERS = frozenset({
     # (`from core.security.log_sanitisation import sanitise_for_terminal
     # as _sft`) — same discipline as the _line/_cell helper names.
     "_sft",
+    # sca bump's terminal helper (escape + bound, sanitise_for_terminal
+    # grade).
+    "_term",
     # Per-module single-line / cell / prose helpers built on the above.
     # exploitability_validation.report's shared helpers (sanitise_line
     # wraps sanitise_string; sanitise_cell adds pipe-escaping on top).
@@ -158,8 +182,11 @@ _SANITISERS = frozenset({
 })
 
 
-# Write sinks.
-_SINK_FUNCTIONS = frozenset({"print"})
+# Write sinks. ``echo``/``secho`` cover the typer/click terminal
+# sinks in both import forms (``typer.echo(...)`` is an Attribute
+# call, ``from typer import echo`` a Name call) — a CLI built on
+# typer otherwise relays foreign text invisibly to this audit.
+_SINK_FUNCTIONS = frozenset({"print", "echo", "secho"})
 _SINK_METHODS = frozenset({"write", "write_text"})
 _ACCUMULATE_METHODS = frozenset({"append", "extend"})
 # ``bullets``: packages/sca/report.py's per-finding renderer
@@ -277,6 +304,18 @@ class AllowlistEntry:
 # the heuristic. New entries require the same discipline (enforced by
 # the test suite: empty / TODO notes are rejected).
 _ALLOWLIST: tuple[AllowlistEntry, ...] = (
+    AllowlistEntry(
+        file="packages/cve_diff/cve_diff/cli/bench.py",
+        func_name="_render_html",
+        kind="unsanitised_llm_value",
+        detail="detail",
+        audit_note=(
+            "the FAIL branch routes r.error through the module's _esc "
+            "(html.escape + escape_nonprintable) before it lands in the "
+            "cell; the local helper is outside the audit's sanitiser "
+            "vocabulary, so the escaped assignment still reads as taint"
+        ),
+    ),
     AllowlistEntry(
         file="libexec/raptor-audit",
         func_name="cmd_rules",
@@ -468,6 +507,109 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
         ),
     ),
     AllowlistEntry(
+        file="libexec/raptor-audit",
+        func_name="cmd_run",
+        kind="unsanitised_llm_value",
+        detail="line",
+        audit_note=(
+            "verbatim relay of the raptor-run-lifecycle stub's stdout "
+            "— RAPTOR's own trusted child, and the OUTPUT_DIR= "
+            "sentinel is parsed downstream, so the relay must stay "
+            "byte-exact (EXECUTION RULES)"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-audit",
+        func_name="cmd_run",
+        kind="unsanitised_llm_value",
+        detail="out_dir",
+        audit_note=(
+            "out_dir is the lifecycle-resolved output directory path "
+            "(RAPTOR-constructed), parsed from the trusted stub's "
+            "OUTPUT_DIR= sentinel"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-audit",
+        func_name="cmd_run",
+        kind="unsanitised_llm_value",
+        detail="bo_counts",
+        audit_note=(
+            "binary-oracle classification counters (ints) from "
+            "enrich_inventory_with_binary_oracle"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-audit",
+        func_name="cmd_run",
+        kind="unsanitised_llm_value",
+        detail="_provision",
+        audit_note=(
+            "CodeQL provisioning counts and detected language names — "
+            "RAPTOR-authored provisioning metadata, not tool/LLM text"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-audit",
+        func_name="cmd_run",
+        kind="unsanitised_llm_value",
+        detail="_skip",
+        audit_note=(
+            "provisioning skip records carry code-authored reason/"
+            "remedy strings and detected language names"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/binary_analysis/cli.py",
+        func_name="_run_active_phase",
+        kind="unsanitised_llm_value",
+        detail="stdout",
+        audit_note=(
+            "verbatim tool-output capture into the run's stdout.txt "
+            "artifact log — raw by design, not a rendered report"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/binary_analysis/cli.py",
+        func_name="_run_active_phase",
+        kind="unsanitised_llm_value",
+        detail="stderr",
+        audit_note=(
+            "verbatim tool-output capture into the run's stderr.txt "
+            "artifact log — raw by design, not a rendered report"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/binary_analysis/cli.py",
+        func_name="_run_trace_parser",
+        kind="unsanitised_llm_value",
+        detail="stderr",
+        audit_note=(
+            "phase['stderr'] is the PATH of the stderr artifact log "
+            "(RAPTOR-constructed), not stream content"
+        ),
+    ),
+    AllowlistEntry(
+        file="raptor_agentic.py",
+        func_name="_run_fuzz_validation_smoke",
+        kind="unsanitised_llm_value",
+        detail="stdout",
+        audit_note=(
+            "verbatim child-output capture into the validation dir's "
+            "artifact log — raw by design, not a rendered report"
+        ),
+    ),
+    AllowlistEntry(
+        file="raptor_agentic.py",
+        func_name="_run_fuzz_validation_smoke",
+        kind="unsanitised_llm_value",
+        detail="stderr",
+        audit_note=(
+            "verbatim child-output capture into the validation dir's "
+            "artifact log — raw by design, not a rendered report"
+        ),
+    ),
+    AllowlistEntry(
         file="raptor_agentic.py",
         func_name="main",
         kind="unsanitised_llm_value",
@@ -509,25 +651,32 @@ def _key_expr(node: ast.AST) -> str | None:
     Recognises ``x.title``, ``x["title"]``, ``x.get("title", ...)``,
     and ``getattr(x, "title", ...)``.
     """
-    if isinstance(node, ast.Attribute) and node.attr in _LLM_DERIVED_KEYS:
+    if isinstance(node, ast.Attribute) and node.attr in _FOREIGN_KEYS:
+        # ``sys.stderr`` / ``sys.stdout`` are the STREAMS, not
+        # tool-output text (`print(..., file=sys.stderr)` would fire
+        # on every stderr print in the tree).
+        if (node.attr in _TOOL_OUTPUT_KEYS
+                and isinstance(node.value, ast.Name)
+                and node.value.id in ("sys", "_sys")):
+            return None
         return node.attr
     if isinstance(node, ast.Subscript):
         sl = node.slice
         if (isinstance(sl, ast.Constant) and isinstance(sl.value, str)
-                and sl.value in _LLM_DERIVED_KEYS):
+                and sl.value in _FOREIGN_KEYS):
             return sl.value
     if isinstance(node, ast.Call):
         name = _call_name(node)
         if name == "get" and node.args:
             a0 = node.args[0]
             if (isinstance(a0, ast.Constant) and isinstance(a0.value, str)
-                    and a0.value in _LLM_DERIVED_KEYS):
+                    and a0.value in _FOREIGN_KEYS):
                 return a0.value
         if (isinstance(node.func, ast.Name) and node.func.id == "getattr"
                 and len(node.args) >= 2):
             a1 = node.args[1]
             if (isinstance(a1, ast.Constant) and isinstance(a1.value, str)
-                    and a1.value in _LLM_DERIVED_KEYS):
+                    and a1.value in _FOREIGN_KEYS):
                 return a1.value
     return None
 
@@ -668,6 +817,11 @@ class _Scanner(ast.NodeVisitor):
             return None
         if isinstance(func, ast.Attribute):
             if func.attr in _REPORT_CONSTRUCTORS:
+                return list(node.args) + [kw.value for kw in node.keywords
+                                          if kw.value is not None]
+            if func.attr in ("echo", "secho"):
+                # typer.echo / click.secho attribute-form terminal
+                # sinks (module receivers, occasionally aliased).
                 return list(node.args) + [kw.value for kw in node.keywords
                                           if kw.value is not None]
             if func.attr in _SINK_METHODS:

@@ -299,3 +299,81 @@ def test_rule_passes_sanitised_bullets_append():
         '    bullets.append(f"- Summary: {sanitise_string(primary.summary)}")\n'
     )
     assert audit_source(src) == []
+
+
+def test_rule_catches_raw_subprocess_stderr_print():
+    """Tool output is foreign-derived: `git apply` failures quote the
+    target's context lines, compiler diagnostics quote hostile source.
+    A raw proc.stderr print must fire."""
+    src = (
+        "def run(proc):\n"
+        "    print(proc.stderr)\n"
+    )
+    vs = audit_source(src)
+    assert any(v.detail == "stderr" for v in vs)
+
+
+def test_rule_catches_tainted_stdout_local():
+    src = (
+        "def run(proc, lines):\n"
+        "    out = proc.stdout\n"
+        '    lines.append(f"tool said: {out}")\n'
+    )
+    vs = audit_source(src)
+    assert any(v.detail == "out" for v in vs)
+
+
+def test_rule_ignores_sys_stderr_stream():
+    # Two-direction guard: the STREAM objects are not tool output.
+    src = (
+        "def warn():\n"
+        '    print("careful", file=sys.stderr)\n'
+        "    _sys.stderr.write('x')\n"
+    )
+    assert audit_source(src) == []
+
+
+def test_rule_passes_sanitised_stderr():
+    src = (
+        "def run(proc):\n"
+        "    print(sanitise_for_terminal(proc.stderr, max_len=500))\n"
+    )
+    assert audit_source(src) == []
+
+
+def test_rule_catches_typer_echo_attribute_sink():
+    """typer.echo is a terminal sink like print — a CLI built on typer
+    must not relay foreign text invisibly to this audit."""
+    src = (
+        "def show(r):\n"
+        '    typer.echo(f"FAIL — {r.error}", err=True)\n'
+    )
+    vs = audit_source(src)
+    assert any(v.detail == "error" for v in vs)
+
+
+def test_rule_catches_echo_name_form_sink():
+    src = (
+        "from typer import echo\n"
+        "def show(r):\n"
+        "    echo(r.stderr)\n"
+    )
+    vs = audit_source(src)
+    assert any(v.detail == "stderr" for v in vs)
+
+
+def test_rule_catches_secho_sink():
+    src = (
+        "def show(r):\n"
+        '    click.secho(r.reasoning, fg="red")\n'
+    )
+    vs = audit_source(src)
+    assert any(v.detail == "reasoning" for v in vs)
+
+
+def test_rule_passes_sanitised_typer_echo():
+    src = (
+        "def show(r):\n"
+        "    typer.echo(sanitise_for_terminal(r.error, max_len=512))\n"
+    )
+    assert audit_source(src) == []

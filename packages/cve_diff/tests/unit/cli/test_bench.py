@@ -498,3 +498,28 @@ def test_render_html_battery_variant_payloads_neutralised() -> None:
     assert "</title><script" not in out
     # Evidence stays visible in inert form.
     assert "&lt;script" in out and "&lt;iframe" in out
+
+
+def test_echo_result_fail_lane_escapes_error(capsys) -> None:
+    """r.error relays agent/tool exception text — hostile ESC/C1/bidi
+    bytes must reach the operator TTY escaped and bounded."""
+    from cve_diff.cli.bench import _CveResult, _echo_result
+
+    hostile = "boom\x1b]0;pwned\x07\x9b2J‮evil " + "A" * 2000
+    r = _CveResult(cve_id="CVE-2024-0001", ok=False, elapsed_s=1.0,
+                   error=hostile, error_class="Other")
+    _echo_result(1, 1, r)
+    err = capsys.readouterr().err
+    assert "CVE-2024-0001" in err and "boom" in err
+    for raw in ("\x1b]", "\x07", "\x9b", "‮"):
+        assert raw not in err
+    assert "...[+" in err  # length-bounded with explicit elision
+
+
+def test_echo_result_pass_lane_unchanged(capsys) -> None:
+    from cve_diff.cli.bench import _CveResult, _echo_result
+
+    r = _CveResult(cve_id="CVE-2024-0002", ok=True, elapsed_s=2.0,
+                   shape="source", error_class="PASS")
+    _echo_result(2, 3, r)
+    assert "[2/3] PASS CVE-2024-0002 (2.0s)" in capsys.readouterr().out

@@ -379,7 +379,14 @@ def _echo_result(i: int, n: int, r: _CveResult) -> None:
         tag = "" if r.shape == "source" else f" [{r.shape}]"
         typer.echo(f"[{i}/{n}] PASS {r.cve_id}{tag} ({r.elapsed_s}s)")
     else:
-        typer.echo(f"[{i}/{n}] FAIL {r.cve_id} — {r.error}", err=True)
+        # r.error can relay agent/tool exception text (LLM- and
+        # repo-derived bytes) — escape + bound before the TTY.
+        from core.security.log_sanitisation import sanitise_for_terminal
+        typer.echo(
+            f"[{i}/{n}] FAIL {r.cve_id} — "
+            f"{sanitise_for_terminal(str(r.error), max_len=512)}",
+            err=True,
+        )
 
 
 def _render_bench_markdown(summary: _BenchSummary) -> str:

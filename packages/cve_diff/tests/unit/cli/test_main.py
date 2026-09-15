@@ -327,3 +327,23 @@ def test_run_quiet_suppresses_flow_md_on_stdout(tmp_path, monkeypatch):
     assert "=== Artifacts ===" not in result.output
     # But flow.md still exists on disk.
     assert (out / "CVE-2024-99006.flow.md").exists()
+
+
+def test_echo_flow_md_escapes_hostile_body(tmp_path, capsys):
+    """The flow.md relay is a terminal sink: producers escape before
+    the file is written, but a producer regression (or hand-edited
+    flow.md) must not drive the operator's TTY — the relay escapes
+    too, keeping structural newlines."""
+    from cve_diff.cli.main import _echo_flow_md
+
+    (tmp_path / "CVE-2024-0003.flow.md").write_text(
+        "# trace\n\x1b]0;pwned\x07\x9b2J‮evil line\nsecond line\n",
+        encoding="utf-8",
+    )
+    _echo_flow_md(tmp_path, "CVE-2024-0003", quiet=False)
+    out = capsys.readouterr().out
+    assert "pipeline trace" in out
+    assert "# trace\n" in out  # newlines stay structural
+    assert "second line" in out
+    for raw in ("\x1b]", "\x07", "\x9b", "‮"):
+        assert raw not in out

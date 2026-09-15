@@ -1257,9 +1257,12 @@ def _run_cocci_prereqs(workdir, findings_data, target=None):
                 and result["checks"].get("function_exists") is True
                 and result["checks"].get("function_has_callers") is False):
             flagged += 1
+            # finding id and function name are target/LLM-derived —
+            # escape + bound before they reach the operator terminal.
+            from core.security.log_sanitisation import sanitise_for_terminal as _sft
             print(
-                f"  C-cocci WARN: {finding.get('id', '?')} — function "
-                f"{result['details'].get('function')!r} has no callers "
+                f"  C-cocci WARN: {_sft(str(finding.get('id', '?')), max_len=64)} — function "
+                f"{_sft(repr(result['details'].get('function')), max_len=128)} has no callers "
                 f"in tree (orphan-static-helper or dead code)"
             )
     total = len(findings_data.get("findings", []))
