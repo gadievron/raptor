@@ -946,6 +946,21 @@ def _flock(path: Path):
 _flock = contextlib.contextmanager(_flock)
 
 
+def _row_ts(row: Any) -> str:
+    """Best-effort ``ts`` of a raw index row for latest-wins compares.
+
+    Index rows are attacker-writable (archive import): a non-dict row
+    or a non-str ``ts`` reads as the empty string — sorting BELOW
+    every real microsecond ISO stamp, so garbage never outranks a
+    genuine entry and never crashes the ``>`` compare inside the
+    merge flock.
+    """
+    if not isinstance(row, dict):
+        return ""
+    ts = row.get("ts", "")
+    return ts if isinstance(ts, str) else ""
+
+
 def merge_into_index(project_dir: Path, run_dir: Path) -> int:
     """Merge run journal entries into the project-level index.
 
@@ -998,6 +1013,11 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
         # of one of its per-site successors.
         rehomed = 0
         for old_key in list(index.keys()):
+            if not isinstance(index[old_key], dict):
+                # Same disposition as an unparseable dict row below:
+                # a non-dict value has no .get and crashed the
+                # re-home inside the flock.
+                continue  # unreadable row: leave in place, never drop
             try:
                 entry = _entry_from_dict(index[old_key])
             except (TypeError, KeyError, ValueError):
@@ -1006,7 +1026,7 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
             if new_key == old_key:
                 continue
             existing = index.get(new_key)
-            if existing is None or entry.ts > existing.get("ts", ""):
+            if existing is None or entry.ts > _row_ts(existing):
                 index[new_key] = index[old_key]
             del index[old_key]
             rehomed += 1
@@ -1018,7 +1038,7 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
         for entry in run_entries:
             key = entry.index_key
             existing = index.get(key)
-            if existing is None or entry.ts > existing.get("ts", ""):
+            if existing is None or entry.ts > _row_ts(existing):
                 index[key] = entry.to_dict()
                 merged += 1
 
@@ -1092,6 +1112,14 @@ def load_index_full(project_dir: Path) -> dict[str, ReviewJournalEntry]:
     raw = _load_index(index_path)
     result: dict[str, ReviewJournalEntry] = {}
     for key, entry_dict in raw.items():
+        if not isinstance(entry_dict, dict):
+            # A non-dict entry VALUE passes the container gates but
+            # has no .get — quarantine per row, like the journal
+            # reader's non-dict line gate.
+            logger.warning(
+                "journal index: skipping %s: not an object (%s)",
+                key, type(entry_dict).__name__)
+            continue
         try:
             result[key] = _entry_from_dict(entry_dict)
         except (TypeError, KeyError, ValueError) as exc:
@@ -1133,7 +1161,41 @@ def _load_index(path: Path, for_write: bool = False
                 f"journal index at {path} is not an object — "
                 "refusing to overwrite it")
         return {}
-    return data.get("entries", {})
+    entries = data.get("entries", {})
+    if not isinstance(entries, dict):
+        # Same threat model as the top-level gate: the index is
+        # reachable via a /project archive import, and a list/null
+        # "entries" value passed the dict gate above only to crash
+        # every consumer's .items()/.get — the writer path crashed
+        # INSIDE the merge flock, so every run-completion merge failed
+        # with a raw traceback instead of the designed loud refusal.
+        if for_write:
+            raise IndexUnreadable(
+                f"journal index at {path} has a non-object 'entries' "
+                "value — refusing to overwrite it")
+        logger.warning(
+            "journal: index at %s has a non-object 'entries' value — "
+            "read as empty (writers refuse)", path)
+        return {}
+    if for_write:
+        # Write-boundary round-trip proof: never-drop preserves rows
+        # that fail row validation IN the entries dict, and the writer
+        # serializes the WHOLE dict — so a planted row whose CONTENT
+        # the serializer refuses (lone-surrogate str, non-finite
+        # float; both parse on stdlib json) crashed save_json inside
+        # the merge flock on EVERY retry. Refuse loudly instead, file
+        # untouched — parity with orjson environments, where the same
+        # planted index already refuses at parse via the unreadable
+        # arm above. Readers need no proof: rows quarantine
+        # individually through _entry_from_dict.
+        try:
+            _validate_serializable(entries)
+        except ValueError as e:
+            raise IndexUnreadable(
+                f"journal index at {path} carries content its own "
+                "writer cannot re-serialize — refusing to rewrite "
+                f"it ({e.__cause__})") from e
+    return entries
 
 
 def _write_index(path: Path, entries: dict[str, dict[str, Any]]) -> None:

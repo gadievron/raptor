@@ -59,8 +59,8 @@ sys.path.insert(0, str(REPO))
 import core.startup.process_init  # noqa: E402,F401
 
 from core.coverage.journal import (  # noqa: E402
-    INDEX_FILENAME, ReviewJournalEntry, _flock, _load_index,
-    _write_index, now_iso,
+    INDEX_FILENAME, IndexUnreadable, ReviewJournalEntry, _flock,
+    _load_index, _row_ts, _write_index, now_iso,
 )
 from core.json import load_json  # noqa: E402
 
@@ -248,14 +248,19 @@ def _migrate(project_dir: Path) -> int:
         return 0
 
     with _flock(index_path):
-        index = _load_index(index_path)
+        # for_write: this path unconditionally REWRITES the index
+        # below, so it is a writer — the reader-degrade default
+        # (unreadable/hostile container reads as {}) would turn a
+        # corrupt-but-recoverable index into a silent full rewrite.
+        # IndexUnreadable propagates to main() as a loud refusal.
+        index = _load_index(index_path, for_write=True)
         for source, rec in legacy_entries:
             entry = _to_journal_entry(rec, run_id=source)
             key = entry.key
             existing = index.get(key)
             new_dict = entry.to_dict()
             new_dict["legacy"] = True
-            if existing is None or entry.ts > existing.get("ts", ""):
+            if existing is None or entry.ts > _row_ts(existing):
                 index[key] = new_dict
                 added += 1
         _write_index(index_path, index)
@@ -282,7 +287,11 @@ def main() -> int:
         _mark_inert(project_dir)
         return 0
 
-    added = _migrate(project_dir)
+    try:
+        added = _migrate(project_dir)
+    except IndexUnreadable as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
     print(
         f"migration: {added} entries added / updated in "
         f"{project_dir / INDEX_FILENAME}",

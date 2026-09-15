@@ -80,3 +80,44 @@ def test_annotation_without_hash_or_lines_still_migrates(migrate_mod, tmp_path):
     assert "line_start" not in rec
     entry = migrate_mod._to_journal_entry(rec)
     assert entry.line_start == 0
+
+
+def test_migrate_refuses_hostile_index_container(migrate_mod, tmp_path):
+    """_migrate unconditionally REWRITES the index, so it is a writer:
+    a non-object "entries" container must refuse (IndexUnreadable),
+    never load-as-empty + rewrite — pre-fix the reader-degrade default
+    silently destroyed the unknown container content."""
+    from core.coverage.journal import IndexUnreadable
+
+    _write_annotation(tmp_path)
+    index_path = tmp_path / "review-journal-index.json"
+    planted = '{"entries": [1, 2]}'
+    index_path.write_text(planted, encoding="utf-8")
+
+    with pytest.raises(IndexUnreadable):
+        migrate_mod._migrate(tmp_path)
+    assert index_path.read_text(encoding="utf-8") == planted
+
+
+def test_migrate_survives_non_dict_occupant_at_target_key(
+    migrate_mod, tmp_path,
+):
+    """A preserved non-dict row at the exact key a legacy entry
+    migrates to crashed the ts compare (no .get on an int) pre-fix;
+    the garbage occupant loses to the genuine migrated entry."""
+    import json
+
+    _write_annotation(tmp_path)
+    (rec,) = migrate_mod._iter_annotation_entries(tmp_path)
+    key = migrate_mod._to_journal_entry(rec, run_id="annotation").key
+    index_path = tmp_path / "review-journal-index.json"
+    index_path.write_text(
+        json.dumps({"entries": {key: 7}}), encoding="utf-8",
+    )
+
+    added = migrate_mod._migrate(tmp_path)
+
+    assert added == 1
+    entries = json.loads(index_path.read_text(encoding="utf-8"))["entries"]
+    assert entries[key]["function"] == "parse_header"
+    assert entries[key]["legacy"] is True

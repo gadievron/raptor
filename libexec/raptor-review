@@ -1163,27 +1163,38 @@ def cmd_compact(args) -> None:
         return
 
     from core.coverage.journal import (
-        INDEX_SCHEMA_VERSION,
+        IndexUnreadable,
         _entry_from_dict,
         _flock,
-        now_iso,
+        _load_index,
+        _row_ts,
+        _write_index,
     )
-    from core.json import save_json
 
     # Same lock every index writer takes (merge_into_index) — a
     # compaction racing a run-completion merge must not clobber it.
     # Load INSIDE the lock so the rewrite is based on current bytes.
+    # The load + rewrite go through the journal module's own writer
+    # gates (_load_index(for_write=True) / _write_index) rather than a
+    # re-implemented copy — compaction is a WRITER, so it inherits the
+    # full refusal discipline (unreadable file, non-object container,
+    # non-serializable preserved rows) instead of drifting behind it.
     with _flock(index_path):
-        data = load_json(index_path, max_bytes=_MAX_ARTIFACT_BYTES)
-        if not isinstance(data, dict) or not isinstance(
-                data.get("entries", {}), dict):
-            print("  Corrupt index.", file=sys.stderr)
+        try:
+            entries = _load_index(index_path, for_write=True)
+        except IndexUnreadable as e:
+            print(f"  Corrupt index — not compacting: {e}",
+                  file=sys.stderr)
             sys.exit(1)
 
-        entries = data.get("entries", {})
         before = len(entries)
         rehomed = 0
         for old_key in list(entries.keys()):
+            if not isinstance(entries[old_key], dict):
+                # Same disposition as merge_into_index's re-home walk:
+                # a non-dict value has no .get and AttributeError is
+                # outside the quarantine tuple below.
+                continue  # unreadable row: leave in place, never drop
             try:
                 entry = _entry_from_dict(entries[old_key])
             except (TypeError, KeyError, ValueError):
@@ -1192,19 +1203,13 @@ def cmd_compact(args) -> None:
             if new_key == old_key:
                 continue
             existing = entries.get(new_key)
-            existing_ts = existing.get("ts", "") if isinstance(
-                existing, dict) else ""
-            if existing is None or entry.ts > existing_ts:
+            if existing is None or entry.ts > _row_ts(existing):
                 entries[new_key] = entries[old_key]
             del entries[old_key]
             rehomed += 1
 
         if rehomed:
-            save_json(index_path, {
-                "schema_version": INDEX_SCHEMA_VERSION,
-                "updated_at": now_iso(),
-                "entries": entries,
-            })
+            _write_index(index_path, entries)
             print(f"  Compacted: {before} -> {len(entries)} entries "
                   f"({rehomed} legacy key(s) re-homed).")
         else:

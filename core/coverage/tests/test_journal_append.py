@@ -642,6 +642,153 @@ class TestJournalByteBudget:
         assert "k" in journal_mod._load_index(index_path)
 
 
+class TestIndexShapeGuards:
+    """Index-side twins of the journal reader's shape gates.
+
+    The index is reachable via a /project archive import, so its
+    "entries" value and every entry value are attacker-shapeable: a
+    list/null "entries" passed the top-level dict gate and crashed
+    every consumer's .items()/.get, and the writer path crashed
+    INSIDE the merge flock — every run-completion merge against such
+    an index failed with a raw traceback instead of the designed
+    loud refusal.
+    """
+
+    def _run_with_entry(self, tmp_path: Path, i: int = 1) -> Path:
+        run = tmp_path / f"run{i}"
+        run.mkdir(exist_ok=True)
+        append_entry(run, _entry(i))
+        return run
+
+    @pytest.mark.parametrize("planted", ["[1, 2]", "null", '"x"', "7"])
+    def test_non_object_entries_reads_empty(
+        self, tmp_path: Path, caplog, planted: str,
+    ) -> None:
+        index_path = tmp_path / journal_mod.INDEX_FILENAME
+        index_path.write_text('{"entries": ' + planted + "}")
+
+        with caplog.at_level(logging.WARNING, logger="core.coverage.journal"):
+            assert journal_mod.load_index_full(tmp_path) == {}
+
+        assert any(
+            "non-object 'entries'" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_non_object_entries_refuses_merge_file_untouched(
+        self, tmp_path: Path,
+    ) -> None:
+        # Writer discipline: IndexUnreadable, never a rewrite — the
+        # unknown content might be history a newer schema wrote.
+        index_path = tmp_path / journal_mod.INDEX_FILENAME
+        index_path.write_text('{"entries": [1, 2]}')
+        run = self._run_with_entry(tmp_path)
+
+        assert journal_mod.merge_into_index(tmp_path, run) == 0
+        assert index_path.read_text() == '{"entries": [1, 2]}'
+
+    @pytest.mark.parametrize("planted", ["null", "[1]", '"x"', "7"])
+    def test_non_object_entry_value_skipped_by_reader(
+        self, tmp_path: Path, caplog, planted: str,
+    ) -> None:
+        index_path = tmp_path / journal_mod.INDEX_FILENAME
+        index_path.write_text('{"entries": {"k": ' + planted + "}}")
+
+        with caplog.at_level(logging.WARNING, logger="core.coverage.journal"):
+            assert journal_mod.load_index_full(tmp_path) == {}
+
+        assert any(
+            "skipping k: not an object" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_non_object_entry_value_left_in_place_by_merge(
+        self, tmp_path: Path,
+    ) -> None:
+        # Row-level disposition mirrors the unparseable-dict-row rule:
+        # leave in place, never drop — but the merge itself (and the
+        # re-home walk over the planted key) must proceed.
+        index_path = tmp_path / journal_mod.INDEX_FILENAME
+        index_path.write_text('{"entries": {"k": null}}')
+        run = self._run_with_entry(tmp_path)
+
+        assert journal_mod.merge_into_index(tmp_path, run) == 1
+
+        entries = json.loads(index_path.read_text())["entries"]
+        assert "k" in entries and entries["k"] is None
+        assert len(entries) == 2
+
+    def test_occupied_key_with_non_str_ts_loses_without_crash(
+        self, tmp_path: Path,
+    ) -> None:
+        # A planted dict row with an int ts at the exact index_key of
+        # an incoming entry crashed the `>` compare inside the flock;
+        # garbage ts must read as "" (older than every real stamp).
+        run = self._run_with_entry(tmp_path)
+        assert journal_mod.merge_into_index(tmp_path, run) == 1
+        index_path = tmp_path / journal_mod.INDEX_FILENAME
+        data = json.loads(index_path.read_text())
+        key = next(iter(data["entries"]))
+        data["entries"][key]["ts"] = 7
+        index_path.write_text(json.dumps(data))
+
+        run2 = tmp_path / "run2"
+        run2.mkdir()
+        newer = _entry(1)
+        newer.verdict = "finding"
+        append_entry(run2, newer)
+
+        assert journal_mod.merge_into_index(tmp_path, run2) == 1
+        assert journal_mod.load_index(tmp_path)[newer.key].verdict == "finding"
+
+    _HOSTILE_INDEXES = [
+        # Lone surrogate inside a preserved row (pure-ASCII bytes).
+        '{"entries": {"k": {"body": "\\ud800evil"}}}',
+        # Overflow-to-inf float (1e400 parses to inf on stdlib json;
+        # parse_constant fires only on literal NaN/Infinity tokens).
+        '{"entries": {"k": {"confidence": 1e400}}}',
+    ]
+
+    @pytest.mark.parametrize("planted", _HOSTILE_INDEXES)
+    def test_content_hostile_preserved_row_refuses_merge_file_untouched(
+        self, tmp_path: Path, monkeypatch, planted: str,
+    ) -> None:
+        # Write-boundary class: never-drop keeps rows that fail row
+        # validation, and the writer serializes the WHOLE entries
+        # dict — pre-fix, a planted row the serializer refuses
+        # (UnicodeEncodeError at the utf-8 encode / allow_nan=False
+        # ValueError) crashed save_json inside the merge flock on
+        # EVERY retry. The writer must refuse loudly instead, file
+        # untouched — parity with orjson environments, where the same
+        # planted index refuses at parse.
+        import core.json.utils as json_utils
+        monkeypatch.setattr(json_utils, "_orjson", None)
+        index_path = tmp_path / journal_mod.INDEX_FILENAME
+        index_path.write_text(planted, encoding="ascii")
+        run = self._run_with_entry(tmp_path)
+
+        assert journal_mod.merge_into_index(tmp_path, run) == 0
+        # Retry parity — refusal, never a crash, on every attempt.
+        assert journal_mod.merge_into_index(tmp_path, run) == 0
+        assert index_path.read_text(encoding="ascii") == planted
+        # The reader side degrades row-by-row, never crashes.
+        assert journal_mod.load_index_full(tmp_path) == {}
+
+    @pytest.mark.parametrize("planted", _HOSTILE_INDEXES)
+    def test_content_hostile_index_contained_on_natural_arm(
+        self, tmp_path: Path, planted: str,
+    ) -> None:
+        # No arm forced: orjson refuses the planted bytes at parse
+        # (unreadable-index refusal); stdlib refuses at the new
+        # write-boundary proof. Both arms: merge 0, file untouched.
+        index_path = tmp_path / journal_mod.INDEX_FILENAME
+        index_path.write_text(planted, encoding="ascii")
+        run = self._run_with_entry(tmp_path)
+
+        assert journal_mod.merge_into_index(tmp_path, run) == 0
+        assert index_path.read_text(encoding="ascii") == planted
+
+
 class TestNonFiniteWriteParity:
     """The reader skips NaN/Infinity lines as malformed, so the writer
     must fail loudly instead of emitting a row the next read drops."""

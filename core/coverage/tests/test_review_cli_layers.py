@@ -314,6 +314,102 @@ def test_compact_merges_legacy_duplicate_latest_wins(tmp_path, capsys):
     assert data["entries"] == {proper_key: newer}
 
 
+def test_compact_leaves_non_dict_entry_values_in_place(tmp_path, capsys):
+    """A planted non-dict entry VALUE has no .get — AttributeError is
+    outside the quarantine tuple, so pre-fix the re-home loop crashed
+    with a raw traceback. Same disposition as merge_into_index's walk:
+    leave in place, never drop, keep compacting the rest."""
+    from core.coverage.journal import _entry_from_dict
+
+    project = tmp_path / "proj"
+    project.mkdir()
+    row = _entry("src/a.c", "foo")
+    index_path = _write_index(project, {
+        "legacy-key": row,
+        "bad1": None,
+        "bad2": 7,
+    })
+
+    _cli.cmd_compact(_ns(project=str(project)))
+    out = capsys.readouterr().out
+    assert "1 legacy key(s) re-homed" in out
+
+    entries = json.loads(index_path.read_text(encoding="utf-8"))["entries"]
+    assert entries[_entry_from_dict(row).index_key] == row
+    assert entries["bad1"] is None
+    assert entries["bad2"] == 7
+
+
+def test_compact_occupied_home_with_garbage_ts_no_crash(tmp_path, capsys):
+    """A dict row with a non-str ts at the re-home destination crashed
+    the `>` compare pre-fix; garbage ts reads as "" (older than every
+    real stamp), so the genuine legacy row wins the home."""
+    from core.coverage.journal import _entry_from_dict
+
+    project = tmp_path / "proj"
+    project.mkdir()
+    legacy = _entry("src/a.c", "foo", ts=TS_NEW)
+    proper_key = _entry_from_dict(legacy).index_key
+    occupant = dict(_entry("src/a.c", "foo"))
+    occupant["ts"] = 7
+    index_path = _write_index(project, {
+        "legacy-key": legacy,
+        proper_key: occupant,
+    })
+
+    _cli.cmd_compact(_ns(project=str(project)))
+    out = capsys.readouterr().out
+    assert "re-homed" in out
+
+    entries = json.loads(index_path.read_text(encoding="utf-8"))["entries"]
+    assert entries[proper_key] == legacy
+
+
+def test_compact_refuses_hostile_entries_container(tmp_path, capsys):
+    """Compaction is a writer: the journal module's writer gates
+    (IndexUnreadable) apply, and the file is never rewritten."""
+    import pytest
+
+    project = tmp_path / "proj"
+    project.mkdir()
+    index_path = project / "review-journal-index.json"
+    index_path.write_text('{"entries": [1, 2]}', encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        _cli.cmd_compact(_ns(project=str(project)))
+    assert exc.value.code == 1
+    assert "Corrupt index" in capsys.readouterr().err
+    assert index_path.read_text(encoding="utf-8") == '{"entries": [1, 2]}'
+
+
+def test_compact_refuses_non_serializable_preserved_row(
+    tmp_path, capsys, monkeypatch,
+):
+    """Write-boundary inheritance: a preserved row the serializer
+    refuses (lone surrogate — parses on stdlib json) must refuse the
+    rewrite loudly instead of crashing save_json mid-compaction."""
+    import pytest
+
+    import core.json.utils as json_utils
+
+    monkeypatch.setattr(json_utils, "_orjson", None)
+    project = tmp_path / "proj"
+    project.mkdir()
+    planted = (
+        '{"entries": {"legacy-key": '
+        + json.dumps(_entry("src/a.c", "foo"))
+        + ', "bad": {"body": "\\ud800evil"}}}'
+    )
+    index_path = project / "review-journal-index.json"
+    index_path.write_text(planted, encoding="ascii")
+
+    with pytest.raises(SystemExit) as exc:
+        _cli.cmd_compact(_ns(project=str(project)))
+    assert exc.value.code == 1
+    assert "Corrupt index" in capsys.readouterr().err
+    assert index_path.read_text(encoding="ascii") == planted
+
+
 # ── gaps: malformed run artifacts degrade, never traceback ───────────
 
 def test_gaps_toplevel_list_degrades(tmp_path, capsys):
