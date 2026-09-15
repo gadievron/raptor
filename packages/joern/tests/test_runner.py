@@ -52,6 +52,29 @@ class TestValidateQuery:
         err = _validate_query('Class.forName("Evil")')
         assert err is not None
 
+    def test_blocks_classloader_and_handle_reflection(self):
+        # The enumerable bypasses of the original list — each reaches
+        # code execution in the unsandboxed joern JVM without any
+        # blocked token.
+        for query in (
+            'getClass.getClassLoader.loadClass("java.lang.Runtime")',
+            'classOf[Runtime].getMethod ("exec")',
+            "classOf[X].getConstructor().newInstance()",
+            "MethodHandles.lookup()",
+            "loader.defineClass(name, bytes, 0, bytes.length)",
+            "field.setAccessible(true)",
+        ):
+            assert _validate_query(query) is not None, query
+
+    def test_plain_method_traversals_stay_clean(self):
+        # The blocklist must not eat legitimate CPG traversals.
+        for query in (
+            'cpg.method.name("getMethodTable").l',
+            "cpg.method.fullName.l",
+            'cpg.call.name("instantiate").l',
+        ):
+            assert _validate_query(query) is None, query
+
     def test_length_cap(self):
         err = _validate_query("x" * 5000)
         assert err is not None

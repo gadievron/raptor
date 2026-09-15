@@ -37,12 +37,23 @@ _JOERN_PARSE_BIN = "joern-parse"
 
 _QUERY_MAX_LEN = 4096
 
+# ADVISORY defence-in-depth, not a security boundary: the check is
+# purely textual, so string concatenation ("Process" + "Builder") or
+# any reflection primitive outside the list slips through — and the
+# validated query executes in the UNSANDBOXED joern --server JVM
+# (netns hides only the network; the JVM keeps full user-privilege
+# filesystem access). The real contract is that every in-tree query
+# author composes from static templates whose slots go through
+# _validate_substitution_value (identifier/qualified-name only) —
+# never pass composed or LLM-authored text to run_query()/query(),
+# with or without validate=True.
 _DANGEROUS_QUERY_PATTERNS = re.compile(
     r"java\.io\b|java\.nio\b|scala\.io\b"
     r"|java\.net\b|scala\.sys\b"
     r"|Runtime\.exec|ProcessBuilder|sys\.process"
     r"|Class\.forName|getDeclaredMethod|getDeclaredField"
-    r"|getRuntime",
+    r"|getRuntime|loadClass|getMethod\b|getConstructor"
+    r"|newInstance|MethodHandles|defineClass|setAccessible",
     re.IGNORECASE,
 )
 
