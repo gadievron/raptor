@@ -252,3 +252,43 @@ def test_esm_extension_scanned(tmp_path: Path) -> None:
     out = scan_target(tmp_path, _manifests(tmp_path))
     assert len(out) == 1
     assert out[0].path.name == "hook.mjs"
+
+
+def test_anchor_matches_sibling_detectors(tmp_path: Path) -> None:
+    """typosquat_domain must resolve its host dep through the shared
+    dominance-based resolver like every other tree-walking detector:
+    the same flagged file must yield the same composite ``_dep_key``
+    a sibling anchor consumer produces, or SQUAT-family conjunctions
+    can never co-fire. Also pins the multi-manifest anchor — the
+    DOMINATING manifest wins, not the first discovered one."""
+    from packages.sca.supply_chain._closest_manifest import (
+        project_host_dep,
+    )
+    from packages.sca.supply_chain.composite import _dep_key
+
+    (tmp_path / "package.json").write_text(
+        '{"name": "rootapp"}', encoding="utf-8")
+    sub = tmp_path / "svc"
+    sub.mkdir()
+    (sub / "package.json").write_text(
+        '{"name": "subapp"}', encoding="utf-8")
+    (sub / "src.py").write_text(
+        "URL = 'https://aquasecurtiy.org/x'\n", encoding="utf-8")
+
+    manifests = [
+        Manifest(path=tmp_path / "package.json", ecosystem="npm",
+                 is_lockfile=False),
+        Manifest(path=sub / "package.json", ecosystem="npm",
+                 is_lockfile=False),
+    ]
+    out = scan_target(tmp_path, manifests)
+    assert len(out) == 1
+    dep = out[0].dependency
+    sibling = project_host_dep(
+        manifests, sub / "src.py", tmp_path, reason="sibling walker",
+    )
+    assert _dep_key(dep) == _dep_key(sibling)
+    # Dominance anchor + own-name resolution (not "<project>" pinned
+    # to the first-discovered manifest).
+    assert dep.declared_in == sub / "package.json"
+    assert dep.name == "subapp"

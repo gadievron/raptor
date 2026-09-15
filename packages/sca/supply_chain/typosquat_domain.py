@@ -35,8 +35,9 @@ from core.json import load_json_bounded
 
 from .._test_paths import TEST_DIR_NAMES as _SHARED_TEST_DIR_NAMES
 from ..discovery import EXCLUDED_DIR_NAMES
-from ..models import PinStyle, Confidence, Dependency, Manifest
+from ..models import Confidence, Dependency, Manifest
 from ..parsers import _safe_read
+from ._closest_manifest import project_host_dep
 from ._edit_distance import damerau_levenshtein
 from ._source_exts import SOURCE_CODE_EXTS as _SOURCE_CODE_EXTS
 from typing import TYPE_CHECKING
@@ -118,11 +119,13 @@ def scan_target(
     if not popular:
         return []
 
-    # Group manifests by parent dir so the synthesised Dependency for a
-    # finding gets attached to a real declared_in.
+    # Anchor findings through the shared dominance-based resolver
+    # (``project_host_dep``) like every other tree-walking detector:
+    # pinning to the FIRST discovered manifest with a literal
+    # ``<project>`` name produced a dep key no sibling detector ever
+    # matched, so SQUAT-family composite promotions could never
+    # co-fire, and multi-manifest repos got a wrong ``declared_in``.
     manifests_list = list(manifests)
-    fallback_manifest: Manifest | None = (
-        manifests_list[0] if manifests_list else None)
 
     # Per-scan cache: a popular-near-miss check is purely a function
     # of the host string and the popular set, both stable across the
@@ -155,7 +158,10 @@ def scan_target(
             if best is None:
                 continue
             distance, nearest = best
-            dep = _stub_dep(fallback_manifest, src)
+            dep = project_host_dep(
+                manifests_list, src, target,
+                reason="domain typosquat — project-level finding",
+            )
             detail = (
                 f"{src.relative_to(target)}:{line} references "
                 f"`{host}` — distance {distance} from popular "
@@ -349,33 +355,6 @@ def _is_test_file(path: Path, target: Path) -> bool:
     except ValueError:
         rel = path
     return any(p in _TEST_DIR_NAMES for p in rel.parts)
-
-
-def _stub_dep(manifest: Manifest | None, src: Path) -> Dependency:
-    """Synthesise a Dependency row for the finding's required field.
-
-    Domain typosquats aren't tied to a specific dep — they're a signal
-    in source files. We attach the finding to the project's first
-    discovered manifest as a representative reference; the file path
-    is captured separately in ``TyposquatDomainFinding.path``.
-    """
-    declared_in = manifest.path if manifest else src
-    return Dependency(
-        ecosystem=manifest.ecosystem if manifest else "Inline",
-        name="<project>",
-        version=None,
-        declared_in=declared_in,
-        scope="main",
-        is_lockfile=False,
-        pin_style=PinStyle.UNKNOWN,
-        direct=True,
-        purl=f"pkg:project/{src.parent.name}",
-        parser_confidence=Confidence(
-            "high",
-            reason="domain typosquat — project-level finding",
-        ),
-        source_kind="manifest" if manifest else "inline",
-    )
 
 
 __all__ = ["TyposquatDomainFinding", "scan_target"]
