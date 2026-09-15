@@ -740,13 +740,25 @@ def _c_function_spans(source: str) -> list[tuple[str, int, int]]:
 def _gather_source_texts(
     target_path: Path, primary_file: str,
 ) -> dict[str, str]:
+    """Contained, capped source intake for the hypothesis channels.
+
+    ``primary_file`` arrives from LLM-writable artifacts: every read
+    routes through :func:`core.source.read_contained` (the
+    release_order idiom), so absolute values, ``..`` traversal, and
+    symlink escapes read as nothing instead of pulling host files
+    into the analysed corpus. The primary read is capped at
+    ``_MAX_FILE_BYTES`` (prefix kept — dropping the hypothesis file
+    outright would only blind the channel); rglob candidates over the
+    cap are skipped, as before.
+    """
+    from core.source import read_contained
+
     texts: dict[str, str] = {}
-    primary = target_path / primary_file
-    if primary.is_file():
-        try:
-            texts[primary_file] = primary.read_text(errors="replace")
-        except OSError:
-            pass
+    primary_text = read_contained(
+        target_path, primary_file, max_chars=_MAX_FILE_BYTES,
+    )
+    if primary_text is not None:
+        texts[primary_file] = primary_text
     try:
         candidates = [
             p for p in sorted(target_path.rglob("*"))
@@ -763,9 +775,14 @@ def _gather_source_texts(
         try:
             if p.stat().st_size > _MAX_FILE_BYTES:
                 continue
-            texts[rel] = p.read_text(errors="replace")
         except OSError:
             continue
+        content = read_contained(
+            target_path, rel, max_chars=_MAX_FILE_BYTES,
+        )
+        if content is None:
+            continue
+        texts[rel] = content
     return texts
 
 

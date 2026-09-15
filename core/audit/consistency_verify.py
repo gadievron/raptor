@@ -1184,17 +1184,21 @@ def _gather_source_texts(
     callee_candidates: list[str],
 ) -> dict[str, str]:
     """Bounded scan: the hypothesis's own file plus files mentioning a
-    candidate callee (the same-callee peer group lives across files)."""
+    candidate callee (the same-callee peer group lives across files).
+
+    ``file_path`` arrives from LLM-writable artifacts: reads route
+    through :func:`core.source.read_contained` (the release_order
+    idiom) so absolute values, ``..`` traversal, and symlink escapes
+    read as nothing, and the primary read is capped like the
+    candidates.
+    """
+    from core.source import read_contained
+
     texts: dict[str, str] = {}
     target = Path(target_path)
-    own = target / file_path
-    try:
-        if own.is_file():
-            texts[file_path] = own.read_text(
-                encoding="utf-8", errors="replace",
-            )
-    except OSError:
-        pass
+    own = read_contained(target, file_path, max_chars=_MAX_FILE_BYTES)
+    if own is not None:
+        texts[file_path] = own
     try:
         paths = sorted(
             p for p in target.rglob("*")
@@ -1214,8 +1218,10 @@ def _gather_source_texts(
         try:
             if p.stat().st_size > _MAX_FILE_BYTES:
                 continue
-            content = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
+            continue
+        content = read_contained(target, rel, max_chars=_MAX_FILE_BYTES)
+        if content is None:
             continue
         if any(c in content for c in callee_candidates):
             texts[rel] = content

@@ -624,3 +624,88 @@ class TestSanitizedViewMatching:
         assert [s.verb for s in sites] == ["list_add"]
         # Receipt shows the ORIGINAL line, not the blanked view.
         assert "list_add(&c->node, l);" in sites[0].code
+
+
+class TestGatherSourceTextsContainment:
+    """_gather_source_texts is a hypothesis-file intake: file paths
+    arrive from LLM-writable artifacts, so reads must be contained to
+    the analysed root and byte-capped (the release_order idiom)."""
+
+    def _tree(self, tmp_path):
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src/a.c").write_text("int f(void) { return 1; }\n")
+        secret = tmp_path / "secret.c"
+        secret.write_text("int host_secret(void) { return 42; }\n")
+        return target, secret
+
+    def test_absolute_primary_path_refused(self, tmp_path):
+        from core.audit.resource_bounds import (
+            _gather_source_texts as _rb_gather_source_texts,
+        )
+        target, secret = self._tree(tmp_path)
+        texts = _rb_gather_source_texts(target, str(secret))
+        assert str(secret) not in texts
+        assert not any("host_secret" in t for t in texts.values())
+
+    def test_traversal_primary_path_refused(self, tmp_path):
+        from core.audit.resource_bounds import (
+            _gather_source_texts as _rb_gather_source_texts,
+        )
+        target, _secret = self._tree(tmp_path)
+        texts = _rb_gather_source_texts(target, "../secret.c")
+        assert "../secret.c" not in texts
+        assert not any("host_secret" in t for t in texts.values())
+
+    def test_symlink_escape_refused(self, tmp_path):
+        from core.audit.resource_bounds import (
+            _gather_source_texts as _rb_gather_source_texts,
+        )
+        target, secret = self._tree(tmp_path)
+        (target / "src/link.c").symlink_to(secret)
+        texts = _rb_gather_source_texts(target, "src/a.c")
+        assert not any("host_secret" in t for t in texts.values())
+
+    def test_primary_read_is_capped(self, tmp_path):
+        from core.audit import resource_bounds
+        from core.audit.resource_bounds import (
+            _gather_source_texts as _rb_gather_source_texts,
+        )
+        target, _secret = self._tree(tmp_path)
+        big = "int g;\n" * (
+            resource_bounds._MAX_FILE_BYTES // 7 + 10
+        )
+        (target / "src/big.c").write_text(big)
+        texts = _rb_gather_source_texts(target, "src/big.c")
+        got = texts.get("src/big.c")
+        assert got is not None
+        assert len(got) <= resource_bounds._MAX_FILE_BYTES
+
+    def test_contained_relative_file_still_read(self, tmp_path):
+        from core.audit.resource_bounds import (
+            _gather_source_texts as _rb_gather_source_texts,
+        )
+        target, _secret = self._tree(tmp_path)
+        texts = _rb_gather_source_texts(target, "src/a.c")
+        assert "src/a.c" in texts
+        assert "int f" in texts["src/a.c"]
+
+
+class TestConsistencyGatherContainment:
+    """Structural twin in consistency_verify: same intake contract."""
+
+    def test_absolute_and_traversal_refused(self, tmp_path):
+        from core.audit.consistency_verify import _gather_source_texts
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src/a.c").write_text("int f(void) { helper(); }\n")
+        secret = tmp_path / "secret.c"
+        secret.write_text("int host_secret(void) { return 42; }\n")
+        for hostile in (str(secret), "../secret.c"):
+            texts = _gather_source_texts(target, hostile, ["helper"])
+            assert hostile not in texts
+            assert not any(
+                "host_secret" in t for t in texts.values()
+            ), hostile
+        ok = _gather_source_texts(target, "src/a.c", ["helper"])
+        assert "src/a.c" in ok
