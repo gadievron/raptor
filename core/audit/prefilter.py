@@ -881,13 +881,16 @@ def _py_value_refs(node: ast.expr | None) -> _WrapperValue:
 
 def _py_wrapper_escape(
     source: str,
-) -> tuple[dict[str, _WrapperValue], list[_WrapperValue]] | None:
-    """Collect (bindings, judged values) for a Python wrapper body.
+) -> tuple[dict[str, _WrapperValue], list[_WrapperValue], set[str]] | None:
+    """Collect (bindings, judged values, parameters) for a Python
+    wrapper body.
 
     ``bindings`` maps every bound name to its whole-value carry set;
     ``judged`` holds the value view of every escape position: binding
     values (including stores into containers/attributes), signature
-    defaults, call arguments, returns, and yields.
+    defaults, call arguments, returns, and yields; ``params`` names
+    the caller-data parameters (unbound ones — see the exemption in
+    _wrapper_ref_hits_exclusion).
 
     Returns None when the analysis cannot account for the body —
     unparseable source, star imports, or a binder construct outside
@@ -901,6 +904,7 @@ def _py_wrapper_escape(
     bindings: dict[str, _WrapperValue] = {}
     judged: list[_WrapperValue] = []
     accounted: set[str] = set()
+    params: set[str] = set()
     outer_defs = {
         id(n) for n in tree.body
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -942,17 +946,38 @@ def _py_wrapper_escape(
         # Attribute/Subscript targets bind no local name; the stored
         # value's refs are judged through the assignment's entry.
 
-    def bind_defaults(a: ast.arguments) -> None:
+    def bind_default(arg_name: str, default: ast.expr) -> None:
+        r, o = _py_value_refs(default)
+        judged.append((r, o))
+        # A pure-literal default leaves the parameter as plain
+        # caller data (the caller's argument usually replaces it);
+        # a reference-carrying or unresolved default joins the
+        # parameter's value domain and must resolve like any alias.
+        if r or not o:
+            bind(arg_name, r, o)
+
+    def bind_defaults(a: ast.arguments, exempt: bool = False) -> None:
         pos = a.posonlyargs + a.args
+        # Only the WRAPPER's own parameters are caller data. A
+        # lambda / nested-def parameter shadows only inside its own
+        # scope — outside it the same spelling is the module or
+        # import — so exempting it would launder a bare sink call
+        # (`g = lambda system: 0` then `return system(c)`) through
+        # the root drop in _wrapper_ref_hits_exclusion. Those
+        # parameters get no exemption and no outer binding; their
+        # in-scope references are already carried conservatively by
+        # the opaque value view.
+        if exempt:
+            params.update(arg_.arg for arg_ in pos + a.kwonlyargs)
+            if a.vararg is not None:
+                params.add(a.vararg.arg)
+            if a.kwarg is not None:
+                params.add(a.kwarg.arg)
         for arg_, default in zip(pos[len(pos) - len(a.defaults):], a.defaults):
-            r, o = _py_value_refs(default)
-            judged.append((r, o))
-            bind(arg_.arg, r, o)
+            bind_default(arg_.arg, default)
         for arg_, default in zip(a.kwonlyargs, a.kw_defaults):
             if default is not None:
-                r, o = _py_value_refs(default)
-                judged.append((r, o))
-                bind(arg_.arg, r, o)
+                bind_default(arg_.arg, default)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
@@ -1005,7 +1030,7 @@ def _py_wrapper_escape(
             # (call-shaped decorators are judged by the Call arm too).
             for dec in node.decorator_list:
                 judged.append(_py_value_refs(dec))
-            bind_defaults(node.args)
+            bind_defaults(node.args, exempt=id(node) in outer_defs)
             if id(node) not in outer_defs:
                 bind(node.name, _py_all_refs(node), False)
         elif isinstance(node, ast.Lambda):
@@ -1068,7 +1093,10 @@ def _py_wrapper_escape(
             if node.id not in bindings and node.id not in accounted:
                 return None
 
-    return bindings, judged
+    # A parameter that is rebound (or carries a reference default)
+    # loses the caller-data exemption — its binding resolves instead.
+    params -= set(bindings)
+    return bindings, judged, params
 
 
 #: Function-pointer declarator: the declared name sits inside the
@@ -1269,10 +1297,29 @@ def _wrapper_ref_hits_exclusion(
     exclusion: frozenset,
     tails: frozenset,
     project_sinks: frozenset | None,
+    params: frozenset[str] | set[str] = frozenset(),
 ) -> bool:
     """Judge one carried reference: every dotted prefix against the
-    full dangerous entries, every segment against the bare tails."""
+    full dangerous entries, every segment against the bare tails.
+
+    A reference ROOTED at a parameter name is caller data — the local
+    binding shadows any module or import of the same spelling, so the
+    root segment carries no sink identity of its own and is dropped
+    before judgment (a bare parameter reference is exempt entirely).
+    The attribute segments still name the API reached through the
+    caller's object (`sp.run`) and stay judged — for the built-in
+    sets via their bare tails, and a declared project sink keeps its
+    ROOT too: the operator's dotted declaration names the module, so
+    a parameter colliding with that root never drops it (dropping
+    would launder `utilmod.launch` through a parameter named
+    `utilmod`, and dotted project sinks derive no tail set)."""
     parts = ref.split(".")
+    if parts and parts[0] in params:
+        sink_roots = {s.split(".", 1)[0] for s in project_sinks or ()}
+        if parts[0] not in sink_roots:
+            parts = parts[1:]
+            if not parts:
+                return False
     prefixes = {".".join(parts[:i]) for i in range(1, len(parts) + 1)}
     if prefixes & exclusion or set(parts) & tails:
         return True
@@ -1486,19 +1533,23 @@ def _is_trivial_wrapper(
     # and every value-escape position (binding value, signature
     # default, call argument, return, yield) is judged against the
     # exclusion. An unaccountable body refuses the skip.
+    wrapper_params: set[str] = set()
     if lang == "python":
         escape = _py_wrapper_escape(source)
+        if escape is None:
+            return False, ""
+        wrapper_bindings, judged_values, wrapper_params = escape
     else:
         escape = _text_wrapper_escape(code_lines, lang)
-    if escape is None:
-        return False, ""
-    wrapper_bindings, judged_values = escape
+        if escape is None:
+            return False, ""
+        wrapper_bindings, judged_values = escape
     for refs, _resolved in judged_values:
         for r in refs:
             expanded, _ok = _resolve_wrapper_ref(r, wrapper_bindings)
             for er in expanded:
                 if _wrapper_ref_hits_exclusion(
-                    er, exclusion, tails, project_sinks,
+                    er, exclusion, tails, project_sinks, wrapper_params,
                 ):
                     return False, ""
 
@@ -1541,7 +1592,7 @@ def _is_trivial_wrapper(
                 ):
                     return False, ""
                 if _wrapper_ref_hits_exclusion(
-                    name, exclusion, tails, project_sinks,
+                    name, exclusion, tails, project_sinks, wrapper_params,
                 ):
                     return False, ""
                 if any(api in name.lower() for api in _CRYPTO_APIS):
@@ -1606,15 +1657,11 @@ def _is_trivial_wrapper(
     # missed exclusion journals a dangerous delegate mechanically
     # clean.
     for name in candidates:
-        parts = name.split(".")
-        prefixes = {
-            ".".join(parts[:i]) for i in range(1, len(parts) + 1)
-        }
-        if prefixes & exclusion or set(parts) & tails:
+        if _wrapper_ref_hits_exclusion(
+            name, exclusion, tails, project_sinks, wrapper_params,
+        ):
             return False, ""
         if any(api in name.lower() for api in _CRYPTO_APIS):
-            return False, ""
-        if project_sinks and prefixes & project_sinks:
             return False, ""
 
     # A sink passed as an ARGUMENT to any call is non-clean: the

@@ -691,6 +691,95 @@ void *alloc_obj(size_t n) {
             "def f(cmd):\n    from os import *\n    return helper(cmd)\n"
         )
 
+    def test_literal_default_parameter_stays_caller_data(self):
+        # A pure-literal default leaves the parameter as plain caller
+        # data: forwarding it (even under a tail-colliding name) or
+        # calling through it keeps the skip.
+        for body in (
+            "def f(x, out=None):\n    return out.append(x)\n",
+            "def f(x, timeout=30):\n    return helper(x, timeout)\n",
+            "def f(self, *, write=True):\n"
+            "    return self._lock(write=write)\n",
+        ):
+            assert self._py_fn(body), body
+
+    def test_parameter_forward_under_sink_tail_name_skips(self):
+        # A BARE parameter reference is caller data even under a
+        # tail-colliding name — the local binding shadows any module
+        # of the same spelling.
+        assert self._py_fn(
+            "def f(request):\n    return helper(request)\n"
+        )
+
+    def test_attribute_chain_on_parameter_still_judged(self):
+        # The attribute segments name the API reached through the
+        # caller's object — only the parameter ROOT is exempt.
+        assert not self._py_fn(
+            "def f(sp, arg):\n    return pool.submit(sp.run, arg)\n"
+        )
+
+    def test_rebound_parameter_loses_caller_data_exemption(self):
+        assert not self._py_fn(
+            "def f(system, c):\n    system = os.system\n"
+            "    return dispatch(system, c)\n"
+        )
+
+    def test_reference_default_parameter_still_resolves(self):
+        # Both directions: a reference-carrying default joins the
+        # parameter's value domain — sink defaults refuse, benign
+        # ones resolve and skip.
+        assert not self._py_fn(
+            "def f(cmd, g=os.system):\n    return g(cmd)\n"
+        )
+        assert self._py_fn(
+            "def f(a, g=math.sqrt):\n    return g(a)\n"
+        )
+
+    def test_lambda_param_does_not_exempt_outer_name(self):
+        # A lambda parameter shadows only inside the lambda — outside
+        # it the same spelling is the module/import, so it must never
+        # join the caller-data exemption (the bare sink call below
+        # would be journalled mechanically clean).
+        assert not self._py_fn(
+            "def f(c):\n    g = lambda system: 0\n    return system(c)\n"
+        )
+
+    def test_nested_def_param_does_not_exempt_outer_name(self):
+        assert not self._py_fn(
+            "def f(c):\n    def g(system):\n        pass\n"
+            "    return system(c)\n"
+        )
+
+    def test_lambda_param_project_sink_not_laundered(self):
+        from core.audit.prefilter import _is_trivial_wrapper
+        skip, _ = _is_trivial_wrapper(
+            "def f(c):\n    g = lambda utilmod: 0\n"
+            "    return utilmod.launch(c)\n",
+            "python", None,
+            project_sinks=frozenset({"utilmod.launch"}),
+        )
+        assert not skip
+
+    def test_project_sink_root_survives_param_collision(self):
+        # The operator's dotted sink declaration names the module —
+        # a parameter sharing that root keeps the reference judged
+        # (dotted project sinks derive no bare-tail set, so the root
+        # is their only surface).
+        from core.audit.prefilter import _is_trivial_wrapper
+        skip, _ = _is_trivial_wrapper(
+            "def f(c, utilmod=None):\n    return utilmod.launch(c)\n",
+            "python", None,
+            project_sinks=frozenset({"utilmod.launch"}),
+        )
+        assert not skip
+
+    def test_lambda_with_benign_params_keeps_skip(self):
+        # The other direction: lambda parameters colliding with
+        # nothing keep the wrapper trivially skippable.
+        assert self._py_fn(
+            "def f(x):\n    g = lambda k: k\n    return helper(x, g)\n"
+        )
+
     def test_relative_import_delegate_still_skips(self):
         # A relative import spells its delegate fully — the wrapper
         # stays trivially skippable; only the ref parts are judged.
@@ -1296,6 +1385,13 @@ _ADVERSARIAL_CASES: list[tuple] = [
     (
         'B05-literal-default', 'python',
         'def f(x, out=None):\n    return helper(x, out)\n',
+        True, None, None,
+    ),
+    (
+        # Caller-data exemption: a param-rooted method call carries
+        # no sink identity of its own.
+        'B06-param-method', 'python',
+        'def f(request):\n    return request.get_host()\n',
         True, None, None,
     ),
     (
