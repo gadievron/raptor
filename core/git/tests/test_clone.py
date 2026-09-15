@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -246,7 +248,10 @@ def test_fetch_into_existing_repo_skips_init(tmp_path: Path) -> None:
     assert not any("init" in c for c in cmds)
     assert cmds[0][3] == "config"
     assert "--local" in cmds[0]
-    assert cmds[1][3] == "remote"
+    # ... then the history-rewrite audit (replace refs + grafts),
+    # then ``remote add``.
+    assert cmds[1][3] == "for-each-ref"
+    assert cmds[3][3] == "remote"
 
 
 def test_fetch_existing_origin_remote_falls_back_to_set_url(
@@ -1280,6 +1285,157 @@ def test_fetch_preexisting_repo_own_footprint_still_fetches(
         ok = fetch_commit(repo, "https://github.com/foo/bar", _VALID_SHA)
         assert ok is True
         assert mock_net.called
+
+
+def test_foreign_local_config_keys_non_origin_remotes_surface() -> None:
+    """fetch_commit writes ONLY remote.origin — a planted foreign
+    remote (e.g. an ``ext::`` URL waiting for an out-of-band
+    ``git fetch --all``) must surface as foreign."""
+    from core.git.clone import _foreign_local_config_keys
+    listing = (
+        "remote.origin.url\nhttps://github.com/foo/bar\0"
+        "remote.evil.url\next::sh -c whoami\0"
+        "remote.evil.fetch\n+refs/*:refs/*\0"
+    )
+    foreign = _foreign_local_config_keys(listing)
+    assert "remote.evil.url" in foreign
+    assert "remote.evil.fetch" in foreign
+    assert "remote.origin.url" not in foreign
+
+
+def test_fetch_preexisting_repo_replace_refs_refused(tmp_path: Path) -> None:
+    """A pre-existing repo_dir carrying ``refs/replace/*`` must refuse
+    BEFORE the network step: with a correctly-hashed attacker object
+    planted, the fetch succeeds from the REAL upstream, FETCH_HEAD
+    verifies the requested SHA — and every reader without the
+    ``core.useReplaceRefs=false`` pin gets the replacement content.
+    The config audit cannot see it (a ref is not a config key)."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+
+    def _side_effect(cmd, **kwargs):
+        if "config" in cmd:
+            return _completed(0, stdout="")
+        if "for-each-ref" in cmd:
+            return _completed(
+                0,
+                stdout=("0123456789abcdef0123456789abcdef01234567 commit\t"
+                        "refs/replace/deadbeef\n"),
+            )
+        return _local_ok(cmd, **kwargs)
+
+    with patch("core.sandbox.run_untrusted", side_effect=_side_effect), \
+         patch("core.sandbox.run_untrusted_networked") as mock_net:
+        with pytest.raises(RuntimeError, match="refs/replace"):
+            fetch_commit(repo, "https://github.com/foo/bar", _VALID_SHA)
+        mock_net.assert_not_called()
+
+
+def test_fetch_preexisting_repo_grafts_refused(tmp_path: Path) -> None:
+    """``info/grafts`` rewrites parent links for every reader and has
+    NO config off-switch — a pre-existing plant must refuse before
+    the network step."""
+    repo = tmp_path / "repo"
+    (repo / ".git" / "info").mkdir(parents=True)
+    (repo / ".git" / "info" / "grafts").write_text(
+        "0123456789abcdef0123456789abcdef01234567\n")
+
+    def _side_effect(cmd, **kwargs):
+        if "config" in cmd:
+            return _completed(0, stdout="")
+        if "for-each-ref" in cmd:
+            return _completed(0, stdout="")
+        if "--git-path" in cmd:
+            return _completed(0, stdout=".git/info/grafts\n")
+        return _local_ok(cmd, **kwargs)
+
+    with patch("core.sandbox.run_untrusted", side_effect=_side_effect), \
+         patch("core.sandbox.run_untrusted_networked") as mock_net:
+        with pytest.raises(RuntimeError, match="info/grafts"):
+            fetch_commit(repo, "https://github.com/foo/bar", _VALID_SHA)
+        mock_net.assert_not_called()
+
+
+def test_fetch_preexisting_repo_rewrite_audit_unreadable_refused(
+    tmp_path: Path,
+) -> None:
+    """The history-rewrite audit fails closed like the unreadable-
+    config arm: an unreadable ref listing refuses, never fetches
+    blind."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+
+    def _side_effect(cmd, **kwargs):
+        if "config" in cmd:
+            return _completed(0, stdout="")
+        if "for-each-ref" in cmd:
+            return _completed(128, stderr="fatal: not a git repository")
+        return _local_ok(cmd, **kwargs)
+
+    with patch("core.sandbox.run_untrusted", side_effect=_side_effect), \
+         patch("core.sandbox.run_untrusted_networked") as mock_net:
+        with pytest.raises(RuntimeError, match="unverifiable"):
+            fetch_commit(repo, "https://github.com/foo/bar", _VALID_SHA)
+        mock_net.assert_not_called()
+
+
+def test_safe_git_overrides_pin_replace_refs_off() -> None:
+    """Posture pin: every safe git command must carry the replace-ref
+    off-switch — object substitution behind a verified SHA otherwise
+    reaches every log/show/diff over a target repo."""
+    from core.git.clone import (
+        _SAFE_GIT_OVERRIDES,
+        _SAFE_GIT_READONLY_OVERRIDES,
+    )
+    assert "core.useReplaceRefs=false" in _SAFE_GIT_OVERRIDES
+    assert "core.useReplaceRefs=false" in _SAFE_GIT_READONLY_OVERRIDES
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_replace_ref_substitution_neutralised_live(tmp_path: Path) -> None:
+    """Live repro of the object-substitution vector: a planted
+    ``refs/replace/<sha>`` makes bare ``git show`` return attacker
+    content for the REAL commit OID; the ``core.useReplaceRefs=false``
+    pin in the safe overrides restores the real content."""
+    from core.git.clone import safe_git_readonly_command
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {"GIT_TERMINAL_PROMPT": "0", "HOME": str(tmp_path),
+           "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+           "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
+           "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+    def _git(*args: str) -> str:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), *args], env=env,
+            capture_output=True, text=True, timeout=30, check=True,
+        )
+        return proc.stdout.strip()
+
+    _git("init", "-q")
+    (repo / "f.txt").write_text("real\n", encoding="utf-8")
+    _git("add", "f.txt")
+    _git("commit", "-q", "-m", "real")
+    real_sha = _git("rev-parse", "HEAD")
+    (repo / "f.txt").write_text("attacker\n", encoding="utf-8")
+    _git("add", "f.txt")
+    _git("commit", "-q", "-m", "attacker")
+    evil_sha = _git("rev-parse", "HEAD")
+    _git("replace", real_sha, evil_sha)
+
+    # The vector: default git substitutes the attacker object.
+    substituted = _git("show", f"{real_sha}:f.txt")
+    assert substituted == "attacker"
+    # The pin: safe overrides read the real object.
+    pinned = subprocess.run(
+        safe_git_readonly_command(
+            "-C", str(repo), "show", f"{real_sha}:f.txt",
+        ) + ["--no-ext-diff"],
+        env=env, capture_output=True, text=True, timeout=30, check=True,
+    ).stdout.strip()
+    assert pinned == "real"
 
 
 def test_writable_path_refuses_system_state_prefixes() -> None:

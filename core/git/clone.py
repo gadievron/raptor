@@ -213,6 +213,17 @@ _SAFE_GIT_OVERRIDES = (
     "-c", "gpg.x509.program=true",
     "-c", "gpg.ssh.program=true",
     "-c", "diff.external=",
+    # Replace refs substitute arbitrary pre-planted objects behind a
+    # real OID at the object-read layer: with ``refs/replace/<sha>``
+    # present, ``git show``/``log``/``diff`` return the replacement
+    # content while ref resolution (and a fetched SHA's verification)
+    # still reports the requested OID. Git honours them by DEFAULT, so
+    # a hostile pre-existing ``.git`` can lie to every reader without
+    # touching config. Pinned off for every target-repo operation.
+    # (``info/grafts`` forges history similarly but has NO config key —
+    # fetch_commit refuses pre-existing repos that carry either; see
+    # ``_hostile_history_rewrite_reason``.)
+    "-c", "core.useReplaceRefs=false",
 )
 
 
@@ -513,8 +524,13 @@ def _validate_writable_path(p: Path, *, role: str) -> None:
 #
 # The exec-vector keys (`core.fsmonitor`, hooks, editor, pager, gpg,
 # filter/diff drivers, …) stay pinned or refused via
-# ``_SAFE_GIT_OVERRIDES``; this audit closes the transport class by
-# refusing to run the NETWORK step over a config we didn't write.
+# ``_SAFE_GIT_OVERRIDES``; this audit closes the transport-CONFIG
+# class by refusing to run the NETWORK step over a config we didn't
+# write. Config is NOT the whole pre-existing-plant surface: replace
+# refs and grafts substitute planted objects behind a correctly-
+# verified fetch with a clean config, so the audit pairs with
+# ``_hostile_history_rewrite_reason`` (both run before the network
+# step) — neither alone closes the class.
 #
 # Trade-off, both directions: an allowlist FAILS LOUD if a future git
 # version's ``init`` writes a new default key (extend the set — the
@@ -567,14 +583,77 @@ def _foreign_local_config_keys(listing_nul: str) -> list:
         if not key or key in _FETCH_LOCAL_CONFIG_BENIGN:
             continue
         parts = key.split(".")
-        # remote.<name>.url / remote.<name>.fetch are fetch_commit's own
-        # ``remote add`` footprint (url is re-pinned via set-url before
-        # every fetch, so a pre-existing value cannot steer the remote).
-        if (parts[0] == "remote" and len(parts) >= 3
+        # remote.origin.url / remote.origin.fetch are fetch_commit's
+        # own ``remote add`` footprint (url is re-pinned via set-url
+        # before every fetch, so a pre-existing value cannot steer the
+        # remote). ORIGIN ONLY: fetch_commit never writes any other
+        # remote, and a planted foreign-remote ``ext::`` URL — inert
+        # for our explicit ``fetch origin <sha>`` — would lie in wait
+        # for any out-of-band ``git fetch --all`` in the same dir.
+        if (parts[0] == "remote" and parts[1:-1] == ["origin"]
                 and parts[-1] in ("url", "fetch")):
             continue
         foreign.add(key)
     return sorted(foreign)
+
+
+def _hostile_history_rewrite_reason(repo_dir: Path, run) -> str | None:
+    """Refusal reason when a pre-existing ``repo_dir`` carries git
+    history-rewrite state fetch_commit never writes, else ``None``.
+
+    Two mechanisms substitute attacker content behind a correctly-
+    verified fetch WITHOUT any config key — so the config audit alone
+    cannot see them:
+
+      - ``refs/replace/<sha>`` (loose or packed): object substitution
+        at the read layer.  ``core.useReplaceRefs=false`` pins our own
+        commands, but the fetched repo outlives this function and any
+        consumer reading it without the pin gets the replacement.
+      - ``info/grafts``: parent-link rewriting (deprecated but still
+        honoured by default; NO config equivalent exists).
+
+    ``run`` is fetch_commit's local sandboxed runner — git plumbing
+    (not raw path checks) so packed replace refs and ``.git``-file
+    worktree pointers are covered.  Fail closed: an audit step that
+    cannot be read refuses like the unreadable-config arm.
+    """
+    refs = run(
+        safe_git_readonly_command(
+            "-C", str(repo_dir), "for-each-ref", "--count=1",
+            "refs/replace/",
+        ),
+    )
+    if refs.returncode != 0:
+        return (
+            "replace-ref audit unreadable — refusing to fetch over an "
+            f"unverifiable repository: {_proc_error_detail(refs)}"
+        )
+    if (refs.stdout or "").strip():
+        return (
+            "pre-existing repo_dir carries refs/replace/* — replace "
+            "refs substitute planted objects behind a correctly-"
+            "verified SHA for every reader"
+        )
+    grafts = run(
+        safe_git_readonly_command(
+            "-C", str(repo_dir), "rev-parse", "--git-path", "info/grafts",
+        ),
+    )
+    if grafts.returncode != 0:
+        return (
+            "grafts audit unreadable — refusing to fetch over an "
+            f"unverifiable repository: {_proc_error_detail(grafts)}"
+        )
+    grafts_path = Path((grafts.stdout or "").strip() or "info/grafts")
+    if not grafts_path.is_absolute():
+        grafts_path = repo_dir / grafts_path
+    if grafts_path.exists():
+        return (
+            "pre-existing repo_dir carries info/grafts — grafts "
+            "rewrite parent links for every reader and have no "
+            "config off-switch"
+        )
+    return None
 
 
 def clone_repository(
@@ -780,7 +859,11 @@ def fetch_commit(
         # ``url.<base>.insteadOf`` / ``http.<url>.*`` /
         # ``credential.<url>.*``, per-remote proxy/vcs — see the
         # closure commentary on ``_foreign_local_config_keys``).
-        # Refuse to fetch over a local config we didn't write.
+        # Refuse to fetch over a local config we didn't write — and
+        # over history-rewrite state (replace refs / grafts) that
+        # substitutes planted objects behind a correctly-verified
+        # fetch without touching config (see
+        # ``_hostile_history_rewrite_reason``).
         listing = _run(
             safe_git_readonly_command(
                 "-C", str(repo_dir), "config", "--local", "-z", "--list",
@@ -806,6 +889,16 @@ def fetch_commit(
                 f"(url.*.insteadOf, http.*), so the network step "
                 f"refuses to run over it. Re-create {str(repo_dir)!r} "
                 f"fresh (empty dir) to fetch."
+            )
+            raise RuntimeError(msg)
+        rewrite_reason = _hostile_history_rewrite_reason(
+            repo_dir, lambda cmd: _run(cmd, network=False),
+        )
+        if rewrite_reason is not None:
+            msg = (
+                f"{rewrite_reason} — the network step refuses to run "
+                f"over it. Re-create {str(repo_dir)!r} fresh (empty "
+                f"dir) to fetch."
             )
             raise RuntimeError(msg)
     if not is_repo:
