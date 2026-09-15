@@ -4547,6 +4547,44 @@ class TestGoImportBinding:
         )
         assert validate_spec(spec, tmp_path) is None
 
+    @pytest.mark.parametrize("alias", [
+        'x"\n\nfunc init() { println("forged") }\nvar _ = "',
+        "a b",
+        "x;",
+        "x\ny",
+        "3x",
+    ])
+    def test_import_alias_injection_rejected(self, tmp_path, alias):
+        # import_alias is pasted raw into the harness import block and
+        # call prefix — anything beyond a single identifier is Go code
+        # injection with verdict-forging reach.
+        root = self._root(tmp_path)
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="pkg/auth/a.go", function="Check",
+            language="go",
+            lang_config={
+                "package": "auth",
+                "import_path": "example.com/m/pkg/auth",
+                "import_alias": alias,
+            },
+        )
+        err = validate_spec(spec, root)
+        assert err is not None
+        assert "import_alias" in err
+
+    def test_import_alias_identifier_accepted(self, tmp_path):
+        root = self._root(tmp_path)
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="pkg/auth/a.go", function="Check",
+            language="go",
+            lang_config={
+                "package": "auth",
+                "import_path": "example.com/m/pkg/auth",
+                "import_alias": "target",
+            },
+        )
+        assert validate_spec(spec, root) is None
+
 
 # -- scripting-language string args render as data, never code ----------------
 

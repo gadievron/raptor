@@ -484,6 +484,19 @@ def validate_spec(
         if setup_err:
             return setup_err
 
+    if lang == "go":
+        # import_alias is pasted raw into the harness import block and
+        # the call prefix — a multiline alias is full Go code
+        # injection (an injected func init() could replay the sentinel
+        # and forge the token-bearing verdict epilogue, the channel
+        # the setup-lines grammar closed for the native lanes). The
+        # only production producer pins "target", but this validator
+        # is the shared pre-execution chokepoint whose contract is
+        # that EVERY code-bearing field passes a typed grammar.
+        alias = str(lc.get("import_alias", ""))
+        if alias and not _IDENTIFIER_RE.match(alias):
+            return f"invalid import_alias: {alias[:60]!r}"
+
     cn = lc.get("class_name", "")
     if cn and not _QUALIFIED_RE.match(cn):
         return f"invalid class_name: {cn!r}"

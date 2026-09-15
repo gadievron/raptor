@@ -15,7 +15,8 @@ Anti-hallucination design:
     against a typed allowlist grammar before generation:
     arg_expressions and native setup_lines (declaration-only),
     param_types / return_type (type spellings), Java imports
-    (dotted names). Free-form code never reaches the harness.
+    (dotted names), the Go import_alias (single identifier).
+    Free-form code never reaches the harness.
   - The harness generates the test from a fixed template.
   - The import/source path is validated against the finding's file
     in EVERY language lane — Python's module path, the compiled
