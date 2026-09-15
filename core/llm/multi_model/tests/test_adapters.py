@@ -457,7 +457,8 @@ class TestVerdictMergeMultiModelAnalysesContract:
         merged = adapter.merge(per_model)
         # Only one DISTINCT model contributed — multi_model_analyses absent.
         assert "multi_model_analyses" not in merged[0]
-        # select_primary still picked among the dupes (prefer-positive)
+        # First-wins duplicate contract: the model's vote is its FIRST
+        # record (here positive); the later dupe is dropped.
         assert merged[0]["is_exploitable"] is True
 
     def test_genuine_multi_model_analyses_still_attached(self):
@@ -469,6 +470,58 @@ class TestVerdictMergeMultiModelAnalysesContract:
         merged = adapter.merge(per_model)
         assert "multi_model_analyses" in merged[0]
         assert len(merged[0]["multi_model_analyses"]) == 2
+
+
+class TestDuplicateVoteContract:
+    """One vote per (item, model), FIRST record wins — the contract the
+    panel consumers settled on. Pre-fix the adapter layer ran two
+    OTHER contracts at once: merge fed every duplicate to
+    select_primary (prefer-positive across one model's duplicates)
+    while the agreement matrix kept the LAST duplicate's verdict."""
+
+    def test_merge_first_record_wins_within_one_model(self):
+        adapter = FindingAdapter()
+        per_model = {
+            "model-a": [
+                {"finding_id": "f1", "is_exploitable": False},
+                {"finding_id": "f1", "is_exploitable": True},  # later dupe
+            ],
+        }
+        merged = adapter.merge(per_model)
+        # Prefer-positive across dupes would flip this to True.
+        assert merged[0]["is_exploitable"] is False
+
+    def test_matrix_vote_matches_merged_primary(self):
+        adapter = FindingAdapter()
+        per_model = {
+            "model-a": [
+                {"finding_id": "f1", "is_exploitable": False},
+                {"finding_id": "f1", "is_exploitable": True},
+            ],
+            "model-b": [{"finding_id": "f1", "is_exploitable": False}],
+        }
+        merged = adapter.merge(per_model)
+        c = adapter.correlate(merged, per_model)
+        # Pre-fix: matrix said negative (last-wins) while merge's
+        # primary said positive (prefer-positive over dupes) — the
+        # consensus producer then graded models against a majority
+        # computed from different votes than the output showed.
+        assert c["agreement_matrix"]["f1"]["model-a"] == "negative"
+        assert merged[0]["is_exploitable"] is False
+
+    def test_set_merge_first_wins_and_finds_deduped(self):
+        adapter = VariantAdapter()
+        per_model = {
+            "model-a": [
+                {"file": "x.c", "line": 5, "snippet": "first"},
+                {"file": "x.c", "line": 5, "snippet": "second"},
+            ],
+            "model-b": [{"file": "x.c", "line": 5, "snippet": "b"}],
+        }
+        merged = adapter.merge(per_model)
+        assert merged[0]["snippet"] == "first"
+        # One per-model record each — the intra-model dupe adds none.
+        assert len(merged[0]["multi_model_finds"]) == 2
 
 
 # ---------------------------------------------------------------------------

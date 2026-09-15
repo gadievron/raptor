@@ -28,6 +28,38 @@ def _coerce_numeric(value: Any, default: float = 0.0) -> float:
     return value
 
 
+def _first_wins_per_model(
+    per_model_results: dict[str, list[dict[str, Any]]],
+    key_fn: Any,
+) -> dict[str, list[dict[str, Any]]]:
+    """One vote per (item key, model): keep each model's FIRST record
+    for a key, drop the rest.
+
+    The panel-wide duplicate contract (panel_log, dawid_skene, replay,
+    calibrated_aggregation all settled on first-wins). The adapter
+    layer used to run two OTHER contracts at once — merge fed every
+    duplicate to select_primary (prefer-positive across a single
+    model's duplicates) while the agreement matrix kept the LAST
+    duplicate's verdict — so a duplicate-emitting task (retry glue,
+    merged shards) could ship a merged verdict disagreeing with the
+    matrix verdict recorded for the same model, and consensus grading
+    read a majority computed from different votes than the output
+    shows.
+    """
+    deduped: dict[str, list[dict[str, Any]]] = {}
+    for model_name, results in per_model_results.items():
+        seen: set = set()
+        kept: list[dict[str, Any]] = []
+        for r in results:
+            k = key_fn(r)
+            if k in seen:
+                continue
+            seen.add(k)
+            kept.append(r)
+        deduped[model_name] = kept
+    return deduped
+
+
 # ---------------------------------------------------------------------------
 # Verdict-style adapter
 # ---------------------------------------------------------------------------
@@ -137,7 +169,13 @@ class BaseVerdictAdapter(ABC):
         multi_model_analyses key (not [], not None — absent). Consumers
         checking for multi-model context should use `if "multi_model_analyses"
         in item:` rather than `if item.get(...)`.
+
+        Duplicate ids within ONE model's list follow the panel-wide
+        first-wins contract (see _first_wins_per_model).
         """
+        per_model_results = _first_wins_per_model(
+            per_model_results, self.item_id,
+        )
         by_id: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
         first_seen_order: list[str] = []
         for model_name, results in per_model_results.items():
@@ -179,7 +217,13 @@ class BaseVerdictAdapter(ABC):
             summary: counts (agreed, disputed, single_model, total, models)
         """
         models = sorted(per_model_results.keys())
-        # Build matrix: id → {model → verdict}
+        # Build matrix: id → {model → verdict}. Same first-wins
+        # duplicate contract as merge() — the setdefault-then-assign
+        # walk used to keep the LAST duplicate's verdict while merge
+        # fed ALL duplicates to select_primary.
+        per_model_results = _first_wins_per_model(
+            per_model_results, self.item_id,
+        )
         matrix: dict[str, dict[str, str]] = {}
         for model_name, results in per_model_results.items():
             for r in results:
@@ -325,7 +369,15 @@ class BaseSetAdapter(ABC):
            - all original non-key fields from the first model that found
              it (alphabetically-first model name wins on ties because the
              substrate sorts per_model_results upstream)
+
+        Duplicate keys within ONE model's list follow the panel-wide
+        first-wins contract (see _first_wins_per_model) — intra-model
+        duplicates neither qualify an item as multi-model nor add a
+        second per-model record to multi_model_finds.
         """
+        per_model_results = _first_wins_per_model(
+            per_model_results, self.item_key,
+        )
         by_key: dict[Hashable, dict[str, Any]] = {}
         first_seen_order: list[Hashable] = []
         finds_by_key: dict[Hashable, list[dict[str, Any]]] = defaultdict(list)
