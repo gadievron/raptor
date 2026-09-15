@@ -332,3 +332,101 @@ def test_timeout_reason_wins_over_cap_abort():
         metadata={}, step=step,
     )
     assert r.reason == "timeout after 9.0s"
+
+
+# ---------------------------------------------------------------------------
+# Errored-stash honesty: errored states are pruned exploration, not
+# "explored fully" — and they count as states.
+# ---------------------------------------------------------------------------
+
+
+class _FakeErroredSimgr:
+    def __init__(self, n_errored: int, stashes=None) -> None:
+        self.errored = list(range(n_errored))
+        self.stashes = stashes or {"active": [], "deadended": []}
+
+
+def test_errored_states_qualify_no_path_reason():
+    import time
+
+    from core.symbolic import _engine
+
+    r = _engine.unfound_result(
+        deadline=time.monotonic() + 100, wall=1.0, states=0,
+        timeout_reason="timeout", no_path_reason="no path to target",
+        metadata={}, step=None, simgr=_FakeErroredSimgr(3),
+    )
+    assert "no path to target" in r.reason
+    assert "errored on 3 state(s)" in r.reason
+    assert "not exhaustive" in r.reason
+    assert r.metadata.get("errored_states") == 3
+
+
+def test_no_errored_states_keeps_bare_no_path_reason():
+    import time
+
+    from core.symbolic import _engine
+
+    r = _engine.unfound_result(
+        deadline=time.monotonic() + 100, wall=1.0, states=0,
+        timeout_reason="timeout", no_path_reason="no path to target",
+        metadata={}, step=None, simgr=_FakeErroredSimgr(0),
+    )
+    assert r.reason == "no path to target"
+    assert "errored_states" not in r.metadata
+
+
+def test_errored_states_recorded_even_on_timeout():
+    import time
+
+    from core.symbolic import _engine
+
+    r = _engine.unfound_result(
+        deadline=time.monotonic() - 1, wall=9.0, states=0,
+        timeout_reason="timeout after 9.0s", no_path_reason="no path",
+        metadata={}, step=None, simgr=_FakeErroredSimgr(2),
+    )
+    assert r.reason == "timeout after 9.0s"
+    assert r.metadata.get("errored_states") == 2
+
+
+def test_count_states_includes_errored():
+    from core.symbolic import _engine
+
+    sg = _FakeErroredSimgr(4, stashes={"active": [1], "deadended": [1, 2]})
+    assert _engine.count_states(sg) == 7
+    assert _engine.count_states(_FakeErroredSimgr(2)) == 2
+
+
+def test_errored_suffix_wording():
+    from core.symbolic import _engine
+
+    assert _engine.errored_suffix(_FakeErroredSimgr(0)) == ""
+    s = _engine.errored_suffix(_FakeErroredSimgr(1))
+    assert "errored on 1 state(s)" in s and "not exhaustive" in s
+
+
+class _FakeUnconstrainedSimgr:
+    def __init__(self, n_unconstrained: int) -> None:
+        self.errored = []
+        self.unconstrained = list(range(n_unconstrained))
+
+
+def test_unconstrained_stash_qualifies_no_path_reason():
+    """An engine running save_unconstrained=True that still finds no
+    path but holds unconstrained states explored a PRUNED space —
+    the negative must carry the qualifier (the save_unconstrained=
+    False engines' invisible drop is documented as out of scope)."""
+    import time
+
+    from core.symbolic import _engine
+
+    r = _engine.unfound_result(
+        deadline=time.monotonic() + 100, wall=1.0, states=0,
+        timeout_reason="timeout", no_path_reason="explored fully",
+        metadata={}, step=None, simgr=_FakeUnconstrainedSimgr(2),
+    )
+    assert "explored fully" in r.reason
+    assert "2 state(s) went unconstrained" in r.reason
+    assert "not exhaustive" in r.reason
+    assert r.metadata.get("unconstrained_states") == 2

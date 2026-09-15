@@ -171,7 +171,7 @@ def _extract_path_constraints_impl(
             timeout_reason=f"timeout after {wall:.1f}s with no path found",
             no_path_reason="explored fully; no path reaches target",
             metadata={"target_address": target_address, "paths": []},
-            step=step,
+            step=step, simgr=simgr,
         )
 
     paths: list[dict[str, Any]] = []

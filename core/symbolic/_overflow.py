@@ -182,10 +182,12 @@ def _find_overflow_reaching_input_impl(
                             f"{len(simgr.unconstrained)} unconstrained "
                             "state(s), none satisfy pc == target under "
                             "the given constraints (unsatisfiable)"
+                            + _engine.errored_suffix(simgr)
                         )
                         if simgr.unconstrained else
                         "exhausted — no unconstrained state reached "
                         "(no overflow-to-PC path found)"
+                        + _engine.errored_suffix(simgr)
                     ),
                     wall_seconds=time.monotonic() - t0,
                     states_explored=_engine.count_states(simgr),

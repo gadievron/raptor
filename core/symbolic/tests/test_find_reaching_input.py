@@ -187,3 +187,40 @@ def test_solver_hard_target_terminates_within_budget(tmp_path: Path):
     wall = time.monotonic() - t0
     assert wall < 30.0, f"budget not enforced: {wall:.0f}s for timeout=5"
     assert result.succeeded is False
+
+
+def test_errored_exploration_never_reads_as_definitive_no_path(
+    tmp_path: Path,
+):
+    """A target whose ONLY path to the target crosses an instruction
+    angr cannot lift (raw ud2) lands every state in simgr.errored —
+    invisible to both the stashes-based state count and the plain
+    "no path to target" wording, which consumers treat as
+    refutation-grade evidence. The result must disclose the errored
+    prune and count the errored states."""
+    from core.symbolic import find_reaching_input, load_binary
+
+    binary = _compile(
+        """
+        #include <stdio.h>
+        void win(void) { puts("WIN"); }
+        int main(void) {
+            __asm__ volatile ("ud2");
+            win();
+            return 0;
+        }
+        """, tmp_path,
+    )
+    info = load_binary(binary)
+    result = find_reaching_input(
+        binary,
+        target_address=info.symbols["win"],
+        timeout=20.0,
+    )
+    assert result.succeeded is False
+    if "timeout" in result.reason:  # slow-host guard: budget exhausted
+        pytest.skip("exploration hit the wall-clock budget on this host")
+    assert "not exhaustive" in result.reason
+    assert "errored" in result.reason
+    assert result.metadata.get("errored_states", 0) >= 1
+    assert result.states_explored >= 1

@@ -129,7 +129,7 @@ def _find_reaching_input_impl(
             timeout_reason=f"timeout after {wall:.1f}s",
             no_path_reason="no path to target",
             metadata={"target_address": target_address},
-            step=step,
+            step=step, simgr=simgr,
         )
 
     found = simgr.found[0]

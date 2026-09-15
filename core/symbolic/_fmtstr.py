@@ -247,7 +247,7 @@ def _discover_fmtstr_slots_impl(
             timeout_reason=f"timeout after {wall:.1f}s (never reached sink)",
             no_path_reason="no path from entry to sink_addr",
             metadata={"sink_addr": sink_addr},
-            step=step,
+            step=step, simgr=simgr,
         )
 
     state = simgr.found[0]

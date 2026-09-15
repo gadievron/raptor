@@ -331,7 +331,7 @@ def _find_heap_mismatch_impl(
             timeout_reason=f"timeout after {wall:.1f}s",
             no_path_reason="no heap-copy mismatch on any explored path",
             metadata={"target_address": target_address},
-            step=step,
+            step=step, simgr=simgr,
         )
 
     found = simgr.found[0]

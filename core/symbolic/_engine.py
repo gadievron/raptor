@@ -241,6 +241,29 @@ def raised_result(
     )
 
 
+def errored_count(simgr: Any) -> int:
+    """Number of states angr moved to ``simgr.errored`` (a plain list
+    of ErrorRecord, NOT a member of ``simgr.stashes``). A state errors
+    when the engine cannot continue it — undecodable instructions
+    (``ud2``, exotic SIMD, obfuscation), unsupported syscalls — so a
+    non-zero count means the exploration was NOT exhaustive."""
+    try:
+        return len(getattr(simgr, "errored", []) or [])
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def errored_suffix(simgr: Any) -> str:
+    """Reason-text qualifier for manual-loop engines that build their
+    own "exhausted" wording: non-empty when states errored, so the
+    text never reads as a definitive negative over a pruned
+    exploration."""
+    n = errored_count(simgr)
+    if n:
+        return f" — exploration errored on {n} state(s); not exhaustive"
+    return ""
+
+
 def unfound_result(
     *,
     deadline: float,
@@ -250,14 +273,38 @@ def unfound_result(
     no_path_reason: str,
     metadata: dict[str, Any],
     step: Optional["_BudgetStep"] = None,
+    simgr: Any = None,
 ) -> SymbolicResult:
     """Nothing-found result: distinguish "timed out with active
-    states remaining", "aborted at the active-state cap", and
-    "explored fully and found nothing". The engines supply their own
-    reason texts for the first and last (the wording is part of the
-    public surface); the cap abort is reported here so no engine can
-    mint a pruned exploration as a definitive negative."""
+    states remaining", "aborted at the active-state cap", "errored
+    states pruned the exploration", "successors went unconstrained",
+    and "explored fully and found nothing". The engines supply their
+    own reason texts for the first and last (the wording is part of
+    the public surface); the cap abort and the errored/unconstrained
+    stash qualifiers are reported here so a pruned exploration this
+    function can OBSERVE is never minted as a definitive negative —
+    a target whose only path crosses an instruction angr cannot lift
+    lands every state in ``simgr.errored``, and consumers treat the
+    bare no-path wording as refutation-grade evidence.
+
+    SCOPE of the claim: the qualifiers cover prunes the simgr still
+    carries (errored records, an ``unconstrained`` stash, the cap
+    flag).  Engines running ``save_unconstrained=False`` make angr
+    DISCARD symbolic-PC successors before any stash exists — that
+    prune is invisible here, so their "no path" negatives stay
+    unqualified.  Consumers must keep treating every negative as
+    non-refutation-grade (all three current consumers do)."""
     timed_out = time.monotonic() >= deadline
+    errored = errored_count(simgr)
+    if errored:
+        metadata = {**metadata, "errored_states": errored}
+    unconstrained = 0
+    try:
+        unconstrained = len(getattr(simgr, "unconstrained", []) or [])
+    except Exception:  # noqa: BLE001
+        unconstrained = 0
+    if unconstrained:
+        metadata = {**metadata, "unconstrained_states": unconstrained}
     if timed_out:
         reason = timeout_reason
     elif step is not None and step.cap_aborted:
@@ -268,6 +315,16 @@ def unfound_result(
         metadata = {**metadata, "cap_aborted": True}
     else:
         reason = no_path_reason
+        if errored:
+            reason = (
+                f"{no_path_reason} — exploration errored on "
+                f"{errored} state(s); not exhaustive"
+            )
+        elif unconstrained:
+            reason = (
+                f"{no_path_reason} — {unconstrained} state(s) went "
+                f"unconstrained (symbolic control flow); not exhaustive"
+            )
     return SymbolicResult(
         succeeded=False,
         reason=reason,
@@ -337,9 +394,15 @@ def is_mapped(project: Any, addr: int) -> bool:
 
 
 def count_states(simgr: Any) -> int:
-    """Sum states across all stashes as a diagnostic. simgr may
-    have stashes we don't know about; use the ``all_states`` view."""
+    """Sum states across all stashes as a diagnostic (spotting
+    explosion vs quick failure). ``simgr.errored`` is a plain list
+    outside ``stashes``, so it is added explicitly — without it an
+    exploration whose every state errored counted 0, contradicting
+    the diagnostic's purpose."""
     try:
-        return sum(1 for _ in simgr.stashes.values() for __ in _)
+        return (
+            sum(1 for _ in simgr.stashes.values() for __ in _)
+            + errored_count(simgr)
+        )
     except Exception:  # noqa: BLE001
         return 0
