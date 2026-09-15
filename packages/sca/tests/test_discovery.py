@@ -205,3 +205,44 @@ def test_bare_shrinkwrap_name_no_longer_classified(tmp_path: Path) -> None:
     from packages.sca.parsers import _resolve
     assert "shrinkwrap.json" not in MANIFEST_FILENAMES
     assert _resolve(tmp_path / "shrinkwrap.json") is None
+
+
+def test_scan_boundary_resets_every_parser_cache(tmp_path: Path) -> None:
+    """Every per-process parser cache must be dropped at the scan
+    boundary — a stale entry from a previous run on a different (or
+    changed) target silently resolves this scan's lookups. Enumerate
+    the caches mechanically so the next cached parser can't be left
+    out of the discovery reset."""
+    import importlib
+    import pkgutil
+
+    import packages.sca.parsers as parsers_pkg
+    from packages.sca.discovery import find_manifests
+
+    cached_modules = []
+    for info in pkgutil.iter_modules(parsers_pkg.__path__):
+        mod = importlib.import_module(f"packages.sca.parsers.{info.name}")
+        caches = [
+            getattr(mod, attr) for attr in dir(mod)
+            if attr.endswith("_CACHE") and isinstance(getattr(mod, attr), dict)
+        ]
+        if caches:
+            # A module holding a scan-content cache must expose the
+            # discovery-facing reset hook.
+            assert hasattr(mod, "reset_cache"), (
+                f"{mod.__name__} has a module-level cache but no "
+                "reset_cache() for the scan-boundary reset"
+            )
+            cached_modules.append((mod, caches))
+    assert cached_modules, "cache enumeration went vacuous"
+    # Behavioural closure: poison every cache, run a scan, and assert
+    # discovery's boundary reset actually cleared each one.
+    for _mod, caches in cached_modules:
+        for cache in caches:
+            cache["__stale_sentinel__"] = object()
+    find_manifests(tmp_path)
+    for mod, caches in cached_modules:
+        for cache in caches:
+            assert "__stale_sentinel__" not in cache, (
+                f"{mod.__name__} cache not reset at scan boundary"
+            )

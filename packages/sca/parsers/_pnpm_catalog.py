@@ -173,9 +173,19 @@ def _parse_catalogs(path: Path) -> dict[str, dict[str, str]]:
     return out
 
 
+def reset_cache() -> None:
+    """Drop the per-process catalog cache. Called from the discovery
+    entry point at the start of each scan — same contract as the CPM
+    and Gradle-catalog caches — so a stale catalog from a previous
+    run on a different target (or the same reused path with a changed
+    ``pnpm-workspace.yaml``) can't resolve this scan's ``catalog:``
+    specs. Within a single scan the cache is intentionally retained."""
+    _CATALOG_CACHE.clear()
+
+
 def _clear_cache() -> None:
     """Test helper — clear the per-root catalog cache."""
-    _CATALOG_CACHE.clear()
+    reset_cache()
 
 
 # ---------------------------------------------------------------------------

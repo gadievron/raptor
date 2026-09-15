@@ -310,10 +310,12 @@ def find_manifests(
     # Within this scan the caches are retained — csproj parsers
     # walking up to the same Directory.Packages.props don't re-
     # parse the file once per csproj.
+    from .parsers import _pnpm_catalog as _pnpm
     from .parsers import directory_packages_props as _cpm
     from .parsers import gradle_version_catalog as _gvc
     _cpm.reset_cache()
     _gvc.reset_cache()
+    _pnpm.reset_cache()
 
     excludes = EXCLUDED_DIR_NAMES | (extra_excludes or set())
     found: list[Manifest] = []
