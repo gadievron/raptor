@@ -315,13 +315,27 @@ def format_progress_line(idx: int, total: int, outcome: Any) -> str:
 
     ``idx < 0`` is the protocol's "print body verbatim" channel used
     for loop-level announcements (e.g. the budget-exhaustion stop).
+
+    Every interpolated value is terminal-scrubbed: ``outcome.file`` /
+    ``outcome.function`` come from the scanned repo (file names are
+    attacker-chosen on Linux and may embed ESC/OSC bytes), and the
+    verbatim-body channel relays tool/loop message text that can quote
+    target-derived bytes. These lines are ``print()``ed to the
+    operator's terminal on every reviewed function.
     """
+    from core.security.log_sanitisation import (
+        escape_nonprintable,
+        sanitise_for_terminal,
+    )
+
     if idx < 0:
-        return f"  {outcome.body}"
+        return f"  {escape_nonprintable(str(outcome.body), preserve_newlines=True)}"
     glyph = STATUS_GLYPHS.get(outcome.status, "·")
     return (
-        f"  [{idx + 1}/{total}] {outcome.file}:{outcome.function} "
-        f"→ {outcome.status} {glyph}"
+        f"  [{idx + 1}/{total}] "
+        f"{sanitise_for_terminal(str(outcome.file))}:"
+        f"{sanitise_for_terminal(str(outcome.function))} "
+        f"→ {sanitise_for_terminal(str(outcome.status), max_len=32)} {glyph}"
     )
 
 

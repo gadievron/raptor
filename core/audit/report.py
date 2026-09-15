@@ -1568,15 +1568,21 @@ def _format_summary(report: dict[str, Any]) -> str:
 
     channel_health = report.get("channel_health")
     if channel_health:
-        for name, rec in sorted(channel_health.items()):
+        for raw_name, rec in sorted(channel_health.items()):
+            # trip_reason originates from channel error strings
+            # (Joern/tool stderr that can echo target-derived bytes)
+            # persisted in tier-diagnostics.json — sanitise like every
+            # sibling block; the channel name rides the same records.
+            name = _line(raw_name, max_chars=40)
             lines.append("")
             if rec.get("tripped"):
                 lines.append(
                     f"### ⚠️ {name} channel unhealthy (mid-run trip)"
                 )
-                reason = (
+                reason = _line(
                     rec.get("trip_reason")
-                    or "consecutive dispatch failures"
+                    or "consecutive dispatch failures",
+                    max_chars=200,
                 )
                 lines.append(
                     f"The {name} channel tripped its health gate "

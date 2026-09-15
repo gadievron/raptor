@@ -200,6 +200,30 @@ class TestPrepFailureDisablesLoudly:
         assert len(disabled) == 1
         assert "exit 1" in disabled[0]
 
+    def test_stderr_tail_terminal_scrubbed(self, monkeypatch, tmp_path):
+        # study-prep parses the hostile target: its stderr routinely
+        # quotes target-derived bytes (paths, source excerpts in parse
+        # errors) — the disable line must escape control sequences
+        # before they reach the operator's terminal.
+        import core.audit.orchestrator as _orch
+
+        def fake_run(cmd, **kwargs):
+            return types.SimpleNamespace(
+                returncode=1,
+                stderr="parse error: \x1b]0;pwned\x07 in src/a.c",
+            )
+
+        monkeypatch.setattr(_orch, "_run_study_prep", fake_run)
+        warnings = _capture_warnings(monkeypatch)
+
+        _run_loop(self._config(tmp_path), _queue_with_batches(20))
+
+        disabled = [m for m in warnings if "DISABLED" in m]
+        assert len(disabled) == 1
+        assert "\x1b" not in disabled[0]
+        assert "\x07" not in disabled[0]
+        assert "\\x1b" in disabled[0]
+
     def test_missing_study_list_disables_once(self, monkeypatch, tmp_path):
         import core.audit.orchestrator as _orch
 

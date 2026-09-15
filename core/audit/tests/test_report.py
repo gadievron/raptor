@@ -720,3 +720,46 @@ class TestFormatSummaryFallback:
         # recompute would choke on proves the fallback never ran).
         report = {"summary": "precomputed", "stats": ["not-a-dict"]}
         assert format_summary(report) == "precomputed"
+
+
+class TestChannelHealthBlockSanitised:
+    """trip_reason originates from channel error strings (tool stderr
+    that can echo target-derived bytes) persisted in
+    tier-diagnostics.json — the summary block must sanitise it and the
+    channel name like every sibling block."""
+
+    def _report(self, name: str, reason: str) -> dict:
+        return {
+            "stats": {
+                "reviewed": 1, "clean": 1, "suspicious": 0,
+                "finding": 0, "error": 0,
+            },
+            "findings_count": 0,
+            "gaps_remaining": 0,
+            "findings": [],
+            "channel_health": {
+                name: {
+                    "tripped": True,
+                    "trip_reason": reason,
+                    "total_successes": 2,
+                    "total_errors": 3,
+                    "gated_spends": [],
+                },
+            },
+        }
+
+    def test_hostile_trip_reason_and_name_escaped(self):
+        summary = _format_summary(self._report(
+            "joern\x1b[2J",
+            "query failed: \x1b]0;pwned\x07 /target/a.c",
+        ))
+        assert "\x1b" not in summary
+        assert "\x07" not in summary
+        assert "channel unhealthy" in summary
+
+    def test_clean_reason_rendered(self):
+        summary = _format_summary(
+            self._report("joern", "consecutive dispatch failures"),
+        )
+        assert "consecutive dispatch failures" in summary
+        assert "2 dispatch(es) completed before the trip" in summary

@@ -74,6 +74,16 @@ _MAX_META_BYTES = 8 * 1024 * 1024
 _LIFECYCLE_TIMEOUT_S = 120
 pin_raptor_dir_in_environ()
 
+from core.security.log_sanitisation import escape_nonprintable  # noqa: E402
+
+
+def _print_scrubbed(text: object, **kwargs: object) -> None:
+    """Terminal print for values that can carry target-/LLM-derived
+    bytes (rule descriptions, sweep errors, report summaries):
+    non-printables are escaped so a hostile string cannot inject
+    ANSI/OSC sequences into the operator's terminal."""
+    print(escape_nonprintable(str(text), preserve_newlines=True), **kwargs)
+
 
 def cmd_gaps(args: argparse.Namespace) -> int:
     from core.audit.gaps import (
@@ -1152,7 +1162,7 @@ def cmd_rules(args: argparse.Namespace) -> int:
             origin_function=args.origin_function,
             cwe=args.cwe,
         )
-        print(f"saved: {path}")
+        _print_scrubbed(f"saved: {path}")
         return 0
 
     elif action == "list":
@@ -1163,7 +1173,9 @@ def cmd_rules(args: argparse.Namespace) -> int:
         for r in rules:
             status = "ok" if r.get("exists") else "MISSING"
             desc = r.get("description", "")[:60]
-            print(f"  {r['rule_id']} ({r.get('tool', '?')}) [{status}] — {desc}")
+            _print_scrubbed(
+                f"  {r['rule_id']} ({r.get('tool', '?')}) [{status}] — {desc}",
+            )
         print(f"\n{len(rules)} rule(s)")
         return 0
 
@@ -1181,7 +1193,7 @@ def cmd_rules(args: argparse.Namespace) -> int:
             target_path=target_path,
         )
         if "error" in result:
-            print(f"error: {result['error']}", file=sys.stderr)
+            _print_scrubbed(f"error: {result['error']}", file=sys.stderr)
             return 1
         print(dumps_display(result, indent=2))
         return 0
@@ -1200,7 +1212,7 @@ def cmd_report(args: argparse.Namespace) -> int:
     report = generate_report(out_dir, target_path=target_path)
     write_report(report, out_dir)
 
-    print(report["summary"])
+    _print_scrubbed(report["summary"])
     return 0
 
 

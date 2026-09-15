@@ -147,6 +147,10 @@ _REPORT_CONSTRUCTORS = frozenset({"ReportSection"})
 # time).
 _REPORT_WRITER_FILES = (
     "core/audit/report.py",
+    # The per-function review-progress stream (format_progress_line):
+    # target-derived file/function names and verbatim announcement
+    # bodies printed to the operator terminal by libexec/raptor-audit.
+    "core/audit/_util.py",
     "core/project/report.py",
     "core/reporting/findings.py",
     "packages/exploitability_validation/report.py",
@@ -155,6 +159,7 @@ _REPORT_WRITER_FILES = (
     # same finding-derived interpolations, must stay under audit.
     "packages/exploitability_validation/orchestrator.py",
     "packages/llm_analysis/patch_gate.py",
+    "libexec/raptor-audit",
     "libexec/raptor-review",
     "libexec/raptor-annotate",
     "libexec/raptor-coverage-summary",

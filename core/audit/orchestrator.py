@@ -14723,7 +14723,16 @@ def _study_consumer_loop(
                     study_queue=study_queue,
                 )
                 if prep_result.returncode != 0:
-                    _stderr_tail = (prep_result.stderr or "").strip()[:200]
+                    # study-prep parses the hostile target: its stderr
+                    # can quote target-derived bytes (paths, source
+                    # excerpts in parse errors) — terminal-scrub the
+                    # tail before it reaches the operator log stream.
+                    from core.security.log_sanitisation import (
+                        escape_nonprintable,
+                    )
+                    _stderr_tail = escape_nonprintable(
+                        (prep_result.stderr or "").strip()[:200],
+                    )
                     _announce_study_disabled(
                         f"study-prep failed "
                         f"(exit {prep_result.returncode}): {_stderr_tail}",
