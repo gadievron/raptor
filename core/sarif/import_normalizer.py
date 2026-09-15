@@ -285,7 +285,10 @@ def _resolve_uri(
     if len(matches) == 1:
         resolved = str(matches[0])
         if _is_under_root(source_root, resolved):
-            logger.debug("URI %s: basename-only match → %s", uri, resolved)
+            logger.debug(
+                "URI %s: basename-only match → %s",
+                escape_nonprintable(uri), resolved,
+            )
             return resolved
 
     if scan_budget is not None:
@@ -330,10 +333,16 @@ def _synthesize_snippet(
     try:
         full = source_root / rel_path
         if full.stat().st_size > _SNIPPET_SOURCE_MAX_BYTES:
+            # rel_path is a filename from the UNTRUSTED scanned tree
+            # (archives/git admit control bytes in names) and this
+            # WARNING reaches the operator terminal raw through the
+            # console handler — escape at creation, like the module's
+            # ImportWarning messages and parser.py's out-of-root twin.
             logger.warning(
                 "SARIF import: skipping snippet synthesis for oversized "
                 "file (>%d MiB): %s",
-                _SNIPPET_SOURCE_MAX_BYTES // (1024 * 1024), rel_path,
+                _SNIPPET_SOURCE_MAX_BYTES // (1024 * 1024),
+                escape_nonprintable(rel_path),
             )
             return ""
         lines = full.read_text(encoding="utf-8", errors="replace").splitlines()

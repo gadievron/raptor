@@ -1305,3 +1305,26 @@ class TestResolveUriAggregateBudget:
         assert result.stats.uri_unresolved == 50
         # One full scan's worth of probes, not 50 (memo short-circuit).
         assert calls["n"] <= 40
+
+
+def test_oversized_snippet_warning_escapes_hostile_path(
+    tmp_path, monkeypatch, caplog,
+):
+    """The oversized-file warning prints a filename from the untrusted
+    scanned tree to the operator terminal — control bytes must be
+    escaped at creation (the ImportWarning sites already are)."""
+    import logging
+
+    from core.sarif import import_normalizer as mod
+
+    root = tmp_path
+    evil = "src/\x1b]0;pwned\x07big.c"
+    (tmp_path / "src").mkdir()
+    victim = tmp_path / evil
+    victim.write_text("x")
+    monkeypatch.setattr(mod, "_SNIPPET_SOURCE_MAX_BYTES", 0)
+    with caplog.at_level(logging.WARNING):
+        assert mod._synthesize_snippet(root, evil, 1, 1) == ""
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert "big.c" in joined
+    assert "\x1b" not in joined and "\x07" not in joined
