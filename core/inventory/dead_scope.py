@@ -663,6 +663,12 @@ def _detect_php(content: str) -> list[DeadRange]:
 # at that column; if the scan dedents past the opener first (malformed /
 # unconventional), we BAIL and report nothing — a false positive here would
 # hard-suppress live code, so ambiguity must under-detect.
+#
+# Scanned over the tokenizer-grade blanked view: comments, strings,
+# heredoc bodies and the ``__END__`` section are spaced out first, so
+# an ``if false`` line inside a heredoc (idiomatic Ruby: SQL, usage
+# banners) can never open a dead range over live code. No grammar /
+# parse errors → bail (no ranges).
 # ---------------------------------------------------------------------------
 
 
@@ -673,28 +679,19 @@ _RB_BRANCH_AT = re.compile(r"^(\s*)(?:else|elsif)\b")
 _RB_END_AT = re.compile(r"^(\s*)end\b")
 
 
-def _strip_ruby_comment(line: str) -> str:
-    """Strip ``#`` comments while respecting string literals."""
-    in_str: str | None = None
-    i = 0
-    while i < len(line):
-        c = line[i]
-        if c == "\\" and in_str:
-            i += 2
-            continue
-        if in_str:
-            if c == in_str:
-                in_str = None
-        elif c in ('"', "'"):
-            in_str = c
-        elif c == "#":
-            return line[:i]
-        i += 1
-    return line
-
-
 def _detect_ruby(content: str) -> list[DeadRange]:
-    lines = [_strip_ruby_comment(ln) for ln in content.split("\n")]
+    from core.inventory.lexical_view import LexicalRefusal, blank_noncode
+
+    try:
+        stripped = blank_noncode("ruby", content)
+    except LexicalRefusal:
+        # Parse errors: recovered token boundaries are guesses; bail
+        # on the whole file — toward no suppression.
+        return []
+    if stripped is None:
+        # Grammar unavailable — cannot vouch a code view; no witness.
+        return []
+    lines = stripped.split("\n")
     ranges: list[DeadRange] = []
     for i, line in enumerate(lines):
         m = _RB_DEAD_IF.match(line)

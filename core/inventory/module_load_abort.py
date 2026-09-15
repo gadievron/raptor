@@ -672,11 +672,23 @@ _RB_MODIFIER = re.compile(r"\b(if|unless|while|until|rescue)\b")
 
 
 def _detect_ruby(content: str) -> ModuleLoadAbort | None:
+    # Scan the tokenizer-grade blanked view: comments, strings, heredoc
+    # bodies and the ``__END__`` section are spaced out, so a column-0
+    # ``raise`` / ``exit`` line inside a heredoc or multi-line string
+    # (idiomatic Ruby: SQL, usage banners) can never fabricate the
+    # whole-file abort gate. String DELIMITERS survive blanking, so a
+    # real ``raise "boom"`` still reads as raise-with-argument. No
+    # grammar / parse errors → bail, toward no suppression.
+    from core.inventory.lexical_view import LexicalRefusal, blank_noncode
+
+    try:
+        blanked = blank_noncode("ruby", content)
+    except LexicalRefusal:
+        return None
+    if blanked is None:
+        return None
     depth = 0
-    for idx, raw in enumerate(content.splitlines()):
-        # Strip trailing line comment (best-effort; a ``#`` inside a string
-        # is rare at module scope and only risks under-detection).
-        line = re.sub(r"#.*$", "", raw)
+    for idx, line in enumerate(blanked.splitlines()):
         stripped = line.strip()
         if not stripped:
             continue

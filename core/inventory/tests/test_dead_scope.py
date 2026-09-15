@@ -664,15 +664,18 @@ def test_php_dead_if_after_heredoc_still_detected():
 
 
 def test_ruby_if_false_block_detected():
+    _requires_lexical_grammar("ruby")
     src = "class C\n  if false\n    def dead; end\n  end\nend\n"
     assert (3, 3) in detect_dead_scopes("ruby", src)
 
 
 def test_ruby_unless_true_detected():
+    _requires_lexical_grammar("ruby")
     assert detect_dead_scopes("ruby", "  unless true\n    x\n  end\n") == [(2, 2)]
 
 
 def test_ruby_if_false_else_branch_live():
+    _requires_lexical_grammar("ruby")
     # only the if-false branch is dead; the else body stays live.
     src = "  if false\n    dead\n  else\n    live\n  end\n"
     assert detect_dead_scopes("ruby", src) == [(2, 2)]
@@ -744,6 +747,7 @@ def test_builder_tags_lexical_dead(tmp_path):
 
 
 def test_ruby_hash_in_string_not_treated_as_comment():
+    _requires_lexical_grammar("ruby")
     src = (
         'x = "has # in string"\n'
         "if false\n"
@@ -839,6 +843,7 @@ def test_ruby_one_liner_if_false_does_not_range_following_code():
 
 
 def test_ruby_then_with_multiline_body_still_detected():
+    _requires_lexical_grammar("ruby")
     src = (
         "if false then\n"
         "  dead\n"
@@ -1014,3 +1019,58 @@ def test_rust_grammar_absent_fails_closed(monkeypatch):
     monkeypatch.setattr(lexical_view, "_VALIDATED", {})
     src = "fn f() {\n    if false {\n        dead();\n    }\n}\n"
     assert detect_dead_scopes("rust", src) == []
+# ---------------------------------------------------------------------------
+# Ruby hostile-shape fixtures: heredoc / multi-line-string data must
+# never open a dead range over live code. All fixtures are valid Ruby.
+# ---------------------------------------------------------------------------
+
+
+def test_ruby_if_false_in_heredoc_no_false_range():
+    # `if false` inside a heredoc plus a later column-0 `end` (any
+    # class/def end) used to range the live method as dead.
+    src = (
+        "banner = <<~EOT\n"
+        "  usage:\n"
+        "if false\n"
+        "EOT\n"
+        "def live_method\n"
+        "  steal\n"
+        "end\n"
+    )
+    assert detect_dead_scopes("ruby", src) == []
+
+
+def test_ruby_if_false_in_multiline_string_no_false_range():
+    src = (
+        's = "text\n'
+        'if false\n'
+        'more"\n'
+        "def live_method\n"
+        "  steal\n"
+        "end\n"
+    )
+    assert detect_dead_scopes("ruby", src) == []
+
+
+def test_ruby_real_dead_if_after_heredoc_still_detected():
+    _requires_lexical_grammar("ruby")
+    src = (
+        "banner = <<~EOT\n"
+        "  if false\n"
+        "EOT\n"
+        "if false\n"
+        "  dead_code\n"
+        "end\n"
+    )
+    assert detect_dead_scopes("ruby", src) == [(5, 5)]
+
+
+def test_ruby_grammar_absent_fails_closed(monkeypatch):
+    from core.inventory import lexical_view
+
+    monkeypatch.setattr(
+        lexical_view._ts_cache, "import_grammar", lambda name: None,
+    )
+    monkeypatch.setattr(lexical_view, "_VALIDATED", {})
+    src = "if false\n  dead\nend\n"
+    assert detect_dead_scopes("ruby", src) == []

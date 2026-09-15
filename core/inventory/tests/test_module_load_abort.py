@@ -478,11 +478,13 @@ def test_php_exit_method_call_does_not_fire():
 
 
 def test_ruby_top_level_raise_fires():
+    _requires_lexical_grammar("ruby")
     r = detect_module_load_abort("ruby", "raise 'disabled'\nclass C\n  def m; end\nend\n")
     assert r is not None and r.line == 1 and r.summary == "raise"
 
 
 def test_ruby_abort_after_oneliner_def_fires():
+    _requires_lexical_grammar("ruby")
     # A one-liner ``def`` before the abort must not leave nesting stuck at 1.
     r = detect_module_load_abort("ruby", "def early; 1; end\nabort 'no'\ndef late; end\n")
     assert r is not None and r.line == 2 and r.summary == "abort"
@@ -511,6 +513,7 @@ def test_ruby_bare_raise_does_not_fire():
 
 
 def test_ruby_exit_bang_detected():
+    _requires_lexical_grammar("ruby")
     abort = detect_module_load_abort("ruby", "exit!\n")
     assert isinstance(abort, ModuleLoadAbort)
     assert abort.line == 1
@@ -522,6 +525,7 @@ def test_ruby_exit_bang_with_modifier_not_detected():
 
 
 def test_ruby_plain_exit_still_detected():
+    _requires_lexical_grammar("ruby")
     abort = detect_module_load_abort("ruby", "exit\n")
     assert abort is not None
     assert abort.summary == "exit"
@@ -679,6 +683,7 @@ def test_ruby_inline_rescue_modifier_not_an_abort():
 
 
 def test_ruby_plain_raise_still_detected():
+    _requires_lexical_grammar("ruby")
     code = 'raise "boom"\ndef live\n  1\nend\n'
     result = detect_module_load_abort("ruby", code)
     assert result is not None
@@ -903,3 +908,82 @@ def test_rust_grammar_absent_fails_closed(monkeypatch):
     monkeypatch.setattr(lexical_view, "_VALIDATED", {})
     src = 'compile_error!("unsupported");\n'
     assert detect_module_load_abort("rust", src) is None
+# ---------------------------------------------------------------------------
+# Ruby hostile-shape fixtures: heredoc / multi-line-string data must
+# never fabricate a whole-file abort. All fixtures are valid Ruby.
+# ---------------------------------------------------------------------------
+
+
+def test_ruby_raise_in_heredoc_no_fabricated_abort():
+    src = (
+        "banner = <<~EOT\n"
+        "raise the alarm when ready\n"
+        "EOT\n"
+        "def live\n"
+        "  1\n"
+        "end\n"
+    )
+    assert detect_module_load_abort("ruby", src) is None
+
+
+def test_ruby_exit_in_multiline_string_no_fabricated_abort():
+    src = (
+        's = "line one\n'
+        'exit\n'
+        'line three"\n'
+        "def live\n"
+        "  1\n"
+        "end\n"
+    )
+    assert detect_module_load_abort("ruby", src) is None
+
+
+def test_ruby_abort_in_end_data_section_no_fabricated_abort():
+    src = (
+        "x = 1\n"
+        "__END__\n"
+        "abort\n"
+    )
+    assert detect_module_load_abort("ruby", src) is None
+
+
+def test_ruby_real_raise_after_heredoc_still_detected():
+    _requires_lexical_grammar("ruby")
+    src = (
+        "banner = <<~EOT\n"
+        "raise decoy\n"
+        "EOT\n"
+        'raise "real abort"\n'
+        "def never\n"
+        "  1\n"
+        "end\n"
+    )
+    result = detect_module_load_abort("ruby", src)
+    assert result is not None
+    assert result.line == 4
+    assert result.summary == "raise"
+
+
+def test_ruby_raise_with_heredoc_argument_still_detected():
+    # The heredoc OPENER survives blanking, so raise-with-argument is
+    # still recognised when the message itself is a heredoc.
+    _requires_lexical_grammar("ruby")
+    src = (
+        "raise <<~ERR\n"
+        "  unsupported platform\n"
+        "ERR\n"
+    )
+    result = detect_module_load_abort("ruby", src)
+    assert result is not None
+    assert result.line == 1
+
+
+def test_ruby_grammar_absent_fails_closed(monkeypatch):
+    from core.inventory import lexical_view
+
+    monkeypatch.setattr(
+        lexical_view._ts_cache, "import_grammar", lambda name: None,
+    )
+    monkeypatch.setattr(lexical_view, "_VALIDATED", {})
+    src = 'raise "boom"\n'
+    assert detect_module_load_abort("ruby", src) is None

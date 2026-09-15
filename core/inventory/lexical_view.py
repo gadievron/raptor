@@ -142,6 +142,8 @@ NONCODE_NODE_MODES: dict[str, dict[str, str]] = {
         "symbol_array": _BLANK_EDGES,
         "delimited_symbol": _BLANK_EDGES,
         "character": _BLANK_EDGES,
+        # ``__END__`` DATA section — never executed.
+        "uninterpreted": _BLANK_ALL,
     },
     "php": {
         "comment": _BLANK_ALL,
