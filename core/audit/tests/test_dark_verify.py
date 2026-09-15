@@ -504,6 +504,26 @@ class TestClassifyOutput:
         r = _classify_output(spec, stdout, "c")
         assert r.verdict == "inconclusive"
 
+    @pytest.mark.parametrize("return_type", [
+        "const char *", "unsigned char *", "void *", "int *",
+        "struct foo *", "char **",
+    ])
+    def test_any_pointer_return_value_check_is_inconclusive(
+        self, return_type,
+    ):
+        # The harness prints EVERY pointer as %p pointer identity —
+        # the guard must match the formatter, or a correct prediction
+        # (e.g. "NULL" vs glibc's "(nil)") on any non-char* pointer
+        # return mints a wrong authoritative refutation.
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="a.c", function="f", language="c",
+            expected_return="NULL",
+            lang_config={"return_type": return_type},
+        )
+        stdout = json.dumps({"status": "returned", "value": "(nil)"})
+        r = _classify_output(spec, stdout, "c")
+        assert r.verdict == "inconclusive", return_type
+
     def test_int_return_value_check_still_compares(self):
         spec = DarkWitnessSpec(
             finding_key="f1", file="a.c", function="f", language="c",

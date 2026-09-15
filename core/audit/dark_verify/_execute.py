@@ -829,16 +829,21 @@ def execute_witness(
 _MESSAGE_MATCH_LANGS = frozenset({"lua", "perl"})
 
 
-def _char_ptr_return(spec: DarkWitnessSpec) -> bool:
-    """True when a C-family spec declares a ``char*`` return.
+def _pointer_return(spec: DarkWitnessSpec) -> bool:
+    """True when a C-family spec declares ANY pointer return.
 
-    The C harness prints every pointer return — including char* — as
-    %p pointer identity (a %s dereference in the HARNESS could itself
-    fault; see ``_c_format_for_type``), so the printed value is an
-    address a predicted string value can never match.
+    The C harness prints every pointer return as %p pointer identity
+    (a %s dereference in the HARNESS could itself fault; see
+    ``_c_format_for_type``), so the printed value is an address a
+    predicted value can never match — for ``char *`` and equally for
+    ``const char *`` / ``void *`` / ``int *`` / every other pointer
+    spelling. Guarding only the exact ``char*`` spelling turned a
+    correct prediction on any other pointer-returning function into a
+    wrong authoritative refutation (the common "NULL" prediction vs
+    the %p rendering, which is itself platform-dependent).
     """
     rt = str(spec.lang_config.get("return_type", "")).strip()
-    return rt.endswith("*") and rt.rstrip("*").strip() == "char"
+    return rt.endswith("*")
 
 
 def _classify_json_output(
@@ -984,12 +989,12 @@ def _classify_json_output(
                 ),
             )
         if spec.expected_return is not None:
-            if language in ("c", "cpp") and _char_ptr_return(spec):
+            if language in ("c", "cpp") and _pointer_return(spec):
                 return DarkVerifyResult(
                     finding_key=spec.finding_key, verdict="inconclusive",
                     language=language, actual_return=actual_repr,
                     match_detail=(
-                        "char* return is printed as pointer identity "
+                        "pointer return is printed as pointer identity "
                         "(see _c_format_for_type), so the predicted "
                         "value cannot be compared; not a refutation"
                     ),
