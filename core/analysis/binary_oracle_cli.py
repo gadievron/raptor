@@ -26,6 +26,11 @@ import logging
 import os
 from pathlib import Path
 
+from core.security.log_sanitisation import (
+    escape_nonprintable,
+    sanitise_for_terminal,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -200,10 +205,12 @@ def _filter_locally_built(
                 # tree): dropped from BOTH lists — conservative, but say
                 # so like the repo-committed drop does, or the operator
                 # sees a binary vanish with no trace.
+                # Candidate names come from walking the scanned repo
+                # — attacker-chosen bytes; escape before logging.
                 logger.warning(
                     "binary-oracle: %s resolves outside the repo — "
                     "excluded from auto-detect (pass --binary to use it)",
-                    c,
+                    escape_nonprintable(str(c)),
                 )
                 continue
             committed = rel in tracked or any(
@@ -247,7 +254,9 @@ def _autodetect_binaries(
                 "Pass --binary <path> to use them anyway when you know "
                 "they were built fresh.",
                 len(dropped),
-                ", ".join(str(p) for p in dropped[:3])
+                ", ".join(
+                    escape_nonprintable(str(p)) for p in dropped[:3]
+                )
                 + ("..." if len(dropped) > 3 else ""),
             )
         return kept
@@ -268,7 +277,9 @@ def _autodetect_binaries(
             f"locally-built binary(s):"
         )
         for b in locally_built:
-            print(f"  {b}")
+            # Build-tree file paths are target-derived — a crafted
+            # filename can carry terminal escapes; sanitise.
+            print(f"  {sanitise_for_terminal(str(b))}")
         if len(locally_built) >= DEFAULT_MAX_RESULTS:
             logger.warning(
                 "binary-oracle: auto-detect result cap (%d) reached — "
@@ -390,9 +401,12 @@ def _env_build_debug_binaries(repo: Path) -> tuple[list[str], bool]:
             toolchain=ToolchainSpec(debug=True),
         )
         if not product.ok:
-            print(f"binary-oracle: env build failed ({product.reason}): "
-                  f"{product.detail[:200]} — oracle runs without a "
-                  f"binary")
+            # reason/detail carry containerized build output of the
+            # target's own build scripts — hostile bytes; sanitise.
+            print(f"binary-oracle: env build failed "
+                  f"({sanitise_for_terminal(str(product.reason))}): "
+                  f"{sanitise_for_terminal(product.detail[:200])} — "
+                  f"oracle runs without a binary")
             return [], False
         paths = [str(pth) for pth in product.artifacts.values()]
         note = (", GUESSED build command — absent verdicts will "
@@ -400,13 +414,15 @@ def _env_build_debug_binaries(repo: Path) -> tuple[list[str], bool]:
         print(f"binary-oracle: env-built {len(paths)} debug binary(s) "
               f"(provenance: env-built{note})")
         for pth in paths:
-            print(f"  {pth}")
+            # Artifact names come out of the target's build — sanitise.
+            print(f"  {sanitise_for_terminal(str(pth))}")
         print("  persist for future runs: /project binary add <path>")
         return paths, guessed
     except Exception as exc:  # noqa: BLE001 — degrade, never fail the run
         logger.debug("binary-oracle env build errored", exc_info=True)
         print(f"binary-oracle: env build errored "
-              f"({type(exc).__name__}: {str(exc)[:200]}) — oracle runs "
+              f"({type(exc).__name__}: "
+              f"{sanitise_for_terminal(str(exc)[:200])}) — oracle runs "
               f"without a binary")
         return [], False
 

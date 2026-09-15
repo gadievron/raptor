@@ -39,6 +39,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+
+from core.security.log_sanitisation import escape_nonprintable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
@@ -149,11 +151,17 @@ def _run_status(argv: list[str], timeout: int = 60,
         # dump — a function past the cut-off point looks ``absent``.
         # Treat as no evidence for this tool, matching the
         # TimeoutExpired path above.
+        # The stderr slice and the trailing argv element are hostile-
+        # ELF-derived (tool output over attacker bytes; a scanned-repo
+        # file path) — escape before they reach the operator's
+        # terminal/log (core.security.log_sanitisation names both as
+        # canonical untrusted inputs).
         logger.warning(
             "binary_oracle: %s rc=%s on %s — discarding partial output "
             "(stderr=%s)",
-            argv[0], proc.returncode, argv[-1],
-            (proc.stderr or "")[:200])
+            argv[0], proc.returncode,
+            escape_nonprintable(str(argv[-1])),
+            escape_nonprintable((proc.stderr or "")[:200]))
         return "", False
     return proc.stdout or "", True
 
@@ -197,8 +205,9 @@ def _stream(argv: list[str], timeout: int,
                                 encoding="utf-8", errors="replace",
                                 timeout=timeout)
         except (OSError, subprocess.TimeoutExpired) as e:
+            # Exception text quotes target-derived paths — escape.
             logger.warning("binary_oracle: %s failed/timed out: %s",
-                           argv[0], e)
+                           argv[0], escape_nonprintable(str(e)))
             return
         if proc.returncode != 0:
             # Same contract as ``_run_status``: a non-zero exit means
@@ -206,11 +215,13 @@ def _stream(argv: list[str], timeout: int,
             # a DWARF dump cut off halfway would silently classify
             # every function past the cut as ``absent``. Yield nothing
             # so the caller degrades to the no-DWARF tier instead.
+            # Same escape rationale as ``_run_status``.
             logger.warning(
                 "binary_oracle: %s rc=%s on %s — discarding partial "
                 "output (stderr=%s)",
-                argv[0], proc.returncode, argv[-1],
-                (proc.stderr or "")[:200])
+                argv[0], proc.returncode,
+                escape_nonprintable(str(argv[-1])),
+                escape_nonprintable((proc.stderr or "")[:200]))
             return
         if not Path(out_path).exists():
             return

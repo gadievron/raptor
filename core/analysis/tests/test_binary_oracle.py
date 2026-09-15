@@ -1370,3 +1370,51 @@ def test_inline_marker_subprogram_also_indexes_bare_name(monkeypatch, tmp_path):
     fake_bin.write_bytes(b"\x7fELF-stub")
     verdicts = bo_mod.classify_binary_evidence(["tr_static_init"], fake_bin)
     assert verdicts["tr_static_init"].classification == "inlined"
+
+
+class TestHostileBytesEscapedInLogs:
+    """Tool stderr over a hostile ELF and scanned-repo file paths are
+    attacker bytes; the operator-facing log records must carry them
+    escaped (core.security.log_sanitisation), never raw — a crafted
+    section name can otherwise drive OSC/CSI onto the terminal."""
+
+    _ESC_STDERR = "boom \x1b]0;pwned\x07 tail"
+
+    def test_run_status_escapes_stderr_and_path(self, monkeypatch, caplog):
+        import logging
+
+        import core.sandbox as _sb
+        from core.analysis.binary_oracle import _run_status
+
+        class _Proc:
+            returncode = 1
+            stderr = TestHostileBytesEscapedInLogs._ESC_STDERR
+            stdout = ""
+
+        monkeypatch.setattr(_sb, "run", lambda *a, **k: _Proc())
+        with caplog.at_level(logging.WARNING):
+            out, ok = _run_status(["readelf", "-n", "/tmp/x\x1b[2Jy"])
+        assert (out, ok) == ("", False)
+        joined = " ".join(r.getMessage() for r in caplog.records)
+        assert "\x1b" not in joined
+        assert "\\x1b" in joined
+
+    def test_stream_escapes_stderr_on_nonzero_rc(self, monkeypatch, caplog):
+        import logging
+
+        import core.sandbox as _sb
+        from core.analysis.binary_oracle import _stream
+
+        class _Proc:
+            returncode = 2
+            stderr = TestHostileBytesEscapedInLogs._ESC_STDERR
+            stdout = ""
+
+        monkeypatch.setattr(_sb, "run", lambda *a, **k: _Proc())
+        with caplog.at_level(logging.WARNING):
+            lines = list(_stream(["objdump", "--dwarf=info", "/tmp/x"],
+                                 timeout=5))
+        assert lines == []
+        joined = " ".join(r.getMessage() for r in caplog.records)
+        assert "\x1b" not in joined
+        assert "\\x1b" in joined

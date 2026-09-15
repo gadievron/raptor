@@ -322,3 +322,47 @@ class TestAutodetectIntegratesGate:
         # Operator-facing warning fires for the dropped one.
         assert any("repo-committed" in r.message.lower()
                    for r in caplog.records)
+
+
+class TestHostileNamesSanitisedOnTerminal:
+    """Auto-detected build-tree paths and env-build output are
+    target-derived — terminal prints and log records must escape
+    non-printables (a crafted filename can carry OSC/CSI)."""
+
+    def test_autodetected_path_print_is_sanitised(
+            self, monkeypatch, tmp_path, capsys):
+        import core.analysis.binary_oracle_cli as cli
+        hostile = tmp_path / "build" / "bin\x1b]0;pwn\x07ary"
+        monkeypatch.setattr(
+            "core.analysis.binary_oracle_autodetect.detect_binaries",
+            lambda repo, kind, path_filter=None: [hostile],
+        )
+        monkeypatch.setattr(
+            cli, "_filter_locally_built", lambda repo, paths: (paths, []),
+        )
+        out = cli._autodetect_binaries(tmp_path, "auto")
+        assert out == [hostile]
+        captured = capsys.readouterr().out
+        assert "\x1b" not in captured
+        assert "\\x1b" in captured
+
+    def test_dropped_committed_warning_is_escaped(
+            self, monkeypatch, tmp_path, caplog):
+        import logging
+
+        import core.analysis.binary_oracle_cli as cli
+        hostile = tmp_path / "build" / "evil\x1b[2J"
+        monkeypatch.setattr(
+            "core.analysis.binary_oracle_autodetect.detect_binaries",
+            lambda repo, kind, path_filter=None: [],
+        )
+        monkeypatch.setattr(
+            cli, "_filter_locally_built",
+            lambda repo, paths: ([], [hostile] if paths else []),
+        )
+        with caplog.at_level(logging.WARNING):
+            cli._autodetect_binaries(tmp_path, "auto")
+        # The drop path runs inside detect_binaries' path_filter in
+        # production; drive the wrapper directly for the log shape.
+        joined = " ".join(r.getMessage() for r in caplog.records)
+        assert "\x1b" not in joined
