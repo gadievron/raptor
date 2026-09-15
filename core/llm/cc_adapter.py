@@ -19,6 +19,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.security.credential_env import (
+    ANTHROPIC_FIRST_PARTY_AUTH_VARS,
+    CREDENTIAL_ENV_FAMILY,
+    is_credential_shaped,
+    is_model_traffic_redirect_shaped,
+)
 from core.security.redaction import redact_secrets
 
 if TYPE_CHECKING:
@@ -83,31 +89,27 @@ _CC_AWS_STATIC_CREDENTIAL_NAMES = (
     "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
 )
 
-# credential_mode="proxy": names/prefixes that must NOT ride the
-# backend overlay into a proxy-mode child. Credential material is the
-# obvious set. Operator base-URL pins are stripped because the caller
-# sets the one true gateway route after the overlay, and the
-# CLAUDE_CODE_SKIP_* family is stripped-then-reset so only the
-# skip-auth flags THIS mode needs are present. Backend-SELECTION flags
-# (CLAUDE_CODE_USE_*) are deliberately KEPT: the CLI's provider mode
-# decides which gateway env vars it reads (verified against the CLI —
-# a Bedrock install ignores ``ANTHROPIC_BASE_URL`` and reads
-# ``ANTHROPIC_BEDROCK_MANTLE_BASE_URL`` instead).
-_CC_PROXY_STRIP_EXACT = frozenset({
-    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
-})
-_CC_PROXY_STRIP_PREFIXES = ("CLAUDE_CODE_SKIP_",)
-
-
+# credential_mode="proxy": names that must NOT ride the backend
+# overlay into a proxy-mode child. Credential material is the obvious
+# set — the canonical vocabulary (family membership plus the
+# name-shape belt, so a future CLAUDE_CODE_*_TOKEN knob cannot slip an
+# exact-name list) rather than a local enumeration. Model-traffic
+# redirect names (operator base-URL pins across ALL per-cloud
+# variants, AWS_ENDPOINT_URL*, and the CLAUDE_CODE_SKIP_* auth-mode
+# flips, which are stripped-then-reset so only the skip flags THIS
+# mode needs are present) come from the SAME vocabulary shape rule
+# cc_trust's settings scan applies — the two surfaces reason about
+# the identical redirect primitive and must not drift. The caller
+# sets the one true gateway route after the overlay.
+# Backend-SELECTION flags (CLAUDE_CODE_USE_*) are deliberately KEPT:
+# the CLI's provider mode decides which gateway env vars it reads
+# (verified against the CLI — a Bedrock install ignores
+# ``ANTHROPIC_BASE_URL`` and reads ``ANTHROPIC_BEDROCK_MANTLE_BASE_URL``
+# instead).
 def _cc_proxy_strip(key: str) -> bool:
-    if key in _CC_PROXY_STRIP_EXACT:
+    if key in CREDENTIAL_ENV_FAMILY or is_credential_shaped(key):
         return True
-    if key.startswith(_CC_PROXY_STRIP_PREFIXES):
-        return True
-    # Operator base-URL pins (ANTHROPIC_BASE_URL, and the per-cloud
-    # ANTHROPIC_*_BASE_URL variants) — the caller sets the one true
-    # gateway route after the overlay.
-    return key.startswith("ANTHROPIC_") and "BASE_URL" in key
+    return is_model_traffic_redirect_shaped(key)
 
 
 #: When set (to anything but "" / "0"), every live ``claude`` spawn on
@@ -253,13 +255,15 @@ def cc_subprocess_env(
         if key.startswith(_CC_BACKEND_ENV_PREFIXES):
             env[key] = value
     if bedrock or vertex:
-        # The child's provider is an alternate cloud — the first-party
-        # Anthropic API key/token is dead weight there, and some of
-        # these children run with tools enabled against hostile repos.
-        # Keep the key only where the child's provider requires it
-        # (first-party API installs, where it IS the auth).
-        env.pop("ANTHROPIC_API_KEY", None)
-        env.pop("ANTHROPIC_AUTH_TOKEN", None)
+        # The child's provider is an alternate cloud — first-party
+        # Anthropic auth material (API key, auth token, and the
+        # ``claude setup-token`` OAuth credential) is dead weight
+        # there, and some of these children run with tools enabled
+        # against hostile repos. Keep it only where the child's
+        # provider requires it (first-party API installs, where it IS
+        # the auth).
+        for key in ANTHROPIC_FIRST_PARTY_AUTH_VARS:
+            env.pop(key, None)
     if bedrock:
         for key in _CC_AWS_PASSTHROUGH_NAMES:
             if key in os.environ:
@@ -396,12 +400,31 @@ def _cc_proxy_mode_env(
 
     # Belt-and-braces enforcement of the zero-credential invariant —
     # get_safe_env plus the strip above already guarantee it, but this
-    # assert is what the security posture rests on, so verify rather
-    # than trust the layering.
+    # sweep is what the security posture rests on, so verify rather
+    # than trust the layering. Vocabulary-driven: every AWS_* name,
+    # every credential-family member, and anything credential-SHAPED
+    # (so a name neither the enumeration nor the layering anticipated
+    # still cannot leak). Two documented survivors:
+    #   * ANTHROPIC_AUTH_TOKEN — the minted scoped gateway token set
+    #     above; the child's ONLY credential by contract.
+    #   * RAPTOR_SESSION_TOKEN — RAPTOR's own session-registry
+    #     credential (an allowlisted get_safe_env member that deep
+    #     children need to resolve their project binding; validated
+    #     on every read, never provider credential material).
+    #   GIT_ASKPASS-style family pins from GIT_ENV_VARS also survive,
+    #   but only at their inert get_safe_env-set values (/usr/bin/true
+    #   etc.), which get_safe_env re-pins after its own strip.
+    _allowed = {"ANTHROPIC_AUTH_TOKEN", "RAPTOR_SESSION_TOKEN"}
+    _git_pins = RaptorConfig.GIT_ENV_VARS
     leaked = [
-        k for k in env
-        if k.startswith("AWS_")
-        or (k == "ANTHROPIC_API_KEY")
+        k for k, v in env.items()
+        if k not in _allowed
+        and _git_pins.get(k) != v
+        and (
+            k.startswith("AWS_")
+            or k in CREDENTIAL_ENV_FAMILY
+            or is_credential_shaped(k)
+        )
     ]
     for key in leaked:
         env.pop(key, None)
