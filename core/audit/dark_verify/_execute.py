@@ -751,6 +751,18 @@ def _classify_json_output(
             match_detail=f"import failed: {data.get('message', '')}",
         )
 
+    if status == "binding_error":
+        # The harness's post-load assertion found the loader bound a
+        # DIFFERENT artifact than the finding's file — whatever ran is
+        # not the code under test, so no verdict may be minted.
+        return DarkVerifyResult(
+            finding_key=spec.finding_key, verdict="error", language=language,
+            match_detail=(
+                f"module binding failed at load time: "
+                f"{data.get('message', '')}"
+            ),
+        )
+
     expected_exc = spec.expected_exception
 
     if status == "exception":

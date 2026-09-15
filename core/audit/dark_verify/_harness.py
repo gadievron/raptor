@@ -167,13 +167,26 @@ def generate_witness_script(
     *,
     witness_token: str = "",
 ) -> str:
-    """Render a fixed-template Python script."""
+    """Render a fixed-template Python script.
+
+    After a successful import the script asserts the LOADED module's
+    ``__file__`` is the finding's file, reporting ``binding_error``
+    (never a verdict) on mismatch.  This belt is BEST-EFFORT, second
+    to the static resolution engine (``_resolve``), which is the
+    refusal authority: ``__file__`` is interpreter state read AFTER
+    target code has run, so any executing plant can forge it — the
+    belt catches only mis-binds where no plant code runs (a shadow
+    that appeared after validation, a stale or mismatched
+    environment).  Plants that would execute are the static engine's
+    job to refuse pre-execution.
+    """
     args_json = json.dumps(spec.args)
     kwargs_json = json.dumps(spec.kwargs)
     target_str = str(target_root.resolve())
+    expected_file = target_str + "/" + spec.file.replace("\\", "/")
     token = _checked_token(witness_token)
     return textwrap.dedent(f"""\
-        import sys, json
+        import sys, json, os.path
         _tok = {token!r}
         sys.path.insert(0, {target_str!r})
         try:
@@ -183,6 +196,16 @@ def generate_witness_script(
             sys.exit(0)
         except Exception as e:
             print(json.dumps({{"status": "import_error", "token": _tok, "message": str(e)}}))
+            sys.exit(0)
+        _mod = sys.modules.get({spec.module_path!r})
+        _loaded = os.path.realpath(getattr(_mod, "__file__", "") or "")
+        _expected = os.path.realpath({expected_file!r})
+        if _loaded != _expected:
+            print(json.dumps({{
+                "status": "binding_error",
+                "token": _tok,
+                "message": "loaded %r, expected %r" % (_loaded, _expected),
+            }}))
             sys.exit(0)
         _args = json.loads({args_json!r})
         _kwargs = json.loads({kwargs_json!r})

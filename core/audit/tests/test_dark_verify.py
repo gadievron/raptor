@@ -173,6 +173,108 @@ class TestGenerateWitnessScript:
         assert "[42, true]" in script or "[42, True]" in script.replace("true", "True")
         assert "key" in script
 
+    def test_script_asserts_loaded_file(self, tmp_path):
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="pkg/mod.py",
+            function="check", module_path="pkg.mod",
+        )
+        script = generate_witness_script(spec, tmp_path)
+        assert "binding_error" in script
+        assert "__file__" in script
+        assert str(tmp_path.resolve()) + "/pkg/mod.py" in script
+
+
+class TestWitnessScriptRuntimeBinding:
+    """The script's post-load ``__file__`` assertion is a best-effort
+    belt behind the static resolution engine: it reports binding_error
+    (never a verdict) for mis-binds where no plant code forges the
+    interpreter state — an executing plant can spoof ``__file__``, so
+    plants are the static engine's job to refuse pre-execution."""
+
+    def _run(self, script):
+        import subprocess
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True, text=True, timeout=30,
+        )
+        return json.loads(proc.stdout.strip().splitlines()[-1])
+
+    def _tree(self, tmp_path):
+        (tmp_path / "pkg").mkdir()
+        (tmp_path / "pkg" / "mod.py").write_text(
+            "def check():\n    return 7\n", encoding="utf-8")
+        return tmp_path
+
+    def _spec(self):
+        return DarkWitnessSpec(
+            finding_key="f1", file="pkg/mod.py",
+            function="check", module_path="pkg.mod",
+            expected_return="7",
+        )
+
+    def test_clean_load_still_returns(self, tmp_path):
+        root = self._tree(tmp_path)
+        script = generate_witness_script(
+            self._spec(), root, witness_token="ab12")
+        data = self._run(script)
+        assert data["status"] == "returned"
+        assert data["token"] == "ab12"
+
+    def test_shadowed_load_reports_binding_error(self, tmp_path):
+        # A package-directory plant the loader binds ahead of the
+        # finding's module (the shape the static walk refuses; here it
+        # exercises the runtime belt directly).
+        root = self._tree(tmp_path)
+        (root / "pkg" / "mod").mkdir()
+        (root / "pkg" / "mod" / "__init__.py").write_text(
+            "def check():\n    return 7\n", encoding="utf-8")
+        script = generate_witness_script(
+            self._spec(), root, witness_token="ab12")
+        data = self._run(script)
+        assert data["status"] == "binding_error"
+        assert "__init__.py" in data["message"]
+
+    def test_sys_modules_hijack_reports_binding_error(self, tmp_path):
+        # Planted package code replacing the module in sys.modules at
+        # import time: the from-import succeeds against the impostor,
+        # but its __file__ is not the finding's file.
+        root = self._tree(tmp_path)
+        (root / "pkg" / "__init__.py").write_text(
+            "import sys, types\n"
+            "_m = types.ModuleType('pkg.mod')\n"
+            "_m.check = lambda: 7\n"
+            "_m.__file__ = __file__\n"
+            "sys.modules['pkg.mod'] = _m\n", encoding="utf-8")
+        script = generate_witness_script(
+            self._spec(), root, witness_token="ab12")
+        data = self._run(script)
+        assert data["status"] == "binding_error"
+
+
+class TestClassifyBindingError:
+    def _spec(self, **kw):
+        return DarkWitnessSpec(
+            finding_key="f1", file="pkg/mod.py", function="check",
+            language="python", module_path="pkg.mod", **kw,
+        )
+
+    def test_binding_error_is_error_never_verdict(self):
+        out = json.dumps({
+            "status": "binding_error",
+            "message": "loaded '/t/pkg/mod/__init__.py', "
+                       "expected '/t/pkg/mod.py'",
+        })
+        r = _classify_output(self._spec(expected_return="7"), out, "python")
+        assert r.verdict == "error"
+        assert "binding failed" in r.match_detail
+        assert r.verdict not in ("confirmed", "refuted")
+
+    def test_binding_error_requires_token_like_any_status(self):
+        out = json.dumps({"status": "binding_error", "message": "x"})
+        r = _classify_output(
+            self._spec(), out, "python", expected_token="ab12")
+        assert r.verdict == "inconclusive"
+
 
 # -- generate_c_harness -------------------------------------------------------
 
