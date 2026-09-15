@@ -164,6 +164,31 @@ def rewrite_libs_versions_toml(
     return rewrite_file_with(path, edits, _apply_one)
 
 
+_TOML_MULTILINE_STRING_RE = re.compile(
+    r'("""|\'\'\')(?s:.*?)\1'
+)
+
+
+def _blank_toml_multiline_strings(text: str) -> str:
+    """TOML multiline-string spans replaced with same-length spaces
+    (newlines kept), so matches on the view splice 1:1 into the
+    original text.
+
+    The section patterns anchor key lines with MULTILINE ``^``, which
+    also matches inside a multiline string's CONTENT — a
+    ``key = "…"``-shaped line in a doc string under ``[versions]``
+    (the pyproject mis-splice mechanism, one file over) was spliced
+    as if it were the live key. Unterminated strings are malformed
+    TOML and left unblanked.
+    """
+    return _TOML_MULTILINE_STRING_RE.sub(
+        lambda m: "".join(
+            c if c == "\n" else " " for c in m.group(0)
+        ),
+        text,
+    )
+
+
 def _apply_one(text: str, edit: RewriteEdit) -> tuple[str, RewriteResult]:
     section, _, key = edit.locator.partition(":")
     if not key:
@@ -190,9 +215,12 @@ def _apply_one(text: str, edit: RewriteEdit) -> tuple[str, RewriteResult]:
             reason=f"unknown locator section {section!r}",
         )
 
+    # Match on the string-blanked view; splice into the original
+    # (offsets map 1:1 — see _blank_toml_multiline_strings).
+    view = _blank_toml_multiline_strings(text)
     for build_pat in candidates:
         pat = build_pat(key)
-        match = pat.search(text)
+        match = pat.search(view)
         if match is None:
             continue
         current = match.group("version")

@@ -178,3 +178,58 @@ guava = "com.google.guava:guava:32.1.2-jre"
     body = p.read_text()
     assert 'spring = "3.2.0"' in body
     assert '"com.google.guava:guava:33.0.0-jre"' in body
+
+
+class TestMultilineStringBlindness:
+    """A TOML multiline string whose CONTENT carries a key = "…" line
+    must never be spliced: the MULTILINE ^ anchors match inside
+    string content, so a hostile (or merely documentation-bearing)
+    catalog had its string mutated while the run reported applied."""
+
+    def test_key_line_inside_multiline_string_not_spliced(
+        self, tmp_path,
+    ):
+        from packages.sca.rewriters import RewriteEdit
+        from packages.sca.rewriters.gradle_version_catalog import (
+            rewrite_libs_versions_toml,
+        )
+        cat = tmp_path / "libs.versions.toml"
+        original = (
+            "[versions]\n"
+            'doc = """\n'
+            'junit = "4.0.0"\n'
+            '"""\n'
+            "[libraries]\n"
+        )
+        cat.write_text(original)
+        results = rewrite_libs_versions_toml(cat, [RewriteEdit(
+            locator="version:junit", old_value="4.0.0",
+            new_value="5.9.0",
+        )])
+        assert results[0].applied is False
+        assert cat.read_text() == original
+
+    def test_real_key_after_multiline_string_still_bumped(
+        self, tmp_path,
+    ):
+        from packages.sca.rewriters import RewriteEdit
+        from packages.sca.rewriters.gradle_version_catalog import (
+            rewrite_libs_versions_toml,
+        )
+        cat = tmp_path / "libs.versions.toml"
+        cat.write_text(
+            "[versions]\n"
+            "doc = '''\n"
+            'junit = "1.0.0"\n'
+            "'''\n"
+            'junit = "4.0.0"\n'
+        )
+        results = rewrite_libs_versions_toml(cat, [RewriteEdit(
+            locator="version:junit", old_value="4.0.0",
+            new_value="5.9.0",
+        )])
+        assert results[0].applied is True
+        text = cat.read_text()
+        assert 'junit = "5.9.0"\n' in text
+        # The string content is untouched.
+        assert 'junit = "1.0.0"\n' in text
