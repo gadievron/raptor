@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any
 
 from core.json import dumps_display
+from core.security.log_sanitisation import sanitise_for_terminal
 from packages.describe.recommendations import recommend_next
 from packages.describe.target_shape import TargetShape, infer_target_shape
 from packages.describe.tool_readiness import ToolCheck, check_tool_readiness
@@ -267,7 +268,12 @@ def format_text(report: DescribeReport) -> str:
         if s.license.classification == "missing":
             lines.append("  License: none detected")
         elif s.license.spdx_id:
-            line = f"  License: {s.license.spdx_id}"
+            # License file names are matched by fnmatch globs whose *
+            # accepts ANY bytes — a hostile repo can ship
+            # "LICENSE-<ESC...>" and its raw name would land on the
+            # operator's terminal. spdx_id/source_file are
+            # target-derived too; escape each.
+            line = f"  License: {sanitise_for_terminal(s.license.spdx_id, max_len=64)}"
             # Surface additional license files when present —
             # dual-licensed projects (libgcrypt: COPYING +
             # COPYING.LIB; NetworkManager: COPYING +
@@ -283,7 +289,9 @@ def format_text(report: DescribeReport) -> str:
                     if len(names) > 3 else ""
                 )
                 line += (
-                    f"  (also: {', '.join(shown)}{suffix})"
+                    "  (also: "
+                    f"{sanitise_for_terminal(', '.join(shown), max_len=200)}"
+                    f"{suffix})"
                 )
             lines.append(line)
         elif s.license.source_file:
@@ -294,7 +302,8 @@ def format_text(report: DescribeReport) -> str:
             # actual MPL text). Be explicit so the operator
             # doesn't read "License: unknown" as "no license".
             lines.append(
-                f"  License: present in {s.license.source_file} "
+                "  License: present in "
+                f"{sanitise_for_terminal(str(s.license.source_file), max_len=120)} "
                 f"(couldn't classify — check manually)"
             )
         else:

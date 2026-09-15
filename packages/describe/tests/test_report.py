@@ -355,3 +355,40 @@ class TestBuildDescribeReport:
         assert preview.semgrep_packs == ["security-audit"]
         assert preview.high_priority_dirs == []
         assert preview.pipeline_names == []
+
+
+class TestLicenseLinesEscaped:
+    """License file names come from fnmatch globs whose * accepts any
+    bytes — a hostile repo names a file LICENSE-<ESC...> and format_text
+    prints it. Escape at the writer."""
+
+    HOSTILE = "\x1b]0;pwned\x07\x9b2J‮evil"
+
+    def _out(self, license_obj) -> str:
+        return format_text(_report(_shape(license=license_obj)))
+
+    def test_additional_files_escaped(self):
+        from core.license.detector import TargetLicense
+        lic = TargetLicense(
+            spdx_id=f"MIT{self.HOSTILE}",
+            classification="oss",
+            source_file="LICENSE",
+            confidence="high",
+            additional_files=(f"LICENSE-{self.HOSTILE}",),
+        )
+        out = self._out(lic)
+        assert "License:" in out
+        for raw in ("\x1b", "\x07", "\x9b", "‮"):
+            assert raw not in out
+
+    def test_unclassified_source_file_escaped(self):
+        from core.license.detector import TargetLicense
+        lic = TargetLicense(
+            spdx_id=None,
+            classification="unknown",
+            source_file=f"LICENSE-{self.HOSTILE}",
+            confidence="low",
+        )
+        out = self._out(lic)
+        for raw in ("\x1b", "\x07", "\x9b", "‮"):
+            assert raw not in out

@@ -3578,7 +3578,14 @@ def main() -> None:
             # "succeeded" — silent coverage loss unless said out loud.
             _dropped = _semgrep_dropped_files(_all_semgrep_jsons)
             if _dropped:
-                _preview = ", ".join(list(_dropped)[:5])
+                # Dropped-file paths come from the semgrep error JSON
+                # over the (hostile) target tree — escape before the
+                # operator's stderr.
+                from core.security.log_sanitisation import (
+                    sanitise_for_terminal,
+                )
+                _preview = sanitise_for_terminal(
+                    ", ".join(list(_dropped)[:5]), max_len=400)
                 _more = len(_dropped) - min(5, len(_dropped))
                 print(
                     f"⚠️  semgrep: {len(_dropped)} file(s) dropped by "
