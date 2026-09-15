@@ -420,6 +420,15 @@ def _trim_to_function(text: str) -> str:
     return text[:cut]
 
 
+# C11 6.5.16: the complete assignment-operator grammar.  Both alias
+# closures (AST and token level) must accept every member — a compound
+# assignment smuggles a tracked value into its LHS exactly like the
+# plain spelling (``a |= (uintptr_t)p`` == ``a = a | (uintptr_t)p``).
+_ASSIGN_OPS = frozenset({
+    "=", "+=", "-=", "*=", "/=", "%=", "<<=", ">>=", "&=", "^=", "|=",
+})
+
+
 def _tokenize_with_offsets(text: str) -> list[tuple[str, str, int, int]]:
     """(kind, spelling, start, end) tokens; refuses on unknown bytes."""
     out: list[tuple[str, str, int, int]] = []
@@ -471,7 +480,7 @@ def _token_tracked_superset(
             if (
                 kind == "ident"
                 and i + 1 < n
-                and tokens[i + 1][1] == "="
+                and tokens[i + 1][1] in _ASSIGN_OPS
                 and (i + 2 >= n or tokens[i + 2][1] != "=")
                 and (i == 0 or spellings[i - 1] not in ("=", "!", "<",
                                                         ">", "+", "-",
@@ -1702,15 +1711,18 @@ class _Analysis:
             for n in _walk_nodes(body):
                 lhs_name: str | None = None
                 rhs: Any = None
+                compound = False
                 if n.type == "assignment_expression":
                     left = n.child_by_field_name("left")
                     op = n.child_by_field_name("operator")
                     if (
                         left is not None and left.type == "identifier"
-                        and op is not None and _node_text(op) == "="
+                        and op is not None
+                        and _node_text(op) in _ASSIGN_OPS
                     ):
                         lhs_name = _node_text(left)
                         rhs = n.child_by_field_name("right")
+                        compound = _node_text(op) != "="
                 elif n.type == "init_declarator":
                     decl = n.child_by_field_name("declarator")
                     d = decl
@@ -1745,12 +1757,19 @@ class _Analysis:
                 rhs_idents = {
                     _node_text(x) for x in _idents(rhs)
                 }
-                if stripped is not None and stripped.type == "identifier" \
-                        and _node_text(stripped) in aliases:
+                if (
+                    not compound
+                    and stripped is not None
+                    and stripped.type == "identifier"
+                    and _node_text(stripped) in aliases
+                ):
                     if lhs_name not in aliases:
                         aliases.add(lhs_name)
                         grew = True
                 elif rhs_idents & (aliases | derived):
+                    # Compound spellings land here by construction:
+                    # ``a |= p`` mixes p into a's prior value — a
+                    # derived carrier, not a pure alias.
                     if lhs_name not in derived and lhs_name not in aliases:
                         derived.add(lhs_name)
                         grew = True
@@ -1926,7 +1945,10 @@ class _Analysis:
                         _node_text(left) in self.locals
                     ):
                         # Local alias propagation — _compute_sets
-                        # tracks it.  A file-scope global is an
+                        # tracks it for every C11 6.5.16 assignment
+                        # operator (_ASSIGN_OPS; pinned by the
+                        # compound-operator closure tests).  A
+                        # file-scope global is an
                         # identifier too (``g_saved = p;`` is a store
                         # into memory a callee or the caller reads
                         # after the free), so only names this function
