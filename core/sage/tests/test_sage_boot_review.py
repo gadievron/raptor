@@ -316,6 +316,70 @@ def _extract_function(name: str) -> str:
     return match.group(0)
 
 
+class TestCompareDisplayIntegrity(ReviewerBase):
+    """The compare display is the operator's authorization surface:
+    the diff it prints is exactly what ``review --approve`` records.
+    Server-derived variant text must reach the TTY with non-printables
+    escaped — a raw ESC/CSI/OSC or bidi control in a variant could
+    re-render the diff (cursor moves overwriting hostile lines with a
+    forged clean verdict, window-title spoofing, reordered text) at
+    the moment of decision."""
+
+    # Cursor-up + erase-line forging an "Authorized" verdict, SGR
+    # colour, a C1 CSI, an OSC window-title with BEL, and an RLO bidi
+    # override — one variant exercising every escape family the
+    # sanitiser must neutralise.
+    INIT_HOSTILE = (
+        "payload line\n"
+        "\x1b[2A\x1b[K  variant 1/1: ✓ Authorized\n"
+        "\x1b[31mred\x9b1m\x1b]0;pwned\x07‮EVIL"
+    )
+
+    def _compare_out(self, init_variants):
+        auth = self._write("auth", v1_stamp(INIT_CLEAN, MSG_CLEAN))
+        live = self._write("live", live_capture(
+            init_variants, [CONTENT_CLEAN]))
+        rc, out = self._main("compare", auth, live)
+        self.assertEqual(rc, 4)
+        return out
+
+    def test_compare_escapes_hostile_controls(self):
+        out = self._compare_out([INIT_CLEAN, self.INIT_HOSTILE])
+        for raw in ("\x1b", "\x9b", "\x07", "‮"):
+            self.assertNotIn(raw, out, f"raw {raw!r} reached the TTY")
+        # Escaped, reviewable spellings instead — and the honest text.
+        self.assertIn("\\x1b[2A", out)
+        self.assertIn("\\x9b", out)
+        self.assertIn("\\u202e", out)
+        self.assertIn("EVIL", out)
+        self.assertIn("red", out)
+
+    def test_compare_bounds_line_length_with_explicit_elision(self):
+        flood = "A" * 5000 + "HIDDEN-TAIL"
+        out = self._compare_out([INIT_CLEAN, flood])
+        self.assertIn("...[+", out)
+        self.assertNotIn("HIDDEN-TAIL", out)
+        # Elision is explicit, never silent: the marker counts the
+        # chars it hid (the sanitised line carries the diff's leading
+        # "+" marker, hence the +1).
+        self.assertIn(f"...[+{len(flood) + 1 - 2000} chars]", out)
+
+    def test_sanitisation_is_display_only_merge_keeps_raw_variant(self):
+        """The stored stamp must keep the raw bytes: the guard's
+        enforcement equality compares raw text, and an escaped variant
+        would never match the live payload again."""
+        auth = self._write("auth", v1_stamp(INIT_CLEAN, MSG_CLEAN))
+        live = self._write("live", live_capture(
+            [INIT_CLEAN, self.INIT_HOSTILE], [CONTENT_CLEAN]))
+        with open(live, encoding="utf-8", newline="") as fh:
+            live_sections = bpr.parse_sections(fh.read())
+        merged = bpr.merge(
+            guard, guard._parse_authorized(str(auth)), live_sections)
+        merged_variants = bpr._init_variants(
+            guard, bpr.parse_sections(merged))
+        self.assertIn(self.INIT_HOSTILE, merged_variants)
+
+
 class TestParseSectionsInjection(ReviewerBase):
     def test_duplicate_section_header_raises(self):
         """Mirrors the guard's hard rejection: a duplicate header only

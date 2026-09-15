@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import functools
 import importlib.machinery
 import importlib.util
 import json
@@ -88,6 +89,41 @@ def _load_guard():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+@functools.lru_cache(maxsize=1)
+def _load_sanitiser():
+    """Import ``core.security.log_sanitisation`` by file location.
+
+    Same standalone-invocation constraint as :func:`_load_guard`: this
+    module runs as ``python3 core/sage/boot_payload_review.py`` with no
+    repo root on ``sys.path``, so a package import is unavailable. The
+    sanitiser module is stdlib-only, so a file-location load is safe.
+    """
+    path = _REPO_ROOT / "core" / "security" / "log_sanitisation.py"
+    spec = importlib.util.spec_from_file_location("log_sanitisation", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _line(s: str) -> str:
+    r"""Terminal-render one line of server-derived text: non-printables
+    escaped to ``\xHH`` and per-line length bounded (explicit elision
+    marker, never silent).
+
+    The compare display is an operator AUTHORIZATION surface — the diff
+    it prints is exactly what the operator approves or rejects, and the
+    variant text comes from the SAGE server, the hostile party in the
+    threat model this review exists for. Raw ESC/CSI/OSC or bidi
+    controls embedded in a variant could re-render the diff (cursor
+    moves overwriting hostile lines with forged clean ones, colour
+    flips, reordered text) at exactly the moment display integrity IS
+    the control, so every diff line is escaped before it reaches the
+    TTY. The generous per-line cap keeps prose payloads fully visible
+    while bounding a single-line terminal flood.
+    """
+    return _load_sanitiser().sanitise_for_terminal(s, max_len=2000)
 
 
 def _nl_lines(text: str) -> list[str]:
@@ -311,7 +347,7 @@ def _print_compare(guard, auth: dict | None, report: dict) -> None:
                 "authorized", "live", lineterm="",
             )
             for line in diff:
-                print(f"    {line}")
+                print(f"    {_line(line)}")
 
 
 def _print_summary(report: dict) -> None:
