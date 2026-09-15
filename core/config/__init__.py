@@ -15,6 +15,10 @@ from typing import ClassVar
 # import would need filesystem reads the child's Landlock read
 # allowlist does not grant — the child died ModuleNotFoundError
 # whenever the parent process had not already imported the module.
+from core.security.credential_env import (
+    CREDENTIAL_BEARING_ENV_VARS,
+    CREDENTIAL_GENERAL_BLOCKLIST_VARS,
+)
 from core.security.env_sanitisation import normalise_proxy_url, strip_env_vars
 from core.security.rule_of_two import is_ci
 
@@ -792,26 +796,11 @@ class RaptorConfig:
         "GIT_CONFIG",          # Used by `git config -f FILE` internally but
                                # also respected when set as env — same
                                # injection surface.
-        "GIT_SSH_COMMAND",     # Verified: git invokes this for every ssh-
-                               # based remote operation (clone/fetch/push
-                               # over ssh://). Direct arbitrary command exec.
-        "GIT_SSH",             # Older variant of GIT_SSH_COMMAND — same
-                               # exec path for git's ssh transport.
-        "SSH_ASKPASS",         # Verified: ssh runs this program to prompt
-                               # for passwords when no tty is attached.
-                               # Any sandboxed tool that invokes ssh (git-
-                               # over-ssh, rsync, scp, ansible) triggers it.
-                               # Direct arbitrary command exec.
         "PYTHONBREAKPOINT",    # Verified: redirects Python's breakpoint()
                                # builtin to an arbitrary import path. Runs
                                # when code calls breakpoint() — uncommon in
                                # production but real attack surface if any
                                # sandboxed Python tool does.
-        "KUBECONFIG",          # Kubernetes config file path. A malicious
-                               # kubeconfig's `users[].user.exec` directive
-                               # invokes an arbitrary command to obtain
-                               # credentials — any kubectl invocation with
-                               # a hijacked KUBECONFIG = arbitrary exec.
         # TLS trust / config redirection — weaken or subvert cryptographic
         # operations. Require MITM network position or traffic capture to
         # exploit, but zero legitimate use for the tools RAPTOR runs.
@@ -858,9 +847,6 @@ class RaptorConfig:
         "EMACSLOADPATH",       # Emacs: additional load path. If any tool
                                # invokes emacs (--batch, etc.), .el files from
                                # the attacker dir auto-load.
-        "DOCKER_CONFIG",       # Docker CLI config dir. credsStore /
-                               # credHelpers entries invoke arbitrary binaries
-                               # named `docker-credential-<helper>` on login.
         "DOCKER_HOST",         # Docker daemon socket. An attacker URL lets
                                # a sandboxed child push images / run
                                # containers against a forged API.
@@ -883,7 +869,20 @@ class RaptorConfig:
         "JE_MALLOC_CONF",      # alternate jemalloc env var (some builds).
         # Note: TERM is NOT stripped — it's read as a string (terminfo lookup),
         # not shell-evaluated. Stripping it breaks colour output in git/grep/etc.
-    ])
+        #
+        # Credential-family names (credential/config file pointers and
+        # exec-redirect vars like GIT_ASKPASS / KUBECONFIG /
+        # DOCKER_CONFIG / GIT_SSH_COMMAND / SSH_ASKPASS) are unioned in
+        # below from core/security/credential_env.py — the single home
+        # for that vocabulary. Only the general-blocklist subset joins:
+        # members a trusted lane legitimately carries into child envs
+        # (first-party CC auth, the Bedrock AWS passthrough) are
+        # documented exemptions there, because this list also feeds the
+        # sandbox strict_env re-filter of caller-supplied envs.
+        # Hostile-input filters (cc_trust settings scan, build-metadata
+        # env filtering) must union the FULL CREDENTIAL_ENV_FAMILY on
+        # top of this list.
+    ]) | CREDENTIAL_GENERAL_BLOCKLIST_VARS
 
     # Git Configuration
     #
@@ -1321,6 +1320,12 @@ class RaptorConfig:
         """
         drop = set(RaptorConfig.LLM_API_KEY_VARS)
         drop.update(RaptorConfig.LLM_ROUTING_ENV_VARS)
+        # Credential-bearing family members not otherwise enumerated
+        # above (the canonical vocabulary owns the names — e.g.
+        # ANTHROPIC_AUTH_TOKEN and the CLAUDE_CODE_OAUTH_TOKEN
+        # setup-token credential, which full-environ copies would
+        # otherwise hand to children that never make LLM calls).
+        drop.update(CREDENTIAL_BEARING_ENV_VARS)
         drop.update(("RAPTOR_LLM_SOCKET", "RAPTOR_LLM_TOKEN_FD"))
         prefixes = RaptorConfig.LLM_ROUTING_ENV_PREFIXES
         for name in [k for k in env

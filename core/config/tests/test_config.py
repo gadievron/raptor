@@ -426,12 +426,23 @@ class TestGetLlmEnvIncludePythonUserBase:
         injected = {var: f"malicious_{var}" for var in RaptorConfig.DANGEROUS_ENV_VARS}
         with patch.dict(os.environ, injected):
             env = RaptorConfig.get_llm_env(include_python_user_base=True)
+            # get_llm_env's own documented overlay (provider keys +
+            # transport routing) re-admits its members AFTER the
+            # blocklist strip — a name that is both DANGEROUS (for
+            # general child-env lanes) and an LLM-lane re-admit
+            # (GOOGLE_APPLICATION_CREDENTIALS) is expected present
+            # here. The opt-in under test must add nothing beyond
+            # PYTHONUSERBASE on top of that documented overlay.
+            llm_readmits = set(RaptorConfig.LLM_API_KEY_VARS) | set(
+                RaptorConfig.LLM_ROUTING_ENV_VARS)
             for var in RaptorConfig.DANGEROUS_ENV_VARS:
                 if var == "PYTHONUSERBASE":
                     assert env.get(var) == "malicious_PYTHONUSERBASE"
                 elif var in RaptorConfig.GIT_ENV_VARS:
                     # Replaced with our pinned safe value, not stripped.
                     assert env.get(var) == RaptorConfig.GIT_ENV_VARS[var]
+                elif var in llm_readmits:
+                    assert env.get(var) == f"malicious_{var}"
                 else:
                     assert var not in env, f"{var} should still be stripped"
 
