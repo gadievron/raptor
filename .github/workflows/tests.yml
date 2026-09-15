@@ -208,14 +208,11 @@ jobs:
           out=/tmp/changed_files.txt
           : > "$out"
           # ``--jq`` expressions use ``?`` + ``// []`` to suppress jq's
-          # ``cannot iterate over: null`` error on diffs the API
-          # truncates or returns as an error object:
-          #   * compare API caps at 300 files; past that ``.files`` is
-          #     omitted entirely (null on access).
-          #   * pulls/{n}/files can return an error object (non-array)
-          #     for very large PRs or transient API failures.
-          # We treat "no list" the same as the first-push case: fall
-          # through to compute_filters and force all filters true.
+          # ``cannot iterate over: null`` error on responses that are
+          # an error object (non-array) — very large PRs or transient
+          # API failures. We treat "no list" the same as the
+          # first-push case: fall through to compute_filters and
+          # force all filters true.
           #
           # Renames also emit ``previous_filename``: the OLD path of a
           # renamed module is what other files still import, and
@@ -234,9 +231,26 @@ jobs:
                 # to the no-list path so compute_filters forces all true.
                 rm -f "$out"
               else
+                # The compare API caps ``files`` at 300 entries and
+                # silently returns the FIRST 300 for a bigger diff —
+                # the key stays present, so the "no list" fail-open
+                # path never fires on truncation and every file past
+                # #300 would lose its dispatch (this repo lands
+                # multi-hundred-file patch trains as direct pushes).
+                # At the cap we cannot know what fell off: discard
+                # the list and fall through to full dispatch. Only
+                # ``.filename`` entries count toward the cap check —
+                # ``previous_filename`` rename companions don't.
+                resp=/tmp/compare_response.json
                 gh api --paginate \
-                  "repos/${REPO}/compare/${BEFORE}...${AFTER}" \
-                  --jq '(.files // [])[]? | .filename, (.previous_filename // empty)' >> "$out"
+                  "repos/${REPO}/compare/${BEFORE}...${AFTER}" > "$resp"
+                jq -r '(.files // [])[]? | .filename, (.previous_filename // empty)' \
+                  "$resp" >> "$out"
+                files_n=$(jq -r '(.files // [])[]?.filename' "$resp" | wc -l)
+                if (( files_n >= 300 )); then
+                  echo "::notice::compare listed ${files_n} files — at the API's 300-file cap, list may be truncated; forcing full dispatch"
+                  rm -f "$out"
+                fi
               fi
               ;;
             *)

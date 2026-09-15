@@ -149,10 +149,9 @@ jobs:
           out=/tmp/changed_files.txt
           : > "$out"
           # ``--jq`` expressions use ``?`` + ``// []`` to suppress jq's
-          # ``cannot iterate over: null`` error on diffs the API
-          # truncates or returns as an error object (compare API caps
-          # at 300 files; past that ``.files`` is omitted entirely).
-          # No list → compute_filters forces all filters true.
+          # ``cannot iterate over: null`` error on responses that are
+          # an error object (non-array). No list → compute_filters
+          # forces all filters true.
           case "$EVENT" in
             pull_request|pull_request_target)
               gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/files" \
@@ -162,8 +161,21 @@ jobs:
               if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
                 rm -f "$out"
               else
-                gh api --paginate "repos/${REPO}/compare/${BEFORE}...${AFTER}" \
-                  --jq '(.files // [])[]?.filename' >> "$out"
+                # The compare API caps ``files`` at 300 entries and
+                # silently returns the FIRST 300 for a bigger diff —
+                # the key stays present, so the "no list" fail-open
+                # path never fires on truncation and a truncated list
+                # could drop the only file matching a language filter.
+                # At the cap, discard the list → full scan.
+                resp=/tmp/compare_response.json
+                gh api --paginate \
+                  "repos/${REPO}/compare/${BEFORE}...${AFTER}" > "$resp"
+                jq -r '(.files // [])[]?.filename' "$resp" >> "$out"
+                files_n=$(wc -l < "$out")
+                if (( files_n >= 300 )); then
+                  echo "::notice::compare listed ${files_n} files — at the API's 300-file cap, list may be truncated; forcing full scan"
+                  rm -f "$out"
+                fi
               fi
               ;;
             *)
