@@ -256,6 +256,20 @@ class TestOverrideConfig:
         hosts = proxy_hosts_for_codeql()
         assert _hostname_in(hosts, "ghcr.io")
 
+    def test_undecodable_override_falls_back(
+        self, isolated_env, monkeypatch, tmp_path, no_calibrate,
+    ):
+        """Garbage bytes at the override path (an operator pointing
+        it at a binary file) must degrade to the static default like
+        every other malformed shape — pre-fix the UnicodeDecodeError
+        escaped and took down every pack-download policy
+        resolution."""
+        config_path = tmp_path / "codeql-proxy-hosts.json"
+        config_path.write_bytes(b"\xff\xfe\x00garbage\x9c")
+        monkeypatch.setattr(mod, "_OVERRIDE_CONFIG_PATH", config_path)
+        hosts = proxy_hosts_for_codeql()
+        assert _hostname_in(hosts, "ghcr.io")
+
 
 # ---------------------------------------------------------------------------
 # readable_paths_for_codeql

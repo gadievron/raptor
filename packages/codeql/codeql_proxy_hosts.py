@@ -172,7 +172,12 @@ def _load_override_config() -> list[str] | None:
         data = json.loads(
             _OVERRIDE_CONFIG_PATH.read_text(encoding="utf-8"),
         )
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        # UnicodeDecodeError: garbage bytes at the override path
+        # (operator pointed it at a binary file by mistake). The
+        # sibling loaders tolerate this; letting it raise took down
+        # every `codeql pack download` policy resolution instead of
+        # falling back to the static hosts.
         return None
     hosts = data.get("proxy_hosts") if isinstance(data, dict) else None
     if not isinstance(hosts, list):
