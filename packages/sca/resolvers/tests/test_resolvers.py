@@ -1440,3 +1440,70 @@ def test_pip_batch_markers_unforgeable_from_manifest_output(
     lock0 = (results[0].proposed_lockfile or b"").decode(
         "utf-8", errors="replace")
     assert "RAPTOR_BATCH_OUT_1" in lock0 or "evil" in lock0
+
+
+# ---------------------------------------------------------------------------
+# gomod hostile-tree walk
+# ---------------------------------------------------------------------------
+
+
+def test_gomod_copy_does_not_follow_directory_symlinks(tmp_path):
+    """A directory symlink in the scanned (hostile) tree must not be
+    traversed — pre-3.13 ``rglob`` recursed through it, pulling
+    regular ``.go`` files from OUTSIDE the project into the resolve
+    input (host-filesystem walk / go.sum encoding host-module facts)."""
+    import os
+
+    from packages.sca.resolvers.gomod import _copy_go_sources
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.go").write_text("package secret\n")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "main.go").write_text("package main\n")
+    os.symlink(outside, project / "linked")
+
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    _copy_go_sources(project, dest)
+    assert (dest / "main.go").exists()
+    assert not (dest / "linked").exists()
+    assert "secret.go" not in [p.name for p in dest.rglob("*")]
+
+
+def test_gomod_copy_terminates_on_symlink_cycle(tmp_path):
+    """A self-referential directory symlink must not hang the cascade
+    worker — the walk terminates and the regular files still copy."""
+    import os
+
+    from packages.sca.resolvers.gomod import _copy_go_sources
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "main.go").write_text("package main\n")
+    os.symlink(project, project / "loop")
+
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    _copy_go_sources(project, dest)
+    assert (dest / "main.go").exists()
+    assert not (dest / "loop").exists()
+
+
+def test_gomod_copy_prunes_skip_dirs_from_traversal(tmp_path):
+    """vendor/ and friends are pruned from TRAVERSAL, not just from
+    the copied paths."""
+    from packages.sca.resolvers.gomod import _copy_go_sources
+
+    project = tmp_path / "project"
+    (project / "vendor" / "dep").mkdir(parents=True)
+    (project / "vendor" / "dep" / "dep.go").write_text("package dep\n")
+    (project / "pkg").mkdir()
+    (project / "pkg" / "ok.go").write_text("package pkg\n")
+
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    _copy_go_sources(project, dest)
+    assert (dest / "pkg" / "ok.go").exists()
+    assert not (dest / "vendor").exists()
