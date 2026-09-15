@@ -124,9 +124,18 @@ def _check_mismatch(caller_dir):
     if not other:
         return None
 
+    # This menu is an authorization surface (it decides which project
+    # binds the session) and target PATHS have no charset constraint
+    # (adopted / machine-created `corpus-*` targets are external
+    # input), so render them with non-printables escaped. Project
+    # NAMES are _validate_name-constrained and print as-is.
+    from core.security.log_sanitisation import sanitise_for_terminal
+    shown_target = sanitise_for_terminal(str(active["target"]))
+    shown_caller = sanitise_for_terminal(str(caller_dir))
+
     print(f"""
-  Last-activated project is {active['name']} ({active['target']})
-  You are in {other}'s target directory ({caller_dir})
+  Last-activated project is {active['name']} ({shown_target})
+  You are in {other}'s target directory ({shown_caller})
 
   Continue this session with:
     1) {active['name']}
