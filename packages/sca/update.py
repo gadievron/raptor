@@ -43,6 +43,7 @@ from typing import Any, TYPE_CHECKING
 from ._md import code_cell, neutralize_inline
 from .naming import pep503_name
 from .parsers._npm_alias import split_npm_alias
+from .resolvers._safe_io import read_regular_text
 from .rows import FindingRow
 from .versions import VersionError
 from .versions import compare as version_compare
@@ -841,10 +842,18 @@ def _materialise_changes(
         by_manifest[plan.manifest].append(plan)
 
     for manifest, plan_list in by_manifest.items():
-        try:
-            original = manifest.read_text(encoding="utf-8")
-        except OSError as e:
-            out.extend(_skip(plan, f"cannot read manifest: {e}") for plan in plan_list)
+        # lstat-gated, size-bounded read: discovery rejected symlinks
+        # at SCAN time, but this write path runs later (and
+        # ``fix --findings`` takes operator-era paths at face value) —
+        # a symlink swapped in between scan and fix must not route
+        # host-file content into proposed/ and upgrade.patch.
+        original = read_regular_text(manifest)
+        if original is None:
+            out.extend(
+                _skip(plan, "cannot read manifest: refused "
+                            "(symlink / non-regular / oversized) or "
+                            "unreadable")
+                for plan in plan_list)
             continue
 
         text = original
@@ -2290,14 +2299,19 @@ def _emit_git_patch(
     diff_lines: list[str] = []
     for original, proposed in pairs:
         rel = original.relative_to(repo_root)
-        try:
-            old = original.read_text(encoding="utf-8").splitlines(keepends=True)
-        except OSError:
+        # ``original`` is the user's manifest re-read AFTER the scan
+        # (TOCTOU window): the lstat-gated bounded read keeps a
+        # swapped-in symlink's target (host files) out of the patch
+        # context lines. ``proposed`` is our own staged output — same
+        # helper for uniformity.
+        old_text = read_regular_text(original)
+        if old_text is None:
             continue
-        try:
-            new = proposed.read_text(encoding="utf-8").splitlines(keepends=True)
-        except OSError:
+        old = old_text.splitlines(keepends=True)
+        new_text = read_regular_text(proposed)
+        if new_text is None:
             continue
+        new = new_text.splitlines(keepends=True)
         # Header line (``diff --git a/x b/x``) makes ``git apply``
         # happy and shows up cleanly in code-review tooling.
         diff_lines.append(f"diff --git a/{rel} b/{rel}\n")

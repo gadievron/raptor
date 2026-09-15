@@ -590,15 +590,21 @@ def _materialise_pin_changes(
             if proposed_copy.exists():
                 read_from = proposed_copy
                 break
-        try:
-            original = read_from.read_text(encoding="utf-8")
-        except OSError as e:
+        # lstat-gated, size-bounded read: discovery rejected symlinks
+        # at SCAN time, but this write path runs later — a symlink
+        # swapped in between scan and fix must not route host-file
+        # content into the staged rewrites.
+        from .resolvers._safe_io import read_regular_text
+        original = read_regular_text(read_from)
+        if original is None:
             out.extend(UpgradeChange(
                     ecosystem=plan.ecosystem, name=plan.name,
                     old_version=plan.installed, new_version=plan.target,
                     manifest=plan.manifest,
                     advisory_ids=tuple(plan.advisory_ids),
-                    skipped_reason=f"cannot read manifest: {e}",
+                    skipped_reason=("cannot read manifest: refused "
+                                    "(symlink / non-regular / oversized) "
+                                    "or unreadable"),
                 ) for plan in plan_list)
             continue
 

@@ -1329,3 +1329,59 @@ class TestDryRunTerminalEscaping:
         assert "\x07" not in out
         # LLM free text also gets the markdown/autofetch defang.
         assert "![b](" not in out
+
+
+class TestMaterialiseSymlinkRefusal:
+    """The fix write path re-reads manifests AFTER the scan (TOCTOU
+    window; `--findings <file>` takes operator-era paths at face
+    value): a symlink swapped in must be refused, not followed —
+    following it routed host-file content into proposed/ and the
+    emitted patch context."""
+
+    def test_pin_changes_refuse_symlinked_manifest(self, tmp_path):
+        import os
+
+        real = tmp_path / "outside.txt"
+        real.write_text("flask==1.0.0\n")
+        manifest = tmp_path / "requirements.txt"
+        os.symlink(real, manifest)
+
+        plans = {
+            ("PyPI", "flask", str(manifest)): _PlanEntry(
+                ecosystem="PyPI", name="flask",
+                installed="1.0.0", target="1.0.0",
+                manifest=manifest,
+                advisory_ids=[],
+            ),
+        }
+        changes = optimise._materialise_pin_changes(
+            plans, tmp_path / "proposed",
+        )
+        assert len(changes) == 1
+        assert changes[0].skipped_reason is not None
+        assert "refused" in changes[0].skipped_reason
+
+    def test_cve_changes_refuse_symlinked_manifest(self, tmp_path):
+        import os
+
+        from packages.sca.update import _materialise_changes
+
+        real = tmp_path / "outside.txt"
+        real.write_text("flask==1.0.0\n")
+        manifest = tmp_path / "requirements.txt"
+        os.symlink(real, manifest)
+
+        plans = {
+            ("PyPI", "flask", str(manifest)): _PlanEntry(
+                ecosystem="PyPI", name="flask",
+                installed="1.0.0", target="2.0.0",
+                manifest=manifest,
+                advisory_ids=["GHSA-x"],
+            ),
+        }
+        changes = _materialise_changes(
+            plans, [], tmp_path / "proposed", pin_only=False,
+        )
+        assert len(changes) == 1
+        assert changes[0].skipped_reason is not None
+        assert "refused" in changes[0].skipped_reason
