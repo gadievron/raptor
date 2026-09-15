@@ -12,6 +12,7 @@ confirmations from /fuzz, /agentic, /crash-analysis, /validate in one place,
 rather than leaving verified status scattered across per-producer fields.
 """
 import sys
+import json
 from pathlib import Path
 
 # ─── trust-marker check (do not import; inline by design) ───
@@ -32,7 +33,6 @@ import argparse  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
-from core.json import dumps_display  # noqa: E402
 
 
 def main(argv=None) -> int:
@@ -61,7 +61,13 @@ def main(argv=None) -> int:
     outcomes = collect_outcomes(out_dir, project_root=project_root)
 
     if args.json:
-        sys.stdout.write(dumps_display([o.to_dict() for o in outcomes]))
+        # ensure_ascii: this JSON goes to the operator terminal; JSON
+        # escapes C0 but passes C1 controls (single-byte CSI/OSC) raw
+        # when ensure_ascii is off (dumps_display is exactly that).
+        # ASCII output stays valid JSON for parsing consumers.
+        sys.stdout.write(json.dumps([o.to_dict() for o in outcomes],
+                                    indent=2, ensure_ascii=True,
+                                    default=str))
         sys.stdout.write("\n")
     else:
         sys.stdout.write(render_outcome_summary(outcomes))

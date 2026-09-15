@@ -84,7 +84,7 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
-from core.json import dumps_display, load_json  # noqa: E402
+from core.json import load_json  # noqa: E402
 
 from packages.exploit_feasibility.smt_path import validate_path  # noqa: E402
 
@@ -248,7 +248,12 @@ def main() -> int:
     except (TypeError, ValueError) as e:
         return _err(str(e))
 
-    sys.stdout.write(dumps_display(result))
+    # ensure_ascii: this JSON goes to the operator terminal; JSON
+    # escapes C0 but passes C1 controls (single-byte CSI/OSC) raw
+    # when ensure_ascii is off (dumps_display is exactly that).
+    # ASCII output stays valid JSON for parsing consumers.
+    sys.stdout.write(json.dumps(result, indent=2, ensure_ascii=True,
+                                default=str))
     sys.stdout.write("\n")
     return 0
 

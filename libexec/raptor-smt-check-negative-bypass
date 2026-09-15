@@ -28,6 +28,7 @@ Output: JSON to stdout matching validate_path's shape.
 """
 import argparse
 import sys
+import json
 from pathlib import Path
 
 # ─── trust-marker check (do not import; inline by design) ───
@@ -46,7 +47,6 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
-from core.json import dumps_display  # noqa: E402
 
 from packages.exploit_feasibility.smt_verbs import check_negative_bypass  # noqa: E402
 
@@ -84,7 +84,12 @@ def main() -> int:
         print(f"raptor-smt-check-negative-bypass: {e}", file=sys.stderr)
         return 2
 
-    sys.stdout.write(dumps_display(result))
+    # ensure_ascii: this JSON goes to the operator terminal; JSON
+    # escapes C0 but passes C1 controls (single-byte CSI/OSC) raw
+    # when ensure_ascii is off (dumps_display is exactly that).
+    # ASCII output stays valid JSON for parsing consumers.
+    sys.stdout.write(json.dumps(result, indent=2, ensure_ascii=True,
+                                default=str))
     sys.stdout.write("\n")
     return 0
 
