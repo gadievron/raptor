@@ -51,7 +51,6 @@ from core.dataflow.smt_barrier import (
     Tier0Result,
     Tier0Status,
     ValidatorSpec,
-    _collect_target_names,
     _crosses_function_boundary,
     _function_containing,
     _lexical_validator_in_branch,
@@ -277,6 +276,50 @@ def _line_invokes_library_call(
     return False
 
 
+def _value_calls_tail(value, tail: str) -> bool:
+    """True iff ``value``'s subtree contains a call whose callee name
+    (bare or attribute) is ``tail``."""
+    import ast
+    return any(
+        isinstance(c, ast.Call)
+        and isinstance(c.func, (ast.Name, ast.Attribute))
+        and (c.func.id if isinstance(c.func, ast.Name)
+             else c.func.attr) == tail
+        for c in ast.walk(value)
+    )
+
+
+def _paired_transform_targets(target, value, tail: str) -> set[str]:
+    """Names bound to a value whose OWN expression contains the
+    transform call, matched element-wise through tuple/list structure.
+
+    A tuple co-assignment binds each target element to its
+    corresponding VALUE element — ``escaped, raw = html.escape(x), x``
+    binds ``raw`` to the RAW input, so collecting every target name of
+    the statement handed the chain a variable the transform never
+    touched (false SOUND).  Only the element whose paired value
+    contains the call joins; when the pairing cannot be established
+    (starred targets, non-tuple RHS for a tuple target, length
+    mismatch) the whole target contributes nothing — refusing costs
+    yield, never soundness."""
+    import ast
+    if isinstance(target, ast.Name):
+        return {target.id} if _value_calls_tail(value, tail) else set()
+    if isinstance(target, (ast.Tuple, ast.List)):
+        if (
+            isinstance(value, (ast.Tuple, ast.List))
+            and len(value.elts) == len(target.elts)
+            and not any(isinstance(t, ast.Starred) for t in target.elts)
+        ):
+            out: set[str] = set()
+            for t_elt, v_elt in zip(target.elts, value.elts):
+                out |= _paired_transform_targets(t_elt, v_elt, tail)
+            return out
+        return set()
+    # Starred / Attribute / Subscript: nothing the chain can follow.
+    return set()
+
+
 def _transform_binding_targets(
     tree, source_text: str, validator_line: int, library_call: str,
 ) -> set[str]:
@@ -297,22 +340,13 @@ def _transform_binding_targets(
             value = getattr(node, "value", None)
             if value is None:
                 continue
-            calls_tail = any(
-                isinstance(c, ast.Call)
-                and isinstance(c.func, (ast.Name, ast.Attribute))
-                and (c.func.id if isinstance(c.func, ast.Name)
-                     else c.func.attr) == tail
-                for c in ast.walk(value)
-            )
-            if not calls_tail:
+            if not _value_calls_tail(value, tail):
                 continue
             node_targets = (list(node.targets)
                             if isinstance(node, ast.Assign)
                             else [node.target])
-            names: set[str] = set()
             for t in node_targets:
-                _collect_target_names(t, names)
-            targets |= names
+                targets |= _paired_transform_targets(t, value, tail)
         return targets
     # Lexical languages: accept ``x = ...call(...)`` (with optional
     # const/let/var/final or a type before the name).

@@ -949,3 +949,132 @@ def test_transform_walrus_unconditional_value_still_sound(tmp_path: Path):
         language="python", complete=_fake_complete(reply),
     )
     assert r.status is t1.Tier0Status.SOUND
+
+
+def test_transform_tuple_coassignment_raw_cotarget_declines(tmp_path: Path):
+    """``escaped, raw_copy = html.escape(name), name`` binds the second
+    target to the RAW input.  Pre-fix every target name of the
+    statement joined the chain, so a sink consuming ``raw_copy``
+    certified SOUND — the "keep both escaped and original" incomplete
+    fix slipped past the transform gate."""
+    (tmp_path / "app.py").write_text(
+        "import html\n"
+        "def f(name):\n"
+        "    escaped, raw_copy = html.escape(name), name\n"   # line 3
+        "    return render(raw_copy)\n"                       # line 4
+    )
+    diff = "+    escaped, raw_copy = html.escape(name), name\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line":
+            "escaped, raw_copy = html.escape(name), name",
+        "variable_name": "name", "charset": "", "forbidden": "",
+        "library_call": "html.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+    assert "does not reach the sink" in r.reasoning
+
+
+def test_transform_tuple_coassignment_escaped_element_still_sound(
+    tmp_path: Path,
+):
+    """Two-direction: the element PAIRED with the transform call keeps
+    certifying when the sink consumes it."""
+    (tmp_path / "app.py").write_text(
+        "import html\n"
+        "def f(name):\n"
+        "    escaped, raw_copy = html.escape(name), name\n"   # line 3
+        "    return render(escaped)\n"                        # line 4
+    )
+    diff = "+    escaped, raw_copy = html.escape(name), name\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line":
+            "escaped, raw_copy = html.escape(name), name",
+        "variable_name": "name", "charset": "", "forbidden": "",
+        "library_call": "html.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.SOUND
+
+
+def test_transform_starred_target_refuses(tmp_path: Path):
+    """Starred unpacking has no establishable element pairing — the
+    binding contributes nothing (refuse, the sound direction)."""
+    (tmp_path / "app.py").write_text(
+        "import html\n"
+        "def f(name):\n"
+        "    first, *rest = html.escape(name), name, name\n"  # line 3
+        "    return render(first)\n"                          # line 4
+    )
+    diff = "+    first, *rest = html.escape(name), name, name\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line":
+            "first, *rest = html.escape(name), name, name",
+        "variable_name": "name", "charset": "", "forbidden": "",
+        "library_call": "html.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+
+
+def test_transform_tuple_unpack_of_call_result_refuses(tmp_path: Path):
+    """Tuple target with a NON-tuple RHS (unpacking the call's own
+    return) has no element pairing — refuse rather than guess."""
+    (tmp_path / "app.py").write_text(
+        "import html\n"
+        "def f(name):\n"
+        "    a, b = html.escape(name)\n"      # line 3
+        "    return render(a)\n"              # line 4
+    )
+    diff = "+    a, b = html.escape(name)\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "a, b = html.escape(name)",
+        "variable_name": "name", "charset": "", "forbidden": "",
+        "library_call": "html.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+
+
+def test_transform_chained_assign_both_targets_join(tmp_path: Path):
+    """``a = b = html.escape(name)`` binds BOTH names to the transform
+    result — each pairs with the whole value and certifies."""
+    (tmp_path / "app.py").write_text(
+        "import html\n"
+        "def f(name):\n"
+        "    a = b = html.escape(name)\n"     # line 3
+        "    return render(b)\n"              # line 4
+    )
+    diff = "+    a = b = html.escape(name)\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "a = b = html.escape(name)",
+        "variable_name": "name", "charset": "", "forbidden": "",
+        "library_call": "html.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.SOUND
