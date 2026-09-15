@@ -206,7 +206,7 @@ def group_by_reachability(
 
     if context_map:
         entry_points = context_map.get("entry_points", [])
-        call_edges = context_map.get("call_edges", {})
+        call_edges = context_map.get("call_edges", [])
 
         for idx in finding_indices:
             o = outcomes[idx]
@@ -640,9 +640,20 @@ def _extract_constraints(outcome: Any) -> list[str]:
 def _find_reachable_entries(
     key: str,
     entry_points: list,
-    call_edges: dict,
+    call_edges: list,
 ) -> list[str]:
-    """Find which entry points can reach a given function."""
+    """Find which entry points can reach a given function.
+
+    ``call_edges`` is the context map's REAL producer shape
+    (core/orchestration/context_map_callgraph.enrich_with_call_edges):
+    a list of ``{caller_file, caller, callee, callee_file}`` dicts.
+    Keys join on the ``"file:function"`` composite the rest of the
+    audit machinery uses; an unresolved ``callee_file`` falls back to
+    the caller's file (same convention as SharedState's
+    ``call_edge_index``). The previous consumer walked a
+    caller→callees DICT no producer ever emitted, so chain synthesis
+    silently grouped nothing whenever the callgraph enricher ran.
+    """
     ep_names = set()
     for ep in entry_points:
         if isinstance(ep, dict):
@@ -654,6 +665,17 @@ def _find_reachable_entries(
     if key in ep_names:
         return [key]
 
+    callers_of: dict[str, set[str]] = {}
+    for edge in call_edges or []:
+        if not isinstance(edge, dict):
+            continue
+        caller_key = (
+            f"{edge.get('caller_file', '')}:{edge.get('caller', '')}"
+        )
+        callee_file = edge.get("callee_file") or edge.get("caller_file", "")
+        callee_key = f"{callee_file}:{edge.get('callee', '')}"
+        callers_of.setdefault(callee_key, set()).add(caller_key)
+
     reachable = []
     visited: set[str] = set()
 
@@ -664,9 +686,8 @@ def _find_reachable_entries(
         if k in ep_names:
             reachable.append(k)
             return
-        for caller, callees in call_edges.items():
-            if isinstance(callees, list) and k in callees:
-                _walk_callers(caller)
+        for caller in sorted(callers_of.get(k, ())):
+            _walk_callers(caller)
 
     _walk_callers(key)
     return reachable[:5]

@@ -8945,8 +8945,15 @@ def _run_audit_body(
             if chains:
                 write_attack_chains(chains, config.out_dir)
                 logger.info(format_chains_summary(chains))
-        except Exception:
-            logger.debug("attacker synthesis failed", exc_info=True)
+        except Exception as exc:  # noqa: BLE001 — synthesis is additive; a crash must not kill the run tail
+            # Loud, not silent: a debug-level swallow hid a
+            # producer/consumer shape mismatch that kept chain
+            # synthesis dead on every run with a callgraph-enriched
+            # context map.
+            logger.warning(
+                "attacker synthesis failed — attack-chains.json not "
+                "written: %s", exc, exc_info=True,
+            )
 
     _pass_ledger.start_phase("post_loop_checks")
     post_loop_findings: list[dict] = []
