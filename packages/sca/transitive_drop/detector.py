@@ -112,25 +112,31 @@ def detect_droppable_transitives(
 
     deps_list = list(deps)
     # Index findings by their dep coordinate so we know which
-    # transitives have issues worth proposing a bump for.
+    # transitives have issues worth proposing a bump for. Keyed
+    # CANONICALLY, matching the ``by_eco_name`` grouping below: a
+    # raw-spelling key made the lookup depend on which spelling
+    # happened to be the group's first member (two manifests
+    # declaring ``zope.interface`` / ``zope-interface`` land in one
+    # canonical group, but only the first member's raw name was
+    # tried).
     issue_keys: dict[tuple[str, str], str] = {}
     for f in vuln_findings:
         d = f.dependency
         if d is not None:
-            key = (d.ecosystem, d.name)
+            key = (d.ecosystem, _canonical_name(d.ecosystem, d.name))
             sev = getattr(f, "severity", "medium")
             # Keep the most severe finding for tier escalation.
             issue_keys[key] = _max_severity(issue_keys.get(key), sev)
     for f in supply_chain_findings:
         d = f.dependency
         if d is not None:
-            key = (d.ecosystem, d.name)
+            key = (d.ecosystem, _canonical_name(d.ecosystem, d.name))
             sev = getattr(f, "severity", "info")
             issue_keys[key] = _max_severity(issue_keys.get(key), sev)
     for f in hygiene_findings:
         d = getattr(f, "dependency", None)
         if d is not None:
-            key = (d.ecosystem, d.name)
+            key = (d.ecosystem, _canonical_name(d.ecosystem, d.name))
             sev = getattr(f, "severity", "info")
             issue_keys[key] = _max_severity(issue_keys.get(key), sev)
 
@@ -172,7 +178,7 @@ def detect_droppable_transitives(
         # Only spend the PyPI roundtrip on transitives whose
         # PROBLEMS make a bump worth surfacing.
         sample = transitive_deps[0]
-        key = (sample.ecosystem, sample.name)
+        key = (eco, canon_name)
         if key not in issue_keys:
             continue
         underlying_sev = issue_keys[key]

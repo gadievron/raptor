@@ -170,6 +170,36 @@ def test_transitive_removed_entirely_in_newer_parent() -> None:
     assert findings[0].extra_name is None
 
 
+def test_issue_lookup_joins_on_canonical_spelling() -> None:
+    """Two spellings of one canonical PyPI name (``zope.interface``
+    / ``zope-interface``) group together, but the finding is
+    attached to the NON-first spelling. The issue lookup must join
+    canonically — a raw-spelling key made detection depend on
+    member order and silently dropped the finding."""
+    pypi = _StubPyPI({
+        "parent": {
+            "1.0.0": {"requires_dist": ["zope.interface>=5.0"]},
+            "2.0.0": {"requires_dist": []},
+        },
+    })
+    dep_dotted = _dep("zope.interface", "5.0.0",
+                      direct=False, source_kind="cascade_resolver",
+                      via=["parent"])
+    dep_dashed = _dep("zope-interface", "5.0.0",
+                      direct=False, source_kind="cascade_resolver",
+                      via=["parent"])
+    deps = [
+        _dep("parent", "1.0.0", direct=True),
+        dep_dotted,      # first group member — no finding attached
+        dep_dashed,
+    ]
+    findings = detect_droppable_transitives(
+        deps, vuln_findings=[_vuln(dep_dashed)], pypi_client=pypi,
+    )
+    assert len(findings) == 1
+    assert findings[0].transitive_status_in_latest == "removed"
+
+
 def test_no_finding_when_already_at_latest() -> None:
     """If the parent is already at the latest version, no bump
     available → no finding (even if the dep is troublesome)."""
