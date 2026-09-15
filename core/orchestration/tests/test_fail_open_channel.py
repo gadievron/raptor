@@ -115,10 +115,9 @@ class TestAdjudication:
             _finding(FAIL_OPEN_CLAIM, file="gone.py"), tmp_path,
         ) is None
 
-    def test_learned_vocab_out_dir_participates(self, tmp_path):
-        # An operator annotation in the run dir binds registry-grade:
-        # the receipt's rule id loses the -naming detection suffix.
-        import json
+    def _annotated_receipt(self, tmp_path, meta_line):
+        # Shared fixture for the annotation-role tests: a run-dir
+        # annotation on step_two, with the caller-chosen meta line.
         src = SWALLOW_PY.replace("check_token", "step_two")
         src = src.replace("verify_session", "run_pipeline")
         (tmp_path / "auth.py").write_text(src)
@@ -126,23 +125,48 @@ class TestAdjudication:
         ann = out / "annotations"
         ann.mkdir(parents=True)
         (ann / "auth.py.md").write_text(
-            "## step_two\n"
-            "<!-- meta: status=trust_boundary -->\n"
-            "Gate for the pipeline.\n",
+            f"## step_two\n{meta_line}\nGate for the pipeline.\n",
         )
         claim = (
             "the broad except swallows the step_two exception and "
             "run_pipeline fails open"
         )
-        receipt = adjudicate_finding(
+        return adjudicate_finding(
             _finding(claim, function="run_pipeline"), tmp_path,
             out_dir=out,
+        )
+
+    def test_learned_vocab_out_dir_participates(self, tmp_path):
+        # A human-grade operator annotation in the run dir binds
+        # registry-grade: the receipt's rule id loses the -naming
+        # detection suffix. Registry grade requires the provenance
+        # stamp (source=human + interactive-tty) — the note is
+        # written with the exact keys the annotate CLI stamps.
+        import json
+        receipt = self._annotated_receipt(
+            tmp_path,
+            "<!-- meta: status=trust_boundary source=human"
+            " provenance=interactive-tty tty=stdin -->",
         )
         assert receipt is not None, receipt
         assert receipt["outcome"] == "confirmed"
         assert receipt["role"]["source"] == "annotation"
         assert not receipt["rule_id"].endswith("-naming")
         assert json.dumps(receipt)  # receipt is JSON-serialisable
+
+    def test_unstamped_annotation_demotes_to_naming_variant(self, tmp_path):
+        # The CLI-bypass shape — a bare note with no source key and
+        # no provenance stamp on a freshly-written file — still binds
+        # the role, but at detection grade: the receipt confirms
+        # under the -naming rule-id variant instead of carrying
+        # operator authority.
+        receipt = self._annotated_receipt(
+            tmp_path, "<!-- meta: status=trust_boundary -->",
+        )
+        assert receipt is not None, receipt
+        assert receipt["outcome"] == "confirmed"
+        assert receipt["role"]["source"] == "annotation"
+        assert receipt["rule_id"].endswith("-naming")
 
     def test_cap_constant_sane(self):
         assert FAIL_OPEN_CHANNEL_CAP > 0
