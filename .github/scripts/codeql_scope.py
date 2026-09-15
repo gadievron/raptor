@@ -243,6 +243,18 @@ def extract_imports(
         tree = ast.parse(source, filename=str(path))
     except (SyntaxError, ValueError):
         return None
+    except OSError:
+        # A discovered path that cannot be read — in practice a
+        # dangling .py symlink: rglob lists it, read_text raises
+        # FileNotFoundError. Uncaught it crashed the whole scope job
+        # (fail-closed but misattributed, on every PR, whatever it
+        # touched). An unreadable file has no extractable imports, so
+        # report it as a parse failure like a syntactically broken
+        # one: callers count it against PARSE_FAILURE_THRESHOLD, and
+        # a CHANGED unreadable path is caught by
+        # missing_graph_covered_py (not a regular file) and fails
+        # toward full dispatch.
+        return None
 
     modules: list[str] = []
     own_package = ".".join(path.parts[:-1]) if len(path.parts) > 1 else ""

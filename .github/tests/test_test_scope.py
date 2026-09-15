@@ -401,6 +401,38 @@ class TestDispatchFailsOpen:
         result = compute_tier_dispatch(["docs/guide.md"], mini_repo)
         assert _active(result) == []
 
+    def test_dangling_symlink_tree_still_dispatches(self, tmp_path):
+        # A dangling .py symlink anywhere under a scan root used to
+        # crash graph construction (FileNotFoundError), reddening the
+        # dispatch job for EVERY PR against that tree. It must instead
+        # be inert for unrelated changes, and a PR that touches the
+        # symlink itself fails toward full dispatch (not a regular
+        # file on disk — same as a deletion).
+        (tmp_path / "core/pkgb").mkdir(parents=True)
+        (tmp_path / "core/pkgb/mod.py").write_text("V = 1\n")
+        (tmp_path / "core/pkgb/tests").mkdir()
+        (tmp_path / "core/pkgb/tests/test_mod.py").write_text(
+            "import core.pkgb.mod\n\ndef test_v():\n"
+            "    assert core.pkgb.mod.V == 1\n"
+        )
+        try:
+            (tmp_path / "core/pkgb/dangling.py").symlink_to(
+                tmp_path / "core/pkgb/no_such_target.py"
+            )
+        except OSError:
+            pytest.skip("platform cannot create symlinks")
+
+        # Unrelated edit: no crash, scoped dispatch.
+        result = compute_tier_dispatch(["core/pkgb/mod.py"], tmp_path)
+        assert Path("core/pkgb/tests/test_mod.py") in result["python"]["files"]
+        assert not _is_full_dispatch(result)
+
+        # The symlink itself changed: cannot be mapped, full dispatch.
+        result = compute_tier_dispatch(["core/pkgb/dangling.py"], tmp_path)
+        assert _is_full_dispatch(result), (
+            f"changed dangling symlink under-dispatched: only {_active(result)}"
+        )
+
     def test_root_module_edit_dispatches_importing_tests(self, mini_repo):
         # A PR editing only a repo-root entry module must dispatch the
         # tests that import it. Pre-fix the scan-root import filter

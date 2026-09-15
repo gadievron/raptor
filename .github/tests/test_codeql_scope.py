@@ -220,6 +220,23 @@ class TestBuildGraph:
         closure = transitive_dependents({Path("core/leaf.py")}, reverse)
         assert closure == {Path("core/leaf.py")}
 
+    def test_dangling_symlink_counts_as_parse_failure(self, tmp_path):
+        # A dangling .py symlink under a scan root is discovered by
+        # rglob but unreadable; uncaught, the FileNotFoundError from
+        # extract_imports crashed build_graph — and with it the whole
+        # dispatch job — on every PR while the symlink existed.
+        files = self._make_repo(tmp_path)
+        link = tmp_path / "core" / "dangling.py"
+        try:
+            link.symlink_to(tmp_path / "core" / "no_such_target.py")
+        except OSError:
+            pytest.skip("platform cannot create symlinks")
+        files = [*files, Path("core/dangling.py")]
+        reverse, failures = build_graph(files, tmp_path)
+        assert failures == 1
+        # The healthy edges are unaffected.
+        assert Path("core/mid.py") in reverse.get(Path("core/base.py"), set())
+
     def test_root_module_acquires_reverse_dependents(self, tmp_path):
         # A repo-root entry module must be able to acquire reverse-
         # dependents; with the import filter erasing its edges it was
