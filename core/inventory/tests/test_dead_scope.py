@@ -14,6 +14,16 @@ import pytest
 from core.inventory.dead_scope import detect_dead_scopes
 
 
+def _requires_lexical_grammar(language: str) -> None:
+    """Positive-detection tests need the tokenizer-grade blanker's
+    grammar; without it the detector fails closed (no ranges), which
+    the degradation tests pin separately."""
+    from core.inventory import lexical_view
+
+    if lexical_view._language_for(language) is None:
+        pytest.skip(f"{language} tree-sitter grammar not installed")
+
+
 # ---------------------------------------------------------------------------
 # Python
 # ---------------------------------------------------------------------------
@@ -78,6 +88,7 @@ def test_python_syntax_error_returns_empty():
 
 
 def test_js_if_false_block_detected():
+    _requires_lexical_grammar("javascript")
     src = (
         "function alive() { return 1; }\n"
         "if (false) {\n"
@@ -89,6 +100,7 @@ def test_js_if_false_block_detected():
 
 
 def test_js_if_zero_detected():
+    _requires_lexical_grammar("javascript")
     src = "if (0) {\n  bad();\n}\n"
     assert (1, 3) in detect_dead_scopes("javascript", src)
 
@@ -108,6 +120,7 @@ def test_js_commented_if_false_not_detected():
 
 
 def test_js_template_literals_do_not_break_brace_match():
+    _requires_lexical_grammar("javascript")
     src = (
         "if (false) {\n"
         "  function shell(input) {\n"
@@ -124,6 +137,7 @@ def test_js_template_literals_do_not_break_brace_match():
 
 
 def test_js_strings_do_not_break_brace_match():
+    _requires_lexical_grammar("javascript")
     src = (
         "throw new Error('not loadable');\n"
         "if (false) {\n"
@@ -138,8 +152,24 @@ def test_js_strings_do_not_break_brace_match():
 
 
 def test_typescript_alias_detected():
+    _requires_lexical_grammar("typescript")
     src = "if (false) {\n  bad();\n}\n"
     assert detect_dead_scopes("typescript", src) == [(1, 3)]
+
+
+@pytest.mark.parametrize("language", ["typescript", "tsx"])
+def test_ts_template_literal_type_if_false_does_not_range(language):
+    # Type-level template literal text is compile-time-erased; a
+    # dead-guard shape inside it must not range live code dead.
+    _requires_lexical_grammar(language)
+    src = (
+        "type T = `\n"
+        "if (false) {\n"
+        "}\n"
+        "`;\n"
+        "function live() { return 1; }\n"
+    )
+    assert detect_dead_scopes(language, src) == []
 
 
 # ---------------------------------------------------------------------------
@@ -740,21 +770,23 @@ def test_js_line_comment_marker_inside_string_does_not_eat_close():
     assert detect_dead_scopes("javascript", src) == [(1, 1)]
 
 
-def test_js_quote_in_regex_candidate_bails_whole_file():
-    # A regex candidate span carrying a quote makes the lexer refuse
-    # to guess regex-vs-division (a wrong guess desyncs string state
-    # for the rest of the file); the detector bails conservatively —
-    # no ranges at all, not a partial view.
+def test_js_quote_in_regex_candidate_resolved_by_grammar():
+    # The heuristic lexer refused to guess regex-vs-division through a
+    # quote-carrying candidate span and bailed on the whole file. The
+    # grammar-backed view disambiguates ``/"/`` as a regex literal, so
+    # the GENUINE dead-if on line 1 is detected instead of dropped.
+    _requires_lexical_grammar("javascript")
     src = (
         'if (false) { var s = "//"; }\n'
         "function live() {\n"
         '  var q = /"/;\n'
         "}\n"
     )
-    assert detect_dead_scopes("javascript", src) == []
+    assert detect_dead_scopes("javascript", src) == [(1, 1)]
 
 
 def test_js_regex_literal_braces_do_not_move_depth():
+    _requires_lexical_grammar("javascript")
     src = (
         "if (false) {\n"
         "  var m = /}}/;\n"
@@ -767,6 +799,7 @@ def test_js_regex_literal_braces_do_not_move_depth():
 
 
 def test_js_division_is_not_a_regex_literal():
+    _requires_lexical_grammar("javascript")
     src = (
         "var a = b / 2 / c;\n"
         "if (false) {\n"
@@ -777,10 +810,8 @@ def test_js_division_is_not_a_regex_literal():
 
 
 def test_js_regex_after_return_keyword():
+    _requires_lexical_grammar("javascript")
     # Keyword-preceded `/` is a regex; its brace must not move depth.
-    # (A quote/backtick INSIDE a candidate span bails the whole file
-    # instead — pinned in test_js_lexer.py — so the fixture stays
-    # quote-free.)
     src = (
         "function f() { return /}{/; }\n"
         "if (false) {\n"
@@ -810,3 +841,102 @@ def test_ruby_then_with_multiline_body_still_detected():
         "end\n"
     )
     assert detect_dead_scopes("ruby", src) == [(2, 2)]
+# ---------------------------------------------------------------------------
+# JS hostile-shape fixtures: string/template data must never mint a
+# dead range over live code, in either regex-vs-division direction.
+# All fixtures are valid, node-verified JavaScript.
+# ---------------------------------------------------------------------------
+
+
+def test_js_real_regex_after_unbraced_if_header_no_false_range():
+    # `/x`y/` after the `)` of an unbraced if header is a REAL regex.
+    # Reading it as division lets its backtick open a phantom template
+    # and the later template's data (`if (false) {`) lex as code —
+    # a fabricated dead range over the live function.
+    src = (
+        "if (a) /x`y/.test(b);\n"
+        "function liveTarget() { return 2; }\n"
+        "const t = `if (false) {\n"
+        "  x\n"
+        "}`;\n"
+    )
+    assert detect_dead_scopes("javascript", src) == []
+
+
+def test_js_division_terminating_at_comment_opener_no_false_range():
+    # `{a:1} /2; // don`t` — the `/` after the object literal is real
+    # division. A fake-regex read ending at the comment opener's first
+    # slash exposes the comment TAIL as code; its backtick flips
+    # template parity for the REST OF THE FILE (not one line), so the
+    # later template's `if (false) {` data ranged the live function.
+    src = (
+        "x = {a:1} /2; // don`t\n"
+        "function liveTarget() { return 1; }\n"
+        "const t = `if (false) {\n"
+        "  x\n"
+        "}`;\n"
+    )
+    assert detect_dead_scopes("javascript", src) == []
+
+
+def test_js_no_false_dead_scope_from_template_data():
+    # The `if (false) {` on line 3 is template DATA; backdoor() is a
+    # live top-level function (executes under node).
+    src = (
+        "const a = `${`}`}`;\n"
+        "const b = `\n"
+        "if (false) {\n"
+        "`; // `\n"
+        "function backdoor(req) { return req.q; }\n"
+        "const c = `${`}`}`;\n"
+        "const d = `\n"
+        "}\n"
+        "`; // `\n"
+    )
+    assert detect_dead_scopes("javascript", src) == []
+
+
+def test_js_real_dead_scope_after_nested_interpolation():
+    # The conservative direction must not overcorrect: a genuine
+    # if-false block AFTER a hostile-nesting template is still found.
+    _requires_lexical_grammar("javascript")
+    src = (
+        'const x = `${"}"}ok`;\n'
+        "if (false) {\n"
+        "  dead();\n"
+        "}\n"
+    )
+    assert detect_dead_scopes("javascript", src) == [(2, 4)]
+
+
+def test_js_backtick_after_division_no_false_dead_range():
+    # `x = {a:1} /`/;` is real division by a template literal whose
+    # data merely looks like a dead-if opener. node: prints LOADED OK.
+    src = (
+        "x = {a:1} /`/;\n"
+        "if (false) {\n"
+        "`;\n"
+        "function backdoor() { return 7; }\n"
+        "q = `}`;\n"
+        'console.log("LOADED OK", backdoor());\n'
+    )
+    assert detect_dead_scopes("javascript", src) == []
+
+
+def test_js_parse_error_bails_whole_file():
+    # Broken JS: recovered token boundaries are guesses — no ranges.
+    src = "function f( {\nif (false) {\n  x();\n}\n"
+    assert detect_dead_scopes("javascript", src) == []
+
+
+def test_js_grammar_absent_fails_closed(monkeypatch):
+    # Without the grammar the detector must report nothing (bail),
+    # never fall back to a guessed lexical view.
+    from core.inventory import lexical_view
+
+    monkeypatch.setattr(
+        lexical_view._ts_cache, "import_grammar", lambda name: None,
+    )
+    monkeypatch.setattr(lexical_view, "_VALIDATED", {})
+    src = "if (false) {\n  dead();\n}\n"
+    assert detect_dead_scopes("javascript", src) == []

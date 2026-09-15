@@ -86,7 +86,7 @@ def detect_module_load_abort(
         if language == "python":
             return _detect_python(content)
         if language in ("javascript", "typescript", "tsx"):
-            return _detect_javascript(content)
+            return _detect_javascript(language, content)
         if language == "go":
             return _detect_go(content)
         if language == "rust":
@@ -178,10 +178,11 @@ def _py_summarise_raise(node: ast.Raise) -> str:
 
 
 # ---------------------------------------------------------------------------
-# JavaScript / TypeScript — regex with brace-depth tracking. No AST
-# in stdlib; pulling tree-sitter just for this detector is overkill
-# (the call-graph extractor already does that work). False-negative
-# bias on ambiguous cases is acceptable.
+# JavaScript / TypeScript — regex with brace-depth tracking over the
+# tokenizer-grade blanked view (comments, strings, templates, regex
+# literals, JSX text all spaced out by the shared substrate). No
+# grammar / parse errors → bail on the whole file (no abort — toward
+# no suppression).
 # ---------------------------------------------------------------------------
 
 
@@ -196,25 +197,29 @@ _JS_THROW_NEW = re.compile(
 _JS_STMT_BOUNDARY = frozenset({";", "{", "}"})
 
 
-def _detect_javascript(content: str) -> ModuleLoadAbort | None:
+def _detect_javascript(
+    language: str, content: str,
+) -> ModuleLoadAbort | None:
     # Blank ALL non-code text (comments, strings, template literals,
-    # regex literals) in one shared-lexer pass, preserving newlines so
-    # the line-number report stays valid. Comment-only or string-only
-    # stripping is not enough: braces inside a REGEX literal
-    # (``var r = /}}/;``) corrupted the depth counter, so a throw
-    # inside a never-called function read as depth-zero — a
-    # false-positive whole-file abort gate that silenced every finding
-    # below it. Same class for a string with an unbalanced brace
-    # (``const s = "}";``).
-    from core.inventory.js_lexer import JsLexAmbiguityError, blank_js_noncode
+    # regex literals, JSX text) via the tokenizer-grade substrate,
+    # preserving newlines so the line-number report stays valid.
+    # Comment-only or string-only stripping is not enough: braces
+    # inside a REGEX literal (``var r = /}}/;``) corrupted the depth
+    # counter, so a throw inside a never-called function read as
+    # depth-zero — a false-positive whole-file abort gate that
+    # silenced every finding below it. Same class for a string with
+    # an unbalanced brace (``const s = "}";``).
+    from core.inventory.lexical_view import LexicalRefusal, blank_noncode
 
     try:
-        stripped = blank_js_noncode(content)
-    except JsLexAmbiguityError:
-        # The lexer refused to guess regex-vs-division through a
-        # quote/backtick-carrying candidate span; a partial view could
-        # fabricate a whole-file abort over live code. Bail on the
-        # whole file: no abort — toward no suppression.
+        stripped = blank_noncode(language, content)
+    except LexicalRefusal:
+        # Parse errors: recovered token boundaries are guesses; a
+        # partial view could fabricate a whole-file abort over live
+        # code. Bail on the whole file — toward no suppression.
+        return None
+    if stripped is None:
+        # Grammar unavailable — cannot vouch a code view; no witness.
         return None
     # Walk character-by-character tracking brace and paren depth.
     # An unconditional module-level throw is one at depth zero

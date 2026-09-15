@@ -72,7 +72,7 @@ def detect_dead_scopes(language: str, content: str) -> list[DeadRange]:
         if language == "python":
             return _detect_python(content)
         if language in ("javascript", "typescript", "tsx"):
-            return _detect_javascript(content)
+            return _detect_javascript(language, content)
         if language in ("c", "cpp"):
             return _detect_c(content)
         if language == "rust":
@@ -133,30 +133,32 @@ def _py_end_line(stmt: ast.stmt) -> int:
 # ---------------------------------------------------------------------------
 # JavaScript / TypeScript — brace-tracked ``if (false) {…}`` blocks.
 # Regex finds the guard header; manual brace matching finds the block
-# extent (no stdlib JS AST; tree-sitter would be heavier than needed).
-# Non-code text is blanked by the shared single-pass lexer
-# (:func:`core.inventory.js_lexer.blank_js_noncode`) — the previous
-# two-phase comments-then-strings regex strip diverged from a real JS
-# lexer (a ``//`` inside a string ate the dead-if's closing brace; a
-# regex literal containing a quote resynced string state), letting a
-# hostile repo range live code as lexical_dead, a hard-suppress
-# witness.
+# extent. Non-code text (comments, strings, templates, regex literals,
+# JSX text) is blanked by the tokenizer-grade shared substrate
+# (:func:`core.inventory.lexical_view.blank_noncode`) — hand-rolled
+# lexing repeatedly diverged from a real JS lexer on hostile shapes
+# (regex-vs-division guesses, comment openers consumed by fake regex
+# terminators), letting a hostile repo range live code as
+# lexical_dead, a hard-suppress witness. No grammar / parse errors →
+# bail on the whole file (no ranges — toward no suppression).
 # ---------------------------------------------------------------------------
 
 
 _JS_DEAD_IF = re.compile(r"\bif\s*\(\s*(?:false|0)\s*\)\s*\{")
 
 
-def _detect_javascript(content: str) -> list[DeadRange]:
-    from core.inventory.js_lexer import JsLexAmbiguityError, blank_js_noncode
+def _detect_javascript(language: str, content: str) -> list[DeadRange]:
+    from core.inventory.lexical_view import LexicalRefusal, blank_noncode
 
     try:
-        stripped = blank_js_noncode(content)
-    except JsLexAmbiguityError:
-        # The lexer refused to guess regex-vs-division through a
-        # quote/backtick-carrying candidate span; a partial view could
-        # range live code as dead (a hard-suppress witness). Bail on
-        # the whole file: no ranges — toward no suppression.
+        stripped = blank_noncode(language, content)
+    except LexicalRefusal:
+        # Parse errors: recovered token boundaries are guesses; a
+        # partial view could range live code as dead (a hard-suppress
+        # witness). Bail on the whole file — toward no suppression.
+        return []
+    if stripped is None:
+        # Grammar unavailable — cannot vouch a code view; no witness.
         return []
     ranges: list[DeadRange] = []
     for m in _JS_DEAD_IF.finditer(stripped):

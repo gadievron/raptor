@@ -9,11 +9,24 @@ from __future__ import annotations
 
 import textwrap
 
+import pytest
+
 from core.inventory.module_load_abort import (
     ModuleLoadAbort,
     _go_panic_is_unconditional,
     detect_module_load_abort,
 )
+
+
+def _requires_lexical_grammar(language: str) -> None:
+    """Positive-detection tests need the tokenizer-grade blanker's
+    grammar; without it the detector fails closed (no abort), which
+    the degradation tests pin separately."""
+    from core.inventory import lexical_view
+
+    if lexical_view._language_for(language) is None:
+        pytest.skip(f"{language} tree-sitter grammar not installed")
+
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +121,7 @@ def test_python_dotted_exception_name_fires():
 
 
 def test_js_top_level_throw_fires():
+    _requires_lexical_grammar("javascript")
     src = (
         "const x = 1;\n"
         "throw new Error('module disabled');\n"
@@ -120,10 +134,27 @@ def test_js_top_level_throw_fires():
 
 
 def test_js_typescript_alias_fires():
+    _requires_lexical_grammar("typescript")
     src = "throw new TypeError('disabled');\n"
     abort = detect_module_load_abort("typescript", src)
     assert abort is not None
     assert abort.summary == "throw new TypeError"
+
+
+@pytest.mark.parametrize("language", ["typescript", "tsx"])
+def test_ts_template_literal_type_throw_does_not_fire(language):
+    # Type-level template literal: its text is erased at compile time,
+    # but the node sits at depth 0 like a value template. Hostile (or
+    # merely string-typed) literal content must not mint a whole-file
+    # abort on a clean-parsing, live TypeScript file.
+    _requires_lexical_grammar(language)
+    src = (
+        "type T = `\n"
+        'x;throw new Error("q");\n'
+        "`;\n"
+        "function live() { return 1; }\n"
+    )
+    assert detect_module_load_abort(language, src) is None
 
 
 def test_js_throw_inside_function_does_not_fire():
@@ -169,6 +200,7 @@ def test_js_throw_in_fn_with_string_brace_does_not_fire():
 
 
 def test_js_template_literal_braces_do_not_break_detection():
+    _requires_lexical_grammar("javascript")
     # A template literal with ``${…}`` braces before a real top-level
     # throw must not desync the walker — the throw still fires.
     src = (
@@ -581,6 +613,7 @@ def test_js_conditional_throw_multiline_not_detected():
 
 
 def test_js_bare_throw_still_detected():
+    _requires_lexical_grammar("javascript")
     code = "throw new Error('module not supported')"
     result = detect_module_load_abort("javascript", code)
     assert result is not None
@@ -588,6 +621,7 @@ def test_js_bare_throw_still_detected():
 
 
 def test_js_throw_after_semicolon_detected():
+    _requires_lexical_grammar("javascript")
     code = "const ver = process.version;\nthrow new RangeError('bad version')"
     result = detect_module_load_abort("javascript", code)
     assert result is not None
@@ -595,6 +629,7 @@ def test_js_throw_after_semicolon_detected():
 
 
 def test_js_throw_after_block_detected():
+    _requires_lexical_grammar("javascript")
     code = textwrap.dedent("""\
         if (false) {
             console.log('skip');
@@ -706,6 +741,7 @@ def test_js_string_unbalanced_brace_does_not_fake_module_scope():
 
 
 def test_js_module_scope_throw_after_regex_still_detected():
+    _requires_lexical_grammar("javascript")
     code = (
         "var r = /}{/;\n"
         'throw new Error("nope");\n'
@@ -714,3 +750,94 @@ def test_js_module_scope_throw_after_regex_still_detected():
     result = detect_module_load_abort("javascript", code)
     assert result is not None
     assert result.line == 2
+# ---------------------------------------------------------------------------
+# JS hostile-shape fixtures: string/template data must never fabricate
+# a whole-file abort, in either regex-vs-division direction. All
+# fixtures are valid, node-verified JavaScript.
+# ---------------------------------------------------------------------------
+
+
+def test_js_real_regex_after_unbraced_if_header_no_fabricated_abort():
+    # `/x`y/` after the `)` of an unbraced if header is a REAL regex;
+    # a division read lets its backtick open a phantom template and the
+    # later template's `; throw new Error(...)` data lex as code.
+    src = (
+        "if (a) /x`y/.test(b);\n"
+        "function live() { return 2; }\n"
+        "const t = `x;\n"
+        'throw new Error("nope");\n'
+        "`;\n"
+    )
+    assert detect_module_load_abort("javascript", src) is None
+
+
+def test_js_division_terminating_at_comment_opener_no_fabricated_abort():
+    # `{a:1} /2; // don`t` — a fake-regex read ending at the comment
+    # opener's first slash exposes the comment tail as code; its
+    # backtick flips template parity file-wide and the later template's
+    # abort-shaped data lexes as code.
+    src = (
+        "x = {a:1} /2; // don`t\n"
+        "function live() { return 1; }\n"
+        "const t = `x;\n"
+        'throw new Error("nope");\n'
+        "`;\n"
+    )
+    assert detect_module_load_abort("javascript", src) is None
+
+
+def test_js_no_fabricated_abort_from_template_data():
+    # `a` is the string "}"; `b` holds STRING DATA that merely looks
+    # like a top-level throw. The module loads fine under node.
+    src = (
+        "const a = `${`}`}`;\n"
+        "const b = `\n"
+        "; throw new Boom();\n"
+        "`;\n"
+        "function live(req) { return req.q; }\n"
+    )
+    assert detect_module_load_abort("javascript", src) is None
+
+
+def test_js_backtick_after_division_no_fabricated_abort():
+    # `x = {a:1} /`/;` is real division by a template literal; the
+    # throw on line 2 is template DATA. node: prints LOADED OK 42.
+    src = (
+        "x = {a:1} /`/;\n"
+        "throw new Boom();\n"
+        "`;\n"
+        "function live() { return 42; }\n"
+        'console.log("LOADED OK", live());\n'
+    )
+    assert detect_module_load_abort("javascript", src) is None
+
+
+def test_js_postfix_increment_division_no_fabricated_abort():
+    # Same class through the `++` preceder: `i++ /`/;` is division by
+    # a template.
+    src = (
+        "let i = 2;\n"
+        "let n = i++ /`/;\n"
+        "throw new Boom();\n"
+        "`;\n"
+        "function live() { return 1; }\n"
+    )
+    assert detect_module_load_abort("javascript", src) is None
+
+
+def test_js_parse_error_bails_whole_file():
+    src = "function f( {\nthrow new Error('x');\n"
+    assert detect_module_load_abort("javascript", src) is None
+
+
+def test_js_grammar_absent_fails_closed(monkeypatch):
+    # Without the grammar the detector must report nothing (bail),
+    # never fall back to a guessed lexical view.
+    from core.inventory import lexical_view
+
+    monkeypatch.setattr(
+        lexical_view._ts_cache, "import_grammar", lambda name: None,
+    )
+    monkeypatch.setattr(lexical_view, "_VALIDATED", {})
+    src = "throw new Error('module disabled');\n"
+    assert detect_module_load_abort("javascript", src) is None
