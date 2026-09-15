@@ -200,3 +200,46 @@ class TestConditionLabelShapes:
         from core.analysis.cfg_conditions import _CONDITION_LABEL_RE
         m = _CONDITION_LABEL_RE.match("If (x > 0)")
         assert m is not None and m.group(1) == "x > 0"
+
+
+class TestLoopHeaderPolarity:
+    """Python while/for headers: the TRUE-polarity edge must reach the
+    BODY, the negated edge the loop exit. The exit join shares the
+    header's line, so the proximity swap (distance 0) used to hand
+    TRUE to the exit — an inverted guard for every Python loop, which
+    the first polarity-trusting consumer (SMT path feasibility) would
+    inherit."""
+
+    def test_while_true_edge_reaches_body(self):
+        from core.analysis.cfg_builder import build_python_cfg
+        src = (
+            "def handle(x):\n"
+            "    while x < 10:\n"
+            "        body(x)\n"
+            "    after(x)\n"
+        )
+        cfg = build_python_cfg(src, "handle")
+        edges = extract_conditions_from_cfg(cfg)
+        cond_edges = [e for e in edges if e.condition is not None
+                      and e.condition.text == "x < 10"]
+        assert cond_edges
+        body_line = 3
+        true_edges = [e for e in cond_edges if e.condition.polarity]
+        false_edges = [e for e in cond_edges if not e.condition.polarity]
+        assert any(e.dst_line == body_line for e in true_edges)
+        assert all(e.dst_line != body_line for e in false_edges)
+
+    def test_if_then_still_true_polarity(self):
+        from core.analysis.cfg_builder import build_python_cfg
+        src = (
+            "def handle(x):\n"
+            "    if x > 0:\n"
+            "        body(x)\n"
+            "    else:\n"
+            "        other(x)\n"
+        )
+        cfg = build_python_cfg(src, "handle")
+        edges = extract_conditions_from_cfg(cfg)
+        true_edges = [e for e in edges if e.condition is not None
+                      and e.condition.polarity]
+        assert any(e.dst_line == 3 for e in true_edges)

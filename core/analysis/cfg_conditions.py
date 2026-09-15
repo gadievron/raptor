@@ -140,11 +140,16 @@ def extract_conditions_from_cfg(cfg) -> list[ConditionEdge]:
             # Determine true/false successor.  CFG builders link the
             # then-body first (closest line to the condition node) and
             # the else/fallthrough second.  Verify by line proximity;
-            # if the second successor is closer, swap.
+            # if the second successor is closer, swap. Same-line
+            # successors never justify a swap: the Python builder's
+            # while/for exit JOIN carries the header's own lineno
+            # (distance 0), so the proximity test would hand the
+            # TRUE-polarity edge to the loop EXIT and the negated
+            # edge to the body — inverted for every Python loop.
             true_succ, false_succ = successors[0], successors[1]
             d_false = abs(false_succ.lineno - node.lineno)
             d_true = abs(true_succ.lineno - node.lineno)
-            if d_false < d_true:
+            if d_false < d_true and false_succ.lineno != node.lineno:
                 true_succ, false_succ = false_succ, true_succ
 
             edges.append(ConditionEdge(
