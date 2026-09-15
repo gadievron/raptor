@@ -29,6 +29,12 @@ name: SCA-gated self-bump
 # Auth surface: needs ``contents: write`` + ``pull-requests: write``
 # to open the bump PR. Same surface as Dependabot. Auto-merge is
 # deliberately NOT enabled — operator reviews the PR before merging.
+# Permissions are job-wide by GitHub's model (no per-step grants), so
+# the write token is kept away from the phases that parse untrusted
+# registry data two ways: checkout runs with persist-credentials:false
+# (nothing in .git/config), and only the publish steps (push branch,
+# create/update PR) receive the token via env — the harden / bump
+# steps run tokenless (same pattern as refresh-sca-data.yml).
 #
 # Branch-protection assumption: this workflow's safety relies on
 # ``main`` having branch protection that requires PR review before
@@ -111,8 +117,15 @@ jobs:
 
       - name: Phase 1 — harden Python / Debian / npm manifests
         id: harden
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # higher rate limits for OSV / GitHub queries
+        # Deliberately NO GITHUB_TOKEN here: this phase fetches and
+        # parses OSV / registry / npm / PyPI metadata — attacker-
+        # influenceable content — and a write-capable token in its
+        # process env would re-open exactly the exfil surface the
+        # persist-credentials:false checkout closes one layer down.
+        # Cost: unauthenticated GitHub API rate limits for the
+        # hash-pin lookups (the code degrades gracefully); the write
+        # token is confined to the publish steps, mirroring the
+        # refresh-sca-* workflows.
         run: |
           set -euo pipefail
           # Subcommand: ``raptor-sca fix --harden`` — verified via
@@ -161,8 +174,7 @@ jobs:
 
       - name: Phase 2 — bump non-manifest surfaces
         id: bump
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # No GITHUB_TOKEN — same registry-parsing exposure as Phase 1.
         run: |
           set -euo pipefail
           # ``--apply`` writes Clean-verdict bumps in place. Review /
