@@ -94,10 +94,12 @@ def detect_JAVA_HOME() -> str | None:
         macos_helper = "/usr/libexec/java_home"
         if os.path.isfile(macos_helper) and os.access(macos_helper, os.X_OK):
             try:
-                import subprocess
-                r = subprocess.run(
+                # Trusted-probe doctrine (see build_detector._PROBE_CWD):
+                # safe env + neutral cwd, never the caller's.
+                from core.sandbox import run_trusted
+                r = run_trusted(
                     [macos_helper], capture_output=True, text=True, timeout=5,
-                    check=False,
+                    cwd=os.sep,
                 )
                 if r.returncode == 0 and r.stdout.strip():
                     candidate = r.stdout.strip()
@@ -180,11 +182,12 @@ def detect_RUSTUP_HOME() -> str | None:
     rustup_bin = shutil.which("rustup")
     if rustup_bin:
         try:
-            import subprocess
-            r = subprocess.run(
+            # Trusted-probe doctrine: safe env + neutral cwd.
+            from core.sandbox import run_trusted
+            r = run_trusted(
                 [rustup_bin, "show", "home"],
                 capture_output=True, text=True, timeout=5,
-                check=False,
+                cwd=os.sep,
             )
             if r.returncode == 0 and r.stdout.strip():
                 candidate = r.stdout.strip()
@@ -305,13 +308,18 @@ def has_libasan() -> bool:
     if shutil.which("gcc") is None:
         return False
     try:
-        result = subprocess.run(
+        # Trusted-probe doctrine: safe env + neutral cwd (a probe run
+        # with the caller's cwd inside a scanned repo picks up repo
+        # config; with its env, loader-injection vars).
+        from core.sandbox import run_trusted
+        result = run_trusted(
             ["gcc", "-fsanitize=address", "-x", "c", "-",
              "-o", "/dev/null"],
             input="int main(void){return 0;}",
             text=True,
             capture_output=True,
             timeout=10,
+            cwd=os.sep,
         )
         return result.returncode == 0
     except Exception:  # noqa: BLE001

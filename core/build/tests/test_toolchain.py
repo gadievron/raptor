@@ -113,7 +113,7 @@ class TestDetectRustupHome(unittest.TestCase):
             stderr="",
         )
         with patch("shutil.which", return_value="/usr/local/bin/rustup"), \
-             patch("subprocess.run", return_value=stub), \
+             patch("core.sandbox.run_trusted", return_value=stub), \
              patch("os.path.isdir", lambda p: p == "/home/user/.rustup"):
             self.assertEqual(
                 toolchain.detect_RUSTUP_HOME(),
