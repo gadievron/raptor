@@ -659,8 +659,20 @@ class QueryRunner:
                 logger.error("✗ Analysis failed for %s", language)
                 # `or ""` for the same reason as above — `result.stderr`
                 # may be None on some sandbox failure modes (timeout
-                # mid-stream, killed before write).
-                logger.error((result.stderr or "")[:500])
+                # mid-stream, killed before write). Escaped because
+                # analyze stderr can quote hostile source from the
+                # scanned repo (extractor diagnostics) — control/bidi
+                # bytes must not reach the operator's terminal raw.
+                from core.security.log_sanitisation import (
+                    escape_nonprintable,
+                )
+                logger.error(
+                    "%s",
+                    escape_nonprintable(
+                        (result.stderr or "")[:500],
+                        preserve_newlines=True,
+                    ),
+                )
 
                 return QueryResult(
                     success=False,
@@ -1215,12 +1227,21 @@ class QueryRunner:
                     install_err = (
                         install_proc.stderr or install_proc.stdout or ""
                     ).strip()[:300]
+                    # Escaped at the echo: install stderr relays
+                    # registry-influenced content — control/bidi
+                    # bytes must not reach the operator terminal raw
+                    # (same contract as the analyze stderr echoes).
+                    from core.security.log_sanitisation import (
+                        escape_nonprintable,
+                    )
                     logger.warning(
                         "%s pack install (%s) returned %s: %s",
                         label,
                         lang,
                         install_proc.returncode,
-                        install_err
+                        escape_nonprintable(
+                            install_err, preserve_newlines=True,
+                        ),
                     )
             except Exception as e:  # noqa: BLE001
                 logger.warning("%s pack install (%s) raised: %s", label, lang, e)
@@ -1282,7 +1303,17 @@ class QueryRunner:
             )
 
         err = (proc.stderr or proc.stdout or "").strip()[:300]
-        logger.warning("%s (%s) failed: %s", label, lang, err)
+        # Escaped at the echo only: analyze stderr quotes hostile
+        # source from the scanned repo (extractor diagnostics), so
+        # control/bidi bytes must not reach the operator terminal raw.
+        # The stored error list keeps the raw string — it is the data
+        # plane consumers (RefinementFeedback.tool_errors, reports)
+        # sanitise at their own render sites.
+        from core.security.log_sanitisation import escape_nonprintable
+        logger.warning(
+            "%s (%s) failed: %s", label, lang,
+            escape_nonprintable(err, preserve_newlines=True),
+        )
         return QueryResult(
             success=False, language=lang,
             database_path=db, sarif_path=None, findings_count=0,

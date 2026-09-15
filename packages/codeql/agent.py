@@ -1072,7 +1072,16 @@ class CodeQLAgent:
         if result.errors:
             print(f"\nErrors encountered: {len(result.errors)}")
             for error in result.errors[:5]:  # Show first 5 errors
-                print(f"  - {error[:100]}")
+                # result.errors carry codeql/build stderr — output of
+                # the scanned repo's build scripts on traced builds and
+                # extractor diagnostics quoting hostile source. Escape
+                # before it reaches the operator's terminal (ANSI/OSC/
+                # bidi injection); core.logging does no control
+                # scrubbing of its own.
+                from core.security.log_sanitisation import (
+                    sanitise_for_terminal,
+                )
+                print(f"  - {sanitise_for_terminal(error, max_len=100)}")
 
         print(f"\nOutput directory: {self.out_dir}")
         print(f"{'=' * 70}\n")
@@ -1150,11 +1159,31 @@ class CodeQLAgent:
                         if not p:
                             return ""
                         return p.replace("\\", "/").rsplit("/", 1)[-1]
+
+                    # Rule ids, messages, and file paths come from
+                    # SARIF over the untrusted repo and are printed to
+                    # the operator's terminal by _print_dataflow_table
+                    # — escape control/bidi characters at extraction so
+                    # every consumer of the example dicts gets inert
+                    # text.
+                    from core.security.log_sanitisation import (
+                        sanitise_for_terminal as _term,
+                    )
                     examples.append({
-                        "rule": rule_id.split("/")[-1] if "/" in rule_id else rule_id,
-                        "message": message[:60] + "..." if len(message) > 60 else message,
-                        "source": f"{_basename(source_file)}:{source_line}",
-                        "sink": f"{_basename(sink_file)}:{sink_line}",
+                        "rule": _term(
+                            rule_id.split("/")[-1] if "/" in rule_id
+                            else rule_id,
+                            max_len=64,
+                        ),
+                        "message": _term(message, max_len=60),
+                        "source": _term(
+                            f"{_basename(source_file)}:{source_line}",
+                            max_len=80,
+                        ),
+                        "sink": _term(
+                            f"{_basename(sink_file)}:{sink_line}",
+                            max_len=80,
+                        ),
                         "steps": len(locations)
                     })
 

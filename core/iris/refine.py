@@ -260,7 +260,17 @@ def refine_loop(
             # so abort the loop loudly.  An uncounted single crash
             # (``tool_runner_crashed``) keeps its retry-next-round
             # semantics — a transient tool crash may recover.
-            cause = "; ".join(feedback.tool_errors[:3]) or "no error detail"
+            # Escaped for the log echoes below: tool_errors now carry
+            # raw tool stderr (the CodeQL lane stores analyze stderr,
+            # which quotes hostile source from the scanned repo) —
+            # control/bidi bytes must not reach the operator terminal
+            # raw. Newlines are escaped too (cause is embedded
+            # mid-line; a raw newline would forge log lines). The
+            # stored feedback.tool_errors list stays raw (data plane).
+            from core.security.log_sanitisation import escape_nonprintable
+            cause = escape_nonprintable(
+                "; ".join(feedback.tool_errors[:3]) or "no error detail",
+            )
             if feedback.n_attempts > 0:
                 logger.warning(
                     "iris.refine: round %d — all %d evaluation call(s) "

@@ -1398,7 +1398,20 @@ class DatabaseManager:
                 if result.stderr:
                     errors.append(result.stderr[:1000])  # Truncate long errors
                 logger.error("✗ Database creation failed for %s", language)
-                logger.error((result.stderr or "")[:500])
+                # stderr is build/extractor output over the untrusted
+                # repo (traced builds run its build scripts) — escape
+                # control/bidi bytes before the operator's terminal;
+                # newlines stay for readability.
+                from core.security.log_sanitisation import (
+                    escape_nonprintable,
+                )
+                logger.error(
+                    "%s",
+                    escape_nonprintable(
+                        (result.stderr or "")[:500],
+                        preserve_newlines=True,
+                    ),
+                )
                 # Surface the extractor's own log before cleanup: the
                 # CLI's stderr carries only "autobuild failed" while the
                 # actual traceback (missing interpreter, denied syscall,
@@ -1408,7 +1421,12 @@ class DatabaseManager:
                 _diag = self._salvage_creation_log(staging_path)
                 if _diag:
                     errors.append(_diag[:2000])
-                    logger.error("extractor log tail:\n%s", _diag[:2000])
+                    logger.error(
+                        "extractor log tail:\n%s",
+                        escape_nonprintable(
+                            _diag[:2000], preserve_newlines=True,
+                        ),
+                    )
                 # Preserve the full staging dir for inspection under a
                 # name the stale-marker GC already reaps (1h TTL), so
                 # diagnostics survive without accumulating: keep only

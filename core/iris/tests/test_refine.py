@@ -411,6 +411,34 @@ class TestZeroSignalRound:
         assert "all 3 evaluation call(s) failed" in warning.message
         assert not any("fixpoint" in m for m in messages)
 
+    def test_zero_signal_cause_is_terminal_escaped(self, caplog):
+        """tool_errors carry raw tool stderr (the CodeQL lane stores
+        analyze stderr, which quotes hostile source from the scanned
+        repo) — the zero-signal warning echoes must escape control /
+        bidi bytes AND newlines (the cause is embedded mid-line; a raw
+        newline would forge log lines)."""
+        hostile = "\x1b]0;pwned\x07\x1b[31mred\nFAKE LINE"
+
+        def dead_runner(specs):
+            return RefinementFeedback(
+                tool_errors=[hostile], n_attempts=1, n_successes=0,
+            )
+
+        def uncounted_runner(specs):
+            return RefinementFeedback(tool_errors=[hostile])
+
+        for runner in (dead_runner, uncounted_runner):
+            caplog.clear()
+            with caplog.at_level(logging.WARNING, logger="core.iris.refine"):
+                refine_loop(
+                    [_cand(fn="exec_cmd")], None, runner, max_rounds=1,
+                )
+            assert "\x1b" not in caplog.text
+            assert "\x07" not in caplog.text
+            assert "FAKE LINE" in caplog.text   # evidence kept…
+            assert "\\x0a" in caplog.text       # …but the newline escaped
+            assert "\\x1b" in caplog.text
+
     def test_all_calls_failed_store_untouched(self, tmp_path):
         from core.iris.store import persist_refined_specs, save_specs
 
