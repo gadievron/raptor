@@ -410,3 +410,31 @@ class TestMarkdownInertness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestProvenanceMdScrub(unittest.TestCase):
+    def test_hostile_command_defanged_in_provenance_md(self):
+        # .raptor-run.json is child-writable during the run and
+        # restored verbatim by /project import — a hostile `command`
+        # must not land in provenance.md as live markdown / controls.
+        hostile = "# forged heading\n\x1b]0;pwned\x07scan"
+        with TemporaryDirectory() as d:
+            output_dir = Path(d) / "project"
+            output_dir.mkdir()
+            run_dir = output_dir / "scan-20260401"
+            start_run(run_dir, "scan")
+            complete_run(run_dir)
+            meta_path = run_dir / ".raptor-run.json"
+            meta = json.loads(meta_path.read_text())
+            meta["command"] = hostile
+            meta_path.write_text(json.dumps(meta))
+            (run_dir / "findings.json").write_text("[]")
+            p = Project(name="test", target=str(Path(d) / "code"),
+                        output_dir=str(output_dir))
+            stats = generate_project_report(p)
+            prov = (Path(stats["report_dir"]) / "provenance.md").read_text()
+        self.assertNotIn("\x1b", prov)
+        self.assertNotIn("\x07", prov)
+        # Line-leading '#' is defanged — no forged heading renders.
+        self.assertNotIn("\n# forged heading", prov)
+        self.assertIn("scan", prov)

@@ -736,7 +736,13 @@ def main() -> None:
                            description=args.description,
                            output_dir=args.output_dir,
                            binaries=getattr(args, "binary", None))
-            print(f"Created project '{p.name}' → {p.output_dir}")
+            # Echo registry round-trip values defensively — the same
+            # fields render from imported archives elsewhere, and the
+            # print surface should not depend on create's validation.
+            from core.security.log_sanitisation import sanitise_for_terminal
+            _pname = sanitise_for_terminal(p.name, max_len=120)
+            print(f"Created project '{_pname}' → "
+                  f"{sanitise_for_terminal(str(p.output_dir), max_len=256)}")
             # Creation activates for the creating session and bumps the
             # last-activated default — binding
             # first, bookmark second, same discipline as `use`.
@@ -760,12 +766,13 @@ def main() -> None:
             except OSError as e:
                 print(f"  WARNING: could not update the last-activated "
                       f"default ({e}) — new sessions will NOT default "
-                      f"to '{p.name}'.")
+                      f"to '{_pname}'.")
             else:
                 print(_bound_msg)
             _p_binaries = getattr(p, "binaries", None) or []
             if _p_binaries:
-                print(f"  binaries: {', '.join(_p_binaries)}")
+                print("  binaries: "
+                      f"{sanitise_for_terminal(', '.join(_p_binaries), max_len=512)}")
             # Print the catalog tuning block AFTER the create
             # confirmation — operator sees what RAPTOR will use as
             # defaults when /scan, /agentic, /codeql etc. run on
@@ -1020,8 +1027,8 @@ def main() -> None:
                 from core.security.log_sanitisation import (
                     sanitise_for_terminal,
                 )
-                desc = (f"  {sanitise_for_terminal(p.description, max_len=60)}"
-                        if p.description else "")
+                desc = sanitise_for_terminal(p.description or "", max_len=60)
+                desc = f"  {desc}" if desc else ""
                 tgt = sanitise_for_terminal(str(p.target or ""), max_len=120)
                 print(f"{marker}{p.name:<{col}s}{desc:30s}  {tgt}")
             if any_marker:
@@ -2191,12 +2198,15 @@ def _print_status(project) -> None:
         project_threat_model_paths,
     )
 
+    from core.security.log_sanitisation import sanitise_for_terminal
+
     print(f"Project: {project.name}")
     if project.description:
-        from core.security.log_sanitisation import sanitise_for_terminal
         print("Description: "
               f"{sanitise_for_terminal(project.description, max_len=500)}")
-    print(f"Target: {project.target}")
+    # target/description arrive via project-import zips too — same
+    # defang as the `list` view of the identical fields.
+    print(f"Target: {sanitise_for_terminal(str(project.target or ''), max_len=256)}")
     print(f"Output: {project.output_dir}")
     print(f"Created: {project.created[:10] if project.created else 'unknown'}")
     # Containment-defended resolution (see _project_threat_model_json_path
@@ -2211,7 +2221,6 @@ def _print_status(project) -> None:
     else:
         print("Threat model: not initialised")
     if project.notes:
-        from core.security.log_sanitisation import sanitise_for_terminal
         print(f"Notes: {sanitise_for_terminal(project.notes, max_len=2000)}")
 
     # Trust block — trust state must never be invisible.
@@ -2419,6 +2428,8 @@ def _print_code_findings(merged, detailed: bool=False) -> None:
         truncate_path,
     )
 
+    from core.security.log_sanitisation import sanitise_for_terminal
+
     from .findings_utils import count_vulns, group_findings
 
     vuln_count = count_vulns(merged)
@@ -2445,8 +2456,13 @@ def _print_code_findings(merged, detailed: bool=False) -> None:
             loc = f"{fname}:{','.join(str(line) for line in lines_in_group)}"
         loc = truncate_path(loc) if loc else "—"
 
-        vtype = title_case_type(rep.get("vuln_type", ""))
-        status = get_display_status(rep)
+        # file/vuln_type/status are finding-derived (LLM-authored or
+        # restored verbatim by /project import) — escape before the
+        # aligned table is built so widths match what prints.
+        loc = sanitise_for_terminal(loc, max_len=120)
+        vtype = sanitise_for_terminal(
+            title_case_type(rep.get("vuln_type", "")), max_len=64)
+        status = sanitise_for_terminal(get_display_status(rep), max_len=32)
 
         cvss = rep.get("cvss_score_estimate")
         cvss_str = str(cvss) if cvss is not None else "—"
@@ -2491,7 +2507,7 @@ def _print_code_findings(merged, detailed: bool=False) -> None:
         if reasoning and isinstance(reasoning, str):
             rlines = reasoning.strip().split("\n")[:2]
             for ln in rlines:
-                print(f"{indent}{ln.strip()}")
+                print(f"{indent}{sanitise_for_terminal(ln.strip())}")
 
         # Proof
         proof_source = rep.get("proof_source")
@@ -2499,9 +2515,11 @@ def _print_code_findings(merged, detailed: bool=False) -> None:
         if proof_source or proof_sink:
             parts = []
             if proof_source:
-                parts.append(f"source: {proof_source}")
+                parts.append(
+                    f"source: {sanitise_for_terminal(str(proof_source), max_len=200)}")
             if proof_sink:
-                parts.append(f"sink: {proof_sink}")
+                parts.append(
+                    f"sink: {sanitise_for_terminal(str(proof_sink), max_len=200)}")
             print(f"{indent}Proof: {', '.join(parts)}")
 
         print()
@@ -2587,15 +2605,20 @@ def _print_sca_findings_section(sca_findings, detailed: bool=False) -> None:
     print()
     pad = len(str(len(ordered)))
     indent = " " * (pad + 5)
+    from core.security.log_sanitisation import sanitise_for_terminal
+
     for i, f in enumerate(ordered, 1):
-        title = f.get("title") or _sca_finding_package(f)
+        # Advisory titles/descriptions come from external OSV/registry
+        # data (and survive /project import verbatim) — escape.
+        title = sanitise_for_terminal(
+            str(f.get("title") or _sca_finding_package(f)), max_len=200)
         print(f"  [{i:0{pad}d}] {title}")
         desc = f.get("description")
         if desc and isinstance(desc, str):
             for ln in desc.strip().split("\n")[:2]:
-                print(f"{indent}{ln.strip()}")
+                print(f"{indent}{sanitise_for_terminal(ln.strip())}")
         for reason in _sca_finding_escalations(f):
-            print(f"{indent}escalated: {reason}")
+            print(f"{indent}escalated: {sanitise_for_terminal(str(reason))}")
         print()
 
 
@@ -2726,10 +2749,14 @@ def _print_annotations(
     print(f"{len(anns)} annotation(s):")
     file_w = max(len(a.file) for a in anns)
     fn_w = max(len(a.function) for a in anns)
+    from core.security.log_sanitisation import sanitise_for_terminal
+
     for a in anns:
         status = a.metadata.get("status", "-")
         source = a.metadata.get("source", "-")
-        snippet = " ".join(a.body.split())[:60]
+        # Annotation bodies are free prose (agent-written ones are
+        # hint-tier, untrusted) — escape the excerpt.
+        snippet = sanitise_for_terminal(" ".join(a.body.split())[:60], max_len=80)
         print(f"  {a.file:<{file_w}}  {a.function:<{fn_w}}  "
               f"{status:<14}  {source:<5}  {snippet}")
 
@@ -2751,27 +2778,35 @@ def _print_diff(result) -> None:
     print(f"Unchanged: {result['unchanged']}")
 
 
+def _print_correlate_counts(counts: dict) -> None:
+    """One-line correlation header. Integer statistics only — every
+    value is int()-coerced so nothing foreign can render here."""
+    parts = [f"Runs: {int(counts.get('runs') or 0)}",
+             f"Findings: {int(counts.get('total_unique_findings') or 0)}"]
+    if counts.get("disagreements"):
+        parts.append(f"Disagreements: {int(counts['disagreements'])}")
+    if counts.get("new_findings"):
+        parts.append(f"New: {int(counts['new_findings'])}")
+    if counts.get("potentially_resolved"):
+        parts.append(f"Resolved?: {int(counts['potentially_resolved'])}")
+    print(f"  {' | '.join(parts)}")
+
+
 def _do_correlate(project, json_out: bool=False) -> None:
     """Cross-run finding correlation — action-oriented output."""
 
     from .correlate import correlate_project
 
+    from core.security.log_sanitisation import sanitise_for_terminal
+
     result = correlate_project(project)
-    summary = result["summary"]
 
     if json_out:
         print(dumps_display(result))
         return
 
     print(f"Project: {project.name}")
-    parts = [f"Runs: {summary['runs']}", f"Findings: {summary['total_unique_findings']}"]
-    if summary["disagreements"]:
-        parts.append(f"Disagreements: {summary['disagreements']}")
-    if summary["new_findings"]:
-        parts.append(f"New: {summary['new_findings']}")
-    if summary["potentially_resolved"]:
-        parts.append(f"Resolved?: {summary['potentially_resolved']}")
-    print(f"  {' | '.join(parts)}")
+    _print_correlate_counts(result["summary"])
 
     # --- Actions (primary output) ---
     actions = result["actions"]
@@ -2786,17 +2821,24 @@ def _do_correlate(project, json_out: bool=False) -> None:
         print(f"  {'─' * 60}")
         for a in actions[:10]:
             sigil = _SIGILS.get(a["category"], "[?]")
-            label = a["category"].upper().replace("_", " ")
-            print(f"  {sigil} {label}  {a['summary']}")
+            label = sanitise_for_terminal(
+                a["category"].upper().replace("_", " "), max_len=32)
+            # Action summaries embed finding-derived text (files,
+            # vuln types) — escape every foreign field.
+            print(f"  {sigil} {label}  "
+                  f"{sanitise_for_terminal(str(a['summary']), max_len=200)}")
             detail = a.get("detail", {})
             if a["category"] == "disagreement":
                 for v in detail.get("verdicts", []):
-                    m = f" ({v['model']})" if v.get("model") else ""
-                    print(f"      {v['run']}: {v['status']}{m}")
+                    m = (f" ({sanitise_for_terminal(str(v['model']), max_len=64)})"
+                         if v.get("model") else "")
+                    print(f"      {sanitise_for_terminal(str(v['run']), max_len=64)}: "
+                          f"{sanitise_for_terminal(str(v['status']), max_len=32)}{m}")
             elif a["category"] == "resolved":
                 absent = detail.get("absent_from", [])
                 if absent:
-                    print(f"      absent from: {', '.join(absent)}")
+                    print("      absent from: "
+                          f"{sanitise_for_terminal(', '.join(absent), max_len=200)}")
         if len(actions) > 10:
             print(f"  ... and {len(actions) - 10} more (use --json for full list)")
     else:
@@ -2807,7 +2849,7 @@ def _do_correlate(project, json_out: bool=False) -> None:
     if suggested:
         print("\n  Next steps:")
         for cmd in suggested:
-            print(f"    → {cmd}")
+            print(f"    → {sanitise_for_terminal(str(cmd), max_len=200)}")
 
     # --- Persistent findings (compact) ---
     persistent = result["persistent_findings"]
@@ -2817,11 +2859,13 @@ def _do_correlate(project, json_out: bool=False) -> None:
         for pf in display:
             models = ", ".join(pf.get("models") or []) or "—"
             rows.append((
-                f"{pf['file']}:{pf['line']}" if pf.get("file") else "?",
-                pf.get("vuln_type", ""),
-                pf.get("status", ""),
+                sanitise_for_terminal(
+                    f"{pf['file']}:{pf['line']}" if pf.get("file") else "?",
+                    max_len=120),
+                sanitise_for_terminal(str(pf.get("vuln_type", "")), max_len=64),
+                sanitise_for_terminal(str(pf.get("status", "")), max_len=32),
                 f"{pf['runs_seen']} runs",
-                models,
+                sanitise_for_terminal(models, max_len=120),
             ))
         headers = ("Location", "Type", "Status", "Seen", "Models")
         widths = [len(h) for h in headers]

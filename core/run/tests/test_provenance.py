@@ -816,3 +816,35 @@ class TestWhoAndHarnessModel(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFormatManifestBlockHostile(unittest.TestCase):
+    HOSTILE = "\x1b]0;pwned\x07\x9b2J‮evil"
+
+    def test_hostile_manifest_fields_escaped(self):
+        # Manifests are child-writable during a run and restored
+        # verbatim by /project import — every string field is
+        # attacker-selectable and must not reach the terminal raw.
+        m = {
+            "schema": 1,
+            "source_control": {"base_sha": f"9668{self.HOSTILE}", "dirty": False},
+            "environment": {"python": f"3.14{self.HOSTILE}",
+                            "os": self.HOSTILE, "arch": self.HOSTILE},
+            "engines": {f"semgrep{self.HOSTILE}": f"1.0{self.HOSTILE}"},
+            "models": [{"alias": f"m{self.HOSTILE}",
+                        "resolved": f"m-1{self.HOSTILE}",
+                        "role": self.HOSTILE, "calls": 3}],
+            "deterministically_reproducible": False,
+        }
+        block = format_manifest_block(m)
+        for raw in ("\x1b", "\x07", "\x9b", "‮"):
+            self.assertNotIn(raw, block)
+        self.assertIn("RAPTOR:", block)
+        self.assertIn("Model:", block)
+
+    def test_hostile_field_length_bounded(self):
+        m = {"schema": 1, "models": [{"alias": "a" * 100_000,
+                                      "resolved": "r", "role": "x",
+                                      "calls": 1}]}
+        block = format_manifest_block(m)
+        self.assertLess(len(block), 2_000)

@@ -529,7 +529,11 @@ def generate_project_report(project) -> dict[str, Any]:
         meta = raw_meta if isinstance(raw_meta, dict) else {}
         ts = (meta.get("timestamp") or "")[:19]
         prov_lines.append(f"## {d.name}")
-        prov_lines.append(f"{meta.get('command', '?')} · {ts}")
+        # `command` is child-writable run metadata restored verbatim by
+        # /project import — defang before it lands in provenance.md.
+        prov_lines.append(
+            f"{sanitise_string(str(meta.get('command', '?')), max_chars=200)}"
+            f" · {ts}")
         block = format_manifest_block(meta.get("manifest"), indent="- ")
         prov_lines.append(block or "- (no provenance manifest)")
         prov_lines.append("")

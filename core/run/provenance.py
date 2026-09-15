@@ -453,31 +453,43 @@ def format_manifest_block(manifest: dict[str, Any] | None,
     if manifest.get("provenance") == "unavailable":
         return f"{indent}Provenance: unavailable (run predates manifest capture)"
 
+    # Manifests are child-writable during the run and restored VERBATIM
+    # by /project import (a .raptor-run.json is not in the import
+    # quarantine set) — every string field here is attacker-selectable.
+    # Escape + bound per field; consumers print this block to the
+    # terminal (/project status, run provenance) and write it into
+    # provenance.md.
+    from core.security.log_sanitisation import sanitise_for_terminal
+
+    def _f(value: object, cap: int = 64) -> str:
+        return sanitise_for_terminal(str(value), max_len=cap)
+
     lines = []
     sc = manifest.get("source_control") or {}
     if sc.get("base_sha"):
         suffix = " (modified)" if sc.get("dirty") else ""
-        lines.append(f"{indent}RAPTOR: {sc['base_sha'][:12]}{suffix}")
+        lines.append(f"{indent}RAPTOR: {_f(str(sc['base_sha'])[:12])}{suffix}")
 
     env = manifest.get("environment") or {}
     if env:
         lines.append(
-            f"{indent}Env: Python {env.get('python', '?')} "
-            f"on {env.get('os', '?')}/{env.get('arch', '?')}"
+            f"{indent}Env: Python {_f(env.get('python', '?'))} "
+            f"on {_f(env.get('os', '?'))}/{_f(env.get('arch', '?'))}"
         )
 
     engines = manifest.get("engines") or {}
     if engines:
         rendered = ", ".join(
-            f"{name} {ver or '?'}" for name, ver in sorted(engines.items())
+            f"{_f(name)} {_f(ver or '?')}"
+            for name, ver in sorted(engines.items())
         )
         lines.append(f"{indent}Engines: {rendered}")
 
     for m in manifest.get("models") or []:
         resolved = m.get("resolved") or m.get("alias") or "?"
         lines.append(
-            f"{indent}Model: {m.get('alias', '?')} → {resolved} "
-            f"({m.get('role', '?')}, {m.get('calls', '?')}×)"
+            f"{indent}Model: {_f(m.get('alias', '?'))} → {_f(resolved)} "
+            f"({_f(m.get('role', '?'), cap=32)}, {_f(m.get('calls', '?'), cap=16)}×)"
         )
 
     if "deterministically_reproducible" in manifest:
