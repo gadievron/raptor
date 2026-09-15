@@ -249,3 +249,74 @@ def test_chart_yaml_mixed_versions_partial_reported(
     text = chart.read_text()
     assert "version: 18.1.0" in text
     assert "version: 16.5.0" in text
+
+
+def test_pathological_chart_yaml_is_fast(tmp_path: Path) -> None:
+    """Hostile Chart.yaml: a matching ``- name:`` block padded with
+    filler lines and NO same-indent ``version:`` line. The previous
+    between-lines group backtracked exponentially on the overall-match
+    failure (~x16 per two filler lines; 30 lines hung the harden/bump
+    run) — the attacker controls both the dep name (their Chart.yaml
+    produced the plan) and the filler. Both-direction bound: fast AND
+    still a clean not_found."""
+    import time
+
+    chart = tmp_path / "Chart.yaml"
+    chart.write_text(
+        "dependencies:\n"
+        "  - name: postgresql\n"
+        + "    key: value\n" * 40
+        + "  - name: other\n"
+        "    version: 1.0.0\n"
+    )
+    edits = [RewriteEdit(
+        locator="postgresql", old_value="13.4.4", new_value="14.0.0",
+    )]
+    start = time.monotonic()
+    results = rewrite_chart_yaml(chart, edits)
+    assert time.monotonic() - start < 5.0
+    assert not results[0].applied
+    assert results[0].reason == "not_found"
+
+
+def test_version_first_pathological_is_fast(tmp_path: Path) -> None:
+    """Same bound for the version-then-name shape."""
+    import time
+
+    chart = tmp_path / "Chart.yaml"
+    chart.write_text(
+        "dependencies:\n"
+        "  - version: 13.4.4\n"
+        + "    key: value\n" * 40
+        + "  - version: 1.0.0\n"
+        "    name: other\n"
+    )
+    edits = [RewriteEdit(
+        locator="postgresql", old_value="13.4.4", new_value="14.0.0",
+    )]
+    start = time.monotonic()
+    results = rewrite_chart_yaml(chart, edits)
+    assert time.monotonic() - start < 5.0
+    assert not results[0].applied
+
+
+def test_nested_list_between_anchors_declines(tmp_path: Path) -> None:
+    """Boundary is STRICTER than the pre-fix pattern: a nested list
+    (tags:/condition: blocks) between name and version hard-stops the
+    window at the first `-` line, so the edit declines with not_found
+    (visible, refusal direction) instead of the old accidental
+    cross-line match. Documented capability regression."""
+    chart = tmp_path / "Chart.yaml"
+    chart.write_text(
+        "dependencies:\n"
+        "  - name: postgresql\n"
+        "    tags:\n"
+        "      - database\n"
+        "    version: 13.4.4\n"
+    )
+    edits = [RewriteEdit(
+        locator="postgresql", old_value="13.4.4", new_value="14.0.0",
+    )]
+    results = rewrite_chart_yaml(chart, edits)
+    assert not results[0].applied
+    assert results[0].reason == "not_found"

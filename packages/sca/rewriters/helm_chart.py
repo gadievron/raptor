@@ -59,10 +59,26 @@ def _apply_one_chart(
     # lines may appear in either order within the dep block;
     # try both shapes.
     #
+    # Intermediate lines between the two anchors: each iteration
+    # consumes EXACTLY ONE non-blank, non-list-item line. The previous
+    # spelling ((?:\s*(?!-).+\n)*?) let \s* span newlines and .+ eat
+    # spaces, giving every filler line many ambiguous splits — overall
+    # match FAILURE (a dep block with filler lines and no same-indent
+    # version: line) backtracked exponentially (~x16 per two lines;
+    # a 30-line block from a hostile Chart.yaml hung the harden/bump
+    # run without any timeout). One-line-per-iteration is linear. The
+    # boundary is STRICTER than before: a `-` list item or a blank
+    # line hard-stops the window (the old spelling could backtrack
+    # `\s*` to zero and accidentally cross a `-` line into ANOTHER
+    # dep's version — a cross-dep mis-splice held back only by the
+    # value_mismatch guard). A dep whose version follows a nested
+    # list (tags:/condition:) now declines with not_found — the
+    # visible, refusal-direction trade.
+    between = r"(?P<between>(?:(?![^\S\n]*(?:-|\n))[^\n]*\n)*?)"
     # Shape A: name-then-version
     pat_name_first = re.compile(
         rf"^(?P<indent>\s+)- name:\s*{locator}\s*(?P<namecomment>#[^\n]*)?\n"
-        rf"(?P<between>(?:\s*(?!-).+\n)*?)"             # optional intermediate lines
+        rf"{between}"
         rf"(?P<prefix>(?P=indent)\s+version:\s*[\"']?)"
         rf"(?P<ver>[^\s\"'#]+)"
         rf"(?P<suffix>[\"']?\s*(?:#[^\n]*)?\n)",
@@ -73,7 +89,7 @@ def _apply_one_chart(
         rf"^(?P<indent>\s+)(?P<vprefix>- version:\s*[\"']?)"
         rf"(?P<ver>[^\s\"'#]+)"
         rf"(?P<vsuffix>[\"']?\s*(?:#[^\n]*)?\n)"
-        rf"(?P<between>(?:\s*(?!-).+\n)*?)"
+        rf"{between}"
         rf"(?P<nline>(?P=indent)\s+name:\s*{locator}\s*(?:#[^\n]*)?\n)",
         re.MULTILINE,
     )
