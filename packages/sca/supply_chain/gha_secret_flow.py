@@ -37,6 +37,21 @@ What this detector must defend against:
     when ANY env binding in the same job derives from a secret, we
     treat ``toJSON(env)`` as a sink.
 
+  * **Untrusted action + secret-bound job env, no tainted inputs**
+    — DELIBERATELY NOT FLAGGED (accepted-miss trade-off).  A job
+    with ``env: NPM_TOKEN: ${{ secrets.NPM_TOKEN }}`` running
+    ``uses: attacker/action@v1`` with no ``with:`` block exports
+    the job env to the action's process, which can read the secret
+    directly.  Job-level env taint is only consulted for the
+    ``actions/upload-artifact`` / ``actions/cache`` sinks: flagging
+    EVERY non-allowlisted action inside an env-tainted job would
+    fire on the dominant legitimate CI shape (job-scoped tokens +
+    third-party build/setup actions) and drown the high-signal
+    rows.  Mitigations that still apply: the action ref itself is
+    covered by gha_drift (mutable ref) / gha_freshness; a ``with:``
+    input carrying the secret IS flagged.  Revisit if a
+    per-action-reputation signal lands.
+
   * **Custom local actions** — ``uses: ./.github/actions/foo``.
     These bypass the trusted-consumer allowlist because they're
     project-local; we conservatively treat them as UNTRUSTED (the

@@ -97,6 +97,14 @@ def detect_droppable_transitives(
 
     Transitive must have ``source_kind == "cascade_resolver"``
     AND ``source_extra["via"]`` populated by the cascade-tagger.
+
+    Production reachability caveat: the cascade pipeline populates
+    ``via`` for PyPI / npm / Cargo / Packagist / RubyGems only
+    (:mod:`packages.sca.transitive` — Maven has no cascade lockfile
+    parser, NuGet has a parser but no parent extractor yet). The
+    Maven and NuGet arms above are therefore reachable only through
+    callers that supply their own ``via`` linkage; they do not fire
+    from the standard pipeline until those extractors land.
     """
     clients = {
         "PyPI": pypi_client,
