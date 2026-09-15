@@ -1952,7 +1952,8 @@ def run_compiler_scan_stage(
 
     if not result.ok:
         print(
-            f"⚠️  compiler-scan did not run: {result.reason}",
+            f"⚠️  compiler-scan did not run: "
+            f"{sanitise_for_terminal(str(result.reason), max_len=300)}",
             file=sys.stderr,
         )
         return []

@@ -97,6 +97,45 @@ _LLM_DERIVED_KEYS = frozenset({
     # OSV advisory free text (attacker-writable markdown; the sca
     # report embeds it inside a <details> block).
     "details",
+    # Live field names report code actually uses — each was carried by
+    # a writer lane the vocabulary missed (finding/journal/stage
+    # fields, LLM overview output, tool-info dicts).
+    "reason",
+    "event_type",
+    "notes",
+    "technique",
+    "constraints",
+    "model_reliabilities",
+    "target_path",
+    "detail",
+    "slug",
+    "vuln_type",
+    "instructions",
+    "evidence",
+    "blocked",
+    "question",
+    "identifiers",
+    "concepts",
+    "working_dir",
+})
+
+
+# Ubiquitous label-ish field names: matched for DICT reads
+# (subscript / .get / getattr) where parsed-artifact fields live, but
+# NOT for attribute access — ``.path`` / ``.status`` / ``.model`` /
+# ``.errors`` attribute reads on stdlib/config/dataclass objects are
+# everywhere and drowned the rule on measurement. An attribute-read
+# writer lane on these names is a documented residual of this tier.
+_LABEL_KEYS = frozenset({
+    "model",
+    "members",
+    "errors",
+    "path",
+    "status",
+    "id",
+    "version",
+    "file",
+    "function",
 })
 
 
@@ -111,9 +150,23 @@ _LLM_DERIVED_KEYS = frozenset({
 _TOOL_OUTPUT_KEYS = frozenset({
     "stderr",
     "stdout",
+    # raw checksec/tool-probe captures quote hostile-binary bytes.
+    "raw_checksec",
+    "output",
 })
 
 _FOREIGN_KEYS = _LLM_DERIVED_KEYS | _TOOL_OUTPUT_KEYS
+# Dict-read (subscript/.get/getattr) vocabulary includes the label
+# tier; attribute reads match only the core vocabulary.
+_SUBSCRIPT_KEYS = _FOREIGN_KEYS | _LABEL_KEYS
+# Taint-engine vocabulary: the pre-widening core names. The widened
+# and label tiers match at sinks/returns only (see _naked_keys(wide)).
+_CORE_KEYS = frozenset({
+    "title", "claim", "body", "reasoning", "summary", "description",
+    "remediation", "attack_scenario", "prediction", "rationale",
+    "hypothesis", "stage_f_review", "stage_f_summary", "error",
+    "details", "stderr", "stdout",
+})
 
 
 # Calls recognised as neutralising a value for report / terminal
@@ -144,6 +197,16 @@ _SANITISERS = frozenset({
     # sca bump's terminal helper (escape + bound, sanitise_for_terminal
     # grade).
     "_term",
+    # Conventional escape_nonprintable-based module helpers (scorecard
+    # samples renderer, cve-diff bench HTML cells). The name-shadow
+    # arm enforces that every local definition builds on a canonical
+    # sanitiser.
+    "_esc",
+    # scorecard render helpers: sanitise_for_terminal-based cell scrub
+    # and the ensure_ascii JSON terminal lane (the shadow arm accepts
+    # ensure_ascii json.dumps bodies).
+    "_scrub_cell",
+    "_dumps_json_lane",
     # Per-module single-line / cell / prose helpers built on the above.
     # exploitability_validation.report's shared helpers (sanitise_line
     # wraps sanitise_string; sanitise_cell adds pipe-escaping on top).
@@ -922,6 +985,144 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
             "comprehension"
         ),
     ),
+    # --- vocabulary widening: adjudicated code-authored fields ------
+    AllowlistEntry(
+        file="core/audit/report.py",
+        func_name="_format_summary",
+        kind="unsanitised_llm_value",
+        detail="reason",
+        audit_note=(
+            "not-attempted reason is the orchestrator's own "
+            "code-authored budget/coverage label"
+        ),
+    ),
+    AllowlistEntry(
+        file="core/llm/scorecard/audit.py",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="report",
+        audit_note=(
+            "render_json is ensure_ascii and render_markdown routes "
+            "cells through _cell — the taint is the report argument "
+            "passed INTO the renderers, not their output"
+        ),
+    ),
+    AllowlistEntry(
+        file="core/project/cli.py",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="notes",
+        audit_note=(
+            "notes edit lane writes the operator's own notes to their "
+            "own $EDITOR tempfile (byte-exact by design); the display "
+            "lane escapes via escape_nonprintable(preserve_newlines) — "
+            "newline-preserving multi-line display for the operator's "
+            "own free text, length deliberately unbounded"
+        ),
+    ),
+    AllowlistEntry(
+        file="core/project/cli.py",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="path",
+        audit_note=(
+            "export destination path constructed by export_project "
+            "under the operator-chosen output root"
+        ),
+    ),
+    AllowlistEntry(
+        file="core/project/cli.py",
+        func_name="_print_run_provenance",
+        kind="unsanitised_llm_value",
+        detail="status",
+        audit_note=(
+            "run status is the lifecycle enum (running/completed/"
+            "failed/...), validated at write time"
+        ),
+    ),
+    AllowlistEntry(
+        file="core/project/report.py",
+        func_name="export_findings_directory",
+        kind="unsanitised_llm_value",
+        detail="record",
+        audit_note=(
+            "findings.jsonl artifact-file write — byte-exact machine "
+            "lane (dumps_artifact is the artifact contract)"
+        ),
+    ),
+    AllowlistEntry(
+        file="core/sandbox/triage.py",
+        func_name="_cli_main",
+        kind="unsanitised_llm_value",
+        detail="model",
+        audit_note="operator-configured model id from the deep-assessment config",
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-audit",
+        func_name="cmd_run",
+        kind="unsanitised_llm_value",
+        detail="reason",
+        audit_note=(
+            "provisioning skip reason/remedy are code-authored "
+            "strings (same record as the _skip entry above)"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/binary_analysis/cli.py",
+        func_name="_print_map_summary",
+        kind="unsanitised_llm_value",
+        detail="key",
+        audit_note=(
+            "count-dict key names from the internally-built "
+            "correlation summary (the summary entry above)"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/binary_analysis/cli.py",
+        func_name="_print_investigation_summary",
+        kind="unsanitised_llm_value",
+        detail="status",
+        audit_note="investigation status is the pipeline's own enum",
+    ),
+    AllowlistEntry(
+        file="packages/binary_analysis/cli.py",
+        func_name="_run_trace_parser",
+        kind="unsanitised_llm_value",
+        detail="status",
+        audit_note="phase/investigation status is the pipeline's own enum",
+    ),
+    AllowlistEntry(
+        file="packages/binary_analysis/investigation.py",
+        func_name="write_investigation",
+        kind="unsanitised_llm_value",
+        detail="investigation",
+        audit_note=(
+            "binary-investigation.json artifact-file save; the "
+            "markdown render on the same lines routes through "
+            "_md_escape"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/describe/report.py",
+        func_name="format_text",
+        kind="unsanitised_llm_value",
+        detail="reason",
+        audit_note=(
+            "recommendation reasons are code-authored strings from the "
+            "describe signal catalog"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/describe/report.py",
+        func_name="format_text",
+        kind="unsanitised_llm_value",
+        detail="detail",
+        audit_note=(
+            "capability-check detail strings are code-authored; "
+            "version fragments come from local trusted-tool probes "
+            "(no target input on the describe surface by contract)"
+        ),
+    ),
 )
 
 
@@ -936,13 +1137,16 @@ def _call_name(node: ast.AST) -> str | None:
     return None
 
 
-def _key_expr(node: ast.AST) -> str | None:
+def _key_expr(node: ast.AST,
+              attr_keys: frozenset,
+              sub_keys: frozenset) -> str | None:
     """Return the LLM-derived key name if ``node`` reads one.
 
     Recognises ``x.title``, ``x["title"]``, ``x.get("title", ...)``,
-    and ``getattr(x, "title", ...)``.
+    and ``getattr(x, "title", ...)``. ``attr_keys``/``sub_keys``
+    select the vocabulary tier (see ``_naked_keys``).
     """
-    if isinstance(node, ast.Attribute) and node.attr in _FOREIGN_KEYS:
+    if isinstance(node, ast.Attribute) and node.attr in attr_keys:
         # ``sys.stderr`` / ``sys.stdout`` are the STREAMS, not
         # tool-output text (`print(..., file=sys.stderr)` would fire
         # on every stderr print in the tree).
@@ -954,20 +1158,20 @@ def _key_expr(node: ast.AST) -> str | None:
     if isinstance(node, ast.Subscript):
         sl = node.slice
         if (isinstance(sl, ast.Constant) and isinstance(sl.value, str)
-                and sl.value in _FOREIGN_KEYS):
+                and sl.value in sub_keys):
             return sl.value
     if isinstance(node, ast.Call):
         name = _call_name(node)
         if name == "get" and node.args:
             a0 = node.args[0]
             if (isinstance(a0, ast.Constant) and isinstance(a0.value, str)
-                    and a0.value in _FOREIGN_KEYS):
+                    and a0.value in sub_keys):
                 return a0.value
         if (isinstance(node.func, ast.Name) and node.func.id == "getattr"
                 and len(node.args) >= 2):
             a1 = node.args[1]
             if (isinstance(a1, ast.Constant) and isinstance(a1.value, str)
-                    and a1.value in _FOREIGN_KEYS):
+                    and a1.value in sub_keys):
                 return a1.value
     return None
 
@@ -1066,6 +1270,11 @@ def _sanitiser_shadow_scan(tree: ast.AST, rel: str) -> list[Violation]:
             if (isinstance(n, ast.Name)
                     and n.id in _CANONICAL_SANITISER_NAMES
                     and n.id != node.name):
+                ok = True
+                break
+            if isinstance(n, ast.Call) and _is_ascii_json_dumps(n):
+                # json.dumps(..., ensure_ascii=True) helpers (the
+                # blessed terminal-JSON lane) sanitise by construction.
                 ok = True
                 break
             if isinstance(n, ast.Attribute) and (
@@ -1215,13 +1424,30 @@ def _naked_keys(
     node: ast.AST,
     tainted: frozenset,
     tainted_calls: frozenset = frozenset(),
+    *,
+    wide: bool = False,
 ) -> list[tuple[int, str]]:
     """Return (line, key) pairs for LLM-derived reads in ``node`` that
     are NOT inside a recognised sanitiser call. ``tainted`` names count
     as LLM-derived reads too (one-level local taint), and simple-name
     calls to ``tainted_calls`` (module-local helpers whose RETURN value
     is tainted — the ``sys.stdout.write(render_json(report))`` shape)
-    count as foreign reads."""
+    count as foreign reads.
+
+    ``wide=True`` (sink arguments and return expressions) matches the
+    FULL vocabulary including the widened and label tiers;
+    ``wide=False`` (taint-engine decisions: assignments, loop iters,
+    container stores) matches only the pre-widening core vocabulary.
+    Measured trade-off: letting the widened names drive the taint
+    engine marked hundreds of sanitise-at-construction table rows and
+    count summaries through container round-trips (322 registered
+    hits tree-wide); direct-read coverage keeps the mechanism-1 lanes
+    visible at their sinks without the amplification. The
+    local-variable round-trip for WIDENED names is therefore a
+    documented residual (the core names keep full propagation).
+    """
+    attr_keys = _FOREIGN_KEYS if wide else _CORE_KEYS
+    sub_keys = _SUBSCRIPT_KEYS if wide else _CORE_KEYS
     out: list[tuple[int, str]] = []
 
     def walk(n: ast.AST) -> None:
@@ -1243,15 +1469,57 @@ def _naked_keys(
             walk(n.body)
             walk(n.orelse)
             return
+        if isinstance(n, (ast.ListComp, ast.GeneratorExp, ast.SetComp)):
+            # Comprehensions: only the ELEMENT flows to the consumer.
+            # A foreign/tainted ITER taints the comprehension targets
+            # for the element walk (``f(x) for x in d["notes"]`` is
+            # clean when f sanitises, fires when x is used raw).
+            iter_tainted = False
+            for gen in n.generators:
+                if _naked_keys(gen.iter, tainted, tainted_calls,
+                               wide=wide):
+                    iter_tainted = True
+            if iter_tainted:
+                extra = set()
+                for gen in n.generators:
+                    extra.update(_target_names(gen.target))
+                out.extend(_naked_keys(
+                    n.elt, tainted | frozenset(extra), tainted_calls,
+                    wide=wide))
+            else:
+                walk(n.elt)
+            return
         if (isinstance(n, ast.FormattedValue)
                 and n.conversion == ord("r")):
             # ``{value!r}`` renders through repr(), which escapes
             # non-printables in strings — control-byte-safe (though
             # unbounded; length abuse is out of this rule's scope).
             return
-        key = _key_expr(n)
+        key = _key_expr(n, attr_keys, sub_keys)
         if key is not None:
             out.append((getattr(n, "lineno", 0), key))
+        if (isinstance(n, ast.Subscript)
+                and isinstance(n.slice, ast.Constant)
+                and isinstance(n.slice.value, str)
+                and n.slice.value not in sub_keys):
+            # Field-scoped read from a (possibly tainted) container:
+            # ``sca_result["deps_scanned"]`` reads a NON-vocabulary
+            # key — the container taint was deposited under vocabulary
+            # keys, so other constant keys read clean. Whole-container
+            # reads (print(d), joins, loops) and vocabulary-key reads
+            # stay tainted. Without this, one foreign store into a
+            # summary dict marked every count print in the function.
+            return
+        if isinstance(n, ast.Call) and _call_name(n) == "get" and n.args:
+            a0 = n.args[0]
+            if (isinstance(a0, ast.Constant) and isinstance(a0.value, str)
+                    and a0.value not in sub_keys
+                    and isinstance(n.func, ast.Attribute)):
+                # ``d.get("count")`` — same field-scoped rule; still
+                # walk the DEFAULT argument (it flows into the value).
+                for extra in n.args[1:]:
+                    walk(extra)
+                return
         if isinstance(n, ast.Name) and n.id in tainted:
             out.append((getattr(n, "lineno", 0), n.id))
         if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
@@ -1471,7 +1739,7 @@ class _Scanner(ast.NodeVisitor):
     def visit_Return(self, node: ast.Return) -> None:
         if node.value is not None and self._fn_stack:
             if (_naked_keys(node.value, frozenset(self._tainted),
-                            self._tainted_calls)
+                            self._tainted_calls, wide=True)
                     or _raw_serialiser_calls(node.value)):
                 # Short name — helper calls are matched by bare Name.
                 self.tainted_return_funcs.add(self._fn_stack[-1])
@@ -1516,7 +1784,8 @@ class _Scanner(ast.NodeVisitor):
             tainted = frozenset(self._tainted)
             for arg in args:
                 for line, key in _naked_keys(arg, tainted,
-                                             self._tainted_calls):
+                                             self._tainted_calls,
+                                             wide=True):
                     self.violations.append(Violation(
                         file=self.rel,
                         line=line or node.lineno,

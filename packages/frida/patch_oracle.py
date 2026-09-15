@@ -337,7 +337,8 @@ def main(argv: list[str] | None = None) -> int:
               "inconclusive": "Inconclusive"}[report["verdict"]]
     qualifier = (f" ({report['confidence']}-level)"
                  if report["confidence"] else "")
-    print(f"patch-verify: {status}{qualifier} — {report['reason']}")
+    print(f"patch-verify: {status}{qualifier} — "
+          f"{_sft(str(report['reason']), max_len=300)}")
     print(f"patch-verify: report → {args.out / 'patch-verify.json'}")
     # Verdict-bearing exit codes; 2 stays reserved for errors so an
     # infrastructure failure can never read as a verdict.

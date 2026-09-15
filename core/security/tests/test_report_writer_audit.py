@@ -773,3 +773,98 @@ def test_type_name_of_exception_is_clean():
     )
     assert not [v for v in audit_source(src)
                 if v.kind == "unsanitised_exception_text"]
+
+
+# ---------------------------------------------------------------------------
+# Vocabulary widening (mechanism 1) + tiers.
+# ---------------------------------------------------------------------------
+
+
+def test_widened_names_fire_on_attribute_reads():
+    """`s.reason` — the attribute-read shape that made three sca
+    writers invisible (the name, not the attribute arm, was the gap)."""
+    src = (
+        "def render(s):\n"
+        "    print(f'skipped: {s.reason}')\n"
+    )
+    assert any(v.detail == "reason" for v in audit_source(src))
+
+
+def test_widened_names_fire_on_dict_reads():
+    src = (
+        "def render(f, lines):\n"
+        "    lines.append(f\"note: {f['notes']} q: {f.get('question')}\")\n"
+    )
+    details = {v.detail for v in audit_source(src)}
+    assert {"notes", "question"} <= details
+
+
+def test_label_tier_fires_on_dict_read_not_attribute():
+    """Label-ish names (id/status/path/model/...) match parsed-artifact
+    DICT reads; attribute reads on them are a documented residual
+    (``.path``/``.status`` on stdlib objects are everywhere)."""
+    dict_read = (
+        "def render(finding):\n"
+        "    print(f\"{finding['vuln_type']}: {finding['id']}\")\n"
+    )
+    details = {v.detail for v in audit_source(dict_read)}
+    assert {"vuln_type", "id"} <= details
+
+    attr_read = (
+        "def render(url):\n"
+        "    print(f'{url.path} {url.version}')\n"
+    )
+    assert audit_source(attr_read) == []
+
+
+def test_widened_name_local_var_at_sink_only():
+    """Widened names cover DIRECT sink reads; their local-variable
+    round-trip is the documented residual (core names keep full
+    propagation — see the mechanism-5 fixture)."""
+    direct = (
+        "def render(f):\n"
+        "    print(f['reason'])\n"
+    )
+    assert any(v.detail == "reason" for v in audit_source(direct))
+
+
+def test_core_name_comprehension_round_trip_fires():
+    """Mechanism-5 comprehension shape for core names: raw loop
+    element from a vocabulary iterable fires; a sanitised element
+    stays clean."""
+    raw = (
+        "def render(self, lines):\n"
+        "    lines.extend(f'- {r}' for r in self.reasoning[:3])\n"
+    )
+    assert audit_source(raw), "raw comprehension element must fire"
+    clean = (
+        "def render(self, lines):\n"
+        "    lines.extend(f'- {_line(r)}' for r in self.reasoning[:3])\n"
+    )
+    assert audit_source(clean) == []
+
+
+def test_field_scoped_container_read_is_clean():
+    """A non-vocabulary constant key read from a tainted container is
+    clean (the taint was deposited under vocabulary keys); vocabulary
+    keys and whole-container reads still fire."""
+    scoped = (
+        "def render(res):\n"
+        "    res['error'] = res.get('error')\n"
+        "    print(f\"{res['deps_scanned']} deps\")\n"
+    )
+    assert audit_source(scoped) == []
+    whole = (
+        "def render(res):\n"
+        "    res['error'] = res.get('error')\n"
+        "    print(res)\n"
+    )
+    assert any(v.detail == "res" for v in audit_source(whole))
+
+
+def test_tool_output_raw_checksec_fires():
+    src = (
+        "def render(info):\n"
+        "    print(info['raw_checksec'])\n"
+    )
+    assert any(v.detail == "raw_checksec" for v in audit_source(src))

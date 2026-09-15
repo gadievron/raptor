@@ -1376,8 +1376,9 @@ def prepare_D(workdir, target=None):
         if finding["test_code_flag"]:
             label = finding.get("likely_test_harness", "?")
             print(
-                f"  D-1 FLAG: {finding.get('id', '?')} test path "
-                f"(likely_test_harness={label}): {fpath}"
+                f"  D-1 FLAG: {_sft(str(finding.get('id', '?')), max_len=120)} "
+                f"test path (likely_test_harness={label}): "
+                f"{_sft(str(fpath), max_len=200)}"
             )
 
     # --- Evidence card assembly ---

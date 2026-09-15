@@ -1420,7 +1420,13 @@ def main() -> None:
             else:
                 p = mgr.load(args.name)
                 if p:
-                    print(p.notes or "(no notes)")
+                    # Notes are free text set via /project set —
+                    # escape control bytes, keep line structure.
+                    from core.security.log_sanitisation import (
+                        escape_nonprintable,
+                    )
+                    print(escape_nonprintable(p.notes, preserve_newlines=True)
+                          if p.notes else "(no notes)")
                 else:
                     print(f"Project '{args.name}' not found.")
 
@@ -2634,8 +2640,12 @@ def _print_sca_findings_section(sca_findings, detailed: bool=False) -> None:
 
 
 def _finding_label(f) -> str:
-    """Location-based label for a finding."""
-    return f"{f.get('file', '?')}:{f.get('function', '?')}:{f.get('line', '?')}"
+    """Location-based label for a finding (terminal-safe: file and
+    function names are target-derived)."""
+    return sanitise_for_terminal(
+        f"{f.get('file', '?')}:{f.get('function', '?')}:{f.get('line', '?')}",
+        max_len=200,
+    )
 
 
 def _parse_since(spec: str):

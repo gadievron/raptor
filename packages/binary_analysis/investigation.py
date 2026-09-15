@@ -768,10 +768,12 @@ def render_investigation_report(investigation: dict[str, Any]) -> str:
     if investigation.get("active_phases"):
         lines.extend(["", "## Active Phases", ""])
         for item in investigation["active_phases"]:
-            reason = f" Reason: {item['reason']}" if item.get("reason") else ""
+            reason = (f" Reason: {_md_escape(item['reason'])}"
+                      if item.get("reason") else "")
             lines.append(
-                f"- `{item['kind']}`: `{item['status']}`"
-                f" ({item.get('output_dir') or 'no output directory'}).{reason}"
+                f"- `{_md_escape(item['kind'])}`: `{_md_escape(item['status'])}`"
+                f" ({_md_escape(item.get('output_dir') or 'no output directory')})."
+                f"{reason}"
             )
 
     suitability = investigation.get("fuzz_suitability") or {}
@@ -782,10 +784,11 @@ def render_investigation_report(investigation: dict[str, Any]) -> str:
             "",
             f"- Strategy: `{suitability.get('strategy')}`",
             f"- Direct whole-target campaign recommended: {'yes' if suitability.get('direct_campaign_recommended') else 'no'}",
-            f"- Runtime collection: `{suitability.get('runtime_strategy', 'direct_process')}`",
-            f"- Runtime reason: {suitability.get('runtime_reason')}",
-            f"- Reason: {suitability.get('reason')}",
-            f"- Next step: {suitability.get('next_step')}",
+            f"- Runtime collection: "
+            f"`{_md_escape(suitability.get('runtime_strategy', 'direct_process'))}`",
+            f"- Runtime reason: {_md_escape(suitability.get('runtime_reason'))}",
+            f"- Reason: {_md_escape(suitability.get('reason'))}",
+            f"- Next step: {_md_escape(suitability.get('next_step'))}",
         ])
         candidates = suitability.get("harness_candidates") or []
         if candidates:

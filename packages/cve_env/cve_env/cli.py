@@ -22,6 +22,9 @@ from cve_env.models import CveRecord, HostInfo, derive_build_method
 from cve_env.tools.arch import detect_host_arch
 
 from core.json import dumps_artifact, save_json
+from core.security.log_sanitisation import (
+    sanitise_for_terminal as _sft,
+)
 
 # Validate CVE-ID format BEFORE invoking build()/LLM. Stops bogus IDs
 # (lowercase, missing dash, wrong year width, etc.) at argparse time
@@ -101,8 +104,8 @@ def _attempt_replay(cve: CveRecord, prefill_from: str | None):
                   f"{getattr(env, 'provision_id', '?')}`",
                   file=sys.stderr)
     print(
-        f"replay: {result.reason or 'verify failed'} — falling through "
-        f"to the agent build",
+        f"replay: {_sft(result.reason or 'verify failed')} — falling "
+        f"through to the agent build",
         file=sys.stderr,
     )
     return None
@@ -153,8 +156,8 @@ def _cmd_up(args: argparse.Namespace) -> int:
                        fail_on_verify=True)
     env = result.environment
     if not result.ok or env is None:
-        print(f"up: {result.reason or 'provision failed'}"
-              f"{': ' + result.detail if result.detail else ''}",
+        print(f"up: {_sft(result.reason or 'provision failed')}"
+              f"{': ' + _sft(result.detail) if result.detail else ''}",
               file=sys.stderr)
         if (result.reason == "verify_failed"
                 and getattr(getattr(spec, "network", None), "mode",
