@@ -139,6 +139,11 @@ def replayable_entries(
             continue
         if not e.dual_control:
             continue
+        # Same doctrine as graduate()/find_replayable: replay treats
+        # the rule as proven, and only the full mechanical-control
+        # tier (fix-mutant included) earns that.
+        if e.rule_tier != "library":
+            continue
         if e.engine == "semgrep":
             semgrep_entries.append(e)
         elif e.engine == "coccinelle":

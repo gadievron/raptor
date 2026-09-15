@@ -271,6 +271,25 @@ class TestRuleLibraryFind:
 
         assert lib.find_replayable("CWE-89", "semgrep") == []
 
+    def test_find_replayable_requires_library_tier(self, tmp_path):
+        # dual passed but fix-mutant failed: an add_rule sweep_once
+        # entry that later accrues a rated target must stay
+        # replay-ineligible — replay treats the rule as proven, and it
+        # never proved it distinguishes fixed from unfixed code (same
+        # doctrine as graduate()).
+        lib = RuleLibrary(tmp_path / "lib")
+        lib.add_rule(
+            "r1", "semgrep", "rules:\n  - id: r1\n", cwe="CWE-89",
+            dual_control=True,
+        )
+        matches = [Match(file="a.py", line=1)]
+        triage = [MatchTriage(match=matches[0], status="variant",
+                              reasoning="")]
+        entry = lib.update("r1", "t1", matches, triage)
+        assert entry is not None
+        assert entry.tp_rate == 1.0
+        assert lib.find_replayable("CWE-89", "semgrep") == []
+
     def test_find_replayable_with_high_tp(self, tmp_path):
         lib = RuleLibrary(tmp_path / "lib")
         result = _result(triage_status="variant")

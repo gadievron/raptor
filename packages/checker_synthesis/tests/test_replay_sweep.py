@@ -22,9 +22,10 @@ def _manifest_entry(
     dual_control: bool = True,
     n_targets: int = 1,
     archived: bool = False,
+    rule_tier: str | None = None,
 ) -> dict:
     ext = ".yml" if engine == "semgrep" else ".cocci"
-    return {
+    d = {
         "rule_id": rule_id,
         "engine": engine,
         "cwe": cwe,
@@ -51,6 +52,9 @@ def _manifest_entry(
         ],
         "archived": archived,
     }
+    if rule_tier is not None:
+        d["rule_tier"] = rule_tier
+    return d
 
 
 def _write_library(tmp_path: Path, entries: list[dict]) -> Path:
@@ -96,6 +100,9 @@ class TestReplayableEntries:
             _manifest_entry("good-cocci", engine="coccinelle"),
             _manifest_entry("low-tp", tp_rate=0.5),
             _manifest_entry("no-dual", dual_control=False),
+            # dual passed, fix-mutant failed: never proved it
+            # distinguishes fixed from unfixed code — not replayable.
+            _manifest_entry("dual-no-mutant", rule_tier="sweep_once"),
             _manifest_entry("no-targets", n_targets=0),
             _manifest_entry("archived", archived=True),
             _manifest_entry("odd-engine", engine="codeql"),

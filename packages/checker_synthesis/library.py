@@ -345,14 +345,21 @@ class RuleLibrary:
     def find_replayable(self, cwe: str, engine: str) -> list[LibraryEntry]:
         """Find rules suitable for replay (high TP, enough targets).
 
-        Sorted by TP rate descending, then by number of targets tested
-        (more evidence = higher confidence). Caller typically takes [0].
+        Requires the full mechanical-control tier (dual_control AND
+        rule_tier="library"), the same doctrine as :meth:`graduate`:
+        precision statistics cannot substitute for the fix-mutant
+        control, and an add_rule entry with dual_control=True but a
+        failed fix-mutant control never proved it distinguishes fixed
+        from unfixed code. Sorted by TP rate descending, then by
+        number of targets tested (more evidence = higher confidence).
+        Caller typically takes [0].
         """
         candidates = [
             e for e in self.find(cwe, engine)
             if e.tp_rate >= _REPLAY_TP_THRESHOLD
             and len(e.targets) >= _MIN_TARGETS_FOR_REPLAY
             and e.dual_control
+            and e.rule_tier == "library"
         ]
         candidates.sort(key=lambda e: (e.tp_rate, len(e.targets)), reverse=True)
         return candidates
