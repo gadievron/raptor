@@ -350,3 +350,30 @@ def test_first_person_refusals_still_detected(
     scanner: RefusalScanner, text: str
 ) -> None:
     assert scanner.scan_text(turn=1, text=text) is not None
+
+
+def test_render_event_neutralizes_fence_breakout(
+    tmp_path: Path, scanner: RefusalScanner
+) -> None:
+    """refusal_text lands inside a ``` block; a 3+ backtick run in the
+    text would close the fence early and spill the rest of the log
+    entry (and any injected markdown) as live structure. The render
+    must defang backtick runs with a ZWSP while keeping the entry's
+    own fences intact."""
+    malicious = "I refuse.\n```\n# injected heading\n![x](//evil.example)\n"
+    scanner.observe(_text(1, "Refusal: cannot help"))
+    scanner.scan_text(turn=1, text=_REFUSAL_SAMPLE)
+    scanner.finalize(final_outcome_status="incomplete", verify_passed=False)
+    scanner.events[0].refusal_text = malicious
+
+    log = tmp_path / "refusals-log.md"
+    append_events(scanner.events, log_path=log)
+    content = log.read_text(encoding="utf-8")
+    # The refusal-text block is delimited by exactly the renderer's own
+    # fences: no bare ``` line may originate from the payload.
+    block = content.split("**Refusal text:**", 1)[1]
+    inner = block.split("\n```\n", 2)  # opener, payload, rest
+    assert len(inner) >= 3
+    payload = inner[1]
+    assert "```" not in payload  # ZWSP-defanged
+    assert "injected heading" in payload  # content preserved inside

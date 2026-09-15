@@ -320,6 +320,16 @@ def _escape_terminal_codes(s: str) -> str:
 def _render_event(event: RefusalEvent, recovery: str | None = None) -> str:
     """Render one event as a markdown section for refusals-log.md."""
     safe_refusal_text = _escape_terminal_codes(event.refusal_text)
+    # Fence-break defence: a 3+ backtick run in the refusal text would
+    # close the surrounding ``` block and spill the rest of the log
+    # entry as live markdown. ZWSP after the second backtick defangs
+    # the fence token without changing the monospace render (same
+    # technique as sanitise_code / cve_diff's _neutralize_diff_fence).
+    safe_refusal_text = re.sub(
+        r"`{3,}",
+        lambda m: "``\u200b" + "`" * (len(m.group(0)) - 2),
+        safe_refusal_text,
+    )
     label = f"{event.cve_id}@{event.run_id}:turn{event.turn}"
     tool_block = (
         f"\n**Tool call in scope:** `{event.tool_call.get('name', '<unknown>')}` "

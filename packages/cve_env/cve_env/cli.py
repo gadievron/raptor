@@ -203,10 +203,12 @@ def _cmd_ps(args: argparse.Namespace) -> int:
     res = run_cli(["docker", "ps", "--filter", f"label={OWNER_LABEL}",
                    "--format", fmt], timeout=30)
     if res.returncode != 0:
-        print(f"ps: docker ps failed: {(res.stderr or '').strip()[:300]}",
+        from core.security.log_sanitisation import sanitise_for_terminal
+        print("ps: docker ps failed: "
+              f"{sanitise_for_terminal((res.stderr or '').strip(), max_len=300)}",
               file=sys.stderr)
         return 1
-    rows = []
+    provisions = []
     for line in (res.stdout or "").splitlines():
         parts = line.split("\t")
         if len(parts) != 5 or not parts[0]:
@@ -216,12 +218,15 @@ def _cmd_ps(args: argparse.Namespace) -> int:
         m = re.search(r"(\d+\.\d+\.\d+\.\d+):(\d+)->", ports)
         if m:
             endpoint = {"host": m.group(1), "port": int(m.group(2))}
-        rows.append({"down_token": token, "name": name,
-                     "endpoint": endpoint, "image": image,
-                     "running_for": age.strip()})
-    print(dumps_display(rows, indent=2))
-    print(f"ps: {len(rows)} live provision(s)"
-          + (" — tear down with: cve-env down <down_token>" if rows
+        provisions.append({"down_token": token, "name": name,
+                           "endpoint": endpoint, "image": image,
+                           "running_for": age.strip()})
+    # ensure_ascii: container names/images are docker-derived; bare
+    # non-ASCII JSON passes C1 terminal controls through raw.
+    import json as _json
+    print(_json.dumps(provisions, indent=2, ensure_ascii=True))
+    print(f"ps: {len(provisions)} live provision(s)"
+          + (" — tear down with: cve-env down <down_token>" if provisions
              else ""), file=sys.stderr)
     return 0
 
@@ -375,9 +380,12 @@ def _cmd_build(args: argparse.Namespace) -> int:
             )
             if pointer is not None:
                 prefill = pointer.to_dict()
+                from core.security.log_sanitisation import (
+                    sanitise_for_terminal as _sft,
+                )
                 print(
                     f"prefill: using /cve-diff discovery from "
-                    f"{pointer.source_run}",
+                    f"{_sft(str(pointer.source_run), max_len=200)}",
                     file=sys.stderr,
                 )
             else:
@@ -1029,7 +1037,16 @@ def _print_human_report(outcome: Any) -> None:  # noqa: ANN401
     pressure = _audit_pressure_summary(outcome.audit_path)
 
     def _e(msg: str) -> None:
-        print(msg, file=sys.stderr)  # noqa: T201 -- intentional CLI output
+        # Single funnel for the whole report: summaries, receipts, and
+        # warnings carry container-/LLM-derived fragments — escape
+        # control bytes AND bound length here so every line inherits
+        # the scrub (several row builders interpolate unbounded
+        # foreign fields; the terminal doctrine is escape + bound).
+        # 512 leaves ample headroom over the longest legitimate row
+        # (~200 chars of receipt text) while stopping a hostile field
+        # from flooding the terminal.
+        from core.security.log_sanitisation import sanitise_for_terminal
+        print(sanitise_for_terminal(msg, max_len=512), file=sys.stderr)  # noqa: T201 -- intentional CLI output
 
     _e("")
     _e("=" * 72)

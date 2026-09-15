@@ -1084,3 +1084,65 @@ def test_print_human_report_zero_turn_non_replay_stays_unknown(
     cli._print_human_report(out)
     text = capfd.readouterr().err
     assert "BUILT" not in text
+
+
+def test_human_report_escapes_foreign_fragments(tmp_path, capsys):
+    """The stderr report funnels container-/LLM-derived fragments
+    (give_up_detail, receipts) through _e — control bytes must be
+    escaped at that funnel."""
+    from types import SimpleNamespace
+
+    from cve_env.cli import _print_human_report
+
+    hostile = "\x1b]0;pwned\x07\x9b2J‮evil"
+    outcome = SimpleNamespace(
+        cve_id="CVE-2020-0001",
+        status="error",
+        error=f"boom {hostile}",
+        tool_names_called=[],
+        num_turns=3,
+        total_cost_usd=0.5,
+        verify_passed=False,
+        stop_reason="end",
+        reason="",
+        give_up_reason="",
+        give_up_detail="",
+        final_text="plain failure text",
+        audit_path=tmp_path / "missing-audit.jsonl",
+    )
+    _print_human_report(outcome)
+    err = capsys.readouterr().err
+    assert "cve-env report" in err
+    for raw in ("\x1b", "\x07", "\x9b", "‮"):
+        assert raw not in err
+    assert "boom" in err
+
+
+def test_human_report_funnel_bounds_line_length(tmp_path, capsys):
+    """Terminal doctrine is escape + bound: a hostile unbounded field
+    (here a flooded error) must arrive capped with an explicit elision
+    marker, not flood the operator's terminal."""
+    from types import SimpleNamespace
+
+    from cve_env.cli import _print_human_report
+
+    outcome = SimpleNamespace(
+        cve_id="CVE-2020-0002" + "A" * 5000,
+        status="error",
+        error="boom",
+        tool_names_called=[],
+        num_turns=3,
+        total_cost_usd=0.5,
+        verify_passed=False,
+        stop_reason="end",
+        reason="",
+        give_up_reason="",
+        give_up_detail="",
+        final_text="plain failure text",
+        audit_path=tmp_path / "missing-audit.jsonl",
+    )
+    _print_human_report(outcome)
+    err = capsys.readouterr().err
+    assert "...[+" in err  # explicit elision marker
+    for line in err.splitlines():
+        assert len(line) < 600  # 512 cap + elision marker headroom

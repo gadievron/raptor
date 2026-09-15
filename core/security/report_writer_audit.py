@@ -224,6 +224,11 @@ _REPORT_WRITER_FILES = (
     "packages/binary_analysis/harness.py",
     "packages/binary_analysis/investigation.py",
     "packages/binary_analysis/pipeline.py",
+    # cve_diff terminal lanes: bench result echoes (agent/tool error
+    # text) and the run-mode flow.md relay (typer.echo sinks).
+    "packages/cve_diff/cve_diff/cli/bench.py",
+    "packages/cve_diff/cve_diff/cli/main.py",
+    "packages/cve_env/cve_env/cli.py",
     "packages/describe/report.py",
     "packages/diagram/attack_paths.py",
     "packages/diagram/attack_tree.py",
@@ -373,6 +378,29 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
             "(class_inventory['summary'] — internally-built integer "
             "counts); every name-bearing interpolation in the report "
             "goes through the _esc chokepoint"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/cve_env/cve_env/cli.py",
+        func_name="_cmd_build",
+        kind="unsanitised_llm_value",
+        detail="cve",
+        audit_note=(
+            "cve.cve_id passes the argparse _validate_cve_id format "
+            "validator (strict CVE-id shape); the taint chains through "
+            "the record construction, not free text"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/cve_env/cve_env/cli.py",
+        func_name="_cmd_build",
+        kind="unsanitised_llm_value",
+        detail="outcome_json",
+        audit_note=(
+            "machine-readable outcome document on stdout consumed by "
+            "bench pipelines (sidecar parity contract) — must stay "
+            "byte-exact dumps_artifact output; the human render of the "
+            "same data goes through the _e escaping funnel"
         ),
     ),
     AllowlistEntry(

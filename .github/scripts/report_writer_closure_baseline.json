@@ -169,33 +169,6 @@
     "packages/cve_diff/cve_diff/oracle/cross_check.py::main::unsanitised_llm_value::ver": {
       "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low — sanitise + register on next functional touch"
     },
-    "packages/cve_env/cve_env/cli.py::_cmd_build::unsanitised_llm_value::cve": {
-      "note": "cve-env human report lane — unit-filed to the cve_env owner (campaign row U19-20); docker/agent-derived fields need the package's own chokepoint before registration"
-    },
-    "packages/cve_env/cve_env/cli.py::_cmd_build::unsanitised_llm_value::outcome_json": {
-      "note": "cve-env human report lane — unit-filed to the cve_env owner (campaign row U19-20); docker/agent-derived fields need the package's own chokepoint before registration"
-    },
-    "packages/cve_env/cve_env/cli.py::_cmd_build::unsanitised_llm_value::pointer": {
-      "note": "cve-env human report lane — unit-filed to the cve_env owner (campaign row U19-20); docker/agent-derived fields need the package's own chokepoint before registration"
-    },
-    "packages/cve_env/cve_env/cli.py::_cmd_ps::unsanitised_llm_value::age": {
-      "note": "cve-env human report lane — unit-filed to the cve_env owner (campaign row U19-20); docker/agent-derived fields need the package's own chokepoint before registration"
-    },
-    "packages/cve_env/cve_env/cli.py::_cmd_ps::unsanitised_llm_value::endpoint": {
-      "note": "cve-env human report lane — unit-filed to the cve_env owner (campaign row U19-20); docker/agent-derived fields need the package's own chokepoint before registration"
-    },
-    "packages/cve_env/cve_env/cli.py::_cmd_ps::unsanitised_llm_value::image": {
-      "note": "cve-env human report lane — unit-filed to the cve_env owner (campaign row U19-20); docker/agent-derived fields need the package's own chokepoint before registration"
-    },
-    "packages/cve_env/cve_env/cli.py::_cmd_ps::unsanitised_llm_value::name": {
-      "note": "cve-env human report lane — unit-filed to the cve_env owner (campaign row U19-20); docker/agent-derived fields need the package's own chokepoint before registration"
-    },
-    "packages/cve_env/cve_env/cli.py::_cmd_ps::unsanitised_llm_value::stderr": {
-      "note": "cve-env human report lane — unit-filed to the cve_env owner (campaign row U19-20); docker/agent-derived fields need the package's own chokepoint before registration"
-    },
-    "packages/cve_env/cve_env/cli.py::_cmd_ps::unsanitised_llm_value::token": {
-      "note": "cve-env human report lane — unit-filed to the cve_env owner (campaign row U19-20); docker/agent-derived fields need the package's own chokepoint before registration"
-    },
     "packages/exploit_feasibility/api.py::format_analysis_summary::unsanitised_llm_value::description": {
       "note": "feasibility summaries interpolate the package's own mitigation-catalog constants; the target-derived residue is unit-filed to the exploit_feasibility owner (campaign row U17-18)"
     },
