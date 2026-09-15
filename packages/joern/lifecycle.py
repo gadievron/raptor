@@ -53,6 +53,13 @@ _STATE_DIR = Path.home() / ".cache" / "raptor"
 _STATE_FILE = _STATE_DIR / "joern-server.json"
 _LOCK_FILE = _STATE_DIR / "joern-server.lock"
 
+# SIGTERM grace for ``_kill_server``: how long the whole recorded
+# server tree gets to exit before SIGKILL escalation. Module-level so
+# tests exercising the escalation ladder against stand-in children can
+# shrink it; production keeps the 5s a multi-GB JVM's orderly shutdown
+# needs.
+_KILL_GRACE_S = 5.0
+
 # Staleness horizon for an UNREFERENCED server (see joern_acquire).
 # Trade-off, both directions: lower and a warm multi-GB JVM gets
 # recycled between closely-spaced runs, re-paying the 30-120s boot
@@ -449,7 +456,7 @@ def _kill_server(state: dict[str, Any]) -> bool:
         pgid = None
     try:
         _signal_server(pid, signal.SIGTERM)
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + _KILL_GRACE_S
         while time.monotonic() < deadline:
             # Leader-only liveness let the grace loop declare victory
             # while the JVM member lived on — require the whole tree

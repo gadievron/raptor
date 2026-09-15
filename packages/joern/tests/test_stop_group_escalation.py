@@ -87,6 +87,11 @@ def _short_graces(monkeypatch):
     """Bound the escalation waits so tests stay fast."""
     monkeypatch.setattr(server_mod, "_GROUP_KILL_GRACE_S", 0.5)
     monkeypatch.setattr(server_mod, "_SHUTDOWN_GRACE_S", 1.0)
+    # The lifecycle kill's own SIGTERM grace: the SIGTERM-immune
+    # stand-in member guarantees that loop always runs to its
+    # deadline, so the production 5s would dominate every
+    # _kill_server test here.
+    monkeypatch.setattr(lifecycle, "_KILL_GRACE_S", 0.5)
 
 
 @pytest.fixture
