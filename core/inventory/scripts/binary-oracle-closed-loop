@@ -49,7 +49,7 @@ sys.path.insert(0, os.environ["RAPTOR_DIR"])
 from core.config import RaptorConfig                    # noqa: E402
 from core.inventory.builder import build_inventory      # noqa: E402
 from core.inventory.lookup import lookup_function       # noqa: E402
-from core.inventory.reach_chokepoint import check_suppress  # noqa: E402
+from core.analysis.reach_chokepoint import check_suppress   # noqa: E402
 
 
 def _run_semgrep(src_root: Path, configs: list[str]) -> list[dict]:
