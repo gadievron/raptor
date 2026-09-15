@@ -104,7 +104,15 @@ class TestRuleProgressPrinter:
             heartbeat_interval_s=0.05, poll_interval_s=0.02,
         ) as prog:
             prog.on_rule(0, 1, "slow_rule")
-            time.sleep(0.3)
+            # Poll for the beat instead of sleeping a fixed window: a
+            # starved heartbeat thread could miss a 0.3s window
+            # entirely (false-fail), while a generous poll deadline
+            # still fails decisively when the heartbeat is gone.
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                if "still running" in stream.getvalue():
+                    break
+                time.sleep(0.02)
         lines = stream.getvalue().splitlines()
         beats = [ln for ln in lines if "still running" in ln]
         assert beats, "idle heartbeat expected"
@@ -112,9 +120,12 @@ class TestRuleProgressPrinter:
 
     def test_heartbeat_silent_while_rule_lines_flow(self):
         stream = io.StringIO()
+        # An interval no test-length stall can cross: silence while
+        # rule lines flow is then structural, not a bet that five
+        # 0.03s-paced lines finish inside 10 seconds under load.
         with RuleProgressPrinter(
             stream, label="cocci",
-            heartbeat_interval_s=10.0, poll_interval_s=0.02,
+            heartbeat_interval_s=3600.0, poll_interval_s=0.02,
         ) as prog:
             for i in range(5):
                 prog.on_rule(i, 5, f"r{i}")
