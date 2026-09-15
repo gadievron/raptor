@@ -1976,6 +1976,43 @@ def _class_body_escaping_bindings(
     return out
 
 
+def _nested_scope_escaping_rebinds(scope_root: ast.AST) -> frozenset:
+    """Enclosing-scope names a NESTED function can rebind — the
+    ``nonlocal``/``global``-declared names that some nested
+    function/method body assigns.
+
+    Function bodies do not execute inline, but any call between
+    validator and sink (direct, indirect, or through a callback) may
+    run them — and call positions are not tracked here, so the only
+    sound treatment is kill-direction membership for the whole
+    window: a chain member a nested scope can rebind is never
+    provably still the validated value at the sink.  Shrink-only
+    (mirrors the class-body arm): these names never GROW the chain.
+
+    Over-approximates on purpose: declarations and assignments are
+    paired per nested function without modelling which enclosing
+    scope each ``nonlocal`` resolves to — the cost is a declined
+    suppression, never a false one.
+    """
+    out: set = set()
+    for node in ast.walk(scope_root):
+        if node is scope_root or not isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef),
+        ):
+            continue
+        declared: set = set()
+        for sub in ast.walk(node):
+            if isinstance(sub, (ast.Global, ast.Nonlocal)):
+                declared.update(sub.names)
+        if not declared:
+            continue
+        for sub in ast.walk(node):
+            for name in declared - out:
+                if _node_rebinds_var(sub, name):
+                    out.add(name)
+    return frozenset(out)
+
+
 def _sanitizer_tails_for_spec_kind(kind: str) -> frozenset | None:
     """Callee-name tails identifying the sanitizing binding on the
     validator line for a mechanical :class:`ValidatorSpec` kind.
@@ -2236,6 +2273,13 @@ def _python_chain_reaches_sink(
             sanitizer_call_tails=sanitizer_call_tails,
         )
     }
+    # Nested-scope escape kill: a nested function rebinding a chain
+    # member through ``nonlocal``/``global`` executes on ANY call in
+    # the window (``def taint(): nonlocal y; y = raw`` + ``taint()``),
+    # and call positions are untracked — such members leave the chain
+    # (shrink-only: conservative; see
+    # :func:`_nested_scope_escaping_rebinds`).
+    chain -= _nested_scope_escaping_rebinds(scope_root)
     if not chain:
         return False
     return any(_re.search(rf"\b{_re.escape(var)}\b", sink_line_text) for var in chain)

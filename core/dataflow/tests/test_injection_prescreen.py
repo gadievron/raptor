@@ -648,3 +648,103 @@ class TestDecoyValidatorsNeverRefute:
             rule_id="py/path-injection",
         )
         assert verdict is not None and verdict.refuted is True
+
+
+class TestNestedScopeRebindKill:
+    """A nested function rebinding an enclosing-scope name via
+    nonlocal/global executes on any call between validator and sink —
+    the chain must drop such names (kill-only, mirroring the
+    class-body arm)."""
+
+    def test_nonlocal_rebind_never_refutes(self, tmp_path):
+        app = (
+            "import os\n"
+            "import re\n"
+            "\n"
+            "\n"
+            "def handler(request):\n"
+            "    raw = request.args.get('name')\n"
+            "    if not re.fullmatch(r'[A-Za-z0-9_+-]+', raw):\n"
+            "        return None\n"
+            "    y = raw\n"
+            "    def taint():\n"
+            "        nonlocal y\n"
+            "        y = request.environ['EVIL']\n"
+            "    taint()\n"
+            "    os.system('ls ' + y)\n"
+        )
+        repo = _write_app(tmp_path, app)
+        assert prescreen_finding(
+            paths=[_path("app.py", 6, [7], 14)], repo_root=repo,
+            rule_id="py/command-line-injection",
+        ) is None
+
+    def test_global_rebind_never_refutes(self, tmp_path):
+        app = (
+            "import os\n"
+            "import re\n"
+            "\n"
+            "\n"
+            "def handler(request):\n"
+            "    global g\n"
+            "    g = request.args.get('name')\n"
+            "    if not re.fullmatch(r'[A-Za-z0-9_+-]+', g):\n"
+            "        return None\n"
+            "    def taint():\n"
+            "        global g\n"
+            "        g = 'evil; rm -rf /'\n"
+            "    taint()\n"
+            "    os.system('ls ' + g)\n"
+        )
+        repo = _write_app(tmp_path, app)
+        assert prescreen_finding(
+            paths=[_path("app.py", 7, [8], 14)], repo_root=repo,
+            rule_id="py/command-line-injection",
+        ) is None
+
+    def test_inline_rebind_control_still_kills(self, tmp_path):
+        # Control from the finding: the same rebind inline (not
+        # nested) was already killed pre-fix.
+        app = (
+            "import os\n"
+            "import re\n"
+            "\n"
+            "\n"
+            "def handler(request):\n"
+            "    raw = request.args.get('name')\n"
+            "    if not re.fullmatch(r'[A-Za-z0-9_+-]+', raw):\n"
+            "        return None\n"
+            "    y = raw\n"
+            "    y = request.environ['EVIL']\n"
+            "    os.system('ls ' + y)\n"
+        )
+        repo = _write_app(tmp_path, app)
+        assert prescreen_finding(
+            paths=[_path("app.py", 6, [7], 11)], repo_root=repo,
+            rule_id="py/command-line-injection",
+        ) is None
+
+    def test_nested_fn_without_escape_still_refutes(self, tmp_path):
+        # Two-direction guard: a nested function binding only its OWN
+        # local (no nonlocal/global) must not kill the chain.
+        app = (
+            "import os\n"
+            "import re\n"
+            "\n"
+            "\n"
+            "def handler(request):\n"
+            "    y = request.args.get('name')\n"
+            "    if not re.fullmatch(r'[A-Za-z0-9_+-]+', y):\n"
+            "        return None\n"
+            "    def helper():\n"
+            "        y = 'local-only'\n"
+            "        return y\n"
+            "    helper()\n"
+            "    os.system('ls ' + y)\n"
+        )
+        repo = _write_app(tmp_path, app)
+        verdict = prescreen_finding(
+            paths=[_path("app.py", 6, [7], 13)], repo_root=repo,
+            rule_id="py/command-line-injection",
+        )
+        assert verdict is not None and verdict.refuted is True
