@@ -1278,6 +1278,7 @@ def run_sandboxed(
     exec_pid_callback: Callable[[int], None] | None = None,
     child_pid_callback: Callable[[int], None] | None = None,
     rootfs: str | None = None,
+    max_capture_bytes: int | None = None,
 ) -> subprocess.CompletedProcess:
     """Run `cmd` inside a fully-isolated sandbox.
 
@@ -3921,6 +3922,13 @@ def run_sandboxed(
     # .raptor-sbx-* dir under /tmp.
     stdout_buf = b"" if capture_output else None
     stderr_buf = b"" if capture_output else None
+    # Effective per-stream capture ceiling: callers that only consume
+    # bounded tails (SandboxHandle.exec keeps kilobytes) request a
+    # tighter transient bound than the 64 MiB default; never above
+    # the module ceiling.
+    _capture_cap = _CAPTURE_CAP
+    if max_capture_bytes is not None:
+        _capture_cap = max(0, min(int(max_capture_bytes), _CAPTURE_CAP))
     _truncated = {1: False, 2: False}
     # Raw wait-status once the capture loop's exit poll reaps the
     # child (None = not yet reaped there).
@@ -4007,25 +4015,24 @@ def run_sandboxed(
                             _parent_fds.discard(fd)
                             fds.remove(fd)
                         elif fd == out_r:
-                            if len(stdout_buf) < _CAPTURE_CAP:
+                            if len(stdout_buf) < _capture_cap:
                                 stdout_buf += chunk
                             else:
                                 _truncated[1] = True
                         else:
-                            if len(stderr_buf) < _CAPTURE_CAP:
+                            if len(stderr_buf) < _capture_cap:
                                 stderr_buf += chunk
                             else:
                                 _truncated[2] = True
-                _cap_mib = _CAPTURE_CAP // (1024 * 1024)
                 if _truncated[1]:
                     stdout_buf += (
                         b"\n[sandbox: stdout capture truncated "
-                        b"at %d MiB]\n" % _cap_mib
+                        b"at %d bytes]\n" % _capture_cap
                     )
                 if _truncated[2]:
                     stderr_buf += (
                         b"\n[sandbox: stderr capture truncated "
-                        b"at %d MiB]\n" % _cap_mib
+                        b"at %d bytes]\n" % _capture_cap
                     )
             finally:
                 # Close any pipes we didn't drain (timeout, exception).

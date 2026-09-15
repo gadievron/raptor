@@ -153,6 +153,18 @@ def sandbox_rootfs_supported() -> bool:
     return "rootfs" in _inspect.signature(sandbox_run).parameters
 
 
+# Per-stream sandbox capture ceiling for SandboxHandle.exec (bytes),
+# enforced transiently at the spawn backend's pipe drain. The handle
+# only ever consumes bounded tails of exec output (kilobytes into
+# ExecOutcome, a bounded logs replay), so a hostile command streaming
+# gigabytes must not balloon the trusted parent's memory first.
+# Trade-off, both directions: too SMALL truncates the output a verify
+# log/exec check greps before the interesting line arrives; too LARGE
+# re-opens the transient memory-DoS this bound exists to close. 1 MiB
+# per stream matches the docker tier's logs cap.
+_EXEC_CAPTURE_CAP_BYTES: int = 1024 * 1024
+
+
 class SandboxHandle(RuntimeHandle):
     """Witness-tier handle: an unpacked image rootfs run under the
     RAPTOR sandbox (namespace isolation, fail-closed rootfs mode).
@@ -253,6 +265,11 @@ class SandboxHandle(RuntimeHandle):
                 rootfs=str(self.rootfs),
                 block_network=self.block_network,
                 capture_output=True,
+                # Bounded at the sandbox drain: only tails of the
+                # hostile output are ever consumed (see
+                # _EXEC_CAPTURE_CAP_BYTES), so the capture must not
+                # transit unbounded through host memory.
+                max_capture_bytes=_EXEC_CAPTURE_CAP_BYTES,
                 text=True,
                 timeout=timeout_seconds,
                 cwd=(workdir or self.workdir) or None,

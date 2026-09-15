@@ -102,6 +102,41 @@ class TestCaptureCeiling(unittest.TestCase):
         self.assertIn(b"capture truncated", r.stdout,
                       "expected the truncation marker")
 
+    # Same gating rationale as the flood test above.
+    @requires_mount
+    def test_per_call_cap_bounds_the_drain(self):
+        from core.sandbox._spawn import run_sandboxed
+
+        # Per-call ceiling BELOW the module constant: the drain must
+        # honour the caller's tighter bound (SandboxHandle-style
+        # tail-only consumers), no module patching involved.
+        out = tempfile.mkdtemp(prefix="raptor-cap-")
+        prog = textwrap.dedent("""
+            import os
+            chunk = b"x" * (256 * 1024)
+            for _ in range(8):  # 2 MiB > the 256 KiB per-call cap
+                os.write(1, chunk)
+        """)
+        r = run_sandboxed(
+            ["/usr/bin/python3", "-c", prog],
+            target=out, output=out,
+            block_network=True,
+            writable_paths=[out, "/tmp"],
+            nproc_limit=1024,
+            limits={"memory_mb": 0, "max_file_mb": 10240,
+                    "cpu_seconds": 300},
+            readable_paths=None, allowed_tcp_ports=None,
+            seccomp_profile="full", seccomp_block_udp=False,
+            env=None, cwd=None, timeout=120,
+            capture_output=True, text=False,
+            max_capture_bytes=256 * 1024,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr[-300:])
+        self.assertLessEqual(
+            len(r.stdout), 256 * 1024 + 65536 + 4096,
+            "per-call capture cap not honoured by the drain")
+        self.assertIn(b"capture truncated", r.stdout)
+
 
 @requires_landlock
 class TestKeepTrustMarkersOutOfBand(unittest.TestCase):

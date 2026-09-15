@@ -521,6 +521,13 @@ def run_sandboxed(cmd: list[str], *,
                   # invisible — but the signature now lies less.)
                   capture_output: bool = True,
                   text: bool = True,
+                  # max_capture_bytes: accepted for signature parity
+                  # with Linux _spawn, which clamps its pipe drain to
+                  # it. This backend wraps subprocess.run (full
+                  # buffering); the caller-facing bound is applied by
+                  # context.py's dispatch-chokepoint result clamp, so
+                  # the value is not consulted here.
+                  max_capture_bytes: int | None = None,
                   stdin=None,
                   # stdout=/stderr= redirects, honoured only when not
                   # capturing (subprocess plumbs them natively here) —

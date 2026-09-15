@@ -381,6 +381,32 @@ def _run_teardown_first_timeout(
         )
 
 
+def _apply_capture_ceiling(
+    result: subprocess.CompletedProcess, cap: int,
+) -> None:
+    """Clamp captured stdout/stderr on *result* to *cap* per stream,
+    appending the spawn backend's truncation-marker shape.
+
+    Keep-head semantics matching ``_spawn.run_sandboxed``'s drain cap.
+    This is a RESULT-size bound only: the fork spawn backend bounds
+    its capture transiently during the drain; the subprocess-backed
+    lanes buffer their pipes fully before this clamp runs (documented
+    at the ``max_capture_bytes`` pop in ``run()``).
+    """
+    cap = max(0, int(cap))
+    for attr, label in (("stdout", "stdout"), ("stderr", "stderr")):
+        val = getattr(result, attr, None)
+        if val is None or len(val) <= cap:
+            continue
+        marker = (
+            f"\n[sandbox: {label} capture truncated at {cap} bytes]\n"
+        )
+        if isinstance(val, bytes):
+            setattr(result, attr, val[:cap] + marker.encode("ascii"))
+        else:
+            setattr(result, attr, val[:cap] + marker)
+
+
 # Byte ceiling for recounting the (target-writable) event log. A
 # planted multi-GiB file must not serialize the parent's I/O under the
 # persist lock; past the cap the recount aborts with the overflow flag
@@ -2864,6 +2890,18 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             )
             raise TypeError(msg_0)
 
+        # Per-call capture ceiling (bytes per captured stream), for
+        # callers that only ever consume bounded tails of hostile
+        # output (SandboxHandle.exec keeps kilobytes). Popped here so
+        # the subprocess-backed lanes never see an unknown kwarg. The
+        # fork spawn backend enforces it DURING the pipe drain — a
+        # true transient bound on the trusted parent's memory (rootfs
+        # runs are pinned to that backend by the rootfs fail-closed
+        # gates); every other lane gets a result-size clamp at the
+        # dispatch chokepoint, which bounds what flows downstream but
+        # not the lane's own transient buffering.
+        _max_capture_bytes = kwargs.pop("max_capture_bytes", None)
+
         # Audit-mode + missing output= handling. Two distinct cases:
         #
         # 1. EXPLICIT per-call kwarg `audit=True` + no output= →
@@ -3514,6 +3552,12 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     _waived_exposure,
                 )
             _executed = executor()
+            if _max_capture_bytes is not None:
+                # Result-size clamp for the lanes whose capture is not
+                # drained through the fork spawn backend's bounded
+                # loop (see the kwarg pop above). Idempotent on
+                # spawn-lane results — they are already within the cap.
+                _apply_capture_ceiling(_executed, _max_capture_bytes)
             # Runtime dominance stamp: run()'s epilogue refuses any
             # result that did not come through this chokepoint, so an
             # executor added in ANOTHER module (out of the AST gate's
@@ -5111,6 +5155,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 stdin=kwargs.get("stdin"),
                                 stdout=kwargs.get("stdout"),
                                 stderr=kwargs.get("stderr"),
+                                max_capture_bytes=_max_capture_bytes,
                                 audit_mode=nonlocal_audit_mode,
                                 audit_run_dir=_audit_run_dir,
                                 audit_required=audit_required,
