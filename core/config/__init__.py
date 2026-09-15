@@ -552,6 +552,18 @@ class RaptorConfig:
         #                    read as an enum (any other value → auto); no
         #                    injection surface.
         "RAPTOR_TARGET_KIND",
+        #   RAPTOR_SCORECARD_PATH  reliability-ledger path override
+        #                    (tests and operators point the per-model
+        #                    scorecard at a scratch/alternate file).
+        #                    Must survive the subprocess boundary:
+        #                    a child that flushes scorecard events
+        #                    would otherwise re-resolve the DEFAULT
+        #                    ledger under RAPTOR_DIR and silently
+        #                    discard the isolation/override — the
+        #                    same silent-loss class as RAPTOR_OUT_DIR.
+        #                    An attacker setting it gains nothing
+        #                    beyond same-UID file write access.
+        "RAPTOR_SCORECARD_PATH",
         # Session identity credential: the launcher-exported
         # pid + token that lets deep children (skill dispatches, nested
         # claude subagents, PID-namespace-blind helpers) resolve their
@@ -594,6 +606,7 @@ class RaptorConfig:
         # on the keep-trust dispatch arm, which retains the full set
         # by contract.
         "RAPTOR_DIR", "RAPTOR_OUT_DIR", "RAPTOR_TARGET_KIND",
+        "RAPTOR_SCORECARD_PATH",
     })
 
     # Name prefixes that identify RAPTOR to EXECUTED target code even

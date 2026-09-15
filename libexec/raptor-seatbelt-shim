@@ -541,7 +541,8 @@ def main() -> int:
                   "_RAPTOR_TRUSTED", "CLAUDECODE",
                   "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
                   "RAPTOR_ALLOW_DEGRADED_UNTRUSTED",
-                  "RAPTOR_DIR", "RAPTOR_OUT_DIR", "RAPTOR_TARGET_KIND")
+                  "RAPTOR_DIR", "RAPTOR_OUT_DIR", "RAPTOR_TARGET_KIND",
+                  "RAPTOR_SCORECARD_PATH")
         )
         for _m in _strip:
             os.environ.pop(_m, None)

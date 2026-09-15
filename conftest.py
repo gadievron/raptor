@@ -23,6 +23,7 @@ require operators to set it explicitly per the launcher rule.
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,25 @@ os.environ.setdefault("_RAPTOR_TRUSTED", "1")
 # exercise the log directly opt back in via ``RAPTOR_REACH_VERDICT_LOG``
 # pointing at a tmp file (see core/analysis/tests/test_reach_verdict_log.py).
 os.environ.setdefault("RAPTOR_REACH_VERDICT_LOG_DISABLED", "1")
+
+# Same class of sidecar, same rule: the per-model reliability ledger
+# (``core.llm.scorecard``) is operator telemetry — real runs grading
+# real models. Any test that reaches a scorecard flush WITHOUT its
+# suite's isolation fixture (a producer exercised from another tree,
+# or a producer that lands before its fixture does) would fall
+# through to the DEFAULT ledger path under RAPTOR_DIR and write
+# fabricated cells (test models, synthetic decision classes) into
+# production telemetry. Point the default at a session-scoped scratch
+# file so that fallback is harmless everywhere; per-suite fixtures
+# that pin their own tmp path run later and win, and a deliberately
+# exported RAPTOR_SCORECARD_PATH survives (``setdefault``).
+os.environ.setdefault(
+    "RAPTOR_SCORECARD_PATH",
+    os.path.join(
+        tempfile.gettempdir(),
+        f"raptor-pytest-scorecard-{os.getpid()}.json",
+    ),
+)
 
 # Force RAPTOR_DIR to point at THIS worktree, not whatever the
 # developer's login shell exports. ``setdefault`` is a no-op when the
