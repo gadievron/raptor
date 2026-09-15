@@ -178,6 +178,7 @@ def test_ts_template_literal_type_if_false_does_not_range(language):
 
 
 def test_rust_cfg_any_empty_gates_fn():
+    _requires_lexical_grammar("rust")
     src = (
         "#[cfg(any())]\n"
         "fn dead_rs() {\n"
@@ -194,6 +195,7 @@ def test_rust_cfg_any_empty_gates_fn():
 
 
 def test_rust_if_false_block_detected():
+    _requires_lexical_grammar("rust")
     src = (
         "fn f() {\n"
         "    if false {\n"
@@ -244,6 +246,7 @@ def test_rust_cfg_on_const_does_not_grab_later_fn():
 
 
 def test_rust_cfg_chained_attrs_then_fn():
+    _requires_lexical_grammar("rust")
     # cfg + other attributes + visibility qualifiers still resolve to
     # the gated fn.
     src = (
@@ -258,6 +261,7 @@ def test_rust_cfg_chained_attrs_then_fn():
 
 
 def test_rust_cfg_on_mod_ranges_module_body():
+    _requires_lexical_grammar("rust")
     # #[cfg(any())] gating a module makes everything inside dead —
     # the range covers the nested fn.
     src = (
@@ -940,3 +944,73 @@ def test_js_grammar_absent_fails_closed(monkeypatch):
     monkeypatch.setattr(lexical_view, "_VALIDATED", {})
     src = "if (false) {\n  dead();\n}\n"
     assert detect_dead_scopes("javascript", src) == []
+# ---------------------------------------------------------------------------
+# Rust hostile-shape fixtures: comment / string data must never range
+# live code dead. All fixtures are valid, compiling Rust.
+# ---------------------------------------------------------------------------
+
+
+def test_rust_if_false_in_comment_no_false_range():
+    src = (
+        "fn outer() { // note: if false { legacy gate\n"
+        "  inner();\n"
+        "}\n"
+        "fn inner() { target(); }\n"
+    )
+    assert detect_dead_scopes("rust", src) == []
+
+
+def test_rust_if_false_in_string_no_false_range():
+    src = (
+        'fn f() {\n'
+        '    let s = "if false { gate\\n";\n'
+        '    let r = r#"if false { raw"#;\n'
+        "    live(s, r);\n"
+        "}\n"
+    )
+    assert detect_dead_scopes("rust", src) == []
+
+
+def test_rust_cfg_any_in_doc_comment_no_false_range():
+    src = (
+        "/// example: #[cfg(any())]\n"
+        "fn documented() { live(); }\n"
+    )
+    assert detect_dead_scopes("rust", src) == []
+
+
+def test_rust_cfg_any_in_block_comment_no_false_range():
+    src = (
+        "/* #[cfg(any())]\n"
+        "   fn gated() { } */\n"
+        "fn live() { target(); }\n"
+    )
+    assert detect_dead_scopes("rust", src) == []
+
+
+def test_rust_real_dead_if_after_comment_decoy_still_detected():
+    _requires_lexical_grammar("rust")
+    src = (
+        "fn f() { // if false { decoy\n"
+        "    if false {\n"
+        "        dead();\n"
+        "    }\n"
+        "}\n"
+    )
+    assert (2, 4) in detect_dead_scopes("rust", src)
+
+
+def test_rust_parse_error_bails_whole_file():
+    src = "fn f( { let = ;\nif false {\n  x();\n}\n"
+    assert detect_dead_scopes("rust", src) == []
+
+
+def test_rust_grammar_absent_fails_closed(monkeypatch):
+    from core.inventory import lexical_view
+
+    monkeypatch.setattr(
+        lexical_view._ts_cache, "import_grammar", lambda name: None,
+    )
+    monkeypatch.setattr(lexical_view, "_VALIDATED", {})
+    src = "fn f() {\n    if false {\n        dead();\n    }\n}\n"
+    assert detect_dead_scopes("rust", src) == []

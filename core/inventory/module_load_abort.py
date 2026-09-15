@@ -470,7 +470,10 @@ def _go_panic_is_unconditional(body: str, panic_offset: int) -> bool:
 # may also appear inside ``#[cfg(...)]`` gates — those are
 # conditional on build features and we conservatively do NOT
 # flag them (build configuration is out of scope for static
-# analysis).
+# analysis). Matched over the tokenizer-grade blanked view so a
+# ``compile_error!`` inside a comment or string literal (both
+# idiomatic in macro documentation) can never fabricate the
+# whole-file abort gate. No grammar / parse errors → bail.
 # ---------------------------------------------------------------------------
 
 
@@ -480,6 +483,18 @@ _RUST_COMPILE_ERROR = re.compile(
 
 
 def _detect_rust(content: str) -> ModuleLoadAbort | None:
+    from core.inventory.lexical_view import LexicalRefusal, blank_noncode
+
+    try:
+        stripped = blank_noncode("rust", content)
+    except LexicalRefusal:
+        # Parse errors: recovered token boundaries are guesses; a
+        # partial view could fabricate a whole-file abort. Bail —
+        # toward no suppression.
+        return None
+    if stripped is None:
+        # Grammar unavailable — cannot vouch a code view; no witness.
+        return None
     # Naive but effective: examine only the FIRST compile_error! at
     # line start (after any leading whitespace). If that occurrence
     # is attribute-gated, report nothing — later occurrences are not
@@ -488,16 +503,16 @@ def _detect_rust(content: str) -> ModuleLoadAbort | None:
     # gates; treating those sites as out of scope is the module-wide
     # false-negative bias (miss a deferral, never suppress live
     # code).
-    m = _RUST_COMPILE_ERROR.search(content)
+    m = _RUST_COMPILE_ERROR.search(stripped)
     if not m:
         return None
     # Check that the preceding non-whitespace token isn't ``]`` (end
     # of an attribute). A bare attribute-attached compile_error like
     # ``#[cfg(...)] compile_error!(...)`` is conditional; skip it.
-    before = content[: m.start()].rstrip()
+    before = stripped[: m.start()].rstrip()
     if before.endswith("]"):
         return None
-    line_no = content.count("\n", 0, m.start()) + 1
+    line_no = stripped.count("\n", 0, m.start()) + 1
     return ModuleLoadAbort(
         line=line_no,
         summary="compile_error!(...)",

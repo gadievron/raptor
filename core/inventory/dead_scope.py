@@ -175,6 +175,11 @@ def _detect_javascript(language: str, content: str) -> list[DeadRange]:
 # ---------------------------------------------------------------------------
 # Rust — ``if false {…}`` blocks plus ``#[cfg(any())]`` attributes
 # (empty ``any()`` is the canonical always-false cfg) gating a fn.
+# Matched over the tokenizer-grade blanked view: comments (line, block
+# — nested included, doc), string literals (raw forms included) and
+# char literals are spaced out first, so ``if false {`` /
+# ``#[cfg(any())]`` in a comment or string can never range live code
+# dead. No grammar / parse errors → bail (no ranges).
 # ---------------------------------------------------------------------------
 
 
@@ -200,19 +205,30 @@ _RUST_ITEM_AFTER_CFG = re.compile(
 
 
 def _detect_rust(content: str) -> list[DeadRange]:
+    from core.inventory.lexical_view import LexicalRefusal, blank_noncode
+
+    try:
+        stripped = blank_noncode("rust", content)
+    except LexicalRefusal:
+        # Parse errors: recovered token boundaries are guesses; bail
+        # on the whole file — toward no suppression.
+        return []
+    if stripped is None:
+        # Grammar unavailable — cannot vouch a code view; no witness.
+        return []
     ranges: list[DeadRange] = []
     # ``if false { … }`` blocks.
-    for m in _RUST_DEAD_IF.finditer(content):
+    for m in _RUST_DEAD_IF.finditer(stripped):
         brace_pos = m.end() - 1
-        close = _match_brace(content, brace_pos)
+        close = _match_brace(stripped, brace_pos)
         if close is None:
             continue
-        start_line = content.count("\n", 0, m.start()) + 1
-        end_line = content.count("\n", 0, close) + 1
+        start_line = stripped.count("\n", 0, m.start()) + 1
+        end_line = stripped.count("\n", 0, close) + 1
         ranges.append((start_line, end_line))
     # ``#[cfg(any())]`` gating the immediately-following fn / mod.
-    for m in _RUST_DEAD_CFG.finditer(content):
-        after = content[m.end():]
+    for m in _RUST_DEAD_CFG.finditer(stripped):
+        after = stripped[m.end():]
         if not _RUST_ITEM_AFTER_CFG.match(after):
             # cfg gates a non-fn/mod item — do not range (avoids the
             # false positive of grabbing an unrelated later fn).
@@ -228,14 +244,14 @@ def _detect_rust(content: str) -> list[DeadRange]:
             continue
         if semi_rel != -1 and semi_rel < brace_rel:
             continue
-        close = _match_brace(content, m.end() + brace_rel)
+        close = _match_brace(stripped, m.end() + brace_rel)
         if close is None:
             continue
         # Range spans from the attribute to the item's closing brace,
         # so the fn/mod ``line_start`` is captured (and, for mod, every
         # nested fn inside the dead module).
-        start_line = content.count("\n", 0, m.start()) + 1
-        end_line = content.count("\n", 0, close) + 1
+        start_line = stripped.count("\n", 0, m.start()) + 1
+        end_line = stripped.count("\n", 0, close) + 1
         ranges.append((start_line, end_line))
     return ranges
 

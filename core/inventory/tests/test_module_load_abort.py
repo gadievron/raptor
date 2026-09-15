@@ -410,6 +410,7 @@ def test_go_panic_walker_top_level_still_true():
 
 
 def test_rust_compile_error_fires():
+    _requires_lexical_grammar("rust")
     src = (
         "compile_error!(\"this module is disabled\");\n"
         "pub fn vuln() {}\n"
@@ -841,3 +842,64 @@ def test_js_grammar_absent_fails_closed(monkeypatch):
     monkeypatch.setattr(lexical_view, "_VALIDATED", {})
     src = "throw new Error('module disabled');\n"
     assert detect_module_load_abort("javascript", src) is None
+# ---------------------------------------------------------------------------
+# Rust hostile-shape fixtures: comment / string data must never
+# fabricate a whole-file abort. All fixtures are valid, compiling Rust.
+# ---------------------------------------------------------------------------
+
+
+def test_rust_compile_error_in_block_comment_no_fabricated_abort():
+    src = (
+        "/* examples:\n"
+        ' compile_error!("do not use on wasm")\n'
+        "*/\n"
+        "fn live() { target(); }\n"
+    )
+    assert detect_module_load_abort("rust", src) is None
+
+
+def test_rust_compile_error_in_string_no_fabricated_abort():
+    src = (
+        "fn f() -> &'static str {\n"
+        '    "usage:\n'
+        "compile_error!(x)\n"
+        '"\n'
+        "}\n"
+    )
+    assert detect_module_load_abort("rust", src) is None
+
+
+def test_rust_compile_error_in_line_comment_no_fabricated_abort():
+    src = (
+        "// compile_error!(\"never\")\n"
+        "fn live() { target(); }\n"
+    )
+    assert detect_module_load_abort("rust", src) is None
+
+
+def test_rust_real_compile_error_after_comment_decoy_still_detected():
+    _requires_lexical_grammar("rust")
+    src = (
+        "// docs mention compile_error! here\n"
+        'compile_error!("unsupported target");\n'
+        "fn never() {}\n"
+    )
+    result = detect_module_load_abort("rust", src)
+    assert result is not None
+    assert result.line == 2
+
+
+def test_rust_parse_error_bails_whole_file():
+    src = 'fn f( { let = ;\ncompile_error!("x");\n'
+    assert detect_module_load_abort("rust", src) is None
+
+
+def test_rust_grammar_absent_fails_closed(monkeypatch):
+    from core.inventory import lexical_view
+
+    monkeypatch.setattr(
+        lexical_view._ts_cache, "import_grammar", lambda name: None,
+    )
+    monkeypatch.setattr(lexical_view, "_VALIDATED", {})
+    src = 'compile_error!("unsupported");\n'
+    assert detect_module_load_abort("rust", src) is None
