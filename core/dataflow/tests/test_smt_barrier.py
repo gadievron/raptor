@@ -3056,3 +3056,205 @@ def test_chain_walrus_target_in_rhs_is_not_a_read():
     assert sb._python_chain_reaches_sink(
         tree, "name", 3, 6, "    return open(y)",
     ) is False
+
+
+# ---------------------------------------------------------------------------
+# Binding-escape closure: the validator-line exemption is per sanitizing
+# binding NODE, chain growth pairs destructuring element-wise, and mixed
+# container literals never grow the chain.
+# ---------------------------------------------------------------------------
+
+def test_chain_same_line_trailing_rebind_kills():
+    """``x = re.sub(...); x = raw`` on ONE line: the whole-LINE
+    validator exemption certified the trailing rebind as still
+    validated (runtime ``x`` is the raw value at the sink)."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def f(x, raw):\n"
+        "    x = re.sub('[;&|]+', '', x); x = raw\n"       # line 2
+        "    return os.system(x)\n"                         # line 3
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "x", 2, 3, "    return os.system(x)",
+        sanitizer_call_tails=frozenset({"sub"}),
+    ) is False
+
+
+def test_chain_same_line_sub_alone_still_reaches():
+    """Two-direction: the sanitizing rebind ALONE on the validator
+    line keeps its exemption (it binds the validated value)."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def f(x):\n"
+        "    x = re.sub('[;&|]+', '', x)\n"                 # line 2
+        "    return os.system(x)\n"                          # line 3
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "x", 2, 3, "    return os.system(x)",
+        sanitizer_call_tails=frozenset({"sub"}),
+    ) is True
+
+
+def test_chain_same_line_augassign_mix_kills():
+    """``x = re.sub(...); x += raw`` on one line: AugAssign is never
+    the sanitizing binding, so the validator line grants no exemption
+    — the mixed-in raw operand re-taints ``x``."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def f(x, raw):\n"
+        "    x = re.sub('[;&|]+', '', x); x += raw\n"       # line 2
+        "    return os.system(x)\n"                          # line 3
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "x", 2, 3, "    return os.system(x)",
+        sanitizer_call_tails=frozenset({"sub"}),
+    ) is False
+
+
+def test_chain_grow_tuple_pairing_raw_element_never_joins():
+    """Chain-GROW pairs destructuring element-wise: ``a, b = x, raw``
+    binds ``b`` to RAW data.  Statement-level growth added BOTH
+    targets whenever any RHS name was a member (false SOUND on the
+    raw co-target)."""
+    import ast as _ast_mod
+    src = (
+        "def serve(request, raw):\n"
+        "    x = request.args.get('x')\n"
+        "    if not re.match(r'^[a-z]+$', x):\n"            # line 3
+        "        return 'bad'\n"
+        "    a, b = x, request.args['raw']\n"               # line 5
+        "    return open(b)\n"                               # line 6
+    )
+    tree = _ast_mod.parse(src)
+    assert sb._python_chain_reaches_sink(
+        tree, "x", 3, 6, "    return open(b)",
+    ) is False
+
+
+def test_chain_grow_tuple_pairing_validated_element_joins():
+    """Two-direction: the element paired with a chain member keeps
+    certifying (``a`` IS the validated value)."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request, raw):\n"
+        "    x = request.args.get('x')\n"
+        "    if not re.match(r'^[a-z]+$', x):\n"            # line 3
+        "        return 'bad'\n"
+        "    a, b = x, request.args['raw']\n"               # line 5
+        "    return open(a)\n"                               # line 6
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "x", 3, 6, "    return open(a)",
+    ) is True
+
+
+def test_chain_swap_idiom_rebinds_member():
+    """``x, y = y, x`` rebinds the member ``x`` to the raw ``y`` while
+    the old grow rule KEPT ``x`` a member (any-RHS-name-is-a-member
+    added every target).  Simultaneous semantics: ``y`` now carries
+    the validated value, ``x`` carries raw data."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request, y):\n"
+        "    x = request.args.get('x')\n"
+        "    if not re.match(r'^[a-z]+$', x):\n"            # line 3
+        "        return 'bad'\n"
+        "    x, y = y, x\n"                                  # line 5
+        "    return open(x)\n"                               # line 6
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "x", 3, 6, "    return open(x)",
+    ) is False
+    # ... and the swapped-INTO name carries the validated value.
+    tree2 = _ast_mod.parse(
+        "def serve(request, y):\n"
+        "    x = request.args.get('x')\n"
+        "    if not re.match(r'^[a-z]+$', x):\n"            # line 3
+        "        return 'bad'\n"
+        "    x, y = y, x\n"                                  # line 5
+        "    return open(y)\n"                               # line 6
+    )
+    assert sb._python_chain_reaches_sink(
+        tree2, "x", 3, 6, "    return open(y)",
+    ) is True
+
+
+def test_chain_unpairable_destructuring_never_joins_and_kills():
+    """``a, x = f(x)``: the unpacked provenance is unknown — no target
+    joins, and a chain member among the targets is killed."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    x = request.args.get('x')\n"
+        "    if not re.match(r'^[a-z]+$', x):\n"            # line 3
+        "        return 'bad'\n"
+        "    a, x = f(x)\n"                                  # line 5
+        "    return open(a)\n"                               # line 6
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "x", 3, 6, "    return open(a)",
+    ) is False
+    tree2 = _ast_mod.parse(
+        "def serve(request):\n"
+        "    x = request.args.get('x')\n"
+        "    if not re.match(r'^[a-z]+$', x):\n"            # line 3
+        "        return 'bad'\n"
+        "    a, x = f(x)\n"                                  # line 5
+        "    return open(x)\n"                               # line 6
+    )
+    assert sb._python_chain_reaches_sink(
+        tree2, "x", 3, 6, "    return open(x)",
+    ) is False
+
+
+def test_chain_container_literal_mixing_never_grows():
+    """``p = [x, raw]`` carries the raw element verbatim to whatever
+    consumes ``p`` — a mixed container literal counts as taint mixing
+    (the operator-mixing rule's container sibling)."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request, raw):\n"
+        "    x = request.args.get('x')\n"
+        "    if not re.match(r'^[a-z]+$', x):\n"            # line 3
+        "        return 'bad'\n"
+        "    p = [x, raw]\n"                                 # line 5
+        "    return open(''.join(p))\n"                      # line 6
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "x", 3, 6, "    return open(''.join(p))",
+    ) is False
+
+
+def test_chain_container_literal_all_members_still_grows():
+    """Two-direction: a container of chain members only (plus
+    constants) is not mixing — ``p = [x, 'suffix']`` stays derived
+    from the validated value."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    x = request.args.get('x')\n"
+        "    if not re.match(r'^[a-z]+$', x):\n"            # line 3
+        "        return 'bad'\n"
+        "    p = [x, 'suffix']\n"                            # line 5
+        "    return open(''.join(p))\n"                      # line 6
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "x", 3, 6, "    return open(''.join(p))",
+    ) is True
+
+
+def test_chain_loop_backedge_same_line_trailing_rebind_kills():
+    """The loop back-edge filter's validator-line exemption is also
+    per sanitizing NODE: a trailing raw rebind sharing the sub's line
+    inside the sink's loop reaches the sink on the next iteration."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def f(items, x):\n"
+        "    for item in items:\n"
+        "        x = re.sub('[;&|]+', '', x); x = item.raw\n"  # line 3
+        "        os.system(x)\n"                                # line 4
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "x", 3, 4, "        os.system(x)",
+        sanitizer_call_tails=frozenset({"sub"}),
+    ) is False

@@ -58,6 +58,7 @@ from core.dataflow.smt_barrier import (
     _lexical_validator_in_branch,
     _python_chain_reaches_sink,
     _lexical_var_reaches_sink,
+    _sanitizer_tails_for_spec_kind,
     extract_validator_from_line,
     extractor_languages,
     prove_neutralizes,
@@ -327,6 +328,7 @@ def _step_refutes_path(
             return False, "sink file does not parse", 0.0
         var_reaches = _python_chain_reaches_sink(
             tree, spec.var_name, step_line, sink_line, sink_line_text,
+            sanitizer_call_tails=_sanitizer_tails_for_spec_kind(spec.kind),
         )
     else:
         var_reaches = _lexical_var_reaches_sink(

@@ -903,7 +903,10 @@ def test_transform_walrus_conditional_value_declines(tmp_path: Path):
     into the sink.  Pre-fix ``_binds_conditional_value`` walked only
     Assign-family statements while the transform gate accepts NamedExpr
     bindings, so the conditional value slipped through inside a call
-    argument and certified SOUND."""
+    argument and certified SOUND.  Two layered gates refuse it now:
+    the binding gate (the walrus value is an IfExp, not the call
+    result, so ``safe`` never joins the chain) and the conditional-
+    value dominance gate behind it — either refusal is correct."""
     (tmp_path / "app.py").write_text(
         "import html\n"
         "def f(name, flag):\n"
@@ -924,7 +927,8 @@ def test_transform_walrus_conditional_value_declines(tmp_path: Path):
         language="python", complete=_fake_complete(reply),
     )
     assert r.status is t1.Tier0Status.NOT_APPLICABLE
-    assert "does not dominate" in r.reasoning
+    assert ("not bound to a variable" in r.reasoning
+            or "does not dominate" in r.reasoning)
 
 
 def test_transform_walrus_unconditional_value_still_sound(tmp_path: Path):
@@ -1203,6 +1207,274 @@ def test_lexical_transform_semicolon_joined_correct_target_sound(
         "kind": "known_safe_call",
         "validator_source_line":
             "var raw = x; var y = DOMPurify.sanitize(x);",
+        "variable_name": "x", "charset": "", "forbidden": "",
+        "library_call": "DOMPurify.sanitize",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.js", sink_line=3, sink_class="xss",
+        language="javascript", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.SOUND
+
+
+# ---------------------------------------------------------------------------
+# Binding-escape closure (e2e): any binding that carries a raw
+# pre-sanitizer value forward escapes the validated chain — same-line
+# rebinds after the sanitizing binding, tuple co-assignment growth,
+# container/select bindings, JS multi-declarator lists.
+# ---------------------------------------------------------------------------
+
+def test_rebind_after_sanitizer_same_line_declines(tmp_path: Path):
+    """``p = safe_join(BASE, fn); p = fn``: runtime ``p`` is the raw
+    file name at the sink.  The whole-LINE validator exemption
+    certified this SOUND."""
+    (tmp_path / "app.py").write_text(
+        "from werkzeug.security import safe_join\n"          # line 1
+        "def f(fn):\n"                                        # line 2
+        "    p = safe_join(BASE, fn); p = fn\n"               # line 3
+        "    return open(p)\n"                                # line 4
+    )
+    diff = "+    p = safe_join(BASE, fn); p = fn\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "p = safe_join(BASE, fn); p = fn",
+        "variable_name": "p", "charset": "", "forbidden": "",
+        "library_call": "werkzeug.security.safe_join",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="pathtrav",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+
+
+def test_augassign_after_sanitizer_same_line_declines(tmp_path: Path):
+    """``p = safe_join(BASE, fn); p += fn`` mixes raw data into the
+    sanitized value on the validator's own line."""
+    (tmp_path / "app.py").write_text(
+        "from werkzeug.security import safe_join\n"          # line 1
+        "def f(fn):\n"                                        # line 2
+        "    p = safe_join(BASE, fn); p += fn\n"              # line 3
+        "    return open(p)\n"                                # line 4
+    )
+    diff = "+    p = safe_join(BASE, fn); p += fn\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "p = safe_join(BASE, fn); p += fn",
+        "variable_name": "p", "charset": "", "forbidden": "",
+        "library_call": "werkzeug.security.safe_join",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="pathtrav",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+
+
+def test_tuple_co_assignment_growth_raw_target_declines(tmp_path: Path):
+    """Chain-GROW twin of the chain-START pairing: ``a, b = safe, x``
+    binds ``b`` to raw ``x``; the sink consuming ``b`` must refuse."""
+    (tmp_path / "app.py").write_text(
+        "import html\n"                                       # line 1
+        "def f(x):\n"                                         # line 2
+        "    safe = html.escape(x)\n"                         # line 3
+        "    a, b = safe, x\n"                                # line 4
+        "    return render(b)\n"                              # line 5
+    )
+    diff = "+    safe = html.escape(x)\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "safe = html.escape(x)",
+        "variable_name": "x", "charset": "", "forbidden": "",
+        "library_call": "html.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=5, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+
+
+def test_tuple_co_assignment_growth_safe_target_sound(tmp_path: Path):
+    """Two-direction: the co-assigned element paired WITH the chain
+    member keeps certifying."""
+    (tmp_path / "app.py").write_text(
+        "import html\n"                                       # line 1
+        "def f(x):\n"                                         # line 2
+        "    safe = html.escape(x)\n"                         # line 3
+        "    a, b = safe, x\n"                                # line 4
+        "    return render(a)\n"                              # line 5
+    )
+    diff = "+    safe = html.escape(x)\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "safe = html.escape(x)",
+        "variable_name": "x", "charset": "", "forbidden": "",
+        "library_call": "html.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=5, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.SOUND
+
+
+def test_swap_idiom_after_sanitizer_declines(tmp_path: Path):
+    """``safe, x = x, safe`` rebinds the member ``safe`` to raw ``x``;
+    a sink consuming ``safe`` must refuse."""
+    (tmp_path / "app.py").write_text(
+        "import html\n"                                       # line 1
+        "def f(x):\n"                                         # line 2
+        "    safe = html.escape(x)\n"                         # line 3
+        "    safe, x = x, safe\n"                             # line 4
+        "    return render(safe)\n"                           # line 5
+    )
+    diff = "+    safe = html.escape(x)\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "safe = html.escape(x)",
+        "variable_name": "x", "charset": "", "forbidden": "",
+        "library_call": "html.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=5, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+
+
+def test_container_binding_with_raw_element_declines(tmp_path: Path):
+    """``p = [html.escape(x), x]`` binds a container that CONTAINS the
+    call but also carries raw ``x`` verbatim — ``p`` must never seed
+    the chain (the Name arm's subtree search credited it)."""
+    (tmp_path / "app.py").write_text(
+        "import html\n"                                       # line 1
+        "def f(x):\n"                                         # line 2
+        "    p = [html.escape(x), x]\n"                       # line 3
+        "    return render(''.join(p))\n"                     # line 4
+    )
+    diff = "+    p = [html.escape(x), x]\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "p = [html.escape(x), x]",
+        "variable_name": "x", "charset": "", "forbidden": "",
+        "library_call": "html.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+
+
+def test_chained_targets_tuple_value_name_target_declines(tmp_path: Path):
+    """``p = q, r2 = html.escape(x), x``: ``p`` is bound to the WHOLE
+    tuple (raw ``x`` included) while ``q`` gets the sanitized element.
+    A sink consuming ``p`` must refuse; ``q`` keeps certifying."""
+    src = (
+        "import html\n"                                       # line 1
+        "def f(x):\n"                                         # line 2
+        "    p = q, r2 = html.escape(x), x\n"                 # line 3
+        "    return render(p)\n"                              # line 4
+    )
+    (tmp_path / "app.py").write_text(src)
+    diff = "+    p = q, r2 = html.escape(x), x\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "p = q, r2 = html.escape(x), x",
+        "variable_name": "x", "charset": "", "forbidden": "",
+        "library_call": "html.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+    # Two-direction: the element-paired target q IS the call result.
+    (tmp_path / "app.py").write_text(src.replace(
+        "return render(p)", "return render(q)"))
+    r2 = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r2.status is t1.Tier0Status.SOUND
+
+
+def test_dict_select_binding_declines(tmp_path: Path):
+    """``safe = {True: html.escape(x), False: x}[flag]`` may BE the
+    raw member — a conditional select with no IfExp/BoolOp.  The
+    binding gate must refuse (the subtree search credited it)."""
+    (tmp_path / "app.py").write_text(
+        "import html\n"                                            # line 1
+        "def f(x, flag):\n"                                        # line 2
+        "    safe = {True: html.escape(x), False: x}[flag]\n"      # line 3
+        "    return render(safe)\n"                                # line 4
+    )
+    diff = "+    safe = {True: html.escape(x), False: x}[flag]\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line":
+            "safe = {True: html.escape(x), False: x}[flag]",
+        "variable_name": "x", "charset": "", "forbidden": "",
+        "library_call": "html.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+
+
+def test_lexical_multi_declarator_first_target_declines(tmp_path: Path):
+    """``var safe = x, y = DOMPurify.sanitize(x);`` binds ``safe`` to
+    the RAW value — the ``,`` declarator list is the same class as the
+    ``;`` join, one delimiter over."""
+    (tmp_path / "app.js").write_text(
+        "function f(req, res) {\n"
+        "  var safe = x, y = DOMPurify.sanitize(x);\n"       # line 2
+        "  res.send(safe);\n"                                 # line 3
+        "}\n"
+    )
+    diff = "+  var safe = x, y = DOMPurify.sanitize(x);\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line":
+            "var safe = x, y = DOMPurify.sanitize(x);",
+        "variable_name": "x", "charset": "", "forbidden": "",
+        "library_call": "DOMPurify.sanitize",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.js", sink_line=3, sink_class="xss",
+        language="javascript", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+
+
+def test_lexical_multi_declarator_correct_target_sound(tmp_path: Path):
+    """Two-direction: the declarator that IS the call keeps
+    certifying when the sink consumes it."""
+    (tmp_path / "app.js").write_text(
+        "function f(req, res) {\n"
+        "  var safe = x, y = DOMPurify.sanitize(x);\n"       # line 2
+        "  res.send(y);\n"                                    # line 3
+        "}\n"
+    )
+    diff = "+  var safe = x, y = DOMPurify.sanitize(x);\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line":
+            "var safe = x, y = DOMPurify.sanitize(x);",
         "variable_name": "x", "charset": "", "forbidden": "",
         "library_call": "DOMPurify.sanitize",
     })

@@ -1233,10 +1233,13 @@ def _node_rebinds_var(node: ast.AST, var_name: str) -> bool:
 
 def _rebound_in_loop_containing_sink(
     tree: ast.AST, var_name: str, validator_line: int, sink_line: int,
+    *, sanitizer_call_tails: frozenset | None = None,
 ) -> bool:
     """True iff ``var_name`` is rebound anywhere inside a loop whose
-    span contains the sink line (the validator's own line is exempt —
-    for ``charset_sub`` the rebind IS the sanitization).
+    span contains the sink line (the validator's own sanitizing
+    binding NODE is exempt — for ``charset_sub`` that rebind IS the
+    sanitization; other bindings sharing the validator's line, e.g. a
+    trailing ``; x = raw``, count like any other rebind).
 
     Loop back-edge soundness: the flat ``(validator, sink)`` interval
     treats the function as straight-line code, but when the sink sits
@@ -1257,7 +1260,10 @@ def _rebound_in_loop_containing_sink(
             continue
         for node in ast.walk(loop):
             line = getattr(node, "lineno", None)
-            if line is None or line == validator_line:
+            if line is None:
+                continue
+            if line == validator_line and _is_sanitizing_binding_node(
+                    node, sanitizer_call_tails):
                 continue
             if _node_rebinds_var(node, var_name):
                 return True
@@ -1728,21 +1734,30 @@ def _collect_target_names(target: ast.AST, names: set) -> None:
 
 
 def _operator_mixes_taint(value: ast.AST, chain: set) -> bool:
-    """True when a string-building operator expression inside ``value``
-    combines a chain member with a non-chain :class:`ast.Name`.
+    """True when a string-building operator expression OR a container
+    literal inside ``value`` combines a chain member with a non-chain
+    :class:`ast.Name`.
 
-    Covers ``BinOp`` (``+`` concatenation and ``%`` formatting) and
-    f-strings (``JoinedStr``).  Call-ARGUMENT mixing
-    (``os.path.join(BASE, name)``) is deliberately NOT flagged: the
-    chain's documented contract accepts derivations through calls
+    Covers ``BinOp`` (``+`` concatenation and ``%`` formatting),
+    f-strings (``JoinedStr``), and container literals (``Tuple`` /
+    ``List`` / ``Set`` / ``Dict``): ``p = [safe, raw]`` carries the
+    raw element verbatim to whatever consumes ``p`` (``''.join(p)``),
+    and a select over a mixed container (``{...: safe, ...: raw}[k]``)
+    may BE the raw member — so a target bound to a mixed container
+    must never join the chain as fully validated.  Call-ARGUMENT
+    mixing (``os.path.join(BASE, name)``) is deliberately NOT flagged:
+    the chain's documented contract accepts derivations through calls
     (the whoogle archetype), and distinguishing a module constant
     from a tainted local inside an argument list needs real taint
     tracking — Tier 2's job.  Operator mixing is the shape the
-    charset proof actually breaks on: the concatenated non-chain
+    charset proof actually breaks on: the mixed-in non-chain
     operand's characters reach the sink unvalidated.
     """
     for sub in ast.walk(value):
-        if isinstance(sub, (ast.BinOp, ast.JoinedStr)):
+        if isinstance(sub, (ast.BinOp, ast.JoinedStr,
+                            ast.Tuple, ast.List, ast.Set, ast.Dict)):
+            if isinstance(sub, ast.Tuple) and isinstance(sub.ctx, ast.Store):
+                continue  # target-side tuple, not a value expression
             names = {
                 n.id for n in ast.walk(sub) if isinstance(n, ast.Name)
             }
@@ -1751,9 +1766,133 @@ def _operator_mixes_taint(value: ast.AST, chain: set) -> bool:
     return False
 
 
+def _is_sanitizer_call_value(
+    value: ast.AST | None, tails: frozenset | None,
+) -> bool:
+    """True iff ``value`` IS the sanitizer call's result expression —
+    an :class:`ast.Call` whose callee tail is one of ``tails`` (any
+    call when the lane cannot name it).  Deliberately NOT a subtree
+    search: a value that merely CONTAINS the call
+    (``[escape(x), x]``, ``{...}[flag]``, ``escape(x) + raw``) mixes
+    raw input around the sanitized result, so it must never earn the
+    validator-binding exemption."""
+    if not isinstance(value, ast.Call):
+        return False
+    if tails is None:
+        return True
+    func = value.func
+    if isinstance(func, ast.Name):
+        return func.id in tails
+    if isinstance(func, ast.Attribute):
+        return func.attr in tails
+    return False
+
+
+def _is_sanitizing_binding_node(
+    node: ast.AST, tails: frozenset | None,
+) -> bool:
+    """True iff ``node`` is a binding statement whose bound value IS
+    the sanitizer call (Assign / AnnAssign / walrus).  Used to scope
+    the validator-line exemption to the sanitizing binding NODE — the
+    whole-LINE exemption certified any trailing same-line rebind
+    (``p = safe_join(base, fn); p = fn``) as still validated."""
+    if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+        return _is_sanitizer_call_value(getattr(node, "value", None), tails)
+    return False
+
+
+def _sanitizer_tails_for_spec_kind(kind: str) -> frozenset | None:
+    """Callee-name tails identifying the sanitizing binding on the
+    validator line for a mechanical :class:`ValidatorSpec` kind.
+    ``charset_sub``'s binding is always an ``re.sub`` rebind;
+    guard-shaped kinds bind nothing themselves, so any call-valued
+    binding on the guard line (e.g. a walrus normalising the guarded
+    value, which the guard then constrains) keeps the exemption
+    (``None`` = any call)."""
+    return frozenset({"sub"}) if kind == "charset_sub" else None
+
+
+def _bind_chain_target(
+    target: ast.AST, value: ast.AST, chain: set,
+    grows: set, kills: set, *, at_validator: bool,
+    tails: frozenset | None,
+) -> None:
+    """Chain grow/kill decision for ONE assignment target bound to
+    ``value``, element-wise through tuple/list structure (mirroring
+    runtime unpacking).
+
+    Statement-level "any RHS name is a member → every target joins"
+    certified the co-assigned raw value in ``a, b = safe, x`` (``b``
+    IS raw ``x``) and kept ``safe`` a member through the swap idiom
+    ``safe, x = x, safe`` while rebinding it to raw ``x``.  Pairing
+    evaluates each element against the PRE-statement chain
+    (simultaneous-assignment semantics) and the caller applies
+    ``(chain | grows) - kills`` — kill wins on a name that appears in
+    both, the conservative direction.  Unpairable shapes (starred
+    target, length mismatch, non-literal RHS for a destructuring
+    target) contribute no members and kill member targets — the
+    unpacked provenance is unknown; refusing costs yield, never
+    soundness.
+
+    The validator line's own sanitizing binding — the target(s) whose
+    paired value IS the sanitizer call (:func:`_is_sanitizer_call_value`)
+    — is exempt: it binds the validated value.  Every OTHER binding on
+    the validator line carries a pre-sanitizer value forward and is
+    processed like any other line's.
+    """
+    if isinstance(target, (ast.Tuple, ast.List)):
+        if (
+            isinstance(value, (ast.Tuple, ast.List))
+            and len(value.elts) == len(target.elts)
+            and not any(isinstance(t, ast.Starred) for t in target.elts)
+        ):
+            for t_elt, v_elt in zip(target.elts, value.elts):
+                _bind_chain_target(
+                    t_elt, v_elt, chain, grows, kills,
+                    at_validator=at_validator, tails=tails,
+                )
+            return
+        names: set = set()
+        _collect_target_names(target, names)
+        kills |= names
+        return
+    names = set()
+    _collect_target_names(target, names)
+    if not names:
+        return  # Attribute / Subscript target: mutation, not a rebind
+    if at_validator and _is_sanitizer_call_value(value, tails):
+        return  # the sanitizing binding itself — the chain's seed
+    # Load-context names only: a walrus TARGET inside the RHS
+    # (``y = (x := raw)``) is a simultaneous rebind, not a read of
+    # the (possibly validated) old value — counting it as a read
+    # certified ``y`` from stale ``x`` while ``x`` was being
+    # rebound to raw data in the same statement.
+    rhs_names = {
+        n.id for n in ast.walk(value)
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+    }
+    if chain & rhs_names:
+        if _operator_mixes_taint(value, chain):
+            # Taint mixing on a plain Assign: a string-building
+            # operator expression (``cmd = name + raw``, an f-string
+            # interpolating both) or a mixed container literal
+            # combines a chain member with a non-chain name.  The
+            # target carries PARTIALLY-unvalidated data, so it must
+            # never join the chain — and if it was a member, it stops
+            # being one.
+            kills |= names
+            return
+        grows |= names
+        return
+    # Rebind from non-chain RHS: the target no longer carries the
+    # validated value.
+    kills |= names
+
+
 def _python_chain_reaches_sink(
     tree: ast.AST, start_var: str, validator_line: int,
     sink_line: int, sink_line_text: str,
+    *, sanitizer_call_tails: frozenset | None = None,
 ) -> bool:
     """Intra-procedural data-dependency chain: ``True`` iff some variable
     reachable from ``start_var`` (via assignments between validator and
@@ -1771,11 +1910,25 @@ def _python_chain_reaches_sink(
 
     Chain growth: any Assign/AnnAssign/AugAssign between validator and
     sink whose RHS references a chain variable adds its target name(s)
-    to the chain — UNLESS the RHS operator-mixes taint
+    to the chain — element-wise through tuple/list destructuring
+    (:func:`_bind_chain_target`: ``a, b = safe, x`` grows only ``a``;
+    unpairable shapes never join and kill member targets) and UNLESS
+    the paired RHS operator-mixes taint
     (:func:`_operator_mixes_taint`): ``cmd = name + raw`` combines the
     validated ``name`` with the unvalidated ``raw``, so ``cmd`` never
-    joins the chain (and a chain-member target is killed).  Mixing
-    through call ARGUMENTS is not modeled (see the helper's docstring).
+    joins the chain (and a chain-member target is killed); container
+    literals mixing chain and non-chain names count as mixing too.
+    Mixing through call ARGUMENTS is not modeled (see the helper's
+    docstring).
+
+    Validator-line exemption is per-NODE, never per-line: only the
+    binding whose value IS the sanitizer call
+    (``sanitizer_call_tails``; any call when the lane cannot name it)
+    binds the validated value.  Any OTHER binding sharing the
+    validator's line carries a pre-sanitizer value forward and kills
+    like any other line's — the whole-line exemption certified
+    ``p = safe_join(base, fn); p = fn`` (and the ``p += fn`` /
+    trailing ``x = raw`` spellings) as still validated.
 
     Chain KILL: an assignment whose target is a chain member and whose
     RHS references NO chain member REBINDS that variable to a fresh
@@ -1826,11 +1979,17 @@ def _python_chain_reaches_sink(
             # Non-Assign binding forms: walrus / loop targets,
             # ``with|except ... as``, match-case captures, import
             # aliases, nested def/class shadowing.  Shrink-only —
-            # back-edges never GROW the chain.  The validator line's
-            # own binding IS the sanitization (e.g. a walrus wrapping
-            # the substitution), so it is exempt, mirroring the
-            # Assign-family ``at_validator`` exemption below.
-            if node.lineno == validator_line:
+            # back-edges never GROW the chain.  Only the node that IS
+            # the sanitization keeps its binding (a walrus wrapping
+            # the sanitizer call); every OTHER binding sharing the
+            # validator's line carries a pre-sanitizer value forward
+            # and kills like any other line's.
+            if (
+                node.lineno == validator_line
+                and isinstance(node, ast.NamedExpr)
+                and _is_sanitizer_call_value(node.value,
+                                             sanitizer_call_tails)
+            ):
                 continue
             for var in list(chain):
                 if _node_rebinds_var(node, var):
@@ -1838,55 +1997,39 @@ def _python_chain_reaches_sink(
             continue
         if node.value is None:
             continue  # bare annotation (``x: int``) binds nothing
-        # Load-context names only: a walrus TARGET inside the RHS
-        # (``y = (x := raw)``) is a simultaneous rebind, not a read of
-        # the (possibly validated) old value — counting it as a read
-        # certified ``y`` from stale ``x`` while ``x`` was being
-        # rebound to raw data in the same statement.
-        rhs_names = {
-            n.id for n in ast.walk(node.value)
-            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
-        }
-        targets = (list(node.targets) if isinstance(node, ast.Assign)
-                   else [node.target])
-        target_names: set = set()
-        for t in targets:
-            _collect_target_names(t, target_names)
-        # The validator line's own assignment BINDS the validated
-        # value (``abs_path = safe_join(...)``, ``x = re.sub(...)``) —
-        # it must not be treated as a rebind of the start variable.
         at_validator = node.lineno == validator_line
         if isinstance(node, ast.AugAssign):
             # ``x += rhs`` mixes the old value with the RHS.  It never
             # ADDS to the chain (the old target value may be
             # unvalidated), and it kills a chain member when the RHS
             # references any non-chain name (the mixed-in data is not
-            # covered by the validator's constraint).
-            if rhs_names - chain and not at_validator:
+            # covered by the validator's constraint).  An AugAssign is
+            # never the sanitizing binding itself (every curated /
+            # mechanical sanitizer binds via plain assignment), so the
+            # validator line grants NO exemption here —
+            # ``p = safe_join(base, fn); p += fn`` re-taints ``p``.
+            rhs_names = {
+                n.id for n in ast.walk(node.value)
+                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+            }
+            target_names: set = set()
+            _collect_target_names(node.target, target_names)
+            if rhs_names - chain:
                 chain -= target_names
             continue
-        if chain & rhs_names:
-            if _operator_mixes_taint(node.value, chain):
-                # Taint mixing on a plain Assign: a string-building
-                # operator expression (``cmd = name + raw``, an
-                # f-string interpolating both) combines a chain
-                # member with a non-chain name.  The target carries
-                # PARTIALLY-unvalidated data, so it must never join
-                # the chain — and if it was a member, it stops being
-                # one.  Pre-fix any RHS referencing at least one
-                # chain member added the target as fully validated,
-                # so the Tier 0 SOUND verdict suppressed the live
-                # ``raw``→sink flow (the AugAssign form already
-                # killed; the Assign spelling of the same mix did
-                # not).
-                if not at_validator:
-                    chain -= target_names
-                continue
-            chain |= target_names
-        elif not at_validator:
-            # Rebind from non-chain RHS: the target no longer carries
-            # the validated value.
-            chain -= target_names
+        targets = (list(node.targets) if isinstance(node, ast.Assign)
+                   else [node.target])
+        grows: set = set()
+        kills: set = set()
+        for t in targets:
+            _bind_chain_target(
+                t, node.value, chain, grows, kills,
+                at_validator=at_validator, tails=sanitizer_call_tails,
+            )
+        # Simultaneous-assignment semantics: every element pair was
+        # evaluated against the PRE-statement chain; kill wins when a
+        # name lands in both sets (conservative).
+        chain = (chain | grows) - kills
     # Loop back-edge kill: a rebind textually AFTER the sink (or before
     # the validator) still reaches the sink on the next iteration when
     # it shares a loop with the sink — the flat forward pass cannot see
@@ -1895,6 +2038,7 @@ def _python_chain_reaches_sink(
         var for var in chain
         if not _rebound_in_loop_containing_sink(
             tree, var, validator_line, sink_line,
+            sanitizer_call_tails=sanitizer_call_tails,
         )
     }
     if not chain:
@@ -2038,9 +2182,12 @@ def _lexical_substitution_dominates(
     if _validator_in_branch(tree, validator_line, sink_line):
         return False
     # Loop back-edge: a rebind outside the flat interval still reaches
-    # the sink on the next iteration when both share a loop.
+    # the sink on the next iteration when both share a loop.  This
+    # helper is substitution-form only, so the sanitizing binding on
+    # the validator line is exactly the ``re.sub`` rebind.
     return not _rebound_in_loop_containing_sink(
         tree, var_name, validator_line, sink_line,
+        sanitizer_call_tails=frozenset({"sub"}),
     )
 
 
@@ -2442,6 +2589,8 @@ def try_tier0(
         else:
             var_reaches = _python_chain_reaches_sink(
                 chain_tree, spec.var_name, line, sink_line, sink_line_text,
+                sanitizer_call_tails=_sanitizer_tails_for_spec_kind(
+                    spec.kind),
             )
     else:
         var_reaches = _lexical_var_reaches_sink(

@@ -56,6 +56,7 @@ from core.dataflow.smt_barrier import (
     _lexical_validator_in_branch,
     _python_chain_reaches_sink,
     _lexical_var_reaches_sink,
+    _sanitizer_tails_for_spec_kind,
     _same_function_in_order,
     _validator_in_branch,
     prove_neutralizes,
@@ -278,7 +279,9 @@ def _line_invokes_library_call(
 
 def _value_calls_tail(value, tail: str) -> bool:
     """True iff ``value``'s subtree contains a call whose callee name
-    (bare or attribute) is ``tail``."""
+    (bare or attribute) is ``tail``.  Pre-filter only — binding
+    decisions use :func:`_value_is_call_result` (the value must BE the
+    call, not merely contain it)."""
     import ast
     return any(
         isinstance(c, ast.Call)
@@ -289,22 +292,44 @@ def _value_calls_tail(value, tail: str) -> bool:
     )
 
 
+def _value_is_call_result(value, tail: str) -> bool:
+    """True iff ``value`` IS a call to ``tail`` — not merely contains
+    one.  The subtree form credited containers and selects that mix
+    the raw input around the sanitized element
+    (``p = [escape(x), x]``, ``p = q, r = escape(x), x``,
+    ``{...: escape(x), ...: x}[flag]``) with a fully-sanitized
+    binding (false SOUND).  Parentheses/annotations are transparent at
+    the AST level; anything else refuses — refusing costs yield,
+    never soundness."""
+    import ast
+    if not isinstance(value, ast.Call):
+        return False
+    func = value.func
+    if isinstance(func, ast.Name):
+        return func.id == tail
+    if isinstance(func, ast.Attribute):
+        return func.attr == tail
+    return False
+
+
 def _paired_transform_targets(target, value, tail: str) -> set[str]:
-    """Names bound to a value whose OWN expression contains the
-    transform call, matched element-wise through tuple/list structure.
+    """Names whose paired value IS the transform call, matched
+    element-wise through tuple/list structure.
 
     A tuple co-assignment binds each target element to its
     corresponding VALUE element — ``escaped, raw = html.escape(x), x``
     binds ``raw`` to the RAW input, so collecting every target name of
     the statement handed the chain a variable the transform never
-    touched (false SOUND).  Only the element whose paired value
-    contains the call joins; when the pairing cannot be established
-    (starred targets, non-tuple RHS for a tuple target, length
-    mismatch) the whole target contributes nothing — refusing costs
-    yield, never soundness."""
+    touched (false SOUND).  Only the element whose paired value IS the
+    call joins (a value that merely CONTAINS the call — a container
+    literal, a chained-target tuple, a subscript select — mixes raw
+    input around the sanitized element); when the pairing cannot be
+    established (starred targets, non-tuple RHS for a tuple target,
+    length mismatch) the whole target contributes nothing — refusing
+    costs yield, never soundness."""
     import ast
     if isinstance(target, ast.Name):
-        return {target.id} if _value_calls_tail(value, tail) else set()
+        return {target.id} if _value_is_call_result(value, tail) else set()
     if isinstance(target, (ast.Tuple, ast.List)):
         if (
             isinstance(value, (ast.Tuple, ast.List))
@@ -318,6 +343,47 @@ def _paired_transform_targets(target, value, tail: str) -> set[str]:
         return set()
     # Starred / Attribute / Subscript: nothing the chain can follow.
     return set()
+
+
+def _lexical_binding_segments(line: str) -> list[str]:
+    """Split a lexical-language source line into per-binding segments:
+    on ``;`` (statement joins) and on top-level ``,`` (declarator
+    lists).  Commas nested inside brackets or string literals never
+    split.  Over-splitting only narrows a segment — the capture and
+    the call must co-reside in one segment — so the crude split errs
+    toward refusal, never toward crediting."""
+    segments: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    quote: str | None = None
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote is not None:
+            buf.append(ch)
+            if ch == "\\" and i + 1 < len(line):
+                buf.append(line[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+        elif ch in "'\"`":
+            quote = ch
+            buf.append(ch)
+        elif ch in "([{":
+            depth += 1
+            buf.append(ch)
+        elif ch in ")]}":
+            depth = max(0, depth - 1)
+            buf.append(ch)
+        elif ch in ";," and depth == 0:
+            segments.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+        i += 1
+    segments.append("".join(buf))
+    return segments
 
 
 def _transform_binding_targets(
@@ -350,20 +416,23 @@ def _transform_binding_targets(
         return targets
     # Lexical languages: accept ``x = ...call(...)`` (with optional
     # const/let/var/final or a type before the name).  Statement
-    # segments are split on ``;`` and the capture + call-presence test
-    # applied PER SEGMENT: on a semicolon-joined line
-    # (``var safe = x; var y = sanitize(x);``) the call must sit in the
-    # SAME statement as the captured target, otherwise the FIRST
-    # target (bound to the raw value) was credited with a transform
-    # that belongs to a later statement.  A ``;`` inside a string
-    # literal only narrows a segment further — it can never join two
-    # statements — so the crude split errs toward refusal.
+    # segments are split on ``;`` AND on top-level ``,`` and the
+    # capture + call-presence test applied PER SEGMENT: on a
+    # semicolon-joined line (``var safe = x; var y = sanitize(x);``)
+    # or a multi-declarator list (``var safe = x, y = sanitize(x);``)
+    # the call must sit in the SAME binding as the captured target,
+    # otherwise the FIRST target (bound to the raw value) was credited
+    # with a transform that belongs to a later binding.  Commas inside
+    # brackets (call arguments, literals) and string literals do not
+    # split; a delimiter inside a string literal only narrows a
+    # segment further — it can never join two statements — so the
+    # crude split errs toward refusal.
     lines = source_text.splitlines()
     if not (0 < validator_line <= len(lines)):
         return set()
     line = lines[validator_line - 1]
     out: set[str] = set()
-    for segment in line.split(";"):
+    for segment in _lexical_binding_segments(line):
         m = _re.match(
             r"\s*(?:(?:const|let|var|final)\s+)?"
             r"(?:[A-Za-z_$][\w$<>\[\].]*\s+)?"
@@ -467,9 +536,14 @@ def _try_known_safe_call(
     sink_lines = source_text.splitlines()
     sink_line_text = sink_lines[sink_line - 1] if 0 < sink_line <= len(sink_lines) else ""
     if language == "python" and tree is not None:
+        # The sanitizing binding on the validator line is exactly the
+        # curated call — name it so the chain walker exempts ONLY that
+        # binding node, never the whole line.
+        tail_set = frozenset({entry.library_call.rsplit(".", 1)[-1]})
         chain_ok = any(
             _python_chain_reaches_sink(
                 tree, var, validator_line, sink_line, sink_line_text,
+                sanitizer_call_tails=tail_set,
             )
             for var in chain_vars
         )
@@ -667,6 +741,8 @@ def try_tier1b(
                 )
             chain_ok = _python_chain_reaches_sink(
                 tree, mech.var_name, validator_line, sink_line, sink_line_text,
+                sanitizer_call_tails=_sanitizer_tails_for_spec_kind(
+                    mech.kind),
             )
         else:
             chain_ok = _lexical_var_reaches_sink(
