@@ -859,16 +859,27 @@ class AutonomousCodeQLAnalyzer:
             # cheap didn't claim FP (no signal for the gate) or when
             # scorecard is disabled. Disagreement reasoning is
             # truncated and bounded inside the scorecard.
-            full_says_fp = not analysis.is_true_positive
-            record_prefilter_outcome(
-                self.llm.scorecard,
-                decision_class=decision_class,
-                model=fast_model_name,
-                cheap_says_fp=cheap_says_fp,
-                full_says_fp=full_says_fp,
-                cheap_reasoning=cheap_reasoning,
-                full_reasoning=analysis.reasoning,
-            )
+            # A model-emitted literal null lands as None on the
+            # dataclass despite the bool annotation — the full model
+            # abstained, so there is no full verdict to compare the
+            # cheap claim against; recording either direction would
+            # write a fabricated outcome into the reliability ledger.
+            if analysis.is_true_positive is None:
+                self.logger.debug(
+                    "full analysis abstained on is_true_positive — "
+                    "skipping prefilter outcome record",
+                )
+            else:
+                full_says_fp = not analysis.is_true_positive
+                record_prefilter_outcome(
+                    self.llm.scorecard,
+                    decision_class=decision_class,
+                    model=fast_model_name,
+                    cheap_says_fp=cheap_says_fp,
+                    full_says_fp=full_says_fp,
+                    cheap_reasoning=cheap_reasoning,
+                    full_reasoning=analysis.reasoning,
+                )
 
             return analysis
 
@@ -1280,6 +1291,19 @@ class AutonomousCodeQLAnalyzer:
                     "deep analysis, not treating as non-exploitable",
                     dataflow_validation.error,
                 )
+            elif (dataflow_validation
+                  and dataflow_validation.is_exploitable is None):
+                # Dict-splat construction lets a model-emitted
+                # literal null land as None despite the bool
+                # annotation — the validation abstained. Same
+                # treatment as the errored case above: no verdict
+                # exists, so fall through to deep analysis instead
+                # of stamping "not exploitable".
+                self.logger.warning(
+                    "Dataflow validation abstained on exploitability "
+                    "— proceeding to deep analysis, not treating as "
+                    "non-exploitable",
+                )
             elif dataflow_validation and not dataflow_validation.is_exploitable:
                 self.logger.info("✗ Dataflow not exploitable - skipping exploit generation")
                 return AutonomousAnalysisResult(
@@ -1303,6 +1327,31 @@ class AutonomousCodeQLAnalyzer:
             dataflow_validation,
             repo_path=repo_path,
         )
+
+        if analysis.is_exploitable is None:
+            # Model-emitted literal null lands as None on the
+            # dataclass despite the bool annotation — the deep
+            # analysis abstained. Skip exploit generation (no tokens
+            # on a verdict the model never gave) but log the
+            # abstention instead of minting a definitive "not
+            # exploitable"; the analysis object carries the honest
+            # None downstream.
+            self.logger.info(
+                "⊘ Deep analysis abstained on exploitability — "
+                "skipping exploit generation (no verdict)",
+            )
+            return AutonomousAnalysisResult(
+                finding=finding,
+                analysis=analysis,
+                dataflow_validation=dataflow_validation,
+                exploitable=False,
+                exploit_code=None,
+                exploit_compiled=False,
+                validation_result=None,
+                refinement_iterations=0,
+                total_duration_seconds=time.time() - start_time,
+                reachability_verdict=reachability_verdict,
+            )
 
         if not analysis.is_exploitable:
             self.logger.info("✗ Not exploitable - skipping exploit generation")

@@ -196,6 +196,21 @@ def test_validate_maps_is_exploitable_false_to_not_exploitable():
     assert v.validate(_finding()) == ValidatorVerdict.NOT_EXPLOITABLE
 
 
+def test_validate_maps_abstained_none_to_uncertain():
+    """A model-emitted literal null lands as None on the dataclass
+    despite the bool annotation (dict-splat construction) — an
+    abstention, not a "not exploitable" ruling. A falsy read counted
+    it as a confident negative in the corpus precision/recall
+    metrics."""
+    v = CodeQLEvidenceValidator()
+    mock_dv = MagicMock()
+    mock_dv.validate_dataflow_path.return_value = _validation(
+        is_exploitable=None,
+    )
+    v._validator = mock_dv
+    assert v.validate(_finding()) == ValidatorVerdict.UNCERTAIN
+
+
 def test_validate_maps_error_state_result_to_uncertain():
     """validate_dataflow_path returns LLM/transport failures WITHOUT
     raising: ``error`` is set and ``is_exploitable=False`` is a default,

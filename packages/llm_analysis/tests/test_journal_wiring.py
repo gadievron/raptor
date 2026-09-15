@@ -259,6 +259,27 @@ class TestDeriveVerdict:
             {"is_true_positive": "yes"},
         ) == "error"
 
+    def test_tp_with_abstained_exploitability_is_error(self):
+        # Response validation nulls a missing/malformed
+        # is_exploitable. "suspicious" would assert "real bug, NOT
+        # exploitable" — a definitive journal verdict minted from an
+        # abstention (pre-fix behaviour). Same rule as
+        # _panel_verdict: a non-bool exploitability bears no verdict.
+        assert AutonomousSecurityAgentV2._derive_verdict(
+            {"is_true_positive": True, "is_exploitable": None},
+        ) == "error"
+
+    def test_tp_with_absent_exploitability_is_error(self):
+        assert AutonomousSecurityAgentV2._derive_verdict(
+            {"is_true_positive": True},
+        ) == "error"
+
+    def test_tp_with_string_exploitability_is_error(self):
+        # A truthy non-bool must not be laundered into "finding".
+        assert AutonomousSecurityAgentV2._derive_verdict(
+            {"is_true_positive": True, "is_exploitable": "yes"},
+        ) == "error"
+
 
 # ---------------------------------------------------------------------------
 # Adversarial vuln.analysis shapes

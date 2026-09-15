@@ -1458,7 +1458,19 @@ class AutonomousSecurityAgentV2:
                             )
                             vuln.exploitable = False
                             vuln.exploitability_score = 0.0
-                        elif not validation.get('is_exploitable'):
+                        elif validation.get('is_exploitable') is None:
+                            # Schema validation nulls a missing or
+                            # malformed is_exploitable — an abstention,
+                            # not a verdict. Casting it as
+                            # "not exploitable" silently demoted a
+                            # finding off a degraded response; leave
+                            # the verdict untouched instead.
+                            logger.info(
+                                "⚠️  Validation returned no "
+                                "exploitability verdict (abstained) — "
+                                "verdict unchanged"
+                            )
+                        elif validation.get('is_exploitable') is False:
                             logger.info(
                                 "⚠️  Validation determined "
                                 "Not Exploitable:"

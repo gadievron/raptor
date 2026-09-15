@@ -654,8 +654,21 @@ class CrashAnalysisAgent:
                     validated.quality, validated.incomplete,
                 )
 
-            # Update crash context
-            crash_context.exploitability = "exploitable" if analysis.get("is_exploitable") else "not_exploitable"
+            # Update crash context. Response validation nulls a
+            # missing/malformed is_exploitable — an abstention, not a
+            # verdict. The old positive ternary coerced that None to
+            # the definitive "not_exploitable" string on the crash
+            # report surface; keep the dataclass's honest "unknown"
+            # instead (exploit generation already gates on the exact
+            # "exploitable" string, so the skip behaviour is
+            # unchanged — only the minted verdict is).
+            _exploitable = analysis.get("is_exploitable")
+            if _exploitable is True:
+                crash_context.exploitability = "exploitable"
+            elif _exploitable is False:
+                crash_context.exploitability = "not_exploitable"
+            else:
+                crash_context.exploitability = "unknown"
             crash_context.crash_type = analysis.get("crash_type", "unknown")
             # Read the canonical name first, fall back to legacy
             # for back-compat with cached analyses still using

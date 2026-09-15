@@ -1171,17 +1171,27 @@ class DataflowValidator:
             # Record cheap-vs-full agreement for the scorecard.
             # ``full_says_fp`` for dataflow = full said NOT
             # exploitable. Same shape as autonomous_analyzer's
-            # is_true_positive negation.
-            full_says_fp = not validation.is_exploitable
-            record_prefilter_outcome(
-                self.llm.scorecard,
-                decision_class=decision_class,
-                model=fast_model_name,
-                cheap_says_fp=cheap_says_fp,
-                full_says_fp=full_says_fp,
-                cheap_reasoning=cheap_reasoning,
-                full_reasoning=validation.reasoning,
-            )
+            # is_true_positive negation — including the abstention
+            # guard: the dict-splat construction above lets a
+            # model-emitted literal null land as None despite the
+            # bool annotation, and there is no full verdict to
+            # compare the cheap claim against.
+            if validation.is_exploitable is None:
+                self.logger.debug(
+                    "dataflow validation abstained on is_exploitable "
+                    "— skipping prefilter outcome record",
+                )
+            else:
+                full_says_fp = not validation.is_exploitable
+                record_prefilter_outcome(
+                    self.llm.scorecard,
+                    decision_class=decision_class,
+                    model=fast_model_name,
+                    cheap_says_fp=cheap_says_fp,
+                    full_says_fp=full_says_fp,
+                    cheap_reasoning=cheap_reasoning,
+                    full_reasoning=validation.reasoning,
+                )
 
             return validation
 

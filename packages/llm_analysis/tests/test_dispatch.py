@@ -502,6 +502,43 @@ class TestDispatchTaskIntegration:
         assert "\x1b" not in out
         assert "evil.py" in out  # content survives, escaped
 
+    def test_progress_line_reports_abstention_not_verdict(self, capsys):
+        # A schema-nulled is_exploitable is an abstention. The
+        # progress line must say so — "not exploitable" would show
+        # the operator a definitive ruling nobody made.
+        def mock_fn(prompt, schema, system_prompt, temperature, model):
+            return _make_dispatch_result(exploitable=None, score=None)
+
+        dispatch_task(
+            task=AnalysisTask(),
+            items=[_make_finding("f-001")],
+            dispatch_fn=mock_fn,
+            role_resolution={},
+            prior_results={},
+            cost_tracker=CostTracker(0),
+            max_parallel=1,
+        )
+        out = capsys.readouterr().out
+        assert "no verdict" in out
+        assert "not exploitable" not in out
+
+    def test_progress_line_explicit_false_still_definitive(self, capsys):
+        # Two-direction: an explicit False keeps its ruling.
+        def mock_fn(prompt, schema, system_prompt, temperature, model):
+            return _make_dispatch_result(exploitable=False, score=0.0)
+
+        dispatch_task(
+            task=AnalysisTask(),
+            items=[_make_finding("f-001")],
+            dispatch_fn=mock_fn,
+            role_resolution={},
+            prior_results={},
+            cost_tracker=CostTracker(0),
+            max_parallel=1,
+        )
+        out = capsys.readouterr().out
+        assert "not exploitable" in out
+
     def test_failure_line_escapes_llm_derived_error(self, capsys):
         # External-LLM errors can embed response excerpts — the
         # FAILED progress line must escape them (the CC path

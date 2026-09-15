@@ -275,7 +275,11 @@ def auto_back_prop_from_validate_run(
         # under a stringified key and silently mangle attribution).
         if not isinstance(model, str) or not model:
             continue
-        analysis_verdict = r.get("is_exploitable", False)
+        # No default: a missing is_exploitable is the same abstention
+        # as a schema-nulled one — the isinstance gate below must
+        # skip BOTH, not record a fabricated "not exploitable"
+        # analysis verdict against the validation outcome.
+        analysis_verdict = r.get("is_exploitable")
         if not isinstance(analysis_verdict, bool):
             continue
         records.append({

@@ -34,7 +34,17 @@ def derive_verdict(analysis: dict[str, Any] | None) -> str:
     if is_tp is False:
         return "clean"
     if is_tp is True:
-        return "finding" if analysis.get("is_exploitable") else "suspicious"
+        is_exploitable = analysis.get("is_exploitable")
+        if is_exploitable is True:
+            return "finding"
+        if is_exploitable is False:
+            return "suspicious"
+        # Response validation nulls a missing/malformed
+        # is_exploitable — an abstention. "suspicious" asserts
+        # "real bug, NOT exploitable", a definitive ruling the
+        # model never made. Same rule as _panel_verdict below:
+        # a non-bool exploitability bears no journal verdict.
+        return "error"
     return "error"
 
 

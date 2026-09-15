@@ -551,20 +551,30 @@ def _dispatch_inner(
                     exploitable = processed.get("is_exploitable", False)
                     score = processed.get("exploitability_score")
                     ruling = processed.get("ruling")
-                    try:
-                        if exploitable:
-                            status = f"exploitable ({float(score):.2f})"
-                        else:
-                            status = "not exploitable"
-                    except (ValueError, TypeError):
-                        status = "exploitable" if exploitable else "not exploitable"
-                    # Show short ruling labels (enum values), not long-form text
-                    valid_rulings = {
-                        "false_positive", "unreachable",
-                        "test_code", "dead_code", "mitigated",
-                    }
-                    if ruling and ruling in valid_rulings and not exploitable:
-                        status = ruling.replace("_", " ")
+                    if exploitable is None:
+                        # Response validation nulled the verdict —
+                        # the model abstained. "not exploitable" on
+                        # the progress line would show the operator
+                        # a definitive ruling nobody made.
+                        status = "no verdict"
+                    else:
+                        try:
+                            if exploitable:
+                                status = f"exploitable ({float(score):.2f})"
+                            else:
+                                status = "not exploitable"
+                        except (ValueError, TypeError):
+                            status = ("exploitable" if exploitable
+                                      else "not exploitable")
+                        # Show short ruling labels (enum values), not
+                        # long-form text
+                        valid_rulings = {
+                            "false_positive", "unreachable",
+                            "test_code", "dead_code", "mitigated",
+                        }
+                        if (ruling and ruling in valid_rulings
+                                and not exploitable):
+                            status = ruling.replace("_", " ")
                 else:
                     status = "done"
                 cost = processed.get("cost_usd")

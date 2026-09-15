@@ -110,6 +110,13 @@ class CodeQLEvidenceValidator:
         if result.error:
             return ValidatorVerdict.UNCERTAIN
 
+        # Dict-splat construction lets a model-emitted literal null
+        # land as None despite the bool annotation — an abstention,
+        # not a "not exploitable" ruling; a falsy read would count
+        # it as a confident negative in the corpus metrics.
+        if result.is_exploitable is None:
+            return ValidatorVerdict.UNCERTAIN
+
         return (
             ValidatorVerdict.EXPLOITABLE
             if result.is_exploitable

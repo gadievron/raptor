@@ -409,6 +409,28 @@ class TestAutoBackPropFromValidateRun:
         )
         assert auto_back_prop_from_validate_run(run, scorecard=scorecard) == 0
 
+    def test_analysis_abstention_skipped(self, tmp_path, scorecard):
+        # Schema-nulled AND absent is_exploitable are the same
+        # abstention: neither may be recorded as a "not exploitable"
+        # analysis verdict against the validation outcome (the
+        # absent-key shape used to default to False and mint a
+        # fabricated correct/incorrect event).
+        run = tmp_path / "v"
+        self._write_run(
+            run,
+            analysis_records=[
+                {"finding_id": "f1", "rule_id": "r",
+                 "analysed_by": "m", "is_exploitable": None},
+                {"finding_id": "f2", "rule_id": "r",
+                 "analysed_by": "m"},  # key absent
+            ],
+            validation_findings=[
+                {"finding_id": "f1", "is_exploitable": False},
+                {"finding_id": "f2", "is_exploitable": False},
+            ],
+        )
+        assert auto_back_prop_from_validate_run(run, scorecard=scorecard) == 0
+
     def test_missing_files_returns_zero(self, tmp_path, scorecard):
         """No orchestrated_report.json (standalone /validate) → silent 0."""
         run = tmp_path / "empty"
