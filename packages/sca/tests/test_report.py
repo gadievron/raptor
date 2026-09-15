@@ -884,11 +884,17 @@ class TestAdvisoryDetailSanitization:
         result = _strip_autofetch_markup(normal)
         assert "Buffer overflow" in result
 
-    def test_source_uses_strip_autofetch(self):
+    def test_source_uses_output_sanitiser(self):
+        """Advisory detail routes through ``sanitise_string`` (which
+        strips autofetch markup, defangs line-leading markdown, and
+        escapes non-printables) — the previous bare
+        ``_strip_autofetch_markup`` + ``escape_nonprintable`` pair let
+        raw ``</details>`` and forged headings through."""
         source = Path(__file__).resolve().parents[1] / "report.py"
         content = source.read_text()
-        assert "_strip_autofetch_markup" in content, (
-            "report.py must call _strip_autofetch_markup on advisory detail"
+        assert "sanitise_string(clipped" in content, (
+            "report.py must sanitise the advisory detail block with "
+            "sanitise_string"
         )
 
 

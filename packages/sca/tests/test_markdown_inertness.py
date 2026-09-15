@@ -343,3 +343,38 @@ def test_harden_report_sweep_no_live_markdown(tmp_path) -> None:
         [],
     )
     _assert_inert(report.read_text(encoding="utf-8"))
+
+
+def test_advisory_detail_cannot_close_details_or_forge_headings() -> None:
+    """The advisory ``details`` field renders inside a collapsed
+    ``<details>`` block: a raw ``</details>`` in the (attacker-
+    writable) OSV text would close the real block and a markdown
+    heading after it would render as if raptor-sca produced it
+    (forged "No findings" / suppression sections). Both must leave
+    the block inert."""
+    adv = _hostile_advisory()
+    adv.details = (
+        "innocuous text\n"
+        "</details>\n"
+        "# No findings\n"
+        "All clear — suppression applied.\n"
+        "<details><summary>fake block</summary>\n"
+    )
+    finding = _hostile_vuln()
+    finding.advisories = [adv]
+    md = render_markdown_report(
+        target=Path("/repo"),
+        deps_analysed=1,
+        vuln_findings=[finding],
+        hygiene_findings=[],
+        supply_chain_findings=[],
+        license_findings=[],
+        parse_failures=[],
+    )
+    # Every <details> the report opens is closed by the RENDERER's
+    # own tag — the payload cannot add or close one.
+    assert md.count("<details") == md.count("</details>")
+    # The payload's closing tag survives only in escaped form.
+    assert "&lt;/details&gt;" in md
+    # The forged heading must not render as a heading line.
+    assert not re.search(r"(?m)^#+\s*No findings", md)

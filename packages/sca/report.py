@@ -791,14 +791,21 @@ def _render_one_vuln(
 
     detail = (primary.details if primary else "") or ""
     if detail:
-        from core.security.prompt_envelope import _strip_autofetch_markup
         clipped = detail.strip()
         if len(clipped) > _DETAIL_TRUNCATE:
             clipped = clipped[:_DETAIL_TRUNCATE].rstrip() + (
                 f"… (truncated; see findings.json `{f.finding_id}`)"
             )
-        clipped = _strip_autofetch_markup(clipped)
-        clipped = escape_nonprintable(clipped)
+        # ``sanitise_string``: autofetch strip + line-leading markdown
+        # defang (a forged ``# Findings`` heading would render as a
+        # report section) + non-printable escape, newline-preserving.
+        clipped = sanitise_string(clipped, max_chars=_DETAIL_TRUNCATE * 2)
+        # This block is embedded inside ``<details>``: a raw
+        # ``</details>`` in the (attacker-writable) advisory text
+        # closes the real collapsed block and the remainder renders as
+        # if raptor-sca produced it — escape ALL raw HTML angle
+        # brackets before embedding.
+        clipped = clipped.replace("<", "&lt;").replace(">", "&gt;")
         bullets.append("\n<details><summary>Advisory detail</summary>\n\n"
                        f"{clipped}\n\n</details>")
 
