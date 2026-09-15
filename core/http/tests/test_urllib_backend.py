@@ -1869,3 +1869,55 @@ class TestBreakerPerRequestGranularity:
         sleeps = [c.args[0] for c in mock_sleep.call_args_list]
         assert sleeps == [7, 7, 7]
         assert cb.is_open("flaky.example.com", 443)[0] is False
+
+
+class TestStreamErrorBodyReadTranslation:
+    """A server that answers 4xx/5xx headers then stalls or resets
+    during the bounded error-body read raises raw urllib3 types from
+    resp.read() — those must translate to HttpError like the mid-body
+    loop (consumers guard the stream with ``except HttpError`` only)."""
+
+    def test_4xx_snippet_read_timeout_translates_to_httperror(self):
+        import urllib3.exceptions as u3e
+
+        resp = _stub_response(b"", status=503,
+                              reason="Service Unavailable", final_url="")
+
+        def _raise(*a, **kw):
+            raise u3e.ReadTimeoutError(None, "https://example.com/blob",
+                                       "Read timed out.")
+
+        resp.read = _raise
+        client, _pool = _client_with_mock_pool(resp)
+        it = client.stream_bytes("https://example.com/blob")
+        with pytest.raises(HttpError) as excinfo:
+            next(it)
+        assert excinfo.value.status == 503
+        assert "error-body read failed" in str(excinfo.value)
+
+    def test_4xx_snippet_protocol_error_translates_to_httperror(self):
+        import urllib3.exceptions as u3e
+
+        resp = _stub_response(b"", status=404,
+                              reason="Not Found", final_url="")
+
+        def _raise(*a, **kw):
+            raise u3e.ProtocolError("Connection broken: reset")
+
+        resp.read = _raise
+        client, _pool = _client_with_mock_pool(resp)
+        it = client.stream_bytes("https://example.com/blob")
+        with pytest.raises(HttpError):
+            next(it)
+
+    def test_4xx_snippet_normal_read_still_reports_status(self):
+        # Two-direction: the happy 4xx path (readable error body)
+        # keeps its status + redacted-snippet shape.
+        resp = _stub_response(b"nope", status=418,
+                              reason="Teapot", final_url="")
+        client, _pool = _client_with_mock_pool(resp)
+        it = client.stream_bytes("https://example.com/blob")
+        with pytest.raises(HttpError) as excinfo:
+            next(it)
+        assert excinfo.value.status == 418
+        assert "418" in str(excinfo.value)

@@ -980,8 +980,23 @@ class UrllibClient:
                 # Bounded read for the error message, secrets
                 # redacted — same defang as `_fetch_once`'s 4xx
                 # branch (4xx bodies commonly echo the request
-                # token back).
-                snippet = resp.read(512, decode_content=decode) or b""
+                # token back). The read itself gets the same
+                # raw-exception translation as the mid-body loop
+                # below: a server that answers error headers then
+                # stalls or resets during the 512-byte body read
+                # raises ReadTimeoutError/ProtocolError — urllib3
+                # types that would otherwise escape every consumer's
+                # ``except HttpError`` (the surrounding try has only
+                # a ``finally``).
+                try:
+                    snippet = resp.read(512, decode_content=decode) or b""
+                except (_U3HTTPError, OSError) as e:
+                    msg = (
+                        f"HTTP {resp.status} from "
+                        f"{_safe_url_for_log(url)}: error-body read "
+                        f"failed: {e}"
+                    )
+                    raise HttpError(msg, status=resp.status) from e
                 reason = resp.reason or "?"
                 from core.security.redaction import redact_secrets
                 snippet_text = snippet.decode("utf-8", errors="replace")
