@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .models import Manifest
 from typing import TYPE_CHECKING
+from .file_shapes import is_compose_file
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -510,7 +511,7 @@ def _classify(path: Path) -> str | None:
     # Docker Compose / overlay variants. ``docker-compose.dev.yml``
     # etc. — too many shapes for static MANIFEST_FILENAMES; matched
     # by predicate.
-    if _is_compose_file(name):
+    if is_compose_file(Path(name)):
         return "OCI"
     # Kubernetes manifests — content-sniffed by the parser
     # (top-level ``kind:`` must match a workload). Discovery
@@ -519,16 +520,3 @@ def _classify(path: Path) -> str | None:
     if path.suffix.lower() in (".yml", ".yaml"):
         return "Kubernetes"
     return None
-
-
-def _is_compose_file(name: str) -> bool:
-    """Match ``compose.yml`` / ``compose.yaml`` /
-    ``docker-compose*.yml`` / ``compose.<overlay>.yml``."""
-    lower = name.lower()
-    if not (lower.endswith((".yml", ".yaml"))):
-        return False
-    if lower.startswith("docker-compose"):
-        return True
-    if lower in {"compose.yml", "compose.yaml"}:
-        return True
-    return bool(lower.startswith("compose."))

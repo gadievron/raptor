@@ -39,6 +39,7 @@ from .evaluator import evaluate_bump_supply_chain
 from .upstream_map import UpstreamSource, lookup_upstream
 from .vuln_delta import VulnDeltaDegraded, evaluate_bump_vulns
 from typing import TYPE_CHECKING
+from ..file_shapes import is_dockerfile as _is_dockerfile
 
 if TYPE_CHECKING:
     from ..registries.pypi import PyPIClient
@@ -1922,15 +1923,6 @@ def _find_dockerfiles(target: Path) -> list[Path]:
         return [target] if _is_dockerfile(target) else []
     out: list[Path] = [path for path in target.rglob("*") if path.is_file() and _is_dockerfile(path)]
     return sorted(out)
-
-
-def _is_dockerfile(path: Path) -> bool:
-    name = path.name
-    if name in ("Dockerfile", "Containerfile"):
-        return True
-    if name.startswith("Dockerfile.") or name.endswith(".Dockerfile"):
-        return True
-    return path.suffix == ".dockerfile"
 
 
 def _term(value: object, max_chars: int) -> str:

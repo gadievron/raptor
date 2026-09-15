@@ -72,6 +72,10 @@ from ... import _gha_uses as _gha_uses_walk
 from ...models import Confidence, Dependency, PinStyle
 from ...naming import fold_name
 from .. import register
+from ...file_shapes import is_dockerfile as _is_dockerfile
+# Composite-action manifests carry run:/uses: steps too — the
+# broader predicate is deliberate for the inline-install lane.
+from ...file_shapes import is_gha_workflow_or_action as _is_gha_workflow
 from ._managers import (
     _MANAGERS,
     _NAME_RE,
@@ -925,15 +929,6 @@ def _flatten_command(val) -> list[str]:
 # Registry
 # ---------------------------------------------------------------------------
 
-def _is_dockerfile(path: Path) -> bool:
-    name = path.name
-    if name in ("Dockerfile", "Containerfile"):
-        return True
-    if name.startswith("Dockerfile.") or name.endswith(".Dockerfile"):
-        return True
-    return path.suffix == ".dockerfile"
-
-
 def _is_devcontainer_json(path: Path) -> bool:
     if path.name == "devcontainer.json":
         return True
@@ -942,16 +937,6 @@ def _is_devcontainer_json(path: Path) -> bool:
 
 def _is_shell_script(path: Path) -> bool:
     return path.suffix in (".sh", ".bash")
-
-
-def _is_gha_workflow(path: Path) -> bool:
-    if path.suffix not in (".yml", ".yaml"):
-        return False
-    parts = path.parts
-    for j in range(len(parts) - 2):
-        if parts[j] == ".github" and parts[j + 1] == "workflows":
-            return True
-    return path.name in ("action.yml", "action.yaml")
 
 
 register(predicate=_is_dockerfile)(parse_dockerfile)

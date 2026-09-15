@@ -58,6 +58,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from ..file_shapes import is_dockerfile as _is_dockerfile
 from pathlib import Path
 from collections.abc import Iterable
 
@@ -667,18 +668,6 @@ def _add_runner(
 # ---------------------------------------------------------------------------
 # Top-level discovery
 # ---------------------------------------------------------------------------
-
-
-def _is_dockerfile(path: Path) -> bool:
-    # Same name grammar as the bump walker's predicate — including
-    # the ``<variant>.Dockerfile`` capital-D suffix form, which the
-    # other consumers accept and this discovery pass must too.
-    name = path.name
-    if name in ("Dockerfile", "Containerfile"):
-        return True
-    if name.startswith("Dockerfile.") or name.endswith(".Dockerfile"):
-        return True
-    return bool(name.endswith(".dockerfile"))
 
 
 def _iter_dockerfiles(target: Path) -> Iterable[Path]:

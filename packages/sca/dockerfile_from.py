@@ -86,6 +86,7 @@ from core.oci.sbom import (
     packages_from_layer_files,
 )
 
+from .file_shapes import is_dockerfile as _is_dockerfile
 from .models import Confidence, Dependency, PinStyle
 
 logger = logging.getLogger(__name__)
@@ -94,9 +95,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Discovery
 # ---------------------------------------------------------------------------
-
-
-_DOCKERFILE_NAMES = {"Dockerfile", "Containerfile"}
 
 
 def _read_source_bounded(p: Path) -> str | None:
@@ -110,22 +108,6 @@ def _read_source_bounded(p: Path) -> str | None:
     """
     from .parsers._safe_read import read_bounded
     return read_bounded(p, follow_symlinks=False)
-
-
-def _is_dockerfile(path: Path) -> bool:
-    """Match Dockerfile / Containerfile / Dockerfile.<variant> /
-    <variant>.Dockerfile / *.dockerfile.
-
-    Same shape as ``discovery._is_inline_install_source`` but
-    Dockerfile-only — devcontainer.json, shell scripts, and GHA
-    workflows don't carry a base image.
-    """
-    name = path.name
-    if name in _DOCKERFILE_NAMES:
-        return True
-    if name.startswith("Dockerfile.") or name.endswith(".Dockerfile"):
-        return True
-    return path.suffix == ".dockerfile"
 
 
 # Directory names that almost certainly carry test fixtures or CI

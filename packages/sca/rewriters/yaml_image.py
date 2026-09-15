@@ -24,29 +24,13 @@ import re
 
 from . import RewriteEdit, RewriteResult, register, rewrite_file_with
 from typing import TYPE_CHECKING
+from ..file_shapes import is_compose_file as _is_compose_file
+from ..file_shapes import is_gitlab_ci_file as _is_gitlab_ci_file
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
-
-
-def _is_compose_file(path: Path) -> bool:
-    """Match compose / docker-compose YAML files. Mirrors the
-    discovery predicate in ``parsers/compose.py``."""
-    if path.suffix.lower() not in (".yml", ".yaml"):
-        return False
-    name = path.name.lower()
-    if name.startswith("docker-compose"):
-        return True
-    if name in ("compose.yml", "compose.yaml"):
-        return True
-    return bool(name.startswith("compose.") and name.endswith((".yml", ".yaml")))
-
-
-def _is_gitlab_ci_file(path: Path) -> bool:
-    """Match ``.gitlab-ci.yml`` / ``.gitlab-ci.yaml``."""
-    return path.name in (".gitlab-ci.yml", ".gitlab-ci.yaml")
 
 
 def _is_k8s_manifest(path: Path) -> bool:

@@ -30,23 +30,12 @@ import re
 
 from . import RewriteEdit, RewriteResult, register, rewrite_file_with
 from typing import TYPE_CHECKING
+from ..file_shapes import is_gha_workflow as _is_gha_workflow
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
-
-
-def _is_gha_workflow(path: Path) -> bool:
-    """Predicate: path is a GHA workflow file
-    (``.github/workflows/*.yml`` or ``*.yaml``)."""
-    if path.suffix not in (".yml", ".yaml"):
-        return False
-    parts = path.parts
-    for i in range(len(parts) - 2):
-        if parts[i] == ".github" and parts[i + 1] == "workflows":
-            return True
-    return False
 
 
 @register(predicate=_is_gha_workflow)

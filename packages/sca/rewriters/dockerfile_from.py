@@ -31,24 +31,12 @@ import re
 
 from . import RewriteEdit, RewriteResult, register, rewrite_file_with
 from typing import TYPE_CHECKING
+from ..file_shapes import is_dockerfile as _is_dockerfile
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
-
-
-def _is_dockerfile(path: Path) -> bool:
-    """Match the same predicate as ``dockerfile_arg`` — both
-    rewriters register against Dockerfiles. The dispatcher routes
-    by content (we look at every ``RewriteEdit`` and pick the
-    line shape that matches)."""
-    name = path.name
-    if name in ("Dockerfile", "Containerfile"):
-        return True
-    if name.startswith("Dockerfile.") or name.endswith(".Dockerfile"):
-        return True
-    return path.suffix == ".dockerfile"
 
 
 @register(predicate=_is_dockerfile, filenames=None)

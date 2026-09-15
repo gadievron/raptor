@@ -55,6 +55,7 @@ from core.oci.image_ref import split_image_ref as _split_image_ref
 from ..models import Confidence, Dependency, PinStyle
 from ..models import classify_pin_style as _classify_pin_style
 from . import _safe_read, register
+from ..file_shapes import is_compose_file as _is_compose_file
 
 logger = logging.getLogger(__name__)
 
@@ -134,30 +135,6 @@ def parse(path: Path) -> list[Dependency]:
         if dep is not None:
             out.append(dep)
     return out
-
-
-def _is_compose_file(path: Path) -> bool:
-    """Match ``docker-compose.yml`` / ``docker-compose.yaml`` /
-    ``compose.yml`` / ``compose.yaml``, plus operator-specific
-    overlays like ``docker-compose.dev.yml``.
-
-    Doesn't match ``compose.yml`` files NOT at the project root
-    or under an obvious compose-config directory — too many false
-    positives (some unrelated tools use ``compose.yaml`` names).
-    Conservative match: name must start with ``compose`` or
-    ``docker-compose``.
-    """
-    if path.suffix.lower() not in (".yml", ".yaml"):
-        return False
-    name = path.name.lower()
-    if name.startswith("docker-compose"):
-        return True
-    if name in {"compose.yml", "compose.yaml"}:
-        return True
-    if name.startswith("compose.") and name.endswith((".yml", ".yaml")):
-        # ``compose.dev.yml`` etc. — common operator pattern.
-        return True
-    return False
 
 
 def _build_dep(

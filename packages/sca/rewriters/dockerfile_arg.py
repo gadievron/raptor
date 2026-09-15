@@ -41,19 +41,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _is_dockerfile(path: Path) -> bool:
-    """Predicate matching the inline-installs parser's predicate
-    so a rewriter is wired to every file the parser sees."""
-    name = path.name
-    if name in ("Dockerfile", "Containerfile"):
-        return True
-    if name.startswith("Dockerfile.") or name.endswith(".Dockerfile"):
-        return True
-    return path.suffix == ".dockerfile"
-
-
-# NOT @register'd: the Dockerfile predicate is owned by
-# ``dockerfile_from`` which dispatches ARG-shaped edits here
+# NOT @register'd: the Dockerfile predicate
+# (``packages.sca.file_shapes.is_dockerfile``) is registered by
+# ``dockerfile_from``, which dispatches ARG-shaped edits here
 # internally (locators containing ``/`` route to FROM, the rest
 # to ARG). One predicate registration prevents the
 # first-match-wins dispatcher from picking the wrong rewriter
