@@ -201,17 +201,19 @@ pytest.importorskip("tree_sitter_php")
 
 
 def test_php_use_simple():
+    # Dot-joined, like package_name: the resolver compares dot-form
+    # module paths, so a backslash-joined binding can never match.
     g = extract_call_graph_php(
         '<?php\nuse Foo\\Bar\\Baz;\n'
     )
-    assert g.imports == {"Baz": "Foo\\Bar\\Baz"}
+    assert g.imports == {"Baz": "Foo.Bar.Baz"}
 
 
 def test_php_use_alias():
     g = extract_call_graph_php(
         '<?php\nuse Foo\\Bar as B;\n'
     )
-    assert g.imports == {"B": "Foo\\Bar"}
+    assert g.imports == {"B": "Foo.Bar"}
 
 
 def test_php_static_call():

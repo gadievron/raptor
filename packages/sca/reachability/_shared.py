@@ -24,15 +24,21 @@ if TYPE_CHECKING:
 
 
 def _normalise_qualified(name: str) -> str:
-    """Map Rust ``::`` and Ruby ``#`` qualifier separators to dots.
+    r"""Map Rust ``::``, Ruby ``#``, and PHP ``\`` qualifier
+    separators to dots.
 
     The cross-language resolver (``core.analysis.reachability
     .function_called``) splits qualified names on ``.`` only, so a
-    ``SmallVec::insert_many`` or ``Mapper#draw`` symbol left
+    ``SmallVec::insert_many``, ``Mapper#draw``, or
+    ``Symfony\Component\HttpFoundation\Request::create`` symbol left
     verbatim could never match any call chain — it would read as a
-    single opaque segment and silently guarantee NOT_CALLED.
+    single opaque segment (or a segment carrying embedded
+    backslashes) and silently guarantee NOT_CALLED, minting a false
+    high-confidence ``not_function_reachable`` downgrade.
     """
-    return name.replace("::", ".").replace("#", ".")
+    return (
+        name.replace("::", ".").replace("#", ".").replace("\\", ".")
+    )
 
 
 def extract_qualified_symbols(advisory: Any, dep_name: str) -> list[str]:

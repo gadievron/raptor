@@ -350,7 +350,16 @@ def test_packagist_symbol_map_filters_by_prefix():
 
 
 def test_packagist_refine_likely_called(tmp_path: Path):
+    """A genuinely-called OSV symbol MUST land on ``likely_called``.
+
+    The symbol map is built through the real producer from the OSV
+    backslash shape (``Request::create`` under a ``Foo\\Bar`` path)
+    — hand-set dotted maps masked the missing ``\\`` normalisation,
+    and the previous three-way ``in (...)`` assert accepted every
+    possible verdict including the false high-confidence
+    ``not_function_reachable`` downgrade."""
     from packages.sca.reachability.packagist_function_level import (
+        build_packagist_symbol_map,
         refine_packagist_verdicts,
     )
     (tmp_path / "X.php").write_text(
@@ -358,20 +367,50 @@ def test_packagist_refine_likely_called(tmp_path: Path):
         'class C { function m() { Request::create("/"); } }\n'
     )
     deps = [_dep("symfony/http-foundation", "5.4.0", "Packagist")]
+    adv = _Adv(ecosystem_specific={
+        "imports": [{"path": "Symfony\\Component\\HttpFoundation",
+                     "symbols": ["Request::create"]}],
+    })
+    symbol_map = build_packagist_symbol_map([
+        _OsvResult(dep_key=deps[0].key(), advisories=[adv]),
+    ])
+    assert symbol_map[deps[0].key()] == [
+        "Symfony.Component.HttpFoundation.Request.create",
+    ]
     out: Dict[str, Reachability] = {deps[0].key(): _imported()}
     refine_packagist_verdicts(
         deps, out,
         target=tmp_path,
-        packagist_symbol_map={
-            deps[0].key(): [
-                "Symfony\\Component\\HttpFoundation.Request.create",
-            ],
-        },
+        packagist_symbol_map=symbol_map,
     )
-    # Reachability resolver chain matching: PHP uses '\' as separator
-    # in the qualified name, but the call_graph stores ':' between
-    # parts. The resolver tail-matches against [Request, create] →
-    # qualified names ending in .Request.create count as a match.
-    assert out[deps[0].key()].verdict in (
-        "likely_called", "imported", "not_function_reachable",
+    assert out[deps[0].key()].verdict == "likely_called"
+
+
+def test_packagist_refine_not_called_still_downgrades(tmp_path: Path):
+    """Counter-direction: the namespace is imported but the affected
+    symbol is never called — the downgrade to
+    ``not_function_reachable`` must still fire (the separator fix
+    may not silently disable the tier's suppression arm)."""
+    from packages.sca.reachability.packagist_function_level import (
+        build_packagist_symbol_map,
+        refine_packagist_verdicts,
     )
+    (tmp_path / "X.php").write_text(
+        '<?php\nuse Symfony\\Component\\HttpFoundation\\Request;\n'
+        'class C { function m() { Request::createFromGlobals(); } }\n'
+    )
+    deps = [_dep("symfony/http-foundation", "5.4.0", "Packagist")]
+    adv = _Adv(ecosystem_specific={
+        "imports": [{"path": "Symfony\\Component\\HttpFoundation",
+                     "symbols": ["Request::create"]}],
+    })
+    symbol_map = build_packagist_symbol_map([
+        _OsvResult(dep_key=deps[0].key(), advisories=[adv]),
+    ])
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_packagist_verdicts(
+        deps, out,
+        target=tmp_path,
+        packagist_symbol_map=symbol_map,
+    )
+    assert out[deps[0].key()].verdict == "not_function_reachable"

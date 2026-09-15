@@ -16,9 +16,11 @@ cross-language resolver against OSV symbol data.
 
 PHP / Packagist OSV records ship symbols as fully-qualified
 namespace paths (``Symfony\Component\HttpFoundation\Request::create``).
-The PHP extractor binds ``use Foo\Bar\Baz;`` ->
-``imports["Baz"] = "Foo\Bar\Baz"``; chains like
-``["Baz", "method"]`` resolve via the import map.
+``_shared._normalise_qualified`` folds both ``::`` and ``\`` to
+dots; the PHP extractor binds ``use Foo\Bar\Baz;`` ->
+``imports["Baz"] = "Foo.Bar.Baz"`` (dot-joined, matching the
+resolver's dot-form comparisons); chains like ``["Baz", "method"]``
+resolve via the import map.
 
 Limitation: ``call_user_func`` / variable callables / ``$$var``
 indirection is flagged as ``INDIRECTION_REFLECT`` so the resolver

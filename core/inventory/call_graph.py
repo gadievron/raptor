@@ -4063,7 +4063,12 @@ class _PhpCallGraph:
                     target_parts = [c.text.decode()]
         if not target_parts:
             return
-        full = "\\".join(target_parts)
+        # Dot-join, matching ``package_name`` and every other
+        # language's import bindings: the cross-language resolver
+        # compares dot-form module paths, so a backslash-joined
+        # binding could never equal any (dot-normalised) OSV symbol
+        # module and guaranteed NOT_CALLED for PHP.
+        full = ".".join(target_parts)
         bound = alias_name or target_parts[-1]
         self.graph.imports[bound] = full
 
