@@ -52,6 +52,7 @@ from core.inventory.call_graph import (
     extract_call_graph_rust,
 )
 from core.inventory.extractors import extract_functions
+from core.source.contained import read_text_capped
 from core.inventory.languages import detect_language
 from typing import TYPE_CHECKING
 
@@ -125,10 +126,17 @@ def view(
         if language is None:
             return None
 
-    try:
-        content = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    # Guarded read: ``view`` runs against files inside untrusted
+    # target trees — a bare ``read_text`` blocks forever on a
+    # repo-planted reader-less FIFO and loads a planted multi-GB file
+    # whole. ``read_text_capped`` opens O_NOFOLLOW | O_NONBLOCK with an
+    # fstat(S_ISREG) fd check and caps the read; a function past the
+    # cap of a truncated read simply isn't found (None), the same
+    # degrade as an unreadable file.
+    got = read_text_capped(path)
+    if got is None:
         return None
+    content = got[0]
 
     # Function discovery — inventory handles per-language dispatch.
     functions = extract_functions(str(path), language, content)

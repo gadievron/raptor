@@ -29,6 +29,10 @@ import os
 from collections import defaultdict
 from dataclasses import dataclass
 
+from core.source.contained import (
+    DEFAULT_MAX_SOURCE_CHARS,
+    read_text_capped,
+)
 from core.source.lines import slice_lines as _slice_lines
 from core.source.strip import strip_comments as _strip_comments
 from typing import TYPE_CHECKING
@@ -162,15 +166,42 @@ def _split_lines(text: str) -> list[str]:
     return lines
 
 
+def _reliable_line_count(text: str, truncated: bool, lines: list[str]) -> int:
+    """Number of lines of a (possibly capped) read that are COMPLETE.
+
+    A truncated read that does not end at a ``\\n`` boundary cut its
+    final line mid-content — hashing that partial tail against a
+    stored span hash reported a false "modified" (a single-line file
+    past the cap has NO span past ``len(lines)``, so the
+    spans-past-the-cap guard alone never fired).  Spans touching the
+    partial line must degrade to unknown/"" like spans past the cap:
+    a read-bound artifact must never demote annotation authority.
+    """
+    if not truncated or text.endswith("\n"):
+        return len(lines)
+    return max(len(lines) - 1, 0)
+
+
 def hash_span(file_path: Path, start_line: int, end_line: int) -> str:
-    """Hash a single source span.  Returns SHA-256[:12] or ``""``."""
+    """Hash a single source span.  Returns SHA-256[:12] or ``""``.
+
+    Reads via :func:`core.source.contained.read_text_capped` — staleness
+    consumers run against untrusted target trees, and a bare
+    ``read_text`` blocks forever on a repo-planted reader-less FIFO
+    (``exists()`` is True for FIFOs) and loads planted multi-GB files
+    whole. A span past the cap of a truncated read returns ``""``
+    (cannot verify) rather than hashing a partial slice.
+    """
     if start_line <= 0 or end_line < start_line:
         return ""
-    try:
-        text = file_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    got = read_text_capped(file_path, DEFAULT_MAX_SOURCE_CHARS)
+    if got is None:
         return ""
-    return _hash_from_lines(_split_lines(text), start_line, end_line)
+    text, truncated = got
+    lines = _split_lines(text)
+    if truncated and end_line > _reliable_line_count(text, truncated, lines):
+        return ""
+    return _hash_from_lines(lines, start_line, end_line)
 
 
 # -------------------------------------------------------------------
@@ -185,13 +216,20 @@ def hash_spans(
     ``(start_line, end_line)`` pair.
 
     Invalid ranges or unreadable files produce ``""`` for that span.
+    Same guarded read as :func:`hash_span` (FIFO-proof, size-capped);
+    spans past the cap of a truncated read produce ``""``.
     """
-    try:
-        text = file_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    got = read_text_capped(file_path, DEFAULT_MAX_SOURCE_CHARS)
+    if got is None:
         return [""] * len(spans)
+    text, truncated = got
     lines = _split_lines(text)
-    return [_hash_from_lines(lines, s, e) for s, e in spans]
+    reliable = _reliable_line_count(text, truncated, lines)
+    return [
+        "" if (truncated and e > reliable)
+        else _hash_from_lines(lines, s, e)
+        for s, e in spans
+    ]
 
 
 def hash_spans_text(
@@ -340,9 +378,14 @@ def _check_file_batch(
             )
         return
 
-    try:
-        text = file_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    # Guarded read: ``exists()`` above is True for a repo-planted FIFO,
+    # and a bare ``read_text`` then blocks the whole batch forever
+    # (open() on a reader-less FIFO never returns); a planted multi-GB
+    # file would load whole. ``read_text_capped`` opens O_NOFOLLOW |
+    # O_NONBLOCK and fstat-checks S_ISREG on the fd — non-regular /
+    # unreadable files degrade to "unknown" like any other read error.
+    got = read_text_capped(file_path, DEFAULT_MAX_SOURCE_CHARS)
+    if got is None:
         for idx, item in entries:
             results[idx] = SpanResult(
                 status="unknown",
@@ -353,8 +396,10 @@ def _check_file_batch(
                           item.stored_norm_hash),
             )
         return
+    text, truncated = got
 
     lines = _split_lines(text)
+    reliable = _reliable_line_count(text, truncated, lines)
     filename = file_path.name
 
     for idx, item in entries:
@@ -363,6 +408,20 @@ def _check_file_batch(
                     item.stored_norm_hash)
 
         if item.start_line <= 0 or item.end_line < item.start_line:
+            results[idx] = SpanResult(
+                status="unknown",
+                current_hash="",
+                current_norm_hash="",
+                span=span,
+            )
+            continue
+
+        if truncated and item.end_line > reliable:
+            # The span reaches past the capped read (or touches its
+            # cut-mid-content final line): the file is larger than
+            # the cap, so an empty/partial slice is a read-bound
+            # artifact, not evidence the span vanished or changed —
+            # "unknown", never a false "modified".
             results[idx] = SpanResult(
                 status="unknown",
                 current_hash="",

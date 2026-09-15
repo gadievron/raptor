@@ -264,11 +264,23 @@ def _read_license_head(path: Path) -> str:
     byte, so memory stays within a small constant factor) dwarfs any
     legitimate 50-line license header.
     """
+    # Same fd-guarded open discipline as ``_read_license_full`` (which
+    # this reader's cap rationale already cites): a plain ``open()``
+    # blocks forever when the ``is_file()``-gated path is swapped for a
+    # reader-less FIFO between check and open, so the guard must live
+    # on the fd, not the name. Delegating keeps one implementation of
+    # the O_NOFOLLOW | O_NONBLOCK + fstat(S_ISREG) sequence. In-tree
+    # symlinked license files (REUSE-style ``COPYING`` →
+    # ``LICENSES/<SPDX>.txt``) are a supported shape and the callers'
+    # discovery step already validates in-tree-ness — so resolve
+    # first, then apply the no-follow open to the resolved path (the
+    # standard read-through-symlinks composition documented on
+    # ``core.source.contained``).
     try:
-        with path.open("r", encoding="utf-8", errors="replace") as f:
-            text = f.read(_INDIRECTION_FILE_BYTES)
+        resolved = path.resolve(strict=True)
     except OSError:
         return ""
+    text = _read_license_full(resolved, _INDIRECTION_FILE_BYTES)
     lines = text.splitlines(keepends=True)[:_LICENSE_READ_LINES]
     return "".join(lines)
 

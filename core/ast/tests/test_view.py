@@ -395,3 +395,25 @@ class TestSchema:
         s = json.dumps(fv.to_dict())
         d = json.loads(s)
         assert d["function"] == "main"
+
+
+class TestGuardedRead:
+    """``view`` reads target-tree file paths — a repo-planted
+    reader-less FIFO must degrade to None, not block the enrichment
+    forever, and a planted multi-GB file must not load whole."""
+
+    def test_fifo_returns_none_promptly(self, tmp_path):
+        import os
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("no mkfifo on this platform")
+        fifo = tmp_path / "plant.py"
+        os.mkfifo(fifo)
+        # Pre-fix this call never returned (blocking open).
+        assert view(fifo, "anything") is None
+
+    def test_regular_file_still_views(self, tmp_path):
+        f = tmp_path / "m.py"
+        f.write_text("def target():\n    return 1\n")
+        fv = view(f, "target")
+        assert fv is not None
+        assert fv.function == "target"

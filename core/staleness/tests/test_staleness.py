@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+
+import pytest
 from pathlib import Path
 
 from core.staleness import (
@@ -584,3 +586,91 @@ class TestBackwardCompat:
         f.write_text("line1\nline2\n")
         for s, e in [(1, 1), (2, 2), (1, 2), (0, 1), (5, 3), (1, 999)]:
             assert hash_span(f, s, e) == compute_function_hash(f, s, e)
+
+
+# -------------------------------------------------------------------
+# Guarded reads — FIFO-proof, size-capped (untrusted target trees)
+# -------------------------------------------------------------------
+
+class TestGuardedReads:
+    """Staleness runs against untrusted target trees: a repo-planted
+    reader-less FIFO passes ``exists()`` and a bare ``read_text``
+    then blocks the whole batch forever."""
+
+    @pytest.fixture
+    def fifo(self, tmp_path):
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("no mkfifo on this platform")
+        p = tmp_path / "plant.c"
+        os.mkfifo(p)
+        return p
+
+    def test_check_batch_fifo_degrades_to_unknown(self, fifo):
+        # Pre-fix this call never returned (open() on a reader-less
+        # FIFO blocks until a writer appears).
+        results = check_batch([CheckItem(fifo, 1, 1, "abc", "x")])
+        assert results[0].status == "unknown"
+
+    def test_hash_span_and_spans_fifo_return_empty(self, fifo):
+        assert hash_span(fifo, 1, 1) == ""
+        assert hash_spans(fifo, [(1, 1), (2, 3)]) == ["", ""]
+
+    def test_span_past_cap_is_unknown_not_modified(self, tmp_path, monkeypatch):
+        # Truncation-awareness: a span past the capped read is a
+        # read-bound artifact — it must NOT report "modified" (which
+        # would demote annotation authority on giant-but-legit files).
+        import core.staleness as st
+        f = tmp_path / "big.c"
+        f.write_text("\n".join(f"line{i}" for i in range(100)) + "\n")
+        monkeypatch.setattr(
+            st, "DEFAULT_MAX_SOURCE_CHARS", 40,
+        )
+        results = check_batch([CheckItem(f, 90, 95, "deadbeefdead", "tail")])
+        assert results[0].status == "unknown"
+        assert hash_span(f, 90, 95) == ""
+        # Spans inside the readable prefix still verify normally.
+        h = hash_span(f, 1, 2)
+        assert h
+        ok = check_batch([CheckItem(f, 1, 2, h, "head")])
+        assert ok[0].status == "current"
+
+    def test_missing_file_still_reports_deleted(self, tmp_path):
+        # Two-direction: the guarded read must not blur "deleted"
+        # (file gone) into "unknown" (unreadable).
+        results = check_batch(
+            [CheckItem(tmp_path / "gone.c", 1, 1, "abc", "x")],
+        )
+        assert results[0].status == "deleted"
+
+
+class TestTruncatedFinalLine:
+    """A capped read that cuts mid-line makes the FINAL line partial:
+    hashing it against a stored span hash reported a false "modified"
+    on a single-line file past the cap (no span lies past len(lines),
+    so the past-the-cap guard alone never fired)."""
+
+    def test_single_line_past_cap_is_unknown_not_modified(
+        self, tmp_path, monkeypatch,
+    ):
+        import core.staleness as st
+        f = tmp_path / "one-line.c"
+        f.write_text("x" * 200)  # ONE line, no newline
+        monkeypatch.setattr(st, "DEFAULT_MAX_SOURCE_CHARS", 40)
+        stored = "abcdefabcdef"  # any stored hash: must not compare
+        results = st.check_batch([st.CheckItem(f, 1, 1, stored, "fn")])
+        assert results[0].status == "unknown"
+        assert st.hash_span(f, 1, 1) == ""
+        assert st.hash_spans(f, [(1, 1)]) == [""]
+
+    def test_complete_lines_before_partial_tail_still_hash(
+        self, tmp_path, monkeypatch,
+    ):
+        # Two-direction: spans wholly inside the COMPLETE prefix of a
+        # truncated read keep hashing (and matching).
+        import core.staleness as st
+        f = tmp_path / "many.c"
+        f.write_text("aaaa\nbbbb\ncccc" + "c" * 200)  # line 3 gets cut
+        monkeypatch.setattr(st, "DEFAULT_MAX_SOURCE_CHARS", 40)
+        good = st.hash_spans_text("aaaa\nbbbb\n", [(1, 2)])[0]
+        assert st.hash_span(f, 1, 2) == good
+        assert st.hash_span(f, 2, 3) == ""  # touches the partial line

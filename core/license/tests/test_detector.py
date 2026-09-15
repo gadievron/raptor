@@ -950,3 +950,29 @@ class TestHeadReaderBounded:
         # Line cap still applies on top of the byte cap.
         assert len(head.splitlines()) == det._LICENSE_READ_LINES
         assert head.startswith("MIT License")
+
+
+class TestHeadReaderFdGuard:
+    """_read_license_head shares _read_license_full's fd discipline:
+    the is_file() gate can be raced, so a FIFO swapped in must fail
+    closed instead of blocking detection forever."""
+
+    def test_fifo_returns_empty(self, tmp_path):
+        import os
+        from core.license.detector import _read_license_head
+        fifo = tmp_path / "LICENSE"
+        os.mkfifo(fifo)
+        # Pre-fix the plain open() blocked until a writer appeared.
+        assert _read_license_head(fifo) == ""
+
+    def test_in_tree_symlink_still_reads(self, tmp_path):
+        # REUSE-style COPYING → LICENSES/<SPDX>.txt stays supported:
+        # resolve-then-guarded-open follows the (caller-validated)
+        # symlink while the fd check still refuses non-regular files.
+        from core.license.detector import _read_license_head
+        (tmp_path / "LICENSES").mkdir()
+        real = tmp_path / "LICENSES" / "MIT.txt"
+        real.write_text("MIT License\n")
+        link = tmp_path / "COPYING"
+        link.symlink_to("LICENSES/MIT.txt")
+        assert _read_license_head(link) == "MIT License\n"
