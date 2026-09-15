@@ -41,7 +41,14 @@ from core.json import save_json
 from core.logging import get_logger as _get_logger
 
 from .registry import category_of
-from .schema import check_version, normalise_loaded_files
+from .schema import (
+    _is_int,
+    _opt_int,
+    check_version,
+    iter_file_entries,
+    iter_item_entries,
+    normalise_loaded_files,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -228,7 +235,7 @@ def content_identity(checklist: dict[str, Any]) -> str | None:
     """
     entries = [
         f"{fe['path']}\0{fe['sha256']}"
-        for fe in checklist.get("files", [])
+        for fe in iter_file_entries(checklist)
         if fe.get("path") and fe.get("sha256")
     ]
     if not entries:
@@ -253,32 +260,44 @@ def iter_inventory_functions(
     ``core.inventory``). ``line_end`` may be ``None`` when the extractor
     couldn't determine it. ``kind`` defaults to ``"function"`` for legacy
     entries lacking it.
+
+    The checklist is a run-dir JSON artifact, so shapes AND values are
+    attacker-writable: rows are walked tolerantly and every numeric
+    field is normalised to a genuine int (``_opt_int``) — a forged
+    ``"line_start": "1"`` previously flowed into interval arithmetic
+    and crashed every store query that touched the function.
     """
-    for fe in checklist.get("files", []):
+    for fe in iter_file_entries(checklist):
         path = fe.get("path")
-        if not path:
+        if not path or not isinstance(path, str):
             continue
-        for fn in fe.get("items", fe.get("functions", [])) or []:
-            address = fn.get("address")
+        for fn in iter_item_entries(fe):
+            name = fn.get("name")
+            if not name or not isinstance(name, str):
+                continue
+            kind = fn.get("kind")
+            if not isinstance(kind, str) or not kind:
+                kind = "function"
+            address = _opt_int(fn.get("address"))
             if address is not None:
                 # Binary items: the store's intervals for binary:<stem>
                 # files live in address space (importer._function_ranges
                 # marks the same ranges) — line numbers don't exist.
-                size = fn.get("size") or 0
+                size = _opt_int(fn.get("size")) or 0
                 yield (
                     path,
-                    fn.get("name"),
+                    name,
                     address,
                     address + max(size - 1, 0),
-                    fn.get("kind", "function"),
+                    kind,
                 )
                 continue
             yield (
                 path,
-                fn.get("name"),
-                fn.get("line_start") or 0,
-                fn.get("line_end"),
-                fn.get("kind", "function"),
+                name,
+                _opt_int(fn.get("line_start")) or 0,
+                _opt_int(fn.get("line_end")),
+                kind,
             )
 
 
@@ -349,7 +368,27 @@ class CoverageStore:
 
         Returns the number of *newly* covered lines for that tool (the
         delta) -- 0 means the range was already fully covered by it.
+
+        Intake chokepoint: every coverage producer (importer lanes,
+        operator ``--mark``, runtime collectors) funnels through here,
+        and several of them relay values straight out of run-dir JSON.
+        Non-int bounds / non-str keys are refused with a warning
+        (returning 0) rather than stored — a forged ``"42"`` bound
+        detonated later in interval arithmetic at every query, and a
+        non-string file/tool key broke the sorted() walks over the
+        store. Genuine-int normalisation matches schema.py's load-side
+        validation, so nothing this method accepts is dropped on the
+        next load.
         """
+        start_i, end_i = _opt_int(start), _opt_int(end)
+        if start_i is None or end_i is None \
+                or not isinstance(file, str) or not isinstance(tool, str):
+            _get_logger(__name__).warning(
+                "coverage store: refusing mark with malformed "
+                "file/tool/bounds (%s, %r-%r, %s)",
+                type(file).__name__, start, end, type(tool).__name__)
+            return 0
+        start, end = start_i, end_i
         if start > end:
             start, end = end, start
         entry = self._entry(file)
@@ -386,11 +425,18 @@ class CoverageStore:
     def set_file_meta(
         self, file: str, total_lines: int | None = None, sloc: int | None = None,
     ) -> None:
-        """Record line counts (from the inventory) so coverage % is defined."""
+        """Record line counts (from the inventory) so coverage % is defined.
+
+        Genuine ints only (same normalisation as the load side): a
+        forged ``"lines": "100"`` stored here crashed the coverage-%
+        division at every render.
+        """
+        if not isinstance(file, str):
+            return
         entry = self._entry(file)
-        if total_lines is not None:
+        if _is_int(total_lines):
             entry["total_lines"] = total_lines
-        if sloc is not None:
+        if _is_int(sloc):
             entry["sloc"] = sloc
 
     def link_finding(
@@ -408,7 +454,19 @@ class CoverageStore:
         ``False`` when it deletes the only run that held the detail, which
         turns the function's verdict into ``found_then_lost``. Dedup by id;
         a later call refreshes ``line``/``retained``.
+
+        ``line`` is normalised to a genuine int (``_opt_int``, the same
+        rule the load side applies) — findings.json is LLM-written
+        inside the sandbox write grant, and a forged ``"line": "42"``
+        linked here crashed ``function_verdict``'s range compare at
+        every subsequent render. A finding with an unusable line keeps
+        its file-level link (never dropped), it just cannot be
+        attributed to a function.
         """
+        if not isinstance(file, str):
+            return
+        line = _opt_int(line)
+        finding_id = str(finding_id)
         entry = self._entry(file)
         for f in entry["findings"]:
             if f["id"] == finding_id:
@@ -563,9 +621,9 @@ class CoverageStore:
     def import_inventory_meta(self, checklist: dict[str, Any]) -> None:
         """Populate per-file ``total_lines`` / ``sloc`` from the inventory so
         :meth:`file_coverage` is defined."""
-        for fe in checklist.get("files", []):
+        for fe in iter_file_entries(checklist):
             path = fe.get("path")
-            if path:
+            if path and isinstance(path, str):
                 self.set_file_meta(path, fe.get("lines"), fe.get("sloc"))
 
     def set_content_id(self, checklist: dict[str, Any]) -> str | None:
@@ -599,9 +657,18 @@ class CoverageStore:
         so they don't affect a function verdict (they remain a file-level
         signal via ``finding_ids``).
         """
+        lo_i, hi_i = _opt_int(lo), _opt_int(hi)
+        if lo_i is None or hi_i is None:
+            # Unattributable range (a hostile checklist reached a
+            # caller that skipped normalisation): the safe direction
+            # is the re-review gap, never a crash or a clean verdict.
+            return "unexamined"
+        lo, hi = lo_i, hi_i
         in_range = [
             f for f in self._findings(file)
-            if f.get("line") is not None and lo <= f["line"] <= hi
+            # The int guard mirrors link_finding's intake
+            # normalisation for stores written before it existed.
+            if _is_int(f.get("line")) and lo <= f["line"] <= hi
         ]
         if in_range:
             if any(f.get("retained", True) for f in in_range):

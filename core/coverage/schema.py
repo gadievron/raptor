@@ -17,9 +17,12 @@ which (with the schema-version warning) is the read-side of forward-compat.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from core.logging import get_logger
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 logger = get_logger(__name__)
 
@@ -32,6 +35,48 @@ def _is_int(x: Any) -> bool:
 
 def _opt_int(x: Any) -> int | None:
     return x if _is_int(x) else None
+
+
+def iter_file_entries(checklist: Any) -> Iterator[dict[str, Any]]:
+    """Yield the dict rows of ``checklist["files"]``, tolerating any
+    hostile container shape.
+
+    The checklist is a run-dir JSON artifact (re-importable, inside
+    the sandbox write grant), so its container shapes are as
+    attacker-writable as its values: a non-list ``files`` or a
+    non-dict row crashed every walk that assumed the produced shape.
+    One tolerant walk for every consumer — non-conforming rows are
+    skipped with a warning, conforming rows still flow.
+    """
+    if not isinstance(checklist, dict):
+        return
+    files = checklist.get("files")
+    if files is None:
+        return
+    if not isinstance(files, list):
+        logger.warning(
+            "checklist: 'files' is %s, not a list; ignoring",
+            type(files).__name__)
+        return
+    for fe in files:
+        if isinstance(fe, dict):
+            yield fe
+        else:
+            logger.warning(
+                "checklist: skipping non-object file entry (%s)",
+                type(fe).__name__)
+
+
+def iter_item_entries(fe: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    """Yield the dict item rows of one file entry (``items`` with the
+    legacy ``functions`` fallback), tolerating hostile shapes — the
+    per-item companion of :func:`iter_file_entries`."""
+    items = fe.get("items", fe.get("functions"))
+    if items is None or not isinstance(items, list):
+        return
+    for it in items:
+        if isinstance(it, dict):
+            yield it
 
 
 def _valid_interval(iv: Any) -> list[int] | None:

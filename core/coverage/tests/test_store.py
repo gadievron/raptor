@@ -320,3 +320,84 @@ def test_lock_normal_path_still_locks(tmp_path):
 
     with coverage_store_lock(tmp_path / "coverage.json"):
         assert (tmp_path / "coverage.json.lock").exists()
+
+
+# --- hostile run-dir JSON values at the intake chokepoints -----------------
+#
+# checklist.json / findings.json live inside the sandbox write grant, so
+# every value is attacker-writable. One forged row must degrade (refused
+# mark, file-level-only finding, skipped meta) — never crash a query.
+
+
+def test_mark_refuses_malformed_bounds_and_keys(tmp_path):
+    s = _store(tmp_path)
+    assert s.mark("a.c", "1", 50, "semgrep") == 0
+    assert s.mark("a.c", 1, None, "semgrep") == 0
+    assert s.mark("a.c", True, 5, "semgrep") == 0
+    assert s.mark(["a.c"], 1, 5, "semgrep") == 0
+    assert s.mark("a.c", 1, 5, {"t": 1}) == 0
+    assert s.covered_lines("a.c") == []
+    # A genuine mark still lands after refusals.
+    assert s.mark("a.c", 1, 5, "semgrep") == 5
+
+
+def test_link_finding_normalises_forged_line(tmp_path):
+    s = _store(tmp_path)
+    s.mark("a.c", 1, 50, "semgrep")
+    s.link_finding("a.c", "x1", line="42")
+    # The finding keeps its file-level link but cannot be attributed.
+    assert s.finding_ids("a.c") == ["x1"]
+    assert s.function_verdict("a.c", 1, 50) == "clean"
+    # A later genuine-int link refreshes attribution (dedup by id).
+    s.link_finding("a.c", "x1", line=42)
+    assert s.function_verdict("a.c", 1, 50) == "open"
+
+
+def test_function_verdict_survives_junk_range_and_legacy_lines(tmp_path):
+    s = _store(tmp_path)
+    s.mark("a.c", 1, 50, "semgrep")
+    # Pre-normalisation stores can carry non-int finding lines.
+    s._files["a.c"]["findings"].append(
+        {"id": "old", "line": "9", "retained": True})
+    assert s.function_verdict("a.c", 1, 50) == "clean"
+    # Junk query bounds resolve to the re-review gap, not a crash.
+    assert s.function_verdict("a.c", "1", 50) == "unexamined"
+
+
+def test_set_file_meta_skips_non_int_counts(tmp_path):
+    s = _store(tmp_path)
+    s.mark("a.c", 1, 50, "semgrep")
+    s.set_file_meta("a.c", total_lines="100", sloc="90")
+    assert s.file_coverage("a.c") == 0.0        # undefined, not a crash
+    s.set_file_meta("a.c", total_lines=100)
+    assert s.file_coverage("a.c") == 50.0
+
+
+def test_inventory_walk_normalises_hostile_checklist(tmp_path):
+    from core.coverage.store import iter_inventory_functions
+
+    hostile = {"files": [
+        "not-a-dict",
+        {"path": "a.c", "items": [
+            {"name": "f", "line_start": "1", "line_end": 50},
+            {"name": "g", "line_start": 3, "line_end": "x"},
+            {"name": "b", "address": "0x10", "size": "9"},
+            {"name": "h", "address": 16, "size": 4, "kind": 7},
+            {"name": None, "line_start": 1},
+            "junk",
+        ]},
+        {"path": 5, "items": [{"name": "k", "line_start": 1}]},
+    ]}
+    rows = list(iter_inventory_functions(hostile))
+    assert rows == [
+        ("a.c", "f", 0, 50, "function"),
+        ("a.c", "g", 3, None, "function"),
+        ("a.c", "b", 0, None, "function"),
+        ("a.c", "h", 16, 19, "function"),
+    ]
+    s = _store(tmp_path)
+    # The verdict join over the hostile inventory must not raise.
+    assert all(v == "unexamined" for *_, v in s.function_verdicts(hostile))
+    assert iter_inventory_functions({"files": "junk"}) is not None
+    assert list(iter_inventory_functions({"files": {"a": 1}})) == []
+    assert list(iter_inventory_functions([])) == []
