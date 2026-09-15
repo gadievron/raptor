@@ -1265,6 +1265,60 @@ class TestGenerateRubyHarness:
         harness = generate_ruby_harness(spec, tmp_path)
         assert "lib/parser" in harness
 
+    def test_loaded_features_binding_assert_present(self, tmp_path):
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="lib/auth.rb", function="validate",
+            language="ruby", lang_config={"require_path": "lib/auth"},
+        )
+        harness = generate_ruby_harness(spec, tmp_path)
+        assert "$LOADED_FEATURES" in harness
+        assert "binding_error" in harness
+        assert str(tmp_path.resolve()) + "/lib/auth.rb" in harness
+        # The assert runs after the require (features are recorded at
+        # load) and before the target function is invoked.
+        assert harness.index("$LOADED_FEATURES") > harness.index("require ")
+        assert harness.index("binding_error") < harness.index("validate(")
+
+    @pytest.mark.skipif(not shutil.which("ruby"), reason="Ruby not available")
+    def test_live_target_load_passes_binding(self, tmp_path):
+        (tmp_path / "lib").mkdir()
+        (tmp_path / "lib" / "auth.rb").write_text(
+            "def validate(x)\n  1\nend\n", encoding="utf-8")
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="lib/auth.rb", function="validate",
+            language="ruby", args=["x"],
+            lang_config={"require_path": "lib/auth"},
+        )
+        harness = generate_ruby_harness(spec, tmp_path, witness_token="ab12")
+        out = _run_stdout([shutil.which("ruby"), "-e", harness])
+        data = json.loads(out.strip().splitlines()[-1])
+        assert data["status"] == "returned"
+
+    @pytest.mark.skipif(not shutil.which("ruby"), reason="Ruby not available")
+    def test_live_foreign_load_reports_binding_error(self, tmp_path):
+        # The feature resolves through a LATER load-path entry (the
+        # target-root slot is empty): whatever loaded is not the
+        # finding's file.
+        target = tmp_path / "target"
+        target.mkdir()
+        other = tmp_path / "other"
+        (other / "lib").mkdir(parents=True)
+        (other / "lib" / "auth.rb").write_text(
+            "def validate(x)\n  1\nend\n", encoding="utf-8")
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="lib/auth.rb", function="validate",
+            language="ruby", args=["x"],
+            lang_config={"require_path": "lib/auth"},
+        )
+        harness = generate_ruby_harness(spec, target, witness_token="ab12")
+        import subprocess
+        proc = subprocess.run(
+            [shutil.which("ruby"), "-I", str(other), "-e", harness],
+            capture_output=True, text=True, timeout=30,
+        )
+        data = json.loads(proc.stdout.strip().splitlines()[-1])
+        assert data["status"] == "binding_error"
+
 
 # -- generate_php_harness -----------------------------------------------------
 

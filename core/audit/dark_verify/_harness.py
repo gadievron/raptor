@@ -513,12 +513,22 @@ def generate_ruby_harness(
     *,
     witness_token: str = "",
 ) -> str:
-    """Render a fixed-template Ruby harness."""
+    """Render a fixed-template Ruby harness.
+
+    After a successful require the harness asserts the finding's file
+    is among $LOADED_FEATURES — a load that never touched it bound
+    some other artifact and reports binding_error, never a verdict.
+    Membership is a runtime BELT (a plant that itself requires the
+    real file would pass it); the verdict-bearing shadow refusal is
+    the static resolution engine's.
+    """
     require_path = derive_ruby_require_path(spec)
 
     target_str = str(target_root.resolve())
     args_str = _format_args_scripting(spec.args, nil_kw="nil")
     token_lit = _single_quote(_checked_token(witness_token))
+    expected_lit = _single_quote(
+        target_str + "/" + spec.file.replace("\\", "/"))
 
     return textwrap.dedent(f"""\
         require 'json'
@@ -528,6 +538,19 @@ def generate_ruby_harness(
           require {_single_quote(require_path)}
         rescue LoadError => e
           puts JSON.generate({{ status: 'import_error', token: _tok, message: e.message }})
+          exit 0
+        end
+        _expected = {expected_lit}
+        _loaded = $LOADED_FEATURES.any? do |f|
+          begin
+            File.identical?(f, _expected)
+          rescue StandardError
+            false
+          end
+        end
+        unless _loaded
+          puts JSON.generate({{ status: 'binding_error', token: _tok,
+            message: "finding file #{{_expected}} not among loaded features" }})
           exit 0
         end
         begin
