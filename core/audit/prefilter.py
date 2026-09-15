@@ -635,6 +635,62 @@ _WRAPPER_PARTIAL_ARG_RE = re.compile(
     r'\bpartial\s*\(\s*((?:\w+\.)*\w+)\s*[,)]',
 )
 
+#: A sink escaping as a VALUE: `pool.submit(os.system, cmd)`,
+#: `map(os.system, args)`, `asyncio.to_thread(os.system, a)` — the
+#: dangerous target appears as an identifier REFERENCE, never as a
+#: call, so the captured-callee exclusion cannot see it. The executor
+#: is deliberately NOT enumerated (submit/to_thread/map/filter/
+#: starmap/apply/…): the class rule is "sink callable escapes as a
+#: value", so EVERY non-call identifier reference in the delegate
+#: body re-enters the exclusion checks.
+_WRAPPER_REF_TOKEN_RE = re.compile(
+    r"(?<![\w.])((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*)",
+)
+
+_WRAPPER_STRING_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
+_WRAPPER_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/")
+
+
+def _wrapper_ref_strip_noise(line: str, lang: str) -> str:
+    """String/comment strip for the reference view ONLY.
+
+    Prose in a string or trailing comment (`# runs the query`) must
+    not flip a benign wrapper; the strip is per-language because the
+    comment spellings collide with live operators elsewhere (`//` is
+    Python floor-division and Perl defined-or, `--` is a C/Python
+    operator spelling) — stripping those would hide a sink reference
+    sitting after the operator, the suppression direction.
+    """
+    line = _WRAPPER_STRING_RE.sub(" ", line)
+    line = _WRAPPER_BLOCK_COMMENT_RE.sub(" ", line)
+    if lang == "lua":
+        line = line.split("--", 1)[0]
+    elif lang in ("python", "perl", "php"):
+        line = line.split("#", 1)[0]
+    if lang not in ("python", "perl", "lua"):
+        line = line.split("//", 1)[0]
+    return line
+
+#: Object-protocol executor attributes: calling `x.__call__(...)`
+#: (or the bound-method / decorator unwrap chains `.__func__` /
+#: `.__wrapped__`) executes the underlying `x`. A trailing executor
+#: segment hid the real dotted target from the exclusion checks —
+#: `os.system.__call__` has tail `__call__`, which matched neither
+#: the dotted dangerous entries nor their bare tails.
+_WRAPPER_EXECUTOR_DUNDERS = frozenset({
+    "__call__", "__func__", "__wrapped__",
+})
+
+
+def _strip_executor_dunders(name: str) -> str:
+    """Strip trailing executor-dunder segments — the executed target
+    is the remaining base object. Empty result = nothing left to
+    judge (the caller refuses the skip)."""
+    parts = name.split(".")
+    while parts and parts[-1] in _WRAPPER_EXECUTOR_DUNDERS:
+        parts.pop()
+    return ".".join(parts)
+
 
 def _is_trivial_wrapper(
     source: str,
@@ -727,6 +783,12 @@ def _is_trivial_wrapper(
     # prefilter-tier only, and the function still passes the triage,
     # Joern, and hit-scan evidence layers, which see the file's
     # surface spellings.
+    # Executor-dunder chains resolve to their base object BEFORE the
+    # alias walk (`f2.__call__` must alias-resolve as `f2`), and again
+    # after it (the alias target can itself carry the chain).
+    callee_name = _strip_executor_dunders(callee_name)
+    if not callee_name:
+        return False, ""
     for _ln in code_lines:
         am = re.match(
             rf"{re.escape(callee_name)}\s*(?::=|=)\s*"
@@ -734,7 +796,9 @@ def _is_trivial_wrapper(
             _ln,
         )
         if am:
-            callee_name = am.group(1)
+            callee_name = _strip_executor_dunders(am.group(1))
+            if not callee_name:
+                return False, ""
             break
 
     candidates = [callee_name]
@@ -769,11 +833,27 @@ def _is_trivial_wrapper(
         # factories the family list does not name.
         return False, ""
 
+    # Any remaining dunder segment routes the call through the object
+    # protocol (`x.__class__(...)`, `x.__self__.run(...)`): the
+    # executed target is not the spelled name, and an unresolvable
+    # delegate must never be journalled mechanically clean.
+    # (`__import__` is the indirection family's own member, resolved
+    # above.)
+    for name in candidates:
+        if any(
+            seg.startswith("__") and seg.endswith("__")
+            and seg != "__import__"
+            for seg in name.split(".")
+        ):
+            return False, ""
+
     # Every language's dangerous-callee set (a wrapper's language arm
     # only strips the signature; the exclusion must not be narrower
-    # than _is_trivially_clean's), matched against the full dotted
-    # name AND its bare tail — `from subprocess import run` delegates
-    # via the bare name. Over-exclusion only costs one review; a
+    # than _is_trivially_clean's), matched against EVERY dotted prefix
+    # of the name AND every segment against the bare tails — `from
+    # subprocess import run` delegates via the bare name, and an
+    # attribute chain can bury the dangerous target mid-name
+    # (`sp.run.retry(...)`). Over-exclusion only costs one review; a
     # missed exclusion journals a dangerous delegate mechanically
     # clean.
     exclusion = _WRAPPER_DANGEROUS_CALLEES | extra_dangerous
@@ -781,11 +861,93 @@ def _is_trivial_wrapper(
         e.rsplit(".", 1)[-1] for e in extra_dangerous
     }
     for name in candidates:
-        if name in exclusion or name.rsplit(".", 1)[-1] in tails:
+        parts = name.split(".")
+        prefixes = {
+            ".".join(parts[:i]) for i in range(1, len(parts) + 1)
+        }
+        if prefixes & exclusion or set(parts) & tails:
             return False, ""
         if any(api in name.lower() for api in _CRYPTO_APIS):
             return False, ""
-        if project_sinks and name in project_sinks:
+        if project_sinks and prefixes & project_sinks:
+            return False, ""
+
+    # A sink passed as an ARGUMENT to any call is non-clean: the
+    # delegate never spells the target in call position
+    # (`pool.submit(os.system, cmd)`, `map(os.system, args)`), so the
+    # callee checks above cannot exclude it. Judge every identifier
+    # reference in argument position (inside a call's parentheses,
+    # not itself called) against the same exclusion — dotted
+    # references over every prefix + every segment tail, bare
+    # references against the full entry names AND the bare tails
+    # (`from os import system; pool.submit(system, cmd)` escapes via
+    # the bare name exactly like the bare-callee case above). The
+    # position gate is load-bearing: a name-blind scan flags keyword
+    # spellings (`assert x == f()`) and plain data reads
+    # (`return request.param`) that share a tail with a sink but
+    # cannot escape a callable — measured at thousands of flipped
+    # legitimate rows; with the gate the flip set is callable-shaped
+    # references only. Strings and comments are cut from this view
+    # only. The crypto substring heuristic stays call-position-only:
+    # matching it against every variable NAME (`hash_val`,
+    # `signed_off`) would flip accessor-adjacent wrappers wholesale
+    # without naming a sink. Over-exclusion costs one review; the
+    # miss journals a dangerous delegate mechanically clean.
+    ref_body = " ".join(
+        _wrapper_ref_strip_noise(ln, lang) for ln in code_lines
+    )
+    if lang in ("c", "cpp"):
+        cut = ref_body.find("{")
+        if cut >= 0:
+            ref_body = ref_body[cut + 1:]
+            closing = ref_body.rfind("}")
+            if closing >= 0:
+                ref_body = ref_body[:closing]
+    elif lang == "python":
+        for i, ln in enumerate(code_lines):
+            if ln.startswith(("def ", "async def ")):
+                ref_body = " ".join(
+                    _wrapper_ref_strip_noise(x, lang)
+                    for x in code_lines[i + 1:]
+                )
+                break
+    # One-hop local aliases (`f2 = os.system` then `pool.submit(f2,
+    # cmd)`): the argument spells the LOCAL name while the sink sits
+    # surface-spelled on the assignment line, outside any argument
+    # list — resolve exactly like the callee alias walk above.
+    ref_aliases: dict[str, str] = {}
+    for _ln in code_lines:
+        am = re.match(
+            r"([A-Za-z_]\w*)\s*(?::=|=)\s*((?:\w+\.)*\w+)\s*;?\s*$",
+            _ln,
+        )
+        if am:
+            ref_aliases[am.group(1)] = am.group(2)
+    for rm in _WRAPPER_REF_TOKEN_RE.finditer(ref_body):
+        if ref_body[rm.end():].lstrip()[:1] == "(":
+            continue  # call position — judged by the callee checks
+        before = ref_body[:rm.start()]
+        if before.count("(") <= before.count(")"):
+            continue  # not inside any call's argument list
+        ref = _strip_executor_dunders(rm.group(1))
+        if not ref:
+            continue
+        ref = _strip_executor_dunders(ref_aliases.get(ref, ref))
+        if not ref:
+            continue
+        parts = ref.split(".")
+        if len(parts) == 1:
+            if ref in exclusion or ref in tails:
+                return False, ""
+            if project_sinks and ref in project_sinks:
+                return False, ""
+            continue
+        prefixes = {
+            ".".join(parts[:i]) for i in range(1, len(parts) + 1)
+        }
+        if prefixes & exclusion or set(parts) & tails:
+            return False, ""
+        if project_sinks and prefixes & project_sinks:
             return False, ""
 
     if lang in ("c", "cpp"):

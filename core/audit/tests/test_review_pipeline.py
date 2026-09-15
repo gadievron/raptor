@@ -355,6 +355,144 @@ void *alloc_obj(size_t n) {
         )
         assert not is_wrapper
 
+    def test_dunder_call_dangerous_not_skipped(self):
+        # Object-protocol executor: `sink.__call__(...)` executes the
+        # base object with no helper at all — the captured callee's
+        # tail is `__call__`, which matched neither the dotted
+        # dangerous entries nor their bare tails, so the delegate
+        # journalled mechanically clean.
+        for body in (
+            "os.system.__call__(arg)",
+            "subprocess.run.__call__(arg)",
+            "pickle.loads.__call__(arg)",
+        ):
+            result = self._py_wrapper(body)
+            assert not result.skip_llm, body
+
+    def test_dunder_call_chain_not_skipped(self):
+        # Stacked executor segments still resolve to the base object.
+        result = self._py_wrapper("os.system.__call__.__call__(arg)")
+        assert not result.skip_llm
+
+    def test_wrapped_dunder_chain_not_skipped(self):
+        # `.__wrapped__` / `.__func__` unwrap chains execute the
+        # underlying callable too.
+        for body in (
+            "subprocess.run.__wrapped__(arg)",
+            "sp.run.__func__(sp, arg)",
+        ):
+            result = self._py_wrapper(body)
+            assert not result.skip_llm, body
+
+    def test_dunder_call_alias_not_skipped(self):
+        # The executor chain on a LOCAL alias: strip before the alias
+        # walk so `f2.__call__` resolves as `f2` -> os.system.
+        from core.audit.prefilter import _is_trivial_wrapper
+        is_wrapper, _ = _is_trivial_wrapper(
+            "def f(a):\n    f2 = os.system\n    return f2.__call__(a)\n",
+            "python", None,
+        )
+        assert not is_wrapper
+
+    def test_object_protocol_dunder_refused(self):
+        # Any other dunder segment routes through the object protocol
+        # — the executed target is not the spelled name, so the
+        # delegate is unresolvable and never mechanically clean.
+        for body in (
+            "obj.__class__(arg)",
+            "obj.__self__.helper(arg)",
+        ):
+            result = self._py_wrapper(body)
+            assert not result.skip_llm, body
+
+    def test_mid_chain_dangerous_attribute_not_skipped(self):
+        # The dangerous target buried mid-chain behind a non-dunder
+        # attribute: every segment joins the tail exclusion.
+        result = self._py_wrapper("subprocess.run.retry(arg)")
+        assert not result.skip_llm
+
+    def test_dunder_call_benign_still_skips(self):
+        # Both directions: the executor chain resolves and re-enters
+        # the exclusion checks — a benign base object keeps the skip.
+        result = self._py_wrapper("helper.compute.__call__(arg)")
+        assert result.skip_llm
+        assert "helper.compute" in result.skip_reason
+
+    def test_sink_callable_argument_not_skipped(self):
+        # The sink escapes as a VALUE: passed as a callable-reference
+        # argument, it never appears in call position, so the
+        # captured-callee exclusion cannot see it. The executor is
+        # deliberately not enumerated — any call taking a sink-name
+        # reference refuses the skip.
+        for body in (
+            "pool.submit(os.system, arg)",
+            "asyncio.to_thread(os.system, arg)",
+            "map(os.system, arg)",
+            "filter(os.system, arg)",
+            "itertools.starmap(os.system, arg)",
+            "apply(os.system, arg)",
+        ):
+            result = self._py_wrapper(body)
+            assert not result.skip_llm, body
+
+    def test_sink_bare_reference_argument_not_skipped(self):
+        # `from os import system` — the escaping reference is the
+        # bare name, matched against the bare tails exactly like the
+        # bare-callee case.
+        result = self._py_wrapper("pool.submit(system, arg)")
+        assert not result.skip_llm
+
+    def test_sink_reference_executor_dunder_not_skipped(self):
+        # The reference can carry the executor-dunder chain too.
+        result = self._py_wrapper("pool.submit(os.system.__call__, arg)")
+        assert not result.skip_llm
+
+    def test_sink_reference_alias_not_skipped(self):
+        # The argument spells a LOCAL alias; the sink sits on the
+        # assignment line outside any argument list — one-hop alias
+        # resolution mirrors the callee walk.
+        from core.audit.prefilter import _is_trivial_wrapper
+        is_wrapper, _ = _is_trivial_wrapper(
+            "def f(a):\n    f2 = os.system\n    return pool.submit(f2, a)\n",
+            "python", None,
+        )
+        assert not is_wrapper
+
+    def test_sink_reference_keyword_argument_not_skipped(self):
+        result = self._py_wrapper("pool.submit(fn=os.system)")
+        assert not result.skip_llm
+
+    def test_c_sink_function_pointer_argument_not_skipped(self):
+        from core.audit.prefilter import _is_trivial_wrapper
+        is_wrapper, _ = _is_trivial_wrapper(
+            "int f(char *cmd) {\n    return dispatch(system, cmd);\n}\n",
+            "c", None,
+        )
+        assert not is_wrapper
+
+    def test_benign_reference_argument_still_skips(self):
+        # Both directions: benign callable references keep the skip.
+        result = self._py_wrapper("dispatch(helper.compute, arg)")
+        assert result.skip_llm
+
+    def test_reference_scan_ignores_strings_and_comments(self):
+        # Prose naming a sink in a string or trailing comment must
+        # not flip a benign wrapper — strings/comments are cut from
+        # the reference view only.
+        for body in (
+            "helper.process(arg, mode='run the system fast')",
+            "helper.process(arg)  # runs the query via os.system",
+        ):
+            result = self._py_wrapper(body)
+            assert result.skip_llm, body
+
+    def test_reference_scan_is_argument_position_only(self):
+        # A tail-colliding name OUTSIDE any argument list (a plain
+        # data read) keeps the skip: the position gate is what holds
+        # the legitimate-corpus flip rate at ~0.
+        result = self._py_wrapper("helper.process(arg) == request.param")
+        assert result.skip_llm
+
 
 # ── Multi-language prefilter patterns ─────────────────────────────
 
