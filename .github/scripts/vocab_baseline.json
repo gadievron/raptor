@@ -1584,13 +1584,25 @@
     "count": 30,
     "kind": "literal"
   },
+  "core/security/report_writer_audit.py::_CORE_KEYS": {
+    "count": 17,
+    "kind": "literal",
+    "note": "taint-engine tier of the detector vocabulary (the pre-widening core names; must stay a subset of _FOREIGN_KEYS \u2014 see _naked_keys(wide) for the tier contract)"
+  },
   "core/security/report_writer_audit.py::_LLM_DERIVED_KEYS": {
-    "count": 14,
-    "kind": "literal"
+    "count": 32,
+    "kind": "literal",
+    "note": "detector vocabulary, not a learned name set: the field names whose values carry LLM/tool output in run artifacts \u2014 grown by the mechanism-spec widening, each name backed by a live writer lane and pinned by mutation fixtures in test_report_writer_audit"
   },
   "core/security/report_writer_audit.py::_SANITISERS": {
-    "count": 11,
-    "kind": "literal"
+    "count": 29,
+    "kind": "literal",
+    "note": "recognised-sanitiser vocabulary for the writer audit; every local definition of these names must build on a canonical sanitiser (enforced by the name-shadow arm)"
+  },
+  "core/security/report_writer_audit.py::_TAINT_NEUTRAL_CALLS": {
+    "count": 14,
+    "kind": "literal",
+    "note": "closed builtin taxonomy: content-destroying calls (len/int/bool/type/...) the taint walk skips \u2014 python builtins, not a learned name vocabulary"
   },
   "core/security/rule_of_two.py::_CI_ENV_VARS": {
     "count": 17,
