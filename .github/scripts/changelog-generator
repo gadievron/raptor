@@ -284,17 +284,18 @@ def fmt_arc(arc: Arc) -> str:
     return f"- **{s}**: {h} ({arc.commits} commits, {arc.src_lines:,} lines)"
 
 
-def ranked_changelog(
-    tag: str, prev_tag: str | None, repo: str,
+def preview_banner(
+    tag: str, prev_tag: str | None,
     commits: list[Commit], top_n: int, full: bool,
 ) -> str:
-    by_type: dict[str, list[Commit]] = defaultdict(list)
-    for c in commits:
-        by_type[c.commit_type].append(c)
-
-    feat_count = len(by_type.get("feat", []))
-    fix_count = len(by_type.get("fix", []))
-    sec_count = len(by_type.get("sec", []))
+    """Operator-facing preview header, separate from the changelog
+    body: main() emits it to stderr because release.yml captures
+    stdout as the ``gh release --notes-file`` content, and the
+    terminal banner used to ship inside the published release notes.
+    """
+    feat_count = sum(1 for c in commits if c.commit_type == "feat")
+    fix_count = sum(1 for c in commits if c.commit_type == "fix")
+    sec_count = sum(1 for c in commits if c.commit_type == "sec")
 
     lines = [
         "═══════════════════════════════════════════════════════",
@@ -310,8 +311,18 @@ def ranked_changelog(
     if not full:
         lines.append(f" Showing: top {top_n} (ranked by impact)")
     lines.append("═══════════════════════════════════════════════════════")
-    lines.append("")
+    return "\n".join(lines)
 
+
+def ranked_changelog(
+    tag: str, prev_tag: str | None, repo: str,
+    commits: list[Commit], top_n: int, full: bool,
+) -> str:
+    by_type: dict[str, list[Commit]] = defaultdict(list)
+    for c in commits:
+        by_type[c.commit_type].append(c)
+
+    lines: list[str] = []
     header = f"## What's changed in {tag}"
     if prev_tag:
         header += f" (since {prev_tag})"
@@ -401,6 +412,10 @@ def main() -> None:
         measure_commit(c)
     print("", file=sys.stderr)
 
+    # Banner on stderr, changelog body on stdout: release.yml captures
+    # stdout as the release-notes file.
+    print(preview_banner(tag, prev_tag, commits, args.top, args.full),
+          file=sys.stderr)
     print(ranked_changelog(tag, prev_tag, repo, commits, args.top, args.full))
 
 

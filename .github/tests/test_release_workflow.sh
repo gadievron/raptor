@@ -374,6 +374,17 @@ assert_contains "ranked security present"      "$CLR" "- patch CVE-2026-1234"
 assert_contains "ranked fix present"           "$CLR" "- correct flag parsing"
 assert_contains "ranked compare link"          "$CLR" "https://github.com/owner/raptor/compare/v2.0.0...v3.0.0"
 assert_not_contains "ranked excludes refactor" "$CLR" "split config into modules"
+
+# The terminal preview banner must never ship inside the release notes:
+# release.yml captures stdout as the ``gh release --notes-file`` content
+# (run_changelog mirrors that by discarding stderr). Both directions —
+# the banner stays operator-visible on stderr in the workflow log.
+assert_not_contains "notes exclude preview banner"   "$CLR" "Changelog preview"
+assert_not_contains "notes exclude banner rule"      "$CLR" "═══"
+git checkout -q v3.0.0
+CLR_ERR=$(python3 "$CHANGELOG_GEN" --repo owner/raptor --top 20 v3.0.0 2>&1 >/dev/null)
+git checkout -q main
+assert_contains "banner still emitted on stderr" "$CLR_ERR" "Changelog preview: v3.0.0"
 echo ""
 
 # ── 5. Version stamping ────────────────────────────────────────────────
