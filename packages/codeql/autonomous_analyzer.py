@@ -1092,9 +1092,14 @@ class AutonomousCodeQLAnalyzer:
                 break
 
             exploit_code = refined_code
+            # _artifact_safe_id, not rule+line: same-rule-same-line
+            # findings in DIFFERENT files share the run's exploits/
+            # compile workspace and would clobber each other's
+            # source + binary (the saved artifacts already key this
+            # way).
             validation_result = self.validator.validate_exploit(
                 exploit_code,
-                f"{finding.rule_id}_{finding.start_line}_refined_{refinement_count}",
+                f"{_artifact_safe_id(finding)}_refined_{refinement_count}",
             )
 
             if validation_result.success:
@@ -1402,9 +1407,12 @@ class AutonomousCodeQLAnalyzer:
 
         if self.validator:
             self.logger.info("🔍 Validating exploit...")
+            # _artifact_safe_id keys the compile workspace like the
+            # saved artifacts: rule+line alone collides for same-rule
+            # same-line findings in different files.
             validation_result = self.validator.validate_exploit(
                 exploit_code,
-                f"{finding.rule_id}_{finding.start_line}"
+                _artifact_safe_id(finding),
             )
 
             exploit_compiled = validation_result.success
