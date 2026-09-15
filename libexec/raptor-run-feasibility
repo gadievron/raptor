@@ -395,6 +395,15 @@ def _enrich_with_empirical_mitigation_map(
 
     enriched = 0
     for finding in group:
+        # findings.json is LLM-authored and schema validation is
+        # advisory — an id-less finding must not KeyError this loop:
+        # the exception would escape past the final save_json and the
+        # run's freshly computed feasibility maps would be lost
+        # wholesale. The per-finding map filename below needs a real
+        # id anyway, so skip id-less entries.
+        fid = finding.get("id")
+        if not fid:
+            continue
         finding_file = finding.get("file") or finding.get("file_path")
         if not finding_file:
             continue
@@ -426,7 +435,7 @@ def _enrich_with_empirical_mitigation_map(
             "empirical_mitigation_map") or {}
         if existing.get("witness_hash") == best.witness.bytes_hash:
             print(
-                f"  {finding['id']}: empirical map already attached "
+                f"  {fid}: empirical map already attached "
                 "for this witness (synthesis pass) — keeping it",
                 file=sys.stderr,
             )
@@ -441,7 +450,7 @@ def _enrich_with_empirical_mitigation_map(
             witness_bytes = store.get_bytes(best.witness.bytes_hash)
         except Exception as e:  # noqa: BLE001
             print(
-                f"  WARN: {finding['id']}: couldn't load witness "
+                f"  WARN: {fid}: couldn't load witness "
                 f"bytes ({type(e).__name__}: {e})",
                 file=sys.stderr,
             )
@@ -455,7 +464,7 @@ def _enrich_with_empirical_mitigation_map(
             )
         except Exception as e:  # noqa: BLE001
             print(
-                f"  WARN: {finding['id']}: empirical analysis raised "
+                f"  WARN: {fid}: empirical analysis raised "
                 f"({type(e).__name__}: {e}); skipping",
                 file=sys.stderr,
             )
@@ -469,7 +478,7 @@ def _enrich_with_empirical_mitigation_map(
             # the flags) — an all-unbuildable map is noise, not
             # evidence. Say so instead of attaching it.
             print(
-                f"  {finding['id']}: empirical map skipped — no "
+                f"  {fid}: empirical map skipped — no "
                 "profile built "
                 f"(unbuildable: {summary_probe.get('unbuildable_profiles')})",
                 file=sys.stderr,
@@ -477,7 +486,7 @@ def _enrich_with_empirical_mitigation_map(
             continue
 
         fmap_file = (
-            feasibility_dir / f"{_map_filename(str(finding['id']))}.json"
+            feasibility_dir / f"{_map_filename(str(fid))}.json"
         )
         fmap_file.write_text(to_json(fmap), encoding="utf-8")
 
@@ -495,7 +504,7 @@ def _enrich_with_empirical_mitigation_map(
         }
         summary = fmap.summary()
         print(
-            f"  {finding['id']}: empirical: "
+            f"  {fid}: empirical: "
             f"fired={summary['bug_fired_under']} "
             f"blocked={summary['blocked_under']}",
             file=sys.stderr,

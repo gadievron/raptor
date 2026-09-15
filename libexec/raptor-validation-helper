@@ -1792,9 +1792,19 @@ def _discover_and_match_binaries(workdir, target, data, build=None,
 
     groups = {}
     for f in data.get("findings", []):
-        bp = f.get("feasibility", {}).get("binary_path", "")
+        # findings.json is LLM-authored and schema validation is
+        # advisory — an id-less finding that acquired a binary_path
+        # (the single-ELF / env-build fallback sets it without
+        # consulting the id) must not KeyError here: the crash aborts
+        # Stage-E prep after _save_findings, including the
+        # mitigation-matrix leg. Group it under a placeholder id
+        # (mirrors the sibling prints).
+        if not isinstance(f, dict):
+            continue
+        feas = f.get("feasibility")
+        bp = feas.get("binary_path", "") if isinstance(feas, dict) else ""
         if bp:
-            groups.setdefault(bp, []).append(f["id"])
+            groups.setdefault(bp, []).append(str(f.get("id") or "?"))
     print(f"{len(groups)} binary group(s), {matched} matched, "
           f"{len(skipped)} skipped")
     for bp, ids in groups.items():
