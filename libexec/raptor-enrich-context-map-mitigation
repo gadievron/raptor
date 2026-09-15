@@ -148,7 +148,10 @@ def main() -> int:
         return 2
 
     if args.dry_run:
-        sys.stdout.write(dumps_artifact(cm, sort_keys=True) + "\n")
+        # ensure_ascii: the LLM-written context map goes to the
+        # terminal on --dry-run; C1 controls pass raw without it.
+        sys.stdout.write(
+            dumps_artifact(cm, sort_keys=True, ensure_ascii=True) + "\n")
         return 0
 
     enforce_context_map_budget(cm)

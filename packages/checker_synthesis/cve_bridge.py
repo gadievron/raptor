@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import difflib
 import logging
+import json
 import re
 import sys
 from dataclasses import dataclass, field
@@ -28,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from core.json import dumps_display, load_json_bounded
+from core.json import load_json_bounded
 
 from .languages import detect_engine
 from .library import RuleLibrary
@@ -461,5 +462,8 @@ def cli_main(argv: list[str] | None = None) -> int:
         library_dir=Path(args.library_dir) if args.library_dir else None,
         promote=not args.no_promote,
     )
-    print(dumps_display(report.to_dict(), indent=2))
+    # ensure_ascii: terminal lane — JSON escapes C0 but passes C1
+    # controls raw without it; stays valid JSON for consumers.
+    print(json.dumps(report.to_dict(), indent=2, ensure_ascii=True,
+                     default=str))
     return 0

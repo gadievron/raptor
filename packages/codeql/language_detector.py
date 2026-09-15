@@ -8,6 +8,7 @@ to determine which CodeQL databases need to be created.
 
 import os
 import sys
+import json
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,7 +20,6 @@ from typing import ClassVar
 # silently breaking under relocation.
 sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
-from core.json import dumps_display
 from core.logging import get_logger
 
 logger = get_logger()
@@ -680,7 +680,9 @@ def main() -> None:
             }
             for lang, info in supported.items()
         }
-        print(dumps_display(output, indent=2))
+        # ensure_ascii: extension/build-file names come from the
+        # scanned repo; C1 controls pass raw without it.
+        print(json.dumps(output, indent=2, ensure_ascii=True, default=str))
     else:
         print(f"\n{'=' * 70}")
         print("DETECTED LANGUAGES (CodeQL-supported only)")

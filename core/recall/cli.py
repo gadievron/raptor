@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from core.json import dumps_display, load_json, save_json
+from core.json import load_json, save_json
 from core.recall.manifest import PROFILES, ManifestError, load_manifest
 from core.recall.matcher import clean_region_hits, match_findings
 from core.recall.cvefix_manifest import main as cvefix_manifest_main
@@ -302,7 +303,9 @@ def _cmd_compare(args: argparse.Namespace) -> int:
         print(f"error: cannot read report: {exc}", file=sys.stderr)
         return 2
     delta = compare_reports(base, new)
-    print(dumps_display(delta))
+    # ensure_ascii: terminal lane — JSON escapes C0 but passes C1
+    # controls raw without it; stays valid JSON for consumers.
+    print(json.dumps(delta, indent=2, ensure_ascii=True, default=str))
     return 0
 
 

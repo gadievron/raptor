@@ -24,11 +24,11 @@ from __future__ import annotations
 
 import argparse
 import logging
+import json
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from core.json import dumps_display
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -226,7 +226,10 @@ def main(argv: Sequence[str]) -> int:
         return 3
 
     if args.emit_json:
-        sys.stdout.write(dumps_display(_report_to_dict(report), indent=2))
+        # ensure_ascii: terminal JSON lane — C1 controls pass raw
+        # without it; stays valid JSON for parsing consumers.
+        sys.stdout.write(json.dumps(_report_to_dict(report), indent=2,
+                                    ensure_ascii=True, default=str))
         sys.stdout.write("\n")
     elif args.pr_comment:
         from .pr_comment import render_pr_comment as _render_pr

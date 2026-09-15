@@ -561,3 +561,98 @@ def test_ascii_json_dumps_is_clean_and_nonascii_fires():
         "    print(json.dumps(e['details'], ensure_ascii=False))\n"
     )
     assert any(v.detail == "details" for v in audit_source(unsafe))
+
+
+# ---------------------------------------------------------------------------
+# Helper-return and raw-serialiser arms.
+# ---------------------------------------------------------------------------
+
+
+def test_rule_catches_helper_return_at_sink():
+    """The render_json shape: taint dies at a module-local helper
+    return and reaches the sink as an opaque call."""
+    src = (
+        "def render_json(report):\n"
+        "    return dumps_artifact(asdict(report), sort_keys=True)\n"
+        "\n"
+        "def main(report):\n"
+        "    sys.stdout.write(render_json(report))\n"
+    )
+    vs = audit_source(src)
+    assert any(v.detail == "render_json" for v in vs), vs
+
+
+def test_rule_catches_helper_returning_foreign_key():
+    src = (
+        "def summary(e):\n"
+        "    return e['title']\n"
+        "\n"
+        "def main(e):\n"
+        "    print(summary(e))\n"
+    )
+    assert any(v.detail == "summary" for v in audit_source(src))
+
+
+def test_clean_helper_call_stays_clean():
+    """A module-local helper whose return is sanitised does not mark
+    its callers."""
+    src = (
+        "def summary(e):\n"
+        "    return _line(e['title'])\n"
+        "\n"
+        "def main(e):\n"
+        "    print(summary(e))\n"
+    )
+    assert audit_source(src) == []
+
+
+def test_rule_catches_dumps_display_at_print():
+    """Whole-dict dumps read no key at all — the key-vocabulary arm
+    can never see them (mechanism 6)."""
+    src = (
+        "def show(payload):\n"
+        "    print(dumps_display(payload))\n"
+    )
+    vs = audit_source(src)
+    assert any(v.kind == "raw_serialiser_at_sink"
+               and v.detail == "dumps_display" for v in vs)
+
+
+def test_rule_catches_dumps_artifact_at_stdout_write():
+    src = (
+        "def show(payload):\n"
+        "    sys.stdout.write(dumps_artifact(payload))\n"
+    )
+    vs = audit_source(src)
+    assert any(v.kind == "raw_serialiser_at_sink" for v in vs)
+
+
+def test_dumps_artifact_ensure_ascii_at_terminal_is_clean():
+    src = (
+        "def show(payload):\n"
+        "    sys.stdout.write(dumps_artifact(payload, ensure_ascii=True))\n"
+    )
+    assert not [v for v in audit_source(src)
+                if v.kind == "raw_serialiser_at_sink"]
+
+
+def test_dumps_artifact_to_file_write_text_is_clean():
+    """File artifacts are dumps_artifact's contract — only
+    terminal-capable sinks fire the raw-serialiser arm."""
+    src = (
+        "def save(payload, path):\n"
+        "    path.write_text(dumps_artifact(payload))\n"
+        "    with open(path) as fh:\n"
+        "        fh.write(dumps_artifact(payload))\n"
+    )
+    assert not [v for v in audit_source(src)
+                if v.kind == "raw_serialiser_at_sink"]
+
+
+def test_sanitised_dumps_display_is_clean():
+    src = (
+        "def show(payload):\n"
+        "    print(_sft(dumps_display(payload)))\n"
+    )
+    assert not [v for v in audit_source(src)
+                if v.kind == "raw_serialiser_at_sink"]

@@ -86,6 +86,7 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
+from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
 from core.annotations import (  # noqa: E402
     NON_TTY,
     PROVENANCE_KEYS,
@@ -344,7 +345,9 @@ def cmd_add(opts: argparse.Namespace) -> int:
             f"--overwrite is respect-manual\n"
         )
         return 1
-    print(f"wrote {path}")
+    # path embeds the operator/agent-supplied file component —
+    # validated against traversal, not against control bytes.
+    print(f"wrote {_sft(str(path), max_len=300)}")
     _promote_iris_spec(base, opts, metadata)
     return 0
 

@@ -837,6 +837,91 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
         detail="thinking",
         audit_note="int thinking-token counter rendered with {:,}",
     ),
+    # --- helper-return arm: adjudicated module-local helper flows ----
+    AllowlistEntry(
+        file="core/project/report.py",
+        func_name="generate_project_report",
+        kind="unsanitised_llm_value",
+        detail="annotations_md",
+        audit_note=(
+            "render_annotations_markdown sanitise_string's every body "
+            "and the annotation store validates file/function/metadata "
+            "at write time; the taint enters via the renderer's "
+            "ARGUMENT (gather_project_annotations returns bodies), not "
+            "its output"
+        ),
+    ),
+    AllowlistEntry(
+        file="core/reporting/findings.py",
+        func_name="findings_summary",
+        kind="unsanitised_llm_value",
+        detail="findings_summary_line",
+        audit_note=(
+            "helper returns a line of int statistics counters (its own "
+            "counts['error'] read is the adjudicated count entry above)"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/binary_analysis/harness.py",
+        func_name="generate_binary_harness",
+        kind="unsanitised_llm_value",
+        detail="spec",
+        audit_note=(
+            "render_harness_report routes name-bearing fields through "
+            "the module's escaping helpers; the taint is spec passed as "
+            "the renderer's argument, not renderer output"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/binary_analysis/investigation.py",
+        func_name="write_investigation",
+        kind="unsanitised_llm_value",
+        detail="render_investigation_report",
+        audit_note=(
+            "the renderer's return-taint chains only through the "
+            "internally-built count dict named 'summary' (vocabulary "
+            "collision); every name-bearing field routes through "
+            "_md_escape"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/llm_analysis/orchestrator.py",
+        func_name="orchestrate",
+        kind="unsanitised_llm_value",
+        detail="suffix",
+        audit_note=(
+            "aggregation['analysed_by'] is the operator-configured "
+            "aggregation model id from the in-process summary"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/static-analysis/scanner.py",
+        func_name="run_single_semgrep",
+        kind="unsanitised_llm_value",
+        detail="se",
+        audit_note=(
+            "verbatim semgrep stderr capture into the run's stderr log "
+            "artifact — raw by design, not a rendered report"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/static-analysis/scanner.py",
+        func_name="run_single_semgrep",
+        kind="unsanitised_llm_value",
+        detail="rc",
+        audit_note="int exit code written to the exit-code artifact file",
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-validation-helper",
+        func_name="prepare_A",
+        kind="unsanitised_llm_value",
+        detail="parts",
+        audit_note=(
+            "source-binary map lines: keys are the map builder's "
+            "constant field names, values are _sft-wrapped in the same "
+            "comprehension"
+        ),
+    ),
 )
 
 
@@ -887,6 +972,71 @@ def _key_expr(node: ast.AST) -> str | None:
     return None
 
 
+def _is_raw_serialiser(node: ast.AST) -> str | None:
+    """Name of a raw-serialiser call whose output passes C1 controls.
+
+    ``dumps_display`` is ensure_ascii=False by contract;
+    ``dumps_artifact`` defaults to ensure_ascii=False (safe only with
+    an explicit ``ensure_ascii=True``); bare ``dumps`` defaults to
+    ensure_ascii=True and is flagged only when explicitly disabled.
+    A whole-payload dump at a sink reads no key at all, so the
+    key-vocabulary arm can never see it.
+    """
+    if not isinstance(node, ast.Call):
+        return None
+    name = _call_name(node)
+    if name == "dumps_display":
+        return name
+    if name == "dumps_artifact" and not any(
+            kw.arg == "ensure_ascii"
+            and isinstance(kw.value, ast.Constant)
+            and kw.value.value is True
+            for kw in node.keywords):
+        return name
+    if name == "dumps" and any(
+            kw.arg == "ensure_ascii"
+            and isinstance(kw.value, ast.Constant)
+            and kw.value.value is False
+            for kw in node.keywords):
+        return name
+    return None
+
+
+def _raw_serialiser_calls(node: ast.AST) -> list[tuple[int, str]]:
+    """(line, serialiser-name) pairs for raw-serialiser calls in
+    ``node`` that are not wrapped by a recognised sanitiser."""
+    out: list[tuple[int, str]] = []
+
+    def walk(n: ast.AST) -> None:
+        if isinstance(n, ast.Call) and _call_name(n) in _SANITISERS:
+            return
+        name = _is_raw_serialiser(n)
+        if name is not None:
+            out.append((getattr(n, "lineno", 0), name))
+        for child in ast.iter_child_nodes(n):
+            walk(child)
+
+    walk(node)
+    return out
+
+
+def _terminal_capable_sink(node: ast.Call) -> bool:
+    """True when the sink call can reach a terminal: ``print``/
+    ``echo``/``secho`` (any form), or ``.write`` on a receiver whose
+    dotted name mentions stdout/stderr/buffer. ``.write_text`` and
+    plain file-handle writes are file-artifact lanes."""
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id in _SINK_FUNCTIONS
+    if isinstance(func, ast.Attribute):
+        if func.attr in ("echo", "secho"):
+            return True
+        if func.attr == "write":
+            recv = _dotted_name(func.value).lower()
+            return any(tok in recv for tok in ("stdout", "stderr", "buffer"))
+    return False
+
+
 def _is_ascii_json_dumps(node: ast.Call) -> bool:
     """True for ``dumps(..., ensure_ascii=True)`` calls (any module
     alias — ``json.dumps`` / ``_json.dumps``). JSON escapes C0 always
@@ -910,16 +1060,25 @@ def _is_ascii_json_dumps(node: ast.Call) -> bool:
 _TAINT_NEUTRAL_CALLS = frozenset({
     "len", "int", "float", "bool", "round", "ord", "hash",
     "isinstance", "hasattr", "callable", "abs",
+    # sum() on strings raises by design; the count idiom
+    # (``sum(1 for ...)``) dominated the false positives. Residual:
+    # ``sum(list_of_lists, [])`` concatenation can carry content —
+    # rare and lint-discouraged, accepted.
+    "sum",
 })
 
 
 def _naked_keys(
     node: ast.AST,
     tainted: frozenset,
+    tainted_calls: frozenset = frozenset(),
 ) -> list[tuple[int, str]]:
     """Return (line, key) pairs for LLM-derived reads in ``node`` that
     are NOT inside a recognised sanitiser call. ``tainted`` names count
-    as LLM-derived reads too (one-level local taint)."""
+    as LLM-derived reads too (one-level local taint), and simple-name
+    calls to ``tainted_calls`` (module-local helpers whose RETURN value
+    is tainted — the ``sys.stdout.write(render_json(report))`` shape)
+    count as foreign reads."""
     out: list[tuple[int, str]] = []
 
     def walk(n: ast.AST) -> None:
@@ -952,6 +1111,9 @@ def _naked_keys(
             out.append((getattr(n, "lineno", 0), key))
         if isinstance(n, ast.Name) and n.id in tainted:
             out.append((getattr(n, "lineno", 0), n.id))
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id in tainted_calls):
+            out.append((getattr(n, "lineno", 0), n.func.id))
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
             # A method reference (`severity.title()`, `text.strip()`) is
             # not a field read — skip the func Attribute itself but keep
@@ -1024,11 +1186,24 @@ def _dotted_name(node: ast.AST) -> str:
 
 
 class _Scanner(ast.NodeVisitor):
-    """Walk one module, tracking function frames and one-level taint."""
+    """Walk one module, tracking function frames and one-level taint.
 
-    def __init__(self, rel: str) -> None:
+    ``tainted_calls`` carries the module-local helper names whose
+    return values were found tainted on a first pass (see
+    :func:`audit_source`) — calls to them count as foreign reads on
+    the second pass. ``tainted_return_funcs`` collects those names:
+    a function whose ``return`` expression carries naked keys, tainted
+    names, or a raw-serialiser call. One module-local level only —
+    helper-of-helper chains and cross-module helpers stay out of
+    scope (documented walk-scope limit).
+    """
+
+    def __init__(self, rel: str,
+                 tainted_calls: frozenset = frozenset()) -> None:
         self.rel = rel
         self.violations: list[Violation] = []
+        self.tainted_return_funcs: set[str] = set()
+        self._tainted_calls = tainted_calls
         self._fn_stack: list[str] = []
         self._tainted_stack: list[set] = [set()]
 
@@ -1069,7 +1244,8 @@ class _Scanner(ast.NodeVisitor):
     # -- taint --------------------------------------------------------
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        if _naked_keys(node.value, frozenset(self._tainted)):
+        if _naked_keys(node.value, frozenset(self._tainted),
+                       self._tainted_calls):
             for target in node.targets:
                 for name in _target_names(target):
                     self._tainted.add(name)
@@ -1101,7 +1277,8 @@ class _Scanner(ast.NodeVisitor):
         if node.value is None:
             self.generic_visit(node)
             return
-        if _naked_keys(node.value, frozenset(self._tainted)):
+        if _naked_keys(node.value, frozenset(self._tainted),
+                       self._tainted_calls):
             for name in _target_names(node.target):
                 self._tainted.add(name)
             base = _container_base(node.target)
@@ -1117,7 +1294,8 @@ class _Scanner(ast.NodeVisitor):
         # ``x = ""; x += e["title"]`` — augmented assignment taints
         # the target when the value is foreign. It never CLEARS taint:
         # ``x += clean`` keeps whatever was already in ``x``.
-        if _naked_keys(node.value, frozenset(self._tainted)):
+        if _naked_keys(node.value, frozenset(self._tainted),
+                       self._tainted_calls):
             for name in _target_names(node.target):
                 self._tainted.add(name)
             base = _container_base(node.target)
@@ -1126,9 +1304,19 @@ class _Scanner(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_For(self, node: ast.For) -> None:
-        if _naked_keys(node.iter, frozenset(self._tainted)):
+        if _naked_keys(node.iter, frozenset(self._tainted),
+                       self._tainted_calls):
             for name in _target_names(node.target):
                 self._tainted.add(name)
+        self.generic_visit(node)
+
+    def visit_Return(self, node: ast.Return) -> None:
+        if node.value is not None and self._fn_stack:
+            if (_naked_keys(node.value, frozenset(self._tainted),
+                            self._tainted_calls)
+                    or _raw_serialiser_calls(node.value)):
+                # Short name — helper calls are matched by bare Name.
+                self.tainted_return_funcs.add(self._fn_stack[-1])
         self.generic_visit(node)
 
     # -- sinks --------------------------------------------------------
@@ -1169,7 +1357,8 @@ class _Scanner(ast.NodeVisitor):
         if args is not None:
             tainted = frozenset(self._tainted)
             for arg in args:
-                for line, key in _naked_keys(arg, tainted):
+                for line, key in _naked_keys(arg, tainted,
+                                             self._tainted_calls):
                     self.violations.append(Violation(
                         file=self.rel,
                         line=line or node.lineno,
@@ -1177,6 +1366,20 @@ class _Scanner(ast.NodeVisitor):
                         detail=key,
                         func_name=self._qualified_func_name(),
                     ))
+                # Whole-payload dumps read no key at all — flag the
+                # serialiser call itself when its output reaches a
+                # TERMINAL-capable sink with C1 passthrough. File
+                # sinks (.write_text, plain handle .write) are the
+                # artifact lane where dumps_artifact is the contract.
+                if _terminal_capable_sink(node):
+                    for line, name in _raw_serialiser_calls(arg):
+                        self.violations.append(Violation(
+                            file=self.rel,
+                            line=line or node.lineno,
+                            kind="raw_serialiser_at_sink",
+                            detail=name,
+                            func_name=self._qualified_func_name(),
+                        ))
         # Container round-trip, mutate side: `recv.append(tainted)` /
         # `recv.update(tainted)` puts a foreign value INSIDE recv;
         # taint the receiver's base local name.
@@ -1185,7 +1388,8 @@ class _Scanner(ast.NodeVisitor):
                 and func.attr in _CONTAINER_MUTATORS
                 and node.args):
             tainted = frozenset(self._tainted)
-            if any(_naked_keys(a, tainted) for a in node.args):
+            if any(_naked_keys(a, tainted, self._tainted_calls)
+                   for a in node.args):
                 base = func.value
                 while isinstance(base, (ast.Subscript, ast.Attribute)):
                     base = base.value
@@ -1259,7 +1463,13 @@ def audit_source(source: str, rel: str = "<snippet>") -> list[Violation]:
         tree = ast.parse(source)
     except SyntaxError:
         return []
-    scanner = _Scanner(rel)
+    # Pass 1 collects module-local helpers whose return value is
+    # tainted (render_json-style); pass 2 reports with calls to them
+    # treated as foreign reads. Pass-1 violations are discarded — the
+    # second pass re-derives them with the fuller call knowledge.
+    pre = _Scanner(rel)
+    pre.visit(tree)
+    scanner = _Scanner(rel, frozenset(pre.tainted_return_funcs))
     scanner.visit(tree)
     violations = scanner.violations
     violations.extend(_mermaid_scan(tree, rel))

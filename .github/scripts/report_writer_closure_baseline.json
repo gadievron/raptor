@@ -67,6 +67,15 @@
     "core/audit/corpus/corpus_metrics.py::format_report::unsanitised_llm_value::error": {
       "note": "'error' is an integer counter column in the corpus metrics report; the free-text hypothesis/trap prints in this dev tool are sanitised"
     },
+    "core/audit/corpus/corpus_metrics.py::main::unsanitised_llm_value::f": {
+      "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
+    },
+    "core/audit/corpus/corpus_metrics.py::main::unsanitised_llm_value::format_attribution_report": {
+      "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
+    },
+    "core/audit/corpus/corpus_metrics.py::main::unsanitised_llm_value::format_report": {
+      "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
+    },
     "core/audit/corpus/run_corpus.py::_run_audit::unsanitised_llm_value::error_reason": {
       "note": "mechanical_skip is a bool, error_reason/hypothesis reach the results-record dict (data artifact), and the terminal prints of the same fields are sanitised; dev corpus driver"
     },
@@ -76,11 +85,26 @@
     "core/audit/corpus/run_corpus.py::_run_audit::unsanitised_llm_value::mechanical_skip": {
       "note": "mechanical_skip is a bool, error_reason/hypothesis reach the results-record dict (data artifact), and the terminal prints of the same fields are sanitised; dev corpus driver"
     },
-    "core/audit/corpus/run_corpus.py::_run_phase2_classify::unsanitised_llm_value::errored": {
+    "core/audit/corpus/run_corpus.py::_run_ensemble_audit::unsanitised_llm_value::_dampened": {
+      "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
+    },
+    "core/audit/corpus/run_corpus.py::_run_ensemble_audit::unsanitised_llm_value::c": {
+      "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
+    },
+    "core/audit/corpus/run_corpus.py::_run_ensemble_audit::unsanitised_llm_value::phase2_cost": {
+      "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
+    },
+    "core/audit/corpus/run_corpus.py::_run_ensemble_audit::unsanitised_llm_value::suppressed": {
+      "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
+    },
+    "core/audit/corpus/run_corpus.py::main::unsanitised_llm_value::p": {
       "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
     },
     "core/audit/dispatch_table.py::format_displacement_context::unsanitised_llm_value::description": {
       "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+    },
+    "core/audit/dynamic_sweep.py::_run_python_harness::unsanitised_llm_value::harness_code": {
+      "note": "LLM harness source written to the sandbox execution file \u2014 byte-exact by design, not a rendered report"
     },
     "core/audit/evidence_grade.py::format_evidence_chain::unsanitised_llm_value::description": {
       "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
@@ -115,6 +139,24 @@
     "core/coverage/collect.py::collect_llvm::unsanitised_llm_value::r_stdout": {
       "note": "verbatim tool/child-output capture into a run artifact or structured data file \u2014 raw by design; rendering to the operator happens in registered writers that sanitise"
     },
+    "core/dataflow/cvefix_bridge.py::_extract_proposal::unsanitised_llm_value::diff": {
+      "note": "fix-commit diff text written to a scratch artifact for tier-0 analysis \u2014 byte-exact input material, not a report"
+    },
+    "core/dataflow/ghsa_harvester.py::main::unsanitised_llm_value::parent": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "core/dataflow/parser_pack_harvest.py::main::unsanitised_llm_value::dumps_pack": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "core/dataflow/scripts/handlabel_seed.py::write_seed::unsanitised_llm_value::finding": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "core/dataflow/scripts/handlabel_seed.py::write_seed::unsanitised_llm_value::label": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "core/llm/cwe_strategies/prompts.py::render_strategy::unsanitised_llm_value::_render_exemplar": {
+      "note": "prompt-construction lane, not an operator terminal/report lane \u2014 input-side envelope territory"
+    },
     "core/llm/cwe_strategies/prompts.py::render_strategy::unsanitised_llm_value::description": {
       "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
@@ -123,6 +165,9 @@
     },
     "core/llm/providers.py::LLMProvider._render_tool_protocol::unsanitised_llm_value::description": {
       "note": "tool-protocol / system-prompt construction from RAPTOR-authored ToolDef descriptions \u2014 prompt text, not an operator surface"
+    },
+    "core/orchestration/skill_dispatch.py::run_skill_dispatch::unsanitised_llm_value::prompt": {
+      "note": "prompt-construction lane, not an operator terminal/report lane \u2014 input-side envelope territory"
     },
     "core/recall/runner.py::run_pipeline::unsanitised_llm_value::stderr": {
       "note": "verbatim tool/child-output capture into a run artifact or structured data file \u2014 raw by design; rendering to the operator happens in registered writers that sanitise"
@@ -133,6 +178,21 @@
     "core/sage/scripts/register_agents.py::register_agents::unsanitised_llm_value::description": {
       "note": "dev setup script; descriptions are RAPTOR-authored agent-catalog constants"
     },
+    "core/sage/scripts/seed_sage_knowledge.py::seed::unsanitised_llm_value::i": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "core/sage/scripts/seed_sage_knowledge.py::seed::unsanitised_llm_value::label": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "core/sage/scripts/seed_sage_knowledge.py::seed::unsanitised_llm_value::mem": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "core/sage/scripts/seed_sage_knowledge.py::seed::unsanitised_llm_value::status": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "core/startup/init.py::_check_analyzer_capabilities::unsanitised_llm_value::gcc_ver": {
+      "note": "gcc --version first line from the local trusted toolchain probe (safe_subprocess_env, no target input)"
+    },
     "core/threat_model/__init__.py::prompt_context::unsanitised_llm_value::rendered": {
       "note": "title/summary route through the module's _safe_for_render/escape_nonprintable discipline (helper names outside the audit vocabulary); prompt_context feeds an LLM prompt"
     },
@@ -141,6 +201,9 @@
     },
     "core/threat_model/__init__.py::render_report::unsanitised_llm_value::title": {
       "note": "title/summary route through the module's _safe_for_render/escape_nonprintable discipline (helper names outside the audit vocabulary); prompt_context feeds an LLM prompt"
+    },
+    "core/threat_model/__init__.py::save_report::unsanitised_llm_value::render_report": {
+      "note": "helper-return of the same renderer whose summary/title rows are triaged above; save_report writes the md artifact"
     },
     "libexec/raptor-bq-query::_run_sandboxed::unsanitised_llm_value::stderr": {
       "note": "verbatim tool/child-output capture into a run artifact or structured data file \u2014 raw by design; rendering to the operator happens in registered writers that sanitise"
@@ -163,31 +226,19 @@
     "libexec/raptor-self-test::case_tool_sandbox_matrix::unsanitised_llm_value::results": {
       "note": "self-test harness matrix rows (RAPTOR-authored tier names + statuses) written to a log artifact"
     },
+    "packages/binary_analysis/blamed_lines.py::check_report::unsanitised_llm_value::results": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
     "packages/binary_analysis/crash_analyser.py::CrashAnalyser._get_disassembly::unsanitised_llm_value::line": {
       "note": "disassembly lines feed the analysis data structure (artifact); the rendering chokepoints in this package are registered"
     },
     "packages/codeql/autonomous_analyzer.py::AutonomousCodeQLAnalyzer.generate_exploit::unsanitised_llm_value::line": {
       "note": "exploit PoC source assembly \u2014 byte-exact artifact by design, not a rendered report"
     },
-    "packages/cve_diff/cve_diff/oracle/cross_check.py::main::unsanitised_llm_value::disp": {
-      "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
-    },
-    "packages/cve_diff/cve_diff/oracle/cross_check.py::main::unsanitised_llm_value::hall": {
-      "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
-    },
     "packages/cve_diff/cve_diff/oracle/cross_check.py::main::unsanitised_llm_value::i": {
       "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
     },
     "packages/cve_diff/cve_diff/oracle/cross_check.py::main::unsanitised_llm_value::md": {
-      "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
-    },
-    "packages/cve_diff/cve_diff/oracle/cross_check.py::main::unsanitised_llm_value::mirror": {
-      "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
-    },
-    "packages/cve_diff/cve_diff/oracle/cross_check.py::main::unsanitised_llm_value::orph": {
-      "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
-    },
-    "packages/cve_diff/cve_diff/oracle/cross_check.py::main::unsanitised_llm_value::rng": {
       "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
     },
     "packages/cve_diff/cve_diff/oracle/cross_check.py::main::unsanitised_llm_value::status": {
@@ -196,13 +247,7 @@
     "packages/cve_diff/cve_diff/oracle/cross_check.py::main::unsanitised_llm_value::summary_path": {
       "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
     },
-    "packages/cve_diff/cve_diff/oracle/cross_check.py::main::unsanitised_llm_value::unk": {
-      "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
-    },
     "packages/cve_diff/cve_diff/oracle/cross_check.py::main::unsanitised_llm_value::v": {
-      "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
-    },
-    "packages/cve_diff/cve_diff/oracle/cross_check.py::main::unsanitised_llm_value::ver": {
       "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/api.py::format_analysis_summary::unsanitised_llm_value::description": {
@@ -220,11 +265,47 @@
     "packages/exploit_feasibility/primitives.py::ConfidenceScore.summary::unsanitised_llm_value::reasoning": {
       "note": "reasoning strings are code-authored score explanations (catalog constants), not LLM text"
     },
+    "packages/exploitability_validation/scripts/measure_stage_e_empirical_influence.py::main::unsanitised_llm_value::a": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "packages/exploitability_validation/scripts/measure_stage_e_empirical_influence.py::main::unsanitised_llm_value::cite_all": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "packages/exploitability_validation/scripts/measure_stage_e_empirical_influence.py::main::unsanitised_llm_value::d": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "packages/exploitability_validation/scripts/measure_stage_e_empirical_influence.py::main::unsanitised_llm_value::r": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
     "packages/exploitability_validation/scripts/measure_stage_e_empirical_influence.py::main::unsanitised_llm_value::reasoning": {
       "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
     },
+    "packages/ghidra/match_precision.py::run_measurement::unsanitised_llm_value::report": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
     "packages/joern/runner.py::_StallMonitor.run::unsanitised_llm_value::line": {
       "note": "stall-monitor relays joern server lines through the raptor logger \u2014 the console-formatter chokepoint escapes them"
+    },
+    "packages/joern/scripts/compat_matrix.py::main::unsanitised_llm_value::asset_name": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "packages/joern/scripts/compat_matrix.py::main::unsanitised_llm_value::digest": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "packages/joern/scripts/compat_matrix.py::main::unsanitised_llm_value::failed": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "packages/joern/scripts/compat_matrix.py::main::unsanitised_llm_value::result": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "packages/joern/scripts/compat_matrix.py::main::unsanitised_llm_value::results": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "packages/joern/scripts/compat_matrix.py::main::unsanitised_llm_value::rows": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "packages/joern/scripts/compat_matrix.py::main::unsanitised_llm_value::tag": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
     },
     "packages/llm_analysis/checker_followup.py::load_variant_candidates::unsanitised_llm_value::rationale": {
       "note": "rationale is loaded into candidate data records (artifact), not printed; the printing consumers are registered writers"
@@ -244,11 +325,20 @@
     "packages/llm_analysis/journal_emit.py::build_journal_body::unsanitised_llm_value::reasoning": {
       "note": "journal-body construction \u2014 journal entries are data artifacts; the journal render surfaces (raptor-review, core/audit/report) are registered writers"
     },
+    "packages/llm_analysis/scripts/e2e_intent_match.py::_show::raw_serialiser_at_sink::dumps_display": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
     "packages/llm_analysis/scripts/e2e_intent_match.py::_show::unsanitised_llm_value::reasoning": {
       "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
     },
+    "packages/llm_analysis/scripts/e2e_verify_exploit.py::main::raw_serialiser_at_sink::dumps_display": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
     "packages/sca/dependency_track.py::main::unsanitised_llm_value::error": {
       "note": "registry/server error text on a config-driven admin lane \u2014 unit-filed to the sca owner (campaign row U05)"
+    },
+    "packages/sca/fix_diff.py::main::unsanitised_llm_value::status": {
+      "note": "status is 'ok' or a RAPTOR-authored error_class constant; taint chains through the row container"
     },
     "packages/sca/harden.py::_run_self_test::unsanitised_llm_value::proc": {
       "note": "self-test lane relays its own child's output for the operator running the self-test; the child is RAPTOR's own harden CLI"
@@ -261,6 +351,9 @@
     },
     "packages/sca/report_html.py::_vuln_card::unsanitised_llm_value::summary": {
       "note": "HTML report lane html.escape()s at emission (helper outside the audit vocabulary)"
+    },
+    "packages/sca/report_html.py::_vuln_section::unsanitised_llm_value::_vuln_card": {
+      "note": "helper-return of the html card renderer whose summary row is triaged above (html-escaping inside the card)"
     },
     "packages/sca/supply_chain/typosquat_audit.py::_render_reaudit_llm::unsanitised_llm_value::rationale": {
       "note": "re-audit rationale lane \u2014 unit-filed to the typosquat owner (campaign rows U07/U08)"
