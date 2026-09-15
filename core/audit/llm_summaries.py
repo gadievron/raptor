@@ -244,8 +244,25 @@ def run_llm_summary_pass(
     if not items_with_source:
         return {}
 
+    # Budget-stop classification (run_parallel's documented exception
+    # contract: EVERY exception from fn — including the typed terminal
+    # LLMBudgetExceededError — becomes the item's on_error result, so
+    # budget-stop semantics must be classified here). Without it, a
+    # mid-pass exhaustion left every remaining candidate making a
+    # doomed reservation-gated call, each swallowed as a per-item
+    # failure and misattributed as an extraction failure.
+    import threading
+
+    budget_stop = threading.Event()
+    budget_skipped = [0]
+    skip_lock = threading.Lock()
+
     def _do_one(item: tuple) -> tuple | None:
         file_path, function_name, source = item
+        if budget_stop.is_set():
+            with skip_lock:
+                budget_skipped[0] += 1
+            return None
         # Injection preflight over the source BEFORE choosing the
         # rendering: the summary class defaults to a plaintext payload
         # (see build_summary_prompt), so a source carrying known
@@ -284,13 +301,22 @@ def run_llm_summary_pass(
         # one — a short call's timeout is usually transient, and an
         # identical retry is cheap.
         from core.audit.llm_review import SHORT_CALL_TIMEOUT_S
-        response = client.generate(
-            prompt,
-            system_prompt=system_prompt,
-            task_type="audit",
-            timeout_s=SHORT_CALL_TIMEOUT_S,
-            call_class="summary",
-        )
+        try:
+            response = client.generate(
+                prompt,
+                system_prompt=system_prompt,
+                task_type="audit",
+                timeout_s=SHORT_CALL_TIMEOUT_S,
+                call_class="summary",
+            )
+        except Exception as exc:
+            from core.llm.client import is_budget_exceeded_error
+            if is_budget_exceeded_error(exc):
+                # Terminal for the run: stop dispatching, don't count
+                # the exhaustion as an extraction failure.
+                budget_stop.set()
+                return None
+            raise
         # LLMResponse carries output in ``content`` (no ``text``
         # attribute); str(response) is the dataclass repr, which the
         # summary parser cannot read.
@@ -318,6 +344,12 @@ def run_llm_summary_pass(
         if r is not None:
             results[r[0]] = r[1]
 
+    if budget_stop.is_set():
+        logger.warning(
+            "llm_summary_pass stopped: run budget exhausted — %d "
+            "candidate(s) skipped without dispatch",
+            budget_skipped[0],
+        )
     if results:
         logger.info(
             "llm_summary_pass: %d summaries extracted (%d failed) from %d candidates",

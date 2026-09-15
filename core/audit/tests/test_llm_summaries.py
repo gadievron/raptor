@@ -190,6 +190,59 @@ class TestRunLLMSummaryPassBudgetRouting:
         assert results["a.c:callee"].preconditions[0].param == "len"
 
 
+class TestRunLLMSummaryPassBudgetStop:
+    """run_parallel converts EVERY fn exception — including the typed
+    terminal LLMBudgetExceededError — into a per-item failure, so the
+    pass must classify budget exhaustion itself: after the first
+    budget error no further candidate may dispatch (each remaining
+    call is a guaranteed refusal, misattributed as an extraction
+    failure)."""
+
+    class _ExhaustedClient:
+        recommended_max_workers = 1
+
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, prompt, **kwargs):
+            from core.llm.client import LLMBudgetExceededError
+            self.calls += 1
+            raise LLMBudgetExceededError("run budget exhausted")
+
+    def test_budget_stop_halts_dispatch(self, tmp_path, caplog):
+        import logging
+        from types import SimpleNamespace
+
+        from core.audit.llm_summaries import run_llm_summary_pass
+
+        for i in range(4):
+            (tmp_path / f"f{i}.c").write_text(
+                f"int fn{i}(int len) {{\n  return len;\n}}\n",
+            )
+        client = self._ExhaustedClient()
+        config = SimpleNamespace(llm_budget_client=client)
+        candidates = [
+            {
+                "file": f"f{i}.c", "name": f"fn{i}",
+                "line_start": 1, "line_end": 3,
+            }
+            for i in range(4)
+        ]
+
+        with caplog.at_level(
+            logging.WARNING, logger="core.audit.llm_summaries",
+        ):
+            results = run_llm_summary_pass(candidates, tmp_path, config)
+
+        assert results == {}
+        assert client.calls == 1, (
+            "post-exhaustion candidates must not dispatch"
+        )
+        assert any(
+            "budget exhausted" in r.message for r in caplog.records
+        )
+
+
 class TestParseSummaryResponse:
     def test_valid_json(self):
         text = '''{
