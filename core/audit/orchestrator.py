@@ -5453,15 +5453,23 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
             exc_info=True,
         )
 
-    peer_groups = resolve_peer_groups(
-        gap_func_dicts,
-        joern_server=joern_server,
-        binary_edge_index=prep_binary_edge_index,
-        dispatch_tables=prep_dispatch_tables or None,
-        domain_model=prep_domain_model,
-        type_ref_index=prep_type_ref_index,
-        checklist=checklist,
-    )
+    # Fail-soft like the sibling prep blocks above: the resolver
+    # consumes producer-controlled inputs (checklist metadata is
+    # LLM-enrichable), and peer groups are an enrichment layer — one
+    # malformed input must cost the layer, never the prep phase.
+    try:
+        peer_groups = resolve_peer_groups(
+            gap_func_dicts,
+            joern_server=joern_server,
+            binary_edge_index=prep_binary_edge_index,
+            dispatch_tables=prep_dispatch_tables or None,
+            domain_model=prep_domain_model,
+            type_ref_index=prep_type_ref_index,
+            checklist=checklist,
+        )
+    except Exception:
+        peer_groups = []
+        logger.debug("peer-group resolution failed", exc_info=True)
 
     sibling_ns_findings = (
         check_sibling_negative_space(

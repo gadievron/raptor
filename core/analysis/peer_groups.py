@@ -65,7 +65,19 @@ def resolve_peer_groups(
 
     Parameters mirror the data available in the orchestrator prep phase.
     Everything is optional — missing inputs simply skip that layer.
+
+    When ``checklist`` is supplied, every layer sees the functions
+    enriched with the checklist items' ``metadata`` (parameters,
+    return_type, attributes) — the orchestrator's gap dicts carry only
+    name/file/line, so without this join the signature-shape filtering
+    in L0/L1/L5 compares empty parameter lists (always compatible) and
+    the L5 decorator pass can never form a group.
     """
+    if checklist:
+        meta_index = _checklist_metadata_index(checklist)
+        if meta_index:
+            functions = [_enrich_from_index(f, meta_index)
+                         for f in functions]
     groups: list[SiblingGroup] = []
     claimed: set[tuple[str, str]] = set()  # (file, function) pairs
     # Per-layer summary: "ran → N groups" vs "skipped (no input)". The
@@ -810,8 +822,16 @@ def _signatures_compatible(
     meta_a = a.get("metadata", {}) or {}
     meta_b = b.get("metadata", {}) or {}
 
+    # Metadata values are producer-controlled (checklist items are
+    # LLM-enrichable); a scalar where the parameter list belongs must
+    # read as "no signature info", not TypeError the len() below —
+    # the orchestrator prep call has no per-function containment.
     params_a = meta_a.get("parameters", [])
     params_b = meta_b.get("parameters", [])
+    if not isinstance(params_a, (list, tuple)):
+        params_a = []
+    if not isinstance(params_b, (list, tuple)):
+        params_b = []
 
     if params_a and params_b:
         if abs(len(params_a) - len(params_b)) > max_arity_diff:
@@ -832,16 +852,142 @@ def _signatures_compatible(
     return not (ret_a and ret_b and ret_a != ret_b)
 
 
+def _decorator_base(attr: str) -> str:
+    """Base callable name of a decorator/annotation string.
+
+    Extractors record decorators verbatim (``ast.unparse`` /
+    tree-sitter text), so the common web-route shape carries
+    arguments: ``app.route('/login', methods=['POST'])``. Comparing
+    full strings means two routes NEVER share a decorator; the base
+    callable — the text before the argument list — is the identity
+    siblings actually share. Argument-less decorators pass through
+    unchanged.
+    """
+    return attr.split("(", 1)[0].strip()
+
+
+def _decorator_bases(meta: dict[str, Any]) -> list[str]:
+    """Deduped, order-preserving decorator base names from metadata.
+
+    Type-validates as it reads: ``attributes`` is producer-controlled
+    (checklist items are LLM-enrichable), so a scalar where the list
+    belongs, or a non-str member, must contribute nothing rather than
+    TypeError the grouping pass. Order is preserved so group emission
+    stays deterministic.
+    """
+    attrs = meta.get("attributes")
+    if not isinstance(attrs, list):
+        return []
+    bases: list[str] = []
+    for attr in attrs:
+        if not isinstance(attr, str):
+            continue
+        base = _decorator_base(attr)
+        if base and base not in bases:
+            bases.append(base)
+    return bases
+
+
 def _shared_decorator(a: dict[str, Any], b: dict[str, Any]) -> str | None:
-    """Return a shared decorator name if both functions have one."""
+    """Return a shared decorator base name if both functions have one."""
     meta_a = a.get("metadata", {}) or {}
     meta_b = b.get("metadata", {}) or {}
-    attrs_a = set(meta_a.get("attributes", []))
-    attrs_b = set(meta_b.get("attributes", []))
-    shared = attrs_a & attrs_b
+    shared = set(_decorator_bases(meta_a)) & set(_decorator_bases(meta_b))
     if shared:
         return sorted(shared)[0]
     return None
+
+
+def _checklist_metadata_index(
+    checklist: dict[str, Any],
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """``(path, name) → metadata`` over the REAL checklist shape.
+
+    ``read_checklist`` produces ``{"files": [{"path": …, "items":
+    […]}]}`` (legacy: per-file ``functions`` list) — the same walk
+    :func:`type_ref_index_from_inventory` and ``find_checklist_item``
+    (core/audit/gaps.py) use. An earlier join here expected a
+    top-level ``{"<file>:<name>": entry}`` dict that no producer
+    emits, so the enrichment never matched anything.
+
+    Checklist content is producer-controlled (understand-bridge
+    imports are LLM-written), so every level is type-validated as it
+    is read — wrong shapes contribute nothing rather than TypeError
+    the orchestrator prep that consumes the enriched functions.
+    """
+    index: dict[tuple[str, str], dict[str, Any]] = {}
+    if not isinstance(checklist, dict):
+        return index
+    files = checklist.get("files")
+    if not isinstance(files, list):
+        return index
+    for file_entry in files:
+        if not isinstance(file_entry, dict):
+            continue
+        path = file_entry.get("path")
+        if not isinstance(path, str):
+            path = ""
+        items = file_entry.get("items", file_entry.get("functions"))
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            meta = item.get("metadata")
+            if (isinstance(name, str) and name
+                    and isinstance(meta, dict) and meta):
+                meta = _validated_metadata(meta)
+                if meta:
+                    # First-wins on a duplicate (path, name) — e.g.
+                    # same-named methods of two classes in one file.
+                    # The join carries no line info to disambiguate;
+                    # a wrong ride-along only loosens filtering (the
+                    # harmless direction), never drops a function.
+                    index.setdefault((path, name), meta)
+    return index
+
+
+def _validated_metadata(meta: dict[str, Any]) -> dict[str, Any]:
+    """Shape-validate checklist metadata before it feeds the filters.
+
+    The consumers this index feeds (:func:`_signatures_compatible`,
+    :func:`_shared_decorator`, the L5 decorator pass) do len()/set()
+    work on these values with no per-function containment at the
+    orchestrator prep call, so a wrong-typed value is dropped here:
+    ``parameters`` must be a list, ``return_type`` a str,
+    ``attributes`` a list (non-str members dropped). Unrecognized
+    keys pass through untouched.
+    """
+    cleaned = dict(meta)
+    params = cleaned.get("parameters")
+    if params is not None and not isinstance(params, list):
+        del cleaned["parameters"]
+    return_type = cleaned.get("return_type")
+    if return_type is not None and not isinstance(return_type, str):
+        del cleaned["return_type"]
+    attrs = cleaned.get("attributes")
+    if attrs is not None:
+        if isinstance(attrs, list):
+            cleaned["attributes"] = [
+                a for a in attrs if isinstance(a, str)
+            ]
+        else:
+            del cleaned["attributes"]
+    return cleaned
+
+
+def _enrich_from_index(
+    func: dict[str, Any],
+    meta_index: dict[tuple[str, str], dict[str, Any]],
+) -> dict[str, Any]:
+    """Attach checklist metadata to *func* (copy) when it has none."""
+    if func.get("metadata"):
+        return func
+    meta = meta_index.get((func.get("file", ""), func.get("name", "")))
+    if meta:
+        return {**func, "metadata": meta}
+    return func
 
 
 def _verb_prefix_groups(
@@ -859,19 +1005,8 @@ def _verb_prefix_groups(
     if not functions:
         return []
 
-    cl_entries = checklist.get("functions", checklist) if checklist else {}
-    if isinstance(cl_entries, list):
-        cl_entries = {}
-
-    def _enrich(func: dict[str, Any]) -> dict[str, Any]:
-        """Attach metadata from checklist if available."""
-        if func.get("metadata"):
-            return func
-        key = f"{func.get('file', '')}:{func.get('name', '')}"
-        entry = cl_entries.get(key, {})
-        if isinstance(entry, dict) and entry.get("metadata"):
-            return {**func, "metadata": entry["metadata"]}
-        return func
+    meta_index = (_checklist_metadata_index(checklist)
+                  if checklist else {})
 
     # First pass: decorator-based groups per directory
     decorator_groups: list[SiblingGroup] = []
@@ -879,7 +1014,7 @@ def _verb_prefix_groups(
 
     dir_funcs: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for f in functions:
-        enriched = _enrich(f)
+        enriched = _enrich_from_index(f, meta_index)
         d = _func_directory(enriched)
         dir_funcs[d].append(enriched)
 
@@ -887,7 +1022,10 @@ def _verb_prefix_groups(
         deco_to_funcs: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for f in dir_members:
             meta = f.get("metadata", {}) or {}
-            for attr in meta.get("attributes", []):
+            # Base names (see _decorator_base): arg-carrying route
+            # decorators must land in ONE bucket per callable, and
+            # _decorator_bases type-validates as it reads.
+            for attr in _decorator_bases(meta):
                 deco_to_funcs[attr].append(f)
 
         for deco, members in deco_to_funcs.items():

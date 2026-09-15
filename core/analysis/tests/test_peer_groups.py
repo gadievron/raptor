@@ -3,6 +3,8 @@
 import os
 import subprocess
 import sys
+
+import pytest
 from dataclasses import dataclass, field
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -537,6 +539,205 @@ class TestVerbPrefixGroups:
         assert len(db_verb) == 1
         db_names = {s.function for s in db_verb[0].siblings}
         assert db_names == {"handle_get", "handle_post"}
+
+
+# ── Checklist metadata join ──────────────────────────────────────────
+
+
+class TestChecklistMetadataJoin:
+    """The checklist join walks the REAL ``read_checklist`` shape
+    (``{"files": [{"path": …, "items": […]}]}``; legacy per-file
+    ``functions`` list) and enriches caller-stripped function dicts —
+    the production callers pass name/file/line only. An earlier join
+    keyed on a top-level ``"<file>:<name>"`` dict no producer emits,
+    leaving the decorator pass and all signature filtering inert."""
+
+    # Attributes carry the REAL extractor shape (ast.unparse of the
+    # decorator expression) — arg-carrying route decorators, not the
+    # bare callable: grouping must match on the base callable name.
+    _CHECKLIST = {
+        "files": [
+            {"path": "src/app.py", "items": [
+                {"name": "index",
+                 "metadata": {"attributes": ["app.route('/')"]}},
+                {"name": "login",
+                 "metadata": {"attributes": [
+                     "app.route('/login', methods=['POST'])"]}},
+            ]},
+            {"path": "src/h.c", "items": [
+                {"name": "handle_get",
+                 "metadata": {"parameters": [["req", "Request"]],
+                              "return_type": "Response"}},
+                {"name": "handle_post",
+                 "metadata": {"parameters": [["req", "Request"]],
+                              "return_type": "Response"}},
+                {"name": "handle_shutdown",
+                 "metadata": {"parameters": [],
+                              "return_type": "None"}},
+            ]},
+        ],
+    }
+
+    @staticmethod
+    def _stripped(name: str, file: str) -> dict:
+        # The orchestrator's gap_func_dicts shape: no metadata key.
+        return {"name": name, "file": file, "line": 1, "source": ""}
+
+    def test_decorator_group_forms_from_real_checklist_shape(self):
+        funcs = [self._stripped("index", "src/app.py"),
+                 self._stripped("login", "src/app.py")]
+        groups = resolve_peer_groups(funcs, checklist=self._CHECKLIST)
+        deco = [g for g in groups if "decorator" in g.group_id]
+        assert len(deco) == 1
+        assert {s.function for s in deco[0].siblings} == {"index", "login"}
+
+    def test_no_checklist_no_decorator_group(self):
+        # Control: the join (not something else) does the work.
+        funcs = [self._stripped("index", "src/app.py"),
+                 self._stripped("login", "src/app.py")]
+        groups = resolve_peer_groups(funcs)
+        assert [g for g in groups if "decorator" in g.group_id] == []
+
+    def test_signature_filtering_live_through_checklist(self):
+        funcs = [self._stripped("handle_get", "src/h.c"),
+                 self._stripped("handle_post", "src/h.c"),
+                 self._stripped("handle_shutdown", "src/h.c")]
+        groups = resolve_peer_groups(funcs, checklist=self._CHECKLIST)
+        verb = [g for g in groups if "verb" in g.group_id]
+        assert len(verb) == 1
+        names = {s.function for s in verb[0].siblings}
+        # Without the join every signature reads empty → always
+        # compatible → handle_shutdown rides along.
+        assert names == {"handle_get", "handle_post"}
+
+    def test_legacy_per_file_functions_list_joins(self):
+        legacy = {"files": [{"path": "src/app.py", "functions": [
+            {"name": "index",
+             "metadata": {"attributes": ["app.route"]}},
+            {"name": "login",
+             "metadata": {"attributes": ["app.route"]}},
+        ]}]}
+        funcs = [self._stripped("index", "src/app.py"),
+                 self._stripped("login", "src/app.py")]
+        groups = resolve_peer_groups(funcs, checklist=legacy)
+        assert [g for g in groups if "decorator" in g.group_id]
+
+    def test_existing_metadata_not_overwritten(self):
+        funcs = [
+            {"name": "index", "file": "src/app.py", "line": 1,
+             "metadata": {"attributes": ["own.deco"]}},
+            {"name": "login", "file": "src/app.py", "line": 5,
+             "metadata": {"attributes": ["own.deco"]}},
+        ]
+        groups = resolve_peer_groups(funcs, checklist=self._CHECKLIST)
+        deco = [g for g in groups if "decorator" in g.group_id]
+        assert len(deco) == 1
+        assert "own.deco" in deco[0].group_id
+
+    def test_arg_carrying_decorators_group_on_base_name(self):
+        # The extractor records the decorator verbatim, so two routes
+        # differ in the argument list — the group identity is the base
+        # callable, and the group id carries it.
+        funcs = [self._stripped("index", "src/app.py"),
+                 self._stripped("login", "src/app.py")]
+        groups = resolve_peer_groups(funcs, checklist=self._CHECKLIST)
+        deco = [g for g in groups if "decorator" in g.group_id]
+        assert len(deco) == 1
+        assert deco[0].group_id.endswith("app.route")
+
+    def test_unrelated_decorators_do_not_group(self):
+        checklist = {"files": [{"path": "src/app.py", "items": [
+            {"name": "index",
+             "metadata": {"attributes": ["app.route('/')"]}},
+            {"name": "worker",
+             "metadata": {"attributes": ["celery.task(bind=True)"]}},
+        ]}]}
+        funcs = [self._stripped("index", "src/app.py"),
+                 self._stripped("worker", "src/app.py")]
+        groups = resolve_peer_groups(funcs, checklist=checklist)
+        assert [g for g in groups if "decorator" in g.group_id] == []
+
+
+class TestChecklistMetadataPoisonedShapes:
+    """Checklist metadata is producer-controlled (understand-bridge
+    imports are LLM-written): wrong-typed values must be dropped at
+    the index — the filters they feed do len()/set() work with no
+    per-function containment at the orchestrator prep call."""
+
+    @staticmethod
+    def _stripped(name: str, file: str) -> dict:
+        return {"name": name, "file": file, "line": 1, "source": ""}
+
+    @staticmethod
+    def _checklist_with_meta(meta_a: dict, meta_b: dict) -> dict:
+        return {"files": [{"path": "src/h.c", "items": [
+            {"name": "handle_get", "metadata": meta_a},
+            {"name": "handle_post", "metadata": meta_b},
+        ]}]}
+
+    _POISONED_METADATA = [
+        {"attributes": [["deco"]]},
+        {"attributes": "deco"},
+        {"attributes": 42},
+        {"attributes": [None, 7, {"k": "v"}]},
+        {"parameters": 42},
+        {"parameters": "int a, int b"},
+        {"parameters": {"a": "int"}},
+        {"return_type": ["Response"]},
+        {"return_type": 0},
+        {"attributes": [["x"]], "parameters": 42, "return_type": []},
+    ]
+
+    @pytest.mark.parametrize("bad_meta", _POISONED_METADATA)
+    def test_poisoned_metadata_never_raises(self, bad_meta):
+        funcs = [self._stripped("handle_get", "src/h.c"),
+                 self._stripped("handle_post", "src/h.c")]
+        checklist = self._checklist_with_meta(
+            bad_meta, {"parameters": [["req", "Request"]]},
+        )
+        groups = resolve_peer_groups(funcs, checklist=checklist)
+        assert isinstance(groups, list)
+
+    def test_poisoned_file_and_item_levels_never_raise(self):
+        funcs = [self._stripped("handle_get", "src/h.c"),
+                 self._stripped("handle_post", "src/h.c")]
+        for checklist in (
+            {"files": 42},
+            {"files": ["src/h.c"]},
+            {"files": [{"path": ["src"], "items": [
+                {"name": "handle_get", "metadata": {"return_type": "R"}},
+            ]}]},
+            {"files": [{"path": "src/h.c", "items": 42}]},
+            {"files": [{"path": "src/h.c", "items": None}]},
+            {"files": [{"path": "src/h.c",
+                        "items": ["handle_get", 7, None]}]},
+        ):
+            groups = resolve_peer_groups(funcs, checklist=checklist)
+            assert isinstance(groups, list)
+
+    def test_valid_fields_survive_next_to_poisoned_ones(self):
+        # Field-granular drop: the bad attributes value goes, the good
+        # parameters/return_type still filter.
+        checklist = {"files": [{"path": "src/h.c", "items": [
+            {"name": "handle_get",
+             "metadata": {"attributes": 42,
+                          "parameters": [["req", "Request"]],
+                          "return_type": "Response"}},
+            {"name": "handle_post",
+             "metadata": {"attributes": 42,
+                          "parameters": [["req", "Request"]],
+                          "return_type": "Response"}},
+            {"name": "handle_shutdown",
+             "metadata": {"parameters": [], "return_type": "None"}},
+        ]}]}
+        funcs = [self._stripped("handle_get", "src/h.c"),
+                 self._stripped("handle_post", "src/h.c"),
+                 self._stripped("handle_shutdown", "src/h.c")]
+        groups = resolve_peer_groups(funcs, checklist=checklist)
+        verb = [g for g in groups if "verb" in g.group_id]
+        assert len(verb) == 1
+        assert ({s.function for s in verb[0].siblings}
+                == {"handle_get", "handle_post"})
 
 
 # ── L6: Paired operations ────────────────────────────────────────────
