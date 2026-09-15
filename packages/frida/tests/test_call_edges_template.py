@@ -3,11 +3,13 @@ flush mechanism it depends on."""
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from core.testing.wallclock import check_wall_deadline
 from packages.frida import runner as runner_module
 from packages.frida.runner import (
     RunConfig,
@@ -180,10 +182,16 @@ class TestBoundedFridaCalls:
         monkeypatch.setattr(runner_module, "_FLUSH_RPC_TIMEOUT_S", 0.5)
 
         calls = {"n": 0}
+        # Event-parked wedge, released after the run: a plain
+        # sleep(10) left every abandoned flush thread wedged past the
+        # test, and its duration doubled as the regression bound —
+        # coupling the assert window to the leak. The 120s park sits
+        # far past the assert bound below.
+        wedge_release = threading.Event()
 
         def _wedge():
             calls["n"] += 1
-            time.sleep(10)
+            wedge_release.wait(timeout=120)
 
         script = _FlushScript()
         script.exports_sync = SimpleNamespace(flush=_wedge)
@@ -193,14 +201,20 @@ class TestBoundedFridaCalls:
         cfg = self._cfg(tmp_path)
         cfg.duration_sec = 0.3
         start = time.monotonic()
-        result = run(cfg, frida_mod_override=fake)
+        try:
+            result = run(cfg, frida_mod_override=fake)
+        finally:
+            wedge_release.set()
         elapsed = time.monotonic() - start
         assert result.ok
         # Bounded attempts (one cap each), latched after two
         # consecutive wedges; the teardown flush always gets its shot
-        # — never one full stall per cycle, never a 10s hang.
+        # — never one full stall per cycle, never a wedge-length hang.
         assert calls["n"] <= 3
-        assert elapsed < 8
+        check_wall_deadline(
+            elapsed, 30.0, code_bound_s=120.0,
+            what="run with wedged flushes (0.5s caps)",
+        )
         assert json.loads(
             (tmp_path / "metadata.json").read_text())["ok"] is True
 
@@ -209,22 +223,33 @@ class TestBoundedFridaCalls:
         import json
         import time
 
+        wedge_release = threading.Event()
+
         class _WedgedLoadScript:
             def on(self, _e, _c):
                 pass
 
             def load(self):
-                time.sleep(60)
+                wedge_release.wait(timeout=300)
 
         device = _Device(_WedgedLoadScript())
         fake = SimpleNamespace(__version__="t",
                                get_local_device=lambda: device)
         start = time.monotonic()
-        result = run(self._cfg(tmp_path), frida_mod_override=fake)
+        try:
+            result = run(self._cfg(tmp_path), frida_mod_override=fake)
+        finally:
+            wedge_release.set()
         elapsed = time.monotonic() - start
         assert not result.ok
         assert "load" in (result.error or "")
-        assert elapsed < 45
+        # Healthy path waits out the real 30s load cap; the 300s
+        # wedge park keeps the "cap gone" regression unmistakably
+        # past the assert bound even under heavy load.
+        check_wall_deadline(
+            elapsed, 90.0, code_bound_s=300.0,
+            what="run with a wedged script load (30s cap)",
+        )
         # The evidence contract survives even a load wedge.
         assert json.loads(
             (tmp_path / "metadata.json").read_text())["ok"] is False

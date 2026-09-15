@@ -560,7 +560,11 @@ def test_fast_setup_reports_small_setup_sec(tmp_path: Path):
     )
     result = runner.run(cfg, frida_mod_override=fake)
     assert result.ok is True
-    assert result.setup_sec < 0.5
+    # Sanity ceiling only: with all-fake devices setup is ~ms, and
+    # the semantics of what setup_sec measures are pinned by the
+    # slow-setup companion above. 5s absorbs a loaded runner's stall
+    # where the old 0.5s bound false-failed on one deschedule.
+    assert result.setup_sec < 5.0
     assert result.duration_actual_sec >= 0.05
 
 
