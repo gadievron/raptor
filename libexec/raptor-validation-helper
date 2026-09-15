@@ -703,14 +703,21 @@ def _build_standalone_pocs(target, build_dir):
             else:
                 result = _sp.run(cmd, capture_output=True, text=True, timeout=30,
                                 check=False, env=_safe_env)
+            # Compiler stderr quotes target-source bytes and the file
+            # names are target-derived — escape before the terminal.
+            from core.security.log_sanitisation import sanitise_for_terminal as _sft
             if result.returncode == 0:
-                print(f"  Built: {source.name} -> {output.name}")
+                print(f"  Built: {_sft(source.name, max_len=120)} -> "
+                      f"{_sft(output.name, max_len=120)}")
                 if result.stderr.strip():
                     for line in result.stderr.strip().splitlines()[:5]:
-                        print(f"    warning: {line}", file=sys.stderr)
+                        print(f"    warning: {_sft(line, max_len=200)}",
+                              file=sys.stderr)
                 built += 1
             else:
-                print(f"  Build failed: {source.name} ({result.stderr.strip()[:80]})", file=sys.stderr)
+                print(f"  Build failed: {_sft(source.name, max_len=120)} "
+                      f"({_sft(result.stderr.strip(), max_len=80)})",
+                      file=sys.stderr)
 
     if built:
         print(f"PoC binaries: {built}/{len(sources)} in {build_dir}")
@@ -736,8 +743,12 @@ def prepare_A(workdir, target=None):
     priority_targets = checklist.get("priority_targets", [])
     if priority_targets:
         print(f"Priority targets from /understand: {len(priority_targets)} unchecked flows")
+        from core.security.log_sanitisation import sanitise_for_terminal as _sft
         for pt in priority_targets:
-            print(f"  {pt.get('entry_point')} → {pt.get('sink')}: {pt.get('missing_boundary')}")
+            # Bridge fields are LLM-authored (/understand output).
+            print(f"  {_sft(str(pt.get('entry_point')), max_len=120)} → "
+                  f"{_sft(str(pt.get('sink')), max_len=120)}: "
+                  f"{_sft(str(pt.get('missing_boundary')), max_len=200)}")
 
     # Surface prior SAGE validation memories (stage-0 recall dump).
     # Hint-only priors per core.sage.hooks.recall_context_for_validation:
@@ -757,10 +768,13 @@ def prepare_A(workdir, target=None):
             f"({len(verified)} MAC-verified) — hint-only, re-verify "
             f"against current code"
         )
+        from core.security.log_sanitisation import sanitise_for_terminal as _sft
         for row in verified[:8]:
+            # MAC verification proves provenance, not byte hygiene —
+            # stored memories quote analysed-target text.
             content = " ".join(str(row.get("content", "")).split())[:160]
             if content:
-                print(f"  [prior] {content}")
+                print(f"  [prior] {_sft(content, max_len=200)}")
 
     # Discover existing binaries and build PoCs for standalone C files
     if target:

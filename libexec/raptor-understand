@@ -692,8 +692,11 @@ def _print_summary(payload: dict, output_path: Path) -> None:
         for m in failed:
             err = errors.get(m)
             if err:
-                # Truncate so a giant traceback doesn't fill the screen
-                print(f"  {m}: {err[:200]}{'...' if len(err) > 200 else ''}", file=sys.stderr)
+                # Truncate AND escape — model error text can relay
+                # response excerpts with terminal controls.
+                from core.security.log_sanitisation import sanitise_for_terminal
+                print(f"  {m}: {sanitise_for_terminal(str(err), max_len=200)}",
+                      file=sys.stderr)
 
     total_cost = payload.get("total_cost_usd") or 0.0
     if total_cost > 0:
@@ -707,8 +710,13 @@ def _print_summary(payload: dict, output_path: Path) -> None:
             print(f"Cost: ${total_cost:.4f}")
     if summary:
         # Generic summary print — keys vary by adapter
+        from core.security.log_sanitisation import sanitise_for_terminal
         keys = sorted(k for k in summary if k not in ("models",))
-        parts = [f"{k}={summary[k]}" for k in keys]
+        parts = [
+            f"{sanitise_for_terminal(str(k), max_len=48)}="
+            f"{sanitise_for_terminal(str(summary[k]), max_len=64)}"
+            for k in keys
+        ]
         if parts:
             print(f"Summary: {' | '.join(parts)}")
     print(f"Output: {output_path}")

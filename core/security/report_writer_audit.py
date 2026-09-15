@@ -113,6 +113,10 @@ _SANITISERS = frozenset({
     "sanitise_string",
     "sanitise_code",
     "sanitise_for_terminal",
+    # Conventional local alias for sanitise_for_terminal
+    # (`from core.security.log_sanitisation import sanitise_for_terminal
+    # as _sft`) — same discipline as the _line/_cell helper names.
+    "_sft",
     # Per-module single-line / cell / prose helpers built on the above.
     # exploitability_validation.report's shared helpers (sanitise_line
     # wraps sanitise_string; sanitise_cell adds pipe-escaping on top).
@@ -211,6 +215,9 @@ _REPORT_WRITER_FILES = (
     "libexec/raptor-audit",
     "libexec/raptor-review",
     "libexec/raptor-study-loop",
+    "libexec/raptor-synthesise-checker",
+    "libexec/raptor-understand",
+    "libexec/raptor-validation-helper",
     "libexec/raptor-annotate",
     "libexec/raptor-coverage-summary",
     "libexec/raptor-llm-ask",
@@ -392,6 +399,63 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
             "cost is float()-coerced LLM-call cost telemetry "
             "(getattr(response, 'cost')), rendered as $%.4f — the "
             "taint chains through the response object, not text"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-synthesise-checker",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="seed",
+        audit_note=(
+            "only seed.line_start/line_end (argparse ints) print via "
+            "the tainted name; seed.file/seed.function are wrapped in "
+            "_sft on the same line — taint chains through the SeedBug "
+            "constructor's reasoning kwarg"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-synthesise-checker",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="result",
+        audit_note=(
+            "only result.rule_path (RAPTOR-constructed path), "
+            "positive_control (bool), len(result.matches), and "
+            "result.capped (bool) print via the tainted name; every "
+            "text field is _sft-wrapped — taint chains through the "
+            "synthesis call's seed argument"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-synthesise-checker",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="cap",
+        audit_note=(
+            "cap is one of two constant strings ('' / ' (capped)'); "
+            "the taint is the IfExp condition reading result.capped"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-synthesise-checker",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="m",
+        audit_note=(
+            "only m.line (int) prints via the tainted name; m.file and "
+            "the snippet lines are _sft-wrapped on the same lines"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-understand",
+        func_name="_print_summary",
+        kind="unsanitised_llm_value",
+        detail="parts",
+        audit_note=(
+            "every element of parts is built from two "
+            "sanitise_for_terminal calls; the taint is the "
+            "comprehension's iterable (summary keys), not the "
+            "rendered values"
         ),
     ),
     AllowlistEntry(

@@ -46,7 +46,7 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
-from core.json import dumps_display, load_json  # noqa: E402
+from core.json import load_json  # noqa: E402
 from core.security.log_sanitisation import escape_nonprintable  # noqa: E402
 
 # --json-schema files are small hand-written schemas.
@@ -250,10 +250,18 @@ def main() -> int:
                 system_prompt=system_prompt,
                 **kwargs,
             )
+            # ensure_ascii: JSON escapes C0 but passes C1 controls
+            # (U+0080-U+009F, incl. single-byte CSI/OSC) through raw
+            # when ensure_ascii is off — dumps_display is exactly that.
+            # ASCII-encode so the structured lane cannot carry live
+            # terminal controls either.
+            import json as _json
             if args.raw:
-                print(dumps_display(response.result, indent=None))
+                print(_json.dumps(response.result, ensure_ascii=True,
+                                  default=str))
             else:
-                print(dumps_display(response.result, indent=2))
+                print(_json.dumps(response.result, indent=2,
+                                  ensure_ascii=True, default=str))
             if args.debug:
                 print(f"\n--- model={response.model} "
                       f"cost=${response.cost:.4f} ---",
@@ -265,9 +273,10 @@ def main() -> int:
                 **kwargs,
             )
             # The model can be induced (e.g. by --file context it is
-            # asked to echo) to emit terminal escape sequences; the
-            # JSON lane is safe (dumps escapes control chars), the
-            # free-text lane must scrub before hitting the terminal.
+            # asked to echo) to emit terminal escape sequences; both
+            # lanes scrub — the JSON lane via ensure_ascii above (bare
+            # dumps escapes C0 but NOT C1 controls), the free-text
+            # lane here.
             print(escape_nonprintable(response.content, preserve_newlines=True))
             if args.debug:
                 print(f"\n--- model={response.model} "

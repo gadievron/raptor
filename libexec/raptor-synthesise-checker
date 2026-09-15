@@ -31,6 +31,7 @@ if not (os.environ.get("CLAUDECODE")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 from core.json import dumps_display  # noqa: E402
+from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
 
 
 def _resolve_out_dir(out_arg: str | None,
@@ -178,8 +179,11 @@ def main() -> int:
             )
             return None
 
-    print(f"Seed: {seed.file}:{seed.line_start}-{seed.line_end} "
-          f"({seed.function})", file=sys.stderr)
+    # Seed names are target-derived; rule ids/rationale and triage
+    # statuses below are LLM-authored; snippets are target source;
+    # error strings quote engine stderr. Escape each foreign field.
+    print(f"Seed: {_sft(seed.file, max_len=200)}:{seed.line_start}-{seed.line_end} "
+          f"({_sft(seed.function, max_len=120)})", file=sys.stderr)
     print("Engine: auto-detect from file extension", file=sys.stderr)
     print(f"Mode: {'single-shot' if args.no_refine else f'refinement (up to {args.max_iterations} iterations)'}",
           file=sys.stderr)
@@ -210,15 +214,16 @@ def main() -> int:
         print("Synthesis failed: no rule passed positive control.")
         if result.errors:
             for e in result.errors:
-                print(f"  {e}")
+                print(f"  {_sft(str(e))}")
         return 1
 
-    print(f"Rule: {result.rule.rule_id} ({result.rule.engine})")
+    print(f"Rule: {_sft(result.rule.rule_id, max_len=120)} "
+          f"({_sft(result.rule.engine, max_len=32)})")
     print(f"Positive control: {'pass' if result.positive_control else 'FAIL'}")
     if result.rule_path:
         print(f"Rule file: {result.rule_path}")
     if result.rule.rationale:
-        print(f"Rationale: {result.rule.rationale}")
+        print(f"Rationale: {_sft(result.rule.rationale)}")
     print()
 
     if not result.matches:
@@ -231,18 +236,18 @@ def main() -> int:
             if result.triage:
                 for t in result.triage:
                     if t.match.file == m.file and t.match.line == m.line:
-                        triage_str = f" [{t.status}]"
+                        triage_str = f" [{_sft(str(t.status), max_len=32)}]"
                         break
-            print(f"  {m.file}:{m.line}{triage_str}")
+            print(f"  {_sft(m.file, max_len=200)}:{m.line}{triage_str}")
             if m.snippet:
                 for sl in m.snippet.splitlines()[:3]:
-                    print(f"    {sl}")
+                    print(f"    {_sft(sl, max_len=200)}")
 
     if result.errors:
         print()
         print("Notes:")
         for e in result.errors:
-            print(f"  {e}")
+            print(f"  {_sft(str(e))}")
 
     return 0
 
