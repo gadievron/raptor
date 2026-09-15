@@ -398,7 +398,10 @@ class TestCrossClassAndDepth2:
 
     def test_anonymous_subclass_never_binds(self):
         # ``new W() { ... }`` is an anonymous SUBCLASS — dispatch
-        # goes to its overrides, never to the summarised class.
+        # goes to its overrides, never to the summarised class. The
+        # builder refuses the whole method (class-like bodies are
+        # unmodellable / member-declaring), so no CFG exists to bind
+        # through — the property holds by refusal.
         src = (_IMP + "public class T {\n"
                "    public void handle(String x, "
                "java.io.PrintWriter out) {\n"
@@ -411,7 +414,10 @@ class TestCrossClassAndDepth2:
                "        public String doSomething(String p) "
                "{ return Encode.forHtml(p); }\n"
                "    }\n}\n")
-        assert not self._bindings(src, (3, 5))
+        cfg = build_java_intraproc_cfg(src, "handle", line_hint=(3, 5))
+        assert cfg is None, (
+            "anonymous-class-carrying method must refuse the build"
+        )
 
     def test_instance_state_body_refuses(self):
         # Cross-class instance bodies obey the strict state rule: a
