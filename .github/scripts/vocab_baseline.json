@@ -2085,6 +2085,11 @@
     "count": 11,
     "kind": "literal"
   },
+  "packages/exploit_feasibility/primitives.py::_VULN_NODE_ALIASES": {
+    "count": 11,
+    "kind": "literal",
+    "note": "closed join contract, not a learned vocabulary: producer vuln_type spellings (VulnerabilityType members / get_vuln_type_for_rule outputs / ASAN taxonomy) mapped onto the PrimitiveID vulnerability nodes the dependency graph defines; closure is machine-checked by test_vuln_node_closure.py against both producer vocabularies"
+  },
   "packages/exploit_feasibility/schema.py::_DICT_SECTIONS": {
     "count": 12,
     "kind": "literal",
@@ -2358,6 +2363,11 @@
   "packages/sca/harden.py::registries": {
     "count": 10,
     "kind": "literal"
+  },
+  "packages/sca/llm/registry_view.py::RENDERED_KEYS": {
+    "count": 11,
+    "kind": "literal",
+    "note": "renderer key contract for the registry-metadata prompt blocks (the exact .get() vocabulary maintainer_trust/slopsquat _format_metadata read) \u2014 a producer/consumer schema manifest, not a learned name vocabulary; build_registry_view asserts its output stays inside it"
   },
   "packages/sca/llm/triage.py::keep_keys": {
     "count": 11,
