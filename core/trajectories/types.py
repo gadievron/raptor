@@ -62,6 +62,14 @@ class TrajectoryStep:
     # "zero-token turn".
     input_tokens: int = 0
     output_tokens: int = 0
+    # Indices into ``text_blocks`` whose text was injected by the
+    # tool-use loop itself (budget warnings, steering nudges) rather
+    # than authored by the user. Persisted so a future
+    # trajectory-to-Message resume bridge can rebuild the
+    # ``loop_injected`` provenance tag instead of inheriting a
+    # tag-stripped history where loop text seeds as user-authored.
+    # Empty for legacy trajectories written before this field existed.
+    loop_injected_blocks: list[int] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

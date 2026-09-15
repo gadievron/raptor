@@ -133,6 +133,27 @@ def test_serialize_truncates_long_text():
     assert "truncated" in step.text_blocks[0]
 
 
+def test_serialize_records_loop_injected_provenance():
+    """Loop-authored text blocks (budget warnings, steering nudges)
+    keep their provenance in the persisted step so a rebuilt history
+    can distinguish them from user-authored text."""
+    msgs = [Message(role="user", content=[
+        TextBlock(text="user says hello"),
+        TextBlock(text="[loop] budget warning", loop_injected=True),
+        TextBlock(text="user says more"),
+    ])]
+    [step] = serialize_messages(msgs)
+    assert step.text_blocks == [
+        "user says hello", "[loop] budget warning", "user says more",
+    ]
+    assert step.loop_injected_blocks == [1]
+
+
+def test_serialize_loop_injected_default_empty():
+    [step] = serialize_messages([_msg_assistant_text("plain")])
+    assert step.loop_injected_blocks == []
+
+
 def test_serialize_truncates_long_tool_result():
     big = "y" * (200 * 1024)
     msgs = [_msg_user_tool_result("c0", big)]

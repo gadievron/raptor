@@ -355,3 +355,123 @@ class TestSeedingProvenance:
         ]
         blocked, _ = _run_resumed_with(history, {"note": MULTIWORD})
         assert blocked == []
+
+
+# ---------------------------------------------------------------------------
+# Loop-injected user text — the loop's own nudges/steering never seed
+# in-run; resume must apply the same rule instead of reading them as
+# user-authored (in_fire_mutator text can quote tool output the in-run
+# rule refused, so seeding it launders those tokens after one resume).
+# ---------------------------------------------------------------------------
+
+
+class TestLoopInjectedSeeding:
+    def test_tagged_loop_injected_text_does_not_seed(self):
+        history = [
+            Message(role="user", content=[TextBlock(text="analyse this")]),
+            Message(role="assistant", content=[TextBlock(text="ok")]),
+            Message(role="user", content=[
+                TextBlock(text=f"steering: consider sha {SHA}",
+                          loop_injected=True),
+            ]),
+        ]
+        blocked, returned = _run_resumed(history)
+        assert len(blocked) == 1
+        assert all(r.result.is_error for r in returned)
+
+    def test_untagged_text_with_same_role_still_seeds(self):
+        # Genuine user text is untouched by the injected-block rule.
+        history = [
+            Message(role="user", content=[
+                TextBlock(text=f"please inspect sha {SHA}"),
+            ]),
+            Message(role="assistant", content=[TextBlock(text="ok")]),
+        ]
+        blocked, _ = _run_resumed(history)
+        assert blocked == []
+
+    def test_untagged_static_nudge_text_does_not_seed(self):
+        """Histories rebuilt without the tag (a consumer serialising
+        only role/text) still refuse the loop's STATIC nudge strings
+        by exact text."""
+        nudge = f"no tool call — try the sha {SHA} with use_sha"
+        events: list = []
+        submit = ToolDef(
+            name="submit",
+            description="finalise",
+            input_schema={"type": "object"},
+            handler=lambda inp: "submitted",
+        )
+        fp = _FakeProvider([
+            TurnResponse(
+                content=[ToolCall(id="c1", name="use_sha",
+                                  input={"sha": SHA})],
+                stop_reason=StopReason.NEEDS_TOOL_CALL,
+                input_tokens=1, output_tokens=1,
+            ),
+            TurnResponse(
+                content=[ToolCall(id="c2", name="submit", input={})],
+                stop_reason=StopReason.NEEDS_TOOL_CALL,
+                input_tokens=1, output_tokens=1,
+            ),
+        ])
+        loop = ToolUseLoop(
+            fp, [_use_sha_tool(), submit], events=events.append,
+            terminal_tool="submit",
+            nudge_on_no_tool_call=nudge,
+        )
+        history = [
+            Message(role="user", content=[TextBlock(text="analyse this")]),
+            Message(role="assistant", content=[TextBlock(text="prose")]),
+            Message(role="user", content=[TextBlock(text=nudge)]),
+        ]
+        loop.run_with_history(history, "continue")
+        blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
+        assert len(blocked) == 1
+
+    def test_round_trip_nudge_never_seeds(self):
+        """The loop's own persisted shape: a nudge injected in run 1
+        (tagged at append time) must not seed run 2's known_values."""
+        nudge = f"keep going — sha {SHA} might matter"
+        fp1 = _FakeProvider([
+            TurnResponse(
+                content=[TextBlock(text="thinking...")],
+                stop_reason=StopReason.COMPLETE,
+                input_tokens=1, output_tokens=1,
+            ),
+            TurnResponse(
+                content=[TextBlock(text="still thinking")],
+                stop_reason=StopReason.COMPLETE,
+                input_tokens=1, output_tokens=1,
+            ),
+        ])
+        loop1 = ToolUseLoop(
+            fp1, [_use_sha_tool()], max_iterations=2,
+            nudge_on_no_tool_call=nudge,
+        )
+        first = loop1.run("go")
+        injected = [
+            b for m in first.messages if m.role == "user"
+            for b in m.content
+            if isinstance(b, TextBlock) and b.text == nudge
+        ]
+        assert injected and all(b.loop_injected for b in injected)
+
+        events: list = []
+        fp2 = _FakeProvider([
+            TurnResponse(
+                content=[ToolCall(id="c1", name="use_sha",
+                                  input={"sha": SHA})],
+                stop_reason=StopReason.NEEDS_TOOL_CALL,
+                input_tokens=1, output_tokens=1,
+            ),
+            TurnResponse(
+                content=[TextBlock(text="done")],
+                stop_reason=StopReason.COMPLETE,
+                input_tokens=1, output_tokens=1,
+            ),
+        ])
+        loop2 = ToolUseLoop(fp2, [_use_sha_tool()], events=events.append)
+        loop2.run_with_history(list(first.messages), "continue")
+        blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
+        assert len(blocked) == 1

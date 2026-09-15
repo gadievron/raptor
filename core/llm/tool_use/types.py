@@ -159,6 +159,13 @@ class TextBlock:
     """Plain text emitted by either role."""
 
     text: str
+    # True for user-role text the LOOP itself appended (max-tokens /
+    # no-tool-call nudges, submission warnings, in-fire steering).
+    # In-run these never enter the x-source discovered-values set;
+    # the tag lets resume-time history seeding apply the same rule
+    # instead of reading them as user-authored. Additive default so
+    # provider-built and hand-built blocks are unaffected.
+    loop_injected: bool = False
 
 
 # ---------------------------------------------------------------------------

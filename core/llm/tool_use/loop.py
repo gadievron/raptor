@@ -414,7 +414,14 @@ class ToolUseLoop:
         # known_values, so seeding it here let a persisted trajectory
         # containing hallucinated or injected assistant text launder
         # undiscovered values past the pre-dispatch ToolCallBlocked
-        # gate on resume.
+        # gate on resume. The loop's OWN user-role injections
+        # (nudges, submission warnings, in-fire steering) never seed
+        # in-run either — on resume they are recognised by the
+        # ``loop_injected`` tag stamped at append time, with an
+        # exact-text fallback for the static nudges so histories
+        # rebuilt without the tag stay covered. Residual: dynamic
+        # warning/steering text in a tag-stripped rebuilt history
+        # cannot be told apart from user text.
         known_values: set[str] = set()
         if next_message:
             known_values |= _extract_tokens_from_text(next_message)
@@ -423,6 +430,12 @@ class ToolUseLoop:
                 continue
             for block in msg.content:
                 if isinstance(block, TextBlock):
+                    if (getattr(block, "loop_injected", False)
+                            or block.text == _MAX_TOKENS_NUDGE
+                            or (self._nudge_on_no_tool_call is not None
+                                and block.text
+                                == self._nudge_on_no_tool_call)):
+                        continue
                     known_values |= _extract_tokens_from_text(block.text)
                 elif isinstance(block, ToolResult) and not block.is_error:
                     # The loop persists the messages-bound tool-result
@@ -683,7 +696,8 @@ class ToolUseLoop:
                 if self._nudge_on_no_tool_call is not None:
                     messages.append(Message(
                         role="user",
-                        content=[TextBlock(text=self._nudge_on_no_tool_call)],
+                        content=[TextBlock(text=self._nudge_on_no_tool_call,
+                                           loop_injected=True)],
                     ))
                     continue
                 final_text = _join_text(response.content)
@@ -747,7 +761,8 @@ class ToolUseLoop:
                         per_turn_tokens.pop()
                     messages.append(Message(
                         role="user",
-                        content=[TextBlock(text=_MAX_TOKENS_NUDGE)],
+                        content=[TextBlock(text=_MAX_TOKENS_NUDGE,
+                                           loop_injected=True)],
                     ))
                     logger.warning(
                         "turn cut off by max_tokens_per_turn — "
@@ -1013,7 +1028,9 @@ class ToolUseLoop:
                     )
                     warning = None
                 if warning:
-                    user_content.append(TextBlock(text=warning))
+                    user_content.append(
+                        TextBlock(text=warning, loop_injected=True),
+                    )
             # In-fire mutator hook: same injection pattern as
             # submission_warning but purpose is technique-steering,
             # not budget nudging. Skipped when the terminal tool
@@ -1042,7 +1059,9 @@ class ToolUseLoop:
                     )
                     steering = None
                 if steering:
-                    user_content.append(TextBlock(text=steering))
+                    user_content.append(
+                        TextBlock(text=steering, loop_injected=True),
+                    )
             messages.append(Message(role="user", content=user_content))
 
             # ---- post-dispatch termination checks -----------------------

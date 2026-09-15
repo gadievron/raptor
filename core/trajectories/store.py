@@ -91,10 +91,17 @@ def serialize_messages(
     iteration = 0
     for msg in messages:
         text_blocks: list[str] = []
+        loop_injected_blocks: list[int] = []
         tool_calls: list[dict[str, Any]] = []
         tool_results: list[dict[str, Any]] = []
         for block in msg.content:
             if isinstance(block, TextBlock):
+                # Persist loop-injection provenance (see
+                # TrajectoryStep.loop_injected_blocks): a rebuilt
+                # history must be able to tell loop-authored text from
+                # user-authored text.
+                if getattr(block, "loop_injected", False):
+                    loop_injected_blocks.append(len(text_blocks))
                 text_blocks.append(_truncate(block.text))
             elif isinstance(block, ToolCall):
                 tool_calls.append({
@@ -123,6 +130,7 @@ def serialize_messages(
             tool_results=tool_results,
             input_tokens=int(in_tokens),
             output_tokens=int(out_tokens),
+            loop_injected_blocks=loop_injected_blocks,
         ))
         # Count iterations on assistant turns — that's "model turn N".
         if msg.role == "assistant":
