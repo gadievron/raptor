@@ -2772,3 +2772,227 @@ def test_chain_survives_unrelated_for_target():
     assert sb._python_chain_reaches_sink(
         tree, "name", 3, 7, "    return open(name)",
     ) is True
+
+
+# ---------------------------------------------------------------------------
+# Rebind-KILL binding-construct closure: constructs vs detector.
+# ---------------------------------------------------------------------------
+
+# Catalog of every Python construct that BINDS a name in the enclosing
+# scope, each spelled so that ``x`` is bound ONLY via that construct.
+# The closure test below checks each snippet two ways: CPython's own
+# ``symtable`` must agree that ``x`` is bound (guards catalog rot), and
+# ``_node_rebinds_var`` must detect it (guards detector gaps).  A new
+# binding construct added to the language shows up as a symtable
+# binding with no detector arm — the exact silent-gap this closure
+# exists to prevent.
+_BINDING_CONSTRUCT_SNIPPETS: dict[str, str] = {
+    "assign": "x = v",
+    "assign-chained": "x = y = v",
+    "assign-tuple-unpack": "a, x = v",
+    "assign-list-unpack": "[a, x] = v",
+    "assign-star-unpack": "a, *x = v",
+    "assign-nested-unpack": "(a, (b, x)) = v",
+    "aug-assign": "x = 0\nx += v",
+    "ann-assign": "x: int = v",
+    "walrus": "(x := v)",
+    "for-target": "for x in v:\n    pass",
+    "for-tuple-target": "for a, x in v:\n    pass",
+    "async-for-target": (
+        "async def _f():\n    async for x in v:\n        pass"
+    ),
+    "with-as": "with v as x:\n    pass",
+    "with-as-tuple": "with v as (a, x):\n    pass",
+    "async-with-as": (
+        "async def _f():\n    async with v as x:\n        pass"
+    ),
+    "except-as": "try:\n    pass\nexcept E as x:\n    pass",
+    "match-capture": "match v:\n    case x:\n        pass",
+    "match-as-pattern": "match v:\n    case [1] as x:\n        pass",
+    "match-or-capture": (
+        "match v:\n    case ('a', x) | ('b', x):\n        pass"
+    ),
+    "match-class-keyword-capture": (
+        "match v:\n    case C(attr=x):\n        pass"
+    ),
+    "match-class-positional-capture": (
+        "match v:\n    case C(x):\n        pass"
+    ),
+    "match-sequence-star": "match v:\n    case [1, *x]:\n        pass",
+    "match-mapping-value-capture": (
+        "match v:\n    case {'k': x}:\n        pass"
+    ),
+    "match-mapping-rest": "match v:\n    case {'k': 1, **x}:\n        pass",
+    "func-def": "def x():\n    pass",
+    "async-func-def": "async def x():\n    pass",
+    "class-def": "class x:\n    pass",
+    "import": "import x",
+    "import-dotted": "import x.sub",
+    "import-as": "import m as x",
+    "from-import": "from m import x",
+    "from-import-as": "from m import y as x",
+}
+if hasattr(__import__("ast"), "TypeAlias"):  # 3.12+
+    _BINDING_CONSTRUCT_SNIPPETS["type-alias"] = "type x = int"
+
+# Constructs that mention ``x`` in a binding-like position but do NOT
+# rebind the enclosing scope's ``x`` — the detector must stay quiet on
+# these (precision direction: a spurious kill costs yield).
+#   * del — unbinds; a later use of the name raises NameError, so no
+#     value flows to a sink through it.
+#   * comprehension targets / lambda / def parameters — bind their own
+#     scope, never the enclosing one (symtable may still report
+#     comprehension targets as enclosing-scope symbols under PEP 709
+#     inlining, which is why they are excluded from the symtable leg).
+#   * global/nonlocal — declarations; the actual binding is an
+#     Assign-family node the detector already flags on its own line.
+_NON_REBINDING_SNIPPETS: dict[str, str] = {
+    "del": "del x",
+    "subscript-mutation": "x[0] = v",
+    "attribute-mutation": "x.attr = v",
+    "comprehension-target": "[x for x in v]",
+    "genexp-target": "list(x for x in v)",
+    "lambda-param": "f = lambda x: x",
+    "def-param": "def f(x):\n    pass",
+    "global-decl": "def f():\n    global x",
+}
+
+
+def _detector_hits(src: str, var: str) -> bool:
+    import ast as _ast_mod
+    tree = _ast_mod.parse(src)
+    return any(
+        sb._node_rebinds_var(node, var) for node in _ast_mod.walk(tree)
+    )
+
+
+@pytest.mark.parametrize(
+    "construct", sorted(_BINDING_CONSTRUCT_SNIPPETS),
+)
+def test_node_rebinds_var_closure_binding_constructs(construct):
+    """Every enclosing-scope binding construct must be detected, and
+    CPython's symtable must agree the snippet binds ``x`` (so the
+    catalog itself cannot rot into exercising non-binding shapes)."""
+    import symtable
+    src = _BINDING_CONSTRUCT_SNIPPETS[construct]
+    table = symtable.symtable(src, "<closure>", "exec")
+    scopes = [table]
+    bound = False
+    while scopes:
+        scope = scopes.pop()
+        for sym in scope.get_symbols():
+            if sym.get_name() != "x":
+                continue
+            # Parameters and comprehension-scope bindings never appear
+            # here — the catalog snippets bind x at module level or in
+            # the one wrapper scope async constructs need.
+            if sym.is_assigned() or sym.is_imported() or sym.is_namespace():
+                bound = True
+        scopes.extend(
+            c for c in scope.get_children()
+            if scope.get_type() != "function" or construct.startswith("async")
+        )
+    assert bound, f"catalog rot: {construct!r} does not bind x per symtable"
+    assert _detector_hits(src, "x"), (
+        f"binding construct {construct!r} escapes _node_rebinds_var — "
+        f"rebind-KILL misses it and a validated chain would survive the "
+        f"rebind (false SOUND)"
+    )
+
+
+@pytest.mark.parametrize(
+    "construct", sorted(_BINDING_CONSTRUCT_SNIPPETS),
+)
+def test_node_rebinds_var_closure_unrelated_name_survives(construct):
+    """Two-direction: no binding construct may kill an UNRELATED name
+    (``from m import *`` excepted — it can rebind anything and is
+    deliberately flagged for every variable)."""
+    src = _BINDING_CONSTRUCT_SNIPPETS[construct]
+    assert not _detector_hits(src, "zz_unrelated")
+
+
+def test_node_rebinds_var_star_import_kills_any_name():
+    assert _detector_hits("from m import *", "anything_at_all")
+
+
+@pytest.mark.parametrize("construct", sorted(_NON_REBINDING_SNIPPETS))
+def test_node_rebinds_var_non_binding_constructs_stay_quiet(construct):
+    src = _NON_REBINDING_SNIPPETS[construct]
+    assert not _detector_hits(src, "x"), (
+        f"{construct!r} must not count as a rebind of x"
+    )
+
+
+def test_chain_kills_match_case_capture_rebind():
+    """A match-case mapping capture between validator and sink rebinds
+    the variable in the enclosing scope — the sink consumes the case
+    value, never the validated one.  Pre-fix ``_node_rebinds_var`` had
+    no match-pattern arm, so the chain survived and the Tier 0 verdict
+    suppressed a live flow (false SOUND)."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    x = request.args.get('x')\n"
+        "    if not re.fullmatch(r'[a-z]+', x):\n"     # line 3
+        "        return 'bad'\n"
+        "    match request.form:\n"
+        "        case {'override': x}:\n"              # line 6 — rebind
+        "            pass\n"
+        "    return os.system(x)\n"                     # line 8 — sink
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "x", 3, 8, "    return os.system(x)",
+    ) is False
+
+
+def test_chain_survives_match_case_unrelated_capture():
+    # Two-direction: a case pattern binding an unrelated name must not
+    # kill the validated chain.
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    x = request.args.get('x')\n"
+        "    if not re.fullmatch(r'[a-z]+', x):\n"
+        "        return 'bad'\n"
+        "    match request.form:\n"
+        "        case {'override': other}:\n"
+        "            pass\n"
+        "    return os.system(x)\n"
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "x", 3, 8, "    return os.system(x)",
+    ) is True
+
+
+def test_charset_twin_kills_match_case_capture_rebind():
+    """The charset-lane twin ``_variable_reassigned_between`` shares
+    ``_node_rebinds_var`` — the same match-capture rebind must
+    invalidate charset dominance too."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    if not re.fullmatch(r'[a-z]+', x):\n"     # line 2
+        "        return 'bad'\n"
+        "    match request.form:\n"
+        "        case {'k': x}:\n"                     # line 5
+        "            pass\n"
+        "    open(x)\n"                                 # line 7
+    )
+    assert sb._variable_reassigned_between(tree, "x", 2, 7) is True
+
+
+def test_chain_kills_import_as_rebind():
+    """``import evil as x`` between validator and sink rebinds x to a
+    module object the validator never constrained."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    x = request.args.get('x')\n"
+        "    if not re.fullmatch(r'[a-z]+', x):\n"     # line 3
+        "        return 'bad'\n"
+        "    import evil as x\n"                        # line 5
+        "    return open(x)\n"                          # line 6
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "x", 3, 6, "    return open(x)",
+    ) is False

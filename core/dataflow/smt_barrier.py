@@ -715,6 +715,11 @@ _TRY_NODES: tuple[type, ...] = (
     (ast.Try, ast.TryStar) if hasattr(ast, "TryStar") else (ast.Try,)
 )
 
+# ``type X = ...`` alias statements are 3.12+; the construct is a
+# SyntaxError on older runtimes, so ``None`` there is exhaustive
+# (same guard shape as ``_TRY_NODES``).
+_TYPE_ALIAS_NODE: type | None = getattr(ast, "TypeAlias", None)
+
 
 def _raised_exception_names(body: list) -> list[str | None]:
     """Names of the exception classes the block's top-level ``raise``
@@ -1130,12 +1135,27 @@ def _variable_reassigned_between(
       * ``for x in …:`` (For / AsyncFor)
       * ``with … as x:`` (With / AsyncWith optional_vars)
       * ``(x := …)`` (NamedExpr walrus)
+      * ``except … as x:`` (ExceptHandler, plain and ``except*``)
+      * ``case x:`` / ``case … as x`` / ``case [*x]`` / ``case {**x}``
+        (match-case capture / as / star / mapping-rest patterns — all
+        bind in the ENCLOSING scope, 3.10+)
+      * ``def x(…)`` / ``class x`` / ``type x = …`` (definition
+        statements shadow the name with a new object)
+      * ``import m as x`` / ``from m import y as x`` (and
+        ``from m import *``, which can rebind ANY name — flagged for
+        every variable, the conservative direction)
 
     Pure-mutation forms (``x[0] = …``, ``x.attr = …``) don't rebind
-    ``x`` itself and are NOT flagged.  Function/class definitions and
-    imports that happen to bind ``x`` are not flagged either — they
-    create their own scopes and very rarely appear between a fix-added
-    substitution and its sink.
+    ``x`` itself and are NOT flagged.  Also NOT flagged, each sound by
+    scope/runtime semantics rather than by rarity: ``del x`` (unbinds —
+    a later use of the name raises ``NameError``, so no value flows),
+    comprehension targets and ``lambda``/``def`` parameters (they bind
+    their own scope, never the enclosing one), and ``global`` /
+    ``nonlocal`` statements (declarations — the actual binding is an
+    Assign-family node this walk already flags).  The
+    constructs-vs-detector closure test pins this enumeration against
+    CPython's own ``symtable`` so a new binding construct cannot be
+    missed silently.
     """
     for node in ast.walk(tree):
         line = getattr(node, "lineno", None)
@@ -1171,6 +1191,33 @@ def _node_rebinds_var(node: ast.AST, var_name: str) -> bool:
     # body x IS the exception, not the sanitized value).
     if isinstance(node, ast.ExceptHandler) and node.name == var_name:
         return True
+    # match-case patterns bind names in the ENCLOSING scope (3.10+):
+    # ``case x:`` and ``case [...] as x`` (MatchAs), ``case [1, *x]``
+    # (MatchStar), ``case {..., **x}`` (MatchMapping rest).  Nested
+    # patterns (inside MatchClass / MatchSequence / MatchOr) are
+    # reached because every caller drives ``ast.walk``.  A sink
+    # consuming the case-bound value is exactly the rebind this
+    # helper exists to catch.
+    if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name == var_name:
+        return True
+    if isinstance(node, ast.MatchMapping) and node.rest == var_name:
+        return True
+    # ``import m as x`` / ``from m import y as x`` rebind x to a
+    # module/attribute object; a bare ``import a.b`` binds the top
+    # package name ``a``.  ``from m import *`` (module scope only)
+    # can rebind ANY name — flagged for every variable, the
+    # conservative (kill) direction.
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        for alias in node.names:
+            if alias.name == "*":
+                return True
+            if (alias.asname or alias.name.split(".")[0]) == var_name:
+                return True
+    # ``type x = ...`` (3.12+) binds x like a class definition.
+    if _TYPE_ALIAS_NODE is not None and isinstance(node, _TYPE_ALIAS_NODE):
+        alias_name = node.name
+        if isinstance(alias_name, ast.Name) and alias_name.id == var_name:
+            return True
     # Nested function / class definitions inside the body shadow
     # the outer name with a function/class object — rare but
     # possible in fix code.
