@@ -20,11 +20,29 @@ def extract_trace(trace_dir, steps: int=100, output_format: str="source", asan: 
         asan: True if dealing with ASAN crash
     """
     
-    # Build rr replay command
+    # Build rr replay command.  Everything after `--` is passed to
+    # the debugger: real command-line hardening flags, applied BEFORE
+    # gdb sources init files or loads any objfile.  Stdin-prepended
+    # `set auto-load no` runs too late for startup-time auto-load
+    # (gdb sources ~/.gdbinit and performs objfile auto-load —
+    # including inlined .debug_gdb_scripts Python, which bypasses the
+    # safe-path check because it is embedded, not a file — before the
+    # first stdin command executes).
+    gdb_hardening = [
+        "-nx",                                   # no HOME/cwd init files
+        "-iex", "set auto-load off",             # all auto-load kinds
+        "-iex", "set auto-load python-scripts off",
+        # Belt-and-braces: even if a later command re-enabled
+        # auto-load, no directory is trusted (/dev/null can never
+        # hold scripts).
+        "-iex", "set auto-load safe-path /dev/null",
+    ]
     cmd = ["rr", "replay"]
     if trace_dir:
         cmd.append(trace_dir)
-    
+    cmd.append("--")
+    cmd.extend(gdb_hardening)
+
     # Build gdb commands
     gdb_commands = []
     
@@ -79,44 +97,56 @@ def extract_trace(trace_dir, steps: int=100, output_format: str="source", asan: 
     gdb_batch = "\n".join(gdb_commands)
     
     # Run rr replay with gdb commands.
-    # Pre-fix the subprocess inherited the parent's full env and
-    # cwd, and gdb honoured `~/.gdbinit` (and any `.gdbinit` in
-    # the rr-trace directory's path). Three concrete failure modes:
-    #   * Parent env injection: `LD_PRELOAD` / `LD_LIBRARY_PATH` /
-    #     `PYTHONPATH` set in the operator's shell flowed into
-    #     gdb's process — gdb is a Python-extension host, so
-    #     PYTHONPATH could load attacker-controlled Python at
-    #     gdb startup.
-    #   * Cwd-relative `.gdbinit`: gdb auto-loads `.gdbinit` from
-    #     `$HOME` AND from the current directory. If the operator
-    #     ran this script from inside a target-repo checkout,
-    #     gdb auto-sourced the repo's `.gdbinit` (any `python ...`
-    #     stanza in there ran arbitrary Python under the
-    #     analyser's uid).
-    #   * `~/.gdbinit` from $HOME: same hazard but from the
-    #     operator's own home — usually safe but composable with
-    #     an attacker that can write there (compromised
-    #     account, shared host).
-    # Mitigate: use a sanitised env (no LD_*, no PYTHONPATH),
-    # explicit cwd to a known-safe location, and `-nx` /
-    # `-iex "set auto-load no"` to suppress all auto-load
-    # behaviours (init files, JIT scripts, separate-debug
-    # python).
+    #
+    # Hardening in effect (this step runs UNSANDBOXED — rr needs
+    # ptrace — so gdb's own auto-load surfaces are the containment):
+    #   * `-nx` + the `-iex` auto-load-off flags above ride the gdb
+    #     COMMAND LINE, so they apply before gdb sources any init
+    #     file and before objfile auto-load (including inlined
+    #     .debug_gdb_scripts Python from a hostile binary, which the
+    #     safe-path check alone would not stop).  A stdin-prepended
+    #     `set auto-load no` executes only after those startup steps
+    #     and is kept purely as an in-session backstop.
+    #   * Sanitised env: no LD_* / PYTHONPATH (gdb is a
+    #     Python-extension host), and HOME points at a fresh empty
+    #     directory, so no operator- or attacker-writable dotfiles
+    #     are reachable even outside `-nx`'s coverage.
+    #   * Neutral cwd: the same fresh directory — never a
+    #     target-repo checkout that could carry `.gdbinit` or
+    #     auto-loadable scripts.
+    # Residual (documented, not mitigated here): the replayed target
+    # code itself executes under this uid via rr; auto-load
+    # hardening narrows gdb's script surfaces, it does not sandbox
+    # the replay.
     try:
         # `import os` is module-level in the consumers but defensive
         # local import here keeps the script self-contained.
         import os as _os
+        import tempfile as _tempfile
+        neutral_dir = _tempfile.mkdtemp(prefix="rr-gdb-neutral-")
         safe_env = {
             k: v
             for k, v in _os.environ.items()
-            if k in ("PATH", "HOME", "USER", "TERM", "LANG", "LC_ALL")
+            if k in ("PATH", "USER", "TERM", "LANG", "LC_ALL")
         }
-        # Inject `-nx` at the start of the command so gdb skips
-        # init files. `cmd` is `["rr", "replay", ...]`; rr forwards
-        # extra args to gdb via `--`. Adding the gdb-suppression
-        # flags via `-x` is messy; rely on `set auto-load no` in
-        # the gdb-batch input itself.
-        gdb_batch_safe = "set auto-load no\nset auto-load python-scripts off\n" + gdb_batch
+        # rr stores traces under $HOME/.local/share/rr by default —
+        # keep the LOOKUP working when no trace_dir was given by
+        # pointing _RR_TRACE_DIR at the real location while HOME
+        # itself stays neutral.
+        real_home = _os.environ.get("HOME", "")
+        if real_home and "_RR_TRACE_DIR" not in _os.environ:
+            safe_env["_RR_TRACE_DIR"] = _os.path.join(
+                real_home, ".local", "share", "rr",
+            )
+        elif "_RR_TRACE_DIR" in _os.environ:
+            safe_env["_RR_TRACE_DIR"] = _os.environ["_RR_TRACE_DIR"]
+        safe_env["HOME"] = neutral_dir
+        # In-session backstop only — startup-time suppression comes
+        # from the command-line flags (see gdb_hardening above).
+        gdb_batch_safe = (
+            "set auto-load no\nset auto-load python-scripts off\n"
+            + gdb_batch
+        )
         result = subprocess.run(
             cmd,
             input=gdb_batch_safe.encode(),
@@ -124,7 +154,7 @@ def extract_trace(trace_dir, steps: int=100, output_format: str="source", asan: 
             stderr=subprocess.PIPE,
             timeout=60,
             env=safe_env,
-            cwd=_os.path.expanduser("~"),  # known-safe cwd
+            cwd=neutral_dir,  # neutral, empty — never a repo checkout
         )
         
         output = result.stdout.decode('utf-8', errors='replace')
