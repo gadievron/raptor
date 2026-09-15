@@ -1,6 +1,7 @@
 """Tests for the same-run resume substrate (core.audit.resume)."""
 
 import json
+import math
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,15 +9,19 @@ from tempfile import TemporaryDirectory
 from core.audit.resume import (
     EXHAUSTED_BUDGET_EPSILON_USD,
     RUN_CONFIG_FILENAME,
+    _MAX_SPEND_EVIDENCE_USD,
     append_resume_markers,
     booked_spend_usd,
     compute_drift,
     journal_spend_usd,
     load_prior_cost_breakdown,
     load_run_config,
+    persist_spend_floor,
     remaining_budget_usd,
+    resolve_prior_spend,
     resume_ineligibility,
     save_run_config,
+    spend_floor_usd,
 )
 from core.coverage.journal import ReviewJournalEntry, append_entry, now_iso
 
@@ -248,6 +253,45 @@ class TestBudgetMath(unittest.TestCase):
             _journal(out, "a.c", "g", cost_usd=0.35)
             _journal(out, "a.c", "h")  # no cost recorded
             self.assertAlmostEqual(journal_spend_usd(out), 0.75)
+
+    def test_spend_evidence_clamped_finite(self):
+        """All three prior-spend evidence sources are run-dir JSON
+        (attacker-writable): planted 1.6e308 journal rows summed to
+        inf, a booked inf reported the budget as exhausted on every
+        later resume, and the floor writer detonated on the encoder's
+        non-finite refusal. Every source must clamp finite —
+        overclaims high (refuse-to-spend), underclaims to $0."""
+        with TemporaryDirectory() as d:
+            out = Path(d)
+            _journal(out, "a.c", "f", cost_usd=1.6e308)
+            _journal(out, "a.c", "g", cost_usd=1.6e308)
+            total = journal_spend_usd(out)
+            self.assertTrue(math.isfinite(total))
+            booked, _ = resolve_prior_spend(out)
+            self.assertTrue(math.isfinite(booked))
+            # Persisting a non-finite figure must neither raise nor
+            # write a floor the reader cannot bound.
+            persist_spend_floor(out, float("inf"))
+            floor = spend_floor_usd(out)
+            self.assertTrue(math.isfinite(floor))
+            self.assertEqual(floor, _MAX_SPEND_EVIDENCE_USD)
+        # Ledger totals — the stdlib JSON backend parses Infinity/NaN,
+        # so these shapes reach the reader.
+        self.assertEqual(
+            booked_spend_usd({"totals": {"total_spend_usd": float("inf")}}),
+            _MAX_SPEND_EVIDENCE_USD,
+        )
+        self.assertEqual(
+            booked_spend_usd({"totals": {"total_spend_usd": float("nan")}}),
+            0.0,
+        )
+        self.assertEqual(
+            booked_spend_usd({"totals": {
+                "cost_usd": float("inf"),
+                "failed_attempts_cost_usd": 1.0,
+            }}),
+            _MAX_SPEND_EVIDENCE_USD + 1.0,
+        )
 
     def test_remaining_budget_math(self):
         self.assertIsNone(remaining_budget_usd(None, 5.0))

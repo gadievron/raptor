@@ -28,6 +28,7 @@ re-enter that run AS THE SAME RUN:
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -239,6 +240,35 @@ def load_prior_cost_breakdown(out_dir: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+#: Per-value ceiling on any single spend-evidence figure read from
+#: run-dir JSON. Orders of magnitude above any real run's spend, so it
+#: never clips genuine evidence — its job is keeping the budget math
+#: finite, not modelling budgets.
+_MAX_SPEND_EVIDENCE_USD = 1e7
+
+
+def _spend_value(value: Any) -> float | None:
+    """A finite, bounded, non-negative spend figure from run-dir JSON
+    evidence — ``None`` for non-numeric shapes.
+
+    All three prior-spend evidence sources (reconciled ledger, journal
+    ``cost_usd`` rows, ``spend-floor.json``) live inside the sandbox-
+    writable run dir. A planted ``1.6e308`` summed to ``inf``, and a
+    booked ``inf`` reported the run's budget as exhausted on every
+    later resume while the floor writer detonated on the encoder's
+    non-finite refusal. Clamps keep the fail direction refuse-to-spend
+    without granting the writer anything a plain forged number would
+    not: an overclaim (``inf``/oversize) clamps to the ceiling, an
+    underclaim (``-inf``/``NaN``/negative) clamps to $0.
+    """
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    v = float(value)
+    if not math.isfinite(v):
+        v = _MAX_SPEND_EVIDENCE_USD if v > 0 else 0.0
+    return min(max(0.0, v), _MAX_SPEND_EVIDENCE_USD)
+
+
 def booked_spend_usd(breakdown: dict[str, Any] | None) -> float:
     """Booked spend from a reconciled ledger dict.
 
@@ -253,15 +283,15 @@ def booked_spend_usd(breakdown: dict[str, Any] | None) -> float:
     if not breakdown:
         return 0.0
     totals = breakdown.get("totals") or {}
-    spend = totals.get("total_spend_usd")
-    if isinstance(spend, (int, float)) and not isinstance(spend, bool):
-        return max(0.0, float(spend))
+    spend = _spend_value(totals.get("total_spend_usd"))
+    if spend is not None:
+        return spend
     tracked = 0.0
     for key in ("cost_usd", "failed_attempts_cost_usd"):
-        v = totals.get(key)
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
-            tracked += float(v)
-    return max(0.0, tracked)
+        v = _spend_value(totals.get(key))
+        if v is not None:
+            tracked += v
+    return tracked
 
 
 def journal_spend_usd(out_dir: Path) -> float:
@@ -275,9 +305,9 @@ def journal_spend_usd(out_dir: Path) -> float:
     total = 0.0
     try:
         for entry in load_entries(Path(out_dir)):
-            cost = entry.cost_usd
-            if isinstance(cost, (int, float)) and not isinstance(cost, bool):
-                total += max(0.0, float(cost))
+            cost = _spend_value(entry.cost_usd)
+            if cost is not None:
+                total += cost
     except Exception:
         logger.debug("journal spend fallback failed", exc_info=True)
     return total
@@ -315,7 +345,10 @@ def persist_spend_floor(
     out_dir = Path(out_dir)
     if not out_dir.is_dir():
         return
-    spend_usd = max(0.0, float(spend_usd))
+    clamped = _spend_value(spend_usd)
+    if clamped is None:
+        return
+    spend_usd = clamped
     if spend_usd <= spend_floor_usd(out_dir):
         return
     payload: dict[str, Any] = {"spend_usd": round(spend_usd, 6)}
@@ -333,10 +366,8 @@ def spend_floor_usd(out_dir: Path) -> float:
     data = load_json(path, max_bytes=_RUN_CONFIG_MAX_BYTES)
     if not isinstance(data, dict):
         return 0.0
-    spend = data.get("spend_usd")
-    if isinstance(spend, (int, float)) and not isinstance(spend, bool):
-        return max(0.0, float(spend))
-    return 0.0
+    spend = _spend_value(data.get("spend_usd"))
+    return 0.0 if spend is None else spend
 
 
 def resolve_prior_spend(out_dir: Path) -> tuple[float, str]:
