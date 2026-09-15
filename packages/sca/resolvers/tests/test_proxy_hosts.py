@@ -100,6 +100,28 @@ def test_per_tool_override_independence(override_config):
     assert npm_hosts == ["registry.npmjs.org"]   # default
 
 
+def test_empty_override_is_deny_all_not_default(override_config):
+    """{"pip": []} is an explicit operator deny-all for the tool.
+    Pre-fix the loader collapsed an empty (or fully-sanitised-away)
+    list to None, silently re-granting the public default registry
+    hosts the operator just denied — the exact inversion the cc
+    sibling loader was fixed for. Deny-all is encoded loopback-only
+    because the sandbox rejects an empty proxy allowlist (and the
+    CONNECT proxy refuses loopback targets by design)."""
+    override_config({"pip": []})
+    hosts = _proxy_hosts.proxy_hosts_for_pip()
+    assert hosts == ["127.0.0.1", "localhost"]
+    assert "pypi.org" not in hosts
+
+
+def test_override_sanitised_to_empty_still_deny_all(override_config):
+    # All entries invalid → configured-but-empty, same deny-all.
+    override_config({"npm": [123, "", None]})
+    hosts = _proxy_hosts.proxy_hosts_for_npm()
+    assert hosts == ["127.0.0.1", "localhost"]
+    assert "registry.npmjs.org" not in hosts
+
+
 def test_override_dedupes_and_strips_garbage(override_config):
     """Override config is hand-edited; tolerate duplicates and
     non-string entries silently."""

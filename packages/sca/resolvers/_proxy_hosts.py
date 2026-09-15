@@ -175,6 +175,14 @@ _YARN_ENV_KEYS: tuple[str, ...] = (
 )
 
 
+# Deny-all encoding: the sandbox requires a non-empty proxy
+# allowlist, and the CONNECT proxy rejects loopback targets by
+# design — so a loopback-only allowlist is an effective deny-all
+# chokepoint for every remote host (same encoding cc_proxy_hosts
+# uses for its credential-proxy and operator-deny-all modes).
+_LOOPBACK_ONLY_HOSTS: tuple[str, ...] = ("127.0.0.1", "localhost")
+
+
 # Per-process memoisation. Calibration is sha-keyed on disk; without
 # this in-memory layer, every resolver subprocess in a scan would
 # stat the cache file independently. Keyed on (binary path, env-key
@@ -215,7 +223,12 @@ def _load_override(tool: str) -> list | None:
         if isinstance(h, str) and h and h not in seen:
             seen.add(h)
             result.append(h)
-    return result or None
+    # A configured list is honoured, including when it sanitises
+    # to empty: {"pip": []} is an explicit operator deny-all for
+    # that tool. Collapsing it to None silently re-granted the
+    # public default registry hosts the operator just denied (the
+    # exact inversion the cc sibling was fixed for).
+    return result
 
 
 def _resolve_bin(name: str) -> str | None:
@@ -313,6 +326,14 @@ def _resolve(
     """
     override = _load_override(tool)
     if override is not None:
+        if not override:
+            # Explicit operator deny-all ({"<tool>": []}). The
+            # sandbox rejects an empty proxy allowlist outright, so
+            # deny-all is encoded as loopback-only — the CONNECT
+            # proxy refuses loopback targets by design, leaving
+            # every remote registry denied at the chokepoint (same
+            # encoding cc_proxy_hosts uses).
+            return list(_LOOPBACK_ONLY_HOSTS)
         return override
 
     bin_path = _resolve_bin(bin_name)
