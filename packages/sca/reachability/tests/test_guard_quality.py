@@ -5,8 +5,8 @@ import pytest
 from packages.sca.reachability.guard_quality import (
     CallSiteGuardAnalysis,
     GuardQualityResult,
-    _parse_evidence,
     analyze_call_site_guards,
+    parse_evidence_entry,
 )
 from packages.sca.models import Confidence, Reachability
 
@@ -17,27 +17,31 @@ from packages.sca.models import Confidence, Reachability
 
 
 class TestParseEvidence:
+    """guard_quality uses the SHARED evidence parser (malformed
+    inputs read ``(None, 0)``); the private copy it replaced used a
+    drifted ``(None, None)`` convention."""
+
     def test_simple(self):
-        path, line = _parse_evidence("src/app.py:42")
+        path, line = parse_evidence_entry("src/app.py:42")
         assert path == "src/app.py"
         assert line == 42
 
     def test_nested_path(self):
-        path, line = _parse_evidence("src/auth/login.py:10")
+        path, line = parse_evidence_entry("src/auth/login.py:10")
         assert path == "src/auth/login.py"
         assert line == 10
 
     def test_no_colon(self):
-        assert _parse_evidence("nocolon") == (None, None)
+        assert parse_evidence_entry("nocolon")[0] is None
 
     def test_non_numeric_line(self):
-        assert _parse_evidence("file.py:abc") == (None, None)
+        assert parse_evidence_entry("file.py:abc")[0] is None
 
     def test_empty(self):
-        assert _parse_evidence("") == (None, None)
+        assert parse_evidence_entry("")[0] is None
 
     def test_colon_at_start(self):
-        assert _parse_evidence(":42") == (None, None)
+        assert parse_evidence_entry(":42")[0] is None
 
 
 # ---------------------------------------------------------------------------

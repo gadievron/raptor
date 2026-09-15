@@ -24,6 +24,12 @@ from ..parsers import _safe_read
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
+# Shared ``path:line`` evidence parser — re-exported by
+# ``_host_reachability`` for exactly this purpose; a private
+# near-identical copy here drifted on the malformed-input
+# convention.
+from ._host_reachability import parse_evidence_entry
+
 
 if TYPE_CHECKING:
     from ..models import Reachability
@@ -185,8 +191,8 @@ def _analyze_dep_call_sites(
     source_cache: dict[str, str] = {}
 
     for entry in evidence[:10]:
-        path, line = _parse_evidence(entry)
-        if path is None or line is None:
+        path, line = parse_evidence_entry(entry)
+        if path is None:
             continue
 
         source_path = target / path
@@ -311,21 +317,6 @@ def _enrich_cpg(
             "cpg_verified": cr.verified_relevant,
             "data_dep_bound": cr.data_dep_bound,
         } for cr in cpg_results)
-
-
-def _parse_evidence(entry: str) -> tuple:
-    """Parse a ``path:line`` evidence string.
-
-    Uses rfind to handle paths containing colons (Windows drive
-    letters, though uncommon in this context).
-    """
-    idx = entry.rfind(":")
-    if idx <= 0:
-        return None, None
-    try:
-        return entry[:idx], int(entry[idx + 1:])
-    except ValueError:
-        return None, None
 
 
 __all__ = [
