@@ -1,4 +1,4 @@
-"""Sanitized source views — comments and string literals blanked.
+"""Sanitized source views — comments, strings, and dead regions blanked.
 
 Lexical checkers that regex raw source treat prose as code: a comment
 that merely MENTIONS a sink ("/* do not use memcpy here */") satisfies
@@ -13,6 +13,17 @@ newlines preserved (line numbers stay valid), blanked spans replaced
 with spaces.  Language is chosen from the file extension; unknown
 extensions get the C-family scanner (its comment/string forms are the
 common denominator for C/C++/Java/Go/Rust/JS/TS).
+
+The C-family scanner also blanks the two preprocessor-dead channels
+with the same one-planted-line attacker capability as a comment:
+``#if 0 … #endif`` regions (whole-condition constant-zero spellings
+only — ``0``/``(0)``/``0x0``/``0L``/``00`` are dead in every build;
+any macro-bearing condition, including a zero prefix like
+``#if 0 || FOO``, is build-dependent and not judged here — that
+residual is documented, not covered) and backslash-line-continued
+``//`` comments
+(splicing happens before comment recognition, so the continued line
+is comment text to the compiler).
 """
 
 from __future__ import annotations
@@ -73,17 +84,86 @@ def sanitized_view(
         lang = language.lower()
         if lang in _HASH_COMMENT_LANGS:
             return _strip_python_like(source)
-        return _strip_c_family(
+        return _blank_if0_regions(_strip_c_family(
             source, backtick_strings=lang in _BACKTICK_LANGS,
             single_quote_strings=lang in _SQ_STRING_LANGS,
-        )
+        ))
     lower = (file_path or "").lower()
     if lower.endswith(_HASH_COMMENT_EXTS):
         return _strip_python_like(source)
-    return _strip_c_family(
+    return _blank_if0_regions(_strip_c_family(
         source, backtick_strings=lower.endswith(_BACKTICK_EXTS),
         single_quote_strings=lower.endswith(_SQ_STRING_EXTS),
-    )
+    ))
+
+
+# Preprocessor-dead region detection. Runs on the comment/string-
+# blanked view, so a ``#if 0`` inside a comment or string is already
+# spaces and never triggers.
+#
+# Always-dead conditions are matched CONSTANT-ONLY with the whole
+# condition anchored: every zero spelling (``0``, ``(0)``, ``0x0``,
+# ``0L``, ``00``, ``0u``, nested parens) is unconditionally dead in
+# every build, while any macro-bearing condition — including a zero
+# PREFIX like ``#if 0 || FOO``, which is LIVE when FOO is truthy —
+# is refused (build-dependent truth is not judged here).
+_PP_IF_COND_RE = re.compile(r"^[ \t]*#[ \t]*if\b(?P<cond>.*)$")
+_PP_ALWAYS_DEAD_COND_RE = re.compile(
+    r"[ \t(]*0+(?:[xX]0+)?[uUlL]*[ \t)]*"
+)
+_PP_IF_RE = re.compile(r"^[ \t]*#[ \t]*(?:if|ifdef|ifndef)\b")
+_PP_ENDIF_RE = re.compile(r"^[ \t]*#[ \t]*endif\b")
+_PP_ELSE_RE = re.compile(r"^[ \t]*#[ \t]*(?:else|elif)\b")
+
+
+def _is_always_dead_if(ln: str) -> bool:
+    """True for an ``#if`` whose whole condition is a constant zero
+    (any spelling) — dead in every build. Trailing comment text is
+    already spaces on the blanked view this runs over; a trailing
+    ``\r`` (CRLF input) is tolerated."""
+    m = _PP_IF_COND_RE.match(ln)
+    if m is None:
+        return False
+    cond = m.group("cond").rstrip("\r")
+    return _PP_ALWAYS_DEAD_COND_RE.fullmatch(cond) is not None
+
+
+def _blank_if0_regions(view: str) -> str:
+    """Blank always-dead ``#if`` regions from a comment/string-blanked
+    view.
+
+    Preprocessor-dead text is prose to the compiler exactly like a
+    comment — a planted ``#if 0`` block steers lexical receipts with
+    the same one-line attacker capability. Dead runs from the
+    directive to its matching ``#endif``, or to a matching
+    ``#else``/``#elif`` (those arms may be live); nested conditionals
+    inside the dead region are tracked by depth. Conservative on
+    purpose: only whole-condition constant-zero spellings are judged
+    (see ``_PP_ALWAYS_DEAD_COND_RE``) — any macro-bearing condition
+    is build-dependent and left visible; an unterminated region
+    blanks to end of input (dead until proven otherwise — refusal
+    direction for receipt consumers). Line lengths are preserved, so
+    offsets keep mapping 1:1.
+    """
+    lines = view.split("\n")
+    out: list[str] = []
+    depth = 0
+    for ln in lines:
+        if depth == 0:
+            if _is_always_dead_if(ln):
+                depth = 1
+                out.append(" " * len(ln))
+            else:
+                out.append(ln)
+            continue
+        if _PP_IF_RE.match(ln):
+            depth += 1
+        elif _PP_ENDIF_RE.match(ln):
+            depth -= 1
+        elif depth == 1 and _PP_ELSE_RE.match(ln):
+            depth = 0
+        out.append(" " * len(ln))
+    return "\n".join(out)
 
 
 def _blank(chars: list[str], start: int, end: int) -> None:
@@ -106,6 +186,17 @@ def _strip_c_family(
         nxt = source[i + 1] if i + 1 < n else ""
         if ch == "/" and nxt == "/":
             end = source.find("\n", i)
+            # Backslash-newline splicing happens BEFORE comment
+            # recognition (C/C++/Java): a ``// … \`` comment
+            # continues onto the next physical line, which is
+            # comment text to the compiler — a guard "hidden"
+            # there must blank like any other comment byte.
+            while end > 0 and (
+                source[end - 1] == "\\"
+                or (source[end - 1] == "\r" and end > 1
+                    and source[end - 2] == "\\")
+            ):
+                end = source.find("\n", end + 1)
             end = n if end < 0 else end
             _blank(chars, i, end)
             i = end

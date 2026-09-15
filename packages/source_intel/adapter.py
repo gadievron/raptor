@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
@@ -599,6 +600,48 @@ def _function_referenced_as_pointer_scan(
     return False
 
 
+def _sanitized_source(file_path: str) -> str | None:
+    """Comment/string-blanked view of a source file — the single
+    lexical substrate for every helper in this module that mints or
+    withholds a verdict-relevant fact from file text.
+
+    source_intel scans the HOSTILE repo: a planted comment or string
+    that merely mentions ``static fn(``, an ``if (p) goto out;``, a
+    privileged ``CAP_`` constant, a downstream size guard, or a
+    fixed-size array declaration must never steer an axis verdict.
+    core/audit routed the identical problem through
+    ``source_view.sanitized_view``; this adopts the same idiom
+    (blanked spans become spaces, newlines survive, so offsets and
+    line numbers map 1:1 onto the original text). Cached per
+    (path, mtime, size) — repeated axis checks hit the same files.
+    """
+    try:
+        st = Path(file_path).stat()
+    except OSError:
+        return None
+    return _sanitized_source_cached(file_path, st.st_mtime_ns, st.st_size)
+
+
+@lru_cache(maxsize=64)
+def _sanitized_source_cached(
+    file_path: str, _mtime_ns: int, _size: int,
+) -> str | None:
+    try:
+        with Path(file_path).open(encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return None
+    from core.audit.source_view import sanitized_view
+
+    return sanitized_view(text, file_path)
+
+
+def _sanitized_lines(file_path: str) -> list[str] | None:
+    """Line view of :func:`_sanitized_source` (keepends, 1:1 lines)."""
+    text = _sanitized_source(file_path)
+    return None if text is None else text.splitlines(keepends=True)
+
+
 def _function_is_static(file_path: str, function_name: str) -> bool:
     """Best-effort: scan ``file_path`` for a line beginning with
     ``static`` and containing ``function_name(``.
@@ -606,12 +649,13 @@ def _function_is_static(file_path: str, function_name: str) -> bool:
     Conservative: returns False when uncertain. Static-detection
     failure ALWAYS keeps a non-static function from being marked
     dead, which is the safe direction (avoids false positives on
-    cross-TU-callable functions).
+    cross-TU-callable functions). The TRUE direction is
+    hostile-steerable from prose (static-ness gates dead-code and
+    privilege back-walk completeness), so the scan runs on the
+    comment/string-blanked view.
     """
-    try:
-        with Path(file_path).open(encoding="utf-8", errors="replace") as f:
-            text = f.read()
-    except OSError:
+    text = _sanitized_source(file_path)
+    if text is None:
         return False
     # Match `static [optional return-type tokens] funcname(`
     import re as _re
@@ -733,10 +777,10 @@ def _has_interprocedural_check(
     """
     if not file_path or sink_line <= alloc_line + 1:
         return False
-    try:
-        with Path(file_path).open(encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-    except OSError:
+    # Blanked view: a commented-out ``if (p) goto out;`` between
+    # alloc and sink must not withhold the axis-3 support.
+    lines = _sanitized_lines(file_path)
+    if lines is None:
         return False
 
     var_in_if = re.compile(
@@ -1025,17 +1069,16 @@ def _line_uses_privileged_cap(file_path: str, line_no: int) -> bool:
     actual build, and a mock capability constant in test code could
     spuriously match. Scope is bounded by upstream filters
     (function-name + memory-corruption rule_id + line proximity).
+    Reads the comment/string-blanked view: ``capable(mask)
+    /* CAP_SYS_ADMIN */`` must not upgrade a bounded capability to
+    root-equivalent (this check also gates every hop of the
+    privilege back-walk).
     """
-    try:
-        with Path(file_path).open(encoding="utf-8", errors="replace") as f:
-            for i, line in enumerate(f, 1):
-                if i == line_no:
-                    return any(c in line for c in _PRIVILEGED_CAP_CONSTANTS)
-                if i > line_no:
-                    return False
-    except OSError:
+    lines = _sanitized_lines(file_path)
+    if lines is None or not (1 <= line_no <= len(lines)):
         return False
-    return False
+    line = lines[line_no - 1]
+    return any(c in line for c in _PRIVILEGED_CAP_CONSTANTS)
 
 
 # =====================================================================
@@ -1259,10 +1302,11 @@ def _downstream_check_suppresses_finding(
             ((repo_root or _DEFAULT_REPO_ROOT) / sink_path).resolve()
         )
 
-    try:
-        with open(sink_path_abs, encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-    except OSError:
+    # Blanked view: a multi-line block comment (or #if 0-style dead
+    # text inside strings) containing ``if (size < 0) return ...``
+    # must not mint NOT_EXPLOITABLE on an unbounded-write finding.
+    lines = _sanitized_lines(sink_path_abs)
+    if lines is None:
         return False
 
     # Scan forward up to 30 lines (typical alloc-then-validate-then-use
@@ -2120,10 +2164,10 @@ def _stack_protector_suppresses_finding(
         sink_path_abs = str(
             ((repo_root or _DEFAULT_REPO_ROOT) / sink_path).resolve()
         )
-    try:
-        with open(sink_path_abs, encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-    except OSError:
+    # Blanked view: a comment ``/* char buf[64] legacy */`` above the
+    # sink must not satisfy the fixed-size-stack-buffer gate.
+    lines = _sanitized_lines(sink_path_abs)
+    if lines is None:
         return False
     # Search window: 10 lines back from sink (the buffer declaration
     # is typically near the top of the function).
