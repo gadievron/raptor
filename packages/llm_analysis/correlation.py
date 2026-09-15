@@ -257,8 +257,14 @@ def _build_clusters(
     pattern_groups: dict[str, list[str]] = {}
 
     for fid, per_model in matrix.items():
+        # Tri-state pattern key (read_verdict): a model that
+        # abstained (None) is a different agreement pattern from a
+        # model that voted an explicit False. Pre-fix the default-
+        # False read keyed both identically, so a finding whose
+        # second model errored out clustered with findings that
+        # model actually ruled not-exploitable.
         verdicts = tuple(
-            (model, v.get("is_exploitable", False))
+            (model, read_verdict(v, "is_exploitable"))
             for model, v in sorted(per_model.items())
         )
         pattern_key = str(verdicts)

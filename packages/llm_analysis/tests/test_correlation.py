@@ -192,6 +192,37 @@ class TestBuildClusters:
         assert clusters[0]["pattern"] == "split"
         assert clusters[0]["models_agreed"] is False
 
+    def test_abstention_is_its_own_pattern(self):
+        """An abstained model (verdict field absent — errored /
+        refused record shapes) is a different agreement pattern from
+        an explicit False vote. Pre-fix the pattern key defaulted a
+        MISSING is_exploitable to False, clustering a finding whose
+        second model never produced a verdict together with findings
+        that model actually ruled not-exploitable."""
+        matrix = {
+            "f-001": {"gemini": {"is_exploitable": True},
+                      "gpt-5": {"reasoning": "request timed out"}},
+            "f-002": {"gemini": {"is_exploitable": True},
+                      "gpt-5": {"is_exploitable": False}},
+        }
+        clusters = _build_clusters(matrix, {})
+        assert clusters == []
+
+    def test_matching_abstentions_still_cluster(self):
+        # Two-direction: identical (voter, abstainer) patterns DO
+        # group — the key change only separates abstention from
+        # False; missing-key and schema-nulled None are the SAME
+        # abstention pattern (read_verdict folds both to None).
+        matrix = {
+            "f-001": {"gemini": {"is_exploitable": True},
+                      "gpt-5": {"reasoning": "request timed out"}},
+            "f-002": {"gemini": {"is_exploitable": True},
+                      "gpt-5": {"is_exploitable": None}},
+        }
+        clusters = _build_clusters(matrix, {})
+        assert len(clusters) == 1
+        assert sorted(clusters[0]["finding_ids"]) == ["f-001", "f-002"]
+
     def test_all_abstain_panel_is_not_unanimous(self):
         """A panel where every member abstained (None verdicts —
         errored / refused / schema-failed models) must not mint a
