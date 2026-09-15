@@ -2622,7 +2622,7 @@ def main() -> int:
             logger.error("Git not found in PATH")
             sys.exit(1)
         except Exception as e:  # noqa: BLE001
-            print(f"  ✗ Error initializing git: {e}", file=sys.stderr)
+            print(f"  ✗ Error initializing git: {sanitise_for_terminal(str(e), max_len=300)}", file=sys.stderr)
             logger.error("Git init error: %s", e)
             sys.exit(1)
 
@@ -2679,7 +2679,7 @@ def main() -> int:
             import contextlib as _ctx
             with _ctx.suppress(OSError):
                 out_dir.rmdir()
-            print(f"✗ {e}", file=sys.stderr)
+            print(f"✗ {sanitise_for_terminal(str(e), max_len=300)}", file=sys.stderr)
             sys.exit(1)
         logger.debug("Run metadata: %s", e)  # Optional — don't fail the pipeline
     # Arm the entry-point backstop: from here on an uncaught exception
@@ -2787,7 +2787,7 @@ def main() -> int:
         except ImportError:
             print("Mitigation analysis module not available")
         except Exception as e:  # noqa: BLE001
-            print(f"⚠️  Mitigation check failed: {e}", file=sys.stderr)
+            print(f"⚠️  Mitigation check failed: {sanitise_for_terminal(str(e), max_len=300)}", file=sys.stderr)
             logger.error("Mitigation check error: %s", e)
 
     # ========================================================================
@@ -3494,7 +3494,7 @@ def main() -> int:
                 logger.warning("SCA failed (rc=%d) — continuing without dep findings", rc)
                 sca_findings_count = 0
         except Exception as e:  # noqa: BLE001
-            print(f"⚠️  SCA failed: {e}", file=sys.stderr)
+            print(f"⚠️  SCA failed: {sanitise_for_terminal(str(e), max_len=300)}", file=sys.stderr)
             logger.warning("SCA failed — continuing without dep findings: %s", e)
             sca_findings_count = 0
     else:
@@ -3636,7 +3636,7 @@ def main() -> int:
             print("⚠️  SCA package not available — skipping dependency analysis", file=sys.stderr)
             logger.warning("SCA import failed — packages/sca not installed")
         except Exception as e:
-            print(f"⚠️  SCA failed: {e}", file=sys.stderr)
+            print(f"⚠️  SCA failed: {sanitise_for_terminal(str(e), max_len=300)}", file=sys.stderr)
             logger.exception("SCA phase failed: %s", e)  # noqa: TRY401
 
     # ========================================================================
@@ -4289,12 +4289,12 @@ def main() -> int:
                             )
                             print(
                                 f"\n  ✗ Crash triage / validation handoff "
-                                f"failed: {e}",
+                                f"failed: {sanitise_for_terminal(str(e), max_len=300)}",
                                 file=sys.stderr,
                             )
             except Exception as e:
                 logger.exception("Fuzz phase failed: %s", e)  # noqa: TRY401
-                print(f"\n  ✗ Fuzz phase error: {e}", file=sys.stderr)
+                print(f"\n  ✗ Fuzz phase error: {sanitise_for_terminal(str(e), max_len=300)}", file=sys.stderr)
 
     print("\n📊 Summary:")
     print(f"   Total findings: {scan_metrics.get('total_findings', 0)}")

@@ -1813,7 +1813,7 @@ def _multilang_pass(
             resolve_identifiers,
         )
     except Exception as exc:  # noqa: BLE001 - degrade to C-only prep
-        print(f"study-prep: multilang pass unavailable: {exc}",
+        print(f"study-prep: multilang pass unavailable: {_sft(str(exc), max_len=300)}",
               file=sys.stderr)
         return [], [], []
 
@@ -2063,7 +2063,7 @@ def _llm_seed_concepts_from_names(
             name_set = set(all_names)
             return [s for s in seeded if isinstance(s, str) and s in name_set]
     except Exception as exc:  # noqa: BLE001 - seeding is best-effort
-        print(f"study-prep: WARNING: concept seeding failed: {exc}",
+        print(f"study-prep: WARNING: concept seeding failed: {_sft(str(exc), max_len=300)}",
               file=sys.stderr)
     return []
 
@@ -2365,7 +2365,7 @@ def _redb_mechanical_items(
         db = REDatabase.from_dict(raw) if isinstance(raw, dict) else None
         side = load_json(sidecar_path, max_bytes=cap)
     except Exception as exc:  # noqa: BLE001 — degrade, never abort prep
-        print(f"study-prep: --redb ignored (unreadable: {exc})",
+        print(f"study-prep: --redb ignored (unreadable: {_sft(str(exc), max_len=300)})",
               file=sys.stderr)
         return []
     if db is None or not isinstance(side, dict):
@@ -3307,7 +3307,7 @@ def main() -> None:
             print(f"study-prep: stale-doc markers on {n_stale} item(s)",
                   file=sys.stderr)
     except Exception as exc:  # noqa: BLE001 - marker pass is best-effort
-        print(f"study-prep: stale-doc pass skipped: {exc}", file=sys.stderr)
+        print(f"study-prep: stale-doc pass skipped: {_sft(str(exc), max_len=300)}", file=sys.stderr)
 
     if parsed.redb:
         redb_path = Path(parsed.redb)

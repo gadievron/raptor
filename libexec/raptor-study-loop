@@ -238,7 +238,7 @@ def _store_in_sage(output_dir: Path, target: str) -> None:
             print(f"study-loop: stored {stored} concepts in SAGE",
                   file=sys.stderr)
     except Exception as exc:  # noqa: BLE001 - SAGE storage is best-effort
-        print(f"study-loop: WARNING: SAGE storage failed: {exc}",
+        print(f"study-loop: WARNING: SAGE storage failed: {sanitise_for_terminal(str(exc), max_len=300)}",
               file=sys.stderr)
 
 
@@ -402,7 +402,7 @@ def _overview_from_directory(
         )
         result = response.result if hasattr(response, "result") else {}
     except Exception as exc:  # noqa: BLE001 - overview is best-effort
-        print(f"study-loop: WARNING: overview LLM call failed: {exc}",
+        print(f"study-loop: WARNING: overview LLM call failed: {sanitise_for_terminal(str(exc), max_len=300)}",
               file=sys.stderr)
         return [], [], "", ""
 
@@ -589,7 +589,7 @@ def _synthesise_overview(
         )
         result = response.result if hasattr(response, "result") else {}
     except Exception as exc:  # noqa: BLE001 - synthesis is best-effort
-        print(f"study-loop: WARNING: synthesis LLM call failed: {exc}",
+        print(f"study-loop: WARNING: synthesis LLM call failed: {sanitise_for_terminal(str(exc), max_len=300)}",
               file=sys.stderr)
         return "", "", "", None
 

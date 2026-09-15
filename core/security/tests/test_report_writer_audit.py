@@ -701,3 +701,75 @@ def test_html_escape_based_helper_is_clean():
     )
     assert not [v for v in audit_source(src)
                 if v.kind == "sanitiser_shadow"]
+
+
+# ---------------------------------------------------------------------------
+# Exception-text indirection arm.
+# ---------------------------------------------------------------------------
+
+
+def test_rule_catches_broad_exception_relay():
+    """``except Exception as e: print(f"{e}")`` relays whatever the
+    raising layer embedded; exception objects are outside the key
+    model entirely."""
+    src = (
+        "def run(cmd):\n"
+        "    try:\n"
+        "        go(cmd)\n"
+        "    except Exception as e:\n"
+        "        print(f'failed: {e}')\n"
+    )
+    vs = audit_source(src)
+    assert any(v.kind == "unsanitised_exception_text" and v.detail == "e"
+               for v in vs), vs
+
+
+def test_broad_exception_tuple_form_fires():
+    src = (
+        "def run(cmd):\n"
+        "    try:\n"
+        "        go(cmd)\n"
+        "    except (ValueError, Exception) as exc:\n"
+        "        sys.stderr.write(str(exc))\n"
+    )
+    assert any(v.kind == "unsanitised_exception_text"
+               for v in audit_source(src))
+
+
+def test_sanitised_exception_relay_is_clean():
+    src = (
+        "def run(cmd):\n"
+        "    try:\n"
+        "        go(cmd)\n"
+        "    except Exception as e:\n"
+        "        print(f'failed: {_sft(str(e), max_len=300)}')\n"
+    )
+    assert not [v for v in audit_source(src)
+                if v.kind == "unsanitised_exception_text"]
+
+
+def test_narrow_exception_relay_is_documented_residual():
+    """Narrow-typed handlers are OUT of the arm's scope by measured
+    trade-off (the arm's docstring records the direction); this pin
+    keeps the boundary deliberate."""
+    src = (
+        "def run(path):\n"
+        "    try:\n"
+        "        go(path)\n"
+        "    except OSError as e:\n"
+        "        print(f'failed: {e}')\n"
+    )
+    assert not [v for v in audit_source(src)
+                if v.kind == "unsanitised_exception_text"]
+
+
+def test_type_name_of_exception_is_clean():
+    src = (
+        "def run(cmd):\n"
+        "    try:\n"
+        "        go(cmd)\n"
+        "    except Exception as e:\n"
+        "        print(f'failed: {type(e).__name__}')\n"
+    )
+    assert not [v for v in audit_source(src)
+                if v.kind == "unsanitised_exception_text"]

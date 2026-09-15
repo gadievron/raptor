@@ -1854,7 +1854,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     try:
         result = run_audit_pipeline(opts)
     except Exception as exc:  # noqa: BLE001
-        print(f"error: audit pipeline failed: {exc}", file=sys.stderr)
+        print(f"error: audit pipeline failed: {sanitise_for_terminal(str(exc), max_len=300)}", file=sys.stderr)
         _lifecycle_fail(out_dir, f"audit pipeline failed: {exc}")
         return 1
 
@@ -2477,7 +2477,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
     try:
         result = run_audit_pipeline(opts)
     except Exception as exc:  # noqa: BLE001
-        print(f"error: audit pipeline failed: {exc}", file=sys.stderr)
+        print(f"error: audit pipeline failed: {sanitise_for_terminal(str(exc), max_len=300)}", file=sys.stderr)
         _lifecycle_fail(out_dir, f"audit resume failed: {exc}")
         return 1
 

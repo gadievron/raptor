@@ -15,6 +15,7 @@ from pathlib import Path
 
 import json
 from core.run.output import unique_run_suffix
+from core.security.log_sanitisation import sanitise_for_terminal
 
 from .oplock import OpLockContention, project_op_lock
 from .project import DEFAULT_OUTPUT_BASE, ProjectManager, _URL_SCHEME_RE
@@ -3008,7 +3009,7 @@ def _apply_clean_coverage(project, plan, consequences) -> None:
                 apply_removal(store, victim, checklist, cons)
             store.save()
     except Exception as e:  # noqa: BLE001 — must never block a clean
-        print(_red(f"  (coverage snapshot skipped: {e})"))
+        print(_red(f"  (coverage snapshot skipped: {sanitise_for_terminal(str(e), max_len=300)})"))
 
 
 def _do_merge(project, merge_type, yes) -> None:
@@ -3064,7 +3065,7 @@ def _do_merge(project, merge_type, yes) -> None:
             # newest run wins ties (the documented latest-wins contract).
             stats = merge_runs(list(reversed(dirs)), merged_dir)
         except Exception as e:  # noqa: BLE001 — abort merge, keep sources
-            print(f"  {cmd_type}: merge failed — {e}")
+            print(f"  {cmd_type}: merge failed — {sanitise_for_terminal(str(e), max_len=300)}")
             print("  Source runs preserved.")
             continue
 
@@ -3099,7 +3100,7 @@ def _do_merge(project, merge_type, yes) -> None:
             # write); source dirs stay on disk (no data lost). The
             # operator sees both the warning AND a clear "source
             # runs preserved" line so they know to re-run.
-            print(f"  {cmd_type}: ERROR — metadata write failed ({e})")
+            print(f"  {cmd_type}: ERROR — metadata write failed ({sanitise_for_terminal(str(e), max_len=300)})")
             print(f"  {cmd_type}: source runs PRESERVED (merged output left at {merged_dir})")
             continue
 

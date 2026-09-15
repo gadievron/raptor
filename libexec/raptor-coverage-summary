@@ -41,6 +41,7 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
+from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
 
 # Run-dir / operator JSON reads share the 64MB artifact ceiling the
 # sibling raptor-review applies to the same files — an unbounded read
@@ -252,7 +253,7 @@ def _journal_marks(run_dir, marked, verdict_by_key):
             ))
         return merge_into_index(project_dir, run_dir)
     except Exception as exc:  # noqa: BLE001 — journaling is additive
-        print(f"WARNING: mark journaling skipped: {exc}", file=sys.stderr)
+        print(f"WARNING: mark journaling skipped: {_sft(str(exc), max_len=300)}", file=sys.stderr)
         return 0
 
 
@@ -509,7 +510,7 @@ def _neutralise_journaled_marks(run_dir, keys):
         if touched:
             merge_into_index(project_dir, run_dir)
     except Exception as exc:  # noqa: BLE001 — neutralisation is additive
-        print(f"WARNING: unmark journaling skipped: {exc}", file=sys.stderr)
+        print(f"WARNING: unmark journaling skipped: {_sft(str(exc), max_len=300)}", file=sys.stderr)
 
 
 def _cmd_import(import_path, fmt, tool, args):

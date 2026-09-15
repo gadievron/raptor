@@ -35,6 +35,7 @@ from typing import Any, TYPE_CHECKING
 sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.hash import sha256_file
+from core.security.log_sanitisation import sanitise_for_terminal as _sft
 from core.security.log_sanitisation import (
     escape_nonprintable,
     sanitise_for_terminal,
@@ -261,8 +262,9 @@ def _run_map(args: argparse.Namespace) -> int:
         fail_run(out_dir, "binary map interrupted")
         raise
     except Exception as exc:  # noqa: BLE001 - operator-facing clean failure
-        fail_run(out_dir, f"binary map failed: {type(exc).__name__}: {exc}")
-        print(f"raptor-binary: map failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        fail_run(out_dir, f"binary map failed: {type(exc).__name__}: {_sft(str(exc), max_len=300)}")
+        print(f"raptor-binary: map failed: {type(exc).__name__}: "
+              f"{_sft(str(exc), max_len=300)}", file=sys.stderr)
         return 1
     _print_map_summary(payload, output_path)
     return 0
@@ -517,8 +519,9 @@ def _run_investigate(args: argparse.Namespace) -> int:
         fail_run(out_dir, "binary investigation interrupted")
         raise
     except Exception as exc:  # noqa: BLE001 - operator-facing clean failure
-        fail_run(out_dir, f"binary investigation failed: {type(exc).__name__}: {exc}")
-        print(f"raptor-binary: investigate failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        fail_run(out_dir, f"binary investigation failed: {type(exc).__name__}: {_sft(str(exc), max_len=300)}")
+        print(f"raptor-binary: investigate failed: {type(exc).__name__}: "
+              f"{_sft(str(exc), max_len=300)}", file=sys.stderr)
         return 1
     _print_investigation_summary(investigation, out_dir)
     return 0

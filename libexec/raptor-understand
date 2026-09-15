@@ -809,7 +809,8 @@ def _main_body(args) -> int:
         raise
     except Exception as e:  # noqa: BLE001 - catch-all for clean exit
         print(
-            f"error: unexpected {type(e).__name__}: {e}", file=sys.stderr,
+            f"error: unexpected {type(e).__name__}: "
+            f"{sanitise_for_terminal(str(e), max_len=300)}", file=sys.stderr,
         )
         return 1
 

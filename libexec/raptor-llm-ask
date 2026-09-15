@@ -183,7 +183,8 @@ def main() -> int:
         else:
             client = LLMClient()
     except Exception as exc:
-        print(f"error: could not create LLM client: {exc}", file=sys.stderr)
+        print(f"error: could not create LLM client: {_sft(str(exc), max_len=300)}",
+              file=sys.stderr)
         return 1
 
     if args.model:
@@ -230,7 +231,7 @@ def main() -> int:
             [model_config], label="raptor-llm-ask",
         )
     except Exception as exc:  # noqa: BLE001 — provider errors below
-        print(f"warning: could not start LLM dispatcher: {exc}",
+        print(f"warning: could not start LLM dispatcher: {_sft(str(exc), max_len=300)}",
               file=sys.stderr)
 
     kwargs = {"model_config": model_config}
@@ -288,7 +289,7 @@ def main() -> int:
                       f"tokens={response.tokens_used} ---",
                       file=sys.stderr)
     except Exception as exc:
-        print(f"error: LLM call failed: {exc}", file=sys.stderr)
+        print(f"error: LLM call failed: {_sft(str(exc), max_len=300)}", file=sys.stderr)
         return 1
 
     # An explicitly pinned --model that fails can be silently answered

@@ -52,6 +52,7 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
+from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
 from core.json import load_json, loads  # noqa: E402
 from core.security.prompt_output_sanitise import sanitise_string  # noqa: E402
 
@@ -867,7 +868,7 @@ def _stale_journal(args) -> None:
     try:
         entries = load_index(project_dir)
     except Exception as exc:  # noqa: BLE001
-        print(f"  Corrupt journal index: {exc}", file=sys.stderr)
+        print(f"  Corrupt journal index: {_sft(str(exc), max_len=300)}", file=sys.stderr)
         sys.exit(1)
 
     stale = []

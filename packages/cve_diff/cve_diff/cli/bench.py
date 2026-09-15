@@ -30,6 +30,7 @@ import typer
 
 from core.atomic_fs import write_text_atomically
 from core.json import save_json
+from core.security.log_sanitisation import sanitise_for_terminal
 from cve_diff.agent.loop import AgentConfig
 from cve_diff.core.exceptions import CveDiffError
 from cve_diff.infra import api_status
@@ -901,7 +902,7 @@ def _persist_summary(summary_path: Path, sample: Path) -> None:
         shutil.copy2(summary_path, dest)
         typer.echo(f"persisted: {dest}")
     except Exception as exc:  # noqa: BLE001 — never fail the bench on a copy
-        typer.echo(f"(could not persist summary to data/runs/: {exc})", err=True)
+        typer.echo(f"(could not persist summary to data/runs/: {sanitise_for_terminal(str(exc), max_len=300)})", err=True)
 
 
 # Error classes the bench-layer retry pass re-runs. Anything else is a

@@ -1412,7 +1412,7 @@ def prepare_D(workdir, target=None):
     try:
         _run_guard_dominance(workdir, target, data)
     except Exception as exc:  # noqa: BLE001 — enrichment must not kill the save
-        print(f"WARNING: guard-dominance refuter skipped: {exc}",
+        print(f"WARNING: guard-dominance refuter skipped: {_sft(str(exc), max_len=300)}",
               file=sys.stderr)
 
     _save_findings(workdir, data)
@@ -1669,7 +1669,7 @@ def _discover_executables(target):
     except Exception as e:  # noqa: BLE001 — discovery is best-effort; failures degrade, loudly
         print(
             "  WARN: binary discovery failed "
-            f"({e.__class__.__name__}: {e}) — Stage E will report "
+            f"({type(e).__name__}: {_sft(str(e), max_len=300)}) — Stage E will report "
             "'no binary found' for every finding",
             file=sys.stderr,
         )
@@ -2801,7 +2801,7 @@ def _rank_priority_targets(checklist: dict, out_dir) -> None:
         )
     except Exception as e:  # noqa: BLE001 — ordering refinement must
         # never break stage 0; the bridge order is a valid fallback.
-        print(f"  Rank: failed ({e}); bridge order kept")
+        print(f"  Rank: failed ({_sft(str(e), max_len=300)}); bridge order kept")
 
 
 def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
@@ -2825,7 +2825,7 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
     except Exception as e:
         from core.run.pin import ProjectArgvError as _PAE
         if isinstance(e, _PAE):
-            print(f"ERROR: {e}", file=sys.stderr)
+            print(f"ERROR: {_sft(str(e), max_len=300)}", file=sys.stderr)
             sys.exit(1)
         raise
 
@@ -2977,7 +2977,7 @@ def prepare_1(workdir, target=None, model=None):
         write_validation_report(workdir)
         print("Report generated")
     except Exception as e:  # noqa: BLE001
-        print(f"⚠️  Report error: {e}", file=sys.stderr)
+        print(f"⚠️  Report error: {_sft(str(e), max_len=300)}", file=sys.stderr)
 
     print(generate_summary(workdir))
 
@@ -3011,7 +3011,7 @@ def prepare_1(workdir, target=None, model=None):
         render_and_write(Path(workdir))
         print("Diagrams generated")
     except Exception as e:  # noqa: BLE001
-        print(f"⚠️  Diagram error: {e}", file=sys.stderr)
+        print(f"⚠️  Diagram error: {_sft(str(e), max_len=300)}", file=sys.stderr)
 
     # Coverage summary (unified store-backed report; file-level tier when
     # there's no function inventory).
@@ -3047,7 +3047,7 @@ def prepare_1(workdir, target=None, model=None):
         # completion of a STARTED run must exit nonzero, otherwise
         # the run is orphaned with status=running while the caller
         # believes the pipeline sealed it.
-        print(f"ERROR: {e}", file=sys.stderr)
+        print(f"ERROR: {_sft(str(e), max_len=300)}", file=sys.stderr)
         sys.exit(1)
 
 

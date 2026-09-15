@@ -1,6 +1,9 @@
 {
   "_comment": "Triaged residual report-writer findings in UNREGISTERED files. Keys are file::func::kind::detail (no line numbers). check_report_writer_closure.py fails CI on any unregistered hit not listed here and warns on stale entries. Prefer fixing: sanitise the site and register the file in _REPORT_WRITER_FILES; add an entry ONLY with a note explaining why the hit is accepted.",
   "entries": {
+    ".claude/skills/crash-analysis/rr-debugger/scripts/crash_trace.py::extract_trace::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
     ".claude/skills/crash-analysis/rr-debugger/scripts/crash_trace.py::extract_trace::unsanitised_llm_value::output": {
       "note": "crash-analysis skill helper script; gdb/rr output relayed for the skill's own agent consumption (KNOWN U35 row) \u2014 sanitise + register when the crash-analysis skill lane is hardened"
     },
@@ -76,6 +79,9 @@
     "core/audit/context.py::render_pattern_library::unsanitised_llm_value::title": {
       "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
+    "core/audit/corpus/corpus_metrics.py::_enrich_from_labels::unsanitised_exception_text::exc": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
     "core/audit/corpus/corpus_metrics.py::format_attribution_report::unsanitised_llm_value::error": {
       "note": "'error' is an integer counter column in the corpus metrics report; the free-text hypothesis/trap prints in this dev tool are sanitised"
     },
@@ -93,6 +99,9 @@
     },
     "core/audit/corpus/corpus_metrics.py::main::unsanitised_llm_value::format_report": {
       "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
+    },
+    "core/audit/corpus/run_corpus.py::_build_checklist::unsanitised_exception_text::exc": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
     },
     "core/audit/corpus/run_corpus.py::_run_audit::unsanitised_llm_value::error_reason": {
       "note": "mechanical_skip is a bool, error_reason/hypothesis reach the results-record dict (data artifact), and the terminal prints of the same fields are sanitised; dev corpus driver"
@@ -205,6 +214,9 @@
     "core/sage/scripts/register_agents.py::register_agents::unsanitised_llm_value::description": {
       "note": "dev setup script; descriptions are RAPTOR-authored agent-catalog constants"
     },
+    "core/sage/scripts/seed_sage_knowledge.py::seed::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
     "core/sage/scripts/seed_sage_knowledge.py::seed::unsanitised_llm_value::i": {
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
     },
@@ -238,6 +250,48 @@
     "libexec/raptor-bq-query::_run_sandboxed::unsanitised_llm_value::stdout": {
       "note": "verbatim tool/child-output capture into a run artifact or structured data file \u2014 raw by design; rendering to the operator happens in registered writers that sanitise"
     },
+    "libexec/raptor-cve-env::_run_build::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-enrich-context-map-mitigation::main::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-enrich-context-map-sites::main::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-enrich-context-map-taint::_find_cached_cpg::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-enrich-flow-trace-ast-view::main::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-ghidra::_cmd_attach::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-ghidra::_cmd_decompile::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-ghidra::_cmd_detach::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-ghidra::_cmd_export::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-ghidra::main::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-pick-strategies::main::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-project-manager::<module>::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-run-feasibility::_enrich_with_empirical_mitigation_map::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-run-lifecycle::main::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
     "libexec/raptor-run-sandboxed::<module>::unsanitised_llm_value::data": {
       "note": "this tool's documented contract IS verbatim relay of the sandboxed child's stdout/stderr to the caller \u2014 scrubbing here would corrupt captured tool output; consumers own their render"
     },
@@ -250,14 +304,68 @@
     "libexec/raptor-sage-mcp-guard::main::unsanitised_llm_value::out": {
       "note": "guard relays the wrapped MCP server's framed protocol stream \u2014 byte-exact by contract (JSON-RPC framing), not a render surface"
     },
+    "libexec/raptor-sage::_report_task_created::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-sage::cmd_backlog::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-sage::cmd_corroborate::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-sage::cmd_domains::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-sage::cmd_forget::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-sage::cmd_get::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-sage::cmd_link::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-sage::cmd_list::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-sage::cmd_recall::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-sage::cmd_remember::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-sage::cmd_status::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-sage::cmd_task::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-sage::cmd_timeline::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-sca-run::_run_analyse::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-self-test::_run_selected::unsanitised_exception_text::exc": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
     "libexec/raptor-self-test::case_tool_sandbox_matrix::unsanitised_llm_value::results": {
       "note": "self-test harness matrix rows (RAPTOR-authored tier names + statuses) written to a log artifact"
+    },
+    "libexec/raptor-session-init::warm_sage_embeddings::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-startup-check::main::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
     },
     "packages/binary_analysis/blamed_lines.py::check_report::unsanitised_llm_value::results": {
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
     },
     "packages/binary_analysis/crash_analyser.py::CrashAnalyser._get_disassembly::unsanitised_llm_value::line": {
       "note": "disassembly lines feed the analysis data structure (artifact); the rendering chokepoints in this package are registered"
+    },
+    "packages/codeql/agent.py::main::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
     },
     "packages/codeql/autonomous_analyzer.py::AutonomousCodeQLAnalyzer.generate_exploit::unsanitised_llm_value::line": {
       "note": "exploit PoC source assembly \u2014 byte-exact artifact by design, not a rendered report"
@@ -276,6 +384,12 @@
     },
     "packages/cve_diff/cve_diff/oracle/cross_check.py::main::unsanitised_llm_value::v": {
       "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
+    },
+    "packages/cve_env/cve_env/agent/core_loop.py::build_core::unsanitised_exception_text::exc": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "packages/describe/cli.py::_resolve_archive::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/api.py::format_analysis_summary::unsanitised_llm_value::description": {
       "note": "feasibility summaries interpolate the package's own mitigation-catalog constants; the target-derived residue is unit-filed to the exploit_feasibility owner (campaign row U17-18)"
@@ -309,6 +423,9 @@
     },
     "packages/ghidra/match_precision.py::run_measurement::unsanitised_llm_value::report": {
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "packages/joern/netns_forwarder.py::self_probe::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
     },
     "packages/joern/runner.py::_StallMonitor.run::unsanitised_llm_value::line": {
       "note": "stall-monitor relays joern server lines through the raptor logger \u2014 the console-formatter chokepoint escapes them"
@@ -361,6 +478,12 @@
     "packages/llm_analysis/scripts/e2e_verify_exploit.py::main::raw_serialiser_at_sink::dumps_display": {
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
     },
+    "packages/sca/bump/cli.py::main::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "packages/sca/clean_cache.py::main::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
     "packages/sca/dependency_track.py::main::unsanitised_llm_value::error": {
       "note": "registry/server error text on a config-driven admin lane \u2014 unit-filed to the sca owner (campaign row U05)"
     },
@@ -391,8 +514,41 @@
     "packages/sca/supply_chain/typosquat_audit.py::_render_reaudit_llm::unsanitised_llm_value::rationale": {
       "note": "re-audit rationale lane \u2014 unit-filed to the typosquat owner (campaign rows U07/U08)"
     },
+    "packages/sca/verify.py::main::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "packages/source_intel/measurement.py::_run_one::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
     "packages/web/external_validators.py::ExternalValidatorRunner._nuclei_batch::unsanitised_llm_value::stdout": {
       "note": "nuclei stdout is parsed as JSON lines into finding records (artifact), not printed"
+    },
+    "packages/web/scanner.py::main::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "raptor.py::<module>::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "raptor.py::_run_script::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "raptor.py::_run_with_lifecycle::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "raptor.py::_unpack_archive_target::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "raptor.py::mode_binary::unsanitised_exception_text::exc": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "raptor.py::mode_sca::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "raptor_codeql.py::main::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "raptor_fuzzing.py::main::unsanitised_exception_text::e": {
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
     }
   }
 }

@@ -1088,6 +1088,76 @@ def _sanitiser_shadow_scan(tree: ast.AST, rel: str) -> list[Violation]:
     return out
 
 
+def _exception_relay_scan(tree: ast.AST, rel: str,
+                          parents: dict | None = None) -> list[Violation]:
+    """Mechanism arm: exception-text indirection.
+
+    ``except Exception as e: print(f"...{e}")`` relays whatever the
+    raising layer embedded — tool stderr, target bytes, LLM text —
+    and exception OBJECTS are outside the key model entirely.
+
+    Deliberately SHALLOW and BROAD-handler-only, both directions
+    measured: (i) full taint integration marked whole ``main()``
+    functions through handler-side container stores (168 registered +
+    116 unregistered hits, dominated by count summaries); (ii)
+    narrow-typed handlers (OSError on an operator path, ValueError
+    from int()) carry far less attacker content than a broad catch
+    that relays arbitrary lower layers — every unit-filed member of
+    this mechanism was a broad catch. Residuals (documented): the
+    one-hop ``msg = f"{e}"; print(msg)`` spelling and narrow-handler
+    relays.
+    """
+    out: list[Violation] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.ExceptHandler) and node.name
+                and _is_broad_handler(node)):
+            continue
+        bound = frozenset({node.name})
+        for inner in ast.walk(node):
+            if not isinstance(inner, ast.Call):
+                continue
+            func = inner.func
+            is_sink = (
+                (isinstance(func, ast.Name) and func.id in _SINK_FUNCTIONS)
+                or (isinstance(func, ast.Attribute)
+                    and func.attr in ("echo", "secho", "write"))
+            )
+            if not is_sink:
+                continue
+            args = list(inner.args) + [kw.value for kw in inner.keywords
+                                       if kw.value is not None]
+            for arg in args:
+                for line, _key in _naked_keys(arg, bound):
+                    out.append(Violation(
+                        file=rel,
+                        line=line or inner.lineno,
+                        kind="unsanitised_exception_text",
+                        detail=node.name,
+                        func_name=_enclosing_func_name(node, tree, parents),
+                    ))
+    return out
+
+
+def _enclosing_func_name(node: ast.AST, tree: ast.AST,
+                         parents: dict | None) -> str:
+    """Dotted enclosing-function name (builds the parents map once,
+    lazily, shared via the caller's dict)."""
+    if parents is None:
+        parents = {}
+    if not parents:
+        for parent in ast.walk(tree):
+            for child in ast.iter_child_nodes(parent):
+                parents[child] = parent
+    names: list[str] = []
+    cur = parents.get(node)
+    while cur is not None:
+        if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef,
+                            ast.ClassDef)):
+            names.append(cur.name)
+        cur = parents.get(cur)
+    return ".".join(reversed(names)) or "<module>"
+
+
 def _terminal_capable_sink(node: ast.Call) -> bool:
     """True when the sink call can reach a terminal: ``print``/
     ``echo``/``secho`` (any form), or ``.write`` on a receiver whose
@@ -1133,6 +1203,11 @@ _TAINT_NEUTRAL_CALLS = frozenset({
     # ``sum(list_of_lists, [])`` concatenation can carry content —
     # rare and lint-discouraged, accepted.
     "sum",
+    # type(x) yields the class (its __name__ is code-authored);
+    # repr(x) escapes non-printables in strings, same grounds as the
+    # {x!r} conversion.
+    "type",
+    "repr",
 })
 
 
@@ -1225,6 +1300,21 @@ def _container_base(target: ast.AST) -> str | None:
     if isinstance(node, ast.Name) and node is not target:
         return node.id
     return None
+
+
+def _is_broad_handler(node: ast.excepthandler) -> bool:
+    """True when the handler catches Exception/BaseException (alone or
+    inside a tuple). Bare ``except:`` binds no name, so it never
+    reaches the taint arm."""
+    def _broad(t: ast.AST) -> bool:
+        return (isinstance(t, ast.Name)
+                and t.id in ("Exception", "BaseException"))
+    t = node.type
+    if t is None:
+        return True
+    if _broad(t):
+        return True
+    return isinstance(t, ast.Tuple) and any(_broad(elt) for elt in t.elts)
 
 
 # Mutating container methods: ``recv.append(tainted)`` puts the value
@@ -1542,6 +1632,8 @@ def audit_source(source: str, rel: str = "<snippet>") -> list[Violation]:
     violations = scanner.violations
     violations.extend(_mermaid_scan(tree, rel))
     violations.extend(_sanitiser_shadow_scan(tree, rel))
+    _parents: dict = {}
+    violations.extend(_exception_relay_scan(tree, rel, _parents))
     return violations
 
 

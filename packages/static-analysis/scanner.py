@@ -317,6 +317,7 @@ from core.inventory.languages import (  # noqa: E402
 from core.inventory.languages import (  # noqa: E402  (after the constants it displays)
     display_langs as _display_langs,  # used by call sites below
 )
+from core.security.log_sanitisation import sanitise_for_terminal  # noqa: E402
 
 
 def _expand_language_aliases(langs: list[str]) -> set:
@@ -1755,7 +1756,7 @@ def _join_codeql_stage(
         return future.result()
     except Exception as e:  # noqa: BLE001 — stage isolation: semgrep results must survive
         logger.error("CodeQL stage raised: %s", e)
-        print(f"⚠️  CodeQL stage failed: {e}", file=sys.stderr)
+        print(f"⚠️  CodeQL stage failed: {sanitise_for_terminal(str(e), max_len=300)}", file=sys.stderr)
         return []
     except BaseException:
         abort()

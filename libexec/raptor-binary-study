@@ -323,7 +323,7 @@ def _clamp_domain_model(output_dir: Path, tree_root: Path) -> None:
         _promote_to_project(path, output_dir)
     except Exception as exc:  # noqa: BLE001 — promotion is best-effort
         print(f"binary-study: canonical re-promotion failed: "
-              f"{str(exc)[:200]}", file=sys.stderr)
+              f"{str(_sft(str(exc), max_len=300))[:200]}", file=sys.stderr)
 
 
 def _persist_enriched_db(redb_path: Path, enriched: dict) -> bool:

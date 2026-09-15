@@ -26,6 +26,7 @@ from typing import Any
 
 from core.reporting.formatting import format_elapsed as _format_elapsed
 from core.run.finding_status import read_verdict
+from core.security.log_sanitisation import sanitise_for_terminal
 from packages.llm_analysis.cc_dispatch import invoke_cc_simple
 from packages.llm_analysis.finding_adapter import FindingAdapter
 
@@ -748,7 +749,7 @@ def orchestrate(
         report = load_json(prep_report_path, strict=True)
     except Exception as e:  # noqa: BLE001 — logged; any parse failure aborts Phase 4
         logger.error("Failed to read Phase 3 report: %s", e)
-        print(f"\n  ✗ Failed to read analysis report: {e}", file=sys.stderr)
+        print(f"\n  ✗ Failed to read analysis report: {sanitise_for_terminal(str(e), max_len=300)}", file=sys.stderr)
         return None
     if report is None:
         logger.error("Phase 3 report not found: %s", prep_report_path)
@@ -1129,7 +1130,6 @@ def orchestrate(
             # path), so refer to `_failed_probe_models` instead.
             # Probe error strings can quote provider/model-authored
             # bytes — escape + bound before the stderr banners below.
-            from core.security.log_sanitisation import sanitise_for_terminal
             _fail_summary = sanitise_for_terminal("; ".join(
                 f"{_m}={_e}" for _m, _e in _failed_probe_models
             ), max_len=512)
