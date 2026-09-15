@@ -36,6 +36,7 @@ PRODUCERS = [
     "self_consistency.py",
     "cross_family.py",
     "validate_feedback.py",
+    "dataflow_validation.py",
 ]
 
 
@@ -91,6 +92,30 @@ class MaxReasoningCharsDriftGuard(unittest.TestCase):
             [],
             "F007 drift: producer modules redefine the canonical cap.\n"
             + "\n".join(offenders),
+        )
+
+    def test_registry_matches_actual_reference_scan(self) -> None:
+        """Closure: PRODUCERS must equal the set of package modules
+        that actually reference `_MAX_REASONING_CHARS`. A hardcoded
+        registry alone lets a new (or overlooked) producer slice by
+        the cap while every drift-guard above stays green — the
+        registry's own enumeration was the gap once already."""
+        referencing: set[str] = set()
+        for py_path in SCORECARD_DIR.glob("*.py"):
+            if py_path.name == "__init__.py":
+                continue  # definition site, not a producer
+            tree = ast.parse(py_path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Name)
+                        and node.id == "_MAX_REASONING_CHARS"):
+                    referencing.add(py_path.name)
+                    break
+        self.assertEqual(
+            sorted(referencing),
+            sorted(PRODUCERS),
+            "PRODUCERS registry out of sync with the modules that "
+            "actually reference _MAX_REASONING_CHARS — add new "
+            "producers to the registry (and vice versa).",
         )
 
     def test_all_producers_import_canonical_constant(self) -> None:
