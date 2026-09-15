@@ -21,7 +21,19 @@ by hand, writer by writer. This gate closes the class mechanically:
   site, or (deliberately, with a note) add a baseline entry**;
 * baseline entries that no longer fire are reported as stale warnings
   (clean exit) so entries can be retired without racing in-flight
-  branches.
+  branches;
+* NON-PYTHON ``libexec/``/``bin/`` scripts (bash launchers) cannot be
+  walked by the AST detector at all — registering one in
+  ``_REPORT_WRITER_FILES`` would be vacuous. Every such script must
+  instead appear in the baseline's ``bash_manual_audit`` section with
+  a note recording its manual review (mechanism tier:
+  registered-with-manual-audit). A new bash script fails the gate
+  until a human adds the note.
+
+Walk-scope note: candidates come from ``git ls-files`` — untracked
+files are invisible until added, and the AST detector sees one module
+at a time (cross-module helper flows are out of scope; see the audit
+module's docstrings for per-arm residuals).
 
 Finding keys carry no line numbers (``file::func::kind::detail``) so
 unrelated churn does not invalidate them; a changed call site that
@@ -128,14 +140,29 @@ def _candidates(root: Path) -> list[str]:
     return result
 
 
+def _shebang_kind(root: Path, rel: str) -> str:
+    """"python" / "bash" / "other" by shebang (first line)."""
+    try:
+        with (root / rel).open("rb") as fh:
+            first = fh.readline(120).decode("utf-8", errors="replace")
+    except OSError:
+        return "other"
+    if "python" in first:
+        return "python"
+    if first.startswith("#!"):
+        return "bash" if ("bash" in first or first.strip().endswith("sh")) else "other"
+    return "python" if rel.endswith(".py") else "other"
+
+
 def _finding_key(v) -> str:
     return f"{v.file}::{v.func_name}::{v.kind}::{v.detail}"
 
 
-def _load_baseline(path: Path) -> dict[str, dict]:
+def _load_baseline(path: Path) -> tuple[dict[str, dict], dict[str, dict]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     entries = data.get("entries", {})
-    bad = [k for k, e in entries.items()
+    bash_entries = data.get("bash_manual_audit", {})
+    bad = [k for k, e in list(entries.items()) + list(bash_entries.items())
            if not str(e.get("note", "")).strip()
            or "TODO" in str(e.get("note", ""))]
     if bad:
@@ -143,7 +170,7 @@ def _load_baseline(path: Path) -> dict[str, dict]:
             "baseline entries missing a real note (empty/TODO): "
             + ", ".join(sorted(bad))
         )
-    return entries
+    return entries, bash_entries
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -164,9 +191,16 @@ def main(argv: list[str] | None = None) -> int:
 
     registered = set(rwa._REPORT_WRITER_FILES) | set(rwa._MERMAID_FENCE_FILES)
 
+    all_candidates = _candidates(root)
+    # Non-Python launcher scripts: the AST detector cannot walk them —
+    # they take the manual-audit tier instead of the scan.
+    bash_scripts = [rel for rel in all_candidates
+                    if rel.startswith(("libexec/", "bin/"))
+                    and _shebang_kind(root, rel) != "python"]
+    candidates = [rel for rel in all_candidates if rel not in set(bash_scripts)]
+
     registered_hits = []
     unregistered: dict[str, list] = {}
-    candidates = _candidates(root)
     for rel, vs in zip(candidates, _audit_candidates(root, candidates)):
         if not vs:
             continue
@@ -185,11 +219,24 @@ def main(argv: list[str] | None = None) -> int:
               f"(fill in the notes before committing)")
         return 0
 
-    baseline = _load_baseline(args.baseline)
+    baseline, bash_audited = _load_baseline(args.baseline)
     new = {k: vs for k, vs in unregistered.items() if k not in baseline}
     stale = [k for k in baseline if k not in unregistered]
+    bash_new = sorted(set(bash_scripts) - set(bash_audited))
+    bash_stale = sorted(set(bash_audited) - set(bash_scripts))
 
     failed = False
+    if bash_new:
+        failed = True
+        print(f"{len(bash_new)} non-Python launcher script(s) outside the "
+              "manual-audit tier.")
+        print("The AST detector cannot walk bash — review the script's "
+              "echo/printf lanes by hand for untrusted interpolations, then "
+              "add a bash_manual_audit entry with a note to "
+              "report_writer_closure_baseline.json:")
+        for rel in bash_new:
+            print(f"  {rel}")
+        print()
     if registered_hits:
         failed = True
         print("REGISTERED report writers with unsanitised foreign values "
@@ -223,11 +270,19 @@ def main(argv: list[str] | None = None) -> int:
         for k in stale:
             print(f"  {k}")
 
+    if bash_stale:
+        print(f"note: {len(bash_stale)} stale bash_manual_audit entr"
+              f"{'y' if len(bash_stale) == 1 else 'ies'} (script gone or "
+              "now Python; safe to remove):")
+        for rel in bash_stale:
+            print(f"  {rel}")
+
     counts = Counter(v.file for vs in unregistered.values() for v in vs)
     print(f"closure scan: {len(candidates)} candidates, "
           f"{len(registered)} registered writers, "
           f"{sum(counts.values())} baselined hits in {len(counts)} files, "
-          f"{len(new)} new, {len(stale)} stale")
+          f"{len(new)} new, {len(stale)} stale, "
+          f"{len(bash_scripts)} bash manual-audit")
     return 1 if failed else 0
 
 

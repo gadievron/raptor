@@ -712,5 +712,43 @@
     "raptor_fuzzing.py::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
     }
+  },
+  "bash_manual_audit": {
+    "bin/cve-diff": {
+      "note": "manual audit: launcher/dispatch shim \u2014 echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
+    },
+    "bin/cve-env": {
+      "note": "manual audit: launcher/dispatch shim \u2014 echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
+    },
+    "bin/raptor": {
+      "note": "manual audit: launcher \u2014 echo lanes carry $0, PATH-entry hygiene warnings (operator env), install paths, and argv; PATH entries are pre-scrubbed before any external command runs"
+    },
+    "bin/raptor-sca": {
+      "note": "manual audit: launcher/dispatch shim \u2014 echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
+    },
+    "libexec/raptor-agentic": {
+      "note": "manual audit: launcher/dispatch shim \u2014 echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
+    },
+    "libexec/raptor-cc-trust-check": {
+      "note": "manual audit: dispatch shim \u2014 echo lanes carry argv flags and install paths; the trust verdict rendering happens in the python CLI it dispatches to"
+    },
+    "libexec/raptor-frida": {
+      "note": "manual audit: echo lanes relay the lifecycle stub's stdout (RAPTOR's own trusted child; the OUTPUT_DIR sentinel relay must stay byte-exact) plus paths/argv; target stdio is NOT echoed by the wrapper (the capture pipeline owns it)"
+    },
+    "libexec/raptor-frida-patch-verify": {
+      "note": "manual audit: same shape as raptor-frida \u2014 lifecycle relay + paths/argv; verdict text comes from the python patch oracle (a registered writer)"
+    },
+    "libexec/raptor-llm-scorecard": {
+      "note": "manual audit: launcher/dispatch shim \u2014 echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
+    },
+    "libexec/raptor-sage-mcp": {
+      "note": "manual audit: docker-exec dispatch shim \u2014 echo lanes carry $0/paths; server JSON-RPC traffic flows through the mcp-guard python filter, never through echo"
+    },
+    "libexec/raptor-sage-setup": {
+      "note": "manual audit: the boot-payload approval displays route server-derived text through _render_payload_display (escape + bound, fail-closed on sanitiser failure) on every lane incl. the corrupt-header --reauthorize replace; covered by test_sage_setup_reauthorize display-integrity tests and the approval-surface registry wire-token check"
+    },
+    "libexec/raptor-threat-model": {
+      "note": "manual audit: launcher/dispatch shim \u2014 echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
+    }
   }
 }

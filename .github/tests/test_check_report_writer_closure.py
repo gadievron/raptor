@@ -236,3 +236,83 @@ def test_real_baseline_notes_are_filled():
 ])
 def test_gate_inputs_exist(rel):
     assert (REPO_ROOT / rel).is_file()
+
+
+# ---------------------------------------------------------------------------
+# Bash manual-audit tier (walk-scope: the AST detector cannot walk
+# non-Python launchers).
+# ---------------------------------------------------------------------------
+
+
+def test_new_bash_script_fails_without_manual_audit_entry(tmp_path):
+    root = _scratch_repo(tmp_path)
+    (root / "libexec").mkdir()
+    script = root / "libexec" / "raptor-new-launcher"
+    script.write_text("#!/usr/bin/env bash\necho \"$UNTRUSTED\"\n")
+    script.chmod(0o755)
+    _git_add_all(root)
+    cp = _run(["--root", str(root),
+               "--baseline", str(_baseline(tmp_path, {}))])
+    assert cp.returncode == 1, cp.stdout + cp.stderr
+    assert "manual-audit" in cp.stdout
+    assert "raptor-new-launcher" in cp.stdout
+
+
+def test_bash_script_with_manual_audit_entry_passes(tmp_path):
+    root = _scratch_repo(tmp_path)
+    (root / "libexec").mkdir()
+    script = root / "libexec" / "raptor-new-launcher"
+    script.write_text("#!/usr/bin/env bash\necho ok\n")
+    script.chmod(0o755)
+    _git_add_all(root)
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({
+        "entries": {},
+        "bash_manual_audit": {
+            "libexec/raptor-new-launcher": {
+                "note": "reviewed: echoes constants only",
+            },
+        },
+    }))
+    cp = _run(["--root", str(root), "--baseline", str(baseline)])
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    assert "1 bash manual-audit" in cp.stdout
+
+
+def test_noteless_bash_entry_refused(tmp_path):
+    root = _scratch_repo(tmp_path)
+    _git_add_all(root)
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({
+        "entries": {},
+        "bash_manual_audit": {"libexec/x": {"note": "TODO: triage"}},
+    }))
+    cp = _run(["--root", str(root), "--baseline", str(baseline)])
+    assert cp.returncode != 0
+    assert "missing a real note" in (cp.stdout + cp.stderr)
+
+
+def test_stale_bash_entry_warns_clean(tmp_path):
+    root = _scratch_repo(tmp_path)
+    _git_add_all(root)
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({
+        "entries": {},
+        "bash_manual_audit": {
+            "libexec/raptor-gone": {"note": "reviewed once, now removed"},
+        },
+    }))
+    cp = _run(["--root", str(root), "--baseline", str(baseline)])
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    assert "stale bash_manual_audit" in cp.stdout
+
+
+def test_every_bash_launcher_has_manual_audit_entry():
+    """Closure over the REAL tree: the gate run in
+    test_gate_green_on_current_tree already enforces this; this pin
+    keeps the requirement visible when editing the baseline."""
+    baseline = json.loads(
+        (REPO_ROOT / ".github" / "scripts"
+         / "report_writer_closure_baseline.json").read_text())
+    assert baseline.get("bash_manual_audit"), (
+        "bash_manual_audit section missing")
