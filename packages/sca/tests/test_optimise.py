@@ -1385,3 +1385,162 @@ class TestMaterialiseSymlinkRefusal:
         assert len(changes) == 1
         assert changes[0].skipped_reason is not None
         assert "refused" in changes[0].skipped_reason
+
+
+class TestBarePinConfinement:
+    """The bare-name pinners run exactly when the hardened
+    (section-confined) rewriters declined — the fallback must carry
+    the same decoy-section resistance, never splicing pins into
+    non-dependency data."""
+
+    def test_package_json_scripts_decoy_untouched(self):
+        plan = _PlanEntry(
+            ecosystem="npm", name="jest",
+            installed="29.0.0", target="29.7.0",
+            manifest=Path("/p/package.json"), advisory_ids=[],
+        )
+        text = (
+            '{\n'
+            '  "scripts": {\n    "jest": ""\n  },\n'
+            '  "config": {\n    "jest": "*"\n  },\n'
+            '  "devDependencies": {\n    "jest": "*"\n  }\n'
+            '}'
+        )
+        new, applied, _ = optimise._pin_bare_package_json(text, plan)
+        assert applied
+        # Only the dependency-section entry is pinned.
+        assert new.count('"jest": "29.7.0"') == 1
+        assert '"scripts": {\n    "jest": ""\n  }' in new
+        assert '"config": {\n    "jest": "*"\n  }' in new
+
+    def test_package_json_no_dep_section_refuses(self):
+        plan = _PlanEntry(
+            ecosystem="npm", name="jest",
+            installed="29.0.0", target="29.7.0",
+            manifest=Path("/p/package.json"), advisory_ids=[],
+        )
+        text = '{"scripts": {"jest": "*"}}'
+        new, applied, reason = optimise._pin_bare_package_json(text, plan)
+        assert not applied
+        assert new == text
+
+    def test_pyproject_keywords_array_untouched(self):
+        plan = _PlanEntry(
+            ecosystem="PyPI", name="requests",
+            installed="2.28.0", target="2.31.0",
+            manifest=Path("/p/pyproject.toml"), advisory_ids=[],
+        )
+        text = (
+            '[project]\n'
+            'keywords = [\n    "requests",\n]\n'
+            'dependencies = [\n    "requests",\n]\n'
+        )
+        new, applied, _ = optimise._pin_bare_pyproject(text, plan)
+        assert applied
+        assert 'keywords = [\n    "requests",\n]' in new
+        assert '"requests==2.31.0",' in new
+
+    def test_pyproject_tool_config_array_untouched(self):
+        plan = _PlanEntry(
+            ecosystem="PyPI", name="requests",
+            installed="2.28.0", target="2.31.0",
+            manifest=Path("/p/pyproject.toml"), advisory_ids=[],
+        )
+        text = (
+            '[tool.mytool]\n'
+            'packages = [\n    "requests",\n]\n'
+        )
+        new, applied, _ = optimise._pin_bare_pyproject(text, plan)
+        assert not applied
+        assert new == text
+
+    def test_pyproject_optional_dependency_group_pinned(self):
+        plan = _PlanEntry(
+            ecosystem="PyPI", name="requests",
+            installed="2.28.0", target="2.31.0",
+            manifest=Path("/p/pyproject.toml"), advisory_ids=[],
+        )
+        text = (
+            '[project.optional-dependencies]\n'
+            'http = [\n    "requests",\n]\n'
+        )
+        new, applied, _ = optimise._pin_bare_pyproject(text, plan)
+        assert applied
+        assert '"requests==2.31.0",' in new
+
+    def test_pyproject_build_system_requires_pinned(self):
+        plan = _PlanEntry(
+            ecosystem="PyPI", name="setuptools",
+            installed="68.0.0", target="70.0.0",
+            manifest=Path("/p/pyproject.toml"), advisory_ids=[],
+        )
+        text = (
+            '[build-system]\n'
+            'requires = [\n    "setuptools",\n]\n'
+        )
+        new, applied, _ = optimise._pin_bare_pyproject(text, plan)
+        assert applied
+        assert '"setuptools==70.0.0",' in new
+
+    def test_pyproject_unbalanced_bracket_string_does_not_leak_context(self):
+        """A dependency string carrying a net-positive bracket
+        (``"foo[",``) must not keep the tracker "inside" the
+        dependencies array past its real ``]`` — the stale array
+        context silently rewrote a bare string in the FOLLOWING
+        ``keywords`` array in the same section."""
+        plan = _PlanEntry(
+            ecosystem="PyPI", name="requests",
+            installed="2.28.0", target="2.31.0",
+            manifest=Path("/p/pyproject.toml"), advisory_ids=[],
+        )
+        text = (
+            '[project]\n'
+            'name = "demo"\n'
+            'dependencies = [\n    "foo[",\n]\n'
+            'keywords = [\n    "requests",\n]\n'
+        )
+        new, applied, reason = optimise._pin_bare_pyproject(text, plan)
+        assert not applied
+        assert new == text
+        assert reason == "bare name not found in a dependency array"
+
+    def test_pyproject_bracketed_extras_string_keeps_array_live(self):
+        """Two-direction guard: brackets inside strings are ignored in
+        BOTH directions — a balanced extras entry (``"foo[bar]",``)
+        neither closes nor extends the array, so a real dependency
+        later in the SAME array is still pinned."""
+        plan = _PlanEntry(
+            ecosystem="PyPI", name="requests",
+            installed="2.28.0", target="2.31.0",
+            manifest=Path("/p/pyproject.toml"), advisory_ids=[],
+        )
+        text = (
+            '[project]\n'
+            'dependencies = [\n'
+            '    "foo[bar]",\n'
+            '    "requests",\n'
+            ']\n'
+        )
+        new, applied, _ = optimise._pin_bare_pyproject(text, plan)
+        assert applied
+        assert '"requests==2.31.0",' in new
+        assert '"foo[bar]",' in new
+
+    def test_pyproject_comment_brackets_ignored(self):
+        """A ``]`` inside a comment must not close the array early —
+        the real dependency below the comment is still in context."""
+        plan = _PlanEntry(
+            ecosystem="PyPI", name="requests",
+            installed="2.28.0", target="2.31.0",
+            manifest=Path("/p/pyproject.toml"), advisory_ids=[],
+        )
+        text = (
+            '[project]\n'
+            'dependencies = [\n'
+            '    # see matrix ]\n'
+            '    "requests",\n'
+            ']\n'
+        )
+        new, applied, _ = optimise._pin_bare_pyproject(text, plan)
+        assert applied
+        assert '"requests==2.31.0",' in new

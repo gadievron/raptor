@@ -700,7 +700,15 @@ def _pin_bare_requirements(
 def _pin_bare_package_json(
     text: str, plan: _PlanEntry,
 ) -> tuple[str, bool, str | None]:
-    """Pin ``"name": "*"`` or ``"name": ""`` → ``"name": "target"``."""
+    """Pin ``"name": "*"`` or ``"name": ""`` → ``"name": "target"``.
+
+    Confined to the root-level dependency sections via the same span
+    helper the hardened rewriter uses — this fallback runs exactly
+    when that rewriter declined, and a whole-file ``pat.sub`` spliced
+    version pins into same-named keys in ``scripts`` / ``config`` /
+    arbitrary nested objects (decoy content, corrupted data).
+    """
+    from .update import _package_json_dep_spans
     pat = re.compile(
         r'("' + re.escape(plan.name) + r'"\s*:\s*")'
         r'([^"]*?)'
@@ -716,29 +724,125 @@ def _pin_bare_package_json(
             return f"{m.group(1)}{plan.target}{m.group(3)}"
         return m.group(0)
 
-    new_text = pat.sub(_replace, text)
+    spans = _package_json_dep_spans(text)
+    if not spans:
+        return text, False, "no dependency section found"
+    new_text = text
+    # Back-to-front so earlier span offsets stay valid after edits.
+    for start, end in sorted(spans, reverse=True):
+        segment = pat.sub(_replace, new_text[start:end])
+        new_text = new_text[:start] + segment + new_text[end:]
     if not rewrote:
         return text, False, "no wildcard/empty spec found"
     return new_text, True, None
 
 
+# TOML (section, array-key) contexts whose bare-string entries are
+# PEP 508 dependency specs. Everything else (``keywords = [...]``,
+# ``classifiers``, tool config arrays) is data a pin must never be
+# spliced into.
+_PYPROJECT_DEP_SECTION_ARRAYS: tuple[tuple[str, str | None], ...] = (
+    ("project", "dependencies"),
+    # Every array key inside these tables is a dependency group.
+    ("project.optional-dependencies", None),
+    ("dependency-groups", None),
+    ("build-system", "requires"),
+)
+
+
+def _toml_bracket_delta(line: str) -> int:
+    """Net ``[``/``]`` balance of one TOML line, ignoring brackets
+    inside single-line string literals and after a comment ``#``.
+
+    A naive ``count("[") - count("]")`` reads brackets INSIDE strings:
+    a dependency entry like ``"foo[",`` carries a net-positive delta,
+    so the tracker stayed "inside" the dependencies array past its
+    real ``]`` and the stale array context silently rewrote a bare
+    string in a FOLLOWING non-dependency array (``keywords``) in the
+    same section. Basic (``"``) strings honour backslash escapes;
+    literal (``'``) strings have none (TOML rules). Multi-line
+    strings are beyond a line heuristic — a bracket inside one can
+    only inflate the depth, which makes the pinner refuse (array
+    openers are only recognised at depth 0), never mis-splice.
+    """
+    delta = 0
+    quote: str | None = None
+    escaped = False
+    for ch in line:
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif quote == '"' and ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+        elif ch == "#":
+            break
+        elif ch == "[":
+            delta += 1
+        elif ch == "]":
+            delta -= 1
+    return delta
+
+
+def _pyproject_dep_context(section: str, array_key: str | None) -> bool:
+    """True when a bare string at (``[section]``, ``key = [``) is a
+    dependency spec."""
+    if array_key is None:
+        return False
+    for sec, key in _PYPROJECT_DEP_SECTION_ARRAYS:
+        if section == sec and (key is None or array_key == key):
+            return True
+    return False
+
+
 def _pin_bare_pyproject(
     text: str, plan: _PlanEntry,
 ) -> tuple[str, bool, str | None]:
-    """Pin a bare dep name in pyproject.toml (PEP 621 or Poetry)."""
+    """Pin a bare dep name in pyproject.toml (PEP 621).
+
+    Confined to dependency arrays (``[project] dependencies``,
+    optional-dependency groups, ``[dependency-groups]``,
+    ``[build-system] requires``): the unscoped line rewrite turned a
+    same-named entry in ANY toml array — a multi-line
+    ``keywords = ["requests",]`` — into ``"requests==X",``, corrupting
+    non-dependency data. Poetry's ``name = "^1.0"`` key-value form is
+    not a bare string, so it never matched here.
+    """
     norm = pep503_name(plan.name)
 
-    # PEP 621 list form: "name" or 'name' as a bare string in
-    # [project.dependencies] or [project.optional-dependencies.*]
     out_lines: list[str] = []
     rewrote = False
+    section = ""
+    array_key: str | None = None
+    bracket_depth = 0
     for raw in text.splitlines(keepends=True):
         stripped = raw.strip()
+        header = re.match(r"^\[+\s*([^\]]+?)\s*\]+\s*$", stripped)
+        if header and bracket_depth == 0:
+            section = header.group(1).strip().strip('"').strip("'")
+            # optional-dependency group headers keep the table prefix.
+            if section.startswith("project.optional-dependencies."):
+                section = "project.optional-dependencies"
+            array_key = None
+            out_lines.append(raw)
+            continue
+        if bracket_depth == 0:
+            opener = re.match(
+                r"""^(['"]?)([A-Za-z0-9_\-.]+)\1\s*=\s*\[""", stripped,
+            )
+            if opener:
+                array_key = opener.group(2)
         m = re.match(
             r"""^(['"])([A-Za-z0-9_\-.]+)\s*(['"])\s*,?\s*$""",
             stripped,
         )
-        if m and pep503_name(m.group(2)) == norm:
+        if (m and bracket_depth > 0
+                and _pyproject_dep_context(section, array_key)
+                and pep503_name(m.group(2)) == norm):
             q = m.group(1)
             new_val = f"{q}{m.group(2)}=={plan.target}{q}"
             if stripped.endswith(","):
@@ -747,9 +851,16 @@ def _pin_bare_pyproject(
             rewrote = True
         else:
             out_lines.append(raw)
+        # String- and comment-aware bracket balance tracks whether the
+        # next line is still inside the opened array (see
+        # ``_toml_bracket_delta`` for why naive counting mis-spliced).
+        bracket_depth += _toml_bracket_delta(stripped)
+        if bracket_depth <= 0:
+            bracket_depth = 0
+            array_key = None
     if rewrote:
         return "".join(out_lines), True, None
-    return text, False, "bare name not found in pyproject.toml"
+    return text, False, "bare name not found in a dependency array"
 
 
 # ---------------------------------------------------------------------------
