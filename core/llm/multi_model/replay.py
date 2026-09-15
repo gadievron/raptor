@@ -391,7 +391,7 @@ def render_markdown(report: ReplayReport) -> str:
             alphas = per_model_alpha[model]
             betas = per_model_beta[model]
             lines.append(
-                f"| `{model}` | {statistics.mean(alphas):.3f} | "
+                f"| `{_scrub_cell(model)}` | {statistics.mean(alphas):.3f} | "
                 f"{statistics.mean(betas):.3f} | {len(alphas)} |"
             )
     lines.append("")
@@ -399,10 +399,13 @@ def render_markdown(report: ReplayReport) -> str:
 
 
 def render_json(report: ReplayReport) -> str:
-    # Artifact, not display: the rendering is persisted to the replay
-    # output file as well as printed, and both forms are consumed as a
-    # JSON document (jq, downstream tooling) rather than read as prose.
-    return dumps_artifact(asdict(report), sort_keys=True)
+    # The rendering is persisted to the replay output file AND written
+    # to the operator terminal by main() — the terminal half makes
+    # ensure_ascii load-bearing: without it, C1 controls (single-byte
+    # CSI/OSC) in orchestrated_report-derived strings pass through
+    # raw. ASCII output stays a valid JSON document for the parsing
+    # consumers (jq, downstream tooling) either way.
+    return dumps_artifact(asdict(report), sort_keys=True, ensure_ascii=True)
 
 
 # ---------------------------------------------------------------------------

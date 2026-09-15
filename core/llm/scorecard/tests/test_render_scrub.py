@@ -361,3 +361,134 @@ class TestHumanLanesModelNamesScrubbed:
         from core.llm.scorecard.cli import cmd_chain_closure
         self._run(cmd_chain_closure, self._args(
             self._sidecar(tmp_path, "exploit_chain_closure")))
+
+
+class TestReplayReliabilityTableScrub:
+    """The per-model reliability table is fed by
+    ``class_summaries[].model_reliabilities[]["model"]`` — same
+    orchestrated_report provenance as the scrubbed distinct_models /
+    decision_class cells. The hostile fixture must populate
+    model_reliabilities (the default-empty fixture never exercised
+    the cell)."""
+
+    def test_reliability_model_cell_escaped(self):
+        from core.llm.multi_model.replay import (
+            ClassSummary,
+            ReplayReport,
+            render_markdown as replay_render,
+        )
+        report = ReplayReport(
+            sources=["r"],
+            total_panels=1,
+            total_findings_with_panel=1,
+            distinct_models=[f"m{HOSTILE}"],
+            distinct_decision_classes=["dc"],
+            findings=[],
+            class_summaries=[ClassSummary(
+                decision_class="dc", n_findings=1,
+                n_flips_to_exploitable=0, n_flips_to_not_exploitable=0,
+                converged=True, iterations=1,
+                model_reliabilities=[
+                    {"model": f"m{HOSTILE}", "alpha": 0.9, "beta": 0.8},
+                ],
+            )],
+            flip_rate=0.0,
+            flip_to_exploitable_rate=0.0,
+            flip_to_not_exploitable_rate=0.0,
+            posterior_distribution={},
+        )
+        md = replay_render(report)
+        for raw in RAW:
+            assert raw not in md
+        assert "Inferred per-model reliability" in md
+
+    def test_replay_render_json_ascii_encoded(self):
+        from core.llm.multi_model.replay import (
+            ClassSummary,
+            ReplayReport,
+            render_json as replay_render_json,
+        )
+        report = ReplayReport(
+            sources=["r"],
+            total_panels=1,
+            total_findings_with_panel=1,
+            distinct_models=["m-\x9b31m"],
+            distinct_decision_classes=["dc-\x9d0;pwn"],
+            findings=[],
+            class_summaries=[ClassSummary(
+                decision_class="dc-\x9d0;pwn", n_findings=1,
+                n_flips_to_exploitable=0, n_flips_to_not_exploitable=0,
+                converged=True, iterations=1,
+                model_reliabilities=[
+                    {"model": "m-\x9b31m", "alpha": 0.9, "beta": 0.8},
+                ],
+            )],
+            flip_rate=0.0,
+            flip_to_exploitable_rate=0.0,
+            flip_to_not_exploitable_rate=0.0,
+            posterior_distribution={},
+        )
+        rendered = replay_render_json(report)
+        assert "\x9b" not in rendered
+        assert "\x9d" not in rendered
+        parsed = json.loads(rendered)
+        assert parsed["distinct_models"] == ["m-\x9b31m"]  # round-trips
+
+
+class TestScorecardAuditJsonLane:
+    """scorecard-audit's own --json lane (audit.render_json →
+    sys.stdout.write) is the 7th JSON terminal lane; it must
+    ASCII-encode like cli.py's six."""
+
+    def test_render_json_ascii_encoded(self, tmp_path, monkeypatch):
+        from core.llm.scorecard import integrity
+        from core.llm.scorecard.audit import audit as run_audit, render_json
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        sidecar = tmp_path / "llm_scorecard.json"
+        sidecar.write_text(json.dumps({
+            "version": 2,
+            "models": {
+                "model-\x9b31m": {
+                    "dc-\x9d0;pwn": {
+                        "events": {
+                            "evil-\x9b2J": {"correct": 3, "incorrect": 1},
+                        },
+                    },
+                },
+            },
+        }))
+        assert integrity.stamp_file(sidecar)
+        report = run_audit(sidecar)
+        rendered = render_json(report)
+        assert "\x9b" not in rendered
+        assert "\x9d" not in rendered
+        json.loads(rendered)  # stays a valid JSON document
+
+    def test_main_json_lane_ascii_encoded(self, tmp_path, monkeypatch):
+        import io
+        from contextlib import redirect_stdout
+
+        from core.llm.scorecard import integrity
+        from core.llm.scorecard.audit import main as audit_main
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        sidecar = tmp_path / "llm_scorecard.json"
+        sidecar.write_text(json.dumps({
+            "version": 2,
+            "models": {
+                "model-\x9b31m": {
+                    "dc-\x9d0;pwn": {
+                        "events": {
+                            "evil-\x9b2J": {"correct": 3, "incorrect": 1},
+                        },
+                    },
+                },
+            },
+        }))
+        assert integrity.stamp_file(sidecar)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            audit_main(["--path", str(sidecar), "--json"])
+        out = buf.getvalue()
+        assert "\x9b" not in out
+        assert "\x9d" not in out
+        json.loads(out)

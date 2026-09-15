@@ -469,8 +469,15 @@ def render_markdown(report: AuditReport) -> str:
 
 
 def render_json(report: AuditReport) -> str:
+    # ensure_ascii: this lane is written to the operator terminal by
+    # main(); JSON escapes C0 but passes C1 controls (U+0080-U+009F,
+    # incl. single-byte CSI/OSC) through raw when ensure_ascii is off,
+    # and the report carries sidecar-derived strings (event_type keys,
+    # decision_class values) that are attacker-choosable under the
+    # key-unusable clamp. ASCII output stays valid JSON for consumers
+    # that parse it (same rationale as cli.py's _dumps_json_lane).
     payload = asdict(report)
-    return dumps_artifact(payload, sort_keys=True)
+    return dumps_artifact(payload, sort_keys=True, ensure_ascii=True)
 
 
 # ---------------------------------------------------------------------------
