@@ -42,10 +42,13 @@ lives in another file and are pinned here without being enumerated.
 from __future__ import annotations
 
 import ast
+import re
 import subprocess
 import unittest
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -263,6 +266,32 @@ def _is_test_path(rel: str) -> bool:
             or parts[-1].startswith("test_") or parts[-1] == "conftest.py")
 
 
+# Call-shaped mention of a prompt callee: the exact identifier at a
+# word boundary, whitespace (newlines included — parenthesised
+# continuations), then the argument list.
+_PY_PROMPT_MENTION = re.compile(r"\b(?:input|confirm)\s*\(")
+
+
+def _may_carry_python_prompt(text: str) -> bool:
+    """Smoke-subset prescreen for the Python prompt lane: does the raw
+    text carry a call-shaped mention of a prompt callee?
+
+    Used ONLY to pick which files the default-tier enumeration parses —
+    it is NOT full coverage. Identifiers (unlike string literals)
+    appear verbatim in honestly-written source, so every honest
+    ``input()``/``confirm()`` call site matches (``input(x)``,
+    ``input (x)``, split across lines inside parentheses, any
+    attribute owner). The residue: an NFKC-normalised identifier
+    spelling (``𝗂𝗇𝗉𝗎𝗍(...)`` parses to the ``input`` name with no
+    ``input`` in the text), a backslash line continuation between
+    callee and argument list, or a comment wedged there — squarely
+    the adversarial-in-repo-author class this net's docstring already
+    scopes out — and the nightly full enumeration owns it (see
+    test_full_enumeration_matches_smoke).
+    """
+    return _PY_PROMPT_MENTION.search(text) is not None
+
+
 def _python_prompts(tree: ast.AST) -> bool:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -277,11 +306,21 @@ def _python_prompts(tree: ast.AST) -> bool:
     return False
 
 
-def enumerate_surfaces() -> set[str]:
+def enumerate_surfaces(full: bool = False) -> set[str]:
     """Every git-tracked file carrying an interactive approval prompt:
     Python ``input()``/``confirm()`` call sites and bash ``read -p``
     in runtime code, plus markdown files instructing AskUserQuestion
-    use."""
+    use.
+
+    Default (smoke) mode parses only files that pass the cheap text
+    prescreens — the bash line scan plus _may_carry_python_prompt —
+    which cover every honestly-written prompt spelling; the AST parse
+    + walk of every tracked runtime module breached the default tier's
+    per-test budget on contended CI runners. ``full=True`` (nightly)
+    parses everything and owns the NFKC-identifier residue; the
+    equivalence of the two modes on the real tree is pinned nightly in
+    test_full_enumeration_matches_smoke.
+    """
     found: set[str] = set()
     for rel in _git_files():
         if _is_test_path(rel):
@@ -300,26 +339,46 @@ def enumerate_surfaces() -> set[str]:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
+        # The bash lane's own detector doubles as its prescreen — the
+        # line scan is cheap; only the Python parse is not.
+        bash_hit = any(
+            _bash_read_has_prompt(ln) for ln in text.splitlines())
+        if not full and not bash_hit and not _may_carry_python_prompt(text):
+            # Neither lane can match: no prompting read line exists,
+            # and an honest input()/confirm() call site would have hit
+            # the identifier prescreen (see _may_carry_python_prompt
+            # for the NFKC residue the nightly full mode owns).
+            continue
         try:
             if _python_prompts(ast.parse(text)):
                 found.add(rel)
         except SyntaxError:
             # Not Python — bash/other script: any read-with-prompt line.
-            if any(_bash_read_has_prompt(ln) for ln in text.splitlines()):
+            if bash_hit:
                 found.add(rel)
     return found
 
 
-class TestApprovalSurfaceRegistry(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        try:
-            cls.enumerated = enumerate_surfaces()
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            raise unittest.SkipTest("not a git checkout (or git unavailable)")
+# Enumeration is lazy and cached per mode: only the two closure tests
+# read it, and computing it in setUpClass made every registry-only test
+# in the class pay the whole-tree walk as setup (once per xdist worker
+# that drew any test from the class).
+_ENUM_CACHE: dict[bool, frozenset[str]] = {}
 
+
+def _enumerated(full: bool = False) -> frozenset[str]:
+    if full not in _ENUM_CACHE:
+        try:
+            _ENUM_CACHE[full] = frozenset(enumerate_surfaces(full=full))
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            raise unittest.SkipTest(
+                "not a git checkout (or git unavailable)")
+    return _ENUM_CACHE[full]
+
+
+class TestApprovalSurfaceRegistry(unittest.TestCase):
     def test_every_prompt_surface_is_adjudicated(self):
-        missing = sorted(self.enumerated - set(REGISTRY))
+        missing = sorted(_enumerated() - set(REGISTRY))
         self.assertFalse(
             missing,
             "unadjudicated approval surface(s) — a new interactive "
@@ -329,14 +388,69 @@ class TestApprovalSurfaceRegistry(unittest.TestCase):
         )
 
     def test_no_stale_registry_rows(self):
+        enumerated = _enumerated()
         stale = sorted(
             rel for rel, entry in REGISTRY.items()
-            if entry.lane != "render" and rel not in self.enumerated
+            if entry.lane != "render" and rel not in enumerated
         )
         self.assertFalse(
             stale,
             "registry rows whose file no longer carries a prompt "
             f"surface — retire or re-adjudicate: {stale}",
+        )
+
+    def test_smoke_prescreen_contract(self):
+        """The prescreen must pass every honestly-written prompt
+        spelling to the parser, and — pinned here so the docstring
+        stays true — it does NOT see the wedge-class residue (an
+        NFKC-normalised identifier, a backslash continuation between
+        callee and argument list): that residue is exactly why the
+        nightly full enumeration exists and must never be re-labelled
+        as covered by the smoke. The detector itself DOES flag each
+        residue spelling once parsed, keeping the detection pinned
+        daily."""
+        honest = (
+            'ans = input("Authorize? [y/N] ")',
+            'ans = input ("spaced call")',
+            'ok = confirm("Proceed?")',
+            'typer.confirm("Delete runs?")',
+            'click.confirm("Apply patch?")',
+            'v = (input\n("split across lines"))',
+        )
+        for src in honest:
+            self.assertTrue(_may_carry_python_prompt(src), src)
+            self.assertTrue(_python_prompts(ast.parse(src)), src)
+        residue = (
+            '𝗂𝗇𝗉𝗎𝗍("Approve? ")',           # NFKC-normalised identifier
+            'v = input \\\n("continued")',   # backslash continuation
+        )
+        for src in residue:
+            self.assertFalse(_may_carry_python_prompt(src), src)
+            self.assertTrue(_python_prompts(ast.parse(src)), src)
+        # Non-call and non-boundary mentions stay out of the smoke
+        # subset — and out of the detector, so the two never diverge
+        # on them.
+        for src in ("x = read_text()", "user_input(y)"):
+            self.assertFalse(_may_carry_python_prompt(src), src)
+            self.assertFalse(_python_prompts(ast.parse(src)), src)
+
+    # Full enumeration: genuinely heavy (an AST parse + walk of every
+    # tracked runtime module; as class setup it breached the default
+    # tier's per-test warning band on contended CI runners), so it runs
+    # in the nightly tier. Trade-off, both directions: unmarking it
+    # puts the whole-tree parse back in every PR run; marking it
+    # WITHOUT the smoke-mode closure tests above would leave a new
+    # prompt surface invisible until the next nightly. The smoke
+    # enumeration covers every honestly-spelled surface on every PR;
+    # only NFKC-identifier spellings wait for nightly, where this
+    # equivalence check surfaces them as a smoke/full divergence.
+    @pytest.mark.slow
+    def test_full_enumeration_matches_smoke(self):
+        self.assertEqual(
+            _enumerated(full=True), _enumerated(),
+            "full enumeration found surface(s) the smoke prescreen "
+            "skipped (or vice versa) — adjudicate the divergent "
+            "file(s) and keep the prescreen honest",
         )
 
     def test_registry_files_exist(self):
