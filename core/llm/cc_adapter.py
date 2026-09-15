@@ -1324,11 +1324,18 @@ def parse_stream_json_lines(lines: list[str]) -> StreamJsonResult:
                 # (e.g. budget cap: subtype error_max_budget_usd with
                 # result "") — fall through to the subtype so the
                 # cause is never silently dropped.
-                result.error = (
+                # Redact + escape at the producer: the stream-json
+                # envelope's result/subtype are model/CLI-authored and
+                # this error string reaches TurnResponse.error_message,
+                # loop artifacts, and provider warning logs.
+                from core.security.log_sanitisation import (
+                    escape_nonprintable as _esc_np,
+                )
+                result.error = _esc_np(redact_secrets(str(
                     obj.get("result")
                     or obj.get("subtype")
                     or "stream-json reported is_error"
-                )
+                )[:500]))
 
     return result
 

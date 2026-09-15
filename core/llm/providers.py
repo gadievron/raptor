@@ -4667,7 +4667,13 @@ class ClaudeCodeLLMProvider(LLMProvider):
                 system_prompt=sys_combined,
             )
         except RuntimeError as exc:
-            err_msg = f"subprocess error: {exc}"
+            # Redact + escape: the exception text can relay CC
+            # subprocess stderr (model/CLI-authored bytes) into the
+            # operator's console log and TurnResponse.error_message.
+            from core.security.log_sanitisation import escape_nonprintable
+            from core.security.redaction import redact_secrets
+            err_msg = ("subprocess error: "
+                       + escape_nonprintable(redact_secrets(str(exc)[:500])))
             logger.warning("ClaudeCodeLLMProvider.turn: %s", err_msg)
             return TurnResponse(
                 content=[],
@@ -4817,7 +4823,13 @@ class ClaudeCodeLLMProvider(LLMProvider):
 
         if sr.error:
             err_msg = sr.error
-            logger.warning("ClaudeCodeLLMProvider._turn_resumable: %s", err_msg)
+            # sr.error is sanitised at the stream-json producer;
+            # escape again at the log site so this console emission
+            # never depends on the producer contract (idempotent on
+            # already-escaped text).
+            from core.security.log_sanitisation import escape_nonprintable
+            logger.warning("ClaudeCodeLLMProvider._turn_resumable: %s",
+                           escape_nonprintable(err_msg)[:500])
             if first_turn and sr.session_id:
                 self._session_id = sr.session_id
             if (
@@ -4906,7 +4918,12 @@ class ClaudeCodeLLMProvider(LLMProvider):
                 return obj
         except (ValueError, json.JSONDecodeError):
             pass
-        return {"error": f"unparseable stream content: {text[:200]}"}
+        # Raw model output — redact + escape before it becomes an
+        # error string that reaches warning logs and loop artifacts.
+        from core.security.log_sanitisation import escape_nonprintable
+        from core.security.redaction import redact_secrets
+        return {"error": "unparseable stream content: "
+                         + escape_nonprintable(redact_secrets(str(text)[:200]))}
 
     # ------------------------------------------------------------------
     # turn() helpers

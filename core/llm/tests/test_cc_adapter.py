@@ -1641,3 +1641,22 @@ class TestCcEnvCredentialScoping:
         env = cc_subprocess_env()
         assert "AWS_BEARER_TOKEN_BEDROCK" not in env
         assert "AWS_REGION" not in env
+
+
+class TestStreamErrorTextSanitised:
+    """Stream-json envelope error text is CLI/model-authored: the
+    producer must redact secrets and escape control bytes before the
+    string reaches TurnResponse.error_message / provider logs."""
+
+    HOSTILE = "\x1b]0;pwned\x07\x9b2J boom sk-ant-api03-" + "a" * 32
+
+    def test_stream_json_error_sanitised(self):
+        from core.llm.cc_adapter import parse_stream_json_lines
+        lines = [json.dumps({
+            "type": "result", "is_error": True, "result": self.HOSTILE,
+        })]
+        r = parse_stream_json_lines(lines)
+        assert r.error is not None
+        assert "\x1b" not in r.error and "\x9b" not in r.error
+        assert "sk-ant-api03-" not in r.error
+        assert len(r.error) < 700
