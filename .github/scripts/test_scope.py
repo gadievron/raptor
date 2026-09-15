@@ -214,6 +214,34 @@ ROOT_HARNESS_FILES = frozenset({
 })
 
 
+def is_dependency_manifest(path: str) -> bool:
+    """Root-level dependency manifests: requirements*.txt and
+    pyproject.toml.
+
+    Every heavy tier installs from these files (the venv jobs and
+    _tier.yml key their caches on ``hashFiles('requirements*.txt')``),
+    so a manifest-only PR must dispatch the FULL tier set: scoping it
+    to the fast tier let a pin bump that broke a carved-out tier merge
+    green and redden that tier's next unrelated run, misattributed —
+    the same delayed-failure shape as the root-harness case. The
+    sibling CodeQL scoper already treats these files as
+    full-scan-worthy. Root-level only: manifests inside test fixture
+    trees are test data, not the CI install surface.
+
+    Trade-off of the root-level restriction: if the install surface
+    ever moves into a directory (e.g. a ``requirements/base.txt``
+    layout), this pattern dispatches NOTHING for it — widen the
+    pattern together with the workflows' hashFiles() keys when that
+    happens. The tie is oracle-tested: every root-level file the
+    workflows' hashFiles() expressions key caches on must be claimed
+    here (test_hashfiles_manifests_are_claimed), so moving the venv
+    cache keys without widening this pattern fails the suite.
+    """
+    return path == "pyproject.toml" or (
+        "/" not in path and path.startswith("requirements")
+    )
+
+
 def expand_conftest(changed_py: set[Path], all_py: list[Path]) -> set[Path]:
     """Files affected by changed conftest.py files.
 
@@ -507,6 +535,27 @@ def compute_tier_dispatch(
         }
         return result
 
+    # Dependency manifests reconfigure what every tier installs —
+    # full dispatch, same rationale as the harness gate above (see
+    # ``is_dependency_manifest``).
+    manifest_hits = sorted(
+        f for f in changed_files if is_dependency_manifest(f)
+    )
+    if manifest_hits:
+        print(
+            f"Dependency manifest change ({', '.join(manifest_hits)}) — "
+            "every tier installs from these files; full tier dispatch"
+        )
+        result = _force_all_dispatch(repo)
+        n_all = len(discover_py_files(repo))
+        result["_stats"] = {
+            "closure": n_all,
+            "total": n_all,
+            "changed": len(changed_files),
+            "dependents": 0,
+        }
+        return result
+
     # Deleted / renamed graph-covered modules: the reverse graph is
     # keyed by on-disk files, so a changed .py that no longer exists
     # (a deletion, or the OLD path of a rename) has no key — every
@@ -665,16 +714,12 @@ def compute_tier_dispatch(
             result[tier_name] = {"run": bool(affected), "files": affected}
 
     # Fast tier: tests in core/ and packages/ that aren't carved out.
+    # (Dependency manifests never reach this point — the
+    # is_dependency_manifest gate above already forced full dispatch;
+    # a fast-tier-only fallback here under-dispatched the carved-out
+    # tiers that install from the same files.)
     fast_files = [f for f in closure
                   if file_in_fast_tier(f) and (repo / f).is_file()]
-    # Also trigger fast tier for non-Python changes that affect the
-    # test infrastructure (requirements, pyproject.toml, etc.).
-    infra_changed = any(
-        f.startswith("requirements") or f == "pyproject.toml"
-        for f in changed_non_py
-    )
-    if infra_changed and not fast_files:
-        fast_files = _discover_fast_tier_files(repo)
     result["python"] = {
         "run": bool(fast_files),
         "files": fast_files,

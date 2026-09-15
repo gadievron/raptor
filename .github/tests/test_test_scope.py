@@ -21,6 +21,7 @@ from test_scope import (
     file_in_dir,
     file_in_fast_tier,
     file_matches_tier,
+    is_dependency_manifest,
     is_test_file,
 )
 
@@ -246,6 +247,41 @@ class TestCiLintTriggerClosure:
         )
 
 
+def _manifest_cache_key_gaps(
+    workflows_dir: Path,
+) -> tuple[list[str], list[str], list[str]]:
+    """(unclaimed root keys, directory-level manifest keys, root keys)
+    from the hashFiles() cache-key expressions in *workflows_dir*.
+
+    ``*.y*ml``: GHA accepts both workflow extensions. A key counts as
+    manifest-named when any path segment starts with ``requirements``
+    or is ``pyproject.toml`` — that is exactly the vocabulary
+    is_dependency_manifest claims, so a claimed name moving into a
+    directory cannot drop out of the checked set silently.
+    """
+    import re
+
+    args: set[str] = set()
+    for wf in sorted(workflows_dir.glob("*.y*ml")):
+        for call in re.findall(
+            r"hashFiles\(([^)]*)\)", wf.read_text(encoding="utf-8")
+        ):
+            args.update(re.findall(r"'([^']+)'", call))
+    root_level = sorted(a for a in args if "/" not in a)
+    unclaimed = [
+        a for a in root_level
+        if not is_dependency_manifest(a.replace("*", "x"))
+    ]
+    moved = sorted(
+        a for a in args
+        if "/" in a and any(
+            seg.startswith("requirements") or seg == "pyproject.toml"
+            for seg in Path(a).parts
+        )
+    )
+    return unclaimed, moved, root_level
+
+
 def _active(result: dict) -> list[str]:
     return sorted(t for t, i in result.items()
                   if not t.startswith("_") and i["run"])
@@ -466,6 +502,74 @@ class TestDispatchFailsOpen:
         assert _is_full_dispatch(result), (
             f"workflow-only PR under-dispatched: only {_active(result)}"
         )
+
+    @pytest.mark.parametrize("manifest", [
+        "requirements.txt",
+        "requirements-dev.txt",
+        "pyproject.toml",
+    ])
+    def test_dependency_manifest_forces_full_dispatch(self, mini_repo, manifest):
+        # Every heavy tier installs from the root manifests (venv jobs
+        # key their caches on hashFiles('requirements*.txt')); pre-fix
+        # a manifest-only PR ran only the fast tier, so a pin bump
+        # that broke a carved-out tier merged green and reddened that
+        # tier's next unrelated run, misattributed.
+        result = compute_tier_dispatch([manifest], mini_repo)
+        assert _is_full_dispatch(result), (
+            f"{manifest}-only PR under-dispatched: only {_active(result)}"
+        )
+
+    def test_nested_manifest_stays_inert(self, mini_repo):
+        # Both directions: a requirements file inside a fixture tree
+        # is test data, not the CI install surface — it must not torch
+        # scoping with a full dispatch.
+        result = compute_tier_dispatch(
+            ["core/pkga/tests/fixtures/requirements.txt"], mini_repo,
+        )
+        assert not _is_full_dispatch(result)
+
+    def test_hashfiles_manifests_are_claimed(self):
+        # Oracle tying is_dependency_manifest to the CI install
+        # surface it mirrors: every ROOT-LEVEL file the workflows'
+        # hashFiles() cache keys reference must be claimed as a
+        # manifest, and no manifest-named key may sit in a directory
+        # (the pattern is root-only, so a cache key moved to e.g.
+        # requirements/base.txt — even while other keys stay at root —
+        # would silently dispatch only the fast tier again). Either
+        # direction of drift fails loud with the remedy named.
+        workflows = Path(__file__).resolve().parents[1] / "workflows"
+        unclaimed, moved, root_level = _manifest_cache_key_gaps(workflows)
+        assert root_level, "hashFiles enumeration broke (no root-level keys)"
+        assert not unclaimed, (
+            f"workflow cache keys reference root manifest(s) "
+            f"{unclaimed} that is_dependency_manifest does not claim — "
+            "widen the pattern in test_scope.py"
+        )
+        assert not moved, (
+            f"workflow cache keys reference manifest(s) inside a "
+            f"directory {moved} — is_dependency_manifest is root-level "
+            "only, so these would dispatch nothing; widen the pattern "
+            "in test_scope.py together with the cache-key move"
+        )
+
+    def test_hashfiles_oracle_flags_drift_shapes(self, tmp_path):
+        # Failing-first fixtures for both drift directions, plus the
+        # .yaml workflow extension (GHA accepts both spellings).
+        (tmp_path / "new-name.yml").write_text(
+            "key: ${{ hashFiles('constraints.txt') }}\n"
+        )
+        unclaimed, moved, root_level = _manifest_cache_key_gaps(tmp_path)
+        assert unclaimed == ["constraints.txt"]
+
+        (tmp_path / "new-name.yml").unlink()
+        (tmp_path / "partial-move.yaml").write_text(
+            "key: ${{ hashFiles('requirements.txt', "
+            "'requirements/base.txt') }}\n"
+        )
+        unclaimed, moved, root_level = _manifest_cache_key_gaps(tmp_path)
+        assert unclaimed == []
+        assert moved == ["requirements/base.txt"]
+        assert root_level == ["requirements.txt"]
 
     def test_scope_script_change_forces_full_dispatch(self, mini_repo):
         # The dispatcher itself under-dispatching is the same failure
