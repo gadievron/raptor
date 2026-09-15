@@ -869,10 +869,23 @@ def case_audit_mechanical(ctx: Ctx) -> None:
         "    message: shell=True with concatenation\n"
         "    pattern: subprocess.call(..., shell=True)\n"
     )
+    # The sweep subcommand takes flags only (no positionals); the old
+    # positional spelling made argparse exit 2 on every run, and
+    # check=False read it green forever — the semgrep sweep runner,
+    # rule-file path, and audit-log receipt were never smoke-tested by
+    # the only case claiming to.
     ctx.run("audit-mech", [
-        au, "sweep", "semgrep", str(rule), str(ctx.fixture),
-        "--out", str(out),
-    ], env=env, timeout=300, check=False)
+        au, "sweep", "--tool", "semgrep", "--rule-file", str(rule),
+        "--file", "app.py", "--function", "ping",
+        "--target", str(ctx.fixture), "--out", str(out),
+    ], env=env, timeout=300)
+    audit_log = out / ".audit-log.jsonl"
+    if not audit_log.is_file():
+        raise AssertionError(
+            f"sweep left no audit-log receipt at {audit_log}")
+    if '"sweep"' not in audit_log.read_text(errors="replace"):
+        raise AssertionError(
+            "audit log carries no sweep receipt entry")
     ctx.run("audit-mech", [au, "critique", "--out", str(out)],
             env=env, timeout=60, check=False)
 
