@@ -14,6 +14,7 @@ Usage::
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import logging
 import os
@@ -197,6 +198,123 @@ def _reap_in_background(proc) -> None:
     threading.Thread(
         target=_wait, name=f"joern-reaper-{pid}", daemon=True,
     ).start()
+
+
+# Bounded wait for the surviving-members escalation in
+# ``_ensure_group_dead``: long enough for a TERM-honouring member to
+# exit, short enough that a wedged JVM (TERM caught, shutdown hook
+# blocked behind the stuck query) reaches SIGKILL without stalling
+# the recovery it rides on.
+_GROUP_KILL_GRACE_S = 5.0
+
+
+def _pgid_alive(pgid: int | None) -> bool:
+    """True while ANY member of *pgid* is actually RUNNING.
+
+    A process group outlives its leader for as long as it has
+    members — exactly the state a leader-only wait cannot see.
+    ``killpg(pgid, 0)`` is the membership probe (a PermissionError
+    still means "somebody is there"), but it also counts zombies:
+    an already-killed member awaiting its parent's reap holds no
+    memory and needs no further signal, so a positive probe is
+    confirmed against procfs state before it reads as alive.
+    """
+    if not pgid or pgid <= 0:
+        return False
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    try:
+        entries = os.scandir("/proc")
+    except OSError:
+        # No procfs — accept the coarse killpg answer.
+        return True
+    with entries:
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            try:
+                if os.getpgid(int(entry.name)) != pgid:
+                    continue
+                stat = Path(f"/proc/{entry.name}/stat").read_text()
+                if stat.rsplit(")", 1)[-1].split()[0] != "Z":
+                    return True
+            except (OSError, ValueError, IndexError):
+                continue
+    return False
+
+
+def _ensure_group_dead(
+    pgid: int | None,
+    *,
+    label: str = "",
+    grace_s: float | None = None,
+) -> bool:
+    """Verify the server's whole process GROUP is dead; escalate if not.
+
+    The stop ladder's waits observe only the LEADER: on the strong
+    tier that is the netns forwarder, and a JVM member survives it on
+    several paths — a forwarder that died first reaps instantly and
+    skips the SIGKILL branch, a non-parent handle fabricates an exit
+    on ECHILD, and the leader-gated killpg fallback degrades to a
+    wrapper-only terminate(). Survivors get TERM → bounded wait →
+    SIGKILL → bounded wait, with a loud log either way. Returns True
+    when the group is empty at exit. Never raises.
+
+    Only ever called with a pgid this process recorded at spawn time;
+    the own-group guard keeps a corrupted value from killing the
+    caller's own session.
+    """
+    if not pgid or pgid <= 0:
+        return True
+    try:
+        if pgid == os.getpgrp():
+            return False
+    except OSError:
+        return False
+    if not _pgid_alive(pgid):
+        return True
+    grace = _GROUP_KILL_GRACE_S if grace_s is None else grace_s
+    tag = label or f"pgid {pgid}"
+    logger.warning(
+        "Joern server process group survived stop (%s) — escalating",
+        tag,
+    )
+    try:
+        with contextlib.suppress(OSError):
+            os.killpg(pgid, signal.SIGTERM)
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            if not _pgid_alive(pgid):
+                return True
+            time.sleep(0.1)
+        with contextlib.suppress(OSError):
+            os.killpg(pgid, signal.SIGKILL)
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            if not _pgid_alive(pgid):
+                logger.info(
+                    "Joern server process group (%s) killed after "
+                    "escalation", tag,
+                )
+                return True
+            time.sleep(0.1)
+    except Exception:  # noqa: BLE001 — cleanup must never break the caller
+        logger.debug("group kill escalation failed (%s)", tag,
+                     exc_info=True)
+    alive = _pgid_alive(pgid)
+    if alive:
+        logger.warning(
+            "Joern server process group (%s) STILL alive after "
+            "SIGKILL escalation — likely uninterruptible teardown; "
+            "not blocking recovery on it", tag,
+        )
+    return not alive
 
 
 def _strip_ansi(text: str) -> str:
@@ -467,6 +585,14 @@ class JoernServer:
         self._query_timeout_s = query_timeout_s
         self._port: int | None = None
         self._proc: subprocess.Popen | None = None
+        # Process-group id recorded at spawn time (Popen used
+        # start_new_session=True, so the child leads a fresh group
+        # whose id equals its pid). Kept SEPARATELY from ``_proc``:
+        # stop() must be able to address the group even after the
+        # leader itself died and was reaped — ``getpgid`` on the dead
+        # leader fails, and on the strong tier the leader is only the
+        # netns forwarder while the JVM member lives on.
+        self._pgid: int | None = None
         self._base_url: str | None = None
         self._cpg_loaded = False
         self._cpg_path: Path | None = None
@@ -645,6 +771,11 @@ class JoernServer:
                 start_new_session=True,
                 cwd=self._workdir,
             )
+            # start_new_session made the child the leader of a fresh
+            # group whose id is its pid; record it while that is
+            # guaranteed true so stop() can address the whole group
+            # later, leader alive or not.
+            self._pgid = self._proc.pid
 
             if self._wait_for_ready():
                 break
@@ -729,6 +860,7 @@ class JoernServer:
             return
 
         pid = self._proc.pid
+        pgid = self._pgid or pid
         logger.info("stopping Joern server (pid %d)", pid)
 
         def _signal_group(sig: int) -> None:
@@ -781,7 +913,14 @@ class JoernServer:
         except OSError:
             pass
 
+        # The waits above observed only the LEADER; verify the whole
+        # group actually died (and escalate if not) BEFORE the
+        # uds/workdir teardown below destroys the only handles that
+        # point at a survivor.
+        _ensure_group_dead(pgid, label=f"stop of pid {pid}")
+
         self._proc = None
+        self._pgid = None
         self._port = None
         self._base_url = None
         self._cpg_loaded = False
@@ -942,9 +1081,43 @@ class JoernServer:
             cpg_path = self._cpg_path
             code_path = self._code_path
             old_pid = self._proc.pid if self._proc is not None else None
+            old_pgid = self._pgid
             old_port = self._port
+            old_socket = self._uds_path
             logger.info("restarting Joern server (stuck query recovery)")
+            if old_pid is None:
+                # Lifecycle-reused handle (connect_existing): no Popen,
+                # so stop() has nothing to signal and the stuck JVM
+                # would survive the restart unaddressed — while
+                # note_server_replaced repoints the state file at the
+                # replacement, erasing the last record of it. Kill the
+                # recorded server through the lifecycle state instead.
+                logger.warning(
+                    "restarting a lifecycle-reused Joern server (no "
+                    "process handle) — killing the recorded server "
+                    "via the lifecycle state file",
+                )
+                try:
+                    from .lifecycle import kill_recorded_server
+                    kill_recorded_server(
+                        port=old_port, socket_path=old_socket,
+                    )
+                except Exception:  # noqa: BLE001 — reap is best-effort
+                    logger.debug(
+                        "lifecycle kill of the reused server failed",
+                        exc_info=True,
+                    )
             self.stop()
+            # Reap before replacing: stop() already ran the identical
+            # group verification, so this re-check is the DELIBERATE
+            # second grace window — it only bites when stop()'s own
+            # escalation timed out (SIGKILLed multi-GB JVM still in
+            # kernel address-space teardown). stop() rightly does not
+            # block its cleanup on that; the one caller about to boot
+            # a replacement JVM is where waiting again is worth it: a
+            # survivor holds gigabytes and would accumulate one leaked
+            # JVM per recovery.
+            _ensure_group_dead(old_pgid, label=f"restart of pid {old_pid}")
             try:
                 self.start()
             except RuntimeError:

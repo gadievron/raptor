@@ -423,27 +423,85 @@ def _signal_server(pid: int, sig: int) -> None:
     os.kill(pid, sig)
 
 
-def _kill_server(state: dict[str, Any]) -> None:
+def _kill_server(state: dict[str, Any]) -> bool:
+    """Kill the recorded server tree. Returns True when a kill was
+    actually dispatched; False when the record was empty or the
+    pid-reuse comm gate refused (nothing verified ours to signal)."""
     pid = state.get("pid")
     if not pid:
-        return
+        return False
     if not _pid_is_our_server(state):
-        return
+        return False
+    # Capture the group BEFORE any signal, while the leader is still
+    # verified ours: on the strong tier the leader is only the netns
+    # forwarder, and it can die (and stop being resolvable via
+    # ``getpgid``) during the grace window while the JVM member
+    # survives in the same group. The group id cannot be recycled
+    # while any member holds it, so a pgid captured here stays ours
+    # for as long as there is anything left to kill. Never our own
+    # group (a corrupt state file must not kill the caller's session).
+    from .server import _ensure_group_dead, _pgid_alive
+    pgid: int | None = None
+    try:
+        if os.getpgid(pid) == pid and pid != os.getpgrp():
+            pgid = pid
+    except OSError:
+        pgid = None
     try:
         _signal_server(pid, signal.SIGTERM)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            if not _pid_alive(pid):
+            # Leader-only liveness let the grace loop declare victory
+            # while the JVM member lived on — require the whole tree
+            # dead.
+            if not _pid_alive(pid) and not _pgid_alive(pgid):
                 _remove_socket_dir(state)
-                return
+                return True
             time.sleep(0.5)
         # Re-verify before SIGKILL: the pid may have died and been
-        # reused during the grace window.
+        # reused during the grace window — but surviving group
+        # MEMBERS still escalate (they are the multi-GB JVM this
+        # exists to kill; the captured pgid is pinned by them).
         if _pid_is_our_server(state):
             _signal_server(pid, signal.SIGKILL)
+        _ensure_group_dead(pgid, label=f"lifecycle kill of pid {pid}")
     except (ProcessLookupError, PermissionError):
         pass
     _remove_socket_dir(state)
+    return True
+
+
+def kill_recorded_server(
+    port: int | None = None,
+    socket_path: str | None = None,
+) -> bool:
+    """Kill the state-file-recorded server when it matches *port* or
+    *socket_path*.
+
+    For ``JoernServer.restart()`` on a lifecycle-reused handle
+    (``connect_existing``): the handle owns no ``Popen``, so
+    ``stop()`` has nothing to signal, and without this the stuck JVM
+    survives every restart while ``note_server_replaced`` repoints
+    the state file at the replacement — erasing the last record of
+    it. Identity-gated so a handle whose server the state file no
+    longer tracks cannot kill an unrelated one. Returns True only
+    when a kill was actually dispatched — False on an identity
+    mismatch AND when ``_kill_server``'s pid-reuse comm gate refused.
+    """
+    if port is None and socket_path is None:
+        return False
+    with _locked() as fd:
+        state = _read_state(fd)
+        if not state:
+            return False
+        matches = (
+            (port is not None and state.get("port") == port)
+            or (socket_path is not None
+                and state.get("socket_path") == socket_path)
+        )
+        if not matches:
+            return False
+        return _kill_server(state)
 
 
 def _remove_socket_dir(state: dict[str, Any]) -> None:
