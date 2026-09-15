@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from core.build.macro_config import MacroConfig, extract_macro_config
 
 
@@ -190,3 +192,38 @@ def test_within_budget_still_parses(tmp_path):
     }])
     mc = extract_macro_config(tmp_path)
     assert mc.is_defined("FOO") is True
+
+
+def test_read_bounded_fifo_refused_without_blocking(tmp_path):
+    """A FIFO planted at a config-artifact path must be REFUSED, not
+    block open(). The reader's contract is FIFO-safe (fstat refuses
+    non-regular files), but the fstat gate only runs after open()
+    returns — a writer-less FIFO opened without O_NONBLOCK hangs the
+    unsandboxed parent forever. Callers pre-gate with is_file(), so
+    the exposure is the check-to-open swap race in an
+    attacker-writable scanned repo; the reader itself must hold the
+    contract it documents.
+    """
+    import os
+    import threading
+
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("os.mkfifo not available on this platform")
+    from core.build.macro_config import _read_bounded
+
+    fifo = tmp_path / "compile_commands.json"
+    os.mkfifo(fifo)
+    outcome: list = []
+
+    def _attempt() -> None:
+        try:
+            _read_bounded(fifo, 1024)
+            outcome.append("read")
+        except (OSError, ValueError):
+            outcome.append("refused")
+
+    t = threading.Thread(target=_attempt, daemon=True)
+    t.start()
+    t.join(timeout=10)
+    assert not t.is_alive(), "_read_bounded blocked opening a FIFO"
+    assert outcome == ["refused"]
