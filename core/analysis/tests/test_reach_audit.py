@@ -299,3 +299,38 @@ def test_module_abort_lineless_query_ambiguous_namesakes_declines():
     }]}
     assert classify_reachability(
         inv, "go/m.go", "dup", 0, "go.m") != "module_aborts"
+
+
+# ---------------------------------------------------------------------------
+# _lookup_class_name — finding-line disambiguation
+# ---------------------------------------------------------------------------
+
+
+def test_lookup_class_name_matches_finding_interior_line():
+    """Production callers (the /agentic chokepoint via _finding_coords)
+    pass the line OF THE FINDING — inside the function, not its first
+    line. Exact line_start equality never matched those, so class_name
+    resolved to None and methods lost class-qualified 1-hop resolution.
+    The lookup now routes through the shared _select_item_by_line
+    heuristic."""
+    from core.analysis.reach_audit import _lookup_class_name
+    inventory = {
+        "files": [{
+            "path": "src/svc.py",
+            "items": [
+                {"name": "handle", "kind": "function",
+                 "line_start": 10, "line_end": 30,
+                 "metadata": {"class_name": "Alpha"}},
+                {"name": "handle", "kind": "function",
+                 "line_start": 40, "line_end": 60,
+                 "metadata": {"class_name": "Beta"}},
+            ],
+        }],
+    }
+    # Interior finding lines resolve to the enclosing definition.
+    assert _lookup_class_name(inventory, "src/svc.py", "handle", 17) == "Alpha"
+    assert _lookup_class_name(inventory, "src/svc.py", "handle", 45) == "Beta"
+    # line_start itself still matches (the old exact-equality case).
+    assert _lookup_class_name(inventory, "src/svc.py", "handle", 40) == "Beta"
+    # line == 0 keeps the first-candidate fallback.
+    assert _lookup_class_name(inventory, "src/svc.py", "handle", 0) == "Alpha"

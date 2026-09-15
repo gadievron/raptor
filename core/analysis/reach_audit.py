@@ -326,10 +326,19 @@ def _lookup_class_name(
     inventory: dict[str, object], file_path: str, name: str, line: int,
 ) -> str | None:
     """The enclosing class of the ``(file_path, name)`` item, if any — used to
-    build a method's class-qualified name for the 1-hop check."""
-    for it in _candidate_items(inventory, file_path, name):
-        if line and int(it.get("line_start") or 0) != line:
-            continue
+    build a method's class-qualified name for the 1-hop check.
+
+    Line disambiguation goes through the shared
+    ``_select_item_by_line`` heuristic: production callers (the
+    /agentic chokepoint via ``_finding_coords``) pass the line OF THE
+    FINDING, which is typically INSIDE the function — the previous
+    exact ``line_start`` equality never matched those, so
+    ``class_name`` resolved to None and the method lost its
+    class-qualified 1-hop resolution and the CHA fallthrough.
+    """
+    from core.analysis.reachability import _select_item_by_line
+    for it in _select_item_by_line(
+            _candidate_items(inventory, file_path, name), line):
         return (it.get("metadata") or {}).get("class_name")
     return None
 
