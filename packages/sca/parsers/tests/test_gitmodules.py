@@ -395,3 +395,46 @@ def test_ls_tree_runs_hardened_and_env_sanitised(
     env = seen["kwargs"].get("env")
     assert env is not None
     assert "GITHUB_TOKEN" not in env
+
+
+# ---------------------------------------------------------------------------
+# Repo-root walk-up is bounded
+# ---------------------------------------------------------------------------
+
+
+def test_repo_root_walk_stops_at_scan_root(tmp_path):
+    """A target WITHOUT its own ``.git`` (extracted tarball, exported
+    subtree) scanned under a directory that IS a git repo must NOT
+    adopt that outer repo as the submodule-resolution root — git would
+    then run (and ``.git/modules`` refs be read) in a repo above the
+    scan target, at attacker-chosen submodule paths."""
+    from packages.sca.parsers._safe_read import scan_root_context
+    from packages.sca.parsers.gitmodules import _find_repo_root
+
+    outer = tmp_path / "operator-repo"
+    target = outer / "extracted" / "src"
+    target.mkdir(parents=True)
+    (outer / ".git").mkdir()
+    gm = target / ".gitmodules"
+    gm.write_text('[submodule "x"]\n  path = libs/x\n  url = u\n')
+    with scan_root_context(target):
+        assert _find_repo_root(gm) is None
+    # Without a scan-root bound the .git boundary still stops the
+    # walk AT the outer repo (the depth-capped legacy behaviour).
+    assert _find_repo_root(gm) == outer.resolve()
+
+
+def test_repo_root_walk_depth_capped(tmp_path):
+    """No scan root, no ``.git`` anywhere near: the walk gives up at
+    the shared depth cap instead of proceeding to ``/``."""
+    from packages.sca.parsers.gitmodules import _find_repo_root
+
+    deep = tmp_path
+    for i in range(15):
+        deep = deep / f"d{i}"
+    deep.mkdir(parents=True)
+    gm = deep / ".gitmodules"
+    gm.write_text('[submodule "x"]\n  path = libs/x\n  url = u\n')
+    # A .git thirteen-plus levels above the manifest is out of reach.
+    (tmp_path / ".git").mkdir()
+    assert _find_repo_root(gm) is None

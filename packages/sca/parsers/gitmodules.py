@@ -57,6 +57,7 @@ from urllib.parse import urlparse
 
 from ..models import Confidence, Dependency, PinStyle
 from . import _safe_read, register
+from ._base import iter_walk_up
 
 logger = logging.getLogger(__name__)
 
@@ -140,14 +141,20 @@ def _parse_sections(text: str) -> list[tuple[str, dict[str, str]]]:
 def _find_repo_root(gitmodules_path: Path) -> Path | None:
     """Walk up from the .gitmodules path looking for a ``.git``
     directory or file. Submodules can have ``.git`` as a file
-    (containing ``gitdir: ../<path>``) — handled separately."""
-    cur = gitmodules_path.resolve().parent
-    while True:
+    (containing ``gitdir: ../<path>``) — handled separately.
+
+    Bounded by ``iter_walk_up`` (active scan root, ``.git``
+    boundary, depth cap, symlink-loop guard) like every other
+    ancestor-walking helper: an unbounded walk made a target
+    WITHOUT its own ``.git`` (extracted tarball, exported subtree)
+    adopt an unrelated repo above the scan root, then ran
+    ``git ls-tree`` and read ``.git/modules`` refs in the
+    OPERATOR'S repo at attacker-chosen submodule paths — data from
+    outside the target landing in ``Dependency.version``."""
+    for cur in iter_walk_up(gitmodules_path.parent):
         if (cur / ".git").exists():
             return cur
-        if cur.parent == cur:
-            return None
-        cur = cur.parent
+    return None
 
 
 def _is_unsafe_path_fragment(fragment: str) -> bool:
