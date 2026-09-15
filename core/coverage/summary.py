@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .record import load_records
+from .schema import iter_file_entries
 
 
 def execution_detail(run_dirs, checklist: dict[str, Any]) -> dict[str, Any]:
@@ -26,14 +27,31 @@ def execution_detail(run_dirs, checklist: dict[str, Any]) -> dict[str, Any]:
     run-scoped diagnostic info — "did the scanners run correctly" — shown
     alongside the durable store-backed coverage view, not folded into it.
     """
-    files = checklist.get("files", []) if checklist else []
+    files = list(iter_file_entries(checklist)) if checklist else []
     files_total = len(files)
-    inv_paths = {fe.get("path") for fe in files if fe.get("path")}
+    inv_paths = {
+        fe.get("path") for fe in files
+        if fe.get("path") and isinstance(fe.get("path"), str)
+    }
+
+    def _strs(value: Any) -> list[str]:
+        # Records are run-dir JSON: keep only string members — a
+        # non-string (or unhashable) element crashed the set updates
+        # and the sorted() views below on every render.
+        if not isinstance(value, list):
+            return []
+        return [v for v in value if isinstance(v, str)]
 
     inv_index = _inventory_name_index(inv_paths)
     tools: dict[str, Any] = {}
     for rd in run_dirs:
         for rec in load_records(Path(rd)):
+            if not isinstance(rec, dict):
+                # load_records may yield one legacy list-of-records
+                # element (an audit-loader contract, spliced flat
+                # there) — this render lane consumes record OBJECTS
+                # only; a list rec crashed every summary render.
+                continue
             tool = rec.get("tool")
             if not tool:
                 continue
@@ -41,11 +59,16 @@ def execution_detail(run_dirs, checklist: dict[str, Any]) -> dict[str, Any]:
                 "examined": set(), "rules_applied": set(), "packs": set(),
                 "files_failed": [], "version": None,
             })
-            for p in rec.get("files_examined", []) or []:
+            for p in _strs(rec.get("files_examined")):
                 t["examined"].add(_match_to_inventory(p, inv_paths, inv_index) or p)
-            t["rules_applied"].update(rec.get("rules_applied", []) or [])
-            t["packs"].update(rec.get("packs", []) or [])
-            t["files_failed"].extend(rec.get("files_failed", []) or [])
+            t["rules_applied"].update(_strs(rec.get("rules_applied")))
+            t["packs"].update(_strs(rec.get("packs")))
+            # files_failed rows are dicts ({path, reason}) and only
+            # ever COUNTED — keep any element, but only from a real
+            # list (a string value would extend char-by-char).
+            ff = rec.get("files_failed")
+            if isinstance(ff, list):
+                t["files_failed"].extend(ff)
             if rec.get("version"):
                 t["version"] = rec["version"]
 

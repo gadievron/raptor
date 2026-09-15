@@ -20,6 +20,7 @@ from typing import Any, TYPE_CHECKING
 from core.json import loads
 
 from .registry import DEPTH_SCANNED, category_of, depth_of
+from .schema import iter_file_entries
 from .store import CoverageStore, iter_inventory_functions
 
 if TYPE_CHECKING:
@@ -32,6 +33,14 @@ _CATEGORIES = ("static", "llm", "runtime")
 _REVIEWABLE_KINDS = ("function", "top_level")
 
 
+def _str_members(value: Any) -> list[str]:
+    """The string members of a run-dir JSON list value ([] for any
+    other shape) — set-update/sorted()-safe intake for record fields."""
+    if not isinstance(value, list):
+        return []
+    return [v for v in value if isinstance(v, str)]
+
+
 def _workflow_step_files(checklist: dict[str, Any]) -> set[str]:
     """File paths whose inventory items are CI-workflow units.
 
@@ -42,9 +51,9 @@ def _workflow_step_files(checklist: dict[str, Any]) -> set[str]:
     checklists written before the per-file ``language`` field.
     """
     out: set[str] = set()
-    for fe in checklist.get("files", []):
+    for fe in iter_file_entries(checklist):
         path = fe.get("path")
-        if not path:
+        if not path or not isinstance(path, str):
             continue
         if (fe.get("language") == "yaml"
                 or ".github/workflows/" in path.replace("\\", "/")):
@@ -86,18 +95,27 @@ def file_level_view(run_dirs: Iterable[Path]) -> dict[str, Any]:
                 "target_path": md.get("target_path"),
             })
         for rec in load_records(rd):
+            if not isinstance(rec, dict):
+                # load_records may yield one legacy list-of-records
+                # element (an audit-loader contract, spliced flat
+                # there) — this render lane consumes record OBJECTS
+                # only; a list rec crashed every summary render.
+                continue
             tool = rec.get("tool")
             if not tool:
                 continue
             t = tools.setdefault(
                 tool, {"files": set(), "versions": set(), "rules": set(), "newest": None}
             )
-            t["files"].update(rec.get("files_examined", []) or [])
-            if rec.get("version"):
+            # Records are run-dir JSON: keep only string members —
+            # a non-string (or unhashable) element crashed the set
+            # updates and the sorted() views this function feeds.
+            t["files"].update(_str_members(rec.get("files_examined")))
+            if isinstance(rec.get("version"), str):
                 t["versions"].add(rec["version"])
-            t["rules"].update(rec.get("rules_applied", []) or [])
+            t["rules"].update(_str_members(rec.get("rules_applied")))
             ts = rec.get("timestamp")
-            if ts and (t["newest"] is None or ts > t["newest"]):
+            if isinstance(ts, str) and (t["newest"] is None or ts > t["newest"]):
                 t["newest"] = ts
     return {
         "tools": {
@@ -189,7 +207,12 @@ def format_progress_trend(store_path) -> str | None:
                     continue
                 try:
                     row = loads(line)
-                except ValueError:
+                except Exception:  # noqa: BLE001 — row containment boundary
+                    # Any parse failure (malformed JSON, nesting bomb
+                    # raising RecursionError on the stdlib backend)
+                    # quarantines this line — the trail sits in the
+                    # writable project dir, and this line renders on
+                    # every coverage report.
                     continue
                 # Valid JSON that isn't an object (a bare ``null`` /
                 # number / string line) would AttributeError on
@@ -200,14 +223,21 @@ def format_progress_trend(store_path) -> str | None:
         return None
     if not rows:
         return None
+
+    def _count(row: dict[str, Any], key: str) -> int:
+        # Genuine ints only — a forged string count crashed the delta
+        # subtraction below on every render.
+        v = row.get(key, 0)
+        return v if isinstance(v, int) and not isinstance(v, bool) else 0
+
     last = rows[-1]
-    reviewed = last.get("llm_reviewed", 0)
-    reviewable = last.get("llm_reviewable", 0)
+    reviewed = _count(last, "llm_reviewed")
+    reviewable = _count(last, "llm_reviewable")
     if len(rows) == 1:
         return (f"  Progress: {reviewed}/{reviewable} reviewed "
                 f"after {last.get('run', '?')} (1 run recorded)")
     prev = rows[-2]
-    delta = reviewed - prev.get("llm_reviewed", 0)
+    delta = reviewed - _count(prev, "llm_reviewed")
     sign = "+" if delta >= 0 else ""
     return (f"  Progress: {reviewed}/{reviewable} reviewed "
             f"({sign}{delta} in {last.get('run', '?')}; "

@@ -480,3 +480,106 @@ def test_read_tracking_status_accepts_generator_input(tmp_path):
     d2.mkdir()
     status = read_tracking_status(d for d in (d1, d2))
     assert status["runs"] == 2
+
+
+# --- hostile run-dir JSON on the render lanes -------------------------------
+
+
+def test_progress_trend_survives_hostile_rows(tmp_path):
+    import json as _json
+
+    from core.coverage.store_summary import format_progress_trend
+
+    store_path = tmp_path / "coverage.json"
+    trail = tmp_path / "coverage-progress.jsonl"
+    bomb = "[" * 100_000 + "]" * 100_000
+    trail.write_text(
+        _json.dumps({"llm_reviewed": "9", "llm_reviewable": None,
+                     "run": ["r"]}) + "\n"
+        + bomb + "\n"
+        + "not json\n"
+        + _json.dumps({"llm_reviewed": 5, "llm_reviewable": 10,
+                       "run": "r2"}) + "\n"
+    )
+    line = format_progress_trend(store_path)
+    assert line is not None
+    assert "5/10" in line
+    assert "+5" in line          # forged prev count reads as 0
+
+
+def test_file_level_view_survives_hostile_records(tmp_path):
+    import json as _json
+
+    from core.coverage.store_summary import (
+        file_level_view,
+        format_file_level_view,
+    )
+
+    run = tmp_path / "run1"
+    run.mkdir()
+    (run / "coverage-semgrep.json").write_text(_json.dumps({
+        "tool": "semgrep",
+        "files_examined": ["a.c", 7, ["x"], None],
+        "rules_applied": ["p/security", {"k": 1}],
+        "version": ["1", "2"],
+        "timestamp": 12345,
+    }))
+    v = file_level_view([run])
+    out = format_file_level_view(v)
+    assert v["tools"]["semgrep"]["files"] == ["a.c"]
+    assert v["tools"]["semgrep"]["versions"] == []
+    assert "semgrep" in out
+
+
+def test_execution_detail_survives_hostile_records(tmp_path):
+    import json as _json
+
+    from core.coverage.summary import execution_detail, format_execution_detail
+
+    run = tmp_path / "run1"
+    run.mkdir()
+    (run / "coverage-semgrep.json").write_text(_json.dumps({
+        "tool": "semgrep",
+        "files_examined": ["a.c", 7],
+        "rules_applied": [None, "p/x", 3],
+        "packs": [{"k": 1}, "pack-a"],
+        "files_failed": "oops",
+        "version": 9,
+    }))
+    hostile_checklist = {"files": [
+        {"path": "a.c", "lines": 10, "items": []},
+        {"path": 5},
+        "junk",
+    ]}
+    detail = execution_detail([run], hostile_checklist)
+    sem = detail["tools"]["semgrep"]
+    assert sem["files_examined"] == 1
+    assert sem["rules_applied"] == ["p/x"]
+    assert sem["packs"] == ["pack-a"]
+    assert sem["files_failed"] == []
+    assert format_execution_detail(detail)
+
+
+def test_render_coverage_survives_hostile_run_dir(tmp_path):
+    import json as _json
+
+    from core.coverage.store_summary import render_coverage
+
+    run = tmp_path / "run1"
+    run.mkdir()
+    (run / "coverage-semgrep.json").write_text(_json.dumps({
+        "tool": "semgrep", "files_examined": ["a.c", None, 7],
+        "rules_applied": {"not": "a list"},
+    }))
+    (run / "findings.json").write_text(_json.dumps({
+        "findings": [{"file": "a.c", "line": "42", "id": "forged"},
+                     {"file": ["x"], "line": 1, "id": "junkfile"}],
+    }))
+    checklist = {"files": [
+        {"path": "a.c", "lines": 100, "items": [
+            {"name": "f", "line_start": "1", "line_end": 50},
+            {"name": "g", "line_start": 60, "line_end": 90},
+        ]},
+    ]}
+    report = render_coverage([run], checklist, run / "coverage.json")
+    assert report is not None and "Coverage" in report
