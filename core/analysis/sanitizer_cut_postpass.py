@@ -864,6 +864,18 @@ def filter_enforced_from_sarif(
     def _norm(s: str) -> str:
         return str(s or "").replace("\\", "/").lstrip("./")
 
+    def _suffix_ok(longer: str, shorter: str) -> bool:
+        # Anchored suffix agreement for abs-vs-relative drift, with a
+        # component minimum: the shorter side must itself carry a
+        # directory component. Both directions of the trade-off: with
+        # no minimum, a bare-basename identity ("util.java") removed a
+        # same-rule same-line namesake in a DIFFERENT directory —
+        # enforcement removal is a finding-drop, the expensive
+        # direction; requiring full-path equality instead would stop
+        # matching the legitimate absolute-uri vs repo-relative-record
+        # drift this arm exists for.
+        return "/" in shorter and longer.endswith("/" + shorter)
+
     keys = [
         ((e.get("rule_id") or ""), _norm(e.get("file") or ""),
          int(e.get("line") or 0))
@@ -892,8 +904,8 @@ def filter_enforced_from_sarif(
                     continue
                 hit = any(
                     rule == k_rule and line == k_line
-                    and (uri == k_file or uri.endswith("/" + k_file)
-                         or k_file.endswith("/" + uri))
+                    and (uri == k_file or _suffix_ok(uri, k_file)
+                         or _suffix_ok(k_file, uri))
                     for (k_rule, k_file, k_line) in keys
                 )
                 if hit:

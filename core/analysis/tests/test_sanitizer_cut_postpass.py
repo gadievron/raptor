@@ -654,6 +654,69 @@ public class Test {
                  r["locations"][0]["physicalLocation"]["region"]["startLine"])
                 for r in kept} == {("r1", 9), ("r2", 8)}
 
+    def test_filter_bare_basename_never_matches_across_dirs(
+            self, tmp_path):
+        """Both directions of the suffix-tolerance trade-off. A
+        same-rule same-line namesake in a DIFFERENT directory must
+        survive when either side is a bare basename — enforcement
+        removal is a finding-drop. Legitimate abs-vs-relative drift
+        (multi-component suffix) must still match."""
+        import json as _json
+        from core.analysis.sanitizer_cut_postpass import (
+            filter_enforced_from_sarif,
+        )
+        sarif = tmp_path / "combined.sarif"
+        results = [
+            # Bare-basename uri, namesake of the enforced x/util.java.
+            {"ruleId": "r1", "locations": [{"physicalLocation": {
+                "artifactLocation": {"uri": "util.java"},
+                "region": {"startLine": 8}}}]},
+            # Different-dir namesake of the enforced file.
+            {"ruleId": "r1", "locations": [{"physicalLocation": {
+                "artifactLocation": {"uri": "other/util.java"},
+                "region": {"startLine": 8}}}]},
+            # Legitimate deeper-path form of the enforced identity.
+            {"ruleId": "r1", "locations": [{"physicalLocation": {
+                "artifactLocation": {"uri": "/repo/x/util.java"},
+                "region": {"startLine": 8}}}]},
+        ]
+        sarif.write_text(_json.dumps(
+            {"runs": [{"results": results}]}), encoding="utf-8")
+        removed = filter_enforced_from_sarif(
+            sarif, [{"rule_id": "r1", "file": "x/util.java", "line": 8}])
+        assert removed == 1
+        kept = _json.loads(sarif.read_text())["runs"][0]["results"]
+        uris = {r["locations"][0]["physicalLocation"]
+                ["artifactLocation"]["uri"] for r in kept}
+        assert uris == {"util.java", "other/util.java"}
+
+    def test_filter_bare_basename_identity_requires_equality(
+            self, tmp_path):
+        # The reverse arm: an enforced identity recorded as a bare
+        # basename must not remove same-named results across dirs —
+        # only the exact-equality arm may fire for it.
+        import json as _json
+        from core.analysis.sanitizer_cut_postpass import (
+            filter_enforced_from_sarif,
+        )
+        sarif = tmp_path / "combined.sarif"
+        results = [
+            {"ruleId": "r1", "locations": [{"physicalLocation": {
+                "artifactLocation": {"uri": "x/util.java"},
+                "region": {"startLine": 8}}}]},
+            {"ruleId": "r1", "locations": [{"physicalLocation": {
+                "artifactLocation": {"uri": "util.java"},
+                "region": {"startLine": 8}}}]},
+        ]
+        sarif.write_text(_json.dumps(
+            {"runs": [{"results": results}]}), encoding="utf-8")
+        removed = filter_enforced_from_sarif(
+            sarif, [{"rule_id": "r1", "file": "util.java", "line": 8}])
+        assert removed == 1
+        kept = _json.loads(sarif.read_text())["runs"][0]["results"]
+        assert (kept[0]["locations"][0]["physicalLocation"]
+                ["artifactLocation"]["uri"]) == "x/util.java"
+
     def test_filter_noop_on_malformed_sarif(self, tmp_path):
         from core.analysis.sanitizer_cut_postpass import (
             filter_enforced_from_sarif,
