@@ -114,29 +114,44 @@ class TestReaderPreParseContainment:
         finally:
             journal.chmod(0o644)
 
-    def test_degenerate_journal_memory_bounded(self, tmp_path: Path):
+    def _assert_degenerate_journal_memory_bounded(
+        self, tmp_path: Path, size: int,
+    ) -> None:
         """The byte cap must bound the reader's own MEMORY, not just
         the file: a journal of 2-byte rows amplified ~20x in peak RSS
         when the reader materialised every line eagerly (an at-cap
         file OOM-killed every journal consumer). Streamed reading
         keeps one line alive at a time."""
         if sys.platform != "linux":
-            pytest.skip("ru_maxrss units are platform-specific")
-        size = 8 * 1024 * 1024
+            pytest.skip("/proc/self/status VmHWM is Linux-specific")
         journal = tmp_path / JOURNAL_FILENAME
         # b"00\n" rows: unparseable JSON -> the corrupt-row quarantine
         # arm, which must allocate nothing per row beyond the line
         # itself (measured ~20x amplification on the eager split).
         journal.write_bytes(b"00\n" * (size // 3))
+        # Peak measurement is VmHWM from the child's own
+        # /proc/self/status, NOT getrusage ru_maxrss: ru_maxrss is
+        # inherited across fork and never reset by execve, so under a
+        # large test-runner parent the child starts with the parent's
+        # watermark already exceeding its own real peak — the delta
+        # reads 0 whatever the reader allocates, and the bound can
+        # never trip. VmHWM resets on exec and tracks only this
+        # child's own high-water mark.
         code = (
-            "import logging, resource, sys\n"
+            "import logging, sys\n"
             "from pathlib import Path\n"
             "logging.disable(logging.CRITICAL)\n"
             "from core.coverage.journal import load_entries\n"
-            "rss0 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n"
+            "def hwm():\n"
+            "    with open('/proc/self/status') as f:\n"
+            "        for line in f:\n"
+            "            if line.startswith('VmHWM:'):\n"
+            "                return int(line.split()[1]) * 1024\n"
+            "    raise RuntimeError('no VmHWM in /proc/self/status')\n"
+            "hwm0 = hwm()\n"
             "entries = load_entries(Path(sys.argv[1]))\n"
-            "rss1 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n"
-            "print((rss1 - rss0) * 1024)\n"
+            "hwm1 = hwm()\n"
+            "print(hwm1 - hwm0)\n"
             "print(len(entries))\n"
         )
         repo_root = Path(__file__).resolve().parents[3]
@@ -147,15 +162,44 @@ class TestReaderPreParseContainment:
             capture_output=True, text=True, env=env, check=True,
             timeout=120,
         )
-        rss_delta, n_entries = (int(x) for x in proc.stdout.split())
+        hwm_delta, n_entries = (int(x) for x in proc.stdout.split())
         assert n_entries == 0
         # Bound: a small multiple of the input covers OS page noise and
-        # buffered-IO overhead; the eager-split reader measured ~20x.
-        assert rss_delta < 6 * size, (
-            f"load_entries peak-RSS delta {rss_delta} bytes for a "
+        # buffered-IO overhead; the eager-split reader measured ~20x —
+        # at EITHER size, an eager-split regression (~20x the input)
+        # lands far past the 6x bound, so both tiers assert the same
+        # memory-bound mechanics on the same code path.
+        assert hwm_delta < 6 * size, (
+            f"load_entries peak-RSS delta {hwm_delta} bytes for a "
             f"{size}-byte degenerate journal — reader memory is not "
             f"bounded by the byte cap"
         )
+
+    def test_degenerate_journal_memory_bounded_scaled(
+        self, tmp_path: Path,
+    ):
+        """Default tier: a 1 MiB degenerate journal walks the same
+        streamed read + per-row quarantine path and asserts the same
+        6x peak-RSS bound as the full-size run below, at ~1/8 the
+        row count."""
+        self._assert_degenerate_journal_memory_bounded(
+            tmp_path, 1024 * 1024)
+
+    # Full-size run: genuinely heavy (a ~2.7M-row subprocess load that
+    # breached the default tier's per-test budget on contended CI
+    # runners), so it runs in the nightly tier. Trade-off, both
+    # directions: unmarking it puts a multi-second, contention-sensitive
+    # test back in every PR run; marking it WITHOUT the scaled run above
+    # would leave the memory bound unasserted until the next nightly.
+    # The scaled run exercises the identical code path and bound daily;
+    # only size-proportional effects (allocator behaviour near the byte
+    # cap) wait for nightly.
+    @pytest.mark.slow
+    def test_degenerate_journal_memory_bounded(self, tmp_path: Path):
+        """Nightly tier: the original full-size (8 MiB) degenerate
+        journal, at the scale where the eager-split OOM was observed."""
+        self._assert_degenerate_journal_memory_bounded(
+            tmp_path, 8 * 1024 * 1024)
 
     def test_row_quarantine_warnings_rate_limited(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture,
