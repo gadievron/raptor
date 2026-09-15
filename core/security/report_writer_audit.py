@@ -33,10 +33,25 @@ Mechanism — deliberately explicit and low-maintenance:
   constructor — without passing through a recognised sanitiser call
   (:data:`_SANITISERS`).
 * **One-level local taint**: ``x = f.get("title")`` marks ``x`` tainted
-  within the enclosing function (also through ``for x in <tainted>``),
-  so the common assign-then-emit pattern is caught. Cross-function
-  dataflow is out of scope (documented limitation, same as the envelope
-  audit).
+  within the enclosing function (also through ``for x in <tainted>``,
+  annotated/augmented assignment, and container round-trips: storing
+  into / appending to a local container taints the container name),
+  so the assign-then-emit and dict→tuple-in-list→loop-print patterns
+  are caught. MODULE-LOCAL helper returns get one level too: a
+  function whose ``return`` carries foreign values marks its callers
+  (``sys.stdout.write(render_json(report))``). Cross-MODULE dataflow
+  and argument→return flow through helpers remain out of scope
+  (documented limitation, same as the envelope audit).
+* **Raw-serialiser arm**: ``print(dumps_display(payload))``-shape
+  whole-payload dumps at terminal-capable sinks are flagged directly
+  (they read no key at all); ``json.dumps(..., ensure_ascii=True)``
+  is the blessed terminal-JSON shape.
+* **Exception-relay arm**: ``except Exception as e: print(f"{e}")``
+  in a BROAD handler is flagged (shallow, handler-body sinks only —
+  scope trade-offs recorded at ``_exception_relay_scan``).
+* **Sanitiser name-shadow arm**: a local definition of a
+  recognised-sanitiser name must build on a canonical sanitiser
+  (``_sanitiser_shadow_scan``).
 * **Mermaid fence rule** (:data:`_MERMAID_FENCE_FILES`): in the diagram
   renderer, any f-string interpolation *inside* a ```` ```mermaid ````
   fence must be a sanitiser call (``_fence`` / ``sanitise_code``) so a
