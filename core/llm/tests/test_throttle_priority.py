@@ -95,15 +95,32 @@ class TestLowPriorityAcquire:
         """Once normal waiters drain, the low-priority caller gets in."""
         throttle = AdaptiveThrottle(1, auto_register=False)
         acquired = threading.Event()
+        attempted = threading.Event()
 
         def low():
             with throttle.acquire_sync(low_priority=True):
                 acquired.set()
 
         with throttle.acquire_sync():
+            # Low-priority waiters don't register in _sync_waiters, so
+            # observe the contender through the acquire loop's own
+            # _maybe_restore call (its first statement per iteration).
+            # The former fixed 0.1s window passed vacuously when the
+            # thread hadn't even started; the probe proves at least
+            # one acquisition pass ran while the slot was held —
+            # in_flight == effective makes the negative assert exact.
+            orig_restore = throttle._maybe_restore
+
+            def probe() -> None:
+                attempted.set()
+                orig_restore()
+
+            throttle._maybe_restore = probe  # type: ignore[method-assign]
             t = threading.Thread(target=low)
             t.start()
-            time.sleep(0.1)
+            assert attempted.wait(timeout=10), (
+                "low-priority contender never reached the acquire loop"
+            )
             assert not acquired.is_set()
         t.join(timeout=10)
         assert acquired.is_set()

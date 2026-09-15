@@ -619,11 +619,19 @@ class TestLaneAttributedControlEvents:
                 s.settimeout(5.0)
                 s.connect(sock)
                 try:
-                    # Bias toward the racing order (verdict before
-                    # request) — well inside the drain budget, so the
-                    # exchange completes cleanly in either order; the
-                    # assertion is order-independent.
-                    time.sleep(0.05)
+                    # Force the racing order structurally: wait until
+                    # the refusal verdict is actually READABLE before
+                    # sending the request (a fixed bias sleep could
+                    # miss the window under load, silently testing the
+                    # ordinary order instead). The proxy writes the
+                    # capacity refusal at accept time, so readability
+                    # proves the verdict landed first; the bounded
+                    # drain must then still serve the late request.
+                    import select as _select
+                    ready, _, _ = _select.select([s], [], [], 10.0)
+                    assert ready, (
+                        "refusal verdict never became readable — "
+                        "accept-time capacity refusal not written")
                     assert _drive_connect(s, _DENIED) == 429
                 finally:
                     s.close()
