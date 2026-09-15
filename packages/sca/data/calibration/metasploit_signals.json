@@ -1,8 +1,8 @@
 {
   "_source": {
-    "fetched_at": "2026-09-08T10:15:53Z",
+    "fetched_at": "2026-09-15T10:40:10Z",
     "license": "Metasploit Framework is BSD-3-Clause. We embed only module-path references + booleans (a public fact about the framework's contents); no MSF code is stored.",
-    "modules_scanned": 7166,
+    "modules_scanned": 7176,
     "name": "Metasploit Framework module metadata",
     "provenance": "rapid7/metasploit-framework modules_metadata_base.json. We extract the CVE→module-path mapping; framework code itself is not redistributed.",
     "url": "https://raw.githubusercontent.com/rapid7/metasploit-framework/HEAD/db/modules_metadata_base.json"
@@ -18739,6 +18739,12 @@
         "exploit_multi/http/magento_sessionreaper"
       ]
     },
+    "CVE-2025-54988": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_scanner/http/elasticsearch_tika_xfa_xxe"
+      ]
+    },
     "CVE-2025-55182": {
       "has_msf_module": true,
       "module_paths": [
@@ -18881,6 +18887,12 @@
         "exploit_multi/http/react2shell_unauth_rce_cve_2025_55182"
       ]
     },
+    "CVE-2025-66516": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_scanner/http/elasticsearch_tika_xfa_xxe"
+      ]
+    },
     "CVE-2025-67888": {
       "has_msf_module": true,
       "module_paths": [
@@ -18989,6 +19001,18 @@
         "exploit_linux/http/beyondtrust_pra_rs_command_injection"
       ]
     },
+    "CVE-2026-18729": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/langflow_auth_rce_cve_2026_18729"
+      ]
+    },
+    "CVE-2026-19295": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/langflow_auth_rce_cve_2026_19295"
+      ]
+    },
     "CVE-2026-19626": {
       "has_msf_module": true,
       "module_paths": [
@@ -19001,6 +19025,12 @@
         "exploit_linux/http/tenable_sc_auditfile_cmdinject_cve_2026_19681"
       ]
     },
+    "CVE-2026-20079": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/http/cisco_fmc_auth_bypass_rce"
+      ]
+    },
     "CVE-2026-20127": {
       "has_msf_module": true,
       "module_paths": [
@@ -19011,6 +19041,12 @@
       "has_msf_module": true,
       "module_paths": [
         "auxiliary_admin/networking/cisco_sdwan_vhub_auth_bypass"
+      ]
+    },
+    "CVE-2026-20929": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_server/relay/esc8_kerberos"
       ]
     },
     "CVE-2026-22200": {
@@ -19315,6 +19351,12 @@
         "auxiliary_scanner/http/concrete_cms_file_usage_disclosure"
       ]
     },
+    "CVE-2026-75604": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_windows/http/nextjs_unauth_rce_cve_2026_75604"
+      ]
+    },
     "CVE-2026-77647": {
       "has_msf_module": true,
       "module_paths": [
@@ -19331,6 +19373,18 @@
       "has_msf_module": true,
       "module_paths": [
         "exploit_multi/http/papercut_ng_external_user_lookup_rce"
+      ]
+    },
+    "CVE-2026-83548": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/http/sonicwall_sma1000_couchdb_rce"
+      ]
+    },
+    "CVE-2026-83549": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/http/sonicwall_sma1000_couchdb_rce"
       ]
     },
     "CVE-2026-9082": {
