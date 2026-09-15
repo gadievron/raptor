@@ -1141,6 +1141,79 @@ def test_git_submodule_candidate_via_parser(tmp_path: Path) -> None:
     assert c.extra["submodule_path"] == "vendor/checkout"
 
 
+def test_git_submodule_bundle_release_falls_back_to_stable_tag(
+    tmp_path: Path,
+) -> None:
+    """``/releases/latest`` may return a non-semver bundle tag
+    (``github/codeql-action`` → ``codeql-bundle-vX.Y.Z``). The
+    submodule walker must gate on stable-semver shape like every
+    other walker and fall through to the stable-filtered ``/tags``
+    path — an ungated bundle tag becomes a wrong-axis bump proposal
+    whose target the policy blocks can't even parse."""
+    from packages.sca.bump.orchestrator import (
+        _enumerate_git_submodule_candidates,
+    )
+    from packages.sca.models import (
+        Confidence,
+        Dependency,
+        PinStyle,
+    )
+
+    current_sha = "a" * 40
+    target_sha = "b" * 40
+    http = _StubHttp({
+        "https://api.github.com/repos/github/codeql-action/releases/latest":
+            {"tag_name": "codeql-bundle-v2.25.4"},
+        "https://api.github.com/repos/github/codeql-action/tags?per_page=100":
+            [
+                {"name": "codeql-bundle-v2.25.4"},   # non-semver — skip
+                {"name": "v3.30.1"},                  # stable — winner
+                {"name": "v3.30.0"},
+            ],
+        "https://api.github.com/repos/github/codeql-action/git/refs/tags/v3.30.1":
+            {"object": {"type": "commit", "sha": target_sha}},
+    })
+    fake_dep = Dependency(
+        ecosystem="GitHub",
+        name="github/codeql-action",
+        version=current_sha,
+        declared_in=tmp_path / ".gitmodules",
+        scope="main", is_lockfile=True, pin_style=PinStyle.GIT,
+        direct=True,
+        purl=f"pkg:github/github/codeql-action@{current_sha}",
+        parser_confidence=Confidence("high", reason="t"),
+        source_kind="git_submodule",
+        source_extra={"url": "https://github.com/github/codeql-action.git",
+                       "path": "vendor/codeql-action",
+                       "submodule_name": "vendor/codeql-action"},
+    )
+    from packages.sca import parsers as _parsers_mod
+    orig = _parsers_mod.parse_manifest
+
+    def _fake_parse(manifest):
+        if manifest.path.name == ".gitmodules":
+            return [fake_dep]
+        return orig(manifest)
+
+    _parsers_mod.parse_manifest = _fake_parse
+    try:
+        (tmp_path / ".gitmodules").write_text("# stub\n")
+        cands, skipped = _enumerate_git_submodule_candidates(
+            tmp_path, http=http, cache=None,
+            github_token=None, sub_cache={},
+        )
+    finally:
+        _parsers_mod.parse_manifest = orig
+
+    assert len(cands) == 1
+    c = cands[0]
+    # MUST be the stable-semver tag, NOT the ungated bundle tag.
+    assert c.target_version == "v3.30.1"
+    assert "codeql-bundle" not in c.target_version
+    assert c.extra["new_sha"] == target_sha
+    assert skipped == []
+
+
 def test_git_submodule_apply_emits_manual_instruction(
     tmp_path: Path,
 ) -> None:

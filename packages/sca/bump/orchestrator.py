@@ -1414,10 +1414,7 @@ def _enumerate_git_submodule_candidates(
     <path>`` instruction.
     """
     from core.upstream_latest.github_releases import (
-        NoStableVersionsFound,
         UpstreamLookupError,
-        latest_release,
-        latest_tag,
         resolve_tag_to_sha,
     )
 
@@ -1448,29 +1445,25 @@ def _enumerate_git_submodule_candidates(
                 # without a current anchor.
                 continue
             repo = dep.name      # ``owner/repo`` for GitHub URLs
-            cache_key = ("git_submodule", repo)
-            if cache_key in sub_cache:
-                target_tag = sub_cache[cache_key]
-            else:
-                try:
-                    target_tag = latest_release(
-                        repo, http=http, cache=cache,
-                        github_token=github_token,
-                    )
-                except UpstreamLookupError:
-                    try:
-                        target_tag = latest_tag(
-                            repo, http=http, cache=cache,
-                            github_token=github_token,
-                        )
-                    except (UpstreamLookupError, NoStableVersionsFound) as e:
-                        skipped.append((
-                            repo, manifest.path,
-                            f"submodule upstream lookup failed: {e}",
-                        ))
-                        sub_cache[cache_key] = None
-                        continue
-                sub_cache[cache_key] = target_tag
+            # Gate on stable-semver shape like every other walker:
+            # ``/releases/latest`` returns whatever tag the
+            # publisher marked latest, unfiltered — e.g.
+            # ``github/codeql-action`` publishes
+            # ``codeql-bundle-vX.Y.Z``. Taken ungated, that becomes
+            # a wrong-axis bump proposal (target_version a bundle
+            # tag, new_sha for the bundle) that block_on_major /
+            # block_on_minor_skew can't even parse. The shared
+            # helper validates through parse_stable and falls back
+            # to the stable-filtered ``/tags`` path, recording a
+            # skip row when neither yields a stable tag.
+            target_tag = _lookup_latest_release_or_tag(
+                repo, http=http, cache=cache,
+                github_token=github_token,
+                uses_cache=sub_cache,
+                skipped=skipped,
+                workflow=manifest.path,
+                cache_kind="git_submodule",
+            )
             if not target_tag:
                 continue
             # Resolve target tag → SHA. Cache separately from the
@@ -1688,6 +1681,7 @@ def _lookup_latest_release_or_tag(
     uses_cache: dict,
     skipped: list[tuple[str, Path, str]],
     workflow: Path,
+    cache_kind: str = "gha_uses",
 ) -> str | None:
     """Look up the latest stable upstream version for a GitHub
     repo. Tries ``/releases/latest`` first (proper GitHub
@@ -1705,6 +1699,10 @@ def _lookup_latest_release_or_tag(
     ``releases/latest`` tag doesn't pass the filter. If neither
     path produces a stable-semver tag, the repo is recorded as
     skipped with reason — operator sees the gap explicitly.
+
+    ``cache_kind`` names the caller's per-repo cache-key kind so
+    walkers with their own cache dicts (gha_uses, git_submodule)
+    share this one gate implementation without colliding keys.
     """
     from core.upstream_latest._version_filter import parse_stable
     from core.upstream_latest.github_releases import (
@@ -1713,7 +1711,7 @@ def _lookup_latest_release_or_tag(
         latest_release,
         latest_tag,
     )
-    cache_key = ("gha_uses", repo)
+    cache_key = (cache_kind, repo)
     if cache_key in uses_cache:
         return uses_cache[cache_key]
     target_ref = None
