@@ -176,13 +176,21 @@ def _target_hash(target: Path) -> str:
 
     sha256 of the RESOLVED path, 12 hex chars — resolving first means
     relative and symlinked spellings of one physical target dedup to a
-    single TargetRecord. Per-run replay records made by
-    packages/llm_analysis/checker_followup.py currently hash the path
-    string as passed (no resolve), so a non-canonical repo_root there
-    can still produce a second record for the same target; align that
-    site to the resolved convention rather than un-resolving this one.
+    single TargetRecord. Every recorder must join on this convention:
+    hashing the path as passed would mint a second TargetRecord for
+    the same physical target, inflating len(entry.targets) (the
+    replay-confidence sort key and the auto-archive floor) and
+    targets_tested. Out-of-package recorders use the public
+    :func:`target_hash_for` spelling.
     """
     return hashlib.sha256(str(target.resolve()).encode()).hexdigest()[:12]
+
+
+def target_hash_for(target: Path) -> str:
+    """Public spelling of the TargetRecord identity convention (see
+    :func:`_target_hash`) for out-of-package recorders — per-run
+    replay recording in llm_analysis joins on the same hash."""
+    return _target_hash(Path(target))
 
 
 def _cap(

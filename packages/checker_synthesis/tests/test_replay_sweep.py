@@ -125,6 +125,31 @@ class TestReplayableEntries:
             == ["edge"]
 
 
+class TestTargetHashConvention:
+    def test_public_spelling_resolves_and_joins(self, tmp_path):
+        # Relative / symlinked spellings of one physical target must
+        # produce ONE TargetRecord identity — the public spelling for
+        # out-of-package recorders joins the private convention.
+        real = tmp_path / "repo"
+        real.mkdir()
+        link = tmp_path / "link"
+        link.symlink_to(real)
+        assert rs.target_hash_for(link) == rs._target_hash(real)
+
+    def test_followup_recorder_uses_the_convention(self):
+        # The per-run replay recorder hashed str(repo_root) as passed
+        # (no resolve), minting a second TargetRecord for the same
+        # target off a non-canonical spelling. Pin that the module
+        # routes target hashing through target_hash_for and carries
+        # no inline hashing of its own.
+        import inspect
+
+        import packages.llm_analysis.checker_followup as cf
+        src = inspect.getsource(cf)
+        assert "target_hash_for" in src
+        assert "hashlib" not in src
+
+
 class TestDispatch:
     def test_cocci_skipped_without_c_sources(self, tmp_path, monkeypatch):
         lib_dir = _write_library(

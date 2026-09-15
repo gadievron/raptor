@@ -225,10 +225,12 @@ def _try_replay_from_library(
             )
             errors.extend(t_errors)
 
-        import hashlib
-        target_hash = hashlib.sha256(
-            str(repo_root).encode(),
-        ).hexdigest()[:12]
+        # Join on the library's resolved-path convention: hashing the
+        # path as passed minted a SECOND TargetRecord for the same
+        # physical target whenever repo_root arrived non-canonical,
+        # inflating len(entry.targets) and targets_tested.
+        from packages.checker_synthesis.replay_sweep import target_hash_for
+        target_hash = target_hash_for(Path(repo_root))
         lib.update(
             entry.rule_id, target_hash, variants, triage_list,
         )
@@ -261,15 +263,13 @@ def _try_replay_from_library(
 def _try_promote_to_library(result, repo_root: Path) -> None:
     """Promote a synthesis result to the rule library if eligible."""
     try:
-        import hashlib
-
         from packages.checker_synthesis import RuleLibrary
         from packages.checker_synthesis.library import _DEFAULT_LIBRARY_DIR
+        from packages.checker_synthesis.replay_sweep import target_hash_for
 
         lib = RuleLibrary(_DEFAULT_LIBRARY_DIR)
-        target_hash = hashlib.sha256(
-            str(repo_root).encode(),
-        ).hexdigest()[:12]
+        # Resolved-path convention — see the replay-record twin above.
+        target_hash = target_hash_for(Path(repo_root))
         lib.promote(result, target_hash=target_hash)
     except Exception:
         logger.debug("checker_followup: library promotion failed", exc_info=True)
