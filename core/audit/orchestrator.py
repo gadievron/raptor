@@ -21397,6 +21397,12 @@ def _re_review_disagreements(
                     _untally_outcome(result, prior)
                     _tally_outcome(result, outcome, append=False)
                     break
+        else:
+            # Kept the prior verdict — the re-review call still spent
+            # real money; changed verdicts book it via _tally_outcome
+            # above (deepen's dominated branch is the template).
+            with result._lock:
+                result.total_cost_usd += outcome.cost_usd
 
     if re_reviewed:
         logger.info(
@@ -27805,6 +27811,13 @@ def _re_review_joern_enriched(
             continue
 
         outcome.line = gap.get("line_start", 0)
+        # Phase ledger — the call cost money whether or not the
+        # verdict changed (deepen's booking is the template).
+        result.cost_tracker.record_call(
+            "re_review",
+            cost_usd=outcome.cost_usd,
+            wall_time_s=outcome.duration_s,
+        )
 
         if outcome.status in ("finding", "suspicious"):
             if outcome.status == "finding" and config.sweep_validate_findings:
@@ -27875,6 +27888,12 @@ def _re_review_joern_enriched(
                 gap["name"],
                 outcome.status,
             )
+        else:
+            # Kept the prior verdict — the re-review call still spent
+            # real money; accepted verdicts book it via _tally_outcome
+            # above (deepen's dominated branch is the template).
+            with result._lock:
+                result.total_cost_usd += outcome.cost_usd
 
     return result
 
@@ -28029,6 +28048,13 @@ def _callee_contract_requeue(
             )
             continue
         outcome.line = gap.get("line_start", 0)
+        # Phase ledger — the call cost money whether or not the
+        # verdict changed (deepen's booking is the template).
+        result.cost_tracker.record_call(
+            "re_review",
+            cost_usd=outcome.cost_usd,
+            wall_time_s=outcome.duration_s,
+        )
         if outcome.status in ("finding", "suspicious"):
             _untally_outcome(result, prior_outcome)
             try:
@@ -28052,6 +28078,12 @@ def _callee_contract_requeue(
                 _ctx.get("callee_contract_violation", {}).get("callee_status"),
             )
             re_reviewed += 1
+        else:
+            # Kept the prior verdict — the re-review call still spent
+            # real money; accepted verdicts book it via _tally_outcome
+            # above (deepen's dominated branch is the template).
+            with result._lock:
+                result.total_cost_usd += outcome.cost_usd
 
     return re_reviewed
 
@@ -28228,6 +28260,13 @@ def _re_review_study_enriched(
             continue
 
         outcome.line = gap.get("line_start", 0)
+        # Phase ledger — the call cost money whether or not the
+        # verdict changed (deepen's booking is the template).
+        result.cost_tracker.record_call(
+            "re_review",
+            cost_usd=outcome.cost_usd,
+            wall_time_s=outcome.duration_s,
+        )
 
         # Receipt threading: a verdict whose re-review was triggered
         # by study answers embeds their receipts in its evidence
@@ -28323,6 +28362,12 @@ def _re_review_study_enriched(
             )
             if ctx.get("study_answers"):
                 _record_study_flip(config, outcome)
+        else:
+            # Kept the prior verdict — the re-review call still spent
+            # real money; changed verdicts book it via _tally_outcome
+            # above (deepen's dominated branch is the template).
+            with result._lock:
+                result.total_cost_usd += outcome.cost_usd
 
     return result
 

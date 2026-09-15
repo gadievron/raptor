@@ -7393,3 +7393,247 @@ class TestPhase2bChainCommit:
             )
             assert chain_out.status == status
             assert not (out_dir / ALARM_FILENAME).exists()
+
+
+class TestReReviewCostBooking:
+    """Every post-loop re-review pass books its LLM spend: the phase
+    ledger gets a re_review record for each call, and a call whose
+    verdict is KEPT (no tally) still lands in result.total_cost_usd —
+    otherwise the --max-cost rail under-enforces by the untracked
+    spend and cost-breakdown.json shows the money only as end-of-run
+    unattributed residual."""
+
+    COST = 0.25
+
+    def _patch_ctx(self, monkeypatch):
+        import core.audit.orchestrator as orch_mod
+
+        monkeypatch.setattr(
+            orch_mod, "_build_context",
+            lambda config, gap, *a, **kw: {
+                "file": gap["file"], "function": gap["name"],
+                "line_start": gap.get("line_start", 1),
+            },
+        )
+        monkeypatch.setattr(
+            orch_mod, "_commit_outcome", lambda *a, **kw: None,
+        )
+        return orch_mod
+
+    def _review_fn(self, status: str):
+        def review_fn(ctx, cfg):
+            return ReviewOutcome(
+                file="a.c", function="f", status=status,
+                body="re-review", hypothesis="h", cost_usd=self.COST,
+            )
+        return review_fn
+
+    def _assert_booked(self, result):
+        assert result.cost_tracker.phases["re_review"].cost_usd == (
+            pytest.approx(self.COST)
+        )
+        assert result.total_cost_usd == pytest.approx(self.COST)
+
+    def test_joern_enriched_kept_verdict_books_spend(
+        self, tmp_path, monkeypatch,
+    ):
+        import time as _time
+        from unittest.mock import MagicMock
+
+        orch_mod = self._patch_ctx(monkeypatch)
+
+        prior = ReviewOutcome(
+            file="a.c", function="f", status="clean", body="ok",
+        )
+        result = OrchestratorResult(clean=1)
+        result.outcomes = [prior]
+        config = OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
+
+        rec = MagicMock()
+        rec.all_joern_flows.return_value = ["flow"]
+
+        orch_mod._re_review_joern_enriched(
+            result, config, self._review_fn("clean"),
+            checklist={"files": []},
+            context_map=None,
+            fuzz_coverage=None,
+            evidence_index={"a.c:f": rec},
+            sarif_cache=None,
+            entry_points=set(),
+            gaps_before_joern=[
+                {"file": "a.c", "name": "f", "line_start": 1},
+            ],
+            start_time=_time.monotonic(),
+            on_progress=None,
+        )
+        # Verdict kept clean: no tally ran, the spend must still land.
+        assert result.outcomes[0] is prior
+        self._assert_booked(result)
+
+    def test_joern_enriched_changed_verdict_books_phase(
+        self, tmp_path, monkeypatch,
+    ):
+        import time as _time
+        from unittest.mock import MagicMock
+
+        orch_mod = self._patch_ctx(monkeypatch)
+
+        prior = ReviewOutcome(
+            file="a.c", function="f", status="clean", body="ok",
+        )
+        result = OrchestratorResult(clean=1)
+        result.outcomes = [prior]
+        config = OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
+
+        rec = MagicMock()
+        rec.all_joern_flows.return_value = ["flow"]
+
+        orch_mod._re_review_joern_enriched(
+            result, config, self._review_fn("suspicious"),
+            checklist={"files": []},
+            context_map=None,
+            fuzz_coverage=None,
+            evidence_index={"a.c:f": rec},
+            sarif_cache=None,
+            entry_points=set(),
+            gaps_before_joern=[
+                {"file": "a.c", "name": "f", "line_start": 1},
+            ],
+            start_time=_time.monotonic(),
+            on_progress=None,
+        )
+        assert result.outcomes[0].status == "suspicious"
+        self._assert_booked(result)
+
+    def test_callee_contract_kept_verdict_books_spend(
+        self, tmp_path, monkeypatch,
+    ):
+        import time as _time
+
+        orch_mod = self._patch_ctx(monkeypatch)
+
+        caller = ReviewOutcome(
+            file="a.c", function="f", status="clean", body="ok",
+            review_result={
+                "relies_on": [
+                    {"callee": "g", "assumption": "validates input"},
+                ],
+            },
+        )
+        callee = ReviewOutcome(
+            file="a.c", function="g", status="finding",
+            body="bad", evidence_tool="semgrep",
+        )
+        result = OrchestratorResult(clean=1, findings=1)
+        result.outcomes = [caller, callee]
+        config = OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
+
+        re_reviewed = orch_mod._callee_contract_requeue(
+            result, config, self._review_fn("clean"),
+            checklist={"files": []},
+            context_map=None,
+            fuzz_coverage=None,
+            evidence_index={},
+            start_time=_time.monotonic(),
+        )
+        assert re_reviewed == 0  # verdict kept
+        self._assert_booked(result)
+
+    def test_study_enriched_kept_verdict_books_spend(
+        self, tmp_path, monkeypatch,
+    ):
+        import time as _time
+
+        orch_mod = self._patch_ctx(monkeypatch)
+
+        prior = ReviewOutcome(
+            file="a.c", function="f", status="clean", body="ok",
+        )
+        result = OrchestratorResult(clean=1)
+        result.outcomes = [prior]
+        config = OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
+
+        orch_mod._re_review_study_enriched(
+            result, config, self._review_fn("clean"),
+            checklist={"files": []},
+            context_map=None,
+            evidence_index={},
+            sarif_cache=None,
+            entry_points=set(),
+            reading_list_functions={"a.c:f"},
+            start_time=_time.monotonic(),
+            on_progress=None,
+        )
+        assert result.outcomes[0] is prior
+        self._assert_booked(result)
+
+    def test_disagreement_kept_verdict_books_spend(
+        self, tmp_path, monkeypatch,
+    ):
+        import time as _time
+        from types import SimpleNamespace
+
+        orch_mod = self._patch_ctx(monkeypatch)
+
+        prior = ReviewOutcome(
+            file="a.c", function="f", status="clean", body="ok",
+        )
+        result = OrchestratorResult(clean=1)
+        result.outcomes = [prior]
+        config = OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
+
+        orch_mod._re_review_disagreements(
+            [SimpleNamespace(
+                file="a.c", function="f", resolution="needs_re_review",
+                mechanical_claim=None,
+            )],
+            result, config, self._review_fn("clean"),
+            checklist={
+                "files": [{
+                    "path": "a.c",
+                    "items": [{"name": "f", "line_start": 1}],
+                }],
+            },
+            context_map=None,
+            evidence_index={},
+            start_time=_time.monotonic(),
+            _on_progress=None,
+        )
+        # Verdict kept clean: no tally ran, the spend must still land.
+        assert result.outcomes[0] is prior
+        self._assert_booked(result)
+
+    def test_disagreement_changed_verdict_books_phase(
+        self, tmp_path, monkeypatch,
+    ):
+        import time as _time
+        from types import SimpleNamespace
+
+        orch_mod = self._patch_ctx(monkeypatch)
+
+        prior = ReviewOutcome(
+            file="a.c", function="f", status="clean", body="ok",
+        )
+        result = OrchestratorResult(clean=1)
+        result.outcomes = [prior]
+        config = OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
+
+        orch_mod._re_review_disagreements(
+            [SimpleNamespace(
+                file="a.c", function="f", resolution="needs_re_review",
+                mechanical_claim=None,
+            )],
+            result, config, self._review_fn("suspicious"),
+            checklist={
+                "files": [{
+                    "path": "a.c",
+                    "items": [{"name": "f", "line_start": 1}],
+                }],
+            },
+            context_map=None,
+            evidence_index={},
+            start_time=_time.monotonic(),
+            _on_progress=None,
+        )
+        assert result.outcomes[0].status == "suspicious"
+        self._assert_booked(result)
