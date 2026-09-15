@@ -223,7 +223,16 @@ def _guard_dominates_sink(guard_if: Node, sink_line: int) -> bool:
 
 
 def _writers_of(method, name: str) -> list[int]:
-    """Byte offsets of every construct that (re)defines ``name``."""
+    """Byte offsets of every construct that (re)defines ``name``.
+
+    Enumeration must cover every BINDING form, not just assignment
+    shapes: a try-with-resources ``resource`` and the pattern
+    variables of ``instanceof`` / ``type_pattern`` / record patterns
+    all bind invisibly to an assignment-only walk — legal even when
+    they shadow a same-named field — and a missed writer between
+    guard and sink lets the guard vouch for a DIFFERENT value than
+    the one the sink consumes (the false-suppression direction).
+    """
     out: list[int] = []
     for n in _iter_named(method):
         t = n.type
@@ -235,11 +244,13 @@ def _writers_of(method, name: str) -> list[int]:
         elif t == "update_expression":
             out.extend(n.start_byte for c in n.children if c.is_named and c.type == "identifier" \
                         and _text(c) == name)
-        elif t in {"variable_declarator", "enhanced_for_statement"}:
+        elif t in {"variable_declarator", "enhanced_for_statement",
+                   "resource", "instanceof_expression"}:
             nm = n.child_by_field_name("name")
             if nm is not None and _text(nm) == name:
                 out.append(n.start_byte)
-        elif t == "catch_formal_parameter":
+        elif t in {"catch_formal_parameter", "type_pattern",
+                   "record_pattern_component"}:
             out.extend(n.start_byte for c in n.children if c.is_named and c.type == "identifier" \
                         and _text(c) == name)
     return out

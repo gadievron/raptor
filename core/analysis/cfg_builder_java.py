@@ -605,9 +605,11 @@ def _payload_from_assignment(
 
 
 def _embedded_store_names(n) -> frozenset[str]:
-    """Store-side base names of assignments, updates, and
-    try-with-resources declarators EMBEDDED in an expression subtree
-    (a condition, a for-update, a call argument, a resource clause).
+    """Store-side base names of assignments, updates,
+    try-with-resources declarators, and pattern-variable bindings
+    (``instanceof`` / ``type_pattern`` / record patterns) EMBEDDED in
+    an expression subtree (a condition, a for-update, a call
+    argument, a resource clause).
 
     ``if (flag && (y = x) != null)`` writes ``y``; a payload with
     ``defs=∅`` makes that definer invisible to reaching-defs, so the
@@ -640,11 +642,20 @@ def _embedded_store_sites(n) -> tuple[tuple[str, int], ...]:
             name = _base_ident(cur)
             if name:
                 out.append((name, cur.start_byte))
-        elif cur.type == "resource":
+        elif cur.type in ("resource", "instanceof_expression"):
             name_node = cur.child_by_field_name("name")
             name = _node_text(name_node) if name_node is not None else None
             if name:
                 out.append((name, cur.start_byte))
+        elif cur.type in ("type_pattern", "record_pattern_component"):
+            # Pattern variables bind on match — ``if (o instanceof
+            # String x)`` / record components. Same invisible-definer
+            # hazard as the resource clause: the binding is an
+            # identifier the Store-shaped walks never see, and a
+            # pattern may legally shadow a same-named field.
+            for c in cur.children:
+                if c.type == _IDENT:
+                    out.append((_node_text(c), cur.start_byte))
         stack.extend(c for c in cur.children if c.is_named)
     return tuple(out)
 

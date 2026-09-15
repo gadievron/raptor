@@ -271,3 +271,82 @@ class TestCrossFile:
     def test_cross_file_without_root_refuses(self, tmp_path):
         src, _root = self._tree(tmp_path)
         assert collection_guard_reason(src, 5, "x", "CWE-79") is None
+
+
+class TestInvisibleBindingWriters:
+    """Binding forms beyond assignment shapes are writers too.
+
+    A try-with-resources ``resource`` and pattern variables
+    (``instanceof String x``, record components) legally rebind — or
+    shadow a same-named field — between guard and sink; missing them
+    from the writer enumeration lets the guard vouch for a DIFFERENT
+    value than the one the sink consumes.
+    """
+
+    def test_resource_rebind_between_guard_and_sink_refuses(self):
+        src = _src(
+            _ALLOWED
+            + "        if (!allowed.contains(x)) { return; }\n"
+            + "        try (var x = open()) {\n"
+            + "            out.println(x);\n        }\n",
+            fields="    java.io.PrintWriter x;\n",
+        )
+        assert collection_guard_reason(src, 7, "x", "CWE-79") is None
+
+    def test_instanceof_pattern_bind_before_sink_refuses(self):
+        src = _src(
+            _ALLOWED
+            + "        if (!allowed.contains(x)) { return; }\n"
+            + "        if (o instanceof String x) {\n"
+            + "            out.println(x);\n        }\n",
+            params="String x, Object o, java.io.PrintWriter out",
+        )
+        assert collection_guard_reason(src, 7, "x", "CWE-79") is None
+
+    def test_record_pattern_component_bind_refuses(self):
+        src = _src(
+            _ALLOWED
+            + "        if (!allowed.contains(x)) { return; }\n"
+            + "        if (o instanceof P(String x)) {\n"
+            + "            out.println(x);\n        }\n",
+            params="String x, Object o, java.io.PrintWriter out",
+        )
+        assert collection_guard_reason(src, 7, "x", "CWE-79") is None
+
+    def test_unrelated_resource_keeps_binding(self):
+        # A resource binding a DIFFERENT name is not a writer of x.
+        src = _src(
+            _ALLOWED
+            + "        if (!allowed.contains(x)) { return; }\n"
+            + "        try (var r = open()) {\n"
+            + "            out.println(x);\n        }\n",
+        )
+        assert collection_guard_reason(src, 7, "x", "CWE-79") is not None
+
+
+class TestPatternBindingsVisibleToCfg:
+    """The CFG twin: pattern/resource bindings must appear in defs so
+    condition-3 exclusivity cannot hold over a live rebind."""
+
+    def test_instanceof_binding_is_a_def(self):
+        from core.analysis.cfg_builder_java import build_java_intraproc_cfg
+        src = ("public class T {\n"
+               "    String x;\n"
+               "    void handle(Object o, java.io.PrintWriter out) {\n"
+               "        if (o instanceof String x) { out.println(x); }\n"
+               "    }\n}\n")
+        cfg = build_java_intraproc_cfg(src, "handle")
+        assert cfg is not None
+        assert any("x" in n.defs for n in cfg.nodes())
+
+    def test_record_pattern_bindings_are_defs(self):
+        from core.analysis.cfg_builder_java import build_java_intraproc_cfg
+        src = ("public class T {\n"
+               "    void handle(Object o, java.io.PrintWriter out) {\n"
+               "        if (o instanceof P(String a, int b)) "
+               "{ out.println(a); }\n"
+               "    }\n}\n")
+        cfg = build_java_intraproc_cfg(src, "handle")
+        assert cfg is not None
+        defs = set().union(*(n.defs for n in cfg.nodes()))
+        assert {"a", "b"} <= defs
