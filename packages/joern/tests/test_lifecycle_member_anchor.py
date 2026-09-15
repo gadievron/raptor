@@ -238,9 +238,15 @@ class TestBootSideDerivation:
         finally:
             self._reap_group(leader)
 
-    def test_no_java_member_fails_safe(self):
-        # The test runner's own group holds no java-comm member.
-        assert server_mod._find_jvm_member(os.getpgrp()) is None
+    def test_no_java_member_fails_safe(self, tmp_path):
+        # A fresh session's group holds no java-comm member.  (Never
+        # scan the test runner's own group: sibling tests spawn real
+        # JVMs -- e.g. the CodeQL CLI -- into it.)
+        leader = self._leader_with_stub(tmp_path, count=0)
+        try:
+            assert server_mod._find_jvm_member(leader.pid) is None
+        finally:
+            self._reap_group(leader)
 
     def test_garbage_pgid_fails_safe(self):
         assert server_mod._find_jvm_member(None) is None
