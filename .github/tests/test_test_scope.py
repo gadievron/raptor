@@ -391,6 +391,38 @@ class TestDispatchFailsOpen:
         result = compute_tier_dispatch(["docs/guide.md"], mini_repo)
         assert _active(result) == []
 
+    def test_tier_workflow_only_change_forces_full_dispatch(self, mini_repo):
+        # tests.yml/_tier.yml ARE every tier's execution harness
+        # (pytest invocations, env guards, venv steps). GHA runs the
+        # modified workflow on the PR, but only the jobs that gate ON
+        # — pre-fix that was none, so a tier-command regression merged
+        # green and surfaced on the next real PR, misattributed.
+        result = compute_tier_dispatch(
+            [".github/workflows/tests.yml"], mini_repo,
+        )
+        assert _is_full_dispatch(result), (
+            f"workflow-only PR under-dispatched: only {_active(result)}"
+        )
+
+    def test_scope_script_change_forces_full_dispatch(self, mini_repo):
+        # The dispatcher itself under-dispatching is the same failure
+        # shape: a scope-script bug gates every job off, so nothing
+        # validates the change beyond its unit tests.
+        result = compute_tier_dispatch(
+            [".github/scripts/test_scope.py"], mini_repo,
+        )
+        assert _is_full_dispatch(result)
+
+    def test_non_harness_workflow_stays_scoped(self, mini_repo):
+        # Both directions: other workflows (lint.yml etc.) are not the
+        # Python-tier harness — they fire ci_lint via extra_triggers,
+        # never a full dispatch.
+        result = compute_tier_dispatch(
+            [".github/workflows/lint.yml"], mini_repo,
+        )
+        assert not _is_full_dispatch(result)
+        assert _active(result) == ["ci_lint"]
+
     def test_mixed_data_and_code_change(self, mini_repo):
         # Mixed PR shape: tier-owned data + an imported module — both
         # routes dispatch, still without a full fallback.
@@ -445,10 +477,10 @@ class TestOnRealRepo:
     @pytest.mark.parametrize("harness_file", sorted(ROOT_HARNESS_FILES))
     def test_root_harness_change_dispatches_every_tier(
             self, repo, harness_file):
-        """A PR touching only the repo-root conftest.py or pytest.ini
-        reconfigures the harness every tier runs under; pre-fix it
-        dispatched ZERO tiers and tests-passed went green with no
-        tests run."""
+        """A PR touching only a harness file (root pytest config, the
+        tier workflows, or the scope scripts that drive dispatch)
+        reconfigures what every tier runs; pre-fix it dispatched ZERO
+        tiers and tests-passed went green with no tests run."""
         result = compute_tier_dispatch([harness_file], repo)
         inactive = [t for t, i in result.items()
                     if not t.startswith("_") and not i["run"]]

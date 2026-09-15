@@ -180,16 +180,38 @@ FAST_TIER_IGNORES = {
 }
 
 
-#: Repo-root files that ARE the pytest harness: every tier runs under
-#: their configuration (fixtures, emulation/egress guards, marker
-#: filters, addopts). A change to them must dispatch the FULL tier set:
-#: the directory-tree conftest expansion cannot express that blast
-#: radius (the root's prefix "./" matches no relative path), pytest.ini
-#: is neither a .py file nor a requirements/pyproject infra trigger,
-#: and the preflight deliberately excludes conftest.py — so without
-#: this gate a PR touching only these files dispatched ZERO tiers and
-#: merged green with no tests run.
-ROOT_HARNESS_FILES = frozenset({"conftest.py", "pytest.ini"})
+#: Repo-relative paths of files that ARE the test harness — every
+#: tier's execution flows through them, so a change to any one must
+#: dispatch the FULL tier set.
+#:
+#: Root pytest harness (conftest.py, pytest.ini): every tier runs
+#: under their configuration (fixtures, emulation/egress guards,
+#: marker filters, addopts). The directory-tree conftest expansion
+#: cannot express that blast radius (the root's prefix "./" matches
+#: no relative path), pytest.ini is neither a .py file nor a
+#: requirements/pyproject infra trigger, and the preflight
+#: deliberately excludes conftest.py — so without this gate a PR
+#: touching only these files dispatched ZERO tiers and merged green
+#: with no tests run.
+#:
+#: CI dispatch harness (tests.yml / _tier.yml / preflight.yml and the
+#: scope scripts they run): these define every tier's pytest
+#: invocation, env guards, and gating. A PR touching only them fired
+#: ci_lint at most — but GHA only executes the jobs that gate ON,
+#: which was none, so a tier-command regression (wrong pytest args,
+#: dropped env guard, an under-dispatching scope bug) merged green
+#: and surfaced on the next real PR or the cron, misattributed —
+#: the same delayed-failure shape as the root pytest case above.
+ROOT_HARNESS_FILES = frozenset({
+    "conftest.py",
+    "pytest.ini",
+    ".github/workflows/tests.yml",
+    ".github/workflows/_tier.yml",
+    ".github/workflows/preflight.yml",
+    ".github/scripts/test_scope.py",
+    ".github/scripts/codeql_scope.py",
+    ".github/scripts/preflight_scope.py",
+})
 
 
 def expand_conftest(changed_py: set[Path], all_py: list[Path]) -> set[Path]:
