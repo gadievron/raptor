@@ -92,6 +92,23 @@ def test_registered_files_exist():
         )
 
 
+def test_both_validation_report_generators_registered():
+    """validation-report.md has TWO generators (report.py's pipeline
+    renderer and the orchestrator's inline _generate_report). Both
+    interpolate finding-derived text into the same operator-facing
+    artifact — losing either from the registry ships its future edits
+    unaudited."""
+    from core.security.report_writer_audit import _REPORT_WRITER_FILES
+    for rel in (
+        "packages/exploitability_validation/report.py",
+        "packages/exploitability_validation/orchestrator.py",
+    ):
+        assert rel in _REPORT_WRITER_FILES, (
+            f"validation-report.md generator missing from the "
+            f"report-writer audit registry: {rel}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Self-tests on the rule itself — deliberately-bad snippets pin that a
 # revert of any batch fix re-fires the audit, WITHOUT actually reverting.

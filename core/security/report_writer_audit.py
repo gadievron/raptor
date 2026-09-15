@@ -135,6 +135,10 @@ _REPORT_WRITER_FILES = (
     "core/project/report.py",
     "core/reporting/findings.py",
     "packages/exploitability_validation/report.py",
+    # Second validation-report.md generator (the orchestrator's
+    # inline _generate_report/_render_finding_lines) — same artifact,
+    # same finding-derived interpolations, must stay under audit.
+    "packages/exploitability_validation/orchestrator.py",
     "packages/llm_analysis/patch_gate.py",
     "libexec/raptor-review",
     "libexec/raptor-annotate",
