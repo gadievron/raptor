@@ -47,7 +47,10 @@ if not (os.environ.get("CLAUDECODE")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 from core.json import load_json  # noqa: E402
-from core.security.log_sanitisation import escape_nonprintable  # noqa: E402
+from core.security.log_sanitisation import (  # noqa: E402
+    escape_nonprintable,
+    sanitise_for_terminal as _sft,
+)
 
 # --json-schema files are small hand-written schemas.
 _MAX_SCHEMA_BYTES = 8 * 1024 * 1024
@@ -301,8 +304,9 @@ def main() -> int:
                 and answered
                 and bare_model_id(answered) != bare_model_id(pinned)):
             print(
-                f"warning: --model {args.model} did not answer — this "
-                f"response came from fallback model {answered}",
+                f"warning: --model {_sft(str(args.model), max_len=120)} "
+                f"did not answer — this response came from fallback "
+                f"model {_sft(answered, max_len=120)}",
                 file=sys.stderr,
             )
 

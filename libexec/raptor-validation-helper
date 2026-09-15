@@ -40,6 +40,7 @@ import hashlib  # noqa: E402
 from core.artifacts.provenance import sanitise_free_text, stamp_provenance  # noqa: E402
 from core.inventory.lookup import normalise_path  # noqa: E402
 from core.json import load_json, save_json  # noqa: E402
+from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
 from core.schema_constants import MEMORY_CORRUPTION_TYPES, normalise_vuln_type  # noqa: E402
 from packages.exploitability_validation.schemas import (  # noqa: E402
     ATTACK_PATH_SCHEMA,
@@ -210,7 +211,7 @@ def _validate_file(workdir, filename, validator_func):
         # complete list still returns to callers that want it.
         print(
             f"  {filename}: WARNING {len(errors)} validation "
-            f"problem(s) — first: {errors[0]}",
+            f"problem(s) — first: {_sft(str(errors[0]), max_len=300)}",
             file=sys.stderr,
         )
     else:
@@ -471,7 +472,7 @@ def _apply_stage_file(workdir, stage_letter):
                     _deep_merge(finding, update_dict)
                     applied += 1
                 else:
-                    print(f"  WARNING: {finding_id} not found in findings.json — skipped", file=sys.stderr)
+                    print(f"  WARNING: {_sft(str(finding_id), max_len=120)} not found in findings.json — skipped", file=sys.stderr)
 
         elif "findings" in staged and isinstance(staged["findings"], list):
             # Fallback: Claude wrote a findings array — merge by ID, don't replace
@@ -705,7 +706,6 @@ def _build_standalone_pocs(target, build_dir):
                                 check=False, env=_safe_env)
             # Compiler stderr quotes target-source bytes and the file
             # names are target-derived — escape before the terminal.
-            from core.security.log_sanitisation import sanitise_for_terminal as _sft
             if result.returncode == 0:
                 print(f"  Built: {_sft(source.name, max_len=120)} -> "
                       f"{_sft(output.name, max_len=120)}")
@@ -743,7 +743,6 @@ def prepare_A(workdir, target=None):
     priority_targets = checklist.get("priority_targets", [])
     if priority_targets:
         print(f"Priority targets from /understand: {len(priority_targets)} unchecked flows")
-        from core.security.log_sanitisation import sanitise_for_terminal as _sft
         for pt in priority_targets:
             # Bridge fields are LLM-authored (/understand output).
             print(f"  {_sft(str(pt.get('entry_point')), max_len=120)} → "
@@ -768,7 +767,6 @@ def prepare_A(workdir, target=None):
             f"({len(verified)} MAC-verified) — hint-only, re-verify "
             f"against current code"
         )
-        from core.security.log_sanitisation import sanitise_for_terminal as _sft
         for row in verified[:8]:
             # MAC verification proves provenance, not byte hygiene —
             # stored memories quote analysed-target text.
@@ -819,8 +817,9 @@ def prepare_A(workdir, target=None):
                   f"(full map: {map_path})")
             _MAP_PRINT_CAP = 20
             for src, entry in list(mapped.items())[:_MAP_PRINT_CAP]:
-                parts = [f"{k}={v}" for k, v in entry.items()]
-                print(f"  {src}: {', '.join(parts)}")
+                parts = [f"{k}={_sft(str(v), max_len=120)}"
+                         for k, v in entry.items()]
+                print(f"  {_sft(str(src), max_len=200)}: {', '.join(parts)}")
             if len(mapped) > _MAP_PRINT_CAP:
                 print(f"  ... {len(mapped) - _MAP_PRINT_CAP} more mapped "
                       f"files in {map_path}")
@@ -846,7 +845,8 @@ def prepare_B(workdir, target=None):
         vt = finding.get("vuln_type", "")
         normalised = normalise_vuln_type(vt)
         if normalised != vt:
-            print(f"  Normalised: {finding.get('id', '?')} vuln_type '{vt}' -> '{normalised}'")
+            print(f"  Normalised: {_sft(str(finding.get('id', '?')), max_len=120)} "
+                  f"vuln_type '{_sft(str(vt), max_len=64)}' -> '{normalised}'")
             finding["vuln_type"] = normalised
 
     # --- Dedup flag ---
@@ -867,7 +867,8 @@ def prepare_B(workdir, target=None):
             # An id-less f1 can't be referenced as the duplicate anchor.
             if (same_func or nearby) and f1.get("id"):
                 f2["dedup_flag"] = f"potential_dup:{f1['id']}"
-                print(f"  Dedup flag: {f2.get('id', '?')} may duplicate {f1['id']}")
+                print(f"  Dedup flag: {_sft(str(f2.get('id', '?')), max_len=120)} "
+                      f"may duplicate {_sft(str(f1['id']), max_len=120)}")
 
     # --- Carry-forward check (Stage A) ---
     for finding in findings:
@@ -881,11 +882,11 @@ def prepare_B(workdir, target=None):
         fid = finding.get("id", "?")
         sa = finding.get("stage_a_summary")
         if not sa:
-            print(f"  WARN: {fid} missing stage_a_summary — add it", file=sys.stderr)
+            print(f"  WARN: {_sft(str(fid), max_len=120)} missing stage_a_summary — add it", file=sys.stderr)
         elif not isinstance(sa, dict) or not all(k in sa for k in ("confidence", "status")):
-            print(f"  WARN: {fid} stage_a_summary incomplete — needs confidence, status", file=sys.stderr)
+            print(f"  WARN: {_sft(str(fid), max_len=120)} stage_a_summary incomplete — needs confidence, status", file=sys.stderr)
         if not finding.get("origin"):
-            print(f"  WARN: {fid} missing origin field", file=sys.stderr)
+            print(f"  WARN: {_sft(str(fid), max_len=120)} missing origin field", file=sys.stderr)
 
     # --- ast_view enrichment ---
     # Attach a compact per-function AST view (signature, calls
@@ -1159,9 +1160,9 @@ def prepare_C(workdir, target=None):
         fid = finding.get("id", "?")
         sb = finding.get("stage_b_summary")
         if not sb:
-            print(f"  WARN: {fid} missing stage_b_summary — add it", file=sys.stderr)
+            print(f"  WARN: {_sft(str(fid), max_len=120)} missing stage_b_summary — add it", file=sys.stderr)
         elif not isinstance(sb, dict) or not all(k in sb for k in ("hypothesis_id", "hypothesis_status", "proximity")):
-            print(f"  WARN: {fid} stage_b_summary incomplete", file=sys.stderr)
+            print(f"  WARN: {_sft(str(fid), max_len=120)} stage_b_summary incomplete", file=sys.stderr)
 
     # --- Pre-check findings against inventory ---
     checklist = load_json(Path(workdir) / "checklist.json")
@@ -1185,13 +1186,15 @@ def prepare_C(workdir, target=None):
             inv = inv_files.get(normalised) if normalised else None
         if inv is None:
             finding["checklist_verified"] = False
-            print(f"  C0 FAIL: {finding.get('id', '?')} — file '{fpath}' not in inventory", file=sys.stderr)
+            print(f"  C0 FAIL: {_sft(str(finding.get('id', '?')), max_len=120)} — "
+                  f"file '{_sft(str(fpath), max_len=200)}' not in inventory", file=sys.stderr)
         # "line" is LLM-authored (advisory schema): a non-int value
         # can't be range-checked, so it just skips this comparison
         # instead of raising a str/int TypeError.
         elif isinstance(fline, int) and fline > inv.get("lines", 0):
             finding["checklist_verified"] = False
-            print(f"  C0 FAIL: {finding.get('id', '?')} — line {fline} > file length {inv['lines']}", file=sys.stderr)
+            print(f"  C0 FAIL: {_sft(str(finding.get('id', '?')), max_len=120)} — "
+                  f"line {fline} > file length {inv['lines']}", file=sys.stderr)
         else:
             finding["checklist_verified"] = True
 
@@ -1259,7 +1262,6 @@ def _run_cocci_prereqs(workdir, findings_data, target=None):
             flagged += 1
             # finding id and function name are target/LLM-derived —
             # escape + bound before they reach the operator terminal.
-            from core.security.log_sanitisation import sanitise_for_terminal as _sft
             print(
                 f"  C-cocci WARN: {_sft(str(finding.get('id', '?')), max_len=64)} — function "
                 f"{_sft(repr(result['details'].get('function')), max_len=128)} has no callers "
@@ -1301,12 +1303,12 @@ def prepare_D(workdir, target=None):
         fid = finding.get("id", "?")
         sc = finding.get("stage_c_summary")
         if not sc:
-            print(f"  WARN: {fid} missing stage_c_summary — add it", file=sys.stderr)
+            print(f"  WARN: {_sft(str(fid), max_len=120)} missing stage_c_summary — add it", file=sys.stderr)
         elif not isinstance(sc, dict) or not isinstance(sc.get("checks"), dict):
-            print(f"  WARN: {fid} stage_c_summary.checks must be a dict "
+            print(f"  WARN: {_sft(str(fid), max_len=120)} stage_c_summary.checks must be a dict "
                   f"with keys: {REQUIRED_CHECKS}", file=sys.stderr)
         elif not all(k in sc["checks"] for k in REQUIRED_CHECKS):
-            print(f"  WARN: {fid} stage_c_summary.checks incomplete", file=sys.stderr)
+            print(f"  WARN: {_sft(str(fid), max_len=120)} stage_c_summary.checks incomplete", file=sys.stderr)
 
     # Count the Stage C verdict from stage_c_summary.passed — that is
     # where the stage-c.json contract (STAGE_SCHEMA_HINTS["C"]) puts
@@ -1739,7 +1741,8 @@ def _discover_and_match_binaries(workdir, target, data, build=None,
                 stem = Path(rel).stem
                 if stem in executables:
                     print(f"  note: multiple env artifacts share stem "
-                          f"{stem!r}; stem matching disabled for it")
+                          f"{_sft(repr(stem), max_len=120)}; "
+                          f"stem matching disabled for it")
                     executables.pop(stem)
                 else:
                     executables[stem] = str(path)
@@ -1797,7 +1800,7 @@ def _discover_and_match_binaries(workdir, target, data, build=None,
                 else:
                     finding.setdefault("feasibility", {})[
                         "binary_path"] = bp
-                print(f"  {finding.get('id', '?')}: matched -> {bp}")
+                print(f"  {_sft(str(finding.get('id', '?')), max_len=120)}: matched -> {_sft(str(bp), max_len=200)}")
                 matched += 1
         if not bp:
             reason = "no binary found"
@@ -1825,12 +1828,13 @@ def _discover_and_match_binaries(workdir, target, data, build=None,
     print(f"{len(groups)} binary group(s), {matched} matched, "
           f"{len(skipped)} skipped")
     for bp, ids in groups.items():
-        print(f"  {bp}: {', '.join(ids)}")
+        print(f"  {_sft(str(bp), max_len=200)}: "
+              f"{_sft(', '.join(ids), max_len=300)}")
     # Name what was skipped and why — an anonymous count hid which
     # findings never reached feasibility analysis (and made a run
     # where EVERYTHING was skipped look like routine attrition).
     for fid, reason in skipped:
-        print(f"  skipped: {fid} ({reason})")
+        print(f"  skipped: {_sft(str(fid), max_len=120)} ({_sft(str(reason), max_len=200)})")
 
     if mitigation_matrix and groups:
         _run_mitigation_matrix(workdir, target, data, build)
@@ -2111,7 +2115,7 @@ def _run_auto_sink_watch(workdir, target, data, dynamic=None):
             poc_upgrade = poc_data is not None and entry.get("poc") is not True
             if 0 <= age < _STALENESS_THRESHOLD_S and not poc_upgrade:
                 print(f"  Auto sink-watch: recent launch recorded for "
-                      f"{Path(binary).name}; skipped")
+                      f"{_sft(Path(binary).name, max_len=120)}; skipped")
                 continue
         # Written only for an imminent launch — a skipped binary must
         # not leave orphan PoC files behind.
@@ -2188,7 +2192,8 @@ def _run_witness_execution(workdir, target, data, dynamic=None):
         from core.llm.client import LLMClient
         client = LLMClient()
     except Exception as e:  # noqa: BLE001 — no LLM, no witness specs
-        print(f"  Witness execution: no LLM available ({e}); skipped",
+        print(f"  Witness execution: no LLM available "
+              f"({_sft(str(e), max_len=200)}); skipped",
               file=sys.stderr)
         return
 
@@ -2244,9 +2249,9 @@ def prepare_E(workdir, target=None, dynamic=None, build=None,
         fid = finding.get("id", "?")
         sd = finding.get("stage_d_summary")
         if not sd:
-            print(f"  WARN: {fid} missing stage_d_summary — add it", file=sys.stderr)
+            print(f"  WARN: {_sft(str(fid), max_len=120)} missing stage_d_summary — add it", file=sys.stderr)
         elif not isinstance(sd, dict) or "ruling" not in sd:
-            print(f"  WARN: {fid} stage_d_summary missing 'ruling' key", file=sys.stderr)
+            print(f"  WARN: {_sft(str(fid), max_len=120)} stage_d_summary missing 'ruling' key", file=sys.stderr)
 
     ruled_out = sum(1 for f in data["findings"]
                     if _ruling(f).get("status") == "ruled_out")
@@ -2441,7 +2446,8 @@ def prepare_F(workdir, target=None):
         feas["status"] = "analyzed"
         feas["verdict"] = verdict
         stamp_feasibility(finding, feas, workdir)
-        print(f"  {finding.get('id', '?')}: source-derived verdict {verdict}")
+        print(f"  {_sft(str(finding.get('id', '?')), max_len=120)}: "
+              f"source-derived verdict {_sft(str(verdict), max_len=64)}")
 
     # --- Verdict-to-status mapping ---
     for finding in data.get("findings", []):
@@ -2453,9 +2459,12 @@ def prepare_F(workdir, target=None):
             old_status = finding.get("status", "")
             if old_status != mapped:
                 finding["status"] = mapped
-                print(f"  {finding.get('id', '?')}: {verdict} -> {mapped} (was {old_status})")
+                print(f"  {_sft(str(finding.get('id', '?')), max_len=120)}: "
+                      f"{_sft(str(verdict), max_len=64)} -> {mapped} "
+                      f"(was {_sft(str(old_status), max_len=64)})")
             else:
-                print(f"  {finding.get('id', '?')}: {verdict} -> {mapped}")
+                print(f"  {_sft(str(finding.get('id', '?')), max_len=120)}: "
+                      f"{_sft(str(verdict), max_len=64)} -> {mapped}")
 
     # --- Set final_status for findings not handled by Stage E verdict mapping ---
     # Covers two cases: (1) final_status never set, (2) final_status is stale
@@ -2501,7 +2510,7 @@ def prepare_F(workdir, target=None):
         if (finding.get("status") == "disproven"
                 or _ruling(finding).get("status") == "ruled_out"):
             continue
-        print(f"  WARN: {finding.get('id', '?')} missing stage_e_summary — add it", file=sys.stderr)
+        print(f"  WARN: {_sft(str(finding.get('id', '?')), max_len=120)} missing stage_e_summary — add it", file=sys.stderr)
 
     _save_findings(workdir, data)
 
@@ -2513,10 +2522,11 @@ def prepare_F(workdir, target=None):
             score = finding.get("cvss_score_estimate")
             vector = finding.get("cvss_vector")
             if score is not None:
-                print(f"  {finding.get('id', '?')}: {vector} -> {score}")
+                print(f"  {_sft(str(finding.get('id', '?')), max_len=120)}: "
+                      f"{_sft(str(vector), max_len=120)} -> {score}")
         _save_findings(workdir, data)
     except Exception as e:  # noqa: BLE001
-        print(f"  ⚠️  CVSS scoring error: {e}", file=sys.stderr)
+        print(f"  ⚠️  CVSS scoring error: {_sft(str(e), max_len=200)}", file=sys.stderr)
 
     # --- Verdict mapping consistency ---
     # This guards against future code paths between the verdict-mapping
@@ -2537,8 +2547,9 @@ def prepare_F(workdir, target=None):
             expected = VERDICT_MAP[verdict]
             actual = finding.get("final_status")
             if actual != expected:
-                print(f"  MISMATCH: {finding.get('id', '?')} verdict={verdict} "
-                      f"expected={expected} got={actual}")
+                print(f"  MISMATCH: {_sft(str(finding.get('id', '?')), max_len=120)} "
+                      f"verdict={_sft(str(verdict), max_len=64)} "
+                      f"expected={expected} got={_sft(str(actual), max_len=64)}")
 
     # --- Proximity consistency ---
     by_vuln = defaultdict(list)
@@ -2554,7 +2565,7 @@ def prepare_F(workdir, target=None):
         if len(scores) > 1:
             vals = [s[1] for s in scores]
             if max(vals) - min(vals) > 3:
-                print(f"  PROXIMITY SPREAD: {vuln} — {scores} (spread > 3)")
+                print(f"  PROXIMITY SPREAD: {_sft(str(vuln), max_len=120)} — {scores} (spread > 3)")
 
     _report_workdir_files(workdir, "available for review")
 

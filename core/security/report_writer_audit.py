@@ -281,10 +281,30 @@ _REPORT_WRITER_FILES = (
     "libexec/raptor-validation-helper",
     "libexec/raptor-annotate",
     "libexec/raptor-coverage-summary",
+    # Whole-payload JSON verdict lanes (ensure_ascii json.dumps) plus
+    # per-field terminal lanes. Terminal writers —
+    # sanitise_for_terminal grade.
+    "libexec/raptor-binary-graph-query",
+    "libexec/raptor-binary-study",
+    "libexec/raptor-compile-invariants",
     # cve-diff run/localize terminal lanes: pipeline/LLM exception
     # relays and cluster member names (functions from hostile-binary
     # decompilation). Terminal writer — sanitise_for_terminal grade.
     "libexec/raptor-cve-diff",
+    # Enrich family: the corroborate-mismatch text is escaped at its
+    # core/run/metadata chokepoint; per-shim stage-failure relays are
+    # escaped in-file. Terminal writers — sanitise_for_terminal grade.
+    "libexec/raptor-enrich-context-map",
+    "libexec/raptor-render-diagrams",
+    "libexec/raptor-smt-check-negative-bypass",
+    "libexec/raptor-smt-check-null-deref",
+    "libexec/raptor-smt-check-oob",
+    "libexec/raptor-smt-check-overflow",
+    "libexec/raptor-smt-check-overflow-to-oob",
+    "libexec/raptor-smt-validate-path",
+    "libexec/raptor-study-prep",
+    "libexec/raptor-validate-schema",
+    "libexec/raptor-verified-outcomes",
     # Attachment fetcher: echoes the untrusted tracker URL at refusal
     # and success. Terminal writer — sanitise_for_terminal grade.
     "libexec/raptor-fetch-attachment",

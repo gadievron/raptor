@@ -98,8 +98,8 @@ def main() -> int:
 
     parts = args.lines.split("-")
     if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
-        print(f"error: --lines must be <start>-<end>, got '{args.lines}'",
-              file=sys.stderr)
+        print(f"error: --lines must be <start>-<end>, got "
+              f"'{_sft(args.lines, max_len=64)}'", file=sys.stderr)
         return 1
     line_start, line_end = int(parts[0]), int(parts[1])
 
@@ -112,7 +112,8 @@ def main() -> int:
     # touch the filesystem for an invocation that is about to refuse.
     if ".." in args.file.split("/") or os.path.isabs(args.file):
         print(f"error: --file must be a repo-relative path without '..' "
-              f"segments, got '{args.file}'", file=sys.stderr)
+              f"segments, got '{_sft(args.file, max_len=200)}'",
+              file=sys.stderr)
         return 1
 
     out_dir = _resolve_out_dir(args.out,
@@ -133,8 +134,8 @@ def main() -> int:
                     lines[max(0, line_start - 1):line_end]
                 )
         except OSError as exc:
-            print(f"warning: cannot read {src_file}: {exc}",
-                  file=sys.stderr)
+            print(f"warning: cannot read {src_file}: "
+                  f"{_sft(str(exc), max_len=200)}", file=sys.stderr)
 
     from packages.checker_synthesis import SeedBug
     seed = SeedBug(

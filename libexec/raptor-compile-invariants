@@ -33,6 +33,7 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
+from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
 
 logger = logging.getLogger("raptor-compile-invariants")
 
@@ -167,11 +168,13 @@ def main() -> int:
 
     for r in succeeded:
         match_info = f", {len(r.matches)} sweep match(es)" if r.matches else ""
-        _progress(f"  compiled {r.invariant_id} -> {r.rule_id}{match_info}")
+        _progress(f"  compiled {_sft(str(r.invariant_id), max_len=120)} -> "
+                  f"{_sft(str(r.rule_id), max_len=120)}{match_info}")
 
     for r in failed:
-        errs = "; ".join(r.errors[:2]) if r.errors else "unknown"
-        _progress(f"  failed {r.invariant_id}: {errs}")
+        errs = _sft("; ".join(str(e) for e in r.errors[:2]), max_len=300) \
+            if r.errors else "unknown"
+        _progress(f"  failed {_sft(str(r.invariant_id), max_len=120)}: {errs}")
 
     _progress(
         f"done: {len(succeeded)} compiled, {len(failed)} failed "

@@ -72,6 +72,7 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
+from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
 from core.artifacts.provenance import (  # noqa: E402
     ARTIFACT_TEXT_SCHEMAS,
     STATUS_INVALID,
@@ -408,12 +409,12 @@ def main():
         schema_type, data)
     errors = list(errors) + prov_errors
     for w in prov_warnings:
-        print(f"WARNING: {filepath.name}: {w}", file=sys.stderr)
+        print(f"WARNING: {filepath.name}: {_sft(str(w), max_len=300)}", file=sys.stderr)
 
     if errors:
         print(f"ERRORS in {filepath.name}:", file=sys.stderr)
         for e in errors:
-            print(f"  {e}", file=sys.stderr)
+            print(f"  {_sft(str(e), max_len=300)}", file=sys.stderr)
         sys.exit(1)
 
     # Record the successful schema validation in the stamp itself so

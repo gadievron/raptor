@@ -41,6 +41,7 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
+from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
 import argparse  # noqa: E402
 from dataclasses import asdict  # noqa: E402
 
@@ -2871,8 +2872,10 @@ def main() -> None:
         rl_idents, rl_concepts = _load_reading_list(Path(parsed.reading_list))
         if rl_idents:
             identifiers.extend(rl_idents)
+            # reading-list identifiers are LLM-authored free text
+            # (_CONTEXT_NAME_RE's (\S+) happily captures ESC bytes).
             print(f"study-prep: reading list added {len(rl_idents)} identifiers: "
-                  f"{', '.join(rl_idents[:5])}"
+                  f"{_sft(', '.join(rl_idents[:5]), max_len=300)}"
                   f"{' ...' if len(rl_idents) > 5 else ''}",
                   file=sys.stderr)
         if rl_concepts:

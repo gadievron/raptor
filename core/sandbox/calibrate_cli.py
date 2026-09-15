@@ -146,7 +146,7 @@ def _format_human(profile, *, cached: bool) -> str:
     if profile.connect_targets:
         lines.append(f"\nconnect targets ({len(profile.connect_targets)}):")
         lines.extend(
-            f"  {_sft(str(t.ip), max_len=64)}:{t.port} ({t.family})"
+            f"  {_sft(str(t.ip), max_len=64)}:{t.port} ({_sft(str(t.family), max_len=32)})"
             for t in profile.connect_targets[:SAMPLE]
         )
         if len(profile.connect_targets) > SAMPLE:

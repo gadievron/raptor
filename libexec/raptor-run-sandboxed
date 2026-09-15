@@ -76,6 +76,7 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, raptor_dir)
 import core.startup.process_init  # noqa: E402,F401
+from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
 
 
 def _die(msg: str, code: int = 1) -> None:
@@ -303,13 +304,16 @@ try:
 
         # Surface sandbox diagnostics for the caller
         info = result.sandbox_info
+        # evidence/blocked summarise the sandboxed child's behaviour —
+        # triage sanitises at production today, but the sink must not
+        # depend on that (in-tree triage doctrine).
         if info.get("crashed"):
-            print(f"[sandbox] {info.get('evidence', 'Process crashed')}", file=sys.stderr)
+            print(f"[sandbox] {_sft(str(info.get('evidence', 'Process crashed')), max_len=400)}", file=sys.stderr)
         elif info.get("resource_exceeded"):
-            print(f"[sandbox] {info.get('evidence', 'Resource limit exceeded')}", file=sys.stderr)
+            print(f"[sandbox] {_sft(str(info.get('evidence', 'Resource limit exceeded')), max_len=400)}", file=sys.stderr)
         if info.get("blocked"):
             for item in info["blocked"]:
-                print(f"[sandbox] {item}", file=sys.stderr)
+                print(f"[sandbox] {_sft(str(item), max_len=400)}", file=sys.stderr)
 except SandboxSetupError as e:
     _die(f"sandbox isolation could not engage: {e}", code=SANDBOX_ENGAGE_EXIT_CODE)
 except subprocess.TimeoutExpired as e:
