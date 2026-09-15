@@ -792,3 +792,39 @@ class TestDeferredExecutionBodies:
             cfg, [cfg.entry_node], sink, cwe="CWE-79", language="python",
         )
         assert not result.suppress
+
+
+class TestLoopJoinSentinels:
+    """Loop-exit joins are payload-free sentinels: re-extracting the
+    header's payload duplicated its defs/calls on a second node at
+    the same line (a walrus in the condition became a duplicate
+    definer; a sanitizer call in the condition appeared twice)."""
+
+    def test_while_join_carries_no_payload(self):
+        src = (
+            "def handle(x):\n"
+            "    while (y := f(x)):\n"
+            "        g(y)\n"
+            "    render(y)\n"
+        )
+        cfg = build_python_cfg(src, "handle")
+        definers = [n for n in cfg.nodes() if "y" in n.defs]
+        assert len(definers) == 1
+        join = next(n for n in cfg.nodes() if n.kind == "join")
+        assert not join.defs and not join.calls and not join.call_sites
+
+    def test_for_join_carries_no_payload(self):
+        src = (
+            "def handle(xs):\n"
+            "    for v in load(xs):\n"
+            "        g(v)\n"
+            "    render(xs)\n"
+        )
+        cfg = build_python_cfg(src, "handle")
+        joins = [n for n in cfg.nodes() if n.kind == "join"]
+        assert joins and all(
+            not j.defs and not j.calls and not j.uses for j in joins
+        )
+        # The header still carries the loop's payload.
+        header = next(n for n in cfg.nodes() if "load" in n.calls)
+        assert "v" in header.defs

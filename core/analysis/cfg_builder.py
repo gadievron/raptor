@@ -740,6 +740,23 @@ class _PythonCFGBuilder:
         self._all_nodes.append(node)
         return node
 
+    def _join_node(self, stmt: ast.stmt, label: str) -> PyCFGNode:
+        """Payload-free join sentinel for a loop's exit edge.
+
+        Re-running the header's payload extraction here duplicated
+        the header's calls/defs/uses on a SECOND node at the same
+        line: a walrus in the condition (``while (y := f(x)):``)
+        yielded a duplicate definer of ``y`` on the join, and a
+        sanitizer call in the condition appeared on two nodes. The
+        duplicate definer carries empty ``assigned_names`` so it can
+        only break exclusivity (over-refusal, never suppression),
+        but it pollutes reaching-defs and per-line call-site queries
+        — the sentinel carries no payload at all.
+        """
+        node = PyCFGNode(kind="join", lineno=stmt.lineno, label=label)
+        self._all_nodes.append(node)
+        return node
+
     # ----- statement dispatchers -----
 
     def _build_stmts(
@@ -830,7 +847,7 @@ class _PythonCFGBuilder:
     ) -> list[PyCFGNode]:
         header = self._new_node("stmt", stmt)
         self._link_many(incoming, header)
-        exit_node = self._new_node("join", stmt, label=f"while-exit (line {stmt.lineno})")
+        exit_node = self._join_node(stmt, f"while-exit (line {stmt.lineno})")
         self._loop_stack.append((exit_node, header))
         body_out = self._build_stmts(stmt.body, [header])
         for tail in body_out:
@@ -849,7 +866,7 @@ class _PythonCFGBuilder:
     ) -> list[PyCFGNode]:
         header = self._new_node("stmt", stmt)
         self._link_many(incoming, header)
-        exit_node = self._new_node("join", stmt, label=f"for-exit (line {stmt.lineno})")
+        exit_node = self._join_node(stmt, f"for-exit (line {stmt.lineno})")
         self._loop_stack.append((exit_node, header))
         body_out = self._build_stmts(stmt.body, [header])
         for tail in body_out:
