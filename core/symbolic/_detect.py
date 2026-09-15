@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from core.source.contained import read_text_capped
+
 
 # Source-pattern regexes for overflow detection. Naive "any read(0, ...)"
 # gives false positives on heap targets whose menu reads are size-bounded
@@ -208,10 +210,14 @@ def detect_shape(
     # strcpy / scanf-%s) combined with a marker-target symbol → pc_control_shape.
     # User-controlled format string → fmtstr_shape.
     if source_path is not None and source_path.is_file():
-        try:
-            raw = source_path.read_text(errors="replace")
-        except OSError:
-            raw = ""
+        # Guarded read: this pre-gate runs over attacker-supplied
+        # targets BEFORE any budget/isolation, so a bare read_text
+        # would load a planted multi-GB source line whole (or block on
+        # a FIFO swapped past the is_file() gate). 512 KiB dwarfs any
+        # legitimate PoC/fixture source these detector-grade regexes
+        # are aimed at; None (unreadable/non-regular) means no source.
+        got = read_text_capped(source_path, 512 * 1024)
+        raw = "" if got is None else got[0]
         if raw:
             src = _strip_c_comments(raw)
             char_bufs = {

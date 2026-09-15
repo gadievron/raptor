@@ -148,3 +148,58 @@ def test_missing_binary_returns_declined(tmp_path: Path):
     assert d.fmtstr_shape is False
     assert d.intsize_shape is False
     assert d.suggested_primitives == ()
+
+
+def test_source_scan_fifo_past_gate_degrades_promptly(
+    tmp_path: Path, monkeypatch,
+):
+    """detect_shape is the pre-budget router gate over attacker-supplied
+    targets.  The ``is_file()`` pre-gate filters a FIFO that is ALREADY
+    a FIFO at check time, but the check is stat-then-open: a swap after
+    the gate reaches the read itself, and a bare ``read_text`` there
+    blocks forever (open() on a reader-less FIFO never returns).  The
+    guarded read must degrade to a no-source scan on its OWN fd-level
+    regularity check.  Simulated by pinning the gate open — the FIFO
+    hits the read exactly as in the race."""
+    import os
+    from pathlib import Path as _P
+
+    from core.symbolic import detect_shape
+
+    if not hasattr(os, "mkfifo"):
+        import pytest
+        pytest.skip("no mkfifo on this platform")
+    fifo = tmp_path / "t.c"
+    os.mkfifo(fifo)
+    monkeypatch.setattr(_P, "is_file", lambda self: True)
+    d = detect_shape(tmp_path / "no-binary", source_path=fifo)
+    assert d.fmtstr_shape is False
+    assert d.pc_control_shape is False
+
+
+def test_source_scan_oversized_source_degrades(tmp_path: Path):
+    """Cap direction: a source_path past the 512 KiB read cap loads at
+    most the cap (never the whole planted blob) and the scan still
+    returns — no crash, no unbounded read."""
+    from core.symbolic import detect_shape
+
+    src = tmp_path / "t.c"
+    src.write_text("// pad\n" * 100_000)  # ~700 KB, past the cap
+    d = detect_shape(tmp_path / "no-binary", source_path=src)
+    assert d.fmtstr_shape is False
+    assert d.pc_control_shape is False
+
+
+def test_source_scan_regular_file_still_detects(tmp_path: Path):
+    """Two-direction: the guarded read keeps detecting on a regular
+    source file (user-controlled format → fmtstr_shape, no binary
+    needed for the source-side scan)."""
+    from core.symbolic import detect_shape
+
+    src = tmp_path / "t.c"
+    src.write_text(
+        "#include <stdio.h>\n"
+        "void log_msg(char *fmt) { printf(fmt); }\n"
+    )
+    d = detect_shape(tmp_path / "no-binary", source_path=src)
+    assert d.fmtstr_shape is True
