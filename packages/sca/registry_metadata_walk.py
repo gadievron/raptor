@@ -26,9 +26,13 @@ This module is the fallback when the toolchain isn't available, and
 the natural mode for ``raptor-sca check <pkg@ver>`` pre-installation
 analysis where there's no project to resolve against.
 
-Supported ecosystems today: PyPI, npm, crates.io. Other ecosystems
+Supported ecosystems today: PyPI, npm, Cargo. Other ecosystems
 follow as separate fetcher modules — adding one is purely a matter of
-the per-registry metadata shape.
+the per-registry metadata shape. Fetcher tables are keyed by the
+CANONICAL ecosystem names (``ecosystems.KNOWN_ECOSYSTEMS``) that every
+producer passes (``Manifest.ecosystem`` / ``canonicalise`` output) —
+Rust is ``"Cargo"`` here; the crates.io registry naming lives inside
+the fetcher URLs, same convention as the resolver layer.
 
 Caching: ``(ecosystem, name, version) -> metadata blob`` is cached
 forever (registry metadata for a pinned version is immutable).
@@ -399,7 +403,7 @@ def _make_dep(
 
 def _purl(ecosystem: str, name: str, version: str | None) -> str:
     eco = {
-        "PyPI": "pypi", "npm": "npm", "crates.io": "cargo",
+        "PyPI": "pypi", "npm": "npm", "Cargo": "cargo",
     }.get(ecosystem, ecosystem.lower())
     if version:
         return f"pkg:{eco}/{name}@{version}"
@@ -582,10 +586,14 @@ def _fetch_crates(
     return out
 
 
+# Keyed by CANONICAL ecosystem names (``ecosystems.KNOWN_ECOSYSTEMS``):
+# producers pass ``Manifest.ecosystem`` / ``canonicalise`` output, so a
+# registry-domain key here ("crates.io") is unreachable from every
+# production caller and silently kills the whole lane.
 _FETCHERS: dict[str, _Fetcher] = {
     "PyPI": _fetch_pypi,
     "npm": _fetch_npm,
-    "crates.io": _fetch_crates,
+    "Cargo": _fetch_crates,
 }
 
 
@@ -597,7 +605,7 @@ def supported_ecosystems() -> set[str]:
 _EXISTENCE_URLS = {
     "PyPI": "https://pypi.org/pypi/{name}/{version}/json",
     "npm": "https://registry.npmjs.org/{name}/{version}",
-    "crates.io": "https://crates.io/api/v1/crates/{name}/{version}",
+    "Cargo": "https://crates.io/api/v1/crates/{name}/{version}",
 }
 
 

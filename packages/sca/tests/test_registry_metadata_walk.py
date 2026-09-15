@@ -114,7 +114,7 @@ def test_norm_name_lowercases_npm():
 
 
 def test_norm_name_preserves_cargo_case():
-    assert _norm_name("Serde_JSON", "crates.io") == "Serde_JSON"
+    assert _norm_name("Serde_JSON", "Cargo") == "Serde_JSON"
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +303,7 @@ def test_cargo_walks_only_normal_deps():
         "/api/v1/crates/serde/1.0/dependencies": leaf,
     })
     result = walk_transitive(
-        [_direct("crates.io", "myapp", "1.0.0")], http=http,
+        [_direct("Cargo", "myapp", "1.0.0")], http=http,
     )
     assert {d.name for d in result.deps_added} == {"serde"}
 
@@ -322,7 +322,7 @@ def test_cargo_skips_optional_deps():
         "/api/v1/crates/log/0.4/dependencies": leaf,
     })
     result = walk_transitive(
-        [_direct("crates.io", "myapp", "1.0.0")], http=http,
+        [_direct("Cargo", "myapp", "1.0.0")], http=http,
     )
     assert {d.name for d in result.deps_added} == {"log"}
 
@@ -376,7 +376,7 @@ def test_unsupported_ecosystem_silently_skipped():
         "/api/v1/crates/serde/1.0/dependencies": {"dependencies": []},
     })
     deps = [
-        _direct("crates.io", "serde", "1.0"),
+        _direct("Cargo", "serde", "1.0"),
         _direct("Hex", "phoenix", "1.7.0"),
     ]
     result = walk_transitive(deps, http=http)
@@ -556,7 +556,42 @@ def test_package_version_exists_quotes_components() -> None:
     from packages.sca.registry_metadata_walk import package_version_exists
     http = _StubHttp({"crates.io": {"ok": True}})
     assert package_version_exists(
-        "crates.io", "name/with/slash", "1.0#f", http=http,
+        "Cargo", "name/with/slash", "1.0#f", http=http,
     ) is True
     assert "name%2Fwith%2Fslash" in http.calls[0]
     assert "1.0%23f" in http.calls[0]
+
+
+# ---------------------------------------------------------------------------
+# Registry closure — join keys must be the canonical producer values
+# ---------------------------------------------------------------------------
+
+def test_registry_tables_keyed_on_canonical_ecosystems() -> None:
+    """Every production caller keys into these tables with canonical
+    ``Manifest.ecosystem`` / ``canonicalise`` values ("Cargo", not the
+    registry domain "crates.io") — a non-canonical key is unreachable
+    and silently kills that ecosystem's whole lane. Enumerate the
+    tables mechanically so a future fetcher can't reopen the class."""
+    from packages.sca.ecosystems import canonicalise
+    from packages.sca.registry_metadata_walk import (
+        _EXISTENCE_URLS,
+        _FETCHERS,
+        supported_ecosystems,
+    )
+    for key in set(_FETCHERS) | set(_EXISTENCE_URLS):
+        assert canonicalise(key) == key, (
+            f"registry table key {key!r} is not a canonical ecosystem "
+            "name — producers pass canonical names, so this entry is "
+            "dead"
+        )
+    # review.py gates the existence probe on supported_ecosystems();
+    # the two tables must stay in lock-step or the gate lies.
+    assert set(_EXISTENCE_URLS) == supported_ecosystems()
+
+
+def test_cargo_existence_probe_reachable_with_canonical_name() -> None:
+    from packages.sca.registry_metadata_walk import package_version_exists
+    http = _StubHttp({"crates.io": {"ok": True}})
+    assert package_version_exists(
+        "Cargo", "serde", "1.0.0", http=http,
+    ) is True
