@@ -1100,12 +1100,14 @@ def main() -> int:
         }
         overview_path = output_dir / "overview.json"
         save_json(overview_path, overview)
+        # identifiers/concepts are LLM-returned free text — escape
+        # control bytes before the operator terminal.
         print("\nIdentifiers:", file=sys.stderr)
         for ident in overview_idents:
-            print(f"  - {ident}", file=sys.stderr)
+            print(f"  - {sanitise_for_terminal(str(ident))}", file=sys.stderr)
         print("\nConcepts:", file=sys.stderr)
         for concept in overview_concepts:
-            print(f"  - {concept}", file=sys.stderr)
+            print(f"  - {sanitise_for_terminal(str(concept))}", file=sys.stderr)
         print(
             f"\nOverview written to {overview_path}\n"
             "Run again with --identifier or --concept to study specific topics.",
@@ -1337,9 +1339,11 @@ def main() -> int:
     if key_files:
         print(f"\nKey files ({len(key_files)}):", file=sys.stderr)
         for kf in key_files:
-            role = kf.get("role", "")
-            path = kf.get("file", "")
-            desc = kf.get("description", "")
+            # role/path are target-derived; description quotes doc
+            # titles extracted verbatim from target file content.
+            role = sanitise_for_terminal(str(kf.get("role", "")), max_len=32)
+            path = sanitise_for_terminal(str(kf.get("file", "")), max_len=200)
+            desc = sanitise_for_terminal(str(kf.get("description", "")))
             label = f"  [{role}] {path}"
             if desc:
                 label += f" — {desc}"
@@ -1350,7 +1354,8 @@ def main() -> int:
         print(f"\n{len(remaining)} unresolved reading-list items:",
               file=sys.stderr)
         for item in remaining:
-            q = item.get("question", "")[:100]
+            # reading-list questions are LLM-authored free text.
+            q = sanitise_for_terminal(str(item.get("question", "")), max_len=100)
             print(f"  - {q}", file=sys.stderr)
 
     # Promotion and SAGE storage are durable-store WRITES — a failed
