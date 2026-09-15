@@ -1175,6 +1175,15 @@ def _rewrite_pom_xml(
             f"pom.xml exceeds {_POM_MAX_CHARS} characters; edit manually"
         )
 
+    # A pom legitimately declares the same groupId:artifactId in
+    # several blocks (<dependencyManagement> + <dependencies>,
+    # per-profile overrides). Rewrite EVERY matching block still at
+    # the installed version — stopping at the first one bumped a
+    # single block and left its twin on the vulnerable version while
+    # the run reported applied. A property-referenced version in ANY
+    # matching block still refuses the whole edit (order-independent
+    # now): rewriting only the literal twins while ``${...}`` decides
+    # the effective version elsewhere would produce a half-edited pom.
     out_text = text
     rewrote = False
     for block in _iter_pom_blocks(text):
@@ -1196,7 +1205,6 @@ def _rewrite_pom_xml(
         if n:
             out_text = out_text.replace(block, new_block, 1)
             rewrote = True
-            break
     if not rewrote:
         return text, False, ("no <dependency>/<plugin> block matched "
                              f"{group}:{artifact}@{plan.installed}")

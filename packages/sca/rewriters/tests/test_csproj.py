@@ -137,3 +137,47 @@ def test_versionless_packageref_is_not_found(tmp_path: Path):
     )])
     assert results[0].applied is False
     assert results[0].reason == "not_found"
+
+
+def test_reversed_attribute_order_twin_bumped(tmp_path: Path):
+    """MSBuild is attribute-order-agnostic: ``<PackageReference
+    Version="…" Include="X"/>`` pins exactly like the Include-first
+    spelling. An Include-then-Version pattern left the reversed twin
+    invisible — it never entered the all-occurrence verdict, so a
+    mixed file reported a clean apply while the twin stayed on the
+    vulnerable version."""
+    p = _write(tmp_path, """\
+<Project>
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
+    <PackageReference Version="13.0.1" Include="Newtonsoft.Json" />
+  </ItemGroup>
+</Project>
+""")
+    results = rewrite_csproj(p, [RewriteEdit(
+        locator="Newtonsoft.Json",
+        old_value="13.0.1", new_value="13.0.3",
+    )])
+    assert results[0].applied is True
+    assert results[0].reason == ""
+    body = p.read_text()
+    assert body.count('"13.0.3"') == 2
+    assert '"13.0.1"' not in body
+    assert '<PackageReference Version="13.0.3" Include="Newtonsoft.Json" />' \
+        in body
+
+
+def test_reversed_attribute_order_version_override(tmp_path: Path):
+    p = _write(tmp_path, """\
+<Project>
+  <ItemGroup>
+    <PackageReference VersionOverride="4.5.0" Include="Serilog" />
+  </ItemGroup>
+</Project>
+""")
+    results = rewrite_csproj(p, [RewriteEdit(
+        locator="Serilog", old_value="4.5.0", new_value="4.5.9",
+    )])
+    assert results[0].applied is True
+    assert '<PackageReference VersionOverride="4.5.9" Include="Serilog" />' \
+        in p.read_text()

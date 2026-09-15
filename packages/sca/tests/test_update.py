@@ -987,6 +987,63 @@ def test_pom_block_scan_targets_matching_block_only() -> None:
     assert "<version>2.14.1</version>" in plugin_block
 
 
+def test_pom_duplicate_dependency_blocks_all_bumped() -> None:
+    """A pom legitimately declares the same groupId:artifactId in
+    several blocks (<dependencyManagement> + <dependencies>,
+    per-profile overrides). EVERY block still at the installed
+    version must be bumped — stopping at the first left the twin on
+    the vulnerable version while the run reported applied."""
+    pom = """\
+<project>
+  <dependencyManagement><dependencies>
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-core</artifactId>
+      <version>2.14.1</version>
+    </dependency>
+  </dependencies></dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-core</artifactId>
+      <version>2.14.1</version>
+    </dependency>
+  </dependencies>
+</project>
+"""
+    text, applied, _reason = update._rewrite_pom_xml(pom, _pom_plan())
+    assert applied is True
+    assert text.count("<version>2.17.1</version>") == 2
+    assert "<version>2.14.1</version>" not in text
+
+
+def test_pom_property_ref_in_any_matching_block_refuses_all() -> None:
+    """When any matching block resolves its version via ``${...}``,
+    the whole edit is refused (original text back) regardless of
+    block order — rewriting only the literal twin while the property
+    decides the effective version elsewhere would half-edit the pom."""
+    pom = """\
+<project>
+  <dependencies>
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-core</artifactId>
+      <version>2.14.1</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-core</artifactId>
+      <version>${log4j.version}</version>
+    </dependency>
+  </dependencies>
+</project>
+"""
+    text, applied, reason = update._rewrite_pom_xml(pom, _pom_plan())
+    assert applied is False
+    assert text == pom
+    assert reason is not None and "property reference" in reason
+
+
 def test_pom_target_written_verbatim() -> None:
     """The replacement is a callable, not a template — backslash
     sequences in the target version must land verbatim rather than

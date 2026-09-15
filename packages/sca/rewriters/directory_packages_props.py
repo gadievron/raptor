@@ -35,7 +35,14 @@ from __future__ import annotations
 import logging
 import re
 
-from . import RewriteEdit, RewriteResult, register, rewrite_file_with
+from . import (
+    RewriteEdit,
+    RewriteResult,
+    apply_version_edit,
+    build_element_attr_version_pattern,
+    register,
+    rewrite_file_with,
+)
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -47,36 +54,20 @@ logger = logging.getLogger(__name__)
 # ``<PackageVersion Include="X" Version="OLD" />`` shape. We also
 # accept ``<GlobalPackageReference>`` since it has identical
 # attribute structure and the bumper / harden may target either.
-# Capture groups: ``open_tag`` (PackageVersion / GlobalPackageReference),
-# ``prefix`` (everything from the tag through the Include attribute),
-# ``ver_open`` (``Version="`` literal), ``version`` (the value),
-# ``ver_close`` (``"``), ``suffix`` (rest of the tag).
 #
 # The include attribute is matched with quotes that can be either
-# style (``"`` or ``'``); MSBuild allows both.
+# style (``"`` or ``'``); MSBuild allows both. Attribute ORDER is
+# NOT assumed: MSBuild is order-agnostic, so ``<PackageVersion
+# Version="OLD" Include="X"/>`` must enter the all-occurrence
+# verdict exactly like the conventional Include-first spelling.
 def _build_attr_pattern(include_name: str) -> re.Pattern:
     """Compile a per-package pattern that matches BOTH the
     ``<PackageVersion>`` and ``<GlobalPackageReference>`` shapes
     with the supplied Include value (case-insensitive — NuGet
-    convention)."""
-    # Escape the include name; it's a NuGet package name which
-    # can contain dots / dashes / pluses but no quote chars in
-    # the wild. Belt-and-braces re.escape anyway.
-    inc = re.escape(include_name)
-    return re.compile(
-        # tag open
-        r"""(?P<open><(?:PackageVersion|GlobalPackageReference)\b)"""
-        # everything up to the Include attribute, then Include
-        r"""(?P<prefix>[^>]*?Include\s*=\s*['"])"""
-        # the include value (case-insensitive match below via re.I)
-        rf"""(?P<inc>{inc})"""
-        r"""(?P<inc_close>['"])"""
-        # whatever sits between Include="..." and Version="..."
-        r"""(?P<mid>[^>]*?Version\s*=\s*['"])"""
-        r"""(?P<version>[^'"]*)"""
-        r"""(?P<ver_close>['"])"""
-        r"""(?P<suffix>[^>]*/?>)""",
-        re.IGNORECASE,
+    convention), in either attribute order."""
+    return build_element_attr_version_pattern(
+        ("PackageVersion", "GlobalPackageReference"),
+        "Include", include_name, "Version",
     )
 
 
@@ -104,10 +95,10 @@ def rewrite_directory_packages_props(
     version edits to a Directory.Packages.props file.
 
     Idempotent — re-running with the same edits after a
-    successful first run is a no-op (the file already has the
-    new version; the second pass triggers
-    ``value_mismatch`` if ``edit.old_value`` wasn't updated to
-    the new value).
+    successful first run is a ``no_change`` no-op (every
+    occurrence is already at the new version); a file whose
+    versions match neither the old nor the new value triggers
+    ``value_mismatch``.
     """
     return rewrite_file_with(path, edits, _apply_one)
 
@@ -115,36 +106,19 @@ def rewrite_directory_packages_props(
 def _apply_one(text: str, edit: RewriteEdit) -> tuple[str, RewriteResult]:
     """Try the attribute-shape rewrite first; fall back to the
     child-element shape. Operators don't mix shapes in practice
-    (one file usually picks a convention) but we tolerate
-    both."""
-    pat = _build_attr_pattern(edit.locator)
-    matches = list(pat.finditer(text))
-    match = matches[-1] if matches else None
-    if match is None:
-        pat = _build_child_pattern(edit.locator)
-        matches = list(pat.finditer(text))
-        match = matches[-1] if matches else None
-    if match is None:
-        return text, RewriteResult(
-            edit=edit, applied=False, reason="not_found",
-        )
-    current = match.group("version")
-    if current != edit.old_value:
-        return text, RewriteResult(
-            edit=edit, applied=False,
-            reason=(
-                f"value_mismatch: file has Version={current!r}, "
-                f"edit expected {edit.old_value!r}"
-            ),
-        )
-    # Substitute the captured Version section with the new value.
-    new_substring = (
-        text[:match.start("version")]
-        + edit.new_value
-        + text[match.end("version"):]
-    )
-    return new_substring, RewriteResult(
-        edit=edit, applied=True, reason="",
+    (one file usually picks a convention) but we tolerate both.
+
+    Routed through the shared ``apply_version_edit`` driver:
+    ``Directory.Packages.props`` legitimately declares the same
+    package in multiple conditional ``<ItemGroup Condition=…>``
+    blocks (per-TFM central pins; the parser tolerates duplicates
+    with last-wins), so verdicts are computed across ALL matches
+    and every occurrence still at the old value is rewritten — a
+    last-match substitution bumped one conditional branch and left
+    its twin on the vulnerable version while the run reported
+    applied."""
+    return apply_version_edit(
+        text, edit, (_build_attr_pattern, _build_child_pattern),
     )
 
 

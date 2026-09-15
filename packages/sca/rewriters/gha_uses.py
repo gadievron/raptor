@@ -208,34 +208,49 @@ def _apply_sha_pinned(
         rf"([\s#]|$)",                    # boundary
         re.MULTILINE,
     )
-    match = pattern.search(text)
-    if match is None:
+    # A workflow can pin the same action in several jobs/steps.
+    # Verdicts are computed across ALL matching lines — deciding
+    # from the first match alone let an occurrence at a different
+    # SHA (or one already bumped) shadow a legitimate bump into
+    # value_mismatch / no_change while its twin stayed on the old
+    # SHA. Same all-occurrence semantics as the tag-pinned arm.
+    matches = list(pattern.finditer(text))
+    if not matches:
         return text, RewriteResult(
             edit=edit, applied=False, reason="not_found",
         )
-    file_sha = match.group(2)
-    file_tag = match.group(4)
-    if file_sha == new_sha and file_tag == edit.new_value:
-        return text, RewriteResult(
-            edit=edit, applied=False, reason="no_change",
+    needs_bump = [
+        m for m in matches
+        if m.group(2) == old_sha and m.group(4) == edit.old_value
+        and (m.group(2) != new_sha or m.group(4) != edit.new_value)
+    ]
+    if not needs_bump:
+        if all(m.group(2) == new_sha and m.group(4) == edit.new_value
+               for m in matches):
+            return text, RewriteResult(
+                edit=edit, applied=False, reason="no_change",
+            )
+        stray = next(
+            m for m in matches
+            if m.group(2) != new_sha or m.group(4) != edit.new_value
         )
-    if file_sha != old_sha:
+        if stray.group(2) != old_sha:
+            return text, RewriteResult(
+                edit=edit, applied=False,
+                reason=(
+                    f"value_mismatch: file SHA {stray.group(2)[:12]}... "
+                    f"differs from plan's old SHA {old_sha[:12]}..."
+                ),
+            )
         return text, RewriteResult(
             edit=edit, applied=False,
             reason=(
-                f"value_mismatch: file SHA {file_sha[:12]}... "
-                f"differs from plan's old SHA {old_sha[:12]}..."
-            ),
-        )
-    if file_tag != edit.old_value:
-        return text, RewriteResult(
-            edit=edit, applied=False,
-            reason=(
-                f"value_mismatch: file '# was {file_tag}' "
+                f"value_mismatch: file '# was {stray.group(4)}' "
                 f"differs from plan's old tag {edit.old_value!r}"
             ),
         )
-    # Rewrite both the SHA and the ``# was vX`` tag comment.
+    # Rewrite both the SHA and the ``# was vX`` tag comment on every
+    # occurrence still at the plan's old (SHA, tag) pair.
     def _repl(m):
         if m.group(2) == old_sha and m.group(4) == edit.old_value:
             return f"{m.group(1)}{new_sha}{m.group(3)}{edit.new_value}{m.group(5)}"

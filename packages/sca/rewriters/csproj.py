@@ -38,6 +38,7 @@ from . import (
     RewriteEdit,
     RewriteResult,
     apply_version_edit,
+    build_element_attr_version_pattern,
     register,
     rewrite_file_with,
 )
@@ -55,34 +56,20 @@ def _csproj_predicate(path: Path) -> bool:
 
 def _build_inline_version_pattern(include_name: str) -> re.Pattern:
     """``<PackageReference Include="X" Version="OLD" />`` — the
-    pre-CPM and CPM-with-inline shape."""
-    inc = re.escape(include_name)
-    return re.compile(
-        r"""(?P<open><PackageReference\b)"""
-        r"""(?P<prefix>[^>]*?Include\s*=\s*['"])"""
-        rf"""(?P<inc>{inc})"""
-        r"""(?P<inc_close>['"])"""
-        r"""(?P<mid>[^>]*?Version\s*=\s*['"])"""
-        r"""(?P<version>[^'"]*)"""
-        r"""(?P<ver_close>['"])""",
-        re.IGNORECASE,
+    pre-CPM and CPM-with-inline shape, either attribute order
+    (MSBuild is order-agnostic)."""
+    return build_element_attr_version_pattern(
+        ("PackageReference",), "Include", include_name, "Version",
     )
 
 
 def _build_version_override_pattern(include_name: str) -> re.Pattern:
     """``<PackageReference Include="X" VersionOverride="OLD" />`` —
-    CPM per-csproj override shape. Separate from the inline
-    pattern so the rewriter can pick which attribute to update."""
-    inc = re.escape(include_name)
-    return re.compile(
-        r"""(?P<open><PackageReference\b)"""
-        r"""(?P<prefix>[^>]*?Include\s*=\s*['"])"""
-        rf"""(?P<inc>{inc})"""
-        r"""(?P<inc_close>['"])"""
-        r"""(?P<mid>[^>]*?VersionOverride\s*=\s*['"])"""
-        r"""(?P<version>[^'"]*)"""
-        r"""(?P<ver_close>['"])""",
-        re.IGNORECASE,
+    CPM per-csproj override shape, either attribute order. Separate
+    from the inline pattern so the rewriter can pick which attribute
+    to update."""
+    return build_element_attr_version_pattern(
+        ("PackageReference",), "Include", include_name, "VersionOverride",
     )
 
 

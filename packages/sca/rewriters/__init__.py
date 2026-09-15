@@ -352,6 +352,45 @@ def apply_version_edit(
     )
 
 
+def build_element_attr_version_pattern(
+    element_names: tuple[str, ...],
+    name_attr: str,
+    name_value: str,
+    version_attr: str,
+) -> re.Pattern:
+    """Order-agnostic XML open-tag pattern for the MSBuild rewriters.
+
+    Matches an ``<Element …>`` open tag that carries
+    ``name_attr="name_value"`` ANYWHERE among its attributes and
+    captures ``version_attr``'s value as the ``version`` group
+    wherever it sits in the tag. XML parsers (and MSBuild) are
+    attribute-order-agnostic, so ``<PackageVersion Version="…"
+    Include="X"/>`` is exactly as authoritative as the conventional
+    Include-first spelling; an Include-then-Version regex left the
+    reversed twin invisible — unmatched occurrences never entered the
+    all-occurrence verdict, so a mixed file reported a clean apply
+    while the reversed twin stayed on the vulnerable version.
+
+    The name-attribute assertion is a lookahead (non-consuming), so
+    it binds regardless of where the version attribute sits relative
+    to it. ``\\b`` fences both attribute names so ``VersionOverride``
+    or a hypothetical ``DataVersion`` never satisfies a ``Version``
+    match. Quote style is per-attribute consistent via backreference.
+    """
+    elem = "|".join(re.escape(e) for e in element_names)
+    val = re.escape(name_value)
+    attr = re.escape(name_attr)
+    ver = re.escape(version_attr)
+    return re.compile(
+        rf"""<(?:{elem})\b"""
+        rf"""(?=[^>]*\b{attr}\s*=\s*(?P<nq>['"]){val}(?P=nq))"""
+        rf"""[^>]*?\b{ver}\s*=\s*(?P<vq>['"])"""
+        r"""(?P<version>[^'"]*)"""
+        r"""(?P=vq)""",
+        re.IGNORECASE,
+    )
+
+
 # Side-effect imports: each module calls register() at import time.
 # ``dockerfile_from`` is the registered dispatch entry point for
 # all Dockerfile edits; it delegates ARG-shaped edits to

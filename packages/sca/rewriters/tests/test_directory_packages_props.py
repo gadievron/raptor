@@ -142,9 +142,10 @@ def test_multiple_edits_in_one_pass(tmp_path: Path):
 
 
 def test_idempotent_second_pass(tmp_path: Path):
-    """Re-running an already-applied edit triggers value_mismatch
-    (the file already has the new version, so old_value doesn't
-    match). This is the documented idempotency contract."""
+    """Re-running an already-applied edit is a ``no_change`` no-op
+    (every occurrence is already at the new version) — the same
+    idempotency contract as the csproj / Directory.Build.targets
+    siblings that share the ``apply_version_edit`` driver."""
     p = _write(tmp_path, """\
 <Project>
   <ItemGroup><PackageVersion Include="A" Version="2.0.0" /></ItemGroup>
@@ -155,4 +156,100 @@ def test_idempotent_second_pass(tmp_path: Path):
     )
     results = rewrite_directory_packages_props(p, [edit])
     assert results[0].applied is False
-    assert "value_mismatch" in results[0].reason
+    assert results[0].reason == "no_change"
+
+
+def test_duplicate_conditional_rows_all_bumped(tmp_path: Path):
+    """CPM files legitimately pin the same package in multiple
+    conditional ``<ItemGroup Condition=…>`` blocks (per-TFM central
+    pins). EVERY occurrence still at the old version must be bumped —
+    a last-match rewrite left the other conditional branch on the
+    vulnerable version while reporting a clean apply."""
+    p = _write(tmp_path, """\
+<Project>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net6.0'">
+    <PackageVersion Include="System.Text.Json" Version="6.0.0" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <PackageVersion Include="System.Text.Json" Version="6.0.0" />
+  </ItemGroup>
+</Project>
+""")
+    results = rewrite_directory_packages_props(p, [RewriteEdit(
+        locator="System.Text.Json",
+        old_value="6.0.0", new_value="6.0.10",
+    )])
+    assert results[0].applied is True
+    body = p.read_text()
+    assert body.count('Version="6.0.10"') == 2
+    assert 'Version="6.0.0"' not in body
+
+
+def test_reversed_attribute_order_twin_bumped(tmp_path: Path):
+    """MSBuild is attribute-order-agnostic: ``<PackageVersion
+    Version="…" Include="X"/>`` pins exactly like the Include-first
+    spelling. An Include-then-Version pattern left the reversed twin
+    invisible — it never entered the all-occurrence verdict, so the
+    run reported a clean apply (``applied=True`` with an empty
+    reason) while the twin stayed on the vulnerable version."""
+    p = _write(tmp_path, """\
+<Project>
+  <ItemGroup>
+    <PackageVersion Include="System.Text.Json" Version="6.0.0" />
+    <PackageVersion Version="6.0.0" Include="System.Text.Json" />
+  </ItemGroup>
+</Project>
+""")
+    results = rewrite_directory_packages_props(p, [RewriteEdit(
+        locator="System.Text.Json",
+        old_value="6.0.0", new_value="6.0.10",
+    )])
+    assert results[0].applied is True
+    assert results[0].reason == ""
+    body = p.read_text()
+    assert body.count('"6.0.10"') == 2
+    assert '"6.0.0"' not in body
+    # Attribute order itself is preserved verbatim.
+    assert '<PackageVersion Version="6.0.10" Include="System.Text.Json" />' \
+        in body
+
+
+def test_reversed_attribute_order_global_package_reference(tmp_path: Path):
+    p = _write(tmp_path, """\
+<Project>
+  <ItemGroup>
+    <GlobalPackageReference Version="1.0.0" Include="SourceLink" />
+  </ItemGroup>
+</Project>
+""")
+    results = rewrite_directory_packages_props(p, [RewriteEdit(
+        locator="SourceLink", old_value="1.0.0", new_value="1.1.1",
+    )])
+    assert results[0].applied is True
+    assert '<GlobalPackageReference Version="1.1.1" Include="SourceLink" />' \
+        in p.read_text()
+
+
+def test_duplicate_rows_mixed_values_partial_reason(tmp_path: Path):
+    """When a third value is present alongside the old one, the
+    old-value occurrence is still bumped and the result carries an
+    explicit ``partial:`` reason — never a clean apply over a mixed
+    file."""
+    p = _write(tmp_path, """\
+<Project>
+  <ItemGroup>
+    <PackageVersion Include="A" Version="1.0.0" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <PackageVersion Include="A" Version="0.9.0" />
+  </ItemGroup>
+</Project>
+""")
+    results = rewrite_directory_packages_props(p, [RewriteEdit(
+        locator="A", old_value="1.0.0", new_value="2.0.0",
+    )])
+    assert results[0].applied is True
+    assert results[0].reason.startswith("partial:")
+    body = p.read_text()
+    assert 'Version="2.0.0"' in body
+    assert 'Version="0.9.0"' in body

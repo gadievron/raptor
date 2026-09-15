@@ -435,3 +435,55 @@ def test_sha_pinned_rejects_uppercase_hex_new_sha(tmp_path: Path) -> None:
     results = rewrite_gha_uses(wf, edits)
     assert not results[0].applied
     assert wf.read_text() == original
+
+
+def test_sha_pinned_multiple_occurrences_all_bumped(tmp_path: Path) -> None:
+    """The same action is routinely SHA-pinned in several jobs of one
+    workflow. EVERY occurrence at the plan's old (SHA, tag) pair must
+    be bumped — a first-match verdict left the later jobs on the old
+    SHA while the run reported applied."""
+    old = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+    new = "ffffffffffffffffffffffffffffffffffffffff"
+    wf = _workflow_path(tmp_path)
+    wf.write_text(
+        f"      - uses: actions/checkout@{old}  # was v6\n"
+        "      - run: make test\n"
+        f"      - uses: actions/checkout@{old}  # was v6\n"
+    )
+    edits = [RewriteEdit(
+        locator="actions/checkout",
+        old_value="v6", new_value="v7",
+        extra={"old_sha": old, "new_sha": new},
+    )]
+    results = rewrite_gha_uses(wf, edits)
+    assert results[0].applied
+    text = wf.read_text()
+    assert text.count(f"@{new}") == 2
+    assert old not in text
+    assert text.count("# was v7") == 2
+
+
+def test_sha_pinned_mixed_first_already_bumped_still_applies(
+    tmp_path: Path,
+) -> None:
+    """A partially-bumped file (one occurrence already at the new SHA,
+    one still at the old) must still bump the remaining occurrence —
+    a first-match verdict read the bumped line and returned
+    no_change."""
+    old = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+    new = "ffffffffffffffffffffffffffffffffffffffff"
+    wf = _workflow_path(tmp_path)
+    wf.write_text(
+        f"      - uses: actions/checkout@{new}  # was v7\n"
+        f"      - uses: actions/checkout@{old}  # was v6\n"
+    )
+    edits = [RewriteEdit(
+        locator="actions/checkout",
+        old_value="v6", new_value="v7",
+        extra={"old_sha": old, "new_sha": new},
+    )]
+    results = rewrite_gha_uses(wf, edits)
+    assert results[0].applied
+    text = wf.read_text()
+    assert old not in text
+    assert text.count(f"@{new}") == 2
