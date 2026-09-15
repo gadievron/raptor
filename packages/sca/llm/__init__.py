@@ -190,6 +190,10 @@ def run_stage(
     )
 
     _retry_fired = [False]
+    # Mutable so the retry closure can add its own spend — the
+    # schema-retry call is a second paid generation; dropping its
+    # cost undercounted exactly the runs where the model misbehaved.
+    _extra_cost = [0.0]
 
     def _retry():
         _retry_fired[0] = True
@@ -202,6 +206,7 @@ def run_stage(
             task_type=task_type,
             **gen_kwargs,
         )
+        _extra_cost[0] += r2.cost or 0.0
         return _json.dumps(r2.result) if isinstance(r2.result, dict) else (r2.raw or "")
 
     validated = validate_response(raw_for_validate, schema_cls, llm_call=_retry)
@@ -225,7 +230,7 @@ def run_stage(
         raw=raw_text,
         preflight_hit=any_hit,
         confidence_haircut=haircut,
-        cost=cost,
+        cost=cost + _extra_cost[0],
     )
 
 

@@ -239,3 +239,40 @@ def test_run_stage_records_telemetry():
     )
     after = defense_telemetry.summary()["defense_telemetry"]["preflight"]["checked"]
     assert after > before
+
+
+def test_run_stage_retry_cost_accumulates():
+    """The schema-retry call is a second paid generation — its cost
+    must join StageResult.cost (it undercounted exactly the runs
+    where the model misbehaved)."""
+
+    class _RetryClient(_StubClient):
+        def generate_structured(self, prompt, schema,
+                                system_prompt=None, task_type=None,
+                                **kwargs):
+            self._call_count += 1
+            if self._call_count == 1:
+                # Schema-invalid: answer overlong forces the retry.
+                return _FakeStructuredResponse(
+                    result={"answer": "x" * 500, "score": 1},
+                    cost=0.01,
+                )
+            return _FakeStructuredResponse(
+                result={"answer": "ok", "score": 2}, cost=0.03,
+            )
+
+    client = _RetryClient({})
+    result = run_stage(
+        client=client,
+        system="You are a test assistant.",
+        untrusted_blocks=(
+            UntrustedBlock(content="test input", kind="TEST",
+                           origin="test"),
+        ),
+        slots={},
+        schema_cls=_SimpleSchema,
+    )
+    assert client._call_count == 2          # retry actually fired
+    assert result.model is not None
+    assert result.model.answer == "ok"
+    assert abs(result.cost - 0.04) < 1e-9   # 0.01 first + 0.03 retry
