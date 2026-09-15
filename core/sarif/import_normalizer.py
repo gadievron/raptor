@@ -8,6 +8,7 @@ producing findings in the same internal dict shape that
 """
 
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -201,6 +202,39 @@ _MAX_FAILED_URI_SCANS = 64
 #: to the scan budget above.
 _MAX_FAILED_URI_MEMO = 4096
 
+#: Positive-memo ceiling — same attacker-chosen-string reasoning as
+#: the negative memo (values are bounded resolved paths, keys are the
+#: URIs). Past the cap, repeats of NEW successful URIs re-resolve via
+#: the depth cache / basename index (cheap paths).
+_MAX_RESOLVED_URI_MEMO = 4096
+
+#: Aggregate wall budget for FULL depth-loop scans per import —
+#: successes included. The failed-scan count budget above cannot see
+#: a wedge built from RESOLVING URIs: alternating deep URIs whose
+#: strip depths differ (~253 junk components ending in a real in-repo
+#: filename) each succeed, so nothing was memoised or charged and the
+#: quadratic loop ran per finding (~66 ms × 147k admitted findings ≈
+#: hours). Once spent, unknown URIs resolve only through the cached
+#: depths and the O(1) basename index. Trade-off, both directions:
+#: too low degrades genuinely many-rooted imports to basename-only
+#: resolution (ambiguous basenames then skip, loudly); too high
+#: re-opens the hours-scale wedge (20 s ≈ 300 cap-sized scans —
+#: two orders of magnitude above the handful of distinct scanner
+#: roots real imports carry).
+_MAX_FULL_SCAN_SECONDS = 20.0
+
+
+def _remember_depth(depth_cache: list, depth: int) -> None:
+    """Record a successful strip depth, most-recent-first.  The cache
+    holds EVERY successful depth (bounded by the component cap, ≤256
+    ints) — a single-slot cache thrashed when two scanner shapes
+    alternated, re-paying the full scan per finding."""
+    if depth in depth_cache:
+        depth_cache.remove(depth)
+    depth_cache.insert(0, depth)
+    while None in depth_cache:
+        depth_cache.remove(None)
+
 
 def _resolve_uri(
     uri: str,
@@ -210,26 +244,44 @@ def _resolve_uri(
     *,
     failed_memo: set[str] | None = None,
     scan_budget: list[int] | None = None,
+    resolved_memo: dict[str, str] | None = None,
+    scan_clock: list[float] | None = None,
 ) -> str | None:
     """Resolve a SARIF URI to a relative path under *source_root*.
 
     Tries progressively shorter prefixes until a match is found.
-    Caches the successful strip-depth so subsequent findings from the
-    same scanner resolve in O(1).
+    Caches EVERY successful strip-depth (``depth_cache``, most-recent-
+    first) so subsequent findings from the same scanner shape(s)
+    resolve in O(1) — a single-slot cache thrashed on two alternating
+    shapes and re-paid the quadratic scan per finding.
 
     Rejects any resolved path that escapes *source_root* (traversal
     defence for untrusted SARIF).
 
-    ``failed_memo`` (per-import) short-circuits URIs that already
-    failed — the depth loop memoised only SUCCESSFUL strip depths, so
-    147k findings carrying the SAME unresolvable URI each re-paid the
-    full quadratic scan. ``scan_budget`` (per-import, mutable cell)
-    bounds the number of failed full scans; once exhausted, unknown
-    URIs resolve only through the cheap cached-depth fast path (see
-    ``_MAX_FAILED_URI_SCANS``).
+    Per-import state, all optional:
+
+    - ``failed_memo`` short-circuits URIs that already failed — the
+      depth loop memoised only SUCCESSFUL strip depths, so 147k
+      findings carrying the SAME unresolvable URI each re-paid the
+      full quadratic scan.
+    - ``scan_budget`` (mutable cell) bounds the number of FAILED full
+      scans (see ``_MAX_FAILED_URI_SCANS``).
+    - ``resolved_memo`` short-circuits repeat SUCCESSFUL URIs.
+    - ``scan_clock`` (mutable cell, accumulated seconds) bounds the
+      aggregate wall time of full scans, successes included (see
+      ``_MAX_FULL_SCAN_SECONDS``) — resolving-URI wedges never touch
+      the failure budget.
+
+    Once either budget is spent, unknown URIs resolve only through
+    the cached-depth fast path and the O(1) basename index — the
+    basename match is NOT part of the quadratic wedge and is never
+    budgeted (skipping it dropped every legitimate finding whose
+    unmappable siblings arrived first).
 
     Returns a POSIX-style relative path string, or None.
     """
+    if resolved_memo is not None and uri in resolved_memo:
+        return resolved_memo[uri]
     if failed_memo is not None and uri in failed_memo:
         return None
 
@@ -238,6 +290,12 @@ def _resolve_uri(
                 and len(failed_memo) < _MAX_FAILED_URI_MEMO):
             failed_memo.add(uri)
         return None
+
+    def _ok(resolved: str) -> str:
+        if (resolved_memo is not None
+                and len(resolved_memo) < _MAX_RESOLVED_URI_MEMO):
+            resolved_memo[uri] = resolved
+        return resolved
 
     clean = unquote(_strip_file_scheme(uri))
     if clean.startswith("/"):
@@ -263,23 +321,48 @@ def _resolve_uri(
         )
         return _fail()
 
-    if depth_cache[0] is not None:
-        candidate = str(Path(*parts[depth_cache[0]:])) if depth_cache[0] < len(parts) else None
-        if candidate and _is_under_root(source_root, candidate):
-            return candidate
-
-    if scan_budget is not None and scan_budget[0] <= 0:
-        # Aggregate budget exhausted: no more O(N²) full scans this
-        # import. The cached-depth fast path above still resolves the
-        # established scanner shape.
-        return _fail()
-
-    for depth in range(len(parts)):
-        candidate = str(Path(*parts[depth:]))
+    for i, cached_depth in enumerate(depth_cache):
+        if cached_depth is None or cached_depth >= len(parts):
+            continue
+        candidate = str(Path(*parts[cached_depth:]))
         if _is_under_root(source_root, candidate):
-            depth_cache[0] = depth
-            return candidate
+            if i != 0:
+                # Most-recent-first so alternating shapes stay O(1).
+                depth_cache.insert(0, depth_cache.pop(i))
+            return _ok(candidate)
 
+    scans_allowed = not (
+        (scan_budget is not None and scan_budget[0] <= 0)
+        or (scan_clock is not None
+            and scan_clock[0] >= _MAX_FULL_SCAN_SECONDS)
+    )
+    if scans_allowed:
+        scan_start = time.monotonic()
+        try:
+            for depth in range(len(parts)):
+                candidate = str(Path(*parts[depth:]))
+                if _is_under_root(source_root, candidate):
+                    _remember_depth(depth_cache, depth)
+                    return _ok(candidate)
+        finally:
+            if scan_clock is not None:
+                before = scan_clock[0]
+                scan_clock[0] += time.monotonic() - scan_start
+                if (before < _MAX_FULL_SCAN_SECONDS
+                        <= scan_clock[0]):
+                    logger.warning(
+                        "SARIF import: full URI scans exceeded the "
+                        "%.0f s aggregate wall budget — further "
+                        "unknown URIs resolve only via cached depths "
+                        "and unique basenames (hostile or deeply "
+                        "prefixed SARIF)",
+                        _MAX_FULL_SCAN_SECONDS,
+                    )
+
+    # Basename index: O(1), NOT part of the quadratic wedge — always
+    # consulted, budgets or not (budget exhaustion used to skip it and
+    # dropped every legitimate finding whose unmappable siblings came
+    # first in the document).
     basename = parts[-1]
     matches = file_index.get(basename, [])
     if len(matches) == 1:
@@ -289,16 +372,17 @@ def _resolve_uri(
                 "URI %s: basename-only match → %s",
                 escape_nonprintable(uri), resolved,
             )
-            return resolved
+            return _ok(resolved)
 
-    if scan_budget is not None:
+    if scans_allowed and scan_budget is not None:
         scan_budget[0] -= 1
         if scan_budget[0] == 0:
             logger.warning(
                 "SARIF import: %d full URI scans found nothing — "
-                "further unknown URIs skip resolution (hostile or "
-                "wrong-root SARIF; resolved shapes keep the cached-"
-                "depth fast path)",
+                "further unknown URIs skip full-scan resolution "
+                "(hostile or wrong-root SARIF; resolved shapes keep "
+                "the cached-depth fast path, unique basenames keep "
+                "the index match)",
                 _MAX_FAILED_URI_SCANS,
             )
     return _fail()
@@ -408,6 +492,8 @@ def normalize_imported_findings(
     depth_cache: list[int | None] = [None]
     failed_memo: set[str] = set()
     scan_budget: list[int] = [_MAX_FAILED_URI_SCANS]
+    resolved_memo: dict[str, str] = {}
+    scan_clock: list[float] = [0.0]
 
     for idx, finding in enumerate(findings):
         uri = finding.get("file") or ""
@@ -435,6 +521,7 @@ def normalize_imported_findings(
         resolved = _resolve_uri(
             uri, source_root, file_index, depth_cache,
             failed_memo=failed_memo, scan_budget=scan_budget,
+            resolved_memo=resolved_memo, scan_clock=scan_clock,
         )
         if resolved is None:
             result.warnings.append(ImportWarning(

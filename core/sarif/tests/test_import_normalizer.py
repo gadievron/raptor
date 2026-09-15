@@ -1328,3 +1328,131 @@ def test_oversized_snippet_warning_escapes_hostile_path(
     joined = " ".join(r.getMessage() for r in caplog.records)
     assert "big.c" in joined
     assert "\x1b" not in joined and "\x07" not in joined
+
+
+class TestResolveUriBudgetRecallAndWallCap:
+    """Budget exhaustion must degrade the EXPENSIVE lane only: the
+    O(1) basename index and the cached-depth path stay live, and
+    RESOLVING deep URIs are bounded by depth caching + the aggregate
+    wall clock (the failure budget never sees a success)."""
+
+    def _counting_root(self, tmp_path, monkeypatch):
+        from core.sarif import import_normalizer as mod
+        root = _source_tree(tmp_path)
+        calls = {"n": 0}
+        real = mod._is_under_root
+
+        def counted(source_root, candidate):
+            calls["n"] += 1
+            return real(source_root, candidate)
+
+        monkeypatch.setattr(mod, "_is_under_root", counted)
+        return root, calls
+
+    def test_basename_index_survives_budget_exhaustion(self, tmp_path):
+        """Junk-first exhausts the failed-scan budget BEFORE any depth
+        is cached; a later legitimate URI with a unique basename must
+        still resolve — the basename lookup is O(1) and not part of
+        the wedge (skipping it dropped the finding)."""
+        root = _source_tree(tmp_path)
+        memo: set = set()
+        budget = [1]
+        cache = [None]
+        idx = {"auth.c": [Path("src/auth.c")]}
+        assert _resolve_uri("j/u/n/k/miss.c", root, idx, cache,
+                            failed_memo=memo, scan_budget=budget) is None
+        assert budget[0] == 0
+        assert _resolve_uri("/ci/prefix/wrong/auth.c", root, idx, cache,
+                            failed_memo=memo,
+                            scan_budget=budget) == "src/auth.c"
+
+    def test_import_junk_first_legit_findings_still_import(self, tmp_path):
+        """E2E recall shape: a document whose unmappable URIs
+        (generated/vendored paths grouped first) precede the real
+        results must still import every real result. Pre-fix the
+        exhausted budget skipped the basename index and dropped ALL
+        subsequent legitimate findings (imported 0 of 500)."""
+        from core.sarif import import_normalizer as mod
+        root = _source_tree(tmp_path)
+        junk = [
+            _make_finding(file=f"gen/out/{i}/nope-{i}.c",
+                          finding_id=f"junk-{i}")
+            for i in range(mod._MAX_FAILED_URI_SCANS + 36)
+        ]
+        legit = [
+            _make_finding(file="/ci/workspace/elsewhere/auth.c",
+                          finding_id=f"legit-{i}", startLine=1)
+            for i in range(500)
+        ]
+        result = normalize_imported_findings(junk + legit, root)
+        assert result.stats.findings_skipped == len(junk)
+        assert result.stats.uri_unresolved == len(junk)
+        imported = len(junk) + len(legit) - result.stats.findings_skipped
+        assert imported == 500
+
+    def test_alternating_deep_resolving_uris_bounded(
+        self, tmp_path, monkeypatch,
+    ):
+        """Two alternating deep-but-RESOLVING URIs (junk components
+        ending in a real in-repo path) thrashed the single-slot depth
+        cache — every finding re-paid the full quadratic scan and
+        nothing was charged (successes bypassed budget and memo).
+        The depth cache holds every successful depth, so the pair
+        costs two full scans total."""
+        root, calls = self._counting_root(tmp_path, monkeypatch)
+        depth_a, depth_b = 40, 60
+        uri_a = "/".join(["a"] * depth_a) + "/src/auth.c"
+        uri_b = "/".join(["b"] * depth_b) + "/src/main.c"
+        cache: list = [None]
+        memo: set = set()
+        budget = [999]
+        clock = [0.0]
+        for _ in range(50):
+            assert _resolve_uri(uri_a, root, {}, cache, failed_memo=memo,
+                                scan_budget=budget,
+                                scan_clock=clock) == "src/auth.c"
+            assert _resolve_uri(uri_b, root, {}, cache, failed_memo=memo,
+                                scan_budget=budget,
+                                scan_clock=clock) == "src/main.c"
+        # Two full scans (≤ depth+2 probes each) + ≤2 cached-depth
+        # probes per subsequent call — far below 100 full scans.
+        assert calls["n"] <= (depth_a + depth_b + 8) + 4 * 100
+        assert budget[0] == 999  # successes never touch the budget
+
+    def test_resolved_memo_short_circuits_repeat_successes(
+        self, tmp_path, monkeypatch,
+    ):
+        root, calls = self._counting_root(tmp_path, monkeypatch)
+        cache: list = [None]
+        rmemo: dict = {}
+        assert _resolve_uri("/ci/ws/src/auth.c", root, {}, cache,
+                            resolved_memo=rmemo) == "src/auth.c"
+        before = calls["n"]
+        assert _resolve_uri("/ci/ws/src/auth.c", root, {}, cache,
+                            resolved_memo=rmemo) == "src/auth.c"
+        assert calls["n"] == before  # memo answered, zero probes
+
+    def test_wall_clock_cap_stops_full_scans_basename_survives(
+        self, tmp_path, monkeypatch,
+    ):
+        """Aggregate wall cap: once full-scan time is spent, unknown
+        URIs skip the quadratic loop entirely — but unique basenames
+        still resolve. Both directions: under the cap the full scan
+        runs (distinct-depth URI resolves without an index)."""
+        from core.sarif import import_normalizer as mod
+        root, calls = self._counting_root(tmp_path, monkeypatch)
+        idx = {"auth.c": [Path("src/auth.c")]}
+        clock = [0.0]
+        # Under the cap: full scan allowed, resolves with empty index.
+        assert _resolve_uri("/p/q/src/main.c", root, {}, [None],
+                            scan_clock=clock) == "src/main.c"
+        assert clock[0] > 0.0
+        # Spent: no full scan probes, basename index still resolves.
+        spent = [mod._MAX_FULL_SCAN_SECONDS]
+        before = calls["n"]
+        assert _resolve_uri("/x/y/z/auth.c", root, idx, [None],
+                            scan_clock=spent) == "src/auth.c"
+        assert calls["n"] == before + 1  # only the basename probe
+        # ... and a non-unique/unknown basename degrades to None.
+        assert _resolve_uri("/x/y/z/nope.c", root, idx, [None],
+                            scan_clock=spent) is None
