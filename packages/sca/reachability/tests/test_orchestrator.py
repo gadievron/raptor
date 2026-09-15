@@ -504,3 +504,44 @@ def test_npm_alias_dual_declared_resolves_stronger_spelling(
     dual.alias_name = "my-lodash"
     out = scan(repo, [dual])
     assert out[dual.key()].verdict == "imported"
+
+
+def test_failed_inventory_build_not_retried_per_tier(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """When the shared inventory build fails, the function-level
+    tiers must be SKIPPED — not each fall back to its own tempdir
+    rebuild of the builder that just failed (up to 8 redundant
+    expensive builds with 8 warning stacks on istio-scale trees)."""
+    import core.inventory.builder as builder_mod
+    from packages.sca.reachability import scan as _scan
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text(
+        "import requests\nrequests.get('u')\n", encoding="utf-8",
+    )
+
+    calls: list[str] = []
+
+    def _failing_build(target, cache_dir, *a, **kw):
+        calls.append(str(target))
+        raise RuntimeError("inventory builder down")
+
+    monkeypatch.setattr(builder_mod, "build_inventory", _failing_build)
+
+    dep = _dep("requests", ecosystem="PyPI")
+
+    class _Adv:
+        ecosystem_specific = None
+        database_specific = {"affected_functions": ["get"]}
+
+    class _Osv:
+        dep_key = dep.key()
+        advisories = [_Adv()]
+
+    out = _scan(repo, [dep], osv_results=[_Osv()])
+    # One shared attempt; no per-tier retry of the failed builder.
+    assert len(calls) == 1, calls
+    # Tier skipped → the module-level verdict is preserved.
+    assert out[dep.key()].verdict == "imported"

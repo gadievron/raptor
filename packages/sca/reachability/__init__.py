@@ -237,6 +237,13 @@ def scan(
     _inventory_build_failed.discard(str(target))
 
     if osv_results:
+        # ``_shared_inventory`` returns None ONLY when the build
+        # failed (failure is memoised per target). Each tier is
+        # gated on a non-None inventory: passing None through would
+        # trigger every tier's own tempdir rebuild fallback — up to
+        # 8 redundant ~21s builds (istio-scale) of a builder that
+        # just failed, with 8 warning stacks. The per-tier fallback
+        # stays for direct callers.
         shared_inventory = None
 
         from .python_function_level import (
@@ -244,8 +251,8 @@ def scan(
             refine_pypi_verdicts,
         )
         pypi_symbols = build_pypi_symbol_map(osv_results)
-        if pypi_symbols:
-            shared_inventory = _shared_inventory(target, shared_inventory)
+        if pypi_symbols and (shared_inventory := _shared_inventory(
+                target, shared_inventory)) is not None:
             refine_pypi_verdicts(
                 deps_list, out,
                 target=target,
@@ -258,8 +265,8 @@ def scan(
             refine_npm_verdicts,
         )
         npm_symbols = build_npm_symbol_map(osv_results)
-        if npm_symbols:
-            shared_inventory = _shared_inventory(target, shared_inventory)
+        if npm_symbols and (shared_inventory := _shared_inventory(
+                target, shared_inventory)) is not None:
             refine_npm_verdicts(
                 deps_list, out,
                 target=target,
@@ -272,8 +279,8 @@ def scan(
             refine_go_verdicts,
         )
         go_symbols = build_go_symbol_map(osv_results)
-        if go_symbols:
-            shared_inventory = _shared_inventory(target, shared_inventory)
+        if go_symbols and (shared_inventory := _shared_inventory(
+                target, shared_inventory)) is not None:
             refine_go_verdicts(
                 deps_list, out,
                 target=target,
@@ -286,8 +293,8 @@ def scan(
             refine_maven_verdicts,
         )
         maven_symbols = build_maven_symbol_map(osv_results)
-        if maven_symbols:
-            shared_inventory = _shared_inventory(target, shared_inventory)
+        if maven_symbols and (shared_inventory := _shared_inventory(
+                target, shared_inventory)) is not None:
             refine_maven_verdicts(
                 deps_list, out,
                 target=target,
@@ -300,8 +307,8 @@ def scan(
             refine_cargo_verdicts,
         )
         cargo_symbols = build_cargo_symbol_map(osv_results)
-        if cargo_symbols:
-            shared_inventory = _shared_inventory(target, shared_inventory)
+        if cargo_symbols and (shared_inventory := _shared_inventory(
+                target, shared_inventory)) is not None:
             refine_cargo_verdicts(
                 deps_list, out,
                 target=target,
@@ -314,8 +321,8 @@ def scan(
             refine_rubygems_verdicts,
         )
         rubygems_symbols = build_rubygems_symbol_map(osv_results)
-        if rubygems_symbols:
-            shared_inventory = _shared_inventory(target, shared_inventory)
+        if rubygems_symbols and (shared_inventory := _shared_inventory(
+                target, shared_inventory)) is not None:
             refine_rubygems_verdicts(
                 deps_list, out,
                 target=target,
@@ -328,8 +335,8 @@ def scan(
             refine_nuget_verdicts,
         )
         nuget_symbols = build_nuget_symbol_map(osv_results)
-        if nuget_symbols:
-            shared_inventory = _shared_inventory(target, shared_inventory)
+        if nuget_symbols and (shared_inventory := _shared_inventory(
+                target, shared_inventory)) is not None:
             refine_nuget_verdicts(
                 deps_list, out,
                 target=target,
@@ -342,8 +349,8 @@ def scan(
             refine_packagist_verdicts,
         )
         packagist_symbols = build_packagist_symbol_map(osv_results)
-        if packagist_symbols:
-            shared_inventory = _shared_inventory(target, shared_inventory)
+        if packagist_symbols and (shared_inventory := _shared_inventory(
+                target, shared_inventory)) is not None:
             refine_packagist_verdicts(
                 deps_list, out,
                 target=target,
