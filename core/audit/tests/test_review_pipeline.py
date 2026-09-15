@@ -787,6 +787,78 @@ void *alloc_obj(size_t n) {
             "    return fp(c);\n}\n"
         )
 
+    def test_c_pointer_store_line_not_treated_as_comment(self):
+        # A leading `*` is a block-comment continuation only inside
+        # an open `/* ... */`; a pointer store must stay in the
+        # judged view.
+        assert not self._c_fn(
+            "void f(fn_t *slot, char *c) {\n"
+            "    *slot = system;\n    helper(c);\n}\n"
+        )
+
+    def test_c_block_comment_continuation_still_dropped(self):
+        # Both directions: prose continuation lines (even ones
+        # spelling sinks) stay out of the judged view.
+        assert self._c_fn(
+            "/* setkey wrapper\n * forwards; system = crypto layer\n"
+            " */\nint setkey(struct aead *a, const u8 *k) {\n"
+            "    return aead_setkey(a, k);\n}\n"
+        )
+
+    def test_c_code_after_inline_block_comment_judged(self):
+        assert not self._c_fn(
+            "int f(char *c) {\n"
+            "    /* nothing */ dispatch(system, c);\n    return 0;\n}\n"
+        )
+
+    def test_c_string_spelling_comment_opener_does_not_swallow(self):
+        # `/*` inside a C string literal is data — treating it as an
+        # opener dropped every following line from the judged view,
+        # hiding a live sink call behind a glob pattern.
+        assert not self._c_fn(
+            'int glob_run(const char *d) {\n'
+            '    log_msg("scan /* pattern");\n'
+            '    return system(d);\n}\n'
+        )
+
+    def test_c_line_comment_opener_does_not_swallow(self):
+        # A `/*` after `//` is line-comment prose, not an opener —
+        # the phantom state swallowed the sink line below.
+        assert not self._c_fn(
+            "int f(char *c) {\n"
+            "    return log(c); // note /*\n"
+            "    system(c);\n}\n"
+        )
+
+    def test_c_string_comment_closer_does_not_end_state(self):
+        # The mirror direction: `*/` inside a string while no comment
+        # is open is data; the sink call stays judged either way.
+        assert not self._c_fn(
+            'int f(char *c) {\n'
+            '    log_msg("end */ marker");\n'
+            '    return system(c);\n}\n'
+        )
+
+    def test_c_quotes_inside_open_comment_are_prose(self):
+        # Inside an open block comment there are no strings — the
+        # first `*/` closes even when quoted, so following code stays
+        # in the judged view (over-inclusion at worst, never a
+        # swallow).
+        assert not self._c_fn(
+            "int f(char *c) {\n"
+            '    /* doc " */ dispatch(system, c);\n'
+            "    return 0;\n}\n"
+        )
+
+    def test_python_block_comment_string_does_not_hide_code(self):
+        # `/*` in a Python string is data, not a comment opener — a
+        # sink call between `"/*"` and `"*/"` strings must stay
+        # visible to the call gate / AST judgment.
+        assert not self._py_fn(
+            'def f(c):\n    s = "/*"\n    os.system(c)\n'
+            '    t = "*/"\n    return s + t\n'
+        )
+
     def test_c_benign_declarations_still_skip(self):
         for body in (
             "int f(int x) {\n    int limit = 30;\n"

@@ -1030,6 +1030,12 @@ def _py_wrapper_escape(
                     if isinstance(n, ast.Name):
                         accounted.add(n.id)  # comprehension-scoped
         elif isinstance(node, ast.Call):
+            # The callee reference is judged too: the textual
+            # single-call gate and the main callee check can miss a
+            # call the AST sees (line-view divergence), and a
+            # call-position reference is exactly the exclusion's
+            # domain.
+            judged.append(_py_value_refs(node.func))
             for a in node.args:
                 judged.append(_py_value_refs(a))
             for kw in node.keywords:
@@ -1262,6 +1268,65 @@ def _wrapper_ref_hits_exclusion(
     return bool(project_sinks and prefixes & project_sinks)
 
 
+def _wrapper_comment_view(ln: str, in_comment: bool) -> tuple[str, bool]:
+    """Remove `/* ... */` regions from one line, carrying open-comment
+    state across lines, with the markers recognised LEXICALLY:
+
+    - a marker inside a string literal is data (`log("scan /*")` must
+      not open comment state and swallow the following code lines out
+      of the judged view — the suppression direction);
+    - a `/*` after a `//` line comment is prose, not an opener (the
+      rest of the line stays in the view as text — over-inclusion
+      only costs a review — but marker scanning stops);
+    - inside an open block comment quotes are prose, so a `*/` there
+      always closes (real lexing: strings do not exist in comments).
+
+    String state is per line (single-line literals; `'`, `"`, and the
+    Go/JS backtick). A multi-line string or template literal spelling
+    a marker on a later line remains a blind spot of the line view —
+    an unterminated quote keeps the rest of its own line verbatim, so
+    the miss direction is over-inclusion (review), never a swallow.
+    """
+    out: list[str] = []
+    quote = ""
+    i = 0
+    n = len(ln)
+    while i < n:
+        ch = ln[i]
+        if in_comment:
+            if ch == "*" and ln.startswith("*/", i):
+                in_comment = False
+                i += 2
+            else:
+                i += 1
+            continue
+        if quote:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(ln[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+            i += 1
+            continue
+        if ch in "\"'`":
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and ln.startswith("/*", i):
+            in_comment = True
+            i += 2
+            continue
+        if ch == "/" and ln.startswith("//", i):
+            out.append(ln[i:])
+            break
+        out.append(ch)
+        i += 1
+    return "".join(out), in_comment
+
+
 def _is_trivial_wrapper(
     source: str,
     lang: str,
@@ -1294,16 +1359,45 @@ def _is_trivial_wrapper(
         if project_sinks and cname in project_sinks:
             return False, ""
 
-    lines = source.strip().splitlines()
-    code_lines = [
-        ln.strip() for ln in lines
-        if ln.strip()
-        and not ln.strip().startswith("//")
-        and not ln.strip().startswith("/*")
-        and not ln.strip().startswith("*")
-        and not ln.strip().startswith("#")
-        and ln.strip() not in ("{", "}")
-    ]
+    # Comment-line filter. For the `/* ... */` languages the filter
+    # carries BLOCK-COMMENT STATE: a leading `*` is a continuation
+    # line only inside an open block comment — unconditionally
+    # dropping every `*`-leading line hid pointer stores
+    # (`*slot = system;`) from all downstream checks. Code before an
+    # opener / after a closer on the same line is kept, and the
+    # markers are located LEXICALLY (_wrapper_comment_view): a `/*`
+    # inside a string literal or after a `//` line comment must not
+    # open comment state and swallow following code lines out of the
+    # judged view — the suppression direction. Languages where `/*`
+    # is NOT a comment (a Python string may spell it) keep the plain
+    # filter — tracking state there would let a string swallow code
+    # lines out of the view, the same suppression direction.
+    code_lines: list[str] = []
+    if lang in ("python", "perl", "lua"):
+        code_lines = [
+            ln.strip() for ln in source.strip().splitlines()
+            if ln.strip()
+            and not ln.strip().startswith("//")
+            and not ln.strip().startswith("/*")
+            and not ln.strip().startswith("*")
+            and not ln.strip().startswith("#")
+            and ln.strip() not in ("{", "}")
+        ]
+    else:
+        in_block_comment = False
+        for raw in source.strip().splitlines():
+            ln, in_block_comment = _wrapper_comment_view(
+                raw.strip(), in_block_comment,
+            )
+            ln = ln.strip()
+            if (
+                not ln
+                or ln.startswith("//")
+                or ln.startswith("#")
+                or ln in ("{", "}")
+            ):
+                continue
+            code_lines.append(ln)
 
     if len(code_lines) > 5:
         return False, ""
