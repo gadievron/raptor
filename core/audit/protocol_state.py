@@ -70,7 +70,7 @@ from dataclasses import field as dc_field
 from pathlib import Path
 from typing import Any
 
-from core.json import dumps_artifact
+from core.json import save_json
 
 logger = logging.getLogger(__name__)
 
@@ -1422,11 +1422,15 @@ def run_protocol_state_prepass(
     telemetry["wall_time_s"] = round(time.monotonic() - t0, 3)
     if out_dir is not None and (findings or leads):
         try:
-            path = Path(out_dir) / "protocol-state.json"
-            path.write_text(dumps_artifact(
+            # Atomic write (tempfile + rename via save_json), like the
+            # sibling prepasses: a torn write here surfaces as
+            # "protocol-state.json exists but fails to parse" at
+            # /review time.
+            save_json(
+                Path(out_dir) / "protocol-state.json",
                 {"findings": findings, "leads": leads,
-                 "telemetry": telemetry}, indent=1,
-            ))
+                 "telemetry": telemetry},
+            )
         except Exception:
             logger.debug("protocol-state.json write failed",
                          exc_info=True)

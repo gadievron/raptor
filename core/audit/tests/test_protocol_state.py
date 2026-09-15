@@ -281,6 +281,26 @@ class TestLeads:
         out = run_protocol_state_prepass(TWIN_TEXTS, out_dir=tmp_path)
         assert out["leads"] == []
 
+    def test_artifact_written_atomically(self, tmp_path, monkeypatch):
+        # Sibling-drift pin: the artifact must go through the atomic
+        # save_json (tempfile + rename) like release-order.json and
+        # resource-bounds.json — a torn plain write_text surfaces as
+        # "protocol-state.json exists but fails to parse" at /review
+        # time.
+        import core.audit.protocol_state as ps_mod
+
+        saved: list = []
+        real_save = ps_mod.save_json
+
+        def spy_save(path, payload, **kw):
+            saved.append(str(path))
+            return real_save(path, payload, **kw)
+
+        monkeypatch.setattr(ps_mod, "save_json", spy_save)
+        run_protocol_state_prepass(TEXTS, out_dir=tmp_path)
+        assert any(p.endswith("protocol-state.json") for p in saved)
+        assert (tmp_path / "protocol-state.json").is_file()
+
     def test_lead_legs_share_one_namespace_firewall(self):
         # Two protocol_state leads can never satisfy the two-
         # independent-namespaces aggregation rule by themselves.
