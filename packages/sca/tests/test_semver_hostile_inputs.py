@@ -11,7 +11,6 @@ parse failure contained to that single version/dep.
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 
 import pytest
@@ -91,15 +90,16 @@ def test_pathological_shapes_parse_in_linear_time() -> None:
         "1.2.3-" + "a." * 50_000 + "b",
         "py" + "3.10.0-6" * 20_000,
     ]
-    start = time.perf_counter()
-    for shape in shapes:
-        bounds(shape)
-        try:
-            parse(shape)
-        except ValueError:
-            pass
-    elapsed = time.perf_counter() - start
-    assert elapsed < 1.0, f"pathological parse took {elapsed:.2f}s"
+    # CPU budget, not wall clock: a superlinear parse burns CPU,
+    # which a loaded runner's scheduling stalls cannot fake.
+    from core.testing.wallclock import cpu_budget
+    with cpu_budget(1.0, what="pathological semver parse"):
+        for shape in shapes:
+            bounds(shape)
+            try:
+                parse(shape)
+            except ValueError:
+                pass
 
 
 if __name__ == "__main__":

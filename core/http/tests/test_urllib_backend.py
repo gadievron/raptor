@@ -896,27 +896,43 @@ class TestRetriesOptOut:
             client.get_json("https://example.com/api", retries=3)
         assert pool.request.call_count == 4
 
-    def test_no_sleep_after_final_attempt(self):
+    def test_no_sleep_after_final_attempt(self, monkeypatch):
         """REGRESSION: each schedule slot owns the sleep AFTER its
         attempt. The final slot has no next attempt, so we MUST NOT
         sleep before raising 'Exhausted retries' — otherwise retries=0
         + 503 sleeps schedule[0] (1s), and a default-config full
         failure burns the trailing 300s slot for nothing.
+
+        Asserted on the sleep CALL itself (recorded via a time-module
+        shim), not on wall clock: the old elapsed < 0.5 bound sat one
+        scheduler stall away from the buggy 1s sleep it distinguished.
         """
         import time as _time
+        import core.http.urllib_backend as _backend
+
+        class _RecordingTime:
+            """Delegates to the real time module; records sleeps."""
+
+            def __init__(self) -> None:
+                self.sleeps: list[float] = []
+
+            def sleep(self, seconds: float) -> None:
+                self.sleeps.append(seconds)
+
+            def __getattr__(self, name):
+                return getattr(_time, name)
+
+        shim = _RecordingTime()
+        monkeypatch.setattr(_backend, "time", shim)
         pool = MagicMock()
         pool.request.return_value = _stub_response(b"", status=503)
         client = UrllibClient(_http=pool)
 
-        t0 = _time.monotonic()
         with pytest.raises(HttpError):
             client.get_json("https://example.com/api", retries=0)
-        elapsed = _time.monotonic() - t0
-        # Real wall-clock — well under schedule[0]=1s. Slop allows
-        # for slow CI scheduling but well below the buggy 1s sleep.
-        assert elapsed < 0.5, (
-            f"retries=0 took {elapsed:.2f}s — likely slept the final "
-            f"schedule slot before raising"
+        assert shim.sleeps == [], (
+            f"retries=0 slept {shim.sleeps} — the final schedule slot "
+            f"must not sleep before raising"
         )
 
     def test_post_json_documents_idempotency(self):

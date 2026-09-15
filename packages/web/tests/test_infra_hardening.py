@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
+from core.testing.wallclock import cpu_budget
 from packages.web.execution_policy import WebExecutionPolicy, WebPolicyError
 
 
@@ -86,10 +86,9 @@ def test_inline_script_scan_is_linear_on_hostile_unclosed_tags():
     from packages.web.discovery.js_routes import _inline_scripts
 
     hostile = ("<script>" * 3000) + ("x" * 1024 * 1024)
-    started = time.monotonic()
-    scripts = _inline_scripts(hostile)
-    elapsed = time.monotonic() - started
-    assert elapsed < 2.0, f"hostile page took {elapsed:.1f}s to scan"
+    # CPU budget, not wall clock: the superlinear scan burns CPU.
+    with cpu_budget(2.0, what="hostile unclosed-tag page scan"):
+        scripts = _inline_scripts(hostile)
     assert scripts == []  # no closing tag: nothing extractable
 
     normal = (
@@ -110,10 +109,9 @@ def test_route_extraction_is_bounded_on_hostile_ajax_fragments():
     # `[^}]*?url` scan re-walks to end-of-body per opener —
     # O(openers x body) on hostile input.
     hostile = (".ajax({ " * 5000) + ("y" * 512 * 1024)
-    started = time.monotonic()
-    routes = _extract_routes(hostile)
-    elapsed = time.monotonic() - started
-    assert elapsed < 2.0, f"hostile JS took {elapsed:.1f}s to scan"
+    # CPU budget — same rationale as the inline-script scan above.
+    with cpu_budget(2.0, what="hostile ajax-fragment scan"):
+        routes = _extract_routes(hostile)
     assert routes == []
 
     # Oversized bodies are truncated, not scanned in full.

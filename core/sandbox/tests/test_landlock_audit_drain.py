@@ -181,15 +181,22 @@ def test_drain_respects_deadline(monkeypatch):
 
     # The child must HOLD the write end open while it sleeps (the old
     # fork child inherited it implicitly) — otherwise the drain sees
-    # EOF at once and the deadline path is never exercised.
-    child = _spawn_child("import time; time.sleep(10.0)", out_w)
+    # EOF at once and the deadline path is never exercised. Its sleep
+    # sits far past the assert bound: a drain that ignores the
+    # deadline pins until pipe EOF at child exit (120s), never inside
+    # the 20s window a loaded runner could legitimately reach.
+    child = _spawn_child("import time; time.sleep(120.0)", out_w)
     os.close(out_w)
     try:
         deadline = time.monotonic() + 0.3
         t0 = time.monotonic()
         mod._drain_pipes_until_eof((out_r,), child.pid, deadline)
         elapsed = time.monotonic() - t0
-        assert elapsed < 2.0, "drain did not stop at the deadline"
+        from core.testing.wallclock import check_wall_deadline
+        check_wall_deadline(
+            elapsed, 20.0, code_bound_s=120.0,
+            what="drain with a 0.3s deadline and a silent child",
+        )
     finally:
         os.close(out_r)
         child.kill()

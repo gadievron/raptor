@@ -26,8 +26,11 @@ from cve_env.tools import image_resolve as ir
 
 def _slow_miss(_cand: str) -> tuple[None, str]:
     """A probe that takes real wall-time and always misses (rate-limited)."""
-    # Real time.sleep -- test relies on wall-clock. May be flaky under heavy
-    # CI load. The 1.5s assertion has ~10x headroom over the 0.15s sleep.
+    # Real time.sleep — the budget under test reads real monotonic, so
+    # probes must burn real wall time. The DETECTOR below is the probe
+    # count (load-safe in the passing direction: stalls exhaust the
+    # budget EARLIER, trying fewer candidates); the wall ceiling is
+    # only a gross-hang backstop.
     time.sleep(0.15)
     return (None, "rate_limited")
 
@@ -50,10 +53,13 @@ def test_image_resolve_enforces_per_call_budget(monkeypatch: Any) -> None:
     elapsed = time.monotonic() - start
 
     assert not res.ok
-    assert elapsed < 1.5, (
-        f"image_resolve ran {elapsed:.2f}s on slow probes — the per-call budget "
-        f"(CVE_ENV_IMAGE_RESOLVE_BUDGET_S=0.45) did not stop the cascade "
-        f"(it probed all candidates + the cooldown re-probe). F3 wall-hang."
+    # Gross-hang ceiling only — the candidates_tried assert below is
+    # the budget detector (a dead budget probes all 10 + the cooldown
+    # re-probe, failing the count regardless of machine speed). The
+    # old 1.5s bound was one CI stall away from the 3s regression.
+    assert elapsed < 30.0, (
+        f"image_resolve ran {elapsed:.2f}s on slow probes — wall hang "
+        f"(F3) far past any budgeted cascade."
     )
     assert len(res.candidates_tried) < 8, (
         f"probed {len(res.candidates_tried)} candidates — budget should have cut "

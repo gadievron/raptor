@@ -65,6 +65,12 @@ def test_read_allocated_host_port_poll_is_bounded(monkeypatch: Any) -> None:
     assert seen.get("timeout", 0) > 0, (
         "each docker-inspect poll must be bounded via run_with_timeout."
     )
-    assert elapsed < 2.0, (
-        f"poll loop ran {elapsed:.1f}s — should be bounded by timeout_s (0.3)."
+    # The regression is an unbounded poll loop (never raises) —
+    # returning at all is the pin, so the ceiling is generous; the
+    # per-poll run_with_timeout assert above carries the bounding
+    # property. The old 2.0s bound measured scheduler stalls.
+    from core.testing.wallclock import check_wall_deadline
+    check_wall_deadline(
+        elapsed, 15.0, code_bound_s=float("inf"),
+        what="port poll loop with a 0.3s deadline",
     )
