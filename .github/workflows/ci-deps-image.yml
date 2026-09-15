@@ -89,10 +89,39 @@ jobs:
           docker push "${image}:req-${reqhash}"
           echo "Pushed ${image}:main and ${image}:req-${reqhash}"
 
+      # The package should stay PRIVATE: this repo is public and the
+      # image is internal CI plumbing, not a distributable. Same check
+      # as sandbox-matrix-image.yml (see the OWNERSHIP SPLIT there):
+      # the package is user-owned, visibility is an owner-only property
+      # (no REST endpoint changes container-package visibility, and the
+      # workflow token could not authorize one anyway), so this emits a
+      # ::warning — never a job failure that would block publishes on
+      # the owner's schedule. stderr is discarded on the org attempt
+      # only (expected 404 on user-owned repos); the user-fallback call
+      # keeps its stderr so a real double-failure leaves its diagnosis
+      # in the job log.
+      - name: Check the package is private (owner-managed)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          vis="$(gh api "orgs/${OWNER}/packages/container/raptor-ci-deps" --jq .visibility 2>/dev/null)" \
+            || vis="$(gh api "users/${OWNER}/packages/container/raptor-ci-deps" --jq .visibility)" \
+            || vis=""
+          if [ -z "${vis}" ]; then
+            echo "::warning::could not read GHCR visibility for raptor-ci-deps with the workflow token — the owner should verify the ghcr.io/${OWNER}/raptor-ci-deps package is Private (package settings -> Danger Zone -> Change visibility)."
+          elif [ "${vis}" != "private" ]; then
+            echo "::warning::ghcr.io/${OWNER}/raptor-ci-deps is '${vis}' but should be private (internal CI image, public repo). Owner action: package settings -> Danger Zone -> Change visibility -> Private. Visibility persists across pushes, so one flip settles it."
+          else
+            echo "package visibility: private"
+          fi
+
       # Prune the untagged digests left behind when :main / :req-<hash> move
       # to this build. Tagged versions (current :main + every :req-<hash>
-      # rollback anchor) are untouched. GHCR has no auto-retention, so without
-      # this the weekly rebuild alone accrues ~52 dangling versions/year.
+      # rollback anchor) are untouched here; bounded anchor retention is
+      # the next step. GHCR has no auto-retention, so without this the
+      # weekly rebuild alone accrues ~52 dangling versions/year.
       # delete-only-untagged + a small floor never risks a rollback anchor.
       - name: Prune superseded (untagged) image versions
         uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55  # was v5.0.0
