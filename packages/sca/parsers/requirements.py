@@ -189,7 +189,13 @@ def _parse_file(
         return []
     visited.add(resolved)
 
-    text = _safe_read.read_bounded(resolved, follow_symlinks=False)
+    # Read the DISCOVERED path, not its resolve() target — resolving
+    # first would hand ``read_bounded`` a plain regular file and the
+    # ``follow_symlinks=False`` symlink refusal could never fire (a
+    # ``requirements.txt -> /outside/tree`` link would be read and its
+    # rows fed to the report). ``resolved`` stays the visited-set key,
+    # ``declared_in`` value, and include-parent base.
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
     if text is None:
         # ``read_bounded`` already logged the underlying reason.
         return []

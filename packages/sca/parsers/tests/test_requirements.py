@@ -215,3 +215,36 @@ def test_standalone_option_lines_still_skipped(tmp_path: Path) -> None:
     body = "--index-url https://pypi.org/simple\nrequests==2.31.0\n"
     deps = parse(_write(tmp_path, body))
     assert [(d.name, d.version) for d in deps] == [("requests", "2.31.0")]
+
+
+def test_symlinked_requirements_refused(tmp_path: Path) -> None:
+    """A symlink pointing at a perfectly VALID requirements file must
+    be refused — the read has to see the DISCOVERED path, not its
+    resolve() target (resolving first handed ``read_bounded`` a plain
+    regular file, so the ``follow_symlinks=False`` refusal could never
+    fire and an out-of-tree target's rows flowed into the report)."""
+    import os
+
+    real = tmp_path / "real.txt"
+    real.write_text("requests==2.31.0\n", encoding="utf-8")
+    link = tmp_path / "requirements.txt"
+    os.symlink(real, link)
+    assert parse(link) == []
+    # The real file, read directly, still parses.
+    deps = parse(real)
+    assert [(d.name, d.version) for d in deps] == [("requests", "2.31.0")]
+
+
+def test_symlinked_include_refused(tmp_path: Path) -> None:
+    """A ``-r`` include whose target is itself a symlink must be
+    refused at the nested read too — the include recursion passes the
+    discovered path, so the same defence applies at every depth."""
+    import os
+
+    real = tmp_path / "real-base.txt"
+    real.write_text("flask==3.0.0\n", encoding="utf-8")
+    link = tmp_path / "base.txt"
+    os.symlink(real, link)
+    top = _write(tmp_path, "-r base.txt\nrequests==2.31.0\n")
+    deps = parse(top, scan_root=tmp_path)
+    assert [(d.name, d.version) for d in deps] == [("requests", "2.31.0")]
