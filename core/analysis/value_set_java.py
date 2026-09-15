@@ -55,6 +55,41 @@ def _parser():
     return _get_parser()
 
 
+def _field_table_scope_ok(declarator: Node) -> bool:
+    """False for a FIELD table that another file could write.
+
+    The occurrence pass scans the WHOLE FILE but only the file: a
+    ``static String[] VALUES`` accessible from another compilation
+    unit can take a cross-file element store
+    (``Other.VALUES[0] = taint``) the scan can never see — and
+    ``final`` does not help, since it protects the REFERENCE, not
+    the elements. Only ``private`` fields confine every possible
+    store to this file (reflection is out of the model, as
+    everywhere in the folder). Local declarators pass: a local
+    array's stores are all in-file by construction, and the scan's
+    disqualifiers (aliasing, call-arg escape) already police them.
+    """
+    parent = declarator.parent
+    if parent is None:
+        return False
+    if parent.type == "constant_declaration":
+        # Interface fields are implicitly public static final
+        # regardless of written modifiers — always cross-file
+        # element-writable, so they can never confine their stores
+        # to this file.
+        return False
+    if parent.type != "field_declaration":
+        return True
+    mods = next(
+        (c for c in parent.children if c.type == "modifiers"), None)
+    if mods is None:
+        return False
+    return any(
+        c.text.decode("utf-8", "replace") == "private"
+        for c in mods.children
+    )
+
+
 def _initializer_elements(value_node) -> list | None:
     """Element nodes of ``{…}`` or ``new T[]{…}``; None otherwise."""
     if value_node is None:
@@ -112,6 +147,11 @@ class ArrayTableIndex:
                         # scope/shadowing games the scan won't model.
                         self._refused.add(name)
                     elif len(elements) > _MAX_ELEMENTS:
+                        self._refused.add(name)
+                    elif not _field_table_scope_ok(n):
+                        # Non-private FIELD: a cross-file element
+                        # store is invisible to the file-scoped
+                        # occurrence pass — refuse.
                         self._refused.add(name)
                     else:
                         self._elements[name] = elements

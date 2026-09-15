@@ -215,3 +215,75 @@ class TestGateIntegration:
             '    break;', '}',
             'out.println(bar);'], 4, 15)
         assert result.verdict == "suppress"
+
+
+class TestFieldTableScope:
+    """A non-private FIELD table can take a cross-file element store
+    (`Other.VALUES[0] = taint`) the file-scoped occurrence pass can
+    never see — `final` protects the reference, not the elements.
+    Only private fields (and locals) qualify."""
+
+    def _elements(self, src, name):
+        from core.analysis.value_set_java import ArrayTableIndex
+        idx = ArrayTableIndex(src, (1, src.count("\n") + 1))
+        assert idx.ok
+        return idx.elements(name)
+
+    def test_public_static_field_table_refuses(self):
+        src = ('public class T {\n'
+               '    public static String[] VALUES = {"a", "b"};\n'
+               '    void m(java.io.PrintWriter out) {\n'
+               '        out.println(VALUES[1]);\n'
+               '    }\n}\n')
+        assert self._elements(src, "VALUES") is None
+
+    def test_final_alone_does_not_qualify(self):
+        src = ('public class T {\n'
+               '    public static final String[] VALUES = {"a", "b"};\n'
+               '    void m(java.io.PrintWriter out) {\n'
+               '        out.println(VALUES[1]);\n'
+               '    }\n}\n')
+        assert self._elements(src, "VALUES") is None
+
+    def test_package_private_field_refuses(self):
+        src = ('public class T {\n'
+               '    static String[] VALUES = {"a", "b"};\n'
+               '    void m(java.io.PrintWriter out) {\n'
+               '        out.println(VALUES[1]);\n'
+               '    }\n}\n')
+        assert self._elements(src, "VALUES") is None
+
+    def test_private_field_table_qualifies(self):
+        src = ('public class T {\n'
+               '    private static final String[] VALUES = {"a", "b"};\n'
+               '    void m(java.io.PrintWriter out) {\n'
+               '        out.println(VALUES[1]);\n'
+               '    }\n}\n')
+        assert self._elements(src, "VALUES") is not None
+
+    def test_local_table_still_qualifies(self):
+        src = ('public class T {\n'
+               '    void m(java.io.PrintWriter out) {\n'
+               '        String[] values = {"a", "b"};\n'
+               '        out.println(values[1]);\n'
+               '    }\n}\n')
+        assert self._elements(src, "values") is not None
+
+    def test_interface_constant_table_refuses(self):
+        # Interface fields (constant_declaration, not
+        # field_declaration) are implicitly public static final
+        # regardless of written modifiers — always cross-file
+        # element-writable, so serving their elements re-opens the
+        # exact hole the private gate closes.
+        src = ('interface I {\n'
+               '    String[] VALUES = {"a", "b"};\n'
+               '}\n')
+        assert self._elements(src, "VALUES") is None
+
+    def test_interface_constant_with_modifiers_refuses(self):
+        # Redundant-but-legal explicit modifiers must not slip
+        # through a modifier-text check either.
+        src = ('interface I {\n'
+               '    public static final String[] VALUES = {"a", "b"};\n'
+               '}\n')
+        assert self._elements(src, "VALUES") is None
