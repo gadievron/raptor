@@ -188,7 +188,16 @@ class ConsistencyVerifier:
     # =========================================================================
 
     def _verify_github_observation(self, observation: Observation) -> VerificationResult:
-        """Verify observation against GitHub API."""
+        """Verify observation against GitHub API.
+
+        Fail closed on unmapped observation types: this dispatcher is
+        an anti-fabrication chokepoint (mirroring the GH Archive
+        lane), and the previous URL-accessibility default let ANY
+        fabricated observation "verify" by carrying a reachable — or
+        absent — URL. Every type the GitHub-lane collectors produce
+        must have an explicit entry here (pinned by
+        tests/test_github_lane_fail_closed.py).
+        """
         obs_type = getattr(observation, "observation_type", None)
 
         verifiers: dict[str, Callable[[Observation], VerificationResult]] = {
@@ -198,10 +207,20 @@ class ConsistencyVerifier:
             "branch": self._verify_branch,
             "tag": self._verify_tag,
             "release": self._verify_release,
+            # Explicit decision, not a fallback: a fork's strongest
+            # API-side witness is its repo URL resolving.
             "fork": self._verify_url_accessible,
         }
 
-        verifier = verifiers.get(obs_type, self._verify_url_accessible)
+        verifier = verifiers.get(obs_type)
+        if verifier is None:
+            return VerificationResult(
+                is_valid=False,
+                errors=[
+                    "GitHub verification unsupported for observation "
+                    f"type {obs_type!r} — unmapped types fail closed"
+                ],
+            )
 
         try:
             return verifier(observation)
@@ -370,12 +389,21 @@ class ConsistencyVerifier:
     # =========================================================================
 
     def _verify_url_accessible(self, obs: Observation) -> VerificationResult:
-        """Verify that the verification URL is accessible."""
+        """Verify that the verification URL is accessible.
+
+        No URL, no verification: a record with nothing to check must
+        never read as verified (the previous is_valid=True was
+        indistinguishable from a real pass in verify_all, so a
+        fabricated observation could simply omit the URL).
+        """
         import requests
 
         url = obs.verification.url
         if not url:
-            return VerificationResult(is_valid=True, errors=[])
+            return VerificationResult(
+                is_valid=False,
+                errors=["no verification URL — nothing was checked"],
+            )
 
         try:
             # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
