@@ -1131,6 +1131,8 @@ def _c_find_assign(stmt: str) -> tuple[int, int, bool] | None:
         if nxt == "=":
             i += 1
             continue
+        if nxt == ">":
+            continue  # `=>` arrow — a value, not an assignment
         prev = stmt[i - 1] if i > 0 else ""
         if prev == "=":
             continue
@@ -1475,26 +1477,21 @@ def _is_trivial_wrapper(
     # and every value-escape position (binding value, signature
     # default, call argument, return, yield) is judged against the
     # exclusion. An unaccountable body refuses the skip.
-    wrapper_bindings: dict[str, _WrapperValue] = {}
-    grammar_analyzed = False
-    escape = None
     if lang == "python":
         escape = _py_wrapper_escape(source)
-    elif lang in ("c", "cpp"):
+    else:
         escape = _text_wrapper_escape(code_lines, lang)
-    if lang in ("python", "c", "cpp"):
-        if escape is None:
-            return False, ""
-        grammar_analyzed = True
-        wrapper_bindings, judged_values = escape
-        for refs, _resolved in judged_values:
-            for r in refs:
-                expanded, _ok = _resolve_wrapper_ref(r, wrapper_bindings)
-                for er in expanded:
-                    if _wrapper_ref_hits_exclusion(
-                        er, exclusion, tails, project_sinks,
-                    ):
-                        return False, ""
+    if escape is None:
+        return False, ""
+    wrapper_bindings, judged_values = escape
+    for refs, _resolved in judged_values:
+        for r in refs:
+            expanded, _ok = _resolve_wrapper_ref(r, wrapper_bindings)
+            for er in expanded:
+                if _wrapper_ref_hits_exclusion(
+                    er, exclusion, tails, project_sinks,
+                ):
+                    return False, ""
 
     # Executor-dunder chains resolve to their base object BEFORE the
     # alias walk (`f2.__call__` must alias-resolve as `f2`), and again
@@ -1502,60 +1499,47 @@ def _is_trivial_wrapper(
     callee_name = _strip_executor_dunders(callee_name)
     if not callee_name:
         return False, ""
-    if grammar_analyzed:
-        if callee_name.split(".", 1)[0] in wrapper_bindings:
-            resolved_set, resolved_ok = _resolve_wrapper_ref(
-                callee_name, wrapper_bindings,
-            )
-            if not resolved_ok or not resolved_set:
-                # An unresolvable delegate (or one whose value the
-                # body never names — a literal, a container element)
-                # must never be journalled mechanically clean.
+    if callee_name.split(".", 1)[0] in wrapper_bindings:
+        resolved_set, resolved_ok = _resolve_wrapper_ref(
+            callee_name, wrapper_bindings,
+        )
+        if not resolved_ok or not resolved_set:
+            # An unresolvable delegate (or one whose value the
+            # body never names — a literal, a container element)
+            # must never be journalled mechanically clean.
+            return False, ""
+        stripped = {_strip_executor_dunders(r) for r in resolved_set}
+        if "" in stripped:
+            return False, ""
+        if len(stripped) == 1:
+            callee_name = next(iter(stripped))
+        else:
+            # Multi-valued delegate: judge every candidate; the
+            # spelled local name stays in the reason/gates.
+            multi = sorted(stripped)
+            if any(
+                c.rsplit(".", 1)[-1] in _WRAPPER_INDIRECTION_TAILS
+                for c in multi
+            ):
                 return False, ""
-            stripped = {_strip_executor_dunders(r) for r in resolved_set}
-            if "" in stripped:
+            if re.search(r"\)\s*[([]", body_no_sig):
                 return False, ""
-            if len(stripped) == 1:
-                callee_name = next(iter(stripped))
-            else:
-                # Multi-valued delegate: judge every candidate; the
-                # spelled local name stays in the reason/gates.
-                multi = sorted(stripped)
+            for name in multi:
                 if any(
-                    c.rsplit(".", 1)[-1] in _WRAPPER_INDIRECTION_TAILS
-                    for c in multi
+                    seg.startswith("__") and seg.endswith("__")
+                    and seg != "__import__"
+                    for seg in name.split(".")
                 ):
                     return False, ""
-                if re.search(r"\)\s*[([]", body_no_sig):
+                if _wrapper_ref_hits_exclusion(
+                    name, exclusion, tails, project_sinks,
+                ):
                     return False, ""
-                for name in multi:
-                    if any(
-                        seg.startswith("__") and seg.endswith("__")
-                        and seg != "__import__"
-                        for seg in name.split(".")
-                    ):
-                        return False, ""
-                    if _wrapper_ref_hits_exclusion(
-                        name, exclusion, tails, project_sinks,
-                    ):
-                        return False, ""
-                    if any(api in name.lower() for api in _CRYPTO_APIS):
-                        return False, ""
-                return _wrapper_tail_gates(
-                    lang, body_no_sig, callee_name,
-                )
-    else:
-        for _ln in code_lines:
-            am = re.match(
-                rf"{re.escape(callee_name)}\s*(?::=|=)\s*"
-                r"((?:\w+\.)*\w+)\s*;?\s*$",
-                _ln,
+                if any(api in name.lower() for api in _CRYPTO_APIS):
+                    return False, ""
+            return _wrapper_tail_gates(
+                lang, body_no_sig, callee_name,
             )
-            if am:
-                callee_name = _strip_executor_dunders(am.group(1))
-                if not callee_name:
-                    return False, ""
-                break
 
     candidates = [callee_name]
     _tail = callee_name.rsplit(".", 1)[-1]
@@ -1662,19 +1646,8 @@ def _is_trivial_wrapper(
         # Local aliases (`f2 = os.system` then `pool.submit(f2,
         # cmd)`): the argument spells the LOCAL name while the sink
         # sits surface-spelled on the assignment line, outside any
-        # argument list. Grammar-analyzed languages resolve through
-        # the escape analysis' binding fixpoint; the rest keep the
-        # one-hop assignment-line resolution until their grammar leg
-        # exists.
-        ref_aliases: dict[str, str] = {}
-        if not grammar_analyzed:
-            for _ln in code_lines:
-                am = re.match(
-                    r"([A-Za-z_]\w*)\s*(?::=|=)\s*((?:\w+\.)*\w+)\s*;?\s*$",
-                    _ln,
-                )
-                if am:
-                    ref_aliases[am.group(1)] = am.group(2)
+        # argument list — resolve through the escape analysis'
+        # binding fixpoint.
         for rm in _WRAPPER_REF_TOKEN_RE.finditer(ref_body):
             if ref_body[rm.end():].lstrip()[:1] == "(":
                 continue  # call position — judged by the callee checks
@@ -1684,21 +1657,12 @@ def _is_trivial_wrapper(
             ref = _strip_executor_dunders(rm.group(1))
             if not ref:
                 continue
-            if grammar_analyzed:
-                expanded, _ok = _resolve_wrapper_ref(ref, wrapper_bindings)
-                if any(
-                    _wrapper_ref_hits_exclusion(
-                        er, exclusion, tails, project_sinks,
-                    )
-                    for er in expanded
-                ):
-                    return False, ""
-                continue
-            ref = _strip_executor_dunders(ref_aliases.get(ref, ref))
-            if not ref:
-                continue
-            if _wrapper_ref_hits_exclusion(
-                ref, exclusion, tails, project_sinks,
+            expanded, _ok = _resolve_wrapper_ref(ref, wrapper_bindings)
+            if any(
+                _wrapper_ref_hits_exclusion(
+                    er, exclusion, tails, project_sinks,
+                )
+                for er in expanded
             ):
                 return False, ""
 

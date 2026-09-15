@@ -875,6 +875,64 @@ void *alloc_obj(size_t n) {
             "cpp",
         )
 
+    # ── Whole-value escape analysis (remaining language legs) ─────
+    # Body-only shapes: with a signature line present these languages
+    # never reach the skip (the signature's own `name(` counts as a
+    # call), so the binding grammar is exercised on bodies.
+
+    def test_go_declaration_alias_sink_not_skipped(self):
+        from core.audit.prefilter import _is_trivial_wrapper
+        for body in (
+            "g := exec.Command\nreturn g(c)\n",
+            "g := exec.Command\nh := g\nreturn dispatch(h, c)\n",
+        ):
+            is_wrapper, _ = _is_trivial_wrapper(body, "go", None)
+            assert not is_wrapper, body
+
+    def test_js_const_alias_sink_not_skipped(self):
+        from core.audit.prefilter import _is_trivial_wrapper
+        for body in (
+            "const g = eval;\nreturn g(c);\n",
+            "let a = eval;\nlet b = a;\nreturn b(c);\n",
+        ):
+            is_wrapper, _ = _is_trivial_wrapper(body, "javascript", None)
+            assert not is_wrapper, body
+
+    def test_lua_local_alias_sink_not_skipped(self):
+        from core.audit.prefilter import _is_trivial_wrapper
+        is_wrapper, _ = _is_trivial_wrapper(
+            "local g = os.execute\nreturn g(c)\n", "lua", None,
+        )
+        assert not is_wrapper
+
+    def test_perl_coderef_value_escape_not_skipped(self):
+        from core.audit.prefilter import _is_trivial_wrapper
+        is_wrapper, _ = _is_trivial_wrapper(
+            "my $g = \\&system;\nreturn dispatch($g, $x);\n",
+            "perl", None,
+        )
+        assert not is_wrapper
+
+    def test_php_string_callable_binding_not_skipped(self):
+        # `$g = 'system'; $g($c)` — the delegate's value is a string
+        # the noise strip cut, so the bound callee resolves to
+        # nothing nameable: never mechanically clean.
+        from core.audit.prefilter import _is_trivial_wrapper
+        is_wrapper, _ = _is_trivial_wrapper(
+            "$g = 'system';\nreturn $g($c);\n", "php", None,
+        )
+        assert not is_wrapper
+
+    def test_other_language_benign_aliases_still_skip(self):
+        from core.audit.prefilter import _is_trivial_wrapper
+        for body, lg in (
+            ("g := compute\nreturn g(x)\n", "go"),
+            ("const g = myHelper;\nreturn g(x);\n", "javascript"),
+            ("local g = fmt_helper\nreturn g(x)\n", "lua"),
+        ):
+            is_wrapper, _ = _is_trivial_wrapper(body, lg, None)
+            assert is_wrapper, (body, lg)
+
     def test_callgraph_resolved_dangerous_callee_not_skipped(self):
         # The extraction pipeline resolved the delegate to a dangerous
         # callee the body text does not spell (macro indirection) —
