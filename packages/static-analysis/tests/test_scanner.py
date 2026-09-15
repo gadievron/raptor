@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+import pytest
+
 
 # static-analysis has a hyphen — load via importlib
 _SCANNER_PATH = Path(__file__).parent.parent / "scanner.py"
@@ -428,3 +430,93 @@ class TestCodeQLStageHandle:
                 stage_handle=handle,
             )
         assert result == []
+
+
+class TestJoinCodeQLStage:
+    """The concurrent stage's JOIN carries the abort discipline too.
+
+    The guarded semgrep region only covers exceptions raised BEFORE
+    the join; a KeyboardInterrupt while the main thread is blocked in
+    future.result() — the single longest wait of the run once semgrep
+    finishes — is not an Exception, so it skipped the stage-isolation
+    handler and wedged interpreter shutdown on the non-daemon
+    worker's 3600s communicate.
+    """
+
+    @staticmethod
+    def _future(target):
+        from concurrent.futures import ThreadPoolExecutor
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            return pool.submit(target)
+        finally:
+            pool.shutdown(wait=False)
+
+    def test_keyboard_interrupt_runs_abort_and_reraises(self):
+        def _stage():
+            raise KeyboardInterrupt
+
+        aborted = []
+        future = self._future(_stage)
+        with pytest.raises(KeyboardInterrupt):
+            _scanner_mod._join_codeql_stage(
+                future, lambda: aborted.append(True),
+            )
+        assert aborted, (
+            "abort not invoked on KeyboardInterrupt — the codeql "
+            "agent's process group stays alive and the shutdown join "
+            "wedges"
+        )
+
+    def test_stage_exception_demoted_no_abort(self, capsys):
+        def _stage():
+            raise RuntimeError("db build failed")
+
+        aborted = []
+        future = self._future(_stage)
+        result = _scanner_mod._join_codeql_stage(
+            future, lambda: aborted.append(True),
+        )
+        assert result == []
+        assert not aborted
+        assert "CodeQL stage failed" in capsys.readouterr().err
+
+    def test_success_passes_sarifs_through(self):
+        def _fail_abort():
+            raise AssertionError("abort must not run on a successful join")
+
+        future = self._future(lambda: ["a.sarif", "b.sarif"])
+        result = _scanner_mod._join_codeql_stage(future, _fail_abort)
+        assert result == ["a.sarif", "b.sarif"]
+
+    def test_run_codeql_interrupt_mid_communicate_killpgs_and_reraises(
+        self, tmp_path,
+    ):
+        # Sequential sibling: only TimeoutExpired killed the group, so
+        # Ctrl-C during communicate orphaned the agent's whole process
+        # tree (codeql grandchildren burning CPU and holding cache
+        # locks).
+        fake = _fake_popen(
+            communicate_side_effect=KeyboardInterrupt(),
+        )
+        with patch("shutil.which", return_value="/usr/bin/codeql"), \
+             patch.object(_scanner_mod.subprocess, "Popen") as mock_popen, \
+             patch.object(_scanner_mod.os, "killpg") as mock_killpg, \
+             patch.object(_scanner_mod.os, "getpgid", return_value=12345):
+            mock_popen.return_value = fake
+            with pytest.raises(KeyboardInterrupt):
+                run_codeql(tmp_path, tmp_path / "out", languages=None)
+
+        assert mock_killpg.called, (
+            "killpg not invoked on KeyboardInterrupt — codeql will orphan"
+        )
+        args = mock_killpg.call_args.args
+        assert args[0] == 12345
+        assert args[1] == _scanner_mod.signal.SIGKILL
+        # Reap parity with the TimeoutExpired arm: without the wait,
+        # the direct child lingers as a zombie for as long as an
+        # interrupt-catching caller lives.
+        assert fake.wait.called, (
+            "child not reaped after killpg — zombie until the "
+            "interrupt-catching caller exits"
+        )

@@ -21,7 +21,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 # Python path safety: the only permitted sys.path addition is the
@@ -1598,7 +1598,11 @@ def run_codeql(
 
     Returns:
         List of absolute SARIF paths the agent wrote. Empty on any
-        failure (logged); never raises.
+        ordinary failure (logged). Raises ``SandboxSetupError`` when
+        the agent reports the sandbox could not engage (fail-loud
+        exit-3 contract), and re-raises ``KeyboardInterrupt`` /
+        other non-``Exception`` aborts after killing the agent's
+        process group.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     if shutil.which("codeql") is None:
@@ -1664,6 +1668,25 @@ def run_codeql(
                 pass
             logger.warning("codeql agent timed out after 3600s; skipping")
             return []
+        except BaseException:
+            # KeyboardInterrupt (or any other abort) while blocked in
+            # communicate: only TimeoutExpired killed the group, so a
+            # Ctrl-C on the sequential path orphaned the agent's whole
+            # process tree — codeql grandchildren kept burning
+            # CPU/memory and holding cache locks for up to an hour.
+            # Flatten the group like the timeout arm — including the
+            # reap: without the wait the direct child lingers as a
+            # zombie for as long as an interrupt-catching caller
+            # lives — then re-raise.
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+            raise
         finally:
             if stage_handle is not None:
                 stage_handle.clear()
@@ -1709,6 +1732,34 @@ def run_codeql(
     # in-tree runner so downstream code (SARIF merge, coverage
     # records, _classify_artifact) needs no changes.
     return sorted(str(p) for p in out_dir.glob("codeql_*.sarif"))
+
+
+def _join_codeql_stage(
+    future: "Future[list[str]]",
+    abort: Callable[[], None],
+) -> list[str]:
+    """Join the concurrent CodeQL stage with abort discipline.
+
+    Stage isolation: an ordinary stage failure (``Exception``) is
+    demoted to a warning — the semgrep results must survive a CodeQL
+    crash. Anything ELSE raised out of the blocking join —
+    KeyboardInterrupt above all, and the CodeQL DB build is usually
+    the run's critical path, so a Ctrl-C while watching the
+    ``[codeql]`` tail lands exactly here — must run the same abort
+    discipline as the guarded semgrep region: kill the agent's
+    process group so concurrent.futures' interpreter-shutdown join
+    can't wedge up to 1h on the non-daemon worker's communicate,
+    then re-raise.
+    """
+    try:
+        return future.result()
+    except Exception as e:  # noqa: BLE001 — stage isolation: semgrep results must survive
+        logger.error("CodeQL stage raised: %s", e)
+        print(f"⚠️  CodeQL stage failed: {e}", file=sys.stderr)
+        return []
+    except BaseException:
+        abort()
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -3242,13 +3293,22 @@ def main() -> None:
         codeql_sarifs = []
         if _codeql_future is not None:
             try:
-                codeql_sarifs = _codeql_future.result()
-            except Exception as e:  # noqa: BLE001 — stage isolation: semgrep results must survive
-                logger.error("CodeQL stage raised: %s", e)
-                print(f"⚠️  CodeQL stage failed: {e}", file=sys.stderr)
+                # _join_codeql_stage keeps stage isolation (an
+                # ordinary CodeQL failure demotes to a warning) but
+                # runs the abort discipline on KeyboardInterrupt —
+                # the join is the run's single longest wait once
+                # semgrep finishes, so the most common operator
+                # Ctrl-C landed exactly here, skipped the guarded
+                # semgrep region above, and wedged interpreter
+                # shutdown on the worker's 3600s communicate.
+                codeql_sarifs = _join_codeql_stage(
+                    _codeql_future, _abort_codeql_stage,
+                )
             finally:
+                # No-ops after an abort (idempotent shutdown; filter
+                # removal tolerates absence). Symmetric with the
+                # addFilter above (raptor logger).
                 _codeql_pool.shutdown(wait=False)
-                # Symmetric with the addFilter above (raptor logger).
                 logging.getLogger("raptor").removeFilter(_stage_tag)
             print(f"⏱  CodeQL stage finished "
                   f"({time.time() - _codeql_t0:.0f}s, "
