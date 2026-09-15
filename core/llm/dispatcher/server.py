@@ -78,7 +78,11 @@ from pathlib import Path
 import httpx
 
 from core.json.jsonl import append_jsonl
-from core.run.tmp_ownership import remove_owner_marker, write_owner_marker
+from core.run.tmp_ownership import (
+    remove_owner_marker,
+    sweep_dead_owner_dirs,
+    write_owner_marker,
+)
 from core.security.log_sanitisation import escape_nonprintable
 
 from .auth import (
@@ -434,6 +438,13 @@ def _upstream_timeout() -> httpx.Timeout:
         _UPSTREAM_DEFAULT_TIMEOUT_S,
     )
     return httpx.Timeout(float(read_s), connect=_UPSTREAM_CONNECT_TIMEOUT_S)
+
+
+# Socket-dir prefix shared by every construction route: run-scoped
+# dispatchers (``raptor-llm-<run_id>-`` via dispatcher_for_run) and the
+# in-process self-serve route (``raptor-llm-inproc-<hex8>-``) both mint
+# under it, so one dead-owner sweep covers the whole family.
+_SOCK_DIR_SWEEP_PREFIX = "raptor-llm-"
 
 
 @dataclass
@@ -861,6 +872,20 @@ class LLMDispatcher:
         # fallback dir is reclaimed by the dead-owner sweep only when
         # gettempdir() is /tmp — bounded by the owner marker either
         # way.
+        # Reclaim orphaned sibling socket dirs before minting a new
+        # one. shutdown()/atexit remove the dir on normal teardown,
+        # but a SIGTERM'd or SIGKILL'd owner skips both. Sweeping here
+        # — the one chokepoint every construction route passes through
+        # — covers run-scoped dirs (``raptor-llm-<run_id>-`` via
+        # dispatcher_for_run) and in-process dirs alike; the previous
+        # lifecycle-level sweep matched only ``raptor-llm-inproc-``,
+        # so a hard-killed launcher's run-scoped dir waited on the
+        # 24 h age-based reaper after all. The broad prefix is safe:
+        # the sweep removes a dir only when its recorded owner pid is
+        # dead (marker-less: only past the 24 h legacy age gate) and
+        # no live process holds it (cwd / answering-socket probes).
+        # Best-effort by contract — never blocks construction.
+        sweep_dead_owner_dirs(_SOCK_DIR_SWEEP_PREFIX)
         _sock_prefix = f"raptor-llm-{run_id[:40]}-"
         sock_dir = Path(tempfile.mkdtemp(prefix=_sock_prefix))
         if len(str(sock_dir / "llm-child.sock").encode()) > 100:
@@ -874,8 +899,9 @@ class LLMDispatcher:
         os.chmod(self._sock_dir, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions
         # Ownership marker: shutdown()/atexit remove this dir, but a
         # SIGTERM'd or SIGKILL'd owner skips both — the marker lets
-        # the next boot's dead-owner sweep (lifecycle.py) reclaim the
-        # orphan instead of waiting on the 24 h age-based reaper.
+        # the next dispatcher construction's dead-owner sweep (above)
+        # reclaim the orphan instead of waiting on the 24 h age-based
+        # reaper.
         write_owner_marker(self._sock_dir)
         self.socket_path = self._sock_dir / "llm.sock"
         # Child-plane UDS: same peer-UID gate, REDUCED surface (scoped

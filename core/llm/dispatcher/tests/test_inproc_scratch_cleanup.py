@@ -43,9 +43,9 @@ def _dead_pid() -> int:
     return proc.pid
 
 
-def _inproc_dir(pid: int) -> Path:
+def _owned_dir(prefix: str, pid: int) -> Path:
     d = Path(tempfile.gettempdir()) / (
-        f"raptor-llm-inproc-{uuid.uuid4().hex[:8]}-fixture"
+        f"{prefix}{uuid.uuid4().hex[:8]}-fixture"
     )
     d.mkdir()
     (d / OWNER_MARKER_NAME).write_text(
@@ -53,6 +53,10 @@ def _inproc_dir(pid: int) -> Path:
         encoding="utf-8",
     )
     return d
+
+
+def _inproc_dir(pid: int) -> Path:
+    return _owned_dir("raptor-llm-inproc-", pid)
 
 
 def test_sock_dir_carries_owner_marker(fake_creds):
@@ -83,6 +87,26 @@ def test_init_failure_removes_sock_dir_and_marker(
         LLMDispatcher(run_id="inproc-unittest", creds=fake_creds)
     after = set(Path(tempfile.gettempdir()).glob("raptor-llm-inproc-*"))
     assert after == before
+
+
+def test_construction_sweeps_dead_owner_run_scoped_dirs(fake_creds):
+    """Run-scoped dirs (``raptor-llm-<run_id>-``, dispatcher_for_run's
+    prefix) are reclaimed at the next dispatcher construction — not
+    only the in-process ``raptor-llm-inproc-`` family. Pre-fix the
+    sweep matched the inproc prefix alone, so a hard-killed launcher's
+    run-scoped dir waited on the 24 h age-based reaper despite its
+    owner marker."""
+    dead = _owned_dir("raptor-llm-agentic_20260914-", _dead_pid())
+    live = _owned_dir("raptor-llm-agentic_20260915-", os.getpid())
+    d = LLMDispatcher(run_id="inproc-unittest", creds=fake_creds)
+    try:
+        assert not dead.exists()
+        assert live.is_dir()
+        assert d._sock_dir.is_dir()
+    finally:
+        d.shutdown()
+        shutil.rmtree(live, ignore_errors=True)
+        shutil.rmtree(dead, ignore_errors=True)
 
 
 def test_ensure_inprocess_sweeps_dead_owner_dirs(

@@ -19,8 +19,6 @@ import contextlib
 import os
 from pathlib import Path
 
-from core.run.tmp_ownership import sweep_dead_owner_dirs
-
 from .auth import CredentialStore, seed_from_config
 from .server import LLMDispatcher
 from typing import TYPE_CHECKING, Any
@@ -54,11 +52,6 @@ def audit_path_for_run_dir(run_dir: Path) -> Path:
 # realistic single run instead; ``RAPTOR_LLM_DISPATCHER_TOKEN_TTL_S``
 # still wins when the operator sets it.
 _INPROCESS_TOKEN_TTL_S = 7 * 24 * 60 * 60
-
-# Socket-dir prefix minted by LLMDispatcher for the in-process route:
-# ``raptor-llm-<run_id>-`` with ``run_id = inproc-<hex8>``.
-_INPROC_SOCK_DIR_PREFIX = "raptor-llm-inproc-"
-
 
 # Explicit pass-through signature, replacing an earlier ``**kwargs``
 # fan-out. Pre-fix the wildcard accepted anything — typos like
@@ -161,11 +154,9 @@ def ensure_inprocess_dispatcher_env(
         return None
     import uuid
 
-    # shutdown()/atexit remove the socket dir on normal teardown, but
-    # a SIGTERM'd/SIGKILL'd owner skips both — reclaim in-process
-    # socket dirs whose recorded owner pid is dead before minting a
-    # new one. Best-effort: the sweep never raises.
-    sweep_dead_owner_dirs(_INPROC_SOCK_DIR_PREFIX)
+    # Orphaned socket dirs (SIGTERM'd/SIGKILL'd owners) are reclaimed
+    # by the dead-owner sweep inside LLMDispatcher's constructor —
+    # one chokepoint covering the in-process AND run-scoped prefixes.
     creds = CredentialStore()
     seed_from_config(creds)
     kwargs: dict = {}
