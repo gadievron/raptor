@@ -904,6 +904,46 @@ def test_handler_error_default_feeds_back_to_model() -> None:
     assert "oops" in err.content
 
 
+@pytest.mark.parametrize("bad_return", [None, {"k": "v"}, 42])
+def test_handler_non_str_return_feeds_back_as_error(bad_return) -> None:
+    """A handler returning non-str is a handler failure like any
+    other — pre-fix it reached preflight/wrap_tool_result (typed str)
+    and the TypeError escaped the per-tool containment, killing the
+    whole run with an unattributed traceback instead of an is_error
+    result."""
+    bad = ToolDef(name="bad", description="d", input_schema={},
+                  handler=lambda _inp: bad_return)
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "bad", {})),
+        _text_response("ok"),
+    ])
+    loop = ToolUseLoop(fp, [bad])
+    out = loop.run("go")
+    assert out.terminated_by == "complete"
+    second = fp.calls[1]["messages"]
+    err = second[-1].content[0]
+    assert err.is_error is True
+    assert "expected str" in err.content
+
+
+def test_handler_non_str_return_contained_on_timeout_path() -> None:
+    """Same containment when the handler runs under the timeout
+    watchdog thread."""
+    bad = ToolDef(name="bad", description="d", input_schema={},
+                  handler=lambda _inp: None)
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "bad", {})),
+        _text_response("ok"),
+    ])
+    loop = ToolUseLoop(fp, [bad], tool_timeout_s=5.0)
+    out = loop.run("go")
+    assert out.terminated_by == "complete"
+    second = fp.calls[1]["messages"]
+    err = second[-1].content[0]
+    assert err.is_error is True
+    assert "expected str" in err.content
+
+
 def test_handler_error_terminate_on_error_propagates() -> None:
     """``terminate_on_handler_error=True`` re-raises rather than feeding
     the error back — for agents wrapping destructive ops. Loop emits

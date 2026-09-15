@@ -1276,7 +1276,9 @@ class ToolUseLoop:
             )
 
         if self._tool_timeout_s is None:
-            content = tool.handler(call.input)
+            content = _validated_handler_content(
+                call.name, tool.handler(call.input),
+            )
             return ToolResult(tool_use_id=call.id, content=content)
 
         # Best-effort timeout: run the handler on a thread; the parent
@@ -1359,7 +1361,12 @@ class ToolUseLoop:
                 f"{type(captured).__name__} (non-Exception BaseException)"
             )
             raise RuntimeError(msg) from captured
-        return ToolResult(tool_use_id=call.id, content=result_holder["text"])
+        return ToolResult(
+            tool_use_id=call.id,
+            content=_validated_handler_content(
+                call.name, result_holder["text"],
+            ),
+        )
 
     def _estimate_static_tokens(self) -> int:
         """System + tools cost. Doesn't change across iterations of a
@@ -1524,6 +1531,26 @@ class ToolUseLoop:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _validated_handler_content(tool_name: str, content: Any) -> str:
+    """Type-check a handler's return value at the dispatch site.
+
+    A handler returning non-str (None, dict, ...) used to sail into
+    ``ToolResult`` and explode later in ``preflight``/
+    ``wrap_tool_result`` — OUTSIDE the per-tool error containment, so
+    the whole run died with an unattributed traceback instead of an
+    ``is_error`` result. Raising here makes the wrong-return-type
+    member of the handler-failure enumeration flow through the same
+    ``terminate_on_handler_error`` policy as exceptions and timeouts.
+    """
+    if not isinstance(content, str):
+        msg = (
+            f"tool {tool_name!r} handler returned "
+            f"{type(content).__name__}, expected str"
+        )
+        raise TypeError(msg)
+    return content
 
 
 def _join_text(content: Sequence[Any]) -> str:
