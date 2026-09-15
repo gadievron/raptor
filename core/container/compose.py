@@ -1551,12 +1551,6 @@ def up_stack(
     """``docker compose up -d`` + parse ``ps --format json``. Returns
     ``(all_containers, primary)``.
     """
-    # Force fresh pull of every service's image. Bypasses the local Docker
-    # layer cache, which can silently re-use cached vulhub/X images even when
-    # the registry is rate-limited. Compose stacks reference registry images;
-    # locally-built compose stacks are extremely rare (vulhub-compose method's
-    # images are all vulhub/X). If a service does FROM a local-only image,
-    # --pull always fails loudly + the agent sees the error and pivots.
     # --pull missing: pull images only when not locally available. Using
     # "always" breaks locally-built services (compose stacks that `build:`
     # their own images have no upstream to pull from). Trade-off: a stale
