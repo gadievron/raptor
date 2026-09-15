@@ -56,6 +56,10 @@ from core.json import dumps_display  # noqa: E402
 # every SMT probe TypeError'd on a stale checkout's core.audit.sweep).
 from core.config import pin_raptor_dir_in_environ  # noqa: E402
 from core.json import load_json  # noqa: E402
+# Foreign-derived text (target paths/names, tool matches/stderr, saved
+# rule metadata) is escaped per-field before it reaches the operator
+# terminal; RAPTOR's own framing stays raw.
+from core.security.log_sanitisation import sanitise_for_terminal  # noqa: E402
 
 # Byte budgets: checklists / inventories / journal indexes track
 # target size (the checklist budget class); scope-coverage is a
@@ -922,13 +926,13 @@ def cmd_sweep(args: argparse.Namespace) -> int:
         match_info = ""
         if result.matches:
             match_info = f" ({len(result.matches)} match(es))"
-        print(f"sweep: {func_key} with {tool} → {result.outcome}{match_info}")
+        print(f"sweep: {sanitise_for_terminal(func_key)} with {tool} → {result.outcome}{match_info}")
         if result.matches:
             for m in result.matches[:5]:
-                print(f"  {m}")
+                print(f"  {sanitise_for_terminal(str(m))}")
         if result.errors:
             for e in result.errors[:3]:
-                print(f"  error: {e}", file=sys.stderr)
+                print(f"  error: {sanitise_for_terminal(str(e))}", file=sys.stderr)
         return 0
 
     # Auto-run mode: symbolic (angr) — binary items only
@@ -956,10 +960,10 @@ def cmd_sweep(args: argparse.Namespace) -> int:
         append_audit_log(out_dir, entry)
         match_info = ""
         if result.matches:
-            match_info = f" ({result.matches[0]['message']})"
-        print(f"sweep: {func_key} with symbolic → {result.outcome}{match_info}")
+            match_info = f" ({sanitise_for_terminal(str(result.matches[0]['message']))})"
+        print(f"sweep: {sanitise_for_terminal(func_key)} with symbolic → {result.outcome}{match_info}")
         for e in result.errors[:3]:
-            print(f"  error: {e}", file=sys.stderr)
+            print(f"  error: {sanitise_for_terminal(str(e))}", file=sys.stderr)
         return 0
 
     # Auto-run mode: SMT — verb + args instead of rule-file
@@ -987,13 +991,13 @@ def cmd_sweep(args: argparse.Namespace) -> int:
             entry["smt_args"] = smt_args
         append_audit_log(out_dir, entry)
 
-        print(f"sweep: {func_key} with smt:{args.smt_verb} → {result.outcome}")
+        print(f"sweep: {sanitise_for_terminal(func_key)} with smt:{args.smt_verb} → {result.outcome}")
         if result.raw_output:
             for line in result.raw_output.splitlines()[:10]:
-                print(f"  {line}")
+                print(f"  {sanitise_for_terminal(line)}")
         if result.errors:
             for e in result.errors[:3]:
-                print(f"  error: {e}", file=sys.stderr)
+                print(f"  error: {sanitise_for_terminal(str(e))}", file=sys.stderr)
         return 0
 
     # Auto-run mode: heap-copy (static + optional symbolic)
@@ -1037,10 +1041,10 @@ def cmd_sweep(args: argparse.Namespace) -> int:
         match_info = ""
         if result.matches:
             match_info = f" ({len(result.matches)} finding(s))"
-        print(f"sweep: {func_key} with heap-copy → {result.outcome}{match_info}")
+        print(f"sweep: {sanitise_for_terminal(func_key)} with heap-copy → {result.outcome}{match_info}")
         if result.errors:
             for e in result.errors[:3]:
-                print(f"  error: {e}", file=sys.stderr)
+                print(f"  error: {sanitise_for_terminal(str(e))}", file=sys.stderr)
         return 0
 
     # Auto-run mode: integer-truncation / proto-length / struct-field
@@ -1088,10 +1092,10 @@ def cmd_sweep(args: argparse.Namespace) -> int:
         match_info = ""
         if result.matches:
             match_info = f" ({len(result.matches)} finding(s))"
-        print(f"sweep: {func_key} with {tool} → {result.outcome}{match_info}")
+        print(f"sweep: {sanitise_for_terminal(func_key)} with {tool} → {result.outcome}{match_info}")
         if result.errors:
             for e in result.errors[:3]:
-                print(f"  error: {e}", file=sys.stderr)
+                print(f"  error: {sanitise_for_terminal(str(e))}", file=sys.stderr)
         return 0
 
     # Manual logging mode
@@ -1132,7 +1136,7 @@ def cmd_sweep(args: argparse.Namespace) -> int:
         entry["rule_source"] = "manual-attestation"
 
     append_audit_log(out_dir, entry)
-    print(f"sweep: {func_key} with {tool} → {args.outcome or 'logged'}")
+    print(f"sweep: {sanitise_for_terminal(func_key)} with {tool} → {args.outcome or 'logged'}")
     return 0
 
 
@@ -1172,10 +1176,9 @@ def cmd_rules(args: argparse.Namespace) -> int:
             return 0
         for r in rules:
             status = "ok" if r.get("exists") else "MISSING"
-            desc = r.get("description", "")[:60]
-            _print_scrubbed(
-                f"  {r['rule_id']} ({r.get('tool', '?')}) [{status}] — {desc}",
-            )
+            desc = sanitise_for_terminal(r.get("description", "")[:60], max_len=80)
+            print(f"  {sanitise_for_terminal(r['rule_id'])} ({sanitise_for_terminal(str(r.get('tool', '?')), max_len=32)}) "
+                  f"[{status}] — {desc}")
         print(f"\n{len(rules)} rule(s)")
         return 0
 
@@ -1193,7 +1196,7 @@ def cmd_rules(args: argparse.Namespace) -> int:
             target_path=target_path,
         )
         if "error" in result:
-            _print_scrubbed(f"error: {result['error']}", file=sys.stderr)
+            print(f"error: {sanitise_for_terminal(str(result['error']))}", file=sys.stderr)
             return 1
         print(dumps_display(result, indent=2))
         return 0

@@ -221,6 +221,30 @@ class AllowlistEntry:
 # the test suite: empty / TODO notes are rejected).
 _ALLOWLIST: tuple[AllowlistEntry, ...] = (
     AllowlistEntry(
+        file="libexec/raptor-audit",
+        func_name="cmd_rules",
+        kind="unsanitised_llm_value",
+        detail="path",
+        audit_note=(
+            "path is the Path save_rule returns — a RAPTOR-constructed "
+            "rule-file location under out_dir, not LLM text; the taint "
+            "is a same-assignment false positive from the description "
+            "kwarg passed INTO save_rule"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-audit",
+        func_name="cmd_report",
+        kind="unsanitised_llm_value",
+        detail="summary",
+        audit_note=(
+            "report['summary'] is built by core/audit/report."
+            "_format_summary — a registered writer that routes every "
+            "free-text field through _line — so the string is "
+            "sanitised at construction"
+        ),
+    ),
+    AllowlistEntry(
         file="core/reporting/findings.py",
         func_name="findings_summary_line",
         kind="unsanitised_llm_value",
