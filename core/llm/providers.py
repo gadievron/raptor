@@ -5226,9 +5226,23 @@ def create_provider(config: ModelConfig) -> LLMProvider:
         # response unchanged.
         from core.llm.dispatcher.client import make_bedrock_client
         provider_instance = AnthropicProvider(config)
+        # __init__ built a dispatcher-routed Anthropic client
+        # (RAPTOR_LLM_SOCKET is guaranteed set on this path); close it
+        # when superseding, or every Bedrock provider construction
+        # leaks that client's httpx transport + renewal-side client
+        # (one fd each) until process exit.
+        superseded = getattr(provider_instance, "client", None)
         provider_instance.client = make_bedrock_client(
             api=api, timeout=config.timeout,
         )
+        if superseded is not None:
+            try:
+                superseded.close()
+            except Exception:  # noqa: BLE001 — cleanup must not fail construction
+                logger.debug(
+                    "Bedrock provider: superseded client close failed",
+                    exc_info=True,
+                )
         if api == "mantle":
             # Mantle streams natively; runtime (InvokeModel) has no
             # SSE surface, so its instructor leg stays on plain

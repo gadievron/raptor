@@ -234,6 +234,43 @@ class TestAnthropicDirectGuard:
         ))
         assert p.client is sentinel
 
+    def test_bedrock_swap_closes_superseded_dispatcher_client(
+            self, monkeypatch):
+        """The bedrock branch replaces the dispatcher-routed client
+        AnthropicProvider.__init__ built — the superseded client must
+        be closed, not leaked (one httpx transport + renewal-side
+        client per provider construction otherwise)."""
+        monkeypatch.setenv("RAPTOR_LLM_SOCKET", "/tmp/route.sock")
+
+        import core.llm.dispatcher.client as dclient
+        from core.llm.providers import create_provider
+
+        anthropic = pytest.importorskip("anthropic")
+        sentinel = anthropic.Anthropic(api_key="stub-route")
+        monkeypatch.setattr(
+            dclient, "make_bedrock_client", lambda **k: sentinel,
+        )
+        superseded = anthropic.Anthropic(api_key="stub-route")
+        closed: list[bool] = []
+        real_close = superseded.close
+
+        def _tracked_close() -> None:
+            closed.append(True)
+            real_close()
+
+        superseded.close = _tracked_close
+        monkeypatch.setattr(
+            dclient, "make_anthropic_client", lambda **k: superseded,
+        )
+        p = create_provider(ModelConfig(
+            provider="bedrock",
+            model_name="us.anthropic.claude-opus-4-8-v1:0",
+            api_key=None,
+            max_tokens=1024, max_context=32000,
+        ))
+        assert p.client is sentinel
+        assert closed
+
 
 # ---------------------------------------------------------------------------
 # client-level: the misroute surfaces, no upstream call
