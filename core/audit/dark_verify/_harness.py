@@ -365,17 +365,19 @@ def generate_go_harness(
 # ---------------------------------------------------------------------------
 
 
-def _js_require_path(spec: DarkWitnessSpec, *, strip_suffixes: tuple[str, ...]) -> str:
-    """Resolve require path from spec or file."""
+def _js_require_path(spec: DarkWitnessSpec) -> str:
+    """Resolve require path from spec or file.
+
+    The derived default is the EXACT file path with extension: a
+    stripped stem inherits Node's resolution ambiguity (the
+    extensionless path is tried first, so a repo-planted `src/auth`
+    file would shadow `src/auth.js`), and the exact spelling is the
+    one require() resolves unambiguously.
+    """
     rp = spec.lang_config.get("require_path", "")
     if rp:
         return rp
-    rel = spec.file
-    for suffix in strip_suffixes:
-        if rel.endswith(suffix):
-            rel = rel[: -len(suffix)]
-            break
-    return "./" + rel
+    return "./" + spec.file
 
 
 def generate_js_harness(
@@ -385,7 +387,7 @@ def generate_js_harness(
     witness_token: str = "",
 ) -> str:
     """Render a fixed-template Node.js harness."""
-    require_path = _js_require_path(spec, strip_suffixes=(".js", ".mjs", ".cjs"))
+    require_path = _js_require_path(spec)
     target_str = str(target_root.resolve())
     args_json = json.dumps(spec.args)
     func_name = spec.function
@@ -442,9 +444,7 @@ def generate_ts_harness(
     witness_token: str = "",
 ) -> str:
     """Render a TypeScript harness (same shape as JS but with TS import)."""
-    require_path = _js_require_path(
-        spec, strip_suffixes=(".ts", ".tsx", ".mts", ".cts"),
-    )
+    require_path = _js_require_path(spec)
     target_str = str(target_root.resolve())
     args_json = json.dumps(spec.args)
     func_name = spec.function

@@ -311,7 +311,9 @@ class TestGenerateJsHarness:
             lang_config={},
         )
         harness = generate_js_harness(spec, tmp_path)
-        assert "./lib/parser" in harness
+        # Exact file path with extension: a stripped stem would let a
+        # repo-planted extensionless `lib/parser` shadow the module.
+        assert "./lib/parser.js" in harness
 
 
 # -- _classify_output ---------------------------------------------------------
@@ -867,9 +869,12 @@ class TestValidateSpec:
         )
         assert validate_spec(spec) is not None
 
-    def test_valid_import_path(self):
+    def test_valid_import_path(self, tmp_path):
+        (tmp_path / "go.mod").write_text(
+            "module github.com/user/repo\n", encoding="utf-8",
+        )
         spec = DarkWitnessSpec(
-            finding_key="f1", file="a.go", function="Run",
+            finding_key="f1", file="pkg/a.go", function="Run",
             language="go",
             lang_config={
                 "package": "pkg",
@@ -877,7 +882,7 @@ class TestValidateSpec:
                 "return_type": "int",
             },
         )
-        assert validate_spec(spec) is None
+        assert validate_spec(spec, tmp_path) is None
 
     def test_execute_witness_rejects_bad_spec(self, tmp_path):
         src = tmp_path / "a.rb"
@@ -1044,7 +1049,7 @@ class TestGenerateTsHarness:
             lang_config={},
         )
         harness = generate_ts_harness(spec, tmp_path)
-        assert "./lib/parser" in harness
+        assert "./lib/parser.ts" in harness
 
 
 # -- generate_ruby_harness ----------------------------------------------------
@@ -1217,7 +1222,7 @@ class TestExecuteWitnessJs:
             finding_key="f1", file="auth.js", function="check",
             language="javascript",
             args=["test"],
-            lang_config={"require_path": "./auth"},
+            lang_config={"require_path": "./auth.js"},
         )
         import shutil
         monkeypatch.setattr(shutil, "which", lambda cmd: None)
@@ -1334,7 +1339,7 @@ class TestExecuteWitnessTs:
             finding_key="f1", file="auth.ts", function="check",
             language="typescript",
             args=["test"],
-            lang_config={"require_path": "./auth"},
+            lang_config={"require_path": "./auth.ts"},
         )
         import shutil
         monkeypatch.setattr(shutil, "which", lambda cmd: None)
@@ -2325,7 +2330,7 @@ class TestRealExecutionJs:
             language="javascript",
             args=["not valid json"],
             expected_exception="SyntaxError",
-            lang_config={"require_path": "./parser"},
+            lang_config={"require_path": "./parser.js"},
         )
         r = execute_witness(spec, tmp_path)
         assert r.verdict == "confirmed"
@@ -2342,7 +2347,7 @@ class TestRealExecutionJs:
             language="javascript",
             args=[5],
             expected_return="15",
-            lang_config={"require_path": "./math"},
+            lang_config={"require_path": "./math.js"},
         )
         r = execute_witness(spec, tmp_path)
         assert r.verdict == "confirmed"
@@ -2358,10 +2363,41 @@ class TestRealExecutionJs:
             language="javascript",
             args=[10],
             expected_exception="TypeError",
-            lang_config={"require_path": "./safe"},
+            lang_config={"require_path": "./safe.js"},
         )
         r = execute_witness(spec, tmp_path)
         assert r.verdict == "refuted"
+
+    def test_planted_extensionless_shadow_never_executes(self, tmp_path):
+        # Node's LOAD_AS_FILE tries the extensionless path first: a
+        # repo-planted file named `math` (no extension, loaded as CJS)
+        # shadows `math.js` under a stem require. The stem spelling is
+        # rejected before anything executes, and the derived default
+        # (exact file path with extension) loads the finding's file,
+        # not the plant.
+        (tmp_path / "math.js").write_text(textwrap.dedent("""\
+            function triple(x) { return x * 3; }
+            module.exports = { triple };
+        """), encoding="utf-8")
+        (tmp_path / "math").write_text(
+            "module.exports = { triple: (x) => 999 };\n", encoding="utf-8",
+        )
+        stem_spec = DarkWitnessSpec(
+            finding_key="f1", file="math.js", function="triple",
+            language="javascript", args=[5], expected_return="15",
+            lang_config={"require_path": "./math"},
+        )
+        r = execute_witness(stem_spec, tmp_path)
+        assert r.verdict == "error"
+        assert "not bound to the finding's file" in r.match_detail
+
+        default_spec = DarkWitnessSpec(
+            finding_key="f1", file="math.js", function="triple",
+            language="javascript", args=[5], expected_return="15",
+            lang_config={},
+        )
+        r2 = execute_witness(default_spec, tmp_path)
+        assert r2.verdict == "confirmed", r2.match_detail
 
     def test_confirms_through_symlinked_shim_layout(
         self, tmp_path, monkeypatch,
@@ -2391,7 +2427,7 @@ class TestRealExecutionJs:
             language="javascript",
             args=[5],
             expected_return="15",
-            lang_config={"require_path": "./math"},
+            lang_config={"require_path": "./math.js"},
         )
         r = execute_witness(spec, target)
         assert r.verdict == "confirmed", r.match_detail
@@ -4290,11 +4326,12 @@ class TestValidateSpecLoadPaths:
 
     @pytest.mark.parametrize("field,language,file,value", [
         ("require_path", "ruby", "lib/auth.rb", "lib/auth"),
-        ("require_path", "javascript", "parser.js", "./parser"),
+        ("require_path", "javascript", "parser.js", "./parser.js"),
         ("require_path", "lua", "lib/auth.lua", "lib.auth"),
         ("use_path", "rust", "a.rs", "std::collections::HashMap"),
         ("use_module", "perl", "MathUtil.pm", "MathUtil"),
-        ("import_path", "go", "pkg/a.go", "github.com/user/repo/pkg"),
+        # Go import paths are exercised in TestGoImportBinding — the
+        # binding needs a readable go.mod, which this fixture lacks.
     ])
     def test_legitimate_values_pass(self, field, language, file, value):
         assert validate_spec(self._spec({field: value}, language, file)) is None
@@ -4340,6 +4377,16 @@ class TestModuleBindingToFindingFile:
     @pytest.mark.parametrize("field,language,file,wrong", [
         ("require_path", "javascript", "src/auth.js", "./src/lookalike"),
         ("require_path", "typescript", "src/auth.ts", "./src/lookalike"),
+        # Stem spelling: Node's LOAD_AS_FILE tries the EXTENSIONLESS
+        # path first, so a repo-planted file named `src/auth` (loaded
+        # as CJS) shadows `src/auth.js` — and under the TS loaders a
+        # planted `src/auth.js` shadows `src/auth.ts` (`.js` resolves
+        # before `.ts`). Only the exact file path binds.
+        ("require_path", "javascript", "src/auth.js", "./src/auth"),
+        ("require_path", "typescript", "src/auth.ts", "./src/auth"),
+        # Directory/index spelling: directory resolution consults a
+        # repo-plantable package.json "main" BEFORE index files.
+        ("require_path", "javascript", "src/auth/index.js", "./src/auth"),
         ("require_path", "ruby", "lib/auth.rb", "lib/lookalike"),
         ("require_path", "php", "src/auth.php", "src/lookalike.php"),
         ("require_path", "lua", "lib/auth.lua", "lib.lookalike"),
@@ -4350,7 +4397,6 @@ class TestModuleBindingToFindingFile:
         # Dotted FILENAME stem: same resolution ambiguity.
         ("require_path", "lua", "lib/auth.spec.lua", "lib.auth.spec"),
         ("use_module", "perl", "lib/Auth.pm", "lib::Lookalike"),
-        ("import_path", "go", "pkg/auth/a.go", "example.com/m/pkg/other"),
     ])
     def test_wrong_module_rejected(self, field, language, file, wrong):
         err = validate_spec(self._spec(field, wrong, language, file))
@@ -4380,17 +4426,16 @@ class TestModuleBindingToFindingFile:
         assert validate_spec(spec) is None
 
     @pytest.mark.parametrize("field,language,file,value", [
-        ("require_path", "javascript", "src/auth.js", "./src/auth"),
-        ("require_path", "javascript", "src/auth/index.js", "./src/auth"),
-        ("require_path", "typescript", "src/auth.ts", "./src/auth"),
+        ("require_path", "javascript", "src/auth.js", "./src/auth.js"),
+        ("require_path", "javascript", "src/auth/index.js",
+         "./src/auth/index.js"),
+        ("require_path", "typescript", "src/auth.ts", "./src/auth.ts"),
         ("require_path", "ruby", "lib/auth.rb", "lib/auth"),
         ("require_path", "ruby", "lib/auth.rb", "lib/auth.rb"),
         ("require_path", "php", "src/auth.php", "src/auth.php"),
         ("require_path", "lua", "lib/auth.lua", "lib.auth"),
         ("require_path", "lua", "lib/auth/init.lua", "lib.auth"),
         ("use_module", "perl", "lib/Auth.pm", "lib::Auth"),
-        ("import_path", "go", "pkg/auth/a.go", "example.com/m/pkg/auth"),
-        ("import_path", "go", "pkg/auth/a.go", "pkg/auth"),
     ])
     def test_bound_module_accepted(self, field, language, file, value):
         assert validate_spec(self._spec(field, value, language, file)) is None
@@ -4416,6 +4461,91 @@ class TestModuleBindingToFindingFile:
         r = execute_witness(spec, tmp_path)
         assert r.verdict == "error"
         assert r.verdict not in ("confirmed", "refuted")
+
+
+class TestGoImportBinding:
+    """Go resolves an import path by stripping the go.mod module
+    prefix and mapping the remainder to a directory — the binding
+    must hold in that RESOLUTION direction. The old suffix check
+    accepted module-prefixed lookalikes and left root-package imports
+    completely unchecked."""
+
+    @staticmethod
+    def _spec(file: str, ip: str):
+        return DarkWitnessSpec(
+            finding_key="f1", file=file, function="Check",
+            language="go",
+            lang_config={"package": "auth", "import_path": ip},
+        )
+
+    @staticmethod
+    def _root(tmp_path, module_line="module example.com/m"):
+        (tmp_path / "go.mod").write_text(
+            f"{module_line}\n\ngo 1.21\n", encoding="utf-8",
+        )
+        return tmp_path
+
+    def test_resolved_import_accepted(self, tmp_path):
+        root = self._root(tmp_path)
+        spec = self._spec("pkg/auth/a.go", "example.com/m/pkg/auth")
+        assert validate_spec(spec, root) is None
+
+    def test_module_prefixed_lookalike_rejected(self, tmp_path):
+        # "example.com/m/x/a/b" ends with "/a/b" (the old suffix check
+        # passed it) but Go resolves it to directory x/a/b — a
+        # plantable lookalike package.
+        root = self._root(tmp_path)
+        spec = self._spec("a/b/f.go", "example.com/m/x/a/b")
+        err = validate_spec(spec, root)
+        assert err is not None
+        assert "not bound to the finding's file" in err
+
+    def test_bare_directory_spelling_rejected(self, tmp_path):
+        # "pkg/auth" without the module prefix names a DIFFERENT
+        # module under Go resolution.
+        root = self._root(tmp_path)
+        spec = self._spec("pkg/auth/a.go", "pkg/auth")
+        err = validate_spec(spec, root)
+        assert err is not None
+        assert "not bound to the finding's file" in err
+
+    def test_root_package_bound_to_module_path(self, tmp_path):
+        # Root-package findings were previously not checked at all —
+        # any package in the repo could be named.
+        root = self._root(tmp_path)
+        assert validate_spec(
+            self._spec("a.go", "example.com/m"), root,
+        ) is None
+        err = validate_spec(
+            self._spec("a.go", "example.com/m/pkg/evil"), root,
+        )
+        assert err is not None
+        assert "not bound to the finding's file" in err
+
+    def test_unreadable_go_mod_refuses(self, tmp_path):
+        # No go.mod = no resolution to verify: refuse, never execute
+        # (mirrors the dotted-Lua-stem refusal).
+        spec = self._spec("pkg/auth/a.go", "example.com/m/pkg/auth")
+        err = validate_spec(spec, tmp_path)
+        assert err is not None
+        assert "go.mod" in err
+
+    def test_quoted_and_commented_module_lines_parse(self, tmp_path):
+        root = self._root(
+            tmp_path, 'module "example.com/m"  // legacy quoted form',
+        )
+        assert validate_spec(
+            self._spec("pkg/auth/a.go", "example.com/m/pkg/auth"), root,
+        ) is None
+
+    def test_empty_import_path_stays_unchecked(self, tmp_path):
+        # No import_path: the harness imports nothing (package-main
+        # findings compile the target source directly).
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="a.go", function="Check",
+            language="go", lang_config={},
+        )
+        assert validate_spec(spec, tmp_path) is None
 
 
 # -- scripting-language string args render as data, never code ----------------

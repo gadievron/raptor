@@ -561,10 +561,32 @@ def validate_spec(
         if err:
             return err
 
-    return _module_binding_error(spec, lang)
+    return _module_binding_error(spec, lang, target_root)
 
 
-def _module_binding_error(spec: DarkWitnessSpec, lang: str) -> str | None:
+def _go_module_path(target_root: Path | None) -> str | None:
+    """Module path declared by the target's root go.mod, or None when
+    unreadable/undeclared."""
+    if target_root is None:
+        return None
+    try:
+        text = (target_root / "go.mod").read_text(
+            encoding="utf-8", errors="replace",
+        )
+    except OSError:
+        return None
+    for line in text.splitlines():
+        m = re.match(r'\s*module\s+"?([^\s"]+)"?\s*(?://.*)?$', line)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _module_binding_error(
+    spec: DarkWitnessSpec,
+    lang: str,
+    target_root: Path | None = None,
+) -> str | None:
     """Bind require/use/import module overrides to the finding's FILE.
 
     Python (validate_import_path), C/C++/Rust (compiled against
@@ -573,10 +595,15 @@ def _module_binding_error(spec: DarkWitnessSpec, lang: str) -> str | None:
     charset/containment-checked the LLM-supplied module reference — a
     witness pointing require_path at a lookalike module exporting a
     same-named function would execute the WRONG code and mint a
-    confirmed/refuted verdict for the original finding. Accept an
-    override only when it is the harness-derived default or resolves
-    (require semantics, including index/init entry files) to the
-    finding's file; anything else is rejected, never executed.
+    confirmed/refuted verdict for the original finding. The binding
+    holds in the RESOLUTION direction per language: accept a spelling
+    only when the language's own loader mapping lands on the finding's
+    file (JS/TS: the exact file path with extension — Node tries the
+    extensionless path and a plantable package.json "main" first;
+    Go: the go.mod module path joined with the package directory,
+    refused when go.mod is unreadable; Ruby/Perl/PHP/Lua: their
+    established exact mappings); anything else is rejected, never
+    executed.
     """
     lc = spec.lang_config
     file = spec.file.replace("\\", "/")
@@ -591,19 +618,16 @@ def _module_binding_error(spec: DarkWitnessSpec, lang: str) -> str | None:
         rp = lc.get("require_path", "")
         if not rp:
             return None
-        exts = (
-            (".js", ".mjs", ".cjs") if lang == "javascript"
-            else (".ts", ".tsx", ".mts", ".cts", ".js")
-        )
-        stem = file
-        for ext in exts:
-            if file.endswith(ext):
-                stem = file[: -len(ext)]
-                break
+        # Only the exact file path (with extension) resolves
+        # unambiguously: for a stem spelling Node's LOAD_AS_FILE tries
+        # the extensionless path FIRST (a repo-planted file named
+        # `src/auth` shadows `src/auth.js`) and tries `.js` before
+        # `.ts` under the TS loaders; the directory/index spelling
+        # consults a repo-plantable package.json "main" before index
+        # files. The harness default derives the exact-file spelling,
+        # so nothing is lost by rejecting the ambiguous forms.
         cand = rp[2:] if rp.startswith("./") else rp
-        if cand not in (file, stem) and not any(
-            file == f"{cand}/index{ext}" for ext in exts
-        ):
+        if cand != file:
             return _reject("require_path", rp)
     elif lang == "ruby":
         rp = lc.get("require_path", "")
@@ -654,12 +678,29 @@ def _module_binding_error(spec: DarkWitnessSpec, lang: str) -> str | None:
         ip = lc.get("import_path", "")
         if not ip:
             return None
+        # Go resolves an import path by stripping the module prefix
+        # (from go.mod) and mapping the remainder to a directory — the
+        # old suffix check accepted "example.com/m/x/a/b" for a
+        # finding in a/b/ (Go resolves it to x/a/b, a plantable
+        # lookalike package), and root-package findings were not
+        # checked at all. Bind in the resolution direction: the one
+        # import path that loads the finding's package is the module
+        # path joined with its directory. No readable go.mod = no
+        # resolution to verify — refuse (mirrors the dotted-Lua-stem
+        # refusal); GOPATH-mode imports could not resolve inside the
+        # harness's scratch GOPATH anyway.
         pkg_dir = str(PurePosixPath(file).parent)
-        if pkg_dir in (".", ""):
-            # Root-package finding: the import path is the module path
-            # itself, which is not derivable from spec.file alone.
-            return None
-        if ip != pkg_dir and not ip.endswith("/" + pkg_dir):
+        module = _go_module_path(target_root)
+        if module is None:
+            return (
+                f"cannot bind import_path {ip!r} to the finding's file "
+                f"{spec.file!r}: no readable module declaration in "
+                f"go.mod at the target root"
+            )
+        expected = (
+            module if pkg_dir in (".", "") else f"{module}/{pkg_dir}"
+        )
+        if ip != expected:
             return _reject("import_path", ip)
 
     return None
