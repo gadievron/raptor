@@ -1440,6 +1440,11 @@
     "count": 22,
     "kind": "literal"
   },
+  "core/sandbox/_daemon.py::_handle_conversation": {
+    "count": 11,
+    "kind": "literal",
+    "note": "RPC reply payload keys (wire shape of the conversation verb, not a name vocabulary)"
+  },
   "core/sandbox/_daemon.py::_handle_probe": {
     "count": 11,
     "kind": "literal"
