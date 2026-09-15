@@ -160,6 +160,9 @@ _REPORT_WRITER_FILES = (
     # target-derived file/function names and verbatim announcement
     # bodies printed to the operator terminal by libexec/raptor-audit.
     "core/audit/_util.py",
+    "core/llm/multi_model/replay.py",
+    "core/llm/scorecard/audit.py",
+    "core/llm/scorecard/cli.py",
     "core/project/report.py",
     "core/reporting/findings.py",
     "core/sandbox/triage.py",

@@ -53,6 +53,7 @@ from pathlib import Path
 from collections.abc import Sequence
 
 from core.json import dumps_artifact, load_json
+from core.security.log_sanitisation import sanitise_for_terminal
 from core.llm.multi_model.dawid_skene import (
     DawidSkeneResult,
     estimate_partitioned,
@@ -321,6 +322,14 @@ def replay(
 # ---------------------------------------------------------------------------
 
 
+def _scrub_cell(value: object) -> str:
+    """Escape + bound a sidecar-derived cell value (decision_class,
+    model, event_type) before terminal rendering — the sidecar is
+    same-user writable and readable without HMAC verification under
+    the key-unusable clamp, so these strings are attacker-choosable."""
+    return sanitise_for_terminal(str(value), max_len=64)
+
+
 def render_markdown(report: ReplayReport) -> str:
     lines: list[str] = []
     lines.append("# Panel-log replay")
@@ -332,7 +341,7 @@ def render_markdown(report: ReplayReport) -> str:
     )
     lines.append(
         f"Distinct models: **{len(report.distinct_models)}** "
-        f"(`{', '.join(report.distinct_models)}`)."
+        f"(`{', '.join(_scrub_cell(m) for m in report.distinct_models)}`)."
     )
     lines.append(
         f"Distinct decision classes: **{len(report.distinct_decision_classes)}**."
@@ -365,7 +374,7 @@ def render_markdown(report: ReplayReport) -> str:
             "converged | iters |"
         )
         lines.append("|---|---:|---:|---:|:---:|---:|")
-        lines.extend(f"| `{s.decision_class}` | {s.n_findings} | "
+        lines.extend(f"| `{_scrub_cell(s.decision_class)}` | {s.n_findings} | "
                 f"{s.n_flips_to_exploitable} | {s.n_flips_to_not_exploitable} | "
                 f"{'✓' if s.converged else '×'} | {s.iterations} |" for s in sorted(report.class_summaries, key=lambda x: x.decision_class))
     lines.append("")

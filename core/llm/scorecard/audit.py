@@ -31,6 +31,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 from core.json import dumps_artifact
+from core.security.log_sanitisation import sanitise_for_terminal
 from core.llm.scorecard.paths import default_scorecard_path
 from core.llm.scorecard.scorecard import (
     ALL_EVENT_TYPES,
@@ -386,11 +387,20 @@ def audit(path: Path | None = None) -> AuditReport:
 
 def render_markdown(report: AuditReport) -> str:
     """Operator-facing markdown report. Tables paste cleanly into issues
-    and notebooks."""
+    and notebooks.
+
+    event_type / decision_class / schema_version are read from the
+    sidecar WITHOUT HMAC verification (`_load_raw` bypasses
+    ModelScorecard on purpose) — a same-user forger picks those bytes,
+    so each is escaped and bounded before it reaches the terminal.
+    """
+    def _cell(value: object) -> str:
+        return sanitise_for_terminal(str(value), max_len=64)
+
     lines: list[str] = []
     lines.append(f"# Scorecard audit — `{report.scorecard_path}`")
     lines.append("")
-    lines.append(f"Schema version: `{report.schema_version}`")
+    lines.append(f"Schema version: `{_cell(report.schema_version)}`")
     lines.append(f"Distinct models: **{report.total_models}**")
     lines.append(
         f"Distinct decision classes: **{report.total_decision_classes}**"
@@ -431,7 +441,7 @@ def render_markdown(report: AuditReport) -> str:
     )
     for summary in report.event_type_summaries:
         row_parts = [
-            f"| `{summary.event_type}` "
+            f"| `{_cell(summary.event_type)}` "
             f"| {summary.total_cells} "
             f"| {summary.cells_with_any_data} ",
         ]
@@ -450,7 +460,7 @@ def render_markdown(report: AuditReport) -> str:
             "| decision_class | distinct models | median obs/cell | total obs |"
         )
         lines.append("|---|---:|---:|---:|")
-        lines.extend(f"| `{s.decision_class}` "
+        lines.extend(f"| `{_cell(s.decision_class)}` "
                 f"| {s.distinct_models} "
                 f"| {s.median_obs_primary:.1f} "
                 f"| {s.total_obs_primary} |" for s in report.decision_class_summaries)

@@ -18,12 +18,13 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import json
 import re
 import sys
 from pathlib import Path
 from typing import Any
 
-from core.json import dumps_display
+from core.security.log_sanitisation import sanitise_for_terminal
 
 from .paths import default_scorecard_path
 from .scorecard import (
@@ -160,7 +161,10 @@ def _humanise_age(iso_ts: str, *, now: _dt.datetime | None = None) -> str:
     try:
         ts = _dt.datetime.fromisoformat(iso_ts)
     except ValueError:
-        return iso_ts                              # pass through if unparseable
+        # An unparseable timestamp only comes from a forged/corrupt
+        # sidecar row (the writer always emits ISO) — escape + bound
+        # before it can reach a terminal render verbatim.
+        return _scrub_cell(iso_ts)
     if now is None:
         now = _dt.datetime.now(_dt.timezone.utc)
     if ts.tzinfo is None:
@@ -295,6 +299,27 @@ def _stats_to_json(s: DecisionClassStats) -> dict[str, Any]:
     }
 
 
+def _scrub_cell(value: object) -> str:
+    """Escape + bound a sidecar-derived cell value (decision_class,
+    model, event_type) before terminal rendering — the sidecar is
+    same-user writable and readable without HMAC verification under
+    the key-unusable clamp, so these strings are attacker-choosable."""
+    return sanitise_for_terminal(str(value), max_len=64)
+
+
+def _dumps_json_lane(data: Any) -> str:
+    """Serialise a ``--json`` lane payload for the terminal.
+
+    ensure_ascii: JSON escapes C0 but passes C1 controls
+    (U+0080-U+009F, incl. single-byte CSI/OSC) through raw when
+    ensure_ascii is off — ``dumps_display`` is exactly that, and these
+    dicts carry the same sidecar-derived strings the table lanes scrub
+    (decision_class, model, model_version, timestamps). ASCII-encode
+    so the structured lane cannot carry live terminal controls either;
+    output stays valid JSON for consumers that parse it."""
+    return json.dumps(data, indent=2, ensure_ascii=True, default=str)
+
+
 def _render_table(
     stats: list[DecisionClassStats],
     event_type: str = EventType.CHEAP_SHORT_CIRCUIT,
@@ -327,8 +352,8 @@ def _render_table(
             baseline = drift_map.get((s.decision_class, s.model), policy)
             marker = _drift_marker(baseline, policy)
         rows.append((
-            s.decision_class,
-            s.model,
+            _scrub_cell(s.decision_class),
+            _scrub_cell(s.model),
             n,
             _format_wilson(s, event_type),
             marker + _format_policy(policy, s.events[
@@ -380,7 +405,7 @@ def _render_compare(
         a_ev = a.events[EventType.CHEAP_SHORT_CIRCUIT]
         b_ev = b.events[EventType.CHEAP_SHORT_CIRCUIT]
         rows.append((
-            dc,
+            _scrub_cell(dc),
             f"{a_ev.correct + a_ev.incorrect}",
             _format_wilson(a),
             _format_policy(_policy_for_stats(a),
@@ -417,11 +442,11 @@ def _render_samples(stat: DecisionClassStats) -> str:
     cheap and full disagreed."""
     if not stat.disagreement_samples:
         return (
-            f"_(no disagreement samples for {stat.decision_class} on "
-            f"{stat.model})_"
+            f"_(no disagreement samples for {_scrub_cell(stat.decision_class)} on "
+            f"{_scrub_cell(stat.model)})_"
         )
     lines = [
-        f"# {stat.decision_class} on {stat.model}",
+        f"# {_scrub_cell(stat.decision_class)} on {_scrub_cell(stat.model)}",
         f"_{len(stat.disagreement_samples)} sample(s); "
         f"trust math: cheap claimed FP and was actually wrong_",
         "",
@@ -526,7 +551,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         if hl:
             out["freshness_half_life_days"] = hl
             out["freshness_impact"] = sc.measure_freshness_impact(hl)
-        print(dumps_display(out))
+        print(_dumps_json_lane(out))
         return 0
     print(_render_table(stats, event_type=event_type, drift_map=drift_map))
     if hl:
@@ -637,20 +662,22 @@ def cmd_summary(args: argparse.Namespace) -> int:
             ),
             "recent_cells_7d": recent,
         }
-        print(dumps_display(out))
+        print(_dumps_json_lane(out))
         return 0
 
     print(f"scorecard summary ({args.path}):")
     print(f"  cells: {len(stats)} across {len(models)} model(s)")
     print(f"  policy: {short_circuit} trusted · {learning} learning · {fall_through} fall-through")
-    cost_lines = [f"{m} ${c:.4f}" for m, c in sorted(
+    # Model names are sidecar-derived (same forgeable provenance as the
+    # table cells) — scrub before the terminal, like every other lane.
+    cost_lines = [f"{_scrub_cell(m)} ${c:.4f}" for m, c in sorted(
         cost_per_model.items(), key=lambda x: -x[1]) if c > 0]
     cost_break = " (" + ", ".join(cost_lines) + ")" if cost_lines else ""
     print(f"  total spend: ${total_cost:.4f}{cost_break}")
     if most_used[0] and most_used[1] > 0:
-        print(f"  most-used: {most_used[0]} ({most_used[1]} calls)")
+        print(f"  most-used: {_scrub_cell(most_used[0])} ({most_used[1]} calls)")
     if cheapest:
-        print(f"  cheapest trusted: {cheapest[0]} @ ${cheapest[1]:.4f}/call")
+        print(f"  cheapest trusted: {_scrub_cell(cheapest[0])} @ ${cheapest[1]:.4f}/call")
     print(f"  recent activity: {recent} cells last seen in last 7d")
     return 0
 
@@ -719,7 +746,7 @@ def cmd_recommend(args: argparse.Namespace) -> int:
         }
         if not sc_rows and fall_through:
             out["least_bad"] = {"model": fall_through[0][0]}
-        print(dumps_display(out))
+        print(_dumps_json_lane(out))
         return 0
 
     # Freshness banner — when an operator passes --freshness, surface that the
@@ -734,19 +761,21 @@ def cmd_recommend(args: argparse.Namespace) -> int:
     def _fmt_cpc(x) -> str:
         return f"${x:.4f}/call" if x is not None else "no cost data"
 
+    # Model names are sidecar-derived (same forgeable provenance as the
+    # table cells) — scrub before the terminal, like every other lane.
     if sc_rows:
         m, ub, cpc, _, n = sc_rows[0]
         cpc_note = " — cheapest trusted" if cpc is not None else " — trusted (no cost data to rank by)"
-        print(f"  use: {m}  ({_fmt_ub(ub)} · n={n} · {_fmt_cpc(cpc)}){cpc_note}")
+        print(f"  use: {_scrub_cell(m)}  ({_fmt_ub(ub)} · n={n} · {_fmt_cpc(cpc)}){cpc_note}")
         for m2, ub2, cpc2, _, _n2 in sc_rows[1:]:
-            print(f"  also trusted: {m2} ({_fmt_ub(ub2)} · {_fmt_cpc(cpc2)})")
+            print(f"  also trusted: {_scrub_cell(m2)} ({_fmt_ub(ub2)} · {_fmt_cpc(cpc2)})")
     else:
         print("  no trusted model — none meet the miss-rate ceiling")
         if fall_through:
             m, ub, cpc, _, n = fall_through[0]
-            print(f"  least-bad option: {m} ({_fmt_ub(ub)} · n={n} · {_fmt_cpc(cpc)})")
+            print(f"  least-bad option: {_scrub_cell(m)} ({_fmt_ub(ub)} · n={n} · {_fmt_cpc(cpc)})")
     if learning:
-        names = ", ".join(r[0] for r in learning)
+        names = ", ".join(_scrub_cell(r[0]) for r in learning)
         print(f"  still learning (insufficient data): {names}")
     return 0
 
@@ -796,7 +825,7 @@ def cmd_chain_closure(args: argparse.Namespace) -> int:
             f"once it lands."
         )
         if getattr(args, "json", False):
-            print(dumps_display({
+            print(_dumps_json_lane({
                 "decision_class": target_dc,
                 "candidates": [],
                 "message": msg,
@@ -856,7 +885,7 @@ def cmd_chain_closure(args: argparse.Namespace) -> int:
         return None
 
     if getattr(args, "json", False):
-        print(dumps_display({
+        print(_dumps_json_lane({
             "decision_class": target_dc,
             "candidates": rows,
             "recommendation": _recommendation(),
@@ -871,8 +900,10 @@ def cmd_chain_closure(args: argparse.Namespace) -> int:
     for r in rows:
         rate_s = f"{r['success_rate']*100:5.1f}%" if r['success_rate'] is not None else "  n/a"
         cpc_s = f"${r['cost_per_call']:.3f}" if r['cost_per_call'] is not None else "  n/a"
+        # Model names are sidecar-derived (forgeable) — scrub for the
+        # terminal, like the list/compare table cells.
         print(
-            f"  {r['model']:<28} {r['n']:>4} {r['successes']:>4} "
+            f"  {_scrub_cell(r['model']):<28} {r['n']:>4} {r['successes']:>4} "
             f"{rate_s:>7} {cpc_s:>10}",
         )
     return 0
@@ -895,7 +926,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
                 for dc in sorted(set(by_dc_a) & set(by_dc_b))
             ],
         }
-        print(dumps_display(out))
+        print(_dumps_json_lane(out))
         return 0
     print(_render_compare(
         all_stats, all_stats,
