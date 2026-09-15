@@ -148,9 +148,16 @@ _JS_DEAD_IF = re.compile(r"\bif\s*\(\s*(?:false|0)\s*\)\s*\{")
 
 
 def _detect_javascript(content: str) -> list[DeadRange]:
-    from core.inventory.js_lexer import blank_js_noncode
+    from core.inventory.js_lexer import JsLexAmbiguityError, blank_js_noncode
 
-    stripped = blank_js_noncode(content)
+    try:
+        stripped = blank_js_noncode(content)
+    except JsLexAmbiguityError:
+        # The lexer refused to guess regex-vs-division through a
+        # quote/backtick-carrying candidate span; a partial view could
+        # range live code as dead (a hard-suppress witness). Bail on
+        # the whole file: no ranges — toward no suppression.
+        return []
     ranges: list[DeadRange] = []
     for m in _JS_DEAD_IF.finditer(stripped):
         brace_pos = m.end() - 1

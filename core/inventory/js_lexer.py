@@ -14,6 +14,15 @@ lexer's on the shapes an untrusted repo can craft:
   a string, braces inside it (``/}}/``,) must not move brace depth.
 * Template literals blank wholesale, including ``${…}`` interpolation
   (its braces must not move depth either).
+* ``${…}`` interpolation holds a full EXPRESSION — ES6 allows strings,
+  nested templates, comments and regexes inside it, arbitrarily deep
+  (`` `${`}`}` `` is valid and evaluates to ``"}"``). Interpolation
+  code therefore re-enters the full lexer: counting raw braces alone
+  would let a ``}`` inside a nested literal close the interpolation
+  early, desynchronising the template-vs-code parity for the rest of
+  the file — real code blanked as template data and template DATA
+  lexed as code, which mints false dead-scope ranges and fabricated
+  module-load aborts over live functions.
 
 :func:`blank_js_noncode` replaces every comment, string, template and
 regex-literal character with a space, preserving newlines so line
@@ -27,11 +36,28 @@ boundary / nothing, or after a keyword like ``return`` — and is
 division after a value (identifier, number, ``)``, ``]``, or a string
 we just blanked). A candidate regex whose closing ``/`` doesn't occur
 on the same line is not a regex (regex literals cannot contain raw
-newlines) and is left as division. Ambiguity is resolved toward the
-real-lexer answer on all common shapes; the residual exotic corners
-(``/`` in expression position right after ``)`` of an unbraced ``if``
-header) fail toward treating it as division, which can only make the
-consumers' conservative bail paths fire — never mint a bogus range.
+newlines) and is left as division.
+
+The heuristic can still guess wrong (``/`` after an object literal's
+``}`` or after postfix ``++``/``--`` is really division; ``/`` right
+after ``)`` of an unbraced ``if`` header is really a regex). A wrong
+guess in EITHER direction is parity-fatal when the candidate span
+holds a quote or backtick: blanking a fake regex swallows the
+quote/backtick, desynchronising string/template state for the REST of
+the file — template data lexes as code, minting false dead ranges and
+fabricated module-load aborts over live functions — while reading a
+real regex as division lets its quote/backtick open a phantom literal
+with the same effect. The lexer therefore refuses to guess: any regex
+candidate whose span contains a quote or backtick raises
+:class:`JsLexAmbiguityError`, and the consumers bail on the whole
+file (no dead ranges, no abort — failing toward NO suppression).
+
+Residual, stated honestly: a quote-free candidate can still be
+mis-guessed. The damage is confined to the mis-lexed span on its one
+line (in parseable JS the text between two same-statement ``/`` is a
+balanced expression, so brace depth is unaffected); that can hide a
+real abort or dead range on that line, but cannot flip lexical state
+for the rest of the file.
 """
 
 from __future__ import annotations
@@ -49,6 +75,19 @@ _REGEX_PRECEDER_KEYWORDS = frozenset({
     "return", "typeof", "instanceof", "in", "of", "new", "delete",
     "void", "throw", "case", "do", "else", "yield", "await",
 })
+
+
+class JsLexAmbiguityError(ValueError):
+    """The lexer cannot blank this file with confidence.
+
+    Raised when a regex-literal candidate span contains a quote or
+    backtick: guessing regex-vs-division wrong there swallows (or
+    conjures) a string/template delimiter and desynchronises lexical
+    state for the rest of the file. Consumers making suppression
+    rulings must catch this and bail on the whole file — report no
+    dead ranges and no module-load abort — never fall back to a
+    partially-blanked view.
+    """
 
 
 def _regex_end_on_line(s: list[str] | str, start: int) -> int | None:
@@ -82,6 +121,10 @@ def _regex_end_on_line(s: list[str] | str, start: int) -> int | None:
 def blank_js_noncode(content: str) -> str:
     """Blank comments, strings, template literals and regex literals
     to spaces in one pass, preserving newlines. See module docstring.
+
+    Raises :class:`JsLexAmbiguityError` when a regex-literal candidate
+    span contains a quote or backtick (regex-vs-division ambiguity the
+    lexer refuses to guess through — see module docstring).
     """
     out = list(content)
     n = len(out)
@@ -90,10 +133,44 @@ def blank_js_noncode(content: str) -> str:
     # Index in ``out`` of the last significant char — used to read the
     # preceding word back for the keyword check.
     last_significant_idx = -1
+    # Stack of open ``${…}`` interpolations. Each entry counts the
+    # ``{`` braces opened by CODE inside that interpolation and not yet
+    # closed, so the ``}`` that really ends the interpolation (depth 0)
+    # is distinguished from object-literal / block closers. The code
+    # inside an interpolation runs through the main loop, so nested
+    # strings, templates, comments and regexes lex with full fidelity.
+    interp_depths: list[int] = []
 
     def _blank(idx: int) -> None:
         if out[idx] != "\n":
             out[idx] = " "
+
+    def _scan_template(idx: int) -> tuple[int, bool]:
+        """Blank template-literal TEXT from ``idx`` until the literal's
+        closing backtick (returns ``(index-after, False)``) or a ``${``
+        interpolation opener (blanked; returns ``(index-after, True)``
+        so the caller re-enters code lexing). An unterminated template
+        consumes to EOF, like a real lexer's error recovery."""
+        while idx < n:
+            ch = out[idx]
+            if ch == "\\":
+                _blank(idx)
+                if idx + 1 < n:
+                    _blank(idx + 1)
+                    idx += 2
+                else:
+                    idx += 1
+                continue
+            if ch == "$" and idx + 1 < n and out[idx + 1] == "{":
+                _blank(idx)
+                _blank(idx + 1)
+                return idx + 2, True
+            if ch == "`":
+                out[idx] = " "
+                return idx + 1, False
+            _blank(idx)
+            idx += 1
+        return idx, False
 
     while i < n:
         c = out[i]
@@ -149,42 +226,34 @@ def blank_js_noncode(content: str) -> str:
             last_significant_idx = -1
             continue
 
-        # ---- template literals (with ${…} nesting blanked) ------------
+        # ---- template literals (interpolation re-enters the lexer) ----
         if c == "`":
             out[i] = " "
-            i += 1
-            while i < n:
-                ch = out[i]
-                if ch == "\\":
-                    _blank(i)
-                    if i + 1 < n:
-                        _blank(i + 1)
-                        i += 2
-                    else:
-                        i += 1
-                    continue
-                if ch == "$" and i + 1 < n and out[i + 1] == "{":
-                    _blank(i)
-                    _blank(i + 1)
-                    i += 2
-                    depth = 1
-                    while i < n and depth > 0:
-                        ic = out[i]
-                        if ic == "{":
-                            depth += 1
-                        elif ic == "}":
-                            depth -= 1
-                        _blank(i)
-                        i += 1
-                    continue
-                if ch == "`":
-                    out[i] = " "
-                    i += 1
-                    break
-                _blank(i)
-                i += 1
-            last_significant = "`"
-            last_significant_idx = -1
+            i, entered_interp = _scan_template(i + 1)
+            if entered_interp:
+                # ``${`` starts a fresh expression: a ``/`` right after
+                # it is a regex, and its brace depth starts at 0.
+                interp_depths.append(0)
+                last_significant = None
+                last_significant_idx = -1
+            else:
+                # A template is a value: division follows it.
+                last_significant = "`"
+                last_significant_idx = -1
+            continue
+
+        # ---- interpolation closer: back to template text ---------------
+        if c == "}" and interp_depths and interp_depths[-1] == 0:
+            _blank(i)
+            interp_depths.pop()
+            i, entered_interp = _scan_template(i + 1)
+            if entered_interp:
+                interp_depths.append(0)
+                last_significant = None
+                last_significant_idx = -1
+            else:
+                last_significant = "`"
+                last_significant_idx = -1
             continue
 
         # ---- regex literals -------------------------------------------
@@ -205,6 +274,16 @@ def blank_js_noncode(content: str) -> str:
             if starts_regex:
                 end = _regex_end_on_line(out, i)
                 if end is not None:
+                    if any(ch in "`\"'" for ch in out[i + 1:end - 1]):
+                        # A quote/backtick inside the candidate span:
+                        # a wrong regex-vs-division guess here flips
+                        # string/template parity for the rest of the
+                        # file (escaped or not — blanking swallows the
+                        # delimiter either way). Refuse to guess.
+                        raise JsLexAmbiguityError(
+                            "regex-vs-division candidate span contains "
+                            "a quote or backtick"
+                        )
                     while i < end:
                         _blank(i)
                         i += 1
@@ -220,6 +299,13 @@ def blank_js_noncode(content: str) -> str:
 
         # ---- plain code ------------------------------------------------
         if not c.isspace():
+            if interp_depths:
+                # Track code braces inside the innermost ${…} so its
+                # real closer (depth 0, handled above) is recognised.
+                if c == "{":
+                    interp_depths[-1] += 1
+                elif c == "}":
+                    interp_depths[-1] -= 1
             last_significant = c
             last_significant_idx = i
         i += 1
@@ -227,4 +313,4 @@ def blank_js_noncode(content: str) -> str:
     return "".join(out)
 
 
-__all__ = ["blank_js_noncode"]
+__all__ = ["JsLexAmbiguityError", "blank_js_noncode"]

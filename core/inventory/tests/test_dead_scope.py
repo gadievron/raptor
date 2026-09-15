@@ -728,17 +728,30 @@ def test_ruby_hash_in_string_not_treated_as_comment():
 
 def test_js_line_comment_marker_inside_string_does_not_eat_close():
     # `//` inside the string used to start a "comment" that blanked
-    # the dead-if's real closing brace; the regex literal's quote
-    # then resynced string state and _match_brace closed the block
-    # inside live code — function live() read as dead.
+    # the dead-if's real closing brace, so _match_brace closed the
+    # block inside live code — function live() read as dead.
     src = (
         'if (false) { var s = "//"; }\n'
         "function live() {\n"
         "  steal();\n"
-        '  var q = /"/;\n'
+        "  var q = /x/;\n"
         "}\n"
     )
     assert detect_dead_scopes("javascript", src) == [(1, 1)]
+
+
+def test_js_quote_in_regex_candidate_bails_whole_file():
+    # A regex candidate span carrying a quote makes the lexer refuse
+    # to guess regex-vs-division (a wrong guess desyncs string state
+    # for the rest of the file); the detector bails conservatively —
+    # no ranges at all, not a partial view.
+    src = (
+        'if (false) { var s = "//"; }\n'
+        "function live() {\n"
+        '  var q = /"/;\n'
+        "}\n"
+    )
+    assert detect_dead_scopes("javascript", src) == []
 
 
 def test_js_regex_literal_braces_do_not_move_depth():
@@ -764,8 +777,12 @@ def test_js_division_is_not_a_regex_literal():
 
 
 def test_js_regex_after_return_keyword():
+    # Keyword-preceded `/` is a regex; its brace must not move depth.
+    # (A quote/backtick INSIDE a candidate span bails the whole file
+    # instead — pinned in test_js_lexer.py — so the fixture stays
+    # quote-free.)
     src = (
-        "function f() { return /\"{/; }\n"
+        "function f() { return /}{/; }\n"
         "if (false) {\n"
         "  dead();\n"
         "}\n"

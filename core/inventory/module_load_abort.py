@@ -206,9 +206,16 @@ def _detect_javascript(content: str) -> ModuleLoadAbort | None:
     # false-positive whole-file abort gate that silenced every finding
     # below it. Same class for a string with an unbalanced brace
     # (``const s = "}";``).
-    from core.inventory.js_lexer import blank_js_noncode
+    from core.inventory.js_lexer import JsLexAmbiguityError, blank_js_noncode
 
-    stripped = blank_js_noncode(content)
+    try:
+        stripped = blank_js_noncode(content)
+    except JsLexAmbiguityError:
+        # The lexer refused to guess regex-vs-division through a
+        # quote/backtick-carrying candidate span; a partial view could
+        # fabricate a whole-file abort over live code. Bail on the
+        # whole file: no abort — toward no suppression.
+        return None
     # Walk character-by-character tracking brace and paren depth.
     # An unconditional module-level throw is one at depth zero
     # before any function body opens it.
