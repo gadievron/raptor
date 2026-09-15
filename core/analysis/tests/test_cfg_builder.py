@@ -714,3 +714,81 @@ class TestCompoundStatementsNotFlattened:
         assert "meta" in cls_node.calls
         assert "html.escape" not in cls_node.calls
         assert "attr" not in cls_node.defs
+
+
+class TestDeferredExecutionBodies:
+    """Lambda bodies and genexp payloads run later (or never) — their
+    calls must not be attributed to the statement node, or a
+    never-executed sanitizer sits unconditionally on the path (the
+    nested-def hazard, same class). Eagerly-evaluated parts (lambda
+    defaults, a genexp's first iterable, full list/set/dict
+    comprehensions) keep contributing."""
+
+    def _stmt_calls(self, src, marker):
+        cfg = build_python_cfg(src, "handle")
+        assert cfg is not None
+        node = next(n for n in cfg.nodes() if marker in n.defs)
+        return node.calls, node.call_sites
+
+    def test_lambda_body_call_not_attributed(self):
+        src = (
+            "def handle(x):\n"
+            "    f = lambda v: html.escape(v)\n"
+            "    render(f)\n"
+        )
+        calls, sites = self._stmt_calls(src, "f")
+        assert "html.escape" not in calls
+        assert all(cs.name != "html.escape" for cs in sites)
+
+    def test_genexp_payload_call_not_attributed(self):
+        src = (
+            "def handle(xs):\n"
+            "    out = (html.escape(v) for v in xs)\n"
+            "    render(out)\n"
+        )
+        calls, _ = self._stmt_calls(src, "out")
+        assert "html.escape" not in calls
+
+    def test_genexp_first_iterable_still_eager(self):
+        src = (
+            "def handle(xs):\n"
+            "    out = (v for v in load(xs))\n"
+            "    render(out)\n"
+        )
+        calls, _ = self._stmt_calls(src, "out")
+        assert "load" in calls
+
+    def test_lambda_default_still_eager(self):
+        src = (
+            "def handle(x):\n"
+            "    f = lambda v=seed(x): v\n"
+            "    render(f)\n"
+        )
+        calls, _ = self._stmt_calls(src, "f")
+        assert "seed" in calls
+
+    def test_listcomp_stays_eager(self):
+        src = (
+            "def handle(xs):\n"
+            "    out = [html.escape(v) for v in xs]\n"
+            "    render(out)\n"
+        )
+        calls, _ = self._stmt_calls(src, "out")
+        assert "html.escape" in calls
+
+    def test_lambda_sanitizer_cannot_carry_control_flow_cut(self):
+        # Legacy no-value-context path: the vertex cut suppresses from
+        # ``calls`` alone, so a lambda-wrapped sanitizer must not
+        # register as a sanitizer node at all.
+        from core.analysis.sanitizer_cut import evaluate_finding
+        src = (
+            "def handle(x):\n"
+            "    f = lambda v: html.escape(v)\n"
+            "    render(x)\n"
+        )
+        cfg = build_python_cfg(src, "handle")
+        sink = next(n for n in cfg.nodes() if "render" in n.calls)
+        result = evaluate_finding(
+            cfg, [cfg.entry_node], sink, cwe="CWE-79", language="python",
+        )
+        assert not result.suppress

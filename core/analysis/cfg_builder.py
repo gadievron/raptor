@@ -471,6 +471,38 @@ def _walk_symbols(
     return frozenset(defs), frozenset(uses)
 
 
+def _iter_eager_calls(root: ast.AST):
+    """Every ``ast.Call`` in ``root`` whose execution is NOT deferred.
+
+    Lambda bodies and generator-expression payloads run when the
+    lambda is CALLED / the generator is CONSUMED — not at this
+    statement. Attributing their calls to the statement node puts a
+    possibly-never-executed sanitizer unconditionally on the path
+    (the same false-suppression hazard as flattening nested ``def``
+    bodies, which :func:`_statement_expr_roots` already excludes).
+    Only the parts evaluated eagerly at the statement descend: a
+    lambda's parameter defaults, and a genexp's FIRST iterable (the
+    standard Python semantic). List/set/dict comprehensions evaluate
+    eagerly and descend in full.
+    """
+    stack: list[ast.AST] = [root]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.Lambda):
+            stack.extend(node.args.defaults)
+            stack.extend(
+                d for d in node.args.kw_defaults if d is not None
+            )
+            continue
+        if isinstance(node, ast.GeneratorExp):
+            if node.generators:
+                stack.append(node.generators[0].iter)
+            continue
+        if isinstance(node, ast.Call):
+            yield node
+        stack.extend(ast.iter_child_nodes(node))
+
+
 def _extract_statement_payload(
     stmt: ast.stmt,
 ) -> tuple[
@@ -483,7 +515,9 @@ def _extract_statement_payload(
 
     Statement-level expression discipline (compound stmts walk only
     their controlling expressions, not bodies) is shared with
-    :func:`_statement_expr_roots`. The legacy ``calls`` frozenset is
+    :func:`_statement_expr_roots`; deferred-execution bodies (lambda,
+    genexp) are excluded from call extraction by
+    :func:`_iter_eager_calls`. The legacy ``calls`` frozenset is
     derived from ``call_sites`` so the two views never disagree.
     """
     expr_roots = _statement_expr_roots(stmt)
@@ -492,9 +526,7 @@ def _extract_statement_payload(
     # call_sites in source order
     site_records: list[tuple[int, int, CallSite]] = []
     for root in expr_roots:
-        for child in ast.walk(root):
-            if not isinstance(child, ast.Call):
-                continue
+        for child in _iter_eager_calls(root):
             name = _resolve_callable_name(child.func)
             if name is None:
                 continue
@@ -875,9 +907,7 @@ class _PythonCFGBuilder:
             guard_defs, guard_uses = _walk_symbols(case.guard)
             defs |= guard_defs  # a walrus in a guard binds too
             uses |= guard_uses
-            for child in ast.walk(case.guard):
-                if not isinstance(child, ast.Call):
-                    continue
+            for child in _iter_eager_calls(case.guard):
                 name = _resolve_callable_name(child.func)
                 if name is None:
                     continue

@@ -623,3 +623,51 @@ class TestEmbeddedStoreDefsExpressionContexts:
         assert "y" in decl.defs
         for cs in decl.call_sites:
             assert "y" not in cs.assigned_names
+
+
+class TestCppLambdaDeferredBody:
+    """C++ lambdas: body calls are deferred (excluded from the
+    statement payload) and a lambda is an alias hazard (by-reference
+    captures can rebind enclosing locals whenever it later runs) —
+    the enclosing statement stamps may_escape."""
+
+    def _cfg(self, src, fn="handle"):
+        import pytest as _pytest
+        _pytest.importorskip("tree_sitter_cpp")
+        cfg = build_cpp_intraproc_cfg(src, fn, language="cpp")
+        assert cfg is not None
+        return cfg
+
+    def test_lambda_body_call_not_attributed(self):
+        src = (
+            "void handle(char *x) {\n"
+            "    auto f = [&] { escape_html(x); };\n"
+            "    sink(x);\n"
+            "}\n"
+        )
+        cfg = self._cfg(src)
+        node = next(n for n in cfg.nodes() if "f" in n.defs)
+        assert "escape_html" not in node.calls
+        assert all(cs.name != "escape_html" for cs in node.call_sites)
+
+    def test_lambda_statement_stamps_may_escape(self):
+        src = (
+            "void handle(char *x) {\n"
+            "    auto f = [&] { x = 0; };\n"
+            "    sink(x);\n"
+            "}\n"
+        )
+        cfg = self._cfg(src)
+        node = next(n for n in cfg.nodes() if "f" in n.defs)
+        assert node.may_escape
+
+    def test_plain_call_still_attributed(self):
+        src = (
+            "void handle(char *x) {\n"
+            "    char *y = escape_html(x);\n"
+            "    sink(y);\n"
+            "}\n"
+        )
+        cfg = self._cfg(src)
+        node = next(n for n in cfg.nodes() if "y" in n.defs)
+        assert "escape_html" in node.calls

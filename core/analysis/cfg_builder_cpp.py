@@ -282,6 +282,15 @@ _INDIRECTION_NODE_TYPES = frozenset({
     "subscript_expression",
 })
 
+# C++ lambda (tree-sitter-cpp; the C grammar never produces it). A
+# lambda is BOTH deferred execution (its body's calls are excluded
+# from the statement payload — see _walk_subtree_for_call_sites) and
+# an alias hazard: a by-reference capture lets the body rebind
+# enclosing locals whenever the lambda later runs, invisibly to
+# reaching-defs. The enclosing statement therefore stamps
+# ``may_escape`` — the gate demotes SUPPRESS → CANDIDATE_ONLY.
+_LAMBDA_EXPR = "lambda_expression"
+
 
 # ---------------------------------------------------------------------------
 # Statement payload extraction — defs, uses, call_sites per CFG node
@@ -459,6 +468,14 @@ def _walk_subtree_for_call_sites(
 
     def visit(node: Node) -> None:
         t = node.type
+        if t == _LAMBDA_EXPR:
+            # Deferred execution: the body runs when the lambda is
+            # CALLED, not at this statement — attributing its calls
+            # here would put a possibly-never-executed sanitizer
+            # unconditionally on the path (false-suppression
+            # direction). The enclosing node is stamped may_escape
+            # instead (see _subtree_has_indirection).
+            return
         if t == _CALL_EXPR:
             callee = node.child_by_field_name("function")
             name = _resolve_callable_name(callee)
@@ -495,11 +512,15 @@ def _walk_subtree_for_calls(n) -> frozenset[str]:
     """Set of dotted callable names referenced anywhere in ``n``.
     Equivalent to ``{cs.name for cs in
     _walk_subtree_for_call_sites(n)}`` but without the position
-    plumbing; used to populate the back-compat ``calls`` field."""
+    plumbing; used to populate the back-compat ``calls`` field.
+    Lambda bodies are excluded — deferred execution, same rule as
+    the call-site walker."""
     out: set[str] = set()
     stack = [n] if n is not None else []
     while stack:
         cur = stack.pop()
+        if cur.type == _LAMBDA_EXPR:
+            continue
         if cur.type == _CALL_EXPR:
             callee = cur.child_by_field_name("function")
             name = _resolve_callable_name(callee)
@@ -530,7 +551,7 @@ def _subtree_has_indirection(n) -> bool:
     while stack:
         cur = stack.pop()
         t = cur.type
-        if t in _INDIRECTION_NODE_TYPES:
+        if t in _INDIRECTION_NODE_TYPES or t == _LAMBDA_EXPR:
             return True
         if t == _FIELD_EXPR:
             op = cur.child_by_field_name("operator")
