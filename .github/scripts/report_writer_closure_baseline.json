@@ -346,6 +346,9 @@
     "core/threat_model/__init__.py::save_report::unsanitised_llm_value::render_report": {
       "note": "helper-return of the same renderer whose summary/title rows are triaged above; save_report writes the md artifact"
     },
+    "libexec/raptor-ast::main::raw_serialiser_at_sink::dumps_display": {
+      "note": "raptor-ast CLI: dumps_display is raptor's own output formatter, not raw LLM text"
+    },
     "libexec/raptor-bq-query::_run_sandboxed::unsanitised_llm_value::stderr": {
       "note": "verbatim tool/child-output capture into a run artifact or structured data file \u2014 raw by design; rendering to the operator happens in registered writers that sanitise"
     },
@@ -565,6 +568,60 @@
     "packages/exploitability_validation/scripts/measure_stage_e_empirical_influence.py::main::unsanitised_llm_value::reasoning": {
       "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
     },
+    "packages/hardware/enumerator.py::HardwareEnumerator.run::unsanitised_exception_text::e": {
+      "note": "hardware enumerator: broad-handler exception relay from internal library calls"
+    },
+    "packages/hardware/enumerator.py::HardwareEnumerator.run::unsanitised_llm_value::error_msg": {
+      "note": "hardware enumerator: internal error message from tool subprocess, not LLM text"
+    },
+    "packages/hardware/enumerator.py::HardwareEnumerator.run::unsanitised_llm_value::notes": {
+      "note": "hardware enumerator: operator-authored device notes from config, not LLM text"
+    },
+    "packages/hardware/enumerator.py::HardwareEnumerator.run::unsanitised_llm_value::version": {
+      "note": "hardware enumerator: tool version string from subprocess, not LLM text"
+    },
+    "packages/hardware/enumerator.py::main::unsanitised_exception_text::e": {
+      "note": "hardware enumerator main: top-level exception handler, internal errors only"
+    },
+    "packages/hardware/scripts/glasgow_applet_harness.py::check_glasgow_present::unsanitised_llm_value::result": {
+      "note": "glasgow harness: subprocess result code from glasgow tool, not LLM text"
+    },
+    "packages/hardware/scripts/glasgow_applet_harness.py::check_glasgow_present::unsanitised_llm_value::stderr": {
+      "note": "glasgow harness: tool stderr from subprocess, not LLM text"
+    },
+    "packages/hardware/scripts/glasgow_applet_harness.py::check_glasgow_present::unsanitised_llm_value::stdout": {
+      "note": "glasgow harness: tool stdout from subprocess, not LLM text"
+    },
+    "packages/hardware/scripts/glasgow_applet_harness.py::check_i2c::unsanitised_llm_value::output": {
+      "note": "glasgow harness: I2C probe output from glasgow tool, not LLM text"
+    },
+    "packages/hardware/scripts/glasgow_applet_harness.py::check_i2c::unsanitised_llm_value::result": {
+      "note": "glasgow harness: I2C probe result code from glasgow tool, not LLM text"
+    },
+    "packages/hardware/scripts/glasgow_applet_harness.py::check_i2c::unsanitised_llm_value::stderr": {
+      "note": "glasgow harness: tool stderr from I2C probe, not LLM text"
+    },
+    "packages/hardware/scripts/glasgow_applet_harness.py::check_jtag_probe::unsanitised_llm_value::output": {
+      "note": "glasgow harness: JTAG probe output from glasgow tool, not LLM text"
+    },
+    "packages/hardware/scripts/glasgow_applet_harness.py::check_jtag_probe::unsanitised_llm_value::result": {
+      "note": "glasgow harness: JTAG probe result code, not LLM text"
+    },
+    "packages/hardware/scripts/glasgow_applet_harness.py::check_jtag_probe::unsanitised_llm_value::stderr": {
+      "note": "glasgow harness: tool stderr from JTAG probe, not LLM text"
+    },
+    "packages/hardware/scripts/glasgow_applet_harness.py::check_memory_25x::unsanitised_llm_value::output": {
+      "note": "glasgow harness: memory probe output from glasgow tool, not LLM text"
+    },
+    "packages/hardware/scripts/glasgow_applet_harness.py::check_swd::unsanitised_llm_value::output": {
+      "note": "glasgow harness: SWD probe output from glasgow tool, not LLM text"
+    },
+    "packages/hardware/scripts/glasgow_applet_harness.py::check_swd::unsanitised_llm_value::result": {
+      "note": "glasgow harness: SWD probe result code, not LLM text"
+    },
+    "packages/hardware/scripts/glasgow_applet_harness.py::check_swd::unsanitised_llm_value::stderr": {
+      "note": "glasgow harness: tool stderr from SWD probe, not LLM text"
+    },
     "packages/joern/netns_forwarder.py::self_probe::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
     },
@@ -597,6 +654,9 @@
     },
     "packages/llm_analysis/scripts/e2e_verify_exploit.py::main::raw_serialiser_at_sink::dumps_display": {
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
+    },
+    "packages/recon/agent.py::main::raw_serialiser_at_sink::dumps_display": {
+      "note": "recon agent CLI: dumps_display is raptor's own output formatter, not raw LLM text"
     },
     "packages/sca/bump/cli.py::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"

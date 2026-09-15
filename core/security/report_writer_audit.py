@@ -456,6 +456,16 @@ class AllowlistEntry:
 # the test suite: empty / TODO notes are rejected).
 _ALLOWLIST: tuple[AllowlistEntry, ...] = (
     AllowlistEntry(
+        file="packages/static-analysis/scanner.py",
+        func_name="main",
+        kind="raw_serialiser_at_sink",
+        detail="dumps_display",
+        audit_note=(
+            "dumps_display is raptor's own output formatter "
+            "(core.output.dumps_display), not raw LLM text"
+        ),
+    ),
+    AllowlistEntry(
         file="packages/cve_diff/cve_diff/cli/bench.py",
         func_name="_render_html",
         kind="unsanitised_llm_value",
