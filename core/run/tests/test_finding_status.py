@@ -60,6 +60,17 @@ class TestDeriveStatus:
         }
         assert derive_status(finding) == ANALYSIS_INCONSISTENT
 
+    def test_junk_exploitable_shape_is_not_inconsistent(self):
+        # A non-bool is_exploitable is a non-verdict (tri-state
+        # accessor rule): the inconsistency bucket keys on a genuine
+        # exploitable claim contradicting itself, not on junk.
+        finding = {
+            "is_true_positive": True,
+            "is_exploitable": "yes",
+            "self_contradictory": True,
+        }
+        assert derive_status(finding) == ANALYSED
+
     def test_judge_resolved_contradiction_gives_analysed(self):
         # JudgeTask (commit 727300fc) clears self_contradictory and
         # sets contradiction_resolved_by_judge. The derived status

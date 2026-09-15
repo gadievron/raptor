@@ -88,6 +88,24 @@ class TestCollectAgentic:
         rec = _record(is_exploitable=False, exploitable=False)
         assert collect_agentic_findings([rec]) == []
 
+    def test_junk_verdict_shapes_excluded(self):
+        # analysed_results.json is operator-supplied JSON: a non-bool
+        # verdict shape is a non-verdict, not an exploitable claim —
+        # pre-fix a truthy "yes" exported the record. The legacy
+        # ``exploitable`` alias keeps its truthy contract.
+        rec = _record(is_true_positive="yes", exploitable=False,
+                      is_exploitable=False)
+        assert collect_agentic_findings([rec]) == []
+        rec = _record(is_exploitable="yes", exploitable=False)
+        assert collect_agentic_findings([rec]) == []
+
+    def test_analysis_verdict_fallback_on_junk_result_field(self):
+        # A junk result-level is_true_positive falls back to the
+        # nested analysis copy (junk = abstention, not a block).
+        rec = _record(is_true_positive="junk")
+        rec["analysis"]["is_true_positive"] = True
+        assert len(collect_agentic_findings([rec])) == 1
+
     def test_null_analysis_survives(self):
         # Prep-mode records serialize "analysis": null — the collector
         # must not crash and falls back to the scanner message.

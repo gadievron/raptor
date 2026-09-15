@@ -28,6 +28,7 @@ from core.run.finding_status import (
     ERROR,
     derive_status,
     is_skipped,
+    read_verdict,
 )
 
 
@@ -116,7 +117,7 @@ def bucket_orchestration_results(results: list[dict]) -> dict[str, Any]:
             continue
         if "is_true_positive" not in r:
             continue
-        verdict = r.get("is_true_positive")
+        verdict = read_verdict(r, "is_true_positive")
         if verdict is True:
             buckets["true_positives"] += 1
         elif verdict is False:
@@ -125,7 +126,7 @@ def bucket_orchestration_results(results: list[dict]) -> dict[str, Any]:
                 buckets["severity_mismatches"].append(r)
         else:
             buckets["unverdicted"] += 1
-        if r.get("is_exploitable"):
+        if read_verdict(r, "is_exploitable") is True:
             # Status-aware split: ``analysis_inconsistent`` goes to
             # inconsistent regardless of self_contradictory state
             # (the status enum is the authoritative signal); legacy

@@ -130,6 +130,14 @@ class TestBuildRaptorProperties:
         _, props = _build_raptor_properties(f)
         assert props["is_exploitable"] is False
 
+    def test_is_exploitable_junk_shape_omitted(self):
+        # A non-bool shape is a non-verdict: exporting it stamped a
+        # junk value into the SARIF property bag as if it were a
+        # verdict (tri-state accessor rule — abstention is omitted).
+        f = {"analysis": {"is_exploitable": "yes"}}
+        _, props = _build_raptor_properties(f)
+        assert "is_exploitable" not in props
+
     def test_analysis_none_handled(self):
         f = {"analysis": None}
         verdict, props = _build_raptor_properties(f)

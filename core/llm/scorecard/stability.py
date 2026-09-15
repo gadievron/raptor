@@ -20,6 +20,8 @@ from __future__ import annotations
 import logging
 from typing import Any, TYPE_CHECKING
 
+from core.run.finding_status import read_verdict
+
 from . import _MAX_REASONING_CHARS
 from ._batch import record_event_batch
 from .scorecard import EventType, ModelScorecard
@@ -143,7 +145,9 @@ def record_cross_run_stability(
 
     pending: list[dict] = []
     for fid, result in results_by_id.items():
-        if result.get("is_exploitable") is None:
+        if read_verdict(result, "is_exploitable") is None:
+            # No verdict this run (absent, schema-nulled, or a junk
+            # shape) — an abstention is not a stability data point.
             continue
 
         prior_entry = prior_verdicts.get(fid)

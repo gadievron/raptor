@@ -77,6 +77,7 @@ from pathlib import Path
 from typing import Any
 
 from core.logging import get_logger
+from core.run.finding_status import read_verdict
 from core.security import mac_key
 
 logger = get_logger(__name__)
@@ -723,8 +724,24 @@ def sanitise_findings_evidence(
                 finding["final_status"] = "confirmed_unverified"
                 if finding.get("status") in FEASIBILITY_TIER_STATUSES:
                     finding["status"] = "confirmed_unverified"
-                if finding.get("is_exploitable"):
+                # Demote only a genuine True claim: an abstention is
+                # not a positive claim to overwrite with a fabricated
+                # explicit False. A junk shape is normalised to the
+                # explicit abstention instead — this is a
+                # sanitisation chokepoint, and leaving junk in place
+                # would hand downstream/external truthy readers a
+                # value the tri-state accessor refuses.
+                _claim = read_verdict(finding, "is_exploitable")
+                if _claim is True:
                     finding["is_exploitable"] = False
+                elif _claim is None:
+                    # Presence check on the raw value (not verdict
+                    # consumption — the verdict was read above):
+                    # present-but-junk becomes the explicit
+                    # abstention; absent / already-None untouched.
+                    _raw_claim = finding.get("is_exploitable")
+                    if _raw_claim is not None:
+                        finding["is_exploitable"] = None
                 stats["final_status_demoted"] += 1
 
     if any(stats.values()):

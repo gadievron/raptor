@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from core.json import load_json, save_json
+from core.run.finding_status import read_verdict
 from core.orchestration.skill_dispatch import (
     MAX_VALIDATE_FINDINGS,
     StageError,
@@ -566,13 +567,23 @@ def _convert_one_finding(f: dict) -> dict:
             raw[key] = f[key]
     # is_exploitable: /agentic uses two key names depending on dispatch
     # mode (the schema says is_exploitable, sequential mode emits the
-    # legacy "exploitable"). Normalise to is_exploitable.
-    if f.get("is_exploitable") is not None:
-        raw["is_exploitable"] = f["is_exploitable"]
-    elif f.get("exploitable") is not None:
-        raw["is_exploitable"] = f["exploitable"]
-    if f.get("is_true_positive") is not None:
-        raw["is_true_positive"] = f["is_true_positive"]
+    # legacy "exploitable"). Normalise to is_exploitable; the
+    # tri-state read keeps a junk shape (a non-verdict) from being
+    # exported as a verdict.
+    _exploitable = read_verdict(f, "is_exploitable")
+    if _exploitable is None:
+        # Legacy alias, same genuine-bool rule: forwarding the raw
+        # field laundered a junk shape into the CANONICAL key on
+        # the export surface. (The alias is not a VERDICT_KEYS
+        # member, so the bool check is spelled locally.)
+        _legacy = f.get("exploitable")
+        if isinstance(_legacy, bool):
+            _exploitable = _legacy
+    if _exploitable is not None:
+        raw["is_exploitable"] = _exploitable
+    _tp = read_verdict(f, "is_true_positive")
+    if _tp is not None:
+        raw["is_true_positive"] = _tp
 
     out = Finding.from_dict(raw).to_dict()
     # ruling: /agentic emits a string verdict (e.g. "validated",

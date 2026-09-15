@@ -149,7 +149,7 @@ def derive_status(finding: dict) -> str:
         return ERROR
     if "is_true_positive" not in finding:
         return SKIPPED
-    if (finding.get("is_exploitable")
+    if (read_verdict(finding, "is_exploitable") is True
             and finding.get("self_contradictory")
             and not finding.get("contradiction_resolved_by_judge")):
         return ANALYSIS_INCONSISTENT

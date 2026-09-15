@@ -12,6 +12,8 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from core.run.finding_status import read_verdict
+
 logger = logging.getLogger(__name__)
 
 
@@ -210,9 +212,15 @@ def collect_agentic_findings(
             # degrade like a null analysis, not crash the collector
             # before healthy records are gathered.
             analysis = {}
-        tp = r.get("is_true_positive",
-                   analysis.get("is_true_positive"))
-        if tp and (r.get("is_exploitable") or r.get("exploitable")):
+        # Tri-state reads: only genuine True verdicts export — a
+        # junk shape in this operator-supplied JSON is a non-verdict,
+        # not an exploitable claim. The result-level field wins over
+        # the nested analysis copy when both carry a real verdict.
+        tp = read_verdict(r, "is_true_positive")
+        if tp is None:
+            tp = read_verdict(analysis, "is_true_positive")
+        if tp is True and (read_verdict(r, "is_exploitable") is True
+                           or r.get("exploitable")):
             exploitable.append(r)
 
     findings = []

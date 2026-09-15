@@ -16,6 +16,7 @@ from typing import Any
 
 from core.json import save_json
 from core.logging import get_logger
+from core.run.finding_status import read_verdict
 
 logger = get_logger()
 
@@ -67,8 +68,9 @@ def _build_raptor_properties(
         props["has_dataflow"] = True
 
     analysis = finding.get("analysis") or {}
-    if analysis.get("is_exploitable") is not None:
-        props["is_exploitable"] = analysis["is_exploitable"]
+    _exploitable = read_verdict(analysis, "is_exploitable")
+    if _exploitable is not None:
+        props["is_exploitable"] = _exploitable
     if analysis.get("reasoning"):
         props["reasoning"] = str(analysis["reasoning"])[:500]
 

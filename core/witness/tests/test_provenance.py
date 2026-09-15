@@ -214,6 +214,23 @@ class TestSanitiseFindingsEvidence:
         assert f["final_status"] == "confirmed_unverified"
         assert f["is_exploitable"] is False
 
+    def test_junk_exploitable_shape_normalised_on_demotion(self, tmp_path):
+        # A junk verdict shape is not a claim to demote to False,
+        # but this is a sanitisation chokepoint: the junk value is
+        # normalised to the explicit abstention (None) so external
+        # truthy readers of the sanitised output can't consume it.
+        f = _finding(final_status="likely_exploitable", is_exploitable="yes")
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert stats["final_status_demoted"] == 1
+        assert f["is_exploitable"] is None
+
+    def test_abstained_exploitable_untouched_on_demotion(self, tmp_path):
+        # Explicit None stays None — no fabricated False.
+        f = _finding(final_status="likely_exploitable", is_exploitable=None)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert stats["final_status_demoted"] == 1
+        assert f["is_exploitable"] is None
+
     def test_non_dict_shapes_tolerated(self, tmp_path):
         assert prov.sanitise_findings_evidence(None, tmp_path) == {
             "witness_stripped": 0, "feasibility_demoted": 0,

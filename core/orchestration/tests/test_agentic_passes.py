@@ -1308,6 +1308,25 @@ class FormatConverterTests(unittest.TestCase):
         self.assertEqual(out["findings"][0]["description"],
                          "tainted from req.body to db.execute")
 
+    def test_junk_verdict_shapes_never_export(self):
+        # Tri-state export rule: a non-bool shape is a non-verdict —
+        # it must not export under the canonical key, whether it
+        # arrives on the schema key or launders through the legacy
+        # "exploitable" alias.
+        from core.orchestration.agentic_passes import convert_agentic_to_validate
+        out = convert_agentic_to_validate(
+            [{"finding_id": "f1", "is_exploitable": "yes"},
+             {"finding_id": "f2", "exploitable": "yes"},
+             {"finding_id": "f3", "exploitable": True},
+             {"finding_id": "f4", "is_true_positive": 1}],
+            target_path="/repo")
+        by_id = {f["id"]: f for f in out["findings"]}
+        self.assertIsNot(by_id["f1"].get("is_exploitable"), True)
+        self.assertIsNot(by_id["f2"].get("is_exploitable"), True)
+        # A genuine legacy bool still normalises to the canonical key.
+        self.assertIs(by_id["f3"].get("is_exploitable"), True)
+        self.assertIsNot(by_id["f4"].get("is_true_positive"), True)
+
     def test_wraps_string_ruling_into_object(self):
         # /agentic emits ruling as a string verdict; /validate wants an object
         # {"status": ..., ...}. The converter must wrap, not pass through.

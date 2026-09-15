@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import logging
 
+from core.run.finding_status import read_verdict
+
 from . import _MAX_REASONING_CHARS
 from ._batch import record_event_batch
 from .scorecard import EventType, ModelScorecard
@@ -88,7 +90,12 @@ def record_judge_outcomes(
 
         rule_id = str(result.get("rule_id") or "unknown")
         decision_class = f"{decision_class_prefix}:{rule_id}"
-        final_verdict = bool(result.get("is_exploitable"))
+        final_verdict = read_verdict(result, "is_exploitable")
+        if final_verdict is None:
+            # The finalised verdict itself is an abstention (a tied
+            # panel on an abstained primary) or a junk shape —
+            # there is no majority outcome to score anyone against.
+            continue
         primary_model = str(result.get("analysed_by") or "?")
         # The snapshot preserves abstention: a None entry means the
         # primary's analysis carried no verdict (errored / refused /
@@ -98,8 +105,12 @@ def record_judge_outcomes(
         # outcome into the ledger — scoring exploitable-voting judges
         # "incorrect" against a majority the primary never joined.
         primary_raw = primary_verdicts_before_judge[fid]
+        # The snapshot contract is bool | None, but guard the
+        # boundary anyway: a junk value must read as an abstention,
+        # never a bool()-coerced phantom vote (which could break a
+        # genuine judge tie and mint an event for a vote never cast).
         primary_vote: bool | None = (
-            None if primary_raw is None else bool(primary_raw)
+            primary_raw if isinstance(primary_raw, bool) else None
         )
 
         # Abstention-aware voter list. A judge whose
@@ -115,7 +126,7 @@ def record_judge_outcomes(
         # packages.llm_analysis would invert the layering.
         voting_judges = [
             ja for ja in judge_analyses
-            if ja.get("is_exploitable") is not None
+            if read_verdict(ja, "is_exploitable") is not None
         ]
         if not voting_judges:
             # Whole panel abstained. JudgeTask marks these
@@ -132,7 +143,7 @@ def record_judge_outcomes(
         # consensus producer's even-split skip. An abstained primary
         # contributes no vote here.
         votes = ([] if primary_vote is None else [primary_vote]) + [
-            bool(ja.get("is_exploitable")) for ja in voting_judges
+            read_verdict(ja, "is_exploitable") for ja in voting_judges
         ]
         if len(votes) < 2:
             # Fewer than two real votes cannot define a majority —
@@ -166,7 +177,7 @@ def record_judge_outcomes(
         # Each voting judge's outcome (abstainers get no event).
         for ja in voting_judges:
             judge_model = str(ja.get("model") or "?")
-            judge_vote = bool(ja.get("is_exploitable"))
+            judge_vote = read_verdict(ja, "is_exploitable")
             judge_correct = (judge_vote == final_verdict)
             pending.append(_event(
                 decision_class=decision_class,
