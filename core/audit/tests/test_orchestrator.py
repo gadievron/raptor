@@ -7020,9 +7020,9 @@ class TestDiscardPresweepFuture:
         pool = ThreadPoolExecutor(max_workers=1)
         try:
             fut = pool.submit(fake_build)
-            # Condition-latch, not a clock: on a loaded runner a fixed
-            # sleep may elapse before the worker picks the task up, in
-            # which case cancel() lands and the assertion below flakes.
+            # Structural running-ness: a fixed pre-discard sleep let a
+            # starved pool worker start the task late, cancel() landed,
+            # and the not-cancelled assert false-failed.
             assert started.wait(timeout=10)  # running: cancel() cannot land
             with caplog.at_level(
                 _logging.DEBUG, logger="core.audit.orchestrator",
@@ -7157,7 +7157,6 @@ class TestPresweepSubmittedAtServerStart:
         must set the abort event the build polls, and the build must
         finish promptly instead of paying a full pre-sweep."""
         import threading
-        import time as _time
         from concurrent.futures import ThreadPoolExecutor
 
         import core.audit.orchestrator as orch_mod
@@ -7172,14 +7171,20 @@ class TestPresweepSubmittedAtServerStart:
         def fake_resolve(*args, abort_event=None, **kwargs):
             assert abort_event is not None
             state["abort_event"] = abort_event
+            build_started = threading.Event()
 
             def fake_build():
                 # Mirrors build_joern_evidence's step-boundary poll.
+                build_started.set()
                 state["interrupted"] = abort_event.wait(timeout=30)
                 return None
 
             fut = pool.submit(fake_build)
-            _time.sleep(0.05)  # running before prep — like production
+            # Structural running-ness (like production, where the
+            # build is in flight before prep): a fixed sleep let a
+            # starved pool worker start late, the discard's cancel()
+            # landed, and the not-cancelled assert false-failed.
+            assert build_started.wait(timeout=10)
             state["future"] = fut
             return (None, fut)
 
