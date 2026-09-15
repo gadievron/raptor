@@ -518,3 +518,59 @@ class TestRunEnvCuration:
         monkeypatch.delenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", raising=False)
         mod._run([sys.executable, "-c", "pass"])
         assert "RAPTOR_STUDY_MAX_OUTPUT_TOKENS" not in captured["env"]
+
+
+class TestStudyReportSanitised:
+    """domain-model.json fields are LLM-authored plus target-source
+    bytes — study-report.md must carry no live markdown structure,
+    fence escapes, or control bytes."""
+
+    HOSTILE = "\x1b]0;pwned\x07\x9b2J‮evil"
+
+    def test_hostile_domain_model_rendered_inert(self, tmp_path):
+        dm = {
+            "target": "/t",
+            "subject_title": f"lib{self.HOSTILE}",
+            "overview_summary": (
+                f"# forged heading\n{self.HOSTILE}\n"
+                "![exfil](//evil.example/x)"
+            ),
+            "key_files": [{"file": f"src/{self.HOSTILE}.c",
+                           "role": "header",
+                           "description": f"desc {self.HOSTILE}"}],
+            "concepts": [],
+            "struct_definitions": [{
+                "name": f"s{self.HOSTILE}",
+                "definition": "struct s {\n int x;\n};\n```\n# spilled",
+                "doc_comment": f"doc {self.HOSTILE}",
+            }],
+            "struct_annotations": [],
+            "contracts": [{"function": f"fn{self.HOSTILE}", "file": "a.h",
+                           "when": f"when {self.HOSTILE}",
+                           "security_note": f"sec {self.HOSTILE}"}],
+            "invariants": [{"id": "INV-1",
+                            "statement": f"stmt {self.HOSTILE}",
+                            "negation": f"neg {self.HOSTILE}",
+                            "relevant_cwes": ["CWE-787"]}],
+            "bug_patterns": [{"description": f"bug {self.HOSTILE}. More."}],
+            "state_machines": [{"name": f"sm{self.HOSTILE}",
+                                "description": f"d {self.HOSTILE}",
+                                "states": [{"name": "S|0",
+                                            "description": f"x {self.HOSTILE}"}]}],
+            "security_context": {"privilege_level": f"root {self.HOSTILE}",
+                                 "trust_summary": f"t {self.HOSTILE}"},
+        }
+        (tmp_path / "domain-model.json").write_text(json.dumps(dm))
+        _loop._render_study_report(tmp_path)
+        report = (tmp_path / "study-report.md").read_text()
+        for raw in ("\x1b", "\x07", "\x9b", "‮"):
+            assert raw not in report
+        # No forged heading from LLM prose (line-leading # defanged).
+        assert "\n# forged heading" not in report
+        # The struct definition's embedded fence cannot terminate the
+        # wrapping ```c block: no bare ``` line between the wrappers.
+        body = report.split("```c", 1)[1]
+        inner = body.split("\n```\n", 1)[0]
+        assert "# spilled" in inner  # stayed INSIDE the fence
+        # Autofetch markup is stripped from prose.
+        assert "//evil.example" not in report

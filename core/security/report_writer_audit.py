@@ -210,6 +210,7 @@ _REPORT_WRITER_FILES = (
     "packages/static-analysis/scanner.py",
     "libexec/raptor-audit",
     "libexec/raptor-review",
+    "libexec/raptor-study-loop",
     "libexec/raptor-annotate",
     "libexec/raptor-coverage-summary",
     "libexec/raptor-llm-ask",
@@ -380,6 +381,17 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
         audit_note=(
             "integer count from the internally-built correlation "
             "summary (disputed), not LLM text"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-study-loop",
+        func_name="_synthesise_overview",
+        kind="unsanitised_llm_value",
+        detail="cost",
+        audit_note=(
+            "cost is float()-coerced LLM-call cost telemetry "
+            "(getattr(response, 'cost')), rendered as $%.4f — the "
+            "taint chains through the response object, not text"
         ),
     ),
     AllowlistEntry(

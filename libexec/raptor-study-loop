@@ -47,6 +47,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 from core.config import RaptorConfig  # noqa: E402
 from core.json import load_json, save_json  # noqa: E402
+from core.security.log_sanitisation import sanitise_for_terminal  # noqa: E402
+from core.security.prompt_output_sanitise import (  # noqa: E402
+    sanitise_code,
+    sanitise_string,
+)
+
+
+def _prose(text: object) -> str:
+    """Defang LLM/target-derived free text for the study report."""
+    return sanitise_string(str(text), max_chars=4000)
+
+
+def _line(text: object) -> str:
+    """Single-line variant for headings, labels, and list items."""
+    return sanitise_string(str(text), max_chars=300).replace("\n", " ")
+
+
+def _cell(text: object) -> str:
+    """Markdown-table-cell variant (pipes escaped)."""
+    return _line(text).replace("|", "\\|")
 
 # Study artifacts (reading/study lists, domain model, overview,
 # struct annotations) are small RAPTOR-written run output.
@@ -393,9 +413,11 @@ def _overview_from_directory(
     subject_title = result.get("subject_title", "")
 
     if subject_title:
-        print(f"study-loop: subject: {subject_title}", file=sys.stderr)
+        print("study-loop: subject: "
+              f"{sanitise_for_terminal(subject_title)}", file=sys.stderr)
     if summary:
-        print(f"study-loop: overview: {summary}", file=sys.stderr)
+        print("study-loop: overview: "
+              f"{sanitise_for_terminal(summary, max_len=512)}", file=sys.stderr)
     print(
         f"study-loop: overview produced {len(idents)} identifiers, "
         f"{len(concepts)} concepts (${cost:.4f})",
@@ -586,11 +608,13 @@ def _synthesise_overview(
             if last_space > 100:
                 trust = trust[:last_space] + "."
     if title:
-        print(f"study-loop: synthesised title: {title} (${cost:.4f})",
+        print(f"study-loop: synthesised title: {sanitise_for_terminal(title)} "
+              f"(${float(cost):.4f})",
               file=sys.stderr)
     if arch:
         tm = arch.get("threading_model", "unknown")
-        print(f"study-loop: architecture: threading={tm}",
+        print("study-loop: architecture: "
+              f"threading={sanitise_for_terminal(str(tm), max_len=64)}",
               file=sys.stderr)
     return title or "", overview or "", trust or "", arch
 
@@ -786,7 +810,11 @@ def _render_study_report(output_dir: Path) -> None:
     if not title:
         title = Path(target).name
 
-    parts.append(f"# {title}\n")
+    # Every free-text field below is LLM-authored or read from
+    # target source — route prose through _prose/_line and code
+    # through sanitise_code so study-report.md carries no live
+    # markdown structure, autofetch markup, or control bytes.
+    parts.append(f"# {_line(title)}\n")
 
     # --- Key files ---
     key_files = dm.get("key_files", [])
@@ -801,22 +829,22 @@ def _render_study_report(output_dir: Path) -> None:
             parts.append("## Source Files\n")
             if headers:
                 for kf in headers:
-                    desc = kf.get("description", "")
+                    desc = _line(kf.get("description", ""))
                     desc_str = f" — {desc}" if desc else ""
-                    parts.append(f"- `{kf['file']}`{desc_str}")
+                    parts.append(f"- `{_line(kf['file'])}`{desc_str}")
             if impls:
                 for kf in impls:
-                    desc = kf.get("description", "")
+                    desc = _line(kf.get("description", ""))
                     desc_str = f" — studies {desc}" if desc else ""
-                    parts.append(f"- `{kf['file']}`{desc_str}")
+                    parts.append(f"- `{_line(kf['file'])}`{desc_str}")
             parts.append("")
 
         if docs:
             parts.append("## Documentation\n")
             for kf in docs:
-                desc = kf.get("description", "")
+                desc = _line(kf.get("description", ""))
                 desc_str = f" — {desc}" if desc else ""
-                parts.append(f"- `{kf['file']}`{desc_str}")
+                parts.append(f"- `{_line(kf['file'])}`{desc_str}")
             parts.append("")
 
     # --- Overview ---
@@ -825,13 +853,13 @@ def _render_study_report(output_dir: Path) -> None:
     if overview_summary or concepts:
         parts.append("## Overview\n")
         if overview_summary:
-            parts.append(overview_summary)
+            parts.append(_prose(overview_summary))
             parts.append("")
         else:
             for c in concepts:
                 desc = c.get("description", "")
                 if desc:
-                    parts.append(desc)
+                    parts.append(_prose(desc))
                 parts.append("")
 
     # --- Data Structures ---
@@ -857,20 +885,23 @@ def _render_study_report(output_dir: Path) -> None:
             rendered_structs.add(name)
             defn = sd.get("definition", "")
             doc_comment = sd.get("doc_comment", "")
-            parts.append(f"### `struct {name}`\n")
+            parts.append(f"### `struct {_line(name)}`\n")
             if doc_comment:
-                parts.append(doc_comment.strip())
+                parts.append(_prose(doc_comment.strip()))
                 parts.append("")
             if defn:
+                # sanitise_code: control bytes escaped AND embedded
+                # ``` runs defanged — a struct block quoting a fence
+                # must not spill live markdown out of this block.
                 parts.append("```c")
-                parts.append(defn.rstrip())
+                parts.append(sanitise_code(defn.rstrip()))
                 parts.append("```\n")
             # Render field annotations below the definition
             annots = field_annots.get(name, {})
             if annots:
                 for field_name, annotation in annots.items():
                     parts.append(
-                        f"**`{field_name}`**: {annotation}\n")
+                        f"**`{_line(field_name)}`**: {_line(annotation)}\n")
                 parts.append("")
 
     # --- Data Structures (contracts for structs) ---
@@ -888,23 +919,23 @@ def _render_study_report(output_dir: Path) -> None:
         parts.append("## API Reference\n")
         for c in struct_contracts + impl_contracts:
             parts.append(
-                f"### `{c.get('function', '?')}` "
-                f"({c.get('file', '')})\n")
+                f"### `{_line(c.get('function', '?'))}` "
+                f"({_line(c.get('file', ''))})\n")
             if c.get("when"):
-                parts.append(f"**When:** {c['when']}\n")
+                parts.append(f"**When:** {_prose(c['when'])}\n")
             if c.get("input_semantics"):
-                parts.append(f"**Input:** {c['input_semantics']}\n")
+                parts.append(f"**Input:** {_prose(c['input_semantics'])}\n")
             if c.get("output_semantics"):
-                parts.append(f"**Output:** {c['output_semantics']}\n")
+                parts.append(f"**Output:** {_prose(c['output_semantics'])}\n")
             if c.get("ownership_transfer"):
                 parts.append(
-                    f"**Ownership:** {c['ownership_transfer']}\n")
+                    f"**Ownership:** {_prose(c['ownership_transfer'])}\n")
             if c.get("implication"):
                 parts.append(
-                    f"**Implication:** {c['implication']}\n")
+                    f"**Implication:** {_prose(c['implication'])}\n")
             if c.get("security_note"):
                 parts.append(
-                    f"**Security:** {c['security_note']}\n")
+                    f"**Security:** {_prose(c['security_note'])}\n")
 
     # --- Invariants & Safety ---
     invariants = dm.get("invariants", [])
@@ -912,12 +943,12 @@ def _render_study_report(output_dir: Path) -> None:
         parts.append("## Invariants & Safety\n")
         for inv in invariants:
             cwes = inv.get("relevant_cwes", [])
-            cwe_str = f" ({', '.join(cwes)})" if cwes else ""
-            parts.append(f"### {inv.get('id', '')}{cwe_str}\n")
-            parts.append(f"{inv.get('statement', '')}\n")
+            cwe_str = f" ({_line(', '.join(str(c) for c in cwes))})" if cwes else ""
+            parts.append(f"### {_line(inv.get('id', ''))}{cwe_str}\n")
+            parts.append(f"{_prose(inv.get('statement', ''))}\n")
             neg = inv.get("negation", "")
             if neg:
-                parts.append(f"**Violation:** {neg}\n")
+                parts.append(f"**Violation:** {_prose(neg)}\n")
 
     # --- Bug patterns ---
     bug_patterns = dm.get("bug_patterns", [])
@@ -926,8 +957,8 @@ def _render_study_report(output_dir: Path) -> None:
         for i, bp in enumerate(bug_patterns, 1):
             desc = bp.get("description", bp.get("id", ""))
             # Use first sentence only for terse rendering
-            first_sentence = desc.split(". ")[0].rstrip(".")
-            parts.append(f"{i}. **{first_sentence}**")
+            first_sentence = str(desc).split(". ")[0].rstrip(".")
+            parts.append(f"{i}. **{_line(first_sentence)}**")
         parts.append("")
 
     # --- State machines ---
@@ -935,16 +966,16 @@ def _render_study_report(output_dir: Path) -> None:
     if state_machines:
         parts.append("## State Machines\n")
         for sm in state_machines:
-            parts.append(f"### {sm.get('name', '')}\n")
+            parts.append(f"### {_line(sm.get('name', ''))}\n")
             if sm.get("description"):
-                parts.append(f"{sm['description']}\n")
+                parts.append(f"{_prose(sm['description'])}\n")
             states = sm.get("states", [])
             if states:
                 parts.append("| State | Description |")
                 parts.append("|-------|-------------|")
-                for s in states:
-                    desc = s.get("description", "")
-                    parts.append(f"| {s.get('name', '')} | {desc} |")
+                for st in states:
+                    desc = st.get("description", "")
+                    parts.append(f"| {_cell(st.get('name', ''))} | {_cell(desc)} |")
                 parts.append("")
 
     # --- Security context ---
@@ -953,15 +984,15 @@ def _render_study_report(output_dir: Path) -> None:
         parts.append("## Security Context\n")
         if sc.get("privilege_level"):
             parts.append(
-                f"- **Privilege level:** {sc['privilege_level']}")
+                f"- **Privilege level:** {_line(sc['privilege_level'])}")
         if sc.get("attack_surface"):
             parts.append(
-                f"- **Attack surface:** {sc['attack_surface']}")
+                f"- **Attack surface:** {_line(sc['attack_surface'])}")
         if sc.get("isolation"):
-            parts.append(f"- **Isolation:** {sc['isolation']}")
+            parts.append(f"- **Isolation:** {_line(sc['isolation'])}")
         if sc.get("trust_summary"):
             parts.append(
-                f"- **Key trust boundary:** {sc['trust_summary']}")
+                f"- **Key trust boundary:** {_line(sc['trust_summary'])}")
         parts.append("")
 
     report_path = output_dir / "study-report.md"
