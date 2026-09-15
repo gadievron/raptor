@@ -81,6 +81,28 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _pid_running(pid: int) -> bool:
+    """Alive AND not a zombie.
+
+    A killed process awaiting its parent's reap still answers the
+    ``kill(pid, 0)`` probe but holds no memory and needs no further
+    signal — the same distinction ``_pgid_alive`` draws for whole
+    groups. Only meaningful where procfs exists; the member-anchor
+    path that consumes this has already required a readable
+    ``/proc/<pid>/stat``.
+    """
+    if not _pid_alive(pid):
+        return False
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(
+            encoding="ascii", errors="replace",
+        )
+    except OSError:
+        return False
+    fields = stat.rsplit(")", 1)[-1].split()
+    return bool(fields) and fields[0] != "Z"
+
+
 def _read_comm(pid: int) -> str | None:
     """Best-effort /proc/<pid>/comm read (None off-Linux or on error)."""
     try:
@@ -113,6 +135,33 @@ def _pid_is_our_server(state: dict[str, Any]) -> bool:
     # process (the joern launcher execs java; comm may also be the
     # launcher script name during early boot).
     return "java" in comm.lower() or "joern" in comm.lower()
+
+
+def _member_anchor_fields(srv: JoernServer) -> dict[str, Any]:
+    """State-file JVM-member anchor fields from a server handle.
+
+    Shape-guarded at the write side: handles reach here from tests
+    (mocks whose attribute reads return non-ints) and from lifecycle
+    reuse (class-default None) — only a plausible ``(pid, starttime)``
+    pair is persisted; anything else records the absence explicitly so
+    ``_kill_recorded_member`` declines instead of chasing garbage.
+    """
+    pid = getattr(srv, "_member_pid", None)
+    starttime = getattr(srv, "_member_starttime", None)
+    comm = getattr(srv, "_member_comm", None)
+    if (not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0
+            or not isinstance(starttime, int) or isinstance(starttime, bool)
+            or starttime < 0):
+        return {
+            "member_pid": None,
+            "member_starttime": None,
+            "member_comm": None,
+        }
+    return {
+        "member_pid": pid,
+        "member_starttime": starttime,
+        "member_comm": comm if isinstance(comm, str) else None,
+    }
 
 
 def _read_state(_lock_fd: int) -> dict[str, Any] | None:
@@ -331,6 +380,11 @@ def joern_acquire(tunables: JoernTunables | None = None) -> JoernServer | None:
             # Strong tier: unix socket through which the private-netns
             # server is reached (None on the TCP fallback tier).
             "socket_path": srv._uds_path,
+            # JVM MEMBER identity anchor (pid + /proc starttime +
+            # comm), derived at boot: lets _kill_server reap the JVM
+            # after the group leader died mid-stop. Nones when boot
+            # could not derive it unambiguously (fail-safe).
+            **_member_anchor_fields(srv),
         }
         _write_state(fd, new_state)
         logger.info(
@@ -438,7 +492,15 @@ def _kill_server(state: dict[str, Any]) -> bool:
     if not pid:
         return False
     if not _pid_is_our_server(state):
-        return False
+        # The leader is dead (or its pid was recycled): there is no
+        # live leader identity to anchor a group kill on, and an
+        # unverified pgid is not ours to signal (pid-reuse class). A
+        # hard kill landing mid-stop produces exactly this state —
+        # TERM delivered, the forwarder exits, the JVM wedges in its
+        # shutdown hook and is orphaned. Fall back to the boot-time
+        # JVM MEMBER anchor, whose /proc starttime proves identity
+        # without a live leader.
+        return _kill_recorded_member(state)
     # Capture the group BEFORE any signal, while the leader is still
     # verified ours: on the strong tier the leader is only the netns
     # forwarder, and it can die (and stop being resolvable via
@@ -472,6 +534,98 @@ def _kill_server(state: dict[str, Any]) -> bool:
         if _pid_is_our_server(state):
             _signal_server(pid, signal.SIGKILL)
         _ensure_group_dead(pgid, label=f"lifecycle kill of pid {pid}")
+    except (ProcessLookupError, PermissionError):
+        pass
+    _remove_socket_dir(state)
+    return True
+
+
+def _kill_recorded_member(state: dict[str, Any]) -> bool:
+    """Dead-leader fallback: kill the recorded JVM MEMBER when its
+    recorded identity still proves out.
+
+    ``_kill_server`` anchors on the LEADER; with the leader dead there
+    is no live pid to comm-verify, so it used to refuse outright and
+    the surviving JVM stayed orphaned. The state file's boot-time
+    member anchor (pid + ``/proc/<pid>/stat`` starttime + comm)
+    restores a safe identity: starttime is assigned once per process
+    incarnation, so a live member whose CURRENT starttime equals the
+    recorded one is provably the process the server boot recorded — a
+    recycled pid cannot match. Starttime mismatch, an unreadable
+    starttime (procfs absent off-Linux, or the member exiting under
+    us), or a comm that contradicts the record → refuse, loudly.
+    Absent anchor fields (old state files, boots that could not derive
+    the member) → decline silently, exactly the pre-anchor behaviour.
+    Returns True only when a kill was actually dispatched.
+    """
+    member = state.get("member_pid")
+    recorded_start = state.get("member_starttime")
+    if (not isinstance(member, int) or isinstance(member, bool)
+            or member <= 0
+            or not isinstance(recorded_start, int)
+            or isinstance(recorded_start, bool)):
+        # Old state file / no boot-derived anchor — nothing verified
+        # ours to signal, same as before the anchor existed.
+        return False
+    if not _pid_running(member):
+        return False
+    from .server import _ensure_group_dead, _pgid_alive, _proc_starttime
+    current_start = _proc_starttime(member)
+    if current_start is None:
+        logger.warning(
+            "joern lifecycle: leader pid %s is gone and member pid %d "
+            "has no readable /proc starttime — no identity proof; "
+            "refusing to kill an unverified pid", state.get("pid"), member,
+        )
+        return False
+    if current_start != recorded_start:
+        logger.warning(
+            "joern lifecycle: member pid %d starttime %d does not match "
+            "recorded %d — the pid was recycled by another process; "
+            "refusing to kill it", member, current_start, recorded_start,
+        )
+        return False
+    comm = _read_comm(member)
+    expected_comm = state.get("member_comm")
+    if comm is not None and expected_comm and comm != expected_comm:
+        # Belt-and-braces: a matching starttime with a different comm
+        # should be impossible without an in-place exec/prctl — treat
+        # it as an identity failure, not a curiosity.
+        logger.warning(
+            "joern lifecycle: member pid %d comm %r does not match "
+            "recorded %r despite matching starttime — refusing to "
+            "kill it", member, comm, expected_comm,
+        )
+        return False
+    logger.warning(
+        "joern lifecycle: leader pid %s is gone but recorded JVM member "
+        "pid %d is alive with matching starttime — reaping the orphaned "
+        "member", state.get("pid"), member,
+    )
+    # Same capture-then-escalate shape as _kill_server: group only
+    # when the member leads its own (never the caller's), captured
+    # while the member is still verified ours.
+    pgid: int | None = None
+    try:
+        if os.getpgid(member) == member and member != os.getpgrp():
+            pgid = member
+    except OSError:
+        pgid = None
+    try:
+        _signal_server(member, signal.SIGTERM)
+        deadline = time.monotonic() + _KILL_GRACE_S
+        while time.monotonic() < deadline:
+            if not _pid_running(member) and not _pgid_alive(pgid):
+                _remove_socket_dir(state)
+                return True
+            time.sleep(0.1)
+        # Re-verify the incarnation before SIGKILL: the member may
+        # have exited and its pid been recycled during the grace.
+        if _proc_starttime(member) == recorded_start:
+            _signal_server(member, signal.SIGKILL)
+        _ensure_group_dead(
+            pgid, label=f"lifecycle member kill of pid {member}",
+        )
     except (ProcessLookupError, PermissionError):
         pass
     _remove_socket_dir(state)
@@ -560,6 +714,8 @@ def note_server_replaced(
         state["auth_user"] = srv._auth_user
         state["auth_password"] = srv._auth_password
         state["socket_path"] = srv._uds_path
+        # The replacement boot re-derived the JVM member anchor.
+        state.update(_member_anchor_fields(srv))
         _write_state(fd, state)
         logger.info(
             "joern lifecycle: state updated for restarted server "

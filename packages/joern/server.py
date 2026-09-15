@@ -327,6 +327,74 @@ def _ensure_group_dead(
     return not alive
 
 
+def _proc_starttime(pid: int) -> int | None:
+    """``/proc/<pid>/stat`` field 22 — starttime, clock ticks since boot.
+
+    The (pid, starttime) pair names one process INCARNATION: the
+    kernel assigns starttime once, at fork, so a recycled pid carries
+    a different starttime and a recorded pair that still matches
+    proves the recorded process — not a stranger that inherited its
+    pid — is the one about to be signalled. Parsed after the last
+    ``)`` because comm (field 2) may itself contain spaces and
+    parentheses. None off-Linux and on any read/parse failure.
+    """
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(
+            encoding="ascii", errors="replace",
+        )
+        return int(stat.rsplit(")", 1)[-1].split()[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _find_jvm_member(pgid: int | None) -> tuple[int, int, str] | None:
+    """Locate the sole JVM member of *pgid*, excluding the leader.
+
+    Boot-time derivation for the lifecycle state file's member
+    anchor: the spawned leader — the netns forwarder (strong tier) or
+    the joern launcher wrapper, whose pid IS the group id
+    (``start_new_session=True``) — is excluded; the JVM itself is a
+    descendant this process never holds a handle on, so it is
+    recovered from the process tree via the spawn-time group id.
+    Returns ``(pid, starttime, comm)``, or None when procfs is
+    unavailable or the java-comm member is not unambiguous (zero or
+    several candidates, or one racing its own exit) — fail-safe:
+    callers simply record no anchor and the kill path keeps its
+    refuse-by-default behaviour.
+    """
+    if not isinstance(pgid, int) or isinstance(pgid, bool) or pgid <= 0:
+        return None
+    try:
+        entries = os.scandir("/proc")
+    except OSError:
+        return None
+    candidates: list[tuple[int, int, str]] = []
+    with entries:
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            pid = int(entry.name)
+            if pid == pgid:
+                continue
+            try:
+                if os.getpgid(pid) != pgid:
+                    continue
+                comm = Path(f"/proc/{pid}/comm").read_text(
+                    encoding="utf-8", errors="replace",
+                ).strip()
+            except OSError:
+                continue
+            if "java" not in comm.lower():
+                continue
+            starttime = _proc_starttime(pid)
+            if starttime is None:
+                continue
+            candidates.append((pid, starttime, comm))
+    if len(candidates) != 1:
+        return None
+    return candidates[0]
+
+
 def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
@@ -582,6 +650,12 @@ class JoernServer:
     # ``stop()`` and ``health_check()`` consult these.
     _uds_path: str | None = None
     _uds_dir: str | None = None
+    # ... and for the boot-derived JVM member anchor: the lifecycle
+    # persists these off every handle it records, including
+    # ``connect_existing`` handles whose ``__init__`` predates a boot.
+    _member_pid: int | None = None
+    _member_starttime: int | None = None
+    _member_comm: str | None = None
 
     def __init__(
         self,
@@ -603,6 +677,14 @@ class JoernServer:
         # leader fails, and on the strong tier the leader is only the
         # netns forwarder while the JVM member lives on.
         self._pgid: int | None = None
+        # JVM MEMBER identity anchor, derived from the process tree
+        # once the server is ready (see ``_find_jvm_member``): the
+        # leader above can die mid-stop while the JVM member lives
+        # on, and a live member whose /proc starttime still matches
+        # is the only pid-reuse-safe thing left to signal.
+        self._member_pid: int | None = None
+        self._member_starttime: int | None = None
+        self._member_comm: str | None = None
         self._base_url: str | None = None
         self._cpg_loaded = False
         self._cpg_path: Path | None = None
@@ -804,6 +886,18 @@ class JoernServer:
         logger.info("Joern server ready on port %d (pid %d)",
                      self._port, self._proc.pid)
 
+        # Derive the JVM member anchor now that the server answered:
+        # the JVM provably exists at this point, so a missing/ambiguous
+        # result means "no anchor" (fail-safe), not "too early".
+        member = _find_jvm_member(self._pgid)
+        if member is not None:
+            (self._member_pid, self._member_starttime,
+             self._member_comm) = member
+        else:
+            self._member_pid = None
+            self._member_starttime = None
+            self._member_comm = None
+
         self._warmup_imports()
 
     def _wait_for_ready(self) -> bool:
@@ -931,6 +1025,9 @@ class JoernServer:
 
         self._proc = None
         self._pgid = None
+        self._member_pid = None
+        self._member_starttime = None
+        self._member_comm = None
         self._port = None
         self._base_url = None
         self._cpg_loaded = False
