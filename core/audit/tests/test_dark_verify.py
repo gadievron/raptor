@@ -276,6 +276,70 @@ class TestClassifyBindingError:
         assert r.verdict == "inconclusive"
 
 
+class TestPerlHarnessRuntimeBinding:
+    """%INC maps the bareword require's key to the path the loader
+    ACTUALLY bound — the harness asserts it is the finding's file, so
+    a load served by any other @INC entry reports binding_error."""
+
+    def _spec(self):
+        return DarkWitnessSpec(
+            finding_key="f1", file="lib/Auth.pm", function="check",
+            language="perl", expected_return="1",
+            lang_config={"use_module": "lib::Auth"},
+        )
+
+    def test_harness_asserts_inc_binding(self, tmp_path):
+        harness = hy.generate_perl_harness(
+            self._spec(), tmp_path, witness_token="ab12")
+        assert "binding_error" in harness
+        assert "$INC{'lib/Auth.pm'}" in harness
+        assert str(tmp_path.resolve()) + "/lib/Auth.pm" in harness
+
+    def _run_perl(self, harness, tmp_path, env_extra=None):
+        import os
+        import subprocess
+        perl = shutil.which("perl")
+        script = tmp_path / "witness.pl"
+        script.write_text(harness, encoding="utf-8")
+        env = dict(os.environ)
+        env.update(env_extra or {})
+        proc = subprocess.run(
+            [perl, str(script)], capture_output=True, text=True,
+            timeout=30, env=env,
+        )
+        return json.loads(proc.stdout.strip().splitlines()[-1])
+
+    @pytest.mark.skipif(not shutil.which("perl"), reason="Perl not available")
+    def test_target_load_passes_binding(self, tmp_path):
+        target = tmp_path / "target"
+        (target / "lib").mkdir(parents=True)
+        (target / "lib" / "Auth.pm").write_text(
+            "sub check { return 1; }\n1;\n", encoding="utf-8")
+        harness = hy.generate_perl_harness(
+            self._spec(), target, witness_token="ab12")
+        data = self._run_perl(harness, tmp_path)
+        assert data["status"] == "returned"
+        assert data["token"] == "ab12"
+
+    @pytest.mark.skipif(not shutil.which("perl"), reason="Perl not available")
+    def test_foreign_inc_load_reports_binding_error(self, tmp_path):
+        # The module resolves through a DIFFERENT @INC entry (here
+        # PERL5LIB; in production any entry after the target root) —
+        # whatever loaded is not the finding's file.
+        target = tmp_path / "target"
+        target.mkdir()
+        other = tmp_path / "other"
+        (other / "lib").mkdir(parents=True)
+        (other / "lib" / "Auth.pm").write_text(
+            "sub check { return 1; }\n1;\n", encoding="utf-8")
+        harness = hy.generate_perl_harness(
+            self._spec(), target, witness_token="ab12")
+        data = self._run_perl(
+            harness, tmp_path, env_extra={"PERL5LIB": str(other)})
+        assert data["status"] == "binding_error"
+        assert "expected" in data["message"]
+
+
 # -- generate_c_harness -------------------------------------------------------
 
 

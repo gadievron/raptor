@@ -829,12 +829,24 @@ def generate_perl_harness(
     *,
     witness_token: str = "",
 ) -> str:
-    """Render a fixed-template Perl harness."""
+    """Render a fixed-template Perl harness.
+
+    After a successful require the harness asserts %INC recorded the
+    finding's file for the bareword's ``::``→``/`` + ``.pm`` key,
+    reporting binding_error, never a verdict, on mismatch.  Best-effort
+    belt behind the static resolution engine (the refusal authority):
+    %INC is interpreter state read AFTER the required code has run, so
+    an executing plant can rewrite it — the belt catches only
+    mis-binds where no plant code runs (e.g. a load served by another
+    @INC entry).
+    """
     use_module = derive_perl_use_module(spec)
 
     target_str = str(target_root.resolve())
     args_str = _format_args_scripting(spec.args, nil_kw="undef")
     token_lit = _single_quote(_checked_token(witness_token))
+    inc_key = use_module.replace("::", "/") + ".pm"
+    expected_lit = _single_quote(target_str + "/" + inc_key)
 
     return textwrap.dedent(f"""\
         use strict;
@@ -845,6 +857,12 @@ def generate_perl_harness(
         eval {{ require {use_module}; {use_module}->import() if {use_module}->can('import'); }};
         if ($@) {{
             print encode_json({{status => 'import_error', token => $_tok, message => "$@"}});
+            exit 0;
+        }}
+        my $_loaded = $INC{{{_single_quote(inc_key)}}} || '';
+        if ($_loaded ne {expected_lit}) {{
+            print encode_json({{status => 'binding_error', token => $_tok,
+                message => "loaded '$_loaded', expected " . {expected_lit}}});
             exit 0;
         }}
         eval {{
