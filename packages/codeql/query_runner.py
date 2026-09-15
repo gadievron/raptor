@@ -228,15 +228,26 @@ class QueryRunner:
         Args:
             codeql_cli: Path to CodeQL CLI (auto-detected if None)
         """
-        import shutil
-        _cli = codeql_cli or shutil.which("codeql")
+        # Same resolution ladder as the package's _resolve_cli /
+        # DatabaseManager._detect_codeql_cli: explicit arg, then the
+        # CODEQL_CLI environment variable, then PATH. This runner used
+        # to skip the env var — on hosts where codeql is reachable
+        # ONLY via CODEQL_CLI (the configuration DatabaseManager's own
+        # error message tells operators to use), construction raised
+        # AFTER database creation succeeded, and availability probes
+        # (env-aware) disagreed with the constructor.
+        from packages.codeql import _resolve_cli
+        _cli = codeql_cli or _resolve_cli()
         # Realpath for the same reason as DatabaseManager: the sandbox
         # binds the resolved install root; a ~/.local/bin symlink as
         # cmd[0] would push every query run onto the Landlock-only
         # fallback path.
         self.codeql_cli = os.path.realpath(_cli) if _cli else _cli
         if not self.codeql_cli:
-            msg = "CodeQL CLI not found"
+            msg = (
+                "CodeQL CLI not found (set the CODEQL_CLI environment "
+                "variable or add codeql to PATH)"
+            )
             raise RuntimeError(msg)
 
         logger.info("Query runner initialized with CodeQL: %s", self.codeql_cli)
