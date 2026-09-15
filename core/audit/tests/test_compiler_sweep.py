@@ -566,6 +566,58 @@ class TestSuppressionWitness:
             "int f(void) { return 0; }\n",
         )
 
+    # Closure over both compilers' documented suppression spellings:
+    # the witness exists because analyzer silence on an attacker-
+    # authored TU is forgeable, so an enumeration gap (the clang
+    # system_header spelling was missing) is a forged-refutation
+    # channel on that compiler's path.
+    _SUPPRESSION_SPELLINGS = (
+        '#pragma GCC diagnostic ignored "-Wanalyzer-use-after-free"',
+        '#pragma clang diagnostic ignored "-Wall"',
+        "#pragma GCC system_header",
+        "#pragma clang system_header",
+        "#  pragma clang system_header",  # whitespace-tolerant
+        '_Pragma("GCC diagnostic ignored \\"-Wall\\"")',
+        "#ifndef __clang_analyzer__",
+        "[[clang::suppress]] int *q = p;",
+        '[[gsl::suppress("type.1")]] int *q = p;',
+        "__attribute__((suppress)) int g(void);",
+        # Linemarker system-header flag: silences warnings AND
+        # analyzer reports on BOTH compiler paths with no pragma.
+        '# 1 "hostile.h" 3',
+        '#  1  "hostile.h"  3',  # whitespace-tolerant
+        '# 1 "/usr/include/evil.h" 1 3 4',  # preprocessed-output flags
+        '#line 1 "hostile.h" 3',
+    )
+
+    def test_documented_suppression_spellings_all_detected(self):
+        for spelling in self._SUPPRESSION_SPELLINGS:
+            assert compiler_sweep._suppression_witness(
+                f"{spelling}\nint f(void) {{ return 0; }}\n",
+            ), spelling
+
+    def test_benign_pragmas_do_not_trip(self):
+        # Over-triggering costs genuine refutations (every hit fails
+        # toward inconclusive) — common non-suppression pragmas stay
+        # inert.
+        for spelling in (
+            "#pragma once",
+            "#pragma pack(push, 1)",
+            '#pragma GCC optimize("O2")',
+            "#pragma omp parallel for",
+            "#pragma clang loop unroll(full)",
+            "#pragma GCC visibility push(default)",
+            "__attribute__((unused)) int x;",
+            # Flagless / non-3-flag linemarkers renumber only.
+            '#line 1 "x.h"',
+            '# 1 "x.c"',
+            '# 1 "x.c" 1',
+            '# 42 "x.c" 2 4',
+        ):
+            assert not compiler_sweep._suppression_witness(
+                f"{spelling}\nint f(void) {{ return 0; }}\n",
+            ), spelling
+
 
 @needs_compiler
 class TestSuppressionForgery:
@@ -591,6 +643,33 @@ class TestSuppressionForgery:
             function_name="f",
             hypothesis="use-after-free of `p` in f",
             cwe="CWE-416",
+            out_dir=tmp_path / "out",
+        )
+        assert result.outcome != "refuted", result.to_dict()
+        if result.outcome == "inconclusive":
+            assert result.details.get("suppression_witness")
+
+    def test_linemarker_system_header_silence_cannot_refute(
+        self, tmp_path, sandbox_spy,
+    ):
+        # A TU opening with `# 1 "x.h" 3` (linemarker system-header
+        # flag, no pragma anywhere) silences clang --analyze AND
+        # gcc -fanalyzer on a live double-free — mechanically forged
+        # silence must fail toward unknown, never mint 'refuted'.
+        target = tmp_path / "repo"
+        target.mkdir()
+        (target / "poc.c").write_text(
+            '# 1 "poc.h" 3\n'
+            "#include <stdlib.h>\n"
+            "int f(void){char *p=malloc(8); if(!p) return 0; "
+            "free(p); free(p); return 0;}\n",
+        )
+        result = run_compiler_analyzer_sweep(
+            target_path=target,
+            file_path="poc.c",
+            function_name="f",
+            hypothesis="double free of `p` in f",
+            cwe="CWE-415",
             out_dir=tmp_path / "out",
         )
         assert result.outcome != "refuted", result.to_dict()

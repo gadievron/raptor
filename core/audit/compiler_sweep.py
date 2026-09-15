@@ -474,9 +474,26 @@ def _cached_include_dirs(
 # so the operator token alone is the witness.
 _DIAG_SUPPRESSION_RE = re.compile(
     r"#\s*pragma\s+(?:GCC|clang)\s+diagnostic\s+ignored"
-    r"|#\s*pragma\s+GCC\s+system_header"
+    # Both compilers accept both spellings of the system-header pragma
+    # (a system-header TU suppresses warnings AND analyzer reports for
+    # the rest of the file) — enumerating only the GCC spelling let a
+    # clang-path TU open with `#pragma clang system_header` and earn a
+    # forged refutation from the resulting silence.
+    r"|#\s*pragma\s+(?:GCC|clang)\s+system_header"
+    # GNU linemarkers whose flag list carries 3 (`# 1 "x.h" 3`,
+    # preprocessed-output `# 1 "x.h" 1 3 4`) mark the region as a
+    # system header with no pragma anywhere — silencing warnings AND
+    # analyzer reports on both compiler paths (clang --analyze and
+    # gcc -fanalyzer). Plain renumbering (`#line 1 "x.h"`,
+    # `# 1 "x.c" 1`) carries no 3 flag and stays inert.
+    r"|#\s*(?:line\s+)?\d+\s+\"[^\"]*\"(?:\s+\d+)*?\s+3\b"
     r"|\b_Pragma\s*\("
-    r"|\b__clang_analyzer__\b",
+    r"|\b__clang_analyzer__\b"
+    # Analyzer-report suppression attributes ([[clang::suppress]],
+    # [[gsl::suppress(...)]], __attribute__((suppress))) — honoured by
+    # the clang static analyzer; silence under one is repo-steerable.
+    r"|\[\[\s*(?:clang|gsl)\s*::\s*suppress\b"
+    r"|__attribute__\s*\(\s*\(\s*suppress\b",
 )
 
 
