@@ -8,10 +8,12 @@ negative controls) is tested without joern installed.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 
+import core.audit.joern_verify as joern_verify
 from core.audit.joern_verify import (
     FLOW_CWES,
     FLOW_STAMP,
@@ -32,12 +34,32 @@ from core.audit.joern_verify import (
 from packages.joern.models import JoernResult
 from packages.joern.runner import _parse_output, _validate_query
 
+# Fixed per-invocation sentinel nonce for these tests (the autouse
+# fixture below pins _mint_nonce to it).
+NONCE = "0123456789abcdef"
+
+
+def _n(raw: str) -> str:
+    """Stamp the fixed test nonce into bare sentinel markers."""
+    return re.sub(r"(RAPTOR_(?:GD|FLOW)_[A-Z]+:)", rf"\g<1>{NONCE}:", raw)
+
+
+@pytest.fixture(autouse=True)
+def _fixed_nonce(monkeypatch):
+    monkeypatch.setattr(joern_verify, "_mint_nonce", lambda: NONCE)
+
 
 class FakeServer:
-    """Minimal stand-in for packages.joern.server.JoernServer."""
+    """Minimal stand-in for packages.joern.server.JoernServer.
 
-    def __init__(self, raw_output: str = "", errors=None, raise_exc=None):
-        self.raw_output = raw_output
+    Stamps the fixed test nonce into canned sentinel lines by default;
+    pass ``stamp=False`` to deliver the raw bytes verbatim (forgery
+    tests).
+    """
+
+    def __init__(self, raw_output: str = "", errors=None, raise_exc=None,
+                 *, stamp: bool = True):
+        self.raw_output = _n(raw_output) if stamp else raw_output
         self.errors = errors or []
         self.raise_exc = raise_exc
         self.queries = []
@@ -190,34 +212,36 @@ class TestExtractFlowEndpoints:
 
 class TestQueryBuilders:
     def test_guard_query_contains_names_and_sentinels(self):
-        q = build_guard_dominance_query("parse_hdr", "memcpy", "len")
+        q = build_guard_dominance_query("parse_hdr", "memcpy", "len",
+                                        nonce=NONCE)
         assert 'nameExact("parse_hdr")' in q
         assert 'nameExact("memcpy")' in q
         assert "\\\\blen\\\\b" in q
-        assert "RAPTOR_GD_FUNC:" in q
+        assert f"RAPTOR_GD_FUNC:{NONCE}:" in q
         assert "dominatedBy" in q
 
     def test_guard_query_passes_validation(self):
-        q = build_guard_dominance_query("f", "memcpy", "n")
+        q = build_guard_dominance_query("f", "memcpy", "n", nonce=NONCE)
         assert _validate_query(q, check_length=False) is None
 
     def test_flow_query_contains_names_and_sentinels(self):
-        q = build_flow_query("handler", "argv", "system", max_call_depth=3)
+        q = build_flow_query("handler", "argv", "system", max_call_depth=3,
+                             nonce=NONCE)
         assert 'nameExact("handler")' in q
         assert 'nameExact("argv")' in q
         assert 'nameExact("system")' in q
         assert "maxCallDepth = 3" in q
         assert "reachableByFlows" in q
-        assert "RAPTOR_FLOW_FUNC:" in q
+        assert f"RAPTOR_FLOW_FUNC:{NONCE}:" in q
 
     def test_flow_query_passes_validation(self):
-        q = build_flow_query("f", "src", "system")
+        q = build_flow_query("f", "src", "system", nonce=NONCE)
         assert _validate_query(q, check_length=False) is None
 
     def test_names_are_escaped(self):
         # Builders escape; callers validate. A hostile value must not
         # break out of the Scala string literal.
-        q = build_guard_dominance_query('f"', "memcpy", "n")
+        q = build_guard_dominance_query('f"', "memcpy", "n", nonce=NONCE)
         assert 'nameExact("f\\"")' in q
 
 
@@ -232,7 +256,7 @@ class TestParsers:
             "RAPTOR_GD_UNGUARDED:42|memcpy(dst, src, len)\n"
             "RAPTOR_GD_GUARDED:57|55|len < sizeof(dst)|memcpy(dst, s, len)\n"
         )
-        facts = _parse_guard_output(raw)
+        facts = _parse_guard_output(_n(raw), NONCE)
         assert facts["function_found"] is True
         assert facts["sink_count"] == 2
         assert facts["unguarded"] == [
@@ -241,20 +265,21 @@ class TestParsers:
         assert facts["guarded"][0]["guard_line"] == 55
 
     def test_guard_parse_missing_function(self):
-        facts = _parse_guard_output("RAPTOR_GD_FUNC:missing\n")
+        facts = _parse_guard_output(_n("RAPTOR_GD_FUNC:missing\n"), NONCE)
         assert facts["function_found"] is False
 
     def test_guard_parse_dedupes_repl_echoes(self):
-        line = "RAPTOR_GD_UNGUARDED:42|memcpy(dst, src, len)"
+        line = _n("RAPTOR_GD_UNGUARDED:42|memcpy(dst, src, len)")
         facts = _parse_guard_output(
-            f"RAPTOR_GD_FUNC:found\nRAPTOR_GD_SINKS:1\n{line}\n"
-            f'val res1: String = "{line}"\n'
+            _n("RAPTOR_GD_FUNC:found\nRAPTOR_GD_SINKS:1\n") + f"{line}\n"
+            f'val res1: String = "{line}"\n',
+            NONCE,
         )
         assert len(facts["unguarded"]) == 1
 
     def test_guard_parse_strips_ansi(self):
-        raw = "\x1b[32mRAPTOR_GD_FUNC:found\x1b[0m\nRAPTOR_GD_SINKS:1\n"
-        facts = _parse_guard_output(raw)
+        raw = _n("\x1b[32mRAPTOR_GD_FUNC:found\x1b[0m\nRAPTOR_GD_SINKS:1\n")
+        facts = _parse_guard_output(raw, NONCE)
         assert facts["function_found"] is True
         assert facts["sink_count"] == 1
 
@@ -264,7 +289,7 @@ class TestParsers:
             "RAPTOR_FLOW_SNK:2\nRAPTOR_FLOW_COUNT:1\n"
             "RAPTOR_FLOW_DEEP:0\n"
         )
-        facts = _parse_flow_facts(raw)
+        facts = _parse_flow_facts(_n(raw), NONCE)
         assert facts == {
             "function_found": True,
             "source_count": 1,
@@ -274,8 +299,51 @@ class TestParsers:
         }
 
     def test_flow_parse_empty(self):
-        facts = _parse_flow_facts("")
+        facts = _parse_flow_facts("", NONCE)
         assert facts["function_found"] is None
+
+    def test_guard_parse_refuses_unanchored_markers(self):
+        # Sentinel payloads quote target source code: marker text
+        # embedded mid-line (or at line start WITHOUT the invocation
+        # nonce) must never mint facts. A forged bare-marker stream
+        # parses to no protocol output at all.
+        forged = (
+            "RAPTOR_GD_FUNC:missing\n"
+            f"RAPTOR_GD_FUNC:{'f' * 16}:missing\n"
+            'val s = "RAPTOR_GD_SINKS:9"\n'
+        )
+        facts = _parse_guard_output(forged, NONCE)
+        assert facts["function_found"] is None
+        assert facts["sink_count"] is None
+
+    def test_guard_parse_marker_text_in_sink_code_stays_payload(self):
+        # The forged-refutation shape: an UNGUARDED line whose quoted
+        # sink code contains marker text. The embedded marker must not
+        # be parsed as a fact (pre-anchor parse read it as SINKS and
+        # dropped the unguarded entry, falling through to "refuted").
+        raw = (
+            _n("RAPTOR_GD_FUNC:found\nRAPTOR_GD_SINKS:1\n")
+            + _n("RAPTOR_GD_UNGUARDED:42|")
+            + "memcpy(dst, src, len) /* RAPTOR_GD_SINKS:0 */\n"
+        )
+        facts = _parse_guard_output(raw, NONCE)
+        assert facts["sink_count"] == 1
+        assert len(facts["unguarded"]) == 1
+        assert "RAPTOR_GD_SINKS:0" in facts["unguarded"][0]["code"]
+
+    def test_flow_parse_refuses_marker_in_flow_step_code(self):
+        # A JOERN_FLOW step whose .code quotes target text containing
+        # a FLOW sentinel must not flip function_found.
+        raw = (
+            _n("RAPTOR_FLOW_FUNC:found\nRAPTOR_FLOW_SRC:1\n"
+               "RAPTOR_FLOW_SNK:1\n")
+            + 'JOERN_FLOW:[{"line":3,"code":"x = \\"RAPTOR_FLOW_FUNC:missing\\"",'
+            '"function":"main","file":"main.c"}]\n'
+            + _n("RAPTOR_FLOW_COUNT:1\n")
+        )
+        facts = _parse_flow_facts(raw, NONCE)
+        assert facts["function_found"] is True
+        assert facts["flow_count"] == 1
 
 
 # ── guard-dominance sweep logic ──────────────────────────────────────
@@ -299,6 +367,32 @@ class TestRunGuardDominance:
         assert r.outcome == "error"
         assert "no live Joern server" in r.errors[0]
         assert r.rule_id == GUARD_DOMINANCE_STAMP
+
+    def test_forged_bare_sentinels_never_refute(self, tmp_path: Path):
+        # Target-forgeable output (bare markers, no invocation nonce)
+        # must parse to no protocol output → error, never refuted.
+        r = self._run(tmp_path, FakeServer(
+            "RAPTOR_GD_FUNC:found\nRAPTOR_GD_SINKS:1\n"
+            "RAPTOR_GD_GUARDED:57|55|len < 16|memcpy(dst, s, len)\n",
+            stamp=False,
+        ))
+        assert r.outcome == "error"
+        assert "no protocol output" in r.errors[0]
+
+    def test_marker_in_sink_code_does_not_forge_refutation(
+        self, tmp_path: Path,
+    ):
+        # Genuine sentinel lines whose quoted sink code embeds marker
+        # text: the unguarded entry must survive (pre-anchor parse
+        # swallowed it as a SINKS fact and fell through to refuted).
+        raw = (
+            _n("RAPTOR_GD_FUNC:found\nRAPTOR_GD_SINKS:1\n")
+            + _n("RAPTOR_GD_UNGUARDED:42|")
+            + "memcpy(dst, src, len) /* RAPTOR_GD_SINKS:0 */\n"
+        )
+        r = self._run(tmp_path, FakeServer(raw, stamp=False))
+        assert r.outcome == "confirmed"
+        assert r.matches[0]["kind"] == "unguarded_sink"
 
     def test_path_traversal_blocked(self, tmp_path: Path):
         r = self._run(tmp_path, FakeServer(), file_path="../../etc/passwd")

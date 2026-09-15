@@ -20,11 +20,13 @@ _CHAIN = f'.replace("{_BS * 2}", "{_BS * 4}")'
 
 class TestFlowQueryJsonEscaping:
     def test_embeds_canonical_json_esc_definition(self):
-        q = build_flow_query("handler", "argv", "system")
+        q = build_flow_query("handler", "argv", "system",
+                             nonce="0123456789abcdef")
         assert SCALA_JSON_ESC_DEF in q
 
     def test_every_json_field_routed_through_json_esc(self):
-        q = build_flow_query("handler", "argv", "system")
+        q = build_flow_query("handler", "argv", "system",
+                             nonce="0123456789abcdef")
         # .take(200) on the RAW code BEFORE jsonEsc — escape-then-
         # truncate can bisect an injected \" leaving a dangling
         # backslash.
@@ -33,10 +35,12 @@ class TestFlowQueryJsonEscaping:
         assert "val flEsc = jsonEsc(fl)" in q
 
     def test_single_escape_authority(self):
-        q = build_flow_query("handler", "argv", "system")
+        q = build_flow_query("handler", "argv", "system",
+                             nonce="0123456789abcdef")
         # Exactly one chain — the one inside the jsonEsc definition.
         assert q.count(_CHAIN) == 1
 
     def test_still_passes_query_validation(self):
-        q = build_flow_query("handler", "argv", "system")
+        q = build_flow_query("handler", "argv", "system",
+                             nonce="0123456789abcdef")
         assert _validate_query(q, check_length=False) is None

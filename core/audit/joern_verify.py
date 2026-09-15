@@ -35,6 +35,7 @@ Evidence stamps are namespaced ``joern:guard-dominance`` /
 from __future__ import annotations
 
 import logging
+import os
 import re
 from typing import Any, TYPE_CHECKING
 
@@ -117,6 +118,15 @@ _DEFAULT_QUERY_TIMEOUT_S = 300
 
 # Output-protocol sentinels (kept distinct from packages/joern's
 # JOERN_FLOW / JOERN_DARK markers, which the server parser also reads).
+# Each query invocation stamps a fresh random nonce after the marker
+# (``RAPTOR_GD_FUNC:<nonce>:payload``) and the parsers accept only
+# lines that START with the nonce'd marker.  The sentinel payloads
+# quote target source code (``s.code``), so an unanchored / un-nonce'd
+# parse lets a scanned repo forge facts by simply containing the
+# marker text in a string or comment near a sink — minting refutations
+# or suppressing confirmations.  The nonce is minted per invocation
+# (the merge_fence record_nonce pattern), so target bytes present in
+# the CPG at scan time cannot predict it.
 _GD_FUNC = "RAPTOR_GD_FUNC:"
 _GD_SINKS = "RAPTOR_GD_SINKS:"
 _GD_UNGUARDED = "RAPTOR_GD_UNGUARDED:"
@@ -129,6 +139,16 @@ _FLOW_COUNT = "RAPTOR_FLOW_COUNT:"
 # BEYOND the engine's maxCallDepth — the depth-bound witness for the
 # refutation lane. -1 = probe failed (Try fallback).
 _FLOW_DEEP = "RAPTOR_FLOW_DEEP:"
+
+
+def _mint_nonce() -> str:
+    """Fresh per-invocation sentinel nonce (hex — Scala-string-safe)."""
+    return os.urandom(8).hex()
+
+
+def _anchored(marker: str, nonce: str) -> str:
+    """The full line prefix a genuine sentinel line carries."""
+    return f"{marker}{nonce}:"
 
 
 def normalize_cwe(cwe: str) -> str:
@@ -356,29 +376,38 @@ def build_guard_dominance_query(
     function_name: str,
     sink_call: str,
     identifier: str,
+    *,
+    nonce: str,
 ) -> str:
     r"""CPGQL: does a condition on *identifier* dominate each *sink_call*?
 
-    Emits one ``RAPTOR_GD_*`` sentinel line per fact; parsed by
-    :func:`_parse_guard_output`.  All three inputs must already have
-    passed identifier validation (bare identifiers are regex-safe, so
-    the ``\b<ident>\b`` interpolation cannot change the regex shape).
+    Emits one ``RAPTOR_GD_*`` sentinel line per fact, each stamped
+    with the caller's per-invocation *nonce*; parsed by
+    :func:`_parse_guard_output` with the same nonce (anchored parse —
+    marker text inside quoted target code cannot mint facts).  All
+    three name inputs must already have passed identifier validation
+    (bare identifiers are regex-safe, so the ``\b<ident>\b``
+    interpolation cannot change the regex shape).
     """
     fn = _escape(function_name)
     sink = _escape(sink_call)
     ident = _escape(identifier)
+    gd_func = _anchored(_GD_FUNC, nonce)
+    gd_sinks = _anchored(_GD_SINKS, nonce)
+    gd_unguarded = _anchored(_GD_UNGUARDED, nonce)
+    gd_guarded = _anchored(_GD_GUARDED, nonce)
     ident_pat = f"(?s).*\\\\b{ident}\\\\b.*"
     return (
         'import io.shiftleft.semanticcpg.language._\n'
         f'val raptorFn = cpg.method.nameExact("{fn}").l\n'
         'if (raptorFn.isEmpty) {\n'
-        f'  println("{_GD_FUNC}missing")\n'
+        f'  println("{gd_func}missing")\n'
         '} else {\n'
-        f'  println("{_GD_FUNC}found")\n'
+        f'  println("{gd_func}found")\n'
         '  val raptorSinks = raptorFn.flatMap(\n'
         f'    _.call.nameExact("{sink}")'
         f'.where(_.argument.code("{ident_pat}")).l)\n'
-        f'  println("{_GD_SINKS}" + raptorSinks.size)\n'
+        f'  println("{gd_sinks}" + raptorSinks.size)\n'
         '  val raptorConds = raptorFn.flatMap(\n'
         f'    _.controlStructure.condition.code("{ident_pat}").l)\n'
         '  raptorSinks.foreach { s =>\n'
@@ -387,13 +416,13 @@ def build_guard_dominance_query(
         '    val sCode = s.code.take(200)'
         '.replace("\\n", " ").replace("|", "/")\n'
         '    if (guards.isEmpty) {\n'
-        f'      println("{_GD_UNGUARDED}" + '
+        f'      println("{gd_unguarded}" + '
         's.lineNumber.getOrElse(0) + "|" + sCode)\n'
         '    } else {\n'
         '      val g = guards.head\n'
         '      val gCode = g.code.take(200)'
         '.replace("\\n", " ").replace("|", "/")\n'
-        f'      println("{_GD_GUARDED}" + '
+        f'      println("{gd_guarded}" + '
         's.lineNumber.getOrElse(0) + "|" + '
         'g.lineNumber.getOrElse(0) + "|" + gCode + "|" + sCode)\n'
         '    }\n'
@@ -408,21 +437,28 @@ def build_flow_query(
     sink_call: str,
     *,
     max_call_depth: int = 2,
+    nonce: str,
 ) -> str:
     """CPGQL: reachableByFlows from *source_id* to *sink_call* args.
 
     Scoped to *function_name*.  Sources are the parameter(s) and
     identifier occurrences named *source_id* inside the function;
     sinks are the arguments of calls to *sink_call* inside the same
-    function.  Emits ``RAPTOR_FLOW_*`` sentinels plus standard
-    ``JOERN_FLOW:`` lines (the server's parser turns those into
-    :class:`packages.joern.models.TaintFlow` objects for us).
+    function.  Emits ``RAPTOR_FLOW_*`` sentinels (stamped with the
+    caller's per-invocation *nonce* — see :func:`_parse_flow_facts`)
+    plus standard ``JOERN_FLOW:`` lines (the server's parser turns
+    those into :class:`packages.joern.models.TaintFlow` objects for
+    us).
     """
     from packages.joern.runner import SCALA_JSON_ESC_DEF
 
     fn = _escape(function_name)
     src = _escape(source_id)
     sink = _escape(sink_call)
+    flow_func = _anchored(_FLOW_FUNC, nonce)
+    flow_src = _anchored(_FLOW_SRC, nonce)
+    flow_snk = _anchored(_FLOW_SNK, nonce)
+    flow_count = _anchored(_FLOW_COUNT, nonce)
     meth = f'cpg.method.nameExact("{fn}")'
     # jsonEsc (the shared Scala helper) escapes every value that lands
     # in a JSON-string position; .take(200) truncates the RAW string
@@ -458,15 +494,15 @@ def build_flow_query(
         f'config = EngineConfig(maxCallDepth = {int(max_call_depth)}))\n'
         f'val raptorFn = {meth}.l\n'
         'if (raptorFn.isEmpty) {\n'
-        f'  println("{_FLOW_FUNC}missing")\n'
+        f'  println("{flow_func}missing")\n'
         '} else {\n'
-        f'  println("{_FLOW_FUNC}found")\n'
+        f'  println("{flow_func}found")\n'
         f'  val raptorSrcCount = {meth}.parameter.nameExact("{src}").size + '
         f'{meth}.ast.isIdentifier.nameExact("{src}").size\n'
-        f'  println("{_FLOW_SRC}" + raptorSrcCount)\n'
+        f'  println("{flow_src}" + raptorSrcCount)\n'
         f'  val raptorSnkCount = '
         f'{meth}.call.nameExact("{sink}").argument.size\n'
-        f'  println("{_FLOW_SNK}" + raptorSnkCount)\n'
+        f'  println("{flow_snk}" + raptorSnkCount)\n'
         '  val raptorSources = ('
         f'{meth}.parameter.nameExact("{src}") ++ '
         f'{meth}.ast.isIdentifier.nameExact("{src}")'
@@ -476,13 +512,13 @@ def build_flow_query(
         '  val raptorFlows = '
         'raptorSinkArgs.reachableByFlows(raptorSources).take(20).l\n'
         f'{flow_print}'
-        f'  println("{_FLOW_COUNT}" + raptorFlows.size)\n'
-        f'{_depth_probe_scala(int(max_call_depth))}'
+        f'  println("{flow_count}" + raptorFlows.size)\n'
+        f'{_depth_probe_scala(int(max_call_depth), nonce=nonce)}'
         '}\n'
     )
 
 
-def _depth_probe_scala(max_call_depth: int) -> str:
+def _depth_probe_scala(max_call_depth: int, *, nonce: str) -> str:
     """Scala for the depth-bound witness: count internal methods one
     call level beyond the engine's ``maxCallDepth`` horizon.
 
@@ -507,7 +543,7 @@ def _depth_probe_scala(max_call_depth: int) -> str:
         + ("    " + hop) * max_call_depth
         + "    raptorLvl.size\n"
         "  }.getOrElse(-1)\n"
-        f'  println("{_FLOW_DEEP}" + raptorDeepCount)\n'
+        f'  println("{_anchored(_FLOW_DEEP, nonce)}" + raptorDeepCount)\n'
     )
 
 
@@ -522,43 +558,50 @@ def _sentinel_lines(raw: str) -> list[str]:
     return lines
 
 
-def _parse_guard_output(raw: str) -> dict[str, Any]:
-    """Parse RAPTOR_GD_* sentinels into a fact dict."""
+def _parse_guard_output(raw: str, nonce: str) -> dict[str, Any]:
+    """Parse RAPTOR_GD_* sentinels into a fact dict.
+
+    Anchored parse: a line contributes a fact only when it STARTS with
+    the nonce'd marker the query was built with.  Sentinel payloads
+    quote target source code, so a substring scan would let the
+    scanned repo forge facts (mint refutations / flip
+    ``function_found``) by containing marker text near a sink.
+    """
     facts: dict[str, Any] = {
         "function_found": None,
         "sink_count": None,
         "unguarded": [],
         "guarded": [],
     }
+    gd_func = _anchored(_GD_FUNC, nonce)
+    gd_sinks = _anchored(_GD_SINKS, nonce)
+    gd_unguarded = _anchored(_GD_UNGUARDED, nonce)
+    gd_guarded = _anchored(_GD_GUARDED, nonce)
     for line in _sentinel_lines(raw):
-        idx = line.find(_GD_FUNC)
-        if idx >= 0:
-            val = line[idx + len(_GD_FUNC):].strip()
+        if line.startswith(gd_func):
+            val = line[len(gd_func):].strip()
             if val.startswith("found"):
                 facts["function_found"] = True
             elif val.startswith("missing"):
                 facts["function_found"] = False
             continue
-        idx = line.find(_GD_SINKS)
-        if idx >= 0:
+        if line.startswith(gd_sinks):
             try:
                 facts["sink_count"] = int(
-                    line[idx + len(_GD_SINKS):].split("|")[0].strip().strip('"')
+                    line[len(gd_sinks):].split("|")[0].strip().strip('"')
                 )
             except ValueError:
                 pass
             continue
-        idx = line.find(_GD_UNGUARDED)
-        if idx >= 0:
-            parts = line[idx + len(_GD_UNGUARDED):].split("|")
+        if line.startswith(gd_unguarded):
+            parts = line[len(gd_unguarded):].split("|")
             entry = {"line": _to_int(parts[0]),
                      "code": parts[1].strip().strip('"') if len(parts) > 1 else ""}
             if entry not in facts["unguarded"]:
                 facts["unguarded"].append(entry)
             continue
-        idx = line.find(_GD_GUARDED)
-        if idx >= 0:
-            parts = line[idx + len(_GD_GUARDED):].split("|")
+        if line.startswith(gd_guarded):
+            parts = line[len(gd_guarded):].split("|")
             entry = {
                 "sink_line": _to_int(parts[0]),
                 "guard_line": _to_int(parts[1]) if len(parts) > 1 else 0,
@@ -570,8 +613,14 @@ def _parse_guard_output(raw: str) -> dict[str, Any]:
     return facts
 
 
-def _parse_flow_facts(raw: str) -> dict[str, Any]:
-    """Parse RAPTOR_FLOW_* sentinels into a fact dict."""
+def _parse_flow_facts(raw: str, nonce: str) -> dict[str, Any]:
+    """Parse RAPTOR_FLOW_* sentinels into a fact dict.
+
+    Anchored parse (see :func:`_parse_guard_output`): JOERN_FLOW step
+    payloads quote target source code, so a substring scan over the
+    same stream would let the scanned repo flip ``function_found`` or
+    forge counts.
+    """
     facts: dict[str, Any] = {
         "function_found": None,
         "source_count": None,
@@ -579,10 +628,10 @@ def _parse_flow_facts(raw: str) -> dict[str, Any]:
         "flow_count": None,
         "deep_callee_count": None,
     }
+    flow_func = _anchored(_FLOW_FUNC, nonce)
     for line in _sentinel_lines(raw):
-        idx = line.find(_FLOW_FUNC)
-        if idx >= 0:
-            val = line[idx + len(_FLOW_FUNC):].strip()
+        if line.startswith(flow_func):
+            val = line[len(flow_func):].strip()
             if val.startswith("found"):
                 facts["function_found"] = True
             elif val.startswith("missing"):
@@ -594,11 +643,11 @@ def _parse_flow_facts(raw: str) -> dict[str, Any]:
             (_FLOW_COUNT, "flow_count"),
             (_FLOW_DEEP, "deep_callee_count"),
         ):
-            idx = line.find(marker)
-            if idx >= 0:
+            anchored = _anchored(marker, nonce)
+            if line.startswith(anchored):
                 try:
                     facts[key] = int(
-                        line[idx + len(marker):].split("|")[0].strip().strip('"')
+                        line[len(anchored):].split("|")[0].strip().strip('"')
                     )
                 except ValueError:
                     pass
@@ -732,7 +781,10 @@ def run_guard_dominance_check(
     if timeout is None:
         timeout = default_query_timeout()
 
-    query = build_guard_dominance_query(function_name, sink_bare, identifier)
+    nonce = _mint_nonce()
+    query = build_guard_dominance_query(
+        function_name, sink_bare, identifier, nonce=nonce,
+    )
     try:
         result = server.query(query, timeout=timeout, check_length=False)
     except Exception as exc:  # noqa: BLE001 — degrade to outcome=error, never crash
@@ -749,7 +801,7 @@ def run_guard_dominance_check(
             raw_output=(result.raw_output or "")[:2000],
         )
 
-    facts = _parse_guard_output(result.raw_output or "")
+    facts = _parse_guard_output(result.raw_output or "", nonce)
 
     if facts["function_found"] is None:
         return _error(
@@ -864,9 +916,10 @@ def run_flow_reachability_check(
     if timeout is None:
         timeout = default_query_timeout()
 
+    nonce = _mint_nonce()
     query = build_flow_query(
         function_name, source_id, sink_bare,
-        max_call_depth=max_call_depth,
+        max_call_depth=max_call_depth, nonce=nonce,
     )
     try:
         result = server.query(query, timeout=timeout, check_length=False)
@@ -884,7 +937,7 @@ def run_flow_reachability_check(
             raw_output=(result.raw_output or "")[:2000],
         )
 
-    facts = _parse_flow_facts(result.raw_output or "")
+    facts = _parse_flow_facts(result.raw_output or "", nonce)
 
     if facts["function_found"] is None:
         return _error(
