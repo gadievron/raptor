@@ -52,6 +52,8 @@ from .library import (
     _REPLAY_TP_THRESHOLD,
     LibraryEntry,
     RuleLibrary,
+    graduated_stem,
+    rule_join_key,
 )
 from .models import Match
 
@@ -303,7 +305,7 @@ def _sweep_cocci_rule(
 def _record(
     lib: RuleLibrary,
     report: SweepReport,
-    rule_id: str,
+    entry: LibraryEntry,
     target: Path,
     matches: list[SweepMatch],
     timestamp: str,
@@ -330,14 +332,14 @@ def _record(
     not coverage, and discarding real hits over one fatal per-file
     failure silently cost every variant hit on large targets.
     """
-    entry = lib.update(
-        rule_id,
+    updated = lib.update(
+        rule_join_key(entry),
         _target_hash(target),
         [Match(file=m.file, line=m.line) for m in matches],
         [],
         timestamp=timestamp,
     )
-    if entry is not None:
+    if updated is not None:
         report.recorded_updates += 1
 
 
@@ -393,17 +395,38 @@ def run_sweep(
         if engine_rules_dir is not None else ([], [])
     )
     report.rules_graduated = len(graduated_semgrep) + len(graduated_cocci)
-    library_rule_ids = {e.rule_id for e in lib.all_entries()}
+    # Graduated files are named with graduated_stem(entry.rule_id) —
+    # every join from a file stem back to the library goes through the
+    # same constructor. Comparing stems against raw rule_ids silently
+    # never matched ids that sanitisation changed, double-sweeping the
+    # rule and recording no coverage for it. Stems shared by several
+    # entries are ambiguous: resolve to None (no record, one warning)
+    # rather than first-entry-wins.
+    stem_to_entries: dict[str, list[LibraryEntry]] = {}
+    for e in lib.all_entries():
+        stem_to_entries.setdefault(graduated_stem(e.rule_id), []).append(e)
+
+    def _entry_for_stem(stem: str) -> "LibraryEntry | None":
+        candidates = stem_to_entries.get(stem, [])
+        if len(candidates) > 1:
+            logger.warning(
+                "variant-sweep: graduated stem %r matches %d library "
+                "entries — skipping coverage recording for it",
+                stem, len(candidates),
+            )
+            return None
+        return candidates[0] if candidates else None
+
     # Rules present BOTH as replayable library entries and as
     # graduated files (the normal case — graduation copies FROM the
     # library) run once, in the library loop. Sweeping the graduated
     # copy again duplicated every match in the report and, with
     # record=True, double-incremented total_matches via a second
     # lib.update on the same target.
-    swept_library_ids = (
-        {e.rule_id for e in semgrep_entries}
-        | {e.rule_id for e in cocci_entries}
-    )
+    swept_library_stems = {
+        graduated_stem(e.rule_id)
+        for e in (*semgrep_entries, *cocci_entries)
+    }
 
     for target in targets:
         target = Path(target)
@@ -436,8 +459,7 @@ def run_sweep(
             if record and not errored:
                 # Errored runs are never coverage evidence — the
                 # failure is on report.errors, matches flow above.
-                _record(lib, report, entry.rule_id, target, matches,
-                        timestamp)
+                _record(lib, report, entry, target, matches, timestamp)
 
         if run_cocci:
             for entry in cocci_entries:
@@ -457,17 +479,13 @@ def run_sweep(
                 )
                 report.matches.extend(matches)
                 if record and not errored:
-                    _record(lib, report, entry.rule_id, target, matches,
-                            timestamp)
+                    _record(lib, report, entry, target, matches, timestamp)
 
         for rule_file in graduated_semgrep:
             rule_id = rule_file.stem
-            if rule_id in swept_library_ids:
+            if rule_id in swept_library_stems:
                 continue  # already ran as a library entry on this target
-            entry = next(
-                (e for e in lib.all_entries() if e.rule_id == rule_id),
-                None,
-            )
+            entry = _entry_for_stem(rule_id)
             matches, errored = _sweep_semgrep_rule(
                 report, target, rule_file,
                 rule_id=rule_id,
@@ -478,18 +496,15 @@ def run_sweep(
                 targets_tested=len(entry.targets) if entry else 0,
             )
             report.matches.extend(matches)
-            if record and not errored and rule_id in library_rule_ids:
-                _record(lib, report, rule_id, target, matches, timestamp)
+            if record and not errored and entry is not None:
+                _record(lib, report, entry, target, matches, timestamp)
 
         if target_is_c:
             for rule_file in graduated_cocci:
                 rule_id = rule_file.stem
-                if rule_id in swept_library_ids:
+                if rule_id in swept_library_stems:
                     continue
-                entry = next(
-                    (e for e in lib.all_entries() if e.rule_id == rule_id),
-                    None,
-                )
+                entry = _entry_for_stem(rule_id)
                 matches, errored = _sweep_cocci_rule(
                     report, target, rule_file,
                     rule_id=rule_id,
@@ -500,8 +515,8 @@ def run_sweep(
                     tier="graduated",
                 )
                 report.matches.extend(matches)
-                if record and not errored and rule_id in library_rule_ids:
-                    _record(lib, report, rule_id, target, matches, timestamp)
+                if record and not errored and entry is not None:
+                    _record(lib, report, entry, target, matches, timestamp)
 
     return report
 

@@ -513,3 +513,65 @@ class TestOutput:
         assert report.matches == []
         assert report.errors == ["semgrep sg @ %s: sandbox unavailable"
                                  % target]
+
+
+class TestGraduatedStemJoin:
+    """Graduated file stems are SANITISED rule ids — the sweep's joins
+    back to the library must compare through graduated_stem, or an
+    unsafe original id double-sweeps and never accrues coverage."""
+
+    def test_unsafe_id_graduated_twin_runs_once(self, tmp_path, monkeypatch):
+        lib_dir = _write_library(tmp_path, [_manifest_entry("weird id")])
+        engine_rules = tmp_path / "engine-rules"
+        (engine_rules / "semgrep" / "rules").mkdir(parents=True)
+        # graduate() names the file with the sanitised stem.
+        from packages.checker_synthesis.library import graduated_stem
+        stem = graduated_stem("weird id")
+        assert stem != "weird id"
+        (engine_rules / "semgrep" / "rules" / f"{stem}.yaml").write_text(
+            "rules: []\n",
+        )
+        target = tmp_path / "t"
+        target.mkdir()
+        monkeypatch.setattr(
+            rs.semgrep_runner, "run_rule",
+            lambda *a, **k: _semgrep_result(1, rule_id="weird id"),
+        )
+        report = rs.run_sweep(
+            [target], library_dir=lib_dir,
+            engine_rules_dir=engine_rules, record=False,
+        )
+        assert sorted(m.provenance for m in report.matches) == [
+            "rule-library",
+        ]
+
+    def test_unsafe_id_graduated_only_rule_records_coverage(
+        self, tmp_path, monkeypatch,
+    ):
+        # Non-replayable entry (sweep_once tier): only its graduated
+        # copy runs — coverage must still land on the library entry.
+        lib_dir = _write_library(
+            tmp_path,
+            [_manifest_entry("weird id", dual_control=False,
+                             rule_tier="sweep_once")],
+        )
+        engine_rules = tmp_path / "engine-rules"
+        (engine_rules / "semgrep" / "rules").mkdir(parents=True)
+        from packages.checker_synthesis.library import graduated_stem
+        stem = graduated_stem("weird id")
+        (engine_rules / "semgrep" / "rules" / f"{stem}.yaml").write_text(
+            "rules: []\n",
+        )
+        target = tmp_path / "t"
+        target.mkdir()
+        monkeypatch.setattr(
+            rs.semgrep_runner, "run_rule",
+            lambda *a, **k: _semgrep_result(2, rule_id=stem),
+        )
+        report = rs.run_sweep(
+            [target], library_dir=lib_dir,
+            engine_rules_dir=engine_rules, record=True,
+        )
+        assert report.recorded_updates == 1
+        entry = RuleLibrary(lib_dir).all_entries()[0]
+        assert any(t.matches == 2 for t in entry.targets)

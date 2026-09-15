@@ -229,10 +229,15 @@ def _try_replay_from_library(
         # path as passed minted a SECOND TargetRecord for the same
         # physical target whenever repo_root arrived non-canonical,
         # inflating len(entry.targets) and targets_tested.
+        from packages.checker_synthesis.library import rule_join_key
         from packages.checker_synthesis.replay_sweep import target_hash_for
         target_hash = target_hash_for(Path(repo_root))
+        # Key on the entry's identity (body hash), not its rule_id —
+        # rule ids are documented-non-unique, and an id-keyed update
+        # recorded THIS entry's replay verdicts onto whichever entry
+        # happened to be first in the manifest.
         lib.update(
-            entry.rule_id, target_hash, variants, triage_list,
+            rule_join_key(entry), target_hash, variants, triage_list,
         )
 
         result = CheckerSynthesisResult(seed=seed)

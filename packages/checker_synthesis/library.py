@@ -242,6 +242,33 @@ class LibraryEntry:
         )
 
 
+def rule_join_key(entry: LibraryEntry) -> str:
+    """THE mutation-API join key for a library entry — its body hash.
+
+    ``rule_id`` is documented-non-unique: two different bodies can
+    legitimately share a rule id (same seed re-synthesised across runs
+    or CVEs, and the cve_bridge's empty-function seeds all slug to the
+    same id). ``body_hash`` is the store's actual identity — promote()
+    dedups by it. Callers that hold a ``LibraryEntry`` must key
+    ``update()`` through this constructor; keying on the raw rule_id
+    resolved the FIRST manifest entry and recorded one rule's replay
+    verdicts, targets and coverage onto a different rule's precision.
+    """
+    return entry.body_hash
+
+
+def graduated_stem(rule_id: str) -> str:
+    """THE file-stem join key for graduated rule copies.
+
+    ``graduate()`` names the engine-rules file with this sanitised
+    stem, and every consumer that joins a graduated file or finding
+    back to the library (sweep dedup, precision feedback) must compare
+    stems through the same constructor — comparing a stem against the
+    raw rule_id silently never matches ids that sanitisation changed.
+    """
+    return _safe_component(rule_id, what="rule id")
+
+
 def _compute_rates(
     triage: list[MatchTriage],
 ) -> tuple[float, float, int, int]:
@@ -577,13 +604,20 @@ class RuleLibrary:
 
     def update(
         self,
-        rule_id: str,
+        key: str,
         target_hash: str,
         matches: list[Match],
         triage: list[MatchTriage],
         timestamp: str = "",
     ) -> LibraryEntry | None:
         """Update effectiveness after replaying a library rule.
+
+        *key* is :func:`rule_join_key` (the entry's body hash) —
+        callers replaying a specific entry always hold it. A raw
+        rule_id is still resolved while it is UNAMBIGUOUS; a rule_id
+        shared by several entries is refused (None + warning) rather
+        than resolved first-entry-wins, which recorded one rule's
+        verdicts and targets onto a different rule's precision.
 
         Locked like promote/add_rule/record_match: this is a
         read-modify-write over shared entry state, and an unlocked
@@ -594,7 +628,18 @@ class RuleLibrary:
         """
         with self._lock:
             entries = self._load()
-            entry = next((e for e in entries if e.rule_id == rule_id), None)
+            entry = next((e for e in entries if e.body_hash == key), None)
+            if entry is None:
+                by_id = [e for e in entries if e.rule_id == key]
+                if len(by_id) > 1:
+                    logger.warning(
+                        "rule library: update(%r) is ambiguous — %d "
+                        "entries share the rule id; pass "
+                        "rule_join_key(entry) instead. Nothing recorded.",
+                        key, len(by_id),
+                    )
+                    return None
+                entry = by_id[0] if by_id else None
             if entry is None:
                 return None
 
@@ -757,10 +802,29 @@ class RuleLibrary:
         count by ``total_matches`` instead (which also counts untriaged
         sweep hits) let a single true-positive report collapse a proven
         rule's tp_rate below the replay and retirement thresholds.
+
+        Callers only ever hold a rule_id here — usually the graduated
+        FILE STEM (``synthesized:<stem>`` findings), so the join also
+        accepts :func:`graduated_stem` spellings. A rule_id/stem shared
+        by several entries is refused with a warning: feedback about an
+        unidentifiable rule must not move a different rule's precision
+        toward retirement or replay.
         """
         with self._lock:
             entries = self._load()
-            entry = next((e for e in entries if e.rule_id == rule_id), None)
+            matched = [
+                e for e in entries
+                if e.rule_id == rule_id
+                or graduated_stem(e.rule_id) == rule_id
+            ]
+            if len(matched) > 1:
+                logger.warning(
+                    "rule library: record_match(%r) is ambiguous — %d "
+                    "entries share the rule id/stem. Nothing recorded.",
+                    rule_id, len(matched),
+                )
+                return
+            entry = matched[0] if matched else None
             if entry is None:
                 return
             entry.total_matches += 1
@@ -849,8 +913,10 @@ class RuleLibrary:
             # rule_id / engine come from the persisted manifest, which
             # is not re-validated on load — confine them to single
             # path components and require the final destination to
-            # stay inside the engine rules dir before writing.
-            rule_id = _safe_component(entry.rule_id, what="rule id")
+            # stay inside the engine rules dir before writing. The
+            # stem constructor is the join contract: sweep dedup and
+            # record_match resolve graduated files back through it.
+            rule_id = graduated_stem(entry.rule_id)
             engine = _safe_component(entry.engine, what="engine")
             if entry.engine == "semgrep":
                 dest = engine_rules_dir / "semgrep" / "rules" / f"{rule_id}.yaml"

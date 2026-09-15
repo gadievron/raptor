@@ -25,6 +25,7 @@ from packages.checker_synthesis.library import (  # noqa: E402  (import after sy
     RuleLibrary,
     _body_hash,
     _compute_rates,
+    rule_join_key,
 )
 from packages.checker_synthesis.models import (  # noqa: E402  (import after sys.path setup)
     CheckerSynthesisResult,
@@ -1230,3 +1231,82 @@ class TestRecordMatchFeedback:
         lib.update("r1", "t3", replay_matches, replay_triage)
         entry = lib.all_entries()[0]
         assert entry.tp_rate == pytest.approx(4 / 5)
+
+
+class TestNonUniqueRuleIdJoin:
+    """Mutation APIs must never resolve a shared rule_id
+    first-entry-wins: replay verdicts, sweep coverage and precision
+    feedback recorded onto a DIFFERENT rule body drive that rule
+    toward retirement/graduation off evidence about another rule.
+    Entries are produced through the real producer (promote), which
+    documents that two bodies can legitimately share a rule id.
+    """
+
+    @staticmethod
+    def _colliding_library(tmp_path):
+        lib = RuleLibrary(tmp_path / "lib")
+        lib.promote(_result(matches=3), target_hash="t1")
+        res_b = _result(matches=3)
+        res_b.rule = SynthesisedRule(
+            engine="semgrep",
+            rule_id="r1",  # same id...
+            body="rules:\n  - id: r1\n    pattern: $DB.exec_two($Q)\n",
+            rationale="re-synthesised body for the same seed",
+        )
+        lib.promote(res_b, target_hash="t2")
+        entries = lib.all_entries()
+        assert [e.rule_id for e in entries] == ["r1", "r1"]
+        assert entries[0].body_hash != entries[1].body_hash
+        return lib
+
+    def test_update_by_join_key_hits_only_that_entry(self, tmp_path):
+        lib = self._colliding_library(tmp_path)
+        first, second = lib.all_entries()
+        first_targets = {t.target_hash for t in first.targets}
+
+        updated = lib.update(
+            rule_join_key(second), "t9",
+            [Match(file="v.py", line=1)],
+            [MatchTriage(match=Match(file="v.py", line=1),
+                         status="false_positive", reasoning="t")],
+        )
+        assert updated is not None
+        assert updated.body_hash == second.body_hash
+
+        reloaded_first, reloaded_second = RuleLibrary(
+            tmp_path / "lib").all_entries()
+        # The first entry's precision and targets are untouched.
+        assert {t.target_hash for t in reloaded_first.targets} == first_targets
+        assert reloaded_first.tp_rate == first.tp_rate
+        assert "t9" in {t.target_hash for t in reloaded_second.targets}
+
+    def test_update_by_shared_rule_id_refused(self, tmp_path):
+        lib = self._colliding_library(tmp_path)
+        before = [(e.body_hash, e.tp_rate, len(e.targets))
+                  for e in lib.all_entries()]
+        assert lib.update("r1", "t9", [Match(file="v.py", line=1)], []) is None
+        after = [(e.body_hash, e.tp_rate, len(e.targets))
+                 for e in RuleLibrary(tmp_path / "lib").all_entries()]
+        assert after == before
+
+    def test_record_match_shared_rule_id_refused(self, tmp_path):
+        lib = self._colliding_library(tmp_path)
+        before = [(e.tp_rate, e.feedback_classified)
+                  for e in lib.all_entries()]
+        lib.record_match("r1", is_tp=False)
+        after = [(e.tp_rate, e.feedback_classified)
+                 for e in RuleLibrary(tmp_path / "lib").all_entries()]
+        assert after == before
+
+    def test_record_match_joins_graduated_stem(self, tmp_path):
+        # Graduated findings carry the sanitised FILE STEM, not the
+        # raw rule id — feedback must still land on the entry.
+        from packages.checker_synthesis.library import graduated_stem
+
+        lib = RuleLibrary(tmp_path / "lib")
+        lib.add_rule("weird id/with sep", "semgrep", "rules: BODY-A\n")
+        stem = graduated_stem("weird id/with sep")
+        assert stem != "weird id/with sep"
+        lib.record_match(stem, is_tp=True)
+        entry = lib.all_entries()[0]
+        assert entry.feedback_classified == 1
