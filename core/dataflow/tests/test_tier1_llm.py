@@ -1155,3 +1155,60 @@ def test_safe_join_bound_result_at_sink_still_sound(tmp_path: Path):
         language="python", complete=_fake_complete(reply),
     )
     assert r.status is t1.Tier0Status.SOUND
+
+
+def test_lexical_transform_semicolon_joined_first_target_declines(
+    tmp_path: Path,
+):
+    """On a semicolon-joined line the transform call must sit in the
+    SAME statement as the captured binding target.  Pre-fix the lexical
+    arm captured the line's FIRST target (``safe``, bound to raw ``x``)
+    because ``sanitize(`` appeared anywhere later on the line — a sink
+    consuming ``safe`` certified SOUND with the raw value live."""
+    (tmp_path / "app.js").write_text(
+        "function f(req, res) {\n"
+        "  var safe = x; var y = DOMPurify.sanitize(x);\n"  # line 2
+        "  res.send(safe);\n"                                # line 3
+        "}\n"
+    )
+    diff = "+  var safe = x; var y = DOMPurify.sanitize(x);\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line":
+            "var safe = x; var y = DOMPurify.sanitize(x);",
+        "variable_name": "x", "charset": "", "forbidden": "",
+        "library_call": "DOMPurify.sanitize",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.js", sink_line=3, sink_class="xss",
+        language="javascript", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+
+
+def test_lexical_transform_semicolon_joined_correct_target_sound(
+    tmp_path: Path,
+):
+    """Two-direction: the target in the SAME segment as the call keeps
+    certifying when the sink consumes it."""
+    (tmp_path / "app.js").write_text(
+        "function f(req, res) {\n"
+        "  var raw = x; var y = DOMPurify.sanitize(x);\n"   # line 2
+        "  res.send(y);\n"                                   # line 3
+        "}\n"
+    )
+    diff = "+  var raw = x; var y = DOMPurify.sanitize(x);\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line":
+            "var raw = x; var y = DOMPurify.sanitize(x);",
+        "variable_name": "x", "charset": "", "forbidden": "",
+        "library_call": "DOMPurify.sanitize",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.js", sink_line=3, sink_class="xss",
+        language="javascript", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.SOUND

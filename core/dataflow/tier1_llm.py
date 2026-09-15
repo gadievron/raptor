@@ -349,20 +349,30 @@ def _transform_binding_targets(
                 targets |= _paired_transform_targets(t, value, tail)
         return targets
     # Lexical languages: accept ``x = ...call(...)`` (with optional
-    # const/let/var/final or a type before the name).
+    # const/let/var/final or a type before the name).  Statement
+    # segments are split on ``;`` and the capture + call-presence test
+    # applied PER SEGMENT: on a semicolon-joined line
+    # (``var safe = x; var y = sanitize(x);``) the call must sit in the
+    # SAME statement as the captured target, otherwise the FIRST
+    # target (bound to the raw value) was credited with a transform
+    # that belongs to a later statement.  A ``;`` inside a string
+    # literal only narrows a segment further — it can never join two
+    # statements — so the crude split errs toward refusal.
     lines = source_text.splitlines()
     if not (0 < validator_line <= len(lines)):
         return set()
     line = lines[validator_line - 1]
-    m = _re.match(
-        r"\s*(?:(?:const|let|var|final)\s+)?"
-        r"(?:[A-Za-z_$][\w$<>\[\].]*\s+)?"
-        r"([A-Za-z_$][\w$]*)\s*=[^=]",
-        line,
-    )
-    if m and _re.search(rf"\b{_re.escape(tail)}\s*\(", line[m.end():]):
-        return {m.group(1)}
-    return set()
+    out: set[str] = set()
+    for segment in line.split(";"):
+        m = _re.match(
+            r"\s*(?:(?:const|let|var|final)\s+)?"
+            r"(?:[A-Za-z_$][\w$<>\[\].]*\s+)?"
+            r"([A-Za-z_$][\w$]*)\s*=[^=]",
+            segment,
+        )
+        if m and _re.search(rf"\b{_re.escape(tail)}\s*\(", segment[m.end():]):
+            out.add(m.group(1))
+    return out
 
 
 def _try_known_safe_call(
