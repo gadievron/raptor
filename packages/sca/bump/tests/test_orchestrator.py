@@ -2527,3 +2527,43 @@ def test_pr_comment_reports_exclusions(tmp_path: Path) -> None:
     )
     md = render_pr_comment(report)
     assert "excluded from write by `--exclude` patterns" in md
+
+
+def test_from_and_yaml_walkers_share_oci_cache(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The FROM and yaml walkers share ``latest_cache``, but keyed
+    it in different shapes (3-tuple with variant vs 2-tuple) — the
+    same repo was queried upstream once per walker. One key shape,
+    one fetch."""
+    import core.upstream_latest.oci_tags as oci_mod
+    from packages.sca.bump.orchestrator import (
+        _enumerate_from_image_candidates,
+        _enumerate_yaml_image_candidates,
+    )
+
+    calls: list[tuple[str, str]] = []
+
+    def _fake_latest_tag(image_ref, **kw):
+        calls.append((image_ref, kw.get("variant", "")))
+        return "3.99"
+
+    monkeypatch.setattr(oci_mod, "latest_tag", _fake_latest_tag)
+
+    shared: dict = {}
+    from_cands, _ = _enumerate_from_image_candidates(
+        text="FROM python:3.12\n",
+        dockerfile=tmp_path / "Dockerfile",
+        http=None, cache=None, from_cache=shared,
+    )
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n  app:\n    image: python:3.12\n",
+        encoding="utf-8",
+    )
+    yaml_cands, _ = _enumerate_yaml_image_candidates(
+        tmp_path, http=None, cache=None, from_cache=shared,
+    )
+    assert [c.target_version for c in from_cands] == ["3.99"]
+    assert [c.target_version for c in yaml_cands] == ["3.99"]
+    # One upstream fetch for the one repo, shared across walkers.
+    assert len(calls) == 1

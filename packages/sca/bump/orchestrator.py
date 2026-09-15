@@ -923,8 +923,11 @@ def _enumerate_from_image_candidates(
             target_tag = from_cache[cache_key]
         else:
             try:
+                # Look up by bare locator (tag portions are ignored
+                # by the tag-listing anyway) so the FROM and yaml
+                # walkers share upstream caching for the same repo.
                 target_tag = oci_latest_tag(
-                    image_ref_str, http=http, cache=cache,
+                    locator, http=http, cache=cache,
                     variant=variant,
                 )
             except (UpstreamLookupError, NoStableVersionsFound) as e:
@@ -1277,7 +1280,12 @@ def _enumerate_yaml_image_candidates(
                              dep.name, current_tag, e)
                 continue
             locator = f"{ref.registry}/{ref.repository}"
-            cache_key = ("oci_tag", locator)
+            # Same 3-tuple key shape as the FROM walker (variant ""
+            # — this walker only handles bare-semver tags): the two
+            # walkers share ``latest_cache``, and a 2-tuple key
+            # never matched the FROM walker's 3-tuple, so the same
+            # repo was queried once per walker.
+            cache_key = ("oci_tag", locator, "")
             if cache_key in from_cache:
                 target_tag = from_cache[cache_key]
             else:
