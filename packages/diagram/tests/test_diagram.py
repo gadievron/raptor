@@ -1836,3 +1836,42 @@ class TestRendererRobustness:
         p = tmp_path / "wrapped.json"
         p.write_text(json.dumps({"items": [1, 2]}))
         assert _load_optional_list(p) == [1, 2]
+
+
+class TestControlBytesAtChokepoint:
+    """sanitize() is the label chokepoint for all six generators —
+    control/bidi bytes must become inert escapes there, because the
+    attack-paths section builds its own fences and never passes the
+    renderer's last-hop _fence."""
+
+    HOSTILE = "step \x1b]0;pwned\x07\x9b2J‮evil end"
+
+    def test_sanitize_escapes_control_and_bidi(self):
+        from packages.diagram.sanitize import sanitize
+        out = sanitize(self.HOSTILE)
+        for raw in ("\x1b", "\x07", "\x9b", "‮"):
+            assert raw not in out
+        assert out.startswith("step ") and out.endswith(" end")
+
+    def test_fence_break_zwsp_survives_escaping(self):
+        from packages.diagram.sanitize import sanitize
+        out = sanitize("a```b")
+        # The ZWSP fence-break stays a real (invisible) ZWSP — it must
+        # be inserted AFTER the escape pass or it renders literally.
+        assert "``​`" in out
+
+    def test_attack_paths_section_carries_no_raw_controls(self):
+        from packages.diagram.attack_paths import generate
+        data = [{
+            "path_id": "AP-1",
+            "steps": [
+                {"function": f"parse{self.HOSTILE}", "technique": self.HOSTILE},
+                {"function": "sink", "technique": "overflow"},
+            ],
+            "blockers": [{"description": f"guard {self.HOSTILE}"}],
+            "proximity": 0.9,
+        }]
+        out = generate(data)
+        assert out  # section rendered
+        for raw in ("\x1b", "\x07", "\x9b", "‮"):
+            assert raw not in out

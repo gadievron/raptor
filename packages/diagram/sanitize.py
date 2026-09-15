@@ -2,6 +2,8 @@
 
 import re
 
+from core.security.log_sanitisation import escape_nonprintable
+
 _SAFE_ID_RE = re.compile(r'[^A-Za-z0-9_-]')
 # Dash runs are Mermaid edge tokens (`--`, `---`) — see sanitize_id.
 _DASH_RUN_RE = re.compile(r'-{2,}')
@@ -37,6 +39,14 @@ def sanitize(text: str, max_len: int | None = None) -> str:
         .replace("\u2028", " ")
         .replace("\u2029", " ")
     )
+    # Control/bidi bytes become inert \xHH escapes at this chokepoint —
+    # diagrams.md is catted to operator terminals, and some sections
+    # (attack-paths headings and self-fenced blocks) do not pass
+    # through the renderer's last-hop `_fence`. Escaping here closes
+    # the channel for every generator at once. Runs BEFORE the
+    # fence-break ZWSP insertion below, which must stay raw
+    # (escape_nonprintable would turn it into a visible literal).
+    result = escape_nonprintable(result)
     # Fence-break defence: diagram text is embedded inside the
     # renderer's ```mermaid fences (and attack-path headings sit in the
     # surrounding markdown). A 3+ backtick run in a label sourced from

@@ -128,6 +128,15 @@ _SANITISERS = frozenset({
     # (investigation._md_escape: escape_nonprintable + pipe/newline
     # escaping — table-cell grade for binary-derived names).
     "_md_escape",
+    # packages/diagram's Mermaid chokepoints: sanitize.sanitize
+    # (imported as _sanitize; Mermaid-structure neutralisation +
+    # fence-break ZWSP + escape_nonprintable), the context_map _text
+    # wrapper over it, and sanitize_id (imported as _sid; strips to
+    # [A-Za-z0-9_-]).
+    "_sanitize",
+    "_text",
+    "_sid",
+    "sanitize_id",
     "_md_escape_inline",
     "_md_table_cell",
     "_render_detail",
@@ -178,6 +187,13 @@ _REPORT_WRITER_FILES = (
     "packages/binary_analysis/harness.py",
     "packages/binary_analysis/investigation.py",
     "packages/binary_analysis/pipeline.py",
+    "packages/diagram/attack_paths.py",
+    "packages/diagram/attack_tree.py",
+    "packages/diagram/context_map.py",
+    "packages/diagram/edge_obligations.py",
+    "packages/diagram/flow_trace.py",
+    "packages/diagram/hypotheses.py",
+    "packages/diagram/renderer.py",
     "packages/exploitability_validation/report.py",
     # Second validation-report.md generator (the orchestrator's
     # inline _generate_report/_render_finding_lines) — same artifact,
@@ -298,6 +314,39 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
             "(class_inventory['summary'] — internally-built integer "
             "counts); every name-bearing interpolation in the report "
             "goes through the _esc chokepoint"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/diagram/context_map.py",
+        func_name="generate",
+        kind="unsanitised_llm_value",
+        detail="ep_ids",
+        audit_note=(
+            "comma-join of _sid(...) outputs — every element passes "
+            "sanitize_id; the taint is the comprehension's iterable "
+            "name, not the joined values"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/diagram/context_map.py",
+        func_name="generate",
+        kind="unsanitised_llm_value",
+        detail="sink_ids",
+        audit_note=(
+            "comma-join of _sid(...) outputs — every element passes "
+            "sanitize_id; the taint is the comprehension's iterable "
+            "name, not the joined values"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/diagram/context_map.py",
+        func_name="generate",
+        kind="unsanitised_llm_value",
+        detail="fn_ids",
+        audit_note=(
+            "comma-join of _sid(...) outputs — every element passes "
+            "sanitize_id; the taint is the comprehension's iterable "
+            "name, not the joined values"
         ),
     ),
     AllowlistEntry(
