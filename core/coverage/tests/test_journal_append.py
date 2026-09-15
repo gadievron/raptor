@@ -284,6 +284,329 @@ class TestCorruptLineCounting:
         assert len(load_entries(tmp_path)) == 2
 
 
+def _base_row() -> dict:
+    """A minimal well-shaped dict row (passes every gate as written)."""
+    return {
+        "ts": now_iso(),
+        "run_id": "r-planted",
+        "file": "src/p.c",
+        "function": "pf",
+        "verdict": "clean",
+        "schema_version": 1,
+    }
+
+
+_TYPED_FIELDS = sorted(
+    name for name in journal_mod._field_types()
+    if name not in journal_mod._CLAMPED_FIELDS
+    and name != "schema_version"
+)
+
+_LIST_FIELDS = sorted(
+    name for name in _TYPED_FIELDS
+    if journal_mod._value_matches([], journal_mod._field_types()[name])
+)
+
+
+class TestPlantedTypedFieldRows:
+    """Wrong-TYPED fields inside a well-shaped dict row must quarantine.
+
+    The non-dict gate above contains bad row SHAPES; these pin the
+    field-TYPE boundary one enumeration step further out: a dict row
+    with ``"file": 5`` crashed ``encode_key_file`` inside every
+    ``reviewed_set()`` call, and an int ``ts`` crashed the ordering
+    compares in ``latest_entries`` and ``merge_into_index``. The
+    parametrization enumerates the WHOLE dataclass schema, so a field
+    added later is covered from birth.
+    """
+
+    def _plant(self, tmp_path: Path, row: dict) -> None:
+        append_entry(tmp_path, _entry(1))
+        journal = tmp_path / "review-journal.jsonl"
+        with open(journal, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+        append_entry(tmp_path, _entry(2))
+
+    @pytest.mark.parametrize("field_name", _TYPED_FIELDS)
+    def test_wrong_typed_field_quarantines_row(
+        self, tmp_path: Path, caplog, field_name: str,
+    ) -> None:
+        # Self-check: {} conforms to NO field annotation in the current
+        # schema — a future dict-typed field would silently make this
+        # parametrization vacuous for itself, so assert the premise.
+        expected = journal_mod._field_types()[field_name]
+        assert not journal_mod._value_matches({}, expected)
+
+        row = _base_row()
+        row[field_name] = {}
+        self._plant(tmp_path, row)
+
+        with caplog.at_level(logging.WARNING, logger="core.coverage.journal"):
+            entries = load_entries(tmp_path)
+
+        assert len(entries) == 2
+        assert any(
+            "skipping malformed entry" in r.getMessage()
+            and repr(field_name) in r.getMessage()
+            for r in caplog.records
+        )
+
+    @pytest.mark.parametrize("field_name", _LIST_FIELDS)
+    def test_wrong_typed_list_element_quarantines_row(
+        self, tmp_path: Path, caplog, field_name: str,
+    ) -> None:
+        # Element depth matters: a non-str element in strategies
+        # crashes _canonical_strategy_hash's sorted-join inside
+        # index_key at merge time; a non-dict hypothesis element
+        # crashes consumers keying h.get(...).
+        expected = journal_mod._field_types()[field_name]
+        assert not journal_mod._value_matches([5], expected)
+
+        row = _base_row()
+        row[field_name] = [5]
+        self._plant(tmp_path, row)
+
+        with caplog.at_level(logging.WARNING, logger="core.coverage.journal"):
+            entries = load_entries(tmp_path)
+
+        assert len(entries) == 2
+
+    def test_dict_element_values_stay_free_form(self, tmp_path: Path) -> None:
+        # Both-directions boundary: dict VALUES inside list elements
+        # are LLM-derived free-form (consumers guard/format them) —
+        # over-strictening here would retroactively quarantine
+        # legitimate historical rows.
+        row = _base_row()
+        row["hypotheses"] = [{"mechanism": "m", "confidence": 0.7}]
+        row["study_receipts"] = [{"question": "q", "tier": 1}]
+        self._plant(tmp_path, row)
+
+        assert len(load_entries(tmp_path)) == 3
+
+    def test_int_accepted_where_float_expected(self, tmp_path: Path) -> None:
+        # JSON has a single number type: a writer emitting 1 for a
+        # float field must keep loading.
+        row = _base_row()
+        row["confidence"] = 1
+        row["cost_usd"] = 2
+        self._plant(tmp_path, row)
+
+        assert len(load_entries(tmp_path)) == 3
+
+    def test_bool_rejected_where_int_expected(self, tmp_path: Path) -> None:
+        # isinstance(True, int) holds — a bool token_budget is a
+        # planted shape, not a number.
+        row = _base_row()
+        row["token_budget"] = True
+        self._plant(tmp_path, row)
+
+        assert len(load_entries(tmp_path)) == 2
+
+    def test_wrong_typed_span_fields_clamp_not_quarantine(
+        self, tmp_path: Path,
+    ) -> None:
+        # Span fields keep their pre-existing containment discipline:
+        # a forged/wrong-typed span is CLAMPED while the rest of the
+        # row's evidence is kept (see _entry_from_dict).
+        row = _base_row()
+        row["line_start"] = "9"
+        row["line_end"] = {}
+        self._plant(tmp_path, row)
+
+        entries = load_entries(tmp_path)
+        assert len(entries) == 3
+        planted = [e for e in entries if e.run_id == "r-planted"]
+        assert planted[0].line_start == 0
+        assert planted[0].line_end is None
+
+    def test_planted_typed_rows_never_persistently_crash_consumers(
+        self, tmp_path: Path,
+    ) -> None:
+        # The finding's exact repro rows: "file": 5 (crashed
+        # reviewed_set via encode_key_file) and an int ts sharing a
+        # key with a real row (crashed the ts ordering compares in
+        # latest_entries AND merge_into_index). All consumers must
+        # keep working on every subsequent load.
+        append_entry(tmp_path, _entry(1))
+        journal = tmp_path / "review-journal.jsonl"
+        real = load_entries(tmp_path)[0]
+        with open(journal, "a", encoding="utf-8") as f:
+            row = _base_row()
+            row["file"] = 5
+            f.write(json.dumps(row) + "\n")
+            f.write(json.dumps({
+                "ts": 7, "run_id": "r", "file": real.file,
+                "function": real.function, "verdict": "clean",
+                "schema_version": 1,
+            }) + "\n")
+
+        assert journal_mod.reviewed_set(tmp_path) == {real.key}
+        assert set(journal_mod.latest_entries(tmp_path)) == {real.key}
+        project = tmp_path / "project"
+        assert journal_mod.merge_into_index(project, tmp_path) == 1
+        append_entry(tmp_path, _entry(2))
+        assert len(load_entries(tmp_path)) == 2
+
+
+class TestSchemaValidatorClosure:
+    """Every dataclass field's annotation must be handled by the
+    validator — a new field with an unsupported type fails HERE at
+    development time instead of quarantining every row that carries
+    it in production (the validator fails closed on unknown types)."""
+
+    @staticmethod
+    def _sample(expected):
+        import types as _types
+        import typing as _typing
+        origin = _typing.get_origin(expected)
+        if origin in (_typing.Union, _types.UnionType):
+            args = [
+                a for a in _typing.get_args(expected) if a is not type(None)
+            ]
+            return TestSchemaValidatorClosure._sample(args[0])
+        if origin is list or expected is list:
+            args = _typing.get_args(expected)
+            if not args:
+                return []
+            return [TestSchemaValidatorClosure._sample(args[0])]
+        if origin is dict or expected is dict:
+            return {}
+        if expected is bool:
+            return True
+        if expected is int:
+            return 1
+        if expected is float:
+            return 1.0
+        if expected is str:
+            return "x"
+        msg = f"no sample generator for annotation {expected!r} — extend _value_matches AND this generator"
+        raise AssertionError(msg)
+
+    def test_every_field_annotation_has_a_validator_arm(self) -> None:
+        import dataclasses
+        hints = journal_mod._field_types()
+        field_names = {
+            f.name for f in dataclasses.fields(ReviewJournalEntry)
+        }
+        assert set(hints) == field_names
+        for name, expected in hints.items():
+            conforming = self._sample(expected)
+            assert journal_mod._value_matches(conforming, expected), (
+                f"conforming sample rejected for field {name!r} "
+                f"({expected!r})"
+            )
+            assert not journal_mod._value_matches(object(), expected), (
+                f"arbitrary object accepted for field {name!r} "
+                f"({expected!r}) — validator arm missing/too wide"
+            )
+
+
+class TestSerializationHostility:
+    """Typed-VALID but content-hostile values must quarantine at row
+    acceptance.
+
+    A lone surrogate inside a str field (pure-ASCII ``\\ud800`` escape
+    on the wire) and a float that overflowed to ``inf`` at parse
+    (``1e400`` — ``parse_constant`` fires only on the literal
+    ``NaN``/``Infinity`` tokens) both pass the TYPE arms and detonate
+    at the write boundary — ``save_json`` inside the merge flock — on
+    stdlib-json environments. orjson refuses both shapes at parse, but
+    orjson is optional, so these force the stdlib arm explicitly; the
+    unpatched tests pin the natural arm's containment too.
+    """
+
+    _SURROGATE_LINE = (
+        '{"ts": "2099-01-01T00:00:00.000001+00:00", "run_id": "r-pl", '
+        '"file": "src/p.c", "function": "pf", "verdict": "clean", '
+        '"schema_version": 1, "body": "\\ud800evil"}'
+    )
+    _INF_LINE = (
+        '{"ts": "2099-01-01T00:00:00.000001+00:00", "run_id": "r-pl", '
+        '"file": "src/p.c", "function": "pf", "verdict": "clean", '
+        '"schema_version": 1, "confidence": 1e400}'
+    )
+
+    @staticmethod
+    def _force_stdlib_json(monkeypatch) -> None:
+        import core.json.utils as json_utils
+        monkeypatch.setattr(json_utils, "_orjson", None)
+
+    def _plant(self, tmp_path: Path, line: str) -> None:
+        append_entry(tmp_path, _entry(1))
+        journal = tmp_path / "review-journal.jsonl"
+        with open(journal, "a", encoding="ascii") as f:
+            f.write(line + "\n")
+        append_entry(tmp_path, _entry(2))
+
+    @pytest.mark.parametrize("line", [_SURROGATE_LINE, _INF_LINE])
+    def test_hostile_row_quarantined_on_stdlib_arm(
+        self, tmp_path: Path, monkeypatch, line: str,
+    ) -> None:
+        self._force_stdlib_json(monkeypatch)
+        self._plant(tmp_path, line)
+
+        entries = load_entries(tmp_path)
+
+        assert len(entries) == 2
+        assert all(e.run_id == "run-1" for e in entries)
+
+    @pytest.mark.parametrize("line", [_SURROGATE_LINE, _INF_LINE])
+    def test_hostile_row_contained_on_natural_arm(
+        self, tmp_path: Path, line: str,
+    ) -> None:
+        # No arm forced: with orjson installed the planted line is
+        # refused at parse (corrupt-line skip); without it the row
+        # quarantines at validation. Both arms: siblings load.
+        self._plant(tmp_path, line)
+
+        assert len(load_entries(tmp_path)) == 2
+
+    @pytest.mark.parametrize("line", [_SURROGATE_LINE, _INF_LINE])
+    def test_planted_row_never_persistently_crashes_merge(
+        self, tmp_path: Path, monkeypatch, line: str,
+    ) -> None:
+        # The write-boundary repro: pre-fix, the planted row was
+        # ACCEPTED by the loader and every run-completion merge then
+        # crashed inside the flock at save_json (UnicodeEncodeError /
+        # allow_nan=False ValueError) — on EVERY retry.
+        self._force_stdlib_json(monkeypatch)
+        self._plant(tmp_path, line)
+        project = tmp_path / "project"
+
+        assert journal_mod.merge_run_into_index(project, tmp_path) == 2
+        # Retry parity: the merge stays alive on every subsequent run.
+        assert journal_mod.merge_run_into_index(project, tmp_path) == 0
+        index = journal_mod.load_index(project)
+        assert {e.run_id for e in index.values()} == {"run-1"}
+
+    def test_serializer_roundtrip_is_the_invariant(self) -> None:
+        # Class closure: the validator delegates to the serializer's
+        # own strictness pins, not an enumerated hostile-value list.
+        with pytest.raises(ValueError, match="round-trip"):
+            journal_mod._validate_serializable({"body": "\ud800evil"})
+        with pytest.raises(ValueError, match="round-trip"):
+            journal_mod._validate_serializable({"confidence": float("inf")})
+        with pytest.raises(ValueError, match="round-trip"):
+            journal_mod._validate_serializable(
+                {"hypotheses": [{"note": float("nan")}]},
+            )
+        journal_mod._validate_serializable({"body": "café", "ok": 1.0})
+
+    @pytest.mark.parametrize("version", ["true", "1.0"])
+    def test_non_int_schema_version_quarantines(
+        self, tmp_path: Path, version: str,
+    ) -> None:
+        # True == 1 and 1.0 == 1 both slip a bare equality compare —
+        # the version marker must be a genuine int.
+        row_json = (
+            '{"ts": "2099-01-01T00:00:00.000001+00:00", "run_id": "r-pl", '
+            '"file": "src/p.c", "function": "pf", "verdict": "clean", '
+            '"schema_version": ' + version + "}"
+        )
+        self._plant(tmp_path, row_json)
+
+        assert len(load_entries(tmp_path)) == 2
+
 
 class TestJournalByteBudget:
     """Journal + index loads are size-gated before any read."""

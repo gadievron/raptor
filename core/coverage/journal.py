@@ -17,11 +17,12 @@ import json
 import logging
 import os
 import threading
+import types
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from core.json import load_json, loads, save_json
 
@@ -536,7 +537,7 @@ def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
             entries.append(_entry_from_dict(raw))
         except (TypeError, KeyError, ValueError) as exc:
             # ValueError included: _entry_from_dict raises it for an
-            # unknown schema_version (and forged line spans). The
+            # unknown schema_version and for wrong-typed fields. The
             # journal lives inside the run dir — SANDBOX-WRITABLE —
             # so ONE planted row must quarantine (skip + warn), never
             # persistently crash every journal consumer (audit
@@ -553,20 +554,158 @@ def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
     return entries
 
 
+# ── row field-type validation ────────────────────────────────────────
+#
+# The journal (and the index its rows merge into) lives inside the
+# sandbox-writable run dir, so EVERY field of a row is attacker-
+# writable — not just the row's outer shape. Schema-version and
+# line-span vetting alone left the other fields' types unchecked: a
+# planted ``"file": 5`` crashed ``encode_key_file`` inside every
+# ``reviewed_set()`` call, and an int ``ts`` crashed the ordering
+# compares in ``latest_entries`` and ``merge_into_index`` — one
+# 60-byte line persistently wedged every journal consumer (audit
+# resume, reports, verdict reuse, completion merge). The expected
+# types are derived MECHANICALLY from the dataclass annotations, not
+# from an enumerated field list, so a field added to
+# :class:`ReviewJournalEntry` is validated from birth; the closure
+# test enumerates ``dataclasses.fields()`` against the validator.
+
+#: Fields whose values are CLAMPED to safe defaults instead of
+#: quarantining the row (see the span vetting in _entry_from_dict —
+#: a forged span is contained while the rest of the row's evidence
+#: is kept).
+_CLAMPED_FIELDS = frozenset({"line_start", "line_end"})
+
+_FIELD_TYPES: dict[str, Any] | None = None
+
+
+def _field_types() -> dict[str, Any]:
+    """Resolved ``{field: annotation}`` map for the entry dataclass."""
+    global _FIELD_TYPES
+    if _FIELD_TYPES is None:
+        _FIELD_TYPES = get_type_hints(ReviewJournalEntry)
+    return _FIELD_TYPES
+
+
+def _value_matches(value: Any, expected: Any) -> bool:
+    """True when a parsed-JSON *value* conforms to annotation *expected*.
+
+    Depth rule: lists are validated through their ELEMENTS, but
+    validation stops at dict-ness — JSON object keys are always str,
+    and the dict values inside journal rows (hypothesis fields, study
+    receipts, edge verdicts) are LLM-derived free-form that consumers
+    guard and format individually; validating them strictly would
+    retroactively quarantine legitimate historical rows. ``bool`` is
+    rejected where int/float is expected (``isinstance(True, int)``
+    holds in Python); int is accepted where float is expected (JSON
+    has a single number type).
+    """
+    origin = get_origin(expected)
+    if origin in (Union, types.UnionType):
+        return any(_value_matches(value, arg) for arg in get_args(expected))
+    if expected is type(None):
+        return value is None
+    if origin is list or expected is list:
+        if not isinstance(value, list):
+            return False
+        args = get_args(expected)
+        return not args or all(_value_matches(v, args[0]) for v in value)
+    if origin is dict or expected is dict:
+        return isinstance(value, dict)
+    if expected is bool:
+        return isinstance(value, bool)
+    if expected is int:
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected is float:
+        return (
+            isinstance(value, (int, float)) and not isinstance(value, bool)
+        )
+    if expected is str:
+        return isinstance(value, str)
+    # Unknown annotation: fail closed — quarantining the row beats
+    # handing an unvalidated value to consumers. The closure test
+    # surfaces a missing validator arm at development time.
+    return False
+
+
+def _validate_field_types(raw: dict[str, Any]) -> None:
+    """Raise ``ValueError`` for any known field with a wrong-typed value.
+
+    Unknown keys are ignored (tolerant reader — additive fields from a
+    same-schema-version future writer must not quarantine); absent
+    fields take the dataclass defaults.
+    """
+    for name, expected in _field_types().items():
+        if name in _CLAMPED_FIELDS or name == "schema_version":
+            # Spans are clamped by _entry_from_dict (forged-span
+            # containment keeps the row); schema_version is vetted
+            # before this runs.
+            continue
+        if name not in raw:
+            continue
+        if not _value_matches(raw[name], expected):
+            msg = (
+                f"field {name!r} has type {type(raw[name]).__name__}, "
+                f"expected {expected}"
+            )
+            raise ValueError(msg)
+
+
+def _validate_serializable(raw: dict[str, Any]) -> None:
+    """Raise ``ValueError`` when *raw* cannot round-trip the journal's
+    own serializer.
+
+    Type validation alone leaves the CONTENT unchecked: a lone
+    surrogate inside a ``str`` field (deliverable as a pure-ASCII
+    ``\\ud800`` escape) and a float that overflowed to ``inf`` at
+    parse (``1e400`` — ``parse_constant`` only fires on the literal
+    ``NaN``/``Infinity`` tokens) both pass the type arms and then
+    detonate at the WRITE boundary — ``save_json`` inside the merge
+    flock (``UnicodeEncodeError`` at the utf-8 encode /
+    ``ValueError`` from ``allow_nan=False``) — so one planted row
+    persistently crashed every run-completion merge on stdlib-json
+    environments (orjson rejects both shapes at parse, but orjson is
+    an optional dependency). The invariant is json.dumps-ability
+    under the writers' exact strictness pins (``allow_nan=False``,
+    raw-UTF-8 encodable), NOT an enumerated hostile-value list —
+    anything the journal's own writers would refuse to serialize is
+    refused at row acceptance, closing the class.
+    """
+    try:
+        json.dumps(raw, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError) as exc:  # UnicodeEncodeError ⊂ ValueError
+        msg = f"row does not round-trip the journal serializer: {exc}"
+        raise ValueError(msg) from exc
+
+
 def _entry_from_dict(raw: dict[str, Any]) -> ReviewJournalEntry:
     """Construct an entry from a parsed JSON dict, tolerating missing optional fields.
 
     Schema-version compat: absent ``schema_version`` field defaults to
     1 (legacy entries predate the field). Unknown versions raise a
     loud ``ValueError`` — do not silently reinterpret unknown data.
+    Every known field's TYPE is then validated against the dataclass
+    annotation (:func:`_validate_field_types`), and the row's CONTENT
+    must round-trip the journal's own serializer
+    (:func:`_validate_serializable`) — either violation raises
+    ``ValueError`` into the callers' quarantine arms.
     """
     version = raw.get("schema_version", 1)
-    if version != SCHEMA_VERSION:
+    # Exact-int check: ``True == 1`` and ``1.0 == 1`` both slip a bare
+    # equality compare, storing/re-emitting a wrong-typed version
+    # marker as-is — pin the field to a genuine int.
+    if (
+        not isinstance(version, int)
+        or isinstance(version, bool)
+        or version != SCHEMA_VERSION
+    ):
         msg = (
-            f"unknown journal entry schema_version={version}; "
+            f"unknown journal entry schema_version={version!r}; "
             f"this reader supports {SCHEMA_VERSION} only"
         )
         raise ValueError(msg)
+    _validate_field_types(raw)
+    _validate_serializable(raw)
     # Line spans are vetted at parse: journal files live inside run
     # dirs (sandbox write grants), and a forged multi-million-line
     # span detonates in the coverage store's interval-to-set
