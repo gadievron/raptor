@@ -670,5 +670,165 @@ class TestE2EHookScript(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
 
 
+class TestSessionEndLivenessProof(unittest.TestCase):
+    """session-end proves the recorded session dead before reaping.
+
+    A SessionEnd event can fire from a context that inherited the
+    parent session's identity env (a nested subagent ending its own
+    session) while the recorded session_pid is alive and mid-pipeline
+    — pre-fix the reap failed the parent's live run. Stamped metas
+    (session_start + session_boot_id) get the full identity check;
+    whatever IS reaped carries ``extra.abandon_sweep`` so the
+    metadata recovery clause can self-heal a misjudged reap.
+    """
+
+    def _isolated(self, tmp: Path, session_pid: int):
+        """Patch stack confining the hook to *tmp* and *session_pid*.
+
+        The stub tests use REAL (recyclable) pids, so the ledger and
+        the configured out dir must not leak real runs into the scan.
+        """
+        return (
+            patch.object(_hook_mod, "REPO_ROOT", tmp),
+            patch("core.run.metadata._get_session_pid",
+                  return_value=session_pid),
+            patch("core.project.sessions.ledger_runs",
+                  side_effect=Exception("no ledger in this test")),
+            patch("core.config.RaptorConfig.get_out_dir",
+                  return_value=tmp / "out"),
+        )
+
+    def _run_session_end(self, tmp: Path, session_pid: int) -> None:
+        p1, p2, p3, p4 = self._isolated(tmp, session_pid)
+        with p1, p2, p3, p4:
+            sys.argv = ["hook", "session-end"]
+            _hook_mod.main()
+
+    @staticmethod
+    def _spawn_claude_shaped_stub(tmp: Path) -> subprocess.Popen:
+        """A live stub whose comm reads ``claude`` (comm comes from
+        the execve filename, so a symlink to the interpreter named
+        ``claude`` suffices — no real session)."""
+        link = tmp / "claude"
+        link.symlink_to(sys.executable)
+        proc = subprocess.Popen(
+            [str(link), "-c",
+             "import time; print('ready', flush=True); time.sleep(300)"],
+            stdout=subprocess.PIPE, text=True,
+        )
+        assert proc.stdout is not None
+        proc.stdout.readline()
+        return proc
+
+    @staticmethod
+    def _reap_stub(proc: subprocess.Popen) -> None:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(timeout=10)
+
+    @staticmethod
+    def _stamp_meta(run: Path, **fields) -> None:
+        meta = load_json(run / RUN_METADATA_FILE)
+        meta.update(fields)
+        save_json(run / RUN_METADATA_FILE, meta)
+
+    @unittest.skipUnless(sys.platform == "linux",
+                         "identity proof is procfs-based")
+    def test_live_stamped_session_is_skipped(self):
+        from core.run.metadata import _session_stamp
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            stub = self._spawn_claude_shaped_stub(tmp)
+            try:
+                run = _make_running_run(tmp / "out", "validate-001",
+                                        "validate", session_pid=stub.pid)
+                stamp = _session_stamp(stub.pid)
+                self.assertIn("session_start", stamp)  # live stub readable
+                self._stamp_meta(run, **stamp)
+                self._run_session_end(tmp, stub.pid)
+                self.assertEqual(_status(run), STATUS_RUNNING)
+                self.assertIsNone(stub.poll())
+            finally:
+                self._reap_stub(stub)
+
+    @unittest.skipUnless(sys.platform == "linux",
+                         "identity proof is procfs-based")
+    def test_dead_stamped_session_is_reaped_with_marker(self):
+        from core.project.sessions import boot_id, pidns_id
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            dead_pid = 2_000_000_000  # inert: beyond pid_max
+            run = _make_running_run(tmp / "out", "validate-001",
+                                    "validate", session_pid=dead_pid)
+            # Live boot/ns so the stamp is judged HERE (a foreign
+            # stamp reads as alive — fail-open — and would skip).
+            self._stamp_meta(
+                run, session_start="12345",
+                session_boot_id=boot_id(), session_pidns=pidns_id(),
+            )
+            self._run_session_end(tmp, dead_pid)
+            self.assertEqual(_status(run), STATUS_FAILED)
+            meta = load_json(run / RUN_METADATA_FILE)
+            self.assertIs(meta["extra"]["abandon_sweep"], True)
+            self.assertIn("session ended", meta["extra"]["error"])
+
+    @unittest.skipUnless(sys.platform == "linux",
+                         "identity proof is procfs-based")
+    def test_recycled_pid_is_treated_dead_and_reaped(self):
+        # A live claude-shaped process at the recorded pid whose
+        # starttime does not match the stamp is a RECYCLED pid — the
+        # recorded session is gone; the run is reaped (with marker),
+        # and the impostor process is never signalled.
+        from core.project.sessions import boot_id, pidns_id, proc_starttime
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            stub = self._spawn_claude_shaped_stub(tmp)
+            try:
+                run = _make_running_run(tmp / "out", "validate-001",
+                                        "validate", session_pid=stub.pid)
+                real_start = proc_starttime(stub.pid)
+                self.assertIsNotNone(real_start)
+                self._stamp_meta(
+                    run, session_start=str(int(real_start) + 1),
+                    session_boot_id=boot_id(), session_pidns=pidns_id(),
+                )
+                self._run_session_end(tmp, stub.pid)
+                self.assertEqual(_status(run), STATUS_FAILED)
+                meta = load_json(run / RUN_METADATA_FILE)
+                self.assertIs(meta["extra"]["abandon_sweep"], True)
+                self.assertIsNone(stub.poll())
+            finally:
+                self._reap_stub(stub)
+
+    def test_legacy_meta_keeps_unconditional_reap(self):
+        # No identity fields — no proof is possible either way; the
+        # pre-existing reap applies, now with the recovery marker.
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            run = _make_running_run(tmp / "out", "scan-001", "scan")
+            self._run_session_end(tmp, SESSION_PID)
+            self.assertEqual(_status(run), STATUS_FAILED)
+            meta = load_json(run / RUN_METADATA_FILE)
+            self.assertIs(meta["extra"]["abandon_sweep"], True)
+
+    def test_reaped_run_recovers_through_real_finaliser(self):
+        # End-to-end self-heal: a hook-reaped run's real finaliser
+        # overrides the heuristic verdict via the metadata recovery
+        # clause, clearing the marker and the sweep's error.
+        from core.run.metadata import complete_run
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            run = _make_running_run(tmp / "out", "validate-001",
+                                    "validate")
+            self._run_session_end(tmp, SESSION_PID)
+            self.assertEqual(_status(run), STATUS_FAILED)
+            complete_run(run)
+            self.assertEqual(_status(run), STATUS_COMPLETED)
+            meta = load_json(run / RUN_METADATA_FILE)
+            extra = meta.get("extra") or {}
+            self.assertNotIn("abandon_sweep", extra)
+            self.assertNotIn("error", extra)
+
+
 if __name__ == "__main__":
     unittest.main()

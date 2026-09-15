@@ -152,8 +152,8 @@ def main():
 
     from core.json import load_json
     from core.run.metadata import (
-        _get_session_pid, _pid_alive, complete_run, fail_run,
-        RUN_METADATA_FILE, STATUS_RUNNING,
+        _get_session_pid, _pid_alive, _session_alive_for_meta,
+        complete_run, fail_run, RUN_METADATA_FILE, STATUS_RUNNING,
     )
 
     # The ONE shared resolver (env credential first, claude-ancestor
@@ -304,8 +304,50 @@ def main():
                     print(f"lifecycle-hook: failed to finalize {d}: {e}",
                           file=sys.stderr)
             else:  # session-end
+                # A SessionEnd event does not prove the RECORDED
+                # session died: nested subagents inherit the parent
+                # session's identity env, so their own session-end
+                # resolves to the parent's pid and matched the
+                # parent's live in-flight runs here — the reap failed
+                # a run whose owner was alive and mid-pipeline. When
+                # the meta carries the identity stamp (session_start +
+                # session_boot_id, written by start_run), require
+                # proof of death via the full identity check (pid +
+                # starttime + boot id + pid namespace — a live pid
+                # with a mismatching stamp is a recycled pid, i.e. a
+                # dead owner, and still reaps). A session alive by
+                # that proof covers BOTH a subagent/child exit AND the
+                # owner's own graceful end (this hook runs as a child
+                # of the still-alive owner process), so for stamped
+                # metas the immediate session-end reap is effectively
+                # retired: orphans are reaped by _cleanup_abandoned at
+                # the next start_run (hard-killed sessions never fired
+                # SessionEnd anyway). Possible future tightening:
+                # match the SessionEnd payload's session_id against a
+                # stamp recorded at start_run to reap the owner's own
+                # end immediately again. Unstamped legacy metas offer
+                # no proof either way and keep the unconditional reap.
+                if (meta.get("session_start")
+                        and meta.get("session_boot_id")
+                        and _session_alive_for_meta(meta)):
+                    print(
+                        f"lifecycle-hook: session-end for {d} but the "
+                        f"recorded session (pid {session_pid}) is "
+                        "still alive (own graceful end or subagent "
+                        "exit) — leaving the run for its finaliser or "
+                        "the next start_run sweep",
+                        file=sys.stderr,
+                    )
+                    continue
                 try:
-                    fail_run(d, "session ended without explicit completion")
+                    # ``abandon_sweep`` marks this as a heuristic
+                    # verdict: if the reap still misjudged (the run
+                    # was in fact live), the run's real finaliser may
+                    # override the failed status — see the recovery
+                    # clause in core.run.metadata._update_status,
+                    # which pops the marker and the error on override.
+                    fail_run(d, "session ended without explicit completion",
+                             extra={"abandon_sweep": True})
                     (d / FAILURE_MARKER).unlink(missing_ok=True)
                 except (OSError, ValueError) as e:
                     # Missing/malformed .raptor-run.json or an unlink
