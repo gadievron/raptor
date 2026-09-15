@@ -321,3 +321,71 @@ class TestAnnotateResults:
         assert receipt_dirs == 0
         # row-level signal still attributed
         assert results[0]["attribution"] == "attributed"
+
+
+class TestHostileRunArtifacts:
+    """Run dirs are sandbox-writable: planted journal / audit-log rows
+    must degrade, never crash the harvest or pollute the index."""
+
+    def test_non_list_evidence_tools_skipped(self, tmp_path):
+        run = _write_run_dir(tmp_path, journal=[
+            {"file": "a.c", "function": "f", "evidence_tools": 5},
+            {"file": "a.c", "function": "g",
+             "evidence_tools": ["joern"]},
+        ])
+        index = build_signal_index([run])
+        assert "a.c:f" not in index.tools
+        assert index.tools["a.c:g"] == {"joern"}
+
+    def test_str_evidence_tools_never_sheds_characters(self, tmp_path):
+        # Pre-fix, a planted str iterated CHARACTER by character into
+        # the tool index ("abc" -> tokens a, b, c).
+        run = _write_run_dir(tmp_path, journal=[
+            {"file": "a.c", "function": "f", "evidence_tools": "abc"},
+        ])
+        index = build_signal_index([run])
+        assert "a.c:f" not in index.tools
+
+    def test_non_str_evidence_tool_elements_skipped(self, tmp_path):
+        run = _write_run_dir(tmp_path, journal=[
+            {"file": "a.c", "function": "f",
+             "evidence_tools": [{"tool": "joern"}, 7, "smt"]},
+        ])
+        index = build_signal_index([run])
+        assert index.tools["a.c:f"] == {"smt"}
+
+    def test_non_list_study_receipts_skipped(self, tmp_path):
+        run = _write_run_dir(tmp_path, journal=[
+            {"file": "a.c", "function": "f", "study_receipts": 5},
+        ])
+        index = build_signal_index([run])
+        assert "a.c:f" not in index.tools
+
+    def test_non_str_audit_log_key_skipped(self, tmp_path):
+        run = _write_run_dir(tmp_path, audit_log=[
+            {"action": "refutation_gate", "key": 5, "gate": "contract"},
+            {"action": "refutation_gate", "key": "a.c:f:3",
+             "gate": "contract"},
+        ])
+        index = build_signal_index([run])
+        assert index.gates == {"a.c:f": {"contract"}}
+
+    def test_unhashable_gate_token_dropped_at_add(self, tmp_path):
+        # set.add on a planted dict raised TypeError pre-fix; the add
+        # chokepoint drops every non-str token.
+        run = _write_run_dir(tmp_path, audit_log=[
+            {"action": "refutation_gate", "key": "a.c:f",
+             "gate": {"g": 1}},
+        ])
+        index = build_signal_index([run])
+        assert index.gates == {}
+
+    def test_add_chokepoint_gates_key_and_token_types(self):
+        index = SignalIndex()
+        index.add(index.tools, 5, "tok")
+        index.add(index.tools, "k", ["tok"])
+        index.add(index.tools, "k", "")
+        index.add(index.tools, "", "tok")
+        assert index.tools == {}
+        index.add(index.tools, "k", "tok")
+        assert index.tools == {"k": {"tok"}}

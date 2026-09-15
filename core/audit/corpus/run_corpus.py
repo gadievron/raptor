@@ -2525,7 +2525,14 @@ def _save_debug(
                     entry = loads(raw)
                 except ValueError:
                     continue
-                fid = entry.get("file", "") + ":" + entry.get("function", "")
+                if not isinstance(entry, dict):
+                    # Valid JSON is not necessarily a dict — a planted
+                    # scalar line has no .get. Same quarantine as the
+                    # journal reader's non-dict line gate.
+                    continue
+                # f-string, not +: a planted non-str file/function
+                # must yield a non-matching key, not a TypeError.
+                fid = f"{entry.get('file', '')}:{entry.get('function', '')}"
                 if fid != ":":
                     journal_entries[fid] = entry
 

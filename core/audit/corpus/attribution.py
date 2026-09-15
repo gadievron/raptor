@@ -110,7 +110,15 @@ class SignalIndex:
     detectors: dict[str, set[str]] = field(default_factory=dict)
 
     def add(self, bucket: dict[str, set[str]], key: str, token: str) -> None:
-        if key and token:
+        # str gates, not just truthiness: entries come from raw
+        # journal/audit-log lines in sandbox-writable run dirs, so a
+        # planted non-str token (an unhashable dict crashes set.add)
+        # or key must drop here — the one chokepoint every harvest
+        # loop routes through.
+        if (
+            isinstance(key, str) and key
+            and isinstance(token, str) and token
+        ):
             bucket.setdefault(key, set()).add(token)
 
 
@@ -152,7 +160,11 @@ def build_signal_index(run_dirs: Iterable[Path]) -> SignalIndex:
         for log_path in sorted(run_dir.rglob(".audit-log.jsonl")):
             for entry in _iter_jsonl(log_path):
                 action = entry.get("action", "")
-                key = _strip_line_suffix(entry.get("key", ""))
+                raw_key = entry.get("key", "")
+                if not isinstance(raw_key, str):
+                    # Planted row: rpartition below has no non-str arm.
+                    continue
+                key = _strip_line_suffix(raw_key)
                 # Receiver-qualified alias: corpus labels use
                 # ``file:Class.method`` function_ids; without this the
                 # receipt join silently missed every qualified label
@@ -184,9 +196,17 @@ def build_signal_index(run_dirs: Iterable[Path]) -> SignalIndex:
                 qualified = entry.get("function_qualified") or ""
                 if qualified:
                     keys.append(f"{entry.get('file', '')}:{qualified}")
-                for tool in entry.get("evidence_tools") or []:
+                # List + element gates: journal rows are raw parsed
+                # lines from sandbox-writable run dirs — a planted
+                # non-list value must not crash the iteration, and a
+                # planted str must not shed its CHARACTERS into the
+                # tool index one letter at a time.
+                tools = entry.get("evidence_tools")
+                for tool in tools if isinstance(tools, list) else []:
+                    if not isinstance(tool, str):
+                        continue
                     for k in keys:
-                        index.add(index.tools, k, str(tool))
+                        index.add(index.tools, k, tool)
                 # Study receipts: verdicts produced by a study-driven
                 # re-review carry the answers' receipts (question,
                 # tier, file, line, sha256, verified). The study
@@ -196,7 +216,8 @@ def build_signal_index(run_dirs: Iterable[Path]) -> SignalIndex:
                 # study sub-token ("study:<tier>"), matchable by an
                 # expectation pinning a specific tier; a bare "study"
                 # expectation matches on channel.
-                for receipt in entry.get("study_receipts") or []:
+                receipts = entry.get("study_receipts")
+                for receipt in receipts if isinstance(receipts, list) else []:
                     if not isinstance(receipt, dict):
                         continue
                     for k in keys:

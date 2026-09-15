@@ -3430,3 +3430,35 @@ class TestResumeStateClearedOnCompletion:
             assert len(rec["totals"]) >= 1
         metas = [rec["cost_usd"] for rec in runs]
         assert metas == [2.0, 2.0]
+
+
+class TestSaveDebugHostileRows:
+    """Run dirs are sandbox-writable: planted journal lines must not
+    crash the debug-reasoning dump."""
+
+    def test_non_dict_and_wrong_typed_rows_degrade(self, tmp_path):
+        run = tmp_path / "run"
+        run.mkdir()
+        (run / "review-journal.jsonl").write_text(
+            "5\n"                      # non-dict: no .get
+            "[1, 2]\n"                 # non-dict: no .get
+            '{"file": 5, "function": "f"}\n'   # non-str file: no crash
+            + json.dumps({
+                "file": "a.c", "function": "f", "verdict": "clean",
+                "verdict_rationale": "ok",
+            }) + "\n",
+            encoding="utf-8",
+        )
+        out = tmp_path / "results.json"
+        results = [{"function_id": "a.c:f"}]
+
+        run_corpus._save_debug(results, [run], out)
+
+        lines = [
+            json.loads(line)
+            for line in out.with_suffix(".debug.jsonl")
+            .read_text(encoding="utf-8").splitlines()
+        ]
+        assert len(lines) == 1
+        assert lines[0]["function_id"] == "a.c:f"
+        assert lines[0]["verdict"] == "clean"
