@@ -121,6 +121,10 @@ class TestEstimateFromScorecard:
         self._write_scorecard(
             out / "llm_scorecard.json", "test-model", 100, 10.0, 500000,
         )
+        # The session conftest pins RAPTOR_SCORECARD_PATH at a scratch
+        # ledger; drop the pin so this genuinely exercises the
+        # RAPTOR_DIR default the production call shape relies on.
+        monkeypatch.delenv("RAPTOR_SCORECARD_PATH", raising=False)
         monkeypatch.setenv("RAPTOR_DIR", str(tmp_path))
         monkeypatch.chdir(tmp_path / "out")  # cwd-independence
         est = estimate_from_scorecard("test-model", 20, max_parallel=1)
@@ -150,6 +154,10 @@ class TestEstimateFromScorecard:
     def test_default_path_missing_scorecard_returns_none(
         self, tmp_path, monkeypatch,
     ):
+        # Drop the session scratch-ledger pin: the assertion is about
+        # the RAPTOR_DIR default resolving to a missing file, not about
+        # whatever the shared scratch ledger happens to contain.
+        monkeypatch.delenv("RAPTOR_SCORECARD_PATH", raising=False)
         monkeypatch.setenv("RAPTOR_DIR", str(tmp_path))
         est = estimate_from_scorecard("test-model", 20)
         assert est is None

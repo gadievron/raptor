@@ -38,6 +38,10 @@ def _quiet_preseeds(monkeypatch, tmp_path):
     )
     # Hermeticity: the scorecard ETA estimate reads
     # $RAPTOR_DIR/out/llm_scorecard.json; point it at an empty tree.
+    # The session conftest pins RAPTOR_SCORECARD_PATH at a shared
+    # scratch ledger which would otherwise win over RAPTOR_DIR — drop
+    # the pin so the estimate really resolves against the empty tree.
+    monkeypatch.delenv("RAPTOR_SCORECARD_PATH", raising=False)
     monkeypatch.setenv("RAPTOR_DIR", str(tmp_path))
 
 
