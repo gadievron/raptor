@@ -644,37 +644,74 @@ _RESOLVER_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 _RESOLVER_TIMEOUT_S = 60.0
 
 
-def _resolver_env(staging: Path) -> dict[str, str]:
+def _resolver_scratch_home() -> Path:
+    """Create the resolver's throwaway HOME — always OUTSIDE staging.
+
+    The staging dir is a verbatim ``copytree`` of the (hostile) repo's
+    compose dir, so ANY fixed path under it is attacker-preseedable: a
+    repo shipping ``.raptor-resolver-home/.docker/config.json`` would
+    hand the ``docker compose config`` invocation an attacker-authored
+    CLI config — and docker's ``cliPluginsExtraDirs`` discovery would
+    then EXECUTE a repo-shipped plugin binary at sanitize time (before
+    any allowlist sanitisation, unconfined on hosts where the resolver
+    sandbox cannot engage). ``mkdtemp`` in the system temp dir yields a
+    fresh, empty, mode-0700, RAPTOR-owned dir that no repo content can
+    pre-populate or alias (same construction as core.sandbox's
+    fake_home; freshness per call is what makes the symlink-refusal
+    guard unnecessary here). ``.docker`` is pre-created so config
+    discovery lands on an existing empty RAPTOR-owned dir. Callers own
+    cleanup (``shutil.rmtree`` after resolution).
+    """
+    scratch = Path(tempfile.mkdtemp(prefix="raptor-resolver-home-"))
+    (scratch / ".docker").mkdir(mode=0o700)
+    return scratch
+
+
+def _resolver_env(scratch_home: Path) -> dict[str, str]:
     """Minimal environment for the ``compose config`` resolution step.
 
     Interpolation reads THIS environment — a hostile compose file's
     ``${HOME}``/``${PATH}``/``${DOCKER_HOST}`` would otherwise inline the
     launcher's allowlisted process env into the resolved model and ship
-    it into the container. Only a static generic PATH plus a throwaway
-    HOME/DOCKER_CONFIG inside staging are provided: unset variables
+    it into the container. Only a static generic PATH plus the throwaway
+    RAPTOR-owned HOME/DOCKER_CONFIG (:func:`_resolver_scratch_home` —
+    never inside staging) are provided: unset variables
     interpolate to empty (compose semantics, with a compose-side
     warning); ``${VAR:?}`` forms make resolution fail, which refuses the
     stack (fail closed). ``build``/``up``/``ps``/``down`` keep the normal
     allowlisted docker env — the sanitized file they consume contains no
     live interpolation (``$`` survives only ``$$``-escaped).
+
+    Note: a hostile ``${HOME}`` interpolation DOES inline the scratch
+    path string into the resolved model. That is a dead path by the time
+    anything runs (the dir is rmtree'd right after resolution) and leaks
+    only system tmpdir naming layout — the same info class as the
+    staging path itself. Revisit if tmp naming ever becomes sensitive.
     """
-    scratch = staging / ".raptor-resolver-home"
-    scratch.mkdir(exist_ok=True)
     return {
         "PATH": _RESOLVER_PATH,
-        "HOME": str(scratch),
-        "DOCKER_CONFIG": str(scratch / ".docker"),
+        "HOME": str(scratch_home),
+        "DOCKER_CONFIG": str(scratch_home / ".docker"),
     }
 
 
-def _run_resolver(argv: list[str], staging: Path, env: dict[str, str]) -> str:
+def _run_resolver(
+    argv: list[str],
+    staging: Path,
+    env: dict[str, str],
+    *,
+    scratch_home: Path | None = None,
+) -> str:
     """Run the resolver, sandboxed with reads confined to staging.
 
     The resolver invocation is itself attack surface — it follows file
     references in hostile YAML — so it runs under ``core.sandbox`` with
     ``restrict_reads`` scoped to the staging dir: an out-of-staging read
-    the parser-level gate missed fails at the kernel. When the sandbox
-    cannot ENGAGE (unsupported host), resolution proceeds unconfined
+    the parser-level gate missed fails at the kernel. ``scratch_home``
+    (the RAPTOR-owned resolver HOME, which lives outside staging) is
+    granted to the read + write sets so docker's config discovery works
+    under the confinement. When the sandbox cannot ENGAGE (unsupported
+    host), resolution proceeds unconfined
     with the recursive pre-gate as the remaining defense (logged loudly).
     A non-zero exit INSIDE the sandbox is a resolution failure and
     refuses the stack — it is never retried unconfined.
@@ -697,6 +734,10 @@ def _run_resolver(argv: list[str], staging: Path, env: dict[str, str]) -> str:
                 # loader/TLS minimum. This holds on the Landlock-only
                 # tier too, where no private mount view narrows /etc.
                 omit_etc_reads=True,
+                readable_paths=(
+                    [str(scratch_home)] if scratch_home else None),
+                writable_paths=(
+                    [str(scratch_home)] if scratch_home else None),
                 cwd=str(staging),
                 env=env,
                 # The env is CONSTRUCTED minimal (static PATH + throwaway
@@ -771,11 +812,16 @@ def _resolve_effective_model(compose_file: Path) -> dict[str, Any]:
     """
     staging = compose_file.parent
     prefix = _compose_invocation()
-    raw = _run_resolver(
-        [*prefix, "-f", str(compose_file), "config"],
-        staging,
-        _resolver_env(staging),
-    )
+    scratch_home = _resolver_scratch_home()
+    try:
+        raw = _run_resolver(
+            [*prefix, "-f", str(compose_file), "config"],
+            staging,
+            _resolver_env(scratch_home),
+            scratch_home=scratch_home,
+        )
+    finally:
+        shutil.rmtree(scratch_home, ignore_errors=True)
     try:
         data = yaml.safe_load(raw)
     except yaml.YAMLError as exc:

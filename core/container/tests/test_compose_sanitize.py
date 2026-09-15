@@ -551,8 +551,141 @@ def test_resolver_env_is_minimal(tmp_path: Path) -> None:
     env = cco._resolver_env(tmp_path)
     assert set(env) == {"PATH", "HOME", "DOCKER_CONFIG"}
     assert env["PATH"] == cco._RESOLVER_PATH  # static, not the process PATH
-    assert env["HOME"].startswith(str(tmp_path))  # throwaway, inside staging
+    assert env["HOME"] == str(tmp_path)  # the caller-owned scratch home
     assert env["DOCKER_CONFIG"].startswith(env["HOME"])
+
+
+def _plant_hostile_resolver_home(source: Path) -> None:
+    """Repo-shipped ``.raptor-resolver-home`` — the attacker shape: a
+    docker CLI config whose ``cliPluginsExtraDirs`` points at a repo
+    directory carrying an executable ``docker-compose`` plugin."""
+    planted = source / ".raptor-resolver-home" / ".docker"
+    planted.mkdir(parents=True)
+    (planted / "config.json").write_text(
+        '{"cliPluginsExtraDirs": ["plugins"]}')
+    plugins = source / "plugins"
+    plugins.mkdir()
+    plugin = plugins / "docker-compose"
+    plugin.write_text("#!/bin/sh\nexit 0\n")
+    plugin.chmod(0o755)
+
+
+def test_resolver_home_never_inside_staging(tmp_path: Path) -> None:
+    """A hostile repo that SHIPS ``.raptor-resolver-home`` (docker CLI
+    config + plugin binary) must never have that copy become the
+    resolver's HOME/DOCKER_CONFIG — the resolver home is a fresh
+    RAPTOR-owned dir outside the staging tree, and it is torn down
+    after resolution."""
+    source = tmp_path / "repo"
+    source.mkdir()
+    _plant_hostile_resolver_home(source)
+    compose = source / "docker-compose.yml"
+    compose.write_text(yaml.safe_dump(
+        {"services": {"web": {"image": "img"}}}))
+
+    seen: dict[str, Any] = {}
+
+    def fake_run_resolver(argv: list[str], staging: Path,
+                          env: dict[str, str], **kw: Any) -> str:
+        seen["staging"] = staging
+        seen["env"] = dict(env)
+        seen["scratch_home"] = kw.get("scratch_home")
+        seen["home_existed"] = Path(env["HOME"]).is_dir()
+        seen["config_dir_existed"] = Path(env["DOCKER_CONFIG"]).is_dir()
+        seen["config_json"] = sorted(
+            p.name for p in Path(env["DOCKER_CONFIG"]).iterdir())
+        return "services: {}\n"
+
+    staged, staging = cco.rewrite_for_localhost(compose)
+    try:
+        with patch.object(cco, "_run_resolver", fake_run_resolver):
+            cco._resolve_effective_model(staged)
+    finally:
+        cco.cleanup_staging(staging)
+
+    home = Path(seen["env"]["HOME"])
+    staging_prefix = str(seen["staging"].resolve())
+    assert not str(home.resolve()).startswith(staging_prefix)
+    assert not str(
+        Path(seen["env"]["DOCKER_CONFIG"]).resolve()
+    ).startswith(staging_prefix)
+    # The resolver saw a fresh RAPTOR-owned home: real dirs, an EMPTY
+    # config dir (the planted config.json never aliases in), and the
+    # sandbox grant handle for it.
+    assert seen["home_existed"] and seen["config_dir_existed"]
+    assert seen["config_json"] == []
+    assert seen["scratch_home"] == home
+    # Torn down after resolution.
+    assert not home.exists()
+
+
+def test_planted_resolver_home_file_does_not_break_resolution(
+        tmp_path: Path) -> None:
+    """A repo shipping ``.raptor-resolver-home`` as a plain FILE used to
+    make the resolver-env mkdir raise a raw FileExistsError (escaping
+    the ComposeError contract). The name is now inert repo data."""
+    source = tmp_path / "repo"
+    source.mkdir()
+    (source / ".raptor-resolver-home").write_text("not a directory")
+    compose = source / "docker-compose.yml"
+    compose.write_text(yaml.safe_dump(
+        {"services": {"web": {"image": "img"}}}))
+
+    staged, staging = cco.rewrite_for_localhost(compose)
+    try:
+        with patch.object(cco, "_run_resolver",
+                          lambda *a, **kw: "services: {}\n"):
+            resolved = cco._resolve_effective_model(staged)
+    finally:
+        cco.cleanup_staging(staging)
+    assert resolved == {"services": {}}
+
+
+def test_resolver_scratch_home_cleaned_on_failure(tmp_path: Path) -> None:
+    """The scratch home is torn down on the resolution-failure path too
+    (fail closed must not strand tmpdirs)."""
+    compose = tmp_path / "docker-compose.yml"
+    compose.write_text(yaml.safe_dump(
+        {"services": {"web": {"image": "img"}}}))
+    seen: dict[str, Any] = {}
+
+    def failing_run_resolver(argv: list[str], staging: Path,
+                             env: dict[str, str], **kw: Any) -> str:
+        seen["home"] = Path(env["HOME"])
+        raise cco.ComposeError("config exploded")
+
+    with patch.object(cco, "_run_resolver", failing_run_resolver), \
+            pytest.raises(cco.ComposeError, match="config exploded"):
+        cco._resolve_effective_model(compose)
+    assert not seen["home"].exists()
+
+
+def test_resolver_sandbox_granted_scratch_home(tmp_path: Path) -> None:
+    """The sandbox leg confines reads to staging — the out-of-staging
+    scratch home must ride the read + write grants or docker's config
+    discovery fails under confinement."""
+    seen: dict[str, Any] = {}
+
+    def fake_sandbox_run(argv: list[str], **kw: Any):
+        seen.update(kw)
+
+        class _P:
+            returncode = 0
+            stdout = "services: {}\n"
+            stderr = ""
+            sandbox_info: dict[str, Any] = {}
+
+        return _P()
+
+    scratch = tmp_path / "scratch-home"
+    scratch.mkdir()
+    import core.sandbox as sb
+    with patch.object(sb, "run", fake_sandbox_run):
+        cco._run_resolver(["docker", "compose", "config"], tmp_path,
+                          cco._resolver_env(scratch),
+                          scratch_home=scratch)
+    assert seen.get("readable_paths") == [str(scratch)]
+    assert seen.get("writable_paths") == [str(scratch)]
 
 
 def test_resolver_failure_never_retried_unconfined(tmp_path: Path) -> None:
