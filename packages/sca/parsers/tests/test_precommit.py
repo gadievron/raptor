@@ -531,3 +531,39 @@ repos:
     assert by_name["eslint-plugin-foo"].version == "2.0.0"
     assert "@scope/name" in by_name
     assert by_name["@scope/name"].version == "1.0.0"
+
+
+def test_repo_map_loaded_once_per_parse(tmp_path, monkeypatch):
+    """The curated repo-map is one JSON file: `parse` loads it once and
+    hands it to the per-entry extractor — re-loading per repos-entry
+    was an N+1 file read/parse on every config."""
+    import packages.sca.parsers.precommit as pc
+
+    calls = {"n": 0}
+    real = pc._load_repo_map
+
+    def _counting():
+        calls["n"] += 1
+        return real()
+
+    monkeypatch.setattr(pc, "_load_repo_map", _counting)
+    p = _write(tmp_path, """\
+repos:
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.2
+    hooks:
+      - id: mypy
+        additional_dependencies: ["pydantic>=2.5"]
+  - repo: https://github.com/pre-commit/mirrors-eslint
+    rev: v9.10.0
+    hooks:
+      - id: eslint
+        additional_dependencies: ["eslint-plugin-foo@2.0.0"]
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.0
+    hooks:
+      - id: ruff
+""")
+    deps = pc.parse(p)
+    assert deps  # non-vacuous
+    assert calls["n"] == 1

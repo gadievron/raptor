@@ -114,12 +114,15 @@ def parse(path: Path) -> list[Dependency]:
         # the hook needs at runtime. Each entry is a PEP 508 / npm
         # spec string. Common in ``mirrors-mypy`` configs:
         #   additional_dependencies: ["pydantic>=2.5", "types-PyYAML"]
-        out.extend(_extract_additional_deps(entry, declared_in=path))
+        out.extend(_extract_additional_deps(
+            entry, declared_in=path, repo_map=repo_map,
+        ))
     return out
 
 
 def _extract_additional_deps(
     entry: Any, *, declared_in: Path,
+    repo_map: dict[str, dict[str, str]] | None = None,
 ) -> list[Dependency]:
     """Extract ``hooks[].additional_dependencies`` entries.
 
@@ -144,7 +147,11 @@ def _extract_additional_deps(
     if not isinstance(hooks, list):
         return []
 
-    repo_map = _load_repo_map()
+    # ``parse`` passes its already-loaded map — re-loading here cost
+    # one file read + JSON parse PER repos-entry (N+1). The fallback
+    # load keeps direct callers working.
+    if repo_map is None:
+        repo_map = _load_repo_map()
     canonical = _canonicalise_repo(repo)
     if canonical:
         mapping = repo_map.get(canonical)
