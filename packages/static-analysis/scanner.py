@@ -2655,7 +2655,11 @@ def _pack_provenance_from_sarif(sarif_path: Path, out_dir: Path) -> dict:
     Returns a dict with keys:
         tool, name, exit, findings, sarif_sha256, stderr_size_bytes
     Missing-file and parse failures degrade to safe defaults rather
-    than raising — provenance is best-effort.
+    than raising — provenance is best-effort. ``findings`` is null
+    (not 0) when the SARIF is missing, unparseable, or not a SARIF
+    document (no ``runs`` list — a 0-byte file parses to ``{}``): an
+    uncountable pack must stay distinguishable from a clean
+    zero-finding pack in the provenance record.
     """
     p = Path(sarif_path)
     stem = p.stem  # e.g. "semgrep_category_auth" or "codeql_cpp"
@@ -2685,12 +2689,18 @@ def _pack_provenance_from_sarif(sarif_path: Path, out_dir: Path) -> dict:
             data = json.loads(raw.decode("utf-8", errors="replace"))
         except Exception:  # noqa: BLE001
             data = None
-        findings = _count_sarif_results(data) if data is not None else 0
+        if not isinstance(data, dict) or not isinstance(data.get("runs"), list):
+            # Parsed but not a SARIF document (0-byte parses to {};
+            # wrong-schema JSON has no `runs` list): uncountable —
+            # same null as the unparseable case, keep the real hash.
+            data = None
+        findings = _count_sarif_results(data) if data is not None else None
     except OSError:
         # Missing (FileNotFoundError) or unreadable (EACCES, EIO, …)
-        # — best-effort provenance, leave hash empty.
+        # — best-effort provenance, leave hash empty. findings null:
+        # nothing was countable.
         sarif_sha256 = ""
-        findings = 0
+        findings = None
 
     # Exit code: only semgrep packs write a .exit file. CodeQL only emits
     # a SARIF on rc==0 (run_codeql appends only on success), so 0 is

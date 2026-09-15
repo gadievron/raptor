@@ -40,16 +40,31 @@ def test_parse_sarif_matches_normal(tmp_path: Path) -> None:
 
 
 def test_parse_sarif_matches_missing_file(tmp_path: Path) -> None:
-    assert _parse_sarif_matches(tmp_path / "absent.sarif") == []
+    # None, not [] — an empty list reads downstream as a successfully
+    # evaluated zero-confirmation round.
+    assert _parse_sarif_matches(tmp_path / "absent.sarif") is None
+
+
+def test_parse_sarif_matches_non_sarif_json_refused(tmp_path: Path) -> None:
+    """JSON that load_sarif accepts but that is not a SARIF document
+    (0-byte file parses to {}; wrong-schema dict; runs not a list)
+    must surface as None, never an empty match list."""
+    p = tmp_path / "out.sarif"
+    p.write_text("", encoding="utf-8")
+    assert _parse_sarif_matches(p) is None
+    p.write_text('{"hello": "world"}', encoding="utf-8")
+    assert _parse_sarif_matches(p) is None
+    p.write_text('{"runs": "corrupt"}', encoding="utf-8")
+    assert _parse_sarif_matches(p) is None
 
 
 def test_parse_sarif_matches_oversize_refused(tmp_path: Path) -> None:
-    """A SARIF over the bounded loader's cap degrades to no matches;
-    the stat gate fires before any read (sparse truncate)."""
+    """A SARIF over the bounded loader's cap surfaces as unreadable
+    (None); the stat gate fires before any read (sparse truncate)."""
     p = tmp_path / "out.sarif"
     _write_sarif(p)
     os.truncate(p, 100 * 1024 * 1024 + 1)
-    assert _parse_sarif_matches(p) == []
+    assert _parse_sarif_matches(p) is None
 
 
 def test_match_key_uses_store_spec_key_format() -> None:

@@ -679,15 +679,22 @@ class QueryRunner:
 
             from core.sarif.parser import load_sarif
             sarif_data = load_sarif(sarif_path) if sarif_path.exists() else None
-            if sarif_data is None:
+            runs = (
+                sarif_data.get("runs")
+                if isinstance(sarif_data, dict) else None
+            )
+            if not isinstance(runs, list):
                 # rc==0 but no readable SARIF: a missing / oversized /
                 # unparseable output is an analysis failure, never a
                 # successful zero-finding run — success=True here reads
-                # downstream as a clean scan.
+                # downstream as a clean scan. Schema leg: a 0-byte
+                # file parses to {} and any valid-JSON dict passes
+                # load_sarif — without a `runs` list it is not a
+                # SARIF document, same failure.
                 reason = (
                     "SARIF output missing after successful analyze"
                     if not sarif_path.exists()
-                    else "SARIF output unreadable (parse/size failure)"
+                    else "SARIF output unreadable (parse/size/schema failure)"
                 )
                 errors.append(f"{reason}: {sarif_path}")
                 logger.error("✗ %s: %s", reason, sarif_path)
@@ -701,7 +708,7 @@ class QueryRunner:
                     errors=errors,
                     suite_name=suite_name,
                 )
-            for run in sarif_data.get("runs", []):
+            for run in runs:
                 findings_count += len(run.get("results", []))
                 queries_executed += len(run.get("tool", {}).get("driver", {}).get("rules", []))
 
@@ -809,8 +816,27 @@ class QueryRunner:
 
             success = result.returncode == 0
 
-            if success and sarif_path.exists():
-                findings_count = self._count_sarif_findings(sarif_path)
+            if success:
+                findings_count = (
+                    self._count_sarif_findings(sarif_path)
+                    if sarif_path.exists() else None
+                )
+                if findings_count is None:
+                    # rc==0 but no readable SARIF is an analysis
+                    # failure, never a clean zero-finding scan —
+                    # run_suite's guard, applied to this sibling.
+                    reason = self._unreadable_sarif_reason(sarif_path)
+                    logger.error("✗ %s", reason)
+                    return QueryResult(
+                        success=False,
+                        language=language,
+                        database_path=database_path,
+                        sarif_path=None,
+                        findings_count=0,
+                        duration_seconds=time.time() - start_time,
+                        errors=[reason],
+                        suite_name="custom",
+                    )
                 logger.info("✓ Custom queries completed: %s findings", findings_count)
 
                 return QueryResult(
@@ -1229,8 +1255,23 @@ class QueryRunner:
                 errors=[str(e)], suite_name=suite_name,
             )
 
-        if proc.returncode == 0 and sarif_path.exists():
-            n = self._count_sarif_findings(sarif_path)
+        if proc.returncode == 0:
+            n = (
+                self._count_sarif_findings(sarif_path)
+                if sarif_path.exists() else None
+            )
+            if n is None:
+                # rc==0 but no readable SARIF: analysis failure, never
+                # a clean zero-finding scan (run_suite's guard, applied
+                # to the IRIS + curated sibling).
+                reason = self._unreadable_sarif_reason(sarif_path)
+                logger.warning("%s (%s) failed: %s", label, lang, reason)
+                return QueryResult(
+                    success=False, language=lang,
+                    database_path=db, sarif_path=None, findings_count=0,
+                    duration_seconds=time.time() - analysis_start,
+                    errors=[reason], suite_name=suite_name,
+                )
             logger.info("✓ %s (%s): %s findings", label, lang, n)
             return QueryResult(
                 success=True, language=lang,
@@ -1267,13 +1308,48 @@ class QueryRunner:
             skip_install=skip_install,
         )
 
-    def _count_sarif_findings(self, sarif_path: Path) -> int:
-        """Count findings in SARIF file."""
+    def _count_sarif_findings(self, sarif_path: Path) -> int | None:
+        """Count findings in a SARIF file — ``None`` when unreadable.
+
+        ``load_sarif`` refuses missing / oversized (CodeQL SARIFs
+        routinely reach hundreds of MB on large targets) / malformed
+        files by returning None. Mapping that refusal to 0 here used
+        to let an rc==0 analyze with an unreadable output read
+        downstream as a successful zero-finding scan; callers must
+        treat None as an analysis failure, mirroring run_suite's
+        explicit guard.
+
+        A document ``load_sarif`` accepts is not necessarily SARIF: a
+        0-byte file parses to ``{}`` and any valid-JSON dict passes.
+        Without a ``runs`` list (or with malformed run entries) this
+        is not a SARIF document, so it lands on the same None path —
+        never a countable zero."""
         from core.sarif.parser import load_sarif
         sarif_data = load_sarif(sarif_path)
-        if not sarif_data:
-            return 0
-        return sum(len(run.get("results", [])) for run in sarif_data.get("runs", []))
+        if sarif_data is None:
+            return None
+        runs = sarif_data.get("runs")
+        if not isinstance(runs, list):
+            return None
+        total = 0
+        for run in runs:
+            if not isinstance(run, dict):
+                return None
+            results = run.get("results", [])
+            if not isinstance(results, list):
+                return None
+            total += len(results)
+        return total
+
+    def _unreadable_sarif_reason(self, sarif_path: Path) -> str:
+        """Failure reason for an rc==0 analyze without readable SARIF
+        (same wording run_suite established)."""
+        reason = (
+            "SARIF output missing after successful analyze"
+            if not sarif_path.exists()
+            else "SARIF output unreadable (parse/size/schema failure)"
+        )
+        return f"{reason}: {sarif_path}"
 
     def get_sarif_summary(self, sarif_path: Path,
                           *, sarif_data: dict | None = None) -> dict:

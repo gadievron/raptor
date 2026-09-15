@@ -50,18 +50,29 @@ def _write_temp_pack(
     return pack_dir
 
 
-def _parse_sarif_matches(sarif_path: Path) -> list[dict[str, Any]]:
-    """Extract match records from a SARIF file."""
-    # Bounded canonical loader (100 MiB stat gate before the read):
-    # the SARIF is CodeQL output over the analysed target, which can
-    # inflate it through paths and snippets. None-on-failure matches
-    # the previous empty-matches degradation.
+def _parse_sarif_matches(sarif_path: Path) -> list[dict[str, Any]] | None:
+    """Extract match records from a SARIF file — ``None`` when the
+    file is unreadable.
+
+    Bounded canonical loader (100 MiB stat gate before the read): the
+    SARIF is CodeQL output over the analysed target, which can inflate
+    it through paths and snippets. The refusal must surface as None,
+    not an empty match list — an empty list reads downstream as a
+    successfully evaluated zero-confirmation round, silently dropping
+    every confirmation the analyze actually produced."""
     data = load_sarif(sarif_path)
     if data is None:
-        return []
+        return None
+    runs = data.get("runs")
+    if not isinstance(runs, list):
+        # load_sarif accepts any valid JSON dict — a 0-byte file
+        # parses to {} and a wrong-schema document carries no `runs`
+        # list. Neither is SARIF: refuse (None), never an empty match
+        # list that reads as an evaluated zero-confirmation round.
+        return None
 
     matches = []
-    for run in data.get("runs", []):
+    for run in runs:
         for result in run.get("results", []):
             for loc in result.get("locations", []):
                 phys = loc.get("physicalLocation", {})
@@ -224,6 +235,17 @@ def make_codeql_tool_runner(
                     )
 
                 matches = _parse_sarif_matches(result.sarif_path)
+                if matches is None:
+                    # Defence in depth behind run_local_pack's own
+                    # unreadable-SARIF guard (the file can still churn
+                    # between the runner's read and ours): a failed
+                    # parse is a failed round, never an empty one.
+                    return RefinementFeedback(
+                        tool_errors=[
+                            f"sarif unreadable: {result.sarif_path}",
+                        ],
+                        n_attempts=1,
+                    )
                 confirmed_keys = []
                 seen = set()
                 for match in matches:
