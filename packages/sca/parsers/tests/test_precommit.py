@@ -508,5 +508,26 @@ repos:
     by_name = {d.name: d for d in deps}
     assert "flask-sqlalchemy" in by_name
     assert by_name["flask-sqlalchemy"].version == "3.1.1"
-    # npm scoped names keep their as-published spelling (npm is
-    # case-sensitive for legacy names; only PyPI folds here).
+
+
+def test_additional_dependencies_npm_names_case_folded(tmp_path):
+    """The npm arm routes through the same canonical fold as PyPI
+    (``naming.fold_name`` lowercases npm, matching the inline-install
+    producer) — a hand-rolled PyPI-only special case left as-written
+    npm casing breaking join-key parity, scoped names included."""
+    p = _write(tmp_path, """\
+repos:
+  - repo: https://github.com/pre-commit/mirrors-eslint
+    rev: v9.10.0
+    hooks:
+      - id: eslint
+        additional_dependencies:
+          - "ESLint-Plugin-Foo@2.0.0"
+          - "@Scope/Name@1.0.0"
+""")
+    deps = parse(p)
+    by_name = {d.name: d for d in deps}
+    assert "eslint-plugin-foo" in by_name
+    assert by_name["eslint-plugin-foo"].version == "2.0.0"
+    assert "@scope/name" in by_name
+    assert by_name["@scope/name"].version == "1.0.0"

@@ -235,13 +235,15 @@ def _classify_addl_spec(
     """Split a PEP 508 / npm install spec into (name, version,
     pin_style)."""
     import re as _re
+
+    from ..naming import fold_name
     if ecosystem == "npm" and spec.startswith("@"):
         # Scoped npm: ``@scope/name@version``.
         # First ``@`` is the scope marker; tag separator is the
         # second.
         tail_match = _re.search(r"^(@[^/]+/[^@<>=~ ]+)([<>=~@].*)?$", spec)
         if tail_match:
-            name = tail_match.group(1)
+            name = fold_name(tail_match.group(1), ecosystem)
             ver_part = tail_match.group(2) or ""
             ver_part = ver_part.lstrip("@").strip()
             return _wrap_version(name, ver_part)
@@ -250,14 +252,13 @@ def _classify_addl_spec(
     m = _re.match(r"^([A-Za-z0-9._\-]+)(\[[^\]]*\])?(.*)$", spec)
     if not m:
         return "", None, PinStyle.UNKNOWN
-    name = m.group(1)
-    if ecosystem == "PyPI":
-        # Every other PyPI parser emits PEP 503-normalised names —
-        # OSV keys PyPI advisories on the normalised spelling, so an
-        # as-written ``types-PyYAML`` / ``Flask_SQLAlchemy`` here got
-        # zero advisory coverage and broke join-key parity.
-        from ..naming import pep503_name
-        name = pep503_name(name)
+    # Route through the canonical per-ecosystem fold — OSV keys PyPI
+    # advisories on the PEP 503 spelling and case-folds npm names, so
+    # an as-written ``types-PyYAML`` / ``ESLint`` here got zero
+    # advisory coverage and broke join-key parity with the
+    # inline-install producer (which folds every ecosystem). A
+    # hand-rolled PyPI-only special case left the npm arm open.
+    name = fold_name(m.group(1), ecosystem)
     rest = m.group(3).strip()
     # ``name@<spec>`` (npm tag-separator form): drop the separator
     # BEFORE classification. Leaving it attached meant ``pkg@^1.0`` /
