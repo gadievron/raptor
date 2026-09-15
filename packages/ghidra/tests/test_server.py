@@ -1,11 +1,29 @@
 """Tests for the persistent sandboxed Ghidra server."""
 
+import shutil
 import sys
+import tempfile
 import time
+from pathlib import Path
 
 import pytest
 
 from packages.ghidra.detect import pyghidra_available
+
+
+@pytest.fixture
+def short_sock_dir():
+    """AF_UNIX-safe socket dir (same pattern as core/sandbox tests).
+
+    ``tmp_path`` under xdist / deep TMPDIRs exceeds sun_path (~108
+    bytes on Linux) once a socket name is appended — bind() then
+    fails with "AF_UNIX path too long".
+    """
+    d = tempfile.mkdtemp(prefix="raptor-sk-", dir="/tmp")
+    try:
+        yield Path(d)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 class TestServerGating:
@@ -101,19 +119,29 @@ class TestWorkerWatchdog:
     """Per-op hard deadline on the persistent handler — no JVM."""
 
     def test_hung_op_raises(self, monkeypatch):
+        import threading
+
         from packages.ghidra import server_worker
 
+        # Event-parked, not sleep-parked: a plain sleep(30) left the
+        # daemon handler thread wedged for 30s AFTER the test passed,
+        # bleeding scheduler pressure into the rest of the worker's
+        # test batch. The release below unparks it immediately.
+        release = threading.Event()
+
         def _stuck(session, req):
-            import time
-            time.sleep(30)
+            release.wait(timeout=120)
 
         monkeypatch.setattr(server_worker, "_handle", _stuck)
         monkeypatch.setattr(
             server_worker, "_OP_DEADLINE_S", {"ping": 0.2},
         )
         handler = server_worker._HandlerThread(server_worker._Session())
-        with pytest.raises(server_worker._OpHung, match="ping"):
-            handler.run({"op": "ping"})
+        try:
+            with pytest.raises(server_worker._OpHung, match="ping"):
+                handler.run({"op": "ping"})
+        finally:
+            release.set()
 
     def test_fast_op_passes_through(self):
         from packages.ghidra import server_worker
@@ -438,15 +466,16 @@ class TestWorkerConnectionIdleTimeout:
     idle-but-connected (or wedged) parent must not hold the JVM
     worker process alive forever."""
 
-    def _run_worker(self, tmp_path, monkeypatch):
+    def _run_worker(self, sock_dir, monkeypatch, idle_timeout=1):
         import threading
 
         from packages.ghidra import server_worker
 
-        sock_path = str(tmp_path / "w.sock")
+        sock_path = str(sock_dir / "w.sock")
         monkeypatch.setattr(
             sys, "argv",
-            ["server_worker", sock_path, "--idle-timeout", "1"],
+            ["server_worker", sock_path,
+             "--idle-timeout", str(idle_timeout)],
         )
         box: dict = {}
 
@@ -490,11 +519,22 @@ class TestWorkerConnectionIdleTimeout:
                 time.sleep(0.02)
 
     def test_idle_connected_client_does_not_pin_worker(
-            self, tmp_path, monkeypatch):
-        sock_path, thread, box = self._run_worker(tmp_path, monkeypatch)
+            self, short_sock_dir, monkeypatch):
+        sock_path, thread, box = self._run_worker(
+            short_sock_dir, monkeypatch)
         client = self._connect_client(sock_path, thread=thread)
         try:
-            thread.join(timeout=8)
+            # Generous join budget with a structural completion
+            # signal: the worker runs in-process with a REAL 1s
+            # socket timeout, so under xdist scheduler starvation the
+            # timeout wakeup plus the surrounding Python can land
+            # seconds late — a tight join deadline measured the
+            # scheduler, not the idle enforcement. A worker that
+            # MISSES the per-connection timeout never exits at all,
+            # so the wide budget loses no detection power; rc == 0 is
+            # the idle-exit path's return value (a crashed run() body
+            # leaves box empty).
+            thread.join(timeout=60)
             assert not thread.is_alive(), (
                 "worker still alive with an idle connected client")
             assert box.get("rc") == 0
@@ -502,11 +542,21 @@ class TestWorkerConnectionIdleTimeout:
             client.close()
 
     def test_requests_still_served_under_connection_timeout(
-            self, tmp_path, monkeypatch):
+            self, short_sock_dir, monkeypatch):
         import json as json_mod
 
-        sock_path, thread, box = self._run_worker(tmp_path, monkeypatch)
-        client = self._connect_client(sock_path, thread=thread, timeout=5)
+        # The property here is "requests are served WITH a
+        # per-connection timeout armed", not the timeout's length —
+        # a 1s timeout raced this test's own client scheduling (the
+        # worker idle-exited before a descheduled client sent its
+        # ping). 60s keeps the settimeout code path armed while
+        # sitting far outside any load stall.
+        sock_path, thread, box = self._run_worker(
+            short_sock_dir, monkeypatch, idle_timeout=60)
+        # Client timeout and join budget both generous: the in-process
+        # worker's replies can be scheduled seconds late under load
+        # (same rationale as the idle test above).
+        client = self._connect_client(sock_path, thread=thread, timeout=60)
         try:
             stream = client.makefile("rwb")
             stream.write(b'{"id": 1, "op": "ping"}\n')
@@ -517,7 +567,7 @@ class TestWorkerConnectionIdleTimeout:
             stream.flush()
             resp = json_mod.loads(stream.readline())
             assert resp["ok"] is True and resp["bye"] is True
-            thread.join(timeout=5)
+            thread.join(timeout=60)
             assert not thread.is_alive()
             assert box.get("rc") == 0
         finally:
