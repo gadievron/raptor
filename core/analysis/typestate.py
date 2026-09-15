@@ -166,8 +166,16 @@ def extract_typestate_models(
     if not checklist:
         return models
 
-    items = checklist.get("items", [])
-    func_names = [item.get("name", "") for item in items]
+    # Walk the real checklist shape ({"files": [{"path": ..., "items":
+    # [...]}]}) through the producer package's shared walker. A flat
+    # top-level ``items`` read matched no artifact any producer emits,
+    # so the checklist leg of pair discovery silently never fired.
+    from core.inventory import iter_checklist_items
+
+    func_names = [
+        item.get("name", "")
+        for _file_path, _file_entry, item in iter_checklist_items(checklist)
+    ]
 
     # Discovery input: project-defined names PLUS callee names from the
     # Joern summaries. Callees cover external-library lifecycle APIs

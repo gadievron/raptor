@@ -46,3 +46,53 @@ class TestLockMethodsReachable:
         # lock model.
         model = _build_alloc_free_model("spin_lock", "spin_unlock")
         assert model.states == ["unlocked", "locked"]
+
+
+class TestChecklistJoinContract:
+    """Pair discovery must join the shape the checklist producer emits.
+
+    The contract tests build the artifact through the ACTUAL producer
+    (``build_inventory``) instead of hand-writing fixture keys — a
+    hand-built flat ``items`` fixture is exactly the phantom shape
+    that masked the dead checklist leg.
+    """
+
+    def test_real_inventory_checklist_discovers_pairs(self, tmp_path) -> None:
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "conn.c").write_text(
+            "int conn_create(void) { return 0; }\n"
+            "void conn_destroy(int c) { (void)c; }\n",
+            encoding="utf-8",
+        )
+        from core.inventory import build_inventory
+
+        checklist = build_inventory(str(src))
+        from core.analysis.typestate import extract_typestate_models
+
+        models = extract_typestate_models(checklist)
+        assert "conn_create/conn_destroy" in models
+
+    def test_flat_items_shape_discovers_nothing(self) -> None:
+        # Control: no producer emits a flat top-level ``items`` list;
+        # the walker must NOT resurrect the phantom shape.
+        from core.analysis.typestate import extract_typestate_models
+
+        flat = {"items": [{"name": "conn_create"}, {"name": "conn_destroy"}]}
+        models = extract_typestate_models(flat)
+        assert "conn_create/conn_destroy" not in models
+
+    def test_walker_skips_junk_rows(self) -> None:
+        from core.inventory import iter_checklist_items
+
+        checklist = {
+            "files": [
+                "junk",
+                {"path": "a.c", "items": ["junk", {"name": "f"}]},
+                {"file": "b.c", "functions": [{"name": "g"}]},
+            ],
+        }
+        walked = list(iter_checklist_items(checklist))
+        assert [(p, i["name"]) for p, _fe, i in walked] == [
+            ("a.c", "f"), ("b.c", "g"),
+        ]

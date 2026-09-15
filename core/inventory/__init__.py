@@ -96,6 +96,7 @@ __all__ = [
     "get_items",
     "is_binary_file",
     "is_generated_file",
+    "iter_checklist_items",
     "lookup_function",
     "match_exclusion_reason",
     "normalise_path",
@@ -115,6 +116,35 @@ def get_items(file_entry):
     New format: file_entry["items"] (list of CodeItem dicts with "kind" field)
     """
     return file_entry.get("items", file_entry.get("functions", [])) or []
+
+
+def iter_checklist_items(checklist):
+    """Single authority for walking ``checklist["files"][*]`` items.
+
+    Yields ``(file_path, file_entry, item)`` for every code item in a
+    checklist/inventory dict — the shape ``build_inventory`` emits and
+    ``read_checklist`` returns (``{"files": [{"path": ..., "items":
+    [...]}]}``). File records carry ``path`` with a ``file`` fallback
+    for older artifacts; item lists live under ``items`` with a
+    ``functions`` fallback (via :func:`get_items`). Non-dict file
+    records and items are skipped: every consumer immediately calls
+    ``.get`` on both, so yielding junk rows only converts a walk into
+    a crash.
+
+    Consumers joining on the checklist shape must walk through this
+    function rather than hand-rolling the two-level read — flat
+    top-level ``items`` reads silently see nothing on real artifacts.
+    """
+    if not isinstance(checklist, dict):
+        return
+    for file_entry in checklist.get("files", []) or []:
+        if not isinstance(file_entry, dict):
+            continue
+        file_path = file_entry.get("path", file_entry.get("file", ""))
+        for item in get_items(file_entry):
+            if not isinstance(item, dict):
+                continue
+            yield file_path, file_entry, item
 
 
 # checklist.json is read-modify-written many times per run and

@@ -21423,21 +21423,17 @@ def _re_review_disagreements(
 def _iter_checklist_items(
     checklist: dict[str, Any],
 ) -> "Iterator[tuple[str, dict[str, Any], dict[str, Any]]]":
-    """Single authority for walking ``checklist["files"][*]`` items.
+    """Walk ``checklist["files"][*]`` items via the shared walker.
 
-    Yields ``(file_path, file_info, item)``. Checklist file records
-    carry ``path`` (the inventory builder) with a ``file`` fallback
-    for older artifacts; function lists live under ``items`` with a
-    ``functions`` fallback. Consolidating the walk here keeps those
-    key fallbacks from drifting between hand-rolled copies (the
-    per-pass copies had already diverged on both).
+    Yields ``(file_path, file_info, item)``. The shape authority is
+    ``core.inventory.iter_checklist_items`` — the checklist producer's
+    package — so the ``path``/``file`` and ``items``/``functions`` key
+    fallbacks cannot drift between hand-rolled copies (the per-pass
+    copies had already diverged on both before this was consolidated).
     """
-    for file_info in checklist.get("files", []) or []:
-        file_path = file_info.get("path", file_info.get("file", ""))
-        for item in (
-            file_info.get("items", file_info.get("functions", [])) or []
-        ):
-            yield file_path, file_info, item
+    from core.inventory import iter_checklist_items
+
+    yield from iter_checklist_items(checklist)
 
 
 #: Memoised checklist item index, keyed by the identity of the

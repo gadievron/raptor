@@ -53,50 +53,58 @@ class TestExtractTypestateModels:
         models = extract_typestate_models()
         assert len(models) > 0
 
-    def test_discovers_lifecycle_pairs(self):
-        checklist = {
-            "items": [
-                {"name": "ctx_init"},
-                {"name": "ctx_destroy"},
-                {"name": "unrelated"},
+    # Checklists nest items under files[*] (the shape build_inventory
+    # emits and read_checklist returns) — the fixtures mirror it. Flat
+    # top-level "items" fixtures matched no real artifact and let the
+    # dead checklist leg pass for three campaigns.
+    @staticmethod
+    def _checklist(*names: str, split: bool = False) -> dict:
+        if split:
+            # Pair halves in different files — the cross-file case the
+            # checklist leg exists for.
+            return {
+                "files": [
+                    {"path": f"src/f{i}.c", "items": [{"name": n}]}
+                    for i, n in enumerate(names)
+                ],
+            }
+        return {
+            "files": [
+                {"path": "src/a.c", "items": [{"name": n} for n in names]},
             ],
         }
+
+    def test_discovers_lifecycle_pairs(self):
+        checklist = self._checklist("ctx_init", "ctx_destroy", "unrelated")
         models = extract_typestate_models(checklist)
         assert "ctx_init/ctx_destroy" in models
 
     def test_discovers_alloc_free(self):
-        checklist = {
-            "items": [
-                {"name": "session_alloc"},
-                {"name": "session_free"},
-            ],
-        }
+        checklist = self._checklist("session_alloc", "session_free")
         models = extract_typestate_models(checklist)
         assert "session_alloc/session_free" in models
 
-    def test_discovers_open_close(self):
-        checklist = {
-            "items": [
-                {"name": "conn_open"},
-                {"name": "conn_close"},
-            ],
-        }
+    def test_discovers_open_close_across_files(self):
+        checklist = self._checklist("conn_open", "conn_close", split=True)
         models = extract_typestate_models(checklist)
         assert "conn_open/conn_close" in models
 
     def test_no_false_pairs(self):
-        checklist = {
-            "items": [
-                {"name": "foo_init"},
-                {"name": "bar_destroy"},
-            ],
-        }
+        checklist = self._checklist("foo_init", "bar_destroy")
         models = extract_typestate_models(checklist)
         assert "foo_init/bar_destroy" not in models
 
     def test_empty_checklist(self):
-        models = extract_typestate_models({"items": []})
+        models = extract_typestate_models({"files": []})
         assert len(models) == len(build_builtin_models())
+
+    def test_flat_items_shape_is_not_a_producer_shape(self):
+        # Control: no producer emits a flat top-level "items" list;
+        # the walker must not resurrect it.
+        models = extract_typestate_models(
+            {"items": [{"name": "ctx_init"}, {"name": "ctx_destroy"}]},
+        )
+        assert "ctx_init/ctx_destroy" not in models
 
 
 class TestCheckTypestateViolations:
