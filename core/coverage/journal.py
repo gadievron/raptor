@@ -48,6 +48,15 @@ _MAX_JOURNAL_BYTES = 256 * 1024 * 1024
 # domain-model.json is a small RAPTOR-written study artifact.
 _MAX_DOMAIN_MODEL_BYTES = 64 * 1024 * 1024
 
+# Per-load cap on detailed row-quarantine warnings. A hostile journal
+# is millions of refused rows; one warning per row is its own flood
+# (the refusals themselves stay counted and summarised). High enough
+# that every genuine truncated-write/corruption incident (a handful of
+# rows) keeps full detail; low enough that an at-cap degenerate file
+# cannot emit millions of log lines. Downgrading (not dropping) the
+# excess keeps the detail reachable at debug level.
+_ROW_WARN_LIMIT = 20
+
 VALID_VERDICTS = frozenset({
     "clean", "suspicious", "finding", "error", "dormant",
     # Gate-resolution bucket: tool-blind, needs concrete verification.
@@ -501,50 +510,114 @@ def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
         return []
 
     entries: list[ReviewJournalEntry] = []
-    lines = journal_path.read_text(encoding="utf-8").splitlines()
-
+    # Read raw BYTES and hand each line to the parser individually. A
+    # whole-file ``read_text()`` decoded BEFORE any per-line quarantine
+    # could run, so one undecodable byte (anything with the run-dir
+    # write grant can append ``b"\x80"``) crashed every journal
+    # consumer at once; per-row parsing contains a bad encoding to the
+    # row that carries it (both JSON backends decode per input).
+    #
+    # STREAM the lines instead of materialising a whole-file
+    # ``splitlines()``: a degenerate journal of 2-3 byte rows costs one
+    # small bytes object PER LINE when split eagerly (~20x the file
+    # size in peak RSS — an at-cap journal of tiny rows OOM-killed the
+    # reader that exists to contain hostile bytes). Iterating the file
+    # keeps one line alive at a time, so the byte cap bounds the
+    # reader's own memory, not just the file. Pinned by the RSS-bounded
+    # test in core/coverage/tests/test_journal_containment.py.
     corrupt = 0
-    for i, line in enumerate(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            raw = loads(line)
-        except ValueError:
-            corrupt += 1
-            if i == len(lines) - 1:
-                logger.debug(
-                    "journal: skipping corrupt trailing line in %s", journal_path,
+    row_warnings = 0
+    budget = _MAX_JOURNAL_BYTES
+
+    def _row_warning(msg: str, *args: object) -> None:
+        # Rate-limit per-row warnings: a hostile journal is millions of
+        # refused rows, and one warning per row is its own flood. The
+        # first _ROW_WARN_LIMIT keep full detail; the rest downgrade to
+        # debug, and the trailing summary always reports totals.
+        nonlocal row_warnings
+        row_warnings += 1
+        if row_warnings <= _ROW_WARN_LIMIT:
+            logger.warning(msg, *args)
+            if row_warnings == _ROW_WARN_LIMIT:
+                logger.warning(
+                    "journal: further per-row warnings for %s "
+                    "downgraded to debug", journal_path,
                 )
-            else:
-                logger.debug(
-                    "journal: skipping corrupt line %d in %s", i + 1, journal_path,
-                )
-            continue
-        if not isinstance(raw, dict):
-            # Valid JSON is not necessarily a dict: ``null``, a list,
-            # a string, or a bare number parses fine but would raise
-            # AttributeError inside _entry_from_dict — past any except
-            # tuple keyed on the dict schema. Quarantine the row
-            # BEFORE handing it over: anything that is not a validated
-            # dict is contained here.
-            logger.warning(
-                "journal: skipping non-dict entry on line %d: %s",
-                i + 1, type(raw).__name__,
-            )
-            continue
-        try:
-            entries.append(_entry_from_dict(raw))
-        except (TypeError, KeyError, ValueError) as exc:
-            # ValueError included: _entry_from_dict raises it for an
-            # unknown schema_version and for wrong-typed fields. The
-            # journal lives inside the run dir — SANDBOX-WRITABLE —
-            # so ONE planted row must quarantine (skip + warn), never
-            # persistently crash every journal consumer (audit
-            # resume, reports, completion merge).
-            logger.warning(
-                "journal: skipping malformed entry on line %d: %s", i + 1, exc,
-            )
+        else:
+            logger.debug(msg, *args)
+
+    try:
+        with journal_path.open("rb") as fh:
+            for i, line in enumerate(fh):
+                # Running byte budget: the stat() gate above races a
+                # writer that grows the file after the check;
+                # re-enforce the cap on the bytes actually read.
+                budget -= len(line)
+                if budget < 0:
+                    logger.warning(
+                        "journal: %s grew past the %d byte cap "
+                        "mid-read; stopping (%d entries loaded)",
+                        journal_path, _MAX_JOURNAL_BYTES, len(entries),
+                    )
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    raw = loads(line)
+                except Exception:  # noqa: BLE001 — row containment boundary
+                    # ANY parse failure quarantines THIS row only — malformed
+                    # JSON (ValueError), undecodable bytes (UnicodeDecodeError),
+                    # nesting bombs (RecursionError on the stdlib arm; orjson
+                    # rejects depth with ValueError). Enumerating exception
+                    # types here is exactly how each previous planted-row
+                    # generation crashed every consumer: the journal lives in
+                    # the sandbox-writable run dir, so the boundary must be
+                    # total. Pinned by the generative containment test
+                    # (core/coverage/tests/test_intake_containment.py).
+                    corrupt += 1
+                    logger.debug(
+                        "journal: skipping corrupt line %d in %s",
+                        i + 1, journal_path,
+                    )
+                    continue
+                if not isinstance(raw, dict):
+                    # Valid JSON is not necessarily a dict: ``null``, a
+                    # list, a string, or a bare number parses fine but
+                    # would raise AttributeError inside _entry_from_dict
+                    # — past any except tuple keyed on the dict schema.
+                    # Quarantine the row BEFORE handing it over:
+                    # anything that is not a validated dict is
+                    # contained here.
+                    _row_warning(
+                        "journal: skipping non-dict entry on line %d: %s",
+                        i + 1, type(raw).__name__,
+                    )
+                    continue
+                try:
+                    entries.append(_entry_from_dict(raw))
+                except Exception as exc:  # noqa: BLE001 — row containment boundary
+                    # The journal lives inside the run dir — SANDBOX-
+                    # WRITABLE — so ONE planted row must quarantine
+                    # (skip + warn), never persistently crash every
+                    # journal consumer (audit resume, reports,
+                    # completion merge). The catch is deliberately
+                    # total: the previous tuple (TypeError/KeyError/
+                    # ValueError) was a shape enumeration, and each
+                    # newly reachable exception class (serializer
+                    # RecursionError on a deep field, future validator
+                    # arms) re-opened the crash. Same oracle as the
+                    # parse arm above.
+                    _row_warning(
+                        "journal: skipping malformed entry on line %d: %s",
+                        i + 1, exc,
+                    )
+    except OSError as exc:
+        # Open failure, or a read failure mid-iteration (EIO): keep
+        # whatever already loaded (degrade, never propagate) and warn.
+        logger.warning(
+            "journal: failed to read %s: %s", journal_path, exc,
+        )
     if corrupt:
         logger.warning(
             "journal: skipped %d corrupt line(s) in %s "
