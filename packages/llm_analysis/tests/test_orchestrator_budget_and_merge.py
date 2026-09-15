@@ -239,3 +239,36 @@ class TestPanelSummaryParts:
         assert _panel_summary_parts(2, 0, 0) == ["2 agreed"]
         assert _panel_summary_parts(0, 0, 1) == ["1 no-verdict"]
         assert _panel_summary_parts(0, 0, 0) == []
+
+    def test_panel_verdict_panels_are_counted(self):
+        # Panels that voted on an abstained primary (consensus and
+        # judge both stamp "panel-verdict") join the printed line.
+        assert _panel_summary_parts(1, 0, 0, 2) == [
+            "1 agreed", "2 panel-verdict",
+        ]
+
+    def test_count_panel_stamps_counts_every_stage_outcome(self):
+        # The summary counters for BOTH stages come from this one
+        # counter — including the panel-verdict bucket for panels
+        # that voted on an abstained primary. Junk rows (non-dict,
+        # unknown stamp, absent stamp) count nowhere.
+        from packages.llm_analysis.orchestrator import _count_panel_stamps
+        rows = [
+            {"consensus": "agreed"},
+            {"consensus": "disputed"},
+            {"consensus": "no-verdict"},
+            {"consensus": "panel-verdict"},
+            {"consensus": "panel-verdict", "judge": "agreed"},
+            {"judge": "panel-verdict"},
+            {"consensus": "bogus"},
+            {},
+            "not-a-dict",
+        ]
+        assert _count_panel_stamps(rows, "consensus") == {
+            "agreed": 1, "disputed": 1,
+            "no-verdict": 1, "panel-verdict": 2,
+        }
+        assert _count_panel_stamps(rows, "judge") == {
+            "agreed": 1, "disputed": 0,
+            "no-verdict": 0, "panel-verdict": 1,
+        }

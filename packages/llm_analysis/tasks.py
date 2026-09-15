@@ -523,12 +523,26 @@ class ConsensusTask(DispatchTask):
                 panel = tally_verdict_votes(
                     ca.get("is_exploitable") for ca in consensus_analyses
                 )
+                # The primary's tally feed is the PARSED tri-state
+                # value, matching the stamp decision below: feeding
+                # the raw field let a junk shape ("true") cast a
+                # coerced, DECISIVE vote on rows the stamp then
+                # certified as the panel's own verdict — and made
+                # this surface diverge from JudgeTask, whose
+                # abstained-primary branch never lets the primary
+                # influence the outcome.
                 tally = tally_verdict_votes(
-                    [primary.get("is_exploitable")]
+                    [primary_exploitable]
                     + [ca.get("is_exploitable") for ca in consensus_analyses]
                 )
 
                 disputed = tally.disputed
+                # The primary cast NO vote (missing/null
+                # is_exploitable — errored / refused / schema-nulled,
+                # or a junk shape, which is a non-verdict either way).
+                # Snapshot BEFORE the verdict override below so the
+                # stamp decision reads the analyst's actual state.
+                primary_abstained = primary_exploitable is None
 
                 if panel.voted == 0:
                     # The whole consensus panel abstained — no second
@@ -577,7 +591,25 @@ class ConsensusTask(DispatchTask):
                     final = (tally.any_exploitable() if majority is None
                              else majority)
 
-                primary["consensus"] = "disputed" if disputed else "agreed"
+                if primary_abstained:
+                    # A one-sided pair: the primary never voted, so
+                    # there is nothing to "agree" with — that stamp
+                    # would mint corroboration downstream
+                    # (reconcile_dataflow_validation reads
+                    # consensus=="agreed" as "two strong signals
+                    # support the original verdict" and takes the
+                    # SOFT downgrade path; the operator summary
+                    # counts it as agreement). The panel's verdict
+                    # stands on its own authority instead — same
+                    # stamp semantics as JudgeTask.finalize's
+                    # primary_abstained branch below.
+                    primary["consensus"] = (
+                        "disputed" if panel.disputed else "panel-verdict"
+                    )
+                else:
+                    primary["consensus"] = (
+                        "disputed" if disputed else "agreed"
+                    )
                 # Capture pre-consensus verdict before overriding,
                 # so JudgeTask (which runs AFTER consensus) can show
                 # the judge what the primary analyst actually

@@ -267,9 +267,10 @@ def _panel_summary_parts(
     summary line. The counts partition panels that RAN: an
     all-abstain panel resolves to "no-verdict" — neither agreed nor
     disputed — and omitting it made the printed line silently
-    undercount panels that ran. A judge panel that voted on an
-    abstained primary resolves to "panel-verdict" (there was no
-    primary vote to agree with). Zero counts stay off the line."""
+    undercount panels that ran. A panel (consensus or judge) that
+    voted on an abstained primary resolves to "panel-verdict" (there
+    was no primary vote to agree with). Zero counts stay off the
+    line."""
     parts: list[str] = []
     if agreed:
         parts.append(f"{agreed} agreed")
@@ -280,6 +281,23 @@ def _panel_summary_parts(
     if panel_verdict:
         parts.append(f"{panel_verdict} panel-verdict")
     return parts
+
+
+def _count_panel_stamps(
+    per_finding_results: list, field: str,
+) -> dict[str, int]:
+    """Count review-panel stage outcomes for one stamp field
+    ("consensus" or "judge"). The four stamp values partition panels
+    that RAN; both stages mint the same vocabulary, including
+    "panel-verdict" for a panel that voted on an abstained primary,
+    so one counter serves both summary lanes."""
+    counts = {"agreed": 0, "disputed": 0,
+              "no-verdict": 0, "panel-verdict": 0}
+    for r in per_finding_results:
+        stamp = r.get(field) if isinstance(r, dict) else None
+        if stamp in counts:
+            counts[stamp] += 1
+    return counts
 
 
 def _cap_findings(findings: list, max_findings: int) -> list:
@@ -1757,20 +1775,16 @@ def orchestrate(
     if aggregation:
         merged["aggregation"] = aggregation
 
-    consensus_agreed = sum(1 for r in per_finding_results
-                           if r.get("consensus") == "agreed")
-    consensus_disputes = sum(1 for r in per_finding_results
-                             if r.get("consensus") == "disputed")
-    consensus_no_verdict = sum(1 for r in per_finding_results
-                               if r.get("consensus") == "no-verdict")
-    judge_agreed = sum(1 for r in per_finding_results
-                       if r.get("judge") == "agreed")
-    judge_disputes = sum(1 for r in per_finding_results
-                         if r.get("judge") == "disputed")
-    judge_no_verdict = sum(1 for r in per_finding_results
-                           if r.get("judge") == "no-verdict")
-    judge_panel_verdict = sum(1 for r in per_finding_results
-                              if r.get("judge") == "panel-verdict")
+    _cn_counts = _count_panel_stamps(per_finding_results, "consensus")
+    consensus_agreed = _cn_counts["agreed"]
+    consensus_disputes = _cn_counts["disputed"]
+    consensus_no_verdict = _cn_counts["no-verdict"]
+    consensus_panel_verdict = _cn_counts["panel-verdict"]
+    _jg_counts = _count_panel_stamps(per_finding_results, "judge")
+    judge_agreed = _jg_counts["agreed"]
+    judge_disputes = _jg_counts["disputed"]
+    judge_no_verdict = _jg_counts["no-verdict"]
+    judge_panel_verdict = _jg_counts["panel-verdict"]
     cross_family_checked = sum(1 for r in per_finding_results
                                if r.get("cross_family_check"))
     cross_family_disputes = sum(1 for r in per_finding_results
@@ -1793,6 +1807,11 @@ def orchestrate(
         "consensus_agreed": consensus_agreed,
         "consensus_disputes": consensus_disputes,
         "consensus_no_verdict": consensus_no_verdict,
+        # Consensus panels that voted on an abstained primary: the
+        # panel verdict stood in for the missing primary vote —
+        # neither "agreed" (nothing to agree with) nor "disputed".
+        # Mirrors judge_panel_verdict below.
+        "consensus_panel_verdict": consensus_panel_verdict,
         "consensus_budget_skipped": consensus_budget_skipped,
         # New: distinguish "budget capped before any LLM calls"
         # from "calls made but all errored". Operators reading the
@@ -1886,7 +1905,8 @@ def orchestrate(
     if thinking > 0:
         print(f"  Thinking tokens: {thinking:,}")
     cn_parts = _panel_summary_parts(
-        consensus_agreed, consensus_disputes, consensus_no_verdict)
+        consensus_agreed, consensus_disputes, consensus_no_verdict,
+        consensus_panel_verdict)
     if cn_parts:
         print(f"  Consensus: {', '.join(cn_parts)}")
     elif consensus_budget_skipped:

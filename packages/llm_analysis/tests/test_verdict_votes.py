@@ -130,6 +130,80 @@ class TestConsensusFinalizeAbstention:
         ConsensusTask().finalize(results, {"f1": primary})
         assert primary["pre_consensus_is_exploitable"] is False
 
+    def test_abstained_primary_never_stamps_agreed(self):
+        # The primary cast no vote (schema-nulled verdict) and the
+        # panel voted one-sided: nothing exists to agree WITH.
+        # "agreed" here minted corroboration — reconcile's soft
+        # downgrade path reads consensus=="agreed" as "two strong
+        # signals support the original verdict" while no original
+        # verdict existed. The panel verdict stands under its own
+        # stamp instead (JudgeTask's primary_abstained semantics).
+        primary = {"is_exploitable": None}
+        results = [_consensus("f1", True, "m2")]
+        ConsensusTask().finalize(results, {"f1": primary})
+        assert primary["consensus"] == "panel-verdict"
+        assert primary["is_exploitable"] is True
+        assert primary["pre_consensus_is_exploitable"] is None
+
+    def test_abstained_primary_single_false_vote_stands(self):
+        primary = {"is_exploitable": None}
+        results = [_consensus("f1", False, "m2")]
+        ConsensusTask().finalize(results, {"f1": primary})
+        assert primary["consensus"] == "panel-verdict"
+        assert primary["is_exploitable"] is False
+
+    def test_missing_primary_verdict_never_stamps_agreed(self):
+        # Absent key is the same abstention as an explicit null.
+        primary: dict = {}
+        results = [
+            _consensus("f1", True, "m2"),
+            _consensus("f1", True, "m3"),
+        ]
+        ConsensusTask().finalize(results, {"f1": primary})
+        assert primary["consensus"] == "panel-verdict"
+        assert primary["is_exploitable"] is True
+
+    def test_abstained_primary_disputed_panel_stamps_disputed(self):
+        primary = {"is_exploitable": None}
+        results = [
+            _consensus("f1", True, "m2"),
+            _consensus("f1", False, "m3"),
+        ]
+        ConsensusTask().finalize(results, {"f1": primary})
+        assert primary["consensus"] == "disputed"
+
+    def test_junk_primary_verdict_is_an_abstention_for_the_stamp(self):
+        # A non-bool shape that bypassed response validation is not
+        # a vote the panel could have agreed with.
+        primary = {"is_exploitable": "true"}
+        results = [_consensus("f1", True, "m2")]
+        ConsensusTask().finalize(results, {"f1": primary})
+        assert primary["consensus"] == "panel-verdict"
+
+    def test_junk_decisive_vote_is_not_certified_as_panel_verdict(self):
+        # The tally must consume the same parsed tri-state value the
+        # stamp decision reads: feeding the raw field let junk-truthy
+        # "true" cast a coerced DECISIVE vote (conservative-max) on a
+        # row stamped "panel-verdict" — a junk-swung verdict carrying
+        # the panel's authority while the panel itself voted False.
+        primary = {"is_exploitable": "true"}
+        results = [_consensus("f1", False, "m2")]
+        ConsensusTask().finalize(results, {"f1": primary})
+        # panel voted False; if final is True the junk was decisive —
+        # that must not carry the panel's authority stamp
+        assert not (primary["is_exploitable"] is True
+                    and primary["consensus"] == "panel-verdict")
+
+    def test_junk_primary_never_outvotes_the_panel(self):
+        # Positive pin of the same rule: junk primary + one False
+        # consensus vote resolves to the panel's verdict — matching
+        # JudgeTask on identical input.
+        primary = {"is_exploitable": "true"}
+        results = [_consensus("f1", False, "m2")]
+        ConsensusTask().finalize(results, {"f1": primary})
+        assert primary["is_exploitable"] is False
+        assert primary["consensus"] == "panel-verdict"
+
 
 def _judge(fid: str, is_exploitable, model: str = "j1") -> dict:
     return {

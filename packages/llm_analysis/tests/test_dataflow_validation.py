@@ -2009,6 +2009,26 @@ class TestReconcileDataflowValidation:
         assert results_by_id["F1"]["validation_disputed"] is True
         assert "consensus" in results_by_id["F1"]["validation_disputed_by"]
 
+    def test_panel_verdict_stamp_does_not_soften_downgrade(self):
+        """consensus=="panel-verdict" means the primary ABSTAINED and
+        the panel's vote stood in — it is not primary-corroboration,
+        so a validation refutation still hard-downgrades."""
+        results_by_id = {
+            "F1": {
+                "is_exploitable": True,
+                "consensus": "panel-verdict",
+                "dataflow_validation": {
+                    "verdict": "refuted",
+                    "reasoning": "no path",
+                    "recommends_downgrade": True,
+                },
+            },
+        }
+        m = reconcile_dataflow_validation(results_by_id)
+        assert m["n_hard_downgrades"] == 1
+        assert m["n_soft_downgrades"] == 0
+        assert results_by_id["F1"]["is_exploitable"] is False
+
     def test_soft_downgrade_when_judge_agreed(self):
         results_by_id = {
             "F1": {
