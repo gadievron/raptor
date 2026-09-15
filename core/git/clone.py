@@ -374,7 +374,10 @@ def _validate_writable_path(p: Path, *, role: str) -> None:
       - direct children of root (``/foo``, ``/etc``, …) where parent
         is still ``/``;
       - paths under system pseudo-fs prefixes (``/dev/``, ``/proc/``,
-        ``/sys/``, ``/run/``) — see the denylist commentary below.
+        ``/sys/``, ``/run/``) and persistent system-state prefixes
+        (``/etc/``, ``/boot/``, ``/usr/``, ``/var/`` — excepting
+        children of ``/var/tmp/``) — see the denylist commentary
+        below.
     """
     if not p.is_absolute():
         msg = (
@@ -402,9 +405,25 @@ def _validate_writable_path(p: Path, *, role: str) -> None:
     #                        sandbox writes here can collide with
     #                        systemd / docker / similar.
     #
+    # The same reasoning covers persistent SYSTEM STATE — the sandbox
+    # writable scope is ``p.parent``, so accepting a target under
+    # these hands a compromised git server write access to host
+    # configuration with the rest of the isolation engaged:
+    #
+    #   /etc/...           — target=/etc/clone makes /etc writable
+    #                        (cron.d, ld.so.conf.d, sudoers.d).
+    #   /boot/...          — kernels / bootloader config.
+    #   /usr/...           — system binaries and libraries.
+    #   /var/...           — spool/cron, log, lib service state —
+    #                        EXCEPT /var/tmp/<child>, the documented
+    #                        operator scratch location (a target
+    #                        directly AT /var/tmp still refuses:
+    #                        its parent — the writable scope — is
+    #                        /var itself).
+    #
     # Reject these prefixes outright. Operator-legitimate sandbox
     # work belongs under /tmp, /var/tmp, $HOME, or a dedicated
-    # workspace — not in system pseudo-fs locations.
+    # workspace — not in system pseudo-fs or system-state locations.
     #
     # Checked on BOTH the literal spelling and the resolved path: the
     # literal-only check was defeated by ``..`` traversal
@@ -414,15 +433,21 @@ def _validate_writable_path(p: Path, *, role: str) -> None:
     # the root checks below: a literal ``/run/...`` spelling is
     # refused whatever it resolves to).
     resolved = p.resolve()
-    _DENY_PREFIXES = ("/dev/", "/proc/", "/sys/", "/run/")
+    _DENY_PREFIXES = (
+        "/dev/", "/proc/", "/sys/", "/run/",
+        "/etc/", "/boot/", "/usr/", "/var/",
+    )
+    _DENY_EXEMPT_PREFIXES = ("/var/tmp/",)
     for candidate in (str(p), str(resolved)):
+        if any(candidate.startswith(ex) for ex in _DENY_EXEMPT_PREFIXES):
+            continue
         for prefix in _DENY_PREFIXES:
             if candidate.startswith(prefix) or candidate == prefix.rstrip("/"):
                 msg = (
-                    f"{role}={str(p)!r} is under a system pseudo-fs prefix "
-                    f"({prefix}); refusing to grant the sandbox write "
-                    f"access. Use /tmp, /var/tmp, $HOME, or a dedicated "
-                    f"workspace path instead."
+                    f"{role}={str(p)!r} is under a system pseudo-fs or "
+                    f"system-state prefix ({prefix}); refusing to grant "
+                    f"the sandbox write access. Use /tmp, /var/tmp, "
+                    f"$HOME, or a dedicated workspace path instead."
                 )
                 raise ValueError(msg)
     # Two checks against root, both required:

@@ -1280,3 +1280,28 @@ def test_fetch_preexisting_repo_own_footprint_still_fetches(
         ok = fetch_commit(repo, "https://github.com/foo/bar", _VALID_SHA)
         assert ok is True
         assert mock_net.called
+
+
+def test_writable_path_refuses_system_state_prefixes() -> None:
+    """The writable scope is target.parent — a target under persistent
+    system state hands a hostile git server write access to host
+    configuration (/etc/cron.d, ld.so.conf.d, /var/spool/cron) with
+    the rest of the isolation engaged."""
+    from core.git.clone import _validate_writable_path
+    for bad in (
+        Path("/etc/clone"),
+        Path("/boot/kernels/x"),
+        Path("/usr/bin/x"),
+        Path("/var/spool/cron/x"),
+        Path("/var/tmp"),   # parent (= writable scope) would be /var
+    ):
+        with pytest.raises(ValueError, match="pseudo-fs|system-state|root"):
+            _validate_writable_path(bad, role="target")
+
+
+def test_writable_path_allows_var_tmp_children(tmp_path: Path) -> None:
+    """Two-direction: /var/tmp/<child> is the documented operator
+    scratch location and must keep validating (alongside /tmp)."""
+    from core.git.clone import _validate_writable_path
+    _validate_writable_path(Path("/var/tmp/raptor-wt/repo"), role="target")
+    _validate_writable_path(tmp_path / "repo", role="target")
