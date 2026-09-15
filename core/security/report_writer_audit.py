@@ -155,6 +155,8 @@ _REPORT_CONSTRUCTORS = frozenset({"ReportSection"})
 # writer needs an explicit add (forcing a security review at file-add
 # time).
 _REPORT_WRITER_FILES = (
+    "core/analysis/binary_oracle.py",
+    "core/analysis/binary_oracle_cli.py",
     "core/audit/report.py",
     # The per-function review-progress stream (format_progress_line):
     # target-derived file/function names and verbatim announcement
