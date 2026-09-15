@@ -154,8 +154,8 @@ _GRAMMAR_MODULES: tuple[str, ...] = (
 )
 
 # Computed once per process — grammar availability doesn't change
-# mid-process (imports are cached), and find_spec costs a path probe
-# per module.
+# mid-process (imports are cached), and the probe performs real
+# grammar imports through the shared failure-caching importer.
 _EXTRACTOR_IDENTITY: str | None = None
 
 
@@ -183,9 +183,23 @@ def _extractor_identity() -> str:
     # fingerprint. Sharing import_grammar makes this signature
     # definitionally the set the extractors saw in this process.
     from core.inventory._ts_cache import import_grammar
-    available = [
-        mod for mod in _GRAMMAR_MODULES if import_grammar(mod) is not None
-    ]
+    available = []
+    for mod in _GRAMMAR_MODULES:
+        try:
+            ok = import_grammar(mod) is not None
+        except Exception:  # noqa: BLE001 — corrupted wheel: degrade, never crash
+            # import_grammar catches (and failure-caches) ImportError
+            # only; a findable module raising anything else at import
+            # time — a corrupted pure-python wheel raising
+            # SyntaxError is the canonical shape — would otherwise
+            # propagate through compute_fingerprint and crash every
+            # reachability consumer out of its documented degrade
+            # path. Extraction fail-softs per file on the same wheel,
+            # so "unavailable" is exactly the identity the extractors
+            # will effectively have.
+            ok = False
+        if ok:
+            available.append(mod)
     _EXTRACTOR_IDENTITY = ",".join(available)
     return _EXTRACTOR_IDENTITY
 

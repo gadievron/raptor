@@ -81,3 +81,34 @@ def test_identity_excludes_findable_but_unimportable_grammar(
         pass
     else:
         assert "tree_sitter" in identity.split(",")
+
+
+def test_identity_degrades_on_non_importerror_grammar(
+    tmp_path, monkeypatch,
+):
+    # A findable module that raises a NON-ImportError at import time
+    # (a corrupted wheel — the class the import-probe exists for)
+    # must degrade to unavailable, matching extraction's per-file
+    # fail-soft, not crash every reachability consumer out of its
+    # documented degrade path.
+    stub_name = "tree_sitter_reachfp_syntax_stub"
+    (tmp_path / f"{stub_name}.py").write_text("def broken(:\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(rc_mod, "_EXTRACTOR_IDENTITY", None)
+    monkeypatch.setattr(
+        rc_mod, "_GRAMMAR_MODULES", (*rc_mod._GRAMMAR_MODULES, stub_name),
+    )
+    monkeypatch.delitem(ts_cache._GRAMMAR_CACHE, stub_name, raising=False)
+    monkeypatch.delitem(sys.modules, stub_name, raising=False)
+
+    identity = rc_mod._extractor_identity()
+    assert stub_name not in identity.split(",")
+
+    # The whole fingerprint path stays crash-free on this env shape.
+    assert rc_mod.compute_fingerprint(_inv()) is not None
+
+
+def test_header_magic_tracks_cache_version():
+    # The comment contract: the header magic's numeric suffix tracks
+    # _CACHE_VERSION. Convention-only until pinned here.
+    assert str(rc_mod._CACHE_VERSION).encode() in rc_mod._HEADER_MAGIC
