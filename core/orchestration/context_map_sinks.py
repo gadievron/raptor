@@ -600,13 +600,23 @@ def _raw_lines_for(
 ) -> list[str] | None:
     if rel in cache:
         return cache[rel]
+    # ``rel`` comes from preprocessor ``#line`` markers in the
+    # target's own TUs — attacker-shaped. String-prefix containment
+    # let a crafted marker escape to a SIBLING of the target
+    # (``/tmp/target-evil`` passes ``startswith("/tmp/target")``);
+    # the shared confine() does real containment. The capped read
+    # keeps a marker pointed at a multi-GB file from being loaded
+    # whole in the unsandboxed parent — the same hardening the
+    # candidate walk above already has.
+    from core.paths import confine
+    from core.source import read_text_capped
+
     lines: list[str] | None = None
-    try:
-        candidate = (target_path / rel).resolve()
-        if str(candidate).startswith(str(target_path.resolve())) and candidate.is_file():
-            lines = candidate.read_text(errors="replace").splitlines()
-    except (OSError, ValueError):
-        lines = None
+    candidate = confine(target_path, rel)
+    if candidate is not None:
+        got = read_text_capped(candidate)
+        if got is not None:
+            lines = got[0].splitlines()
     cache[rel] = lines
     return lines
 

@@ -806,3 +806,56 @@ class TestExpandedViewWalkSafety:
         mod._merge_expanded_view_sinks(context_map, target)
         # The read went through the capped chokepoint.
         assert "max_chars" in captured
+
+
+class TestRawLinesForContainment:
+    """#line-marker-derived paths are attacker-shaped: containment must
+    be real (confine), not a string prefix, and the read must go
+    through the capped chokepoint — the same hardening as the
+    candidate walk."""
+
+    def test_sibling_prefix_escape_refused(self, tmp_path: Path):
+        from core.orchestration.context_map_sinks import _raw_lines_for
+
+        target = tmp_path / "proj"
+        target.mkdir()
+        sibling = tmp_path / "proj-evil"
+        sibling.mkdir()
+        (sibling / "secret.c").write_text("secret();\n")
+        # ../proj-evil/secret.c resolves to a SIBLING whose string
+        # form starts with the target's — startswith passed it.
+        cache: dict = {}
+        lines = _raw_lines_for("../proj-evil/secret.c", target, cache)
+        assert lines is None
+
+    def test_in_tree_file_read_capped(self, tmp_path: Path, monkeypatch):
+        from core import source as src_mod
+        from core.orchestration.context_map_sinks import _raw_lines_for
+
+        target = tmp_path / "proj"
+        target.mkdir()
+        (target / "a.c").write_text("one\ntwo\n")
+        captured: dict = {}
+        real_read = src_mod.read_text_capped
+
+        def _spy(path, *a, **kw):
+            captured["path"] = str(path)
+            return real_read(path, *a, **kw)
+
+        monkeypatch.setattr(src_mod, "read_text_capped", _spy)
+        cache: dict = {}
+        lines = _raw_lines_for("a.c", target, cache)
+        assert lines == ["one", "two"]
+        assert captured, "read bypassed the capped chokepoint"
+        # Cache round-trip (including the negative entry).
+        assert _raw_lines_for("a.c", target, cache) == ["one", "two"]
+
+    def test_out_of_tree_absolute_refused(self, tmp_path: Path):
+        from core.orchestration.context_map_sinks import _raw_lines_for
+
+        target = tmp_path / "proj"
+        target.mkdir()
+        outside = tmp_path / "outside.c"
+        outside.write_text("x\n")
+        cache: dict = {}
+        assert _raw_lines_for(str(outside), target, cache) is None
