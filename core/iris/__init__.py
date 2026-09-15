@@ -8,6 +8,7 @@ consumer API that any RAPTOR pipeline can pull from.
 """
 
 from .specs import (
+    CODEQL_QUERY_LANGUAGES,
     CandidateFunction,
     TaintSpec,
     compile_codeql_config,
@@ -39,6 +40,7 @@ from .assumptions import (
 from .bypass import CompositionalAnalyzer
 
 __all__ = [
+    "CODEQL_QUERY_LANGUAGES",
     "SCORECARD_DECISION_CLASS",
     "AssumptionCategory",
     "BypassFinding",

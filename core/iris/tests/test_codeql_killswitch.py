@@ -196,7 +196,11 @@ class TestCompileCodeqlConfigPureFunction:
             TaintSpec(function="wrap_call", file="util.py", role="propagator"),
         ]
         result = compile_codeql_config(specs)
-        assert "isAdditionalTaintStep" in result
+        # ConfigSig's step member — the class-based API's
+        # isAdditionalTaintStep does not exist in the module API and
+        # fails compilation.
+        assert "isAdditionalFlowStep" in result
+        assert "isAdditionalTaintStep" not in result
         assert "wrap_call" in result
 
     def test_sources_only_no_select(self):
@@ -209,48 +213,10 @@ class TestCompileCodeqlConfigPureFunction:
         assert "select" not in result
 
 
-class TestPropagatorPredicate:
-    """``_propagator_predicate`` — generator for the
-    ``isAdditionalTaintStep`` body ``compile_codeql_config`` embeds
-    for propagator specs."""
-
-    @staticmethod
-    def _prop(fn):
-        from core.iris.specs import TaintSpec
-        return TaintSpec(function=fn, file="src/db.py", role="propagator")
-
-    def test_single_spec_exact_shape(self):
-        from core.iris.specs import _propagator_predicate
-
-        out = _propagator_predicate([self._prop("wrap")])
-        assert out == (
-            '    exists(DataFlow::CallNode c | '
-            'c.getTarget().hasName("wrap") '
-            "and pred = c.getAnArgument() and succ = c)"
-        )
-
-    def test_multiple_specs_joined_with_or(self):
-        from core.iris.specs import _propagator_predicate
-
-        out = _propagator_predicate([
-            self._prop("wrap"),
-            self._prop("adapt"),
-        ])
-        assert out.count(" or\n") == 1
-        assert 'hasName("wrap")' in out
-        assert 'hasName("adapt")' in out
-
-    def test_escapes_codeql_string_chars(self):
-        from core.iris.specs import _propagator_predicate
-
-        out = _propagator_predicate([self._prop('we"ird\\name')])
-        assert 'hasName("we\\"ird\\\\name")' in out
-
-
 class TestCompileCodeqlConfigPropagators:
-    """The propagator step predicate inside the compiled query comes
-    from ``_propagator_predicate`` and only appears when propagator
-    specs are present."""
+    """The propagator step disjunction inside the compiled query —
+    routed through the per-language ``irisCallStep`` helper and only
+    present when propagator specs are."""
 
     @staticmethod
     def _specs():
@@ -261,28 +227,41 @@ class TestCompileCodeqlConfigPropagators:
             TaintSpec(function="wrap", file="src/db.py", role="propagator"),
         ]
 
-    def test_additional_taint_step_present(self):
+    def test_additional_flow_step_present(self):
         from core.iris.specs import compile_codeql_config
 
         query = compile_codeql_config(self._specs())
         assert (
-            "predicate isAdditionalTaintStep"
+            "predicate isAdditionalFlowStep"
             "(DataFlow::Node pred, DataFlow::Node succ) {"
         ) in query
 
-    def test_generated_step_matches_helper_output(self):
-        from core.iris.specs import (
-            TaintSpec,
-            _propagator_predicate,
-            compile_codeql_config,
-        )
+    def test_step_routed_through_lang_helper(self):
+        from core.iris.specs import compile_codeql_config
 
-        # The predicate body must be exactly what the (previously
-        # inlined) loop emitted — the factoring is behaviour-neutral.
         query = compile_codeql_config(self._specs())
-        wrap = TaintSpec(function="wrap", file="src/db.py",
-                         role="propagator")
-        assert _propagator_predicate([wrap]) in query
+        assert 'irisCallStep(pred, succ, "wrap")' in query
+
+    def test_multiple_propagators_joined_with_or(self):
+        from core.iris.specs import TaintSpec, compile_codeql_config
+
+        query = compile_codeql_config([
+            *self._specs(),
+            TaintSpec(function="adapt", file="src/db.py",
+                      role="propagator"),
+        ])
+        assert 'irisCallStep(pred, succ, "wrap")' in query
+        assert 'irisCallStep(pred, succ, "adapt")' in query
+
+    def test_escapes_codeql_string_chars(self):
+        from core.iris.specs import TaintSpec, compile_codeql_config
+
+        query = compile_codeql_config([
+            *self._specs(),
+            TaintSpec(function='we"ird\\name', file="src/db.py",
+                      role="propagator"),
+        ])
+        assert 'irisCallStep(pred, succ, "we\\"ird\\\\name")' in query
 
     def test_no_propagators_no_step_predicate(self):
         from core.iris.specs import TaintSpec, compile_codeql_config
@@ -292,4 +271,74 @@ class TestCompileCodeqlConfigPropagators:
                       role="source"),
             TaintSpec(function="exec_cmd", file="src/db.py", role="sink"),
         ])
-        assert "isAdditionalTaintStep" not in query
+        assert "isAdditionalFlowStep" not in query
+
+
+class TestLanguageRegistry:
+    """Per-language QL generation. One registry row per language; the
+    call-matching helpers are the only language-specific surface. The
+    e2e closure test (test_codeql_e2e.py) compile-verifies every row
+    against the real CLI; these pins keep the cheap invariants."""
+
+    @staticmethod
+    def _specs():
+        from core.iris.specs import TaintSpec
+        return [
+            TaintSpec(function="read_input", file="io.c", role="source"),
+            TaintSpec(function="exec_cmd", file="cmd.c", role="sink"),
+        ]
+
+    def test_unsupported_language_raises(self):
+        from core.iris.specs import compile_codeql_config
+
+        # Pre-registry this silently fell back to the cpp imports and
+        # emitted un-compilable QL — the lane failed at analyze time
+        # with only per-round tool errors to show for it.
+        for lang in ("swift", "rust", "kotlin", "", "CPP"):
+            with pytest.raises(ValueError, match="unsupported"):
+                compile_codeql_config(self._specs(), language=lang)
+
+    def test_every_language_generates_helper_routed_query(self):
+        from core.iris.specs import (
+            CODEQL_QUERY_LANGUAGES,
+            compile_codeql_config,
+        )
+
+        assert CODEQL_QUERY_LANGUAGES == {
+            "cpp", "java", "python", "javascript", "csharp", "go", "ruby",
+        }
+        for lang in CODEQL_QUERY_LANGUAGES:
+            query = compile_codeql_config(self._specs(), language=lang)
+            assert f"raptor/iris/{lang}/project-specs" in query
+            # All source/sink matching routes through the language's
+            # helper predicates — never a hardcoded node class.
+            assert 'irisCallResult(n, "read_input")' in query
+            assert 'irisCallArg(n, "exec_cmd")' in query
+            assert "predicate irisCallResult" in query
+            assert "predicate irisCallArg" in query
+
+    def test_no_callnode_in_languages_lacking_it(self):
+        from core.iris.specs import compile_codeql_config
+
+        # ``DataFlow::CallNode`` exists only in the JS/Go/Ruby
+        # libraries; emitting it for cpp/java/python/csharp is exactly
+        # the compile failure that kept this lane dead.
+        for lang in ("cpp", "java", "python", "csharp"):
+            query = compile_codeql_config(self._specs(), language=lang)
+            assert "DataFlow::CallNode" not in query, lang
+
+    def test_ast_languages_match_via_as_expr(self):
+        from core.iris.specs import compile_codeql_config
+
+        for lang, call_cls in (
+            ("cpp", "Call"), ("java", "MethodCall"),
+            ("csharp", "MethodCall"),
+        ):
+            query = compile_codeql_config(self._specs(), language=lang)
+            assert f"n.asExpr().({call_cls})" in query, lang
+
+    def test_default_language_is_cpp(self):
+        from core.iris.specs import compile_codeql_config
+
+        assert compile_codeql_config(self._specs()) == \
+            compile_codeql_config(self._specs(), language="cpp")
