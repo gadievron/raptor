@@ -295,6 +295,16 @@ def mini_repo(tmp_path_factory) -> Path:
     )
     (repo / "packages/sca/data/popular").mkdir(parents=True)
     (repo / "packages/sca/data/popular/pypi.json").write_text("[]")
+    # Repo-root entry module whose only dependent is a test that
+    # imports it by bare name (the raptor*.py shape). Deliberately
+    # NOT raptor-named: graph coverage derives from the root-level
+    # location, never from a name pattern or hand-list.
+    (repo / "entrymod.py").write_text("def main() -> int:\n    return 0\n")
+    (repo / "core/pkga/tests/test_entry.py").write_text(
+        "import entrymod\n\n"
+        "def test_main():\n"
+        "    assert entrymod.main() == 0\n"
+    )
     return repo
 
 
@@ -390,6 +400,27 @@ class TestDispatchFailsOpen:
         # dispatch just because no mapping claims them.
         result = compute_tier_dispatch(["docs/guide.md"], mini_repo)
         assert _active(result) == []
+
+    def test_root_module_edit_dispatches_importing_tests(self, mini_repo):
+        # A PR editing only a repo-root entry module must dispatch the
+        # tests that import it. Pre-fix the scan-root import filter
+        # erased those edges: the module sat in the graph as a node
+        # with zero reverse-dependents, the PR dispatched zero tiers,
+        # and tests-passed went green with the importing tests unrun.
+        result = compute_tier_dispatch(["entrymod.py"], mini_repo)
+        assert result["python"]["run"], "root-module edit dispatched zero tiers"
+        assert Path("core/pkga/tests/test_entry.py") in result["python"]["files"]
+        assert not _is_full_dispatch(result)
+
+    def test_root_module_deletion_forces_full_dispatch(self, mini_repo):
+        # Deleting a root entry module (absent from the checkout, so
+        # no graph key) must fail toward full dispatch — pre-fix only
+        # a hand-list of two names was covered and deleting any other
+        # root module stayed "outside graph → inert".
+        result = compute_tier_dispatch(["gone_root.py"], mini_repo)
+        assert _is_full_dispatch(result), (
+            f"deleted root module under-dispatched: only {_active(result)}"
+        )
 
     def test_tier_workflow_only_change_forces_full_dispatch(self, mini_repo):
         # tests.yml/_tier.yml ARE every tier's execution harness
@@ -488,6 +519,34 @@ class TestOnRealRepo:
             f"{harness_file} left tiers undispatched: {inactive}")
         assert result["python"]["files"], "fast tier got no files"
 
+    def test_every_root_entry_module_dispatches(self, repo):
+        """Closure oracle, derived from the tree — never a hand-list.
+
+        Every repo-root .py file must either be harness-grade (in
+        ROOT_HARNESS_FILES, forcing full dispatch — pinned by
+        test_root_harness_change_dispatches_every_tier) or acquire
+        reverse-dependents in the import graph so a PR editing it
+        dispatches the tiers that test it. A new root entry point
+        with neither fails here instead of silently dispatching zero
+        tiers until the cron reddens, misattributed."""
+        root_modules = sorted(
+            p.name for p in repo.glob("*.py") if p.is_file()
+        )
+        assert root_modules, "root-module enumeration broke"
+        undispatchable = []
+        for name in root_modules:
+            if name in ROOT_HARNESS_FILES:
+                continue
+            result = compute_tier_dispatch([name], repo)
+            if not any(i["run"] for t, i in result.items()
+                       if not t.startswith("_")):
+                undispatchable.append(name)
+        assert not undispatchable, (
+            f"root entry module(s) dispatch ZERO test tiers: "
+            f"{undispatchable} — no test imports them; add an importing "
+            "test or register them in ROOT_HARNESS_FILES"
+        )
+
     def test_nested_conftest_still_scopes_to_its_tree(self, repo):
         result = compute_tier_dispatch(
             ["core/sandbox/tests/conftest.py"], repo,
@@ -521,9 +580,15 @@ class TestOnRealRepo:
         )
         assert result["sca"]["run"]
         assert len(result["sca"]["files"]) > 0
-        non_sca = [t for t, i in result.items()
-                   if t != "sca" and not t.startswith("_") and i["run"]]
-        assert len(non_sca) == 0, f"SCA-only change triggered: {non_sca}"
+        # raptor.py imports packages.sca.cli, so the entry-surface
+        # tests that import raptor are genuine dependents and their
+        # tiers legitimately dispatch (asserting zero non-sca tiers
+        # here used to pin the erased root-module edges). The dispatch
+        # must still stay scoped: no full fallback, and tiers with no
+        # graph path from sca stay off.
+        assert not _is_full_dispatch(result)
+        assert not result["sandbox"]["run"]
+        assert not result["sage"]["run"]
 
     def test_ci_script_change_triggers_ci_lint(self, repo):
         result = compute_tier_dispatch(

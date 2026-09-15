@@ -44,26 +44,39 @@ FULL_SCAN_THRESHOLD = 0.60
 
 PARSE_FAILURE_THRESHOLD = 0.05
 
-EXTRA_ROOTS = (
-    "raptor.py",
-    "raptor_agentic.py",
-)
+def is_root_module_path(path: str) -> bool:
+    """True for a repo-root .py file (raptor.py, raptor_agentic.py,
+    conftest.py, ...).
+
+    Pattern-based on purpose, never a name list and never a disk
+    check: the graph-coverage decision must hold for files a PR just
+    DELETED (a glob cannot see them), and a hand-maintained entry-
+    module list silently dropped new entry points before (root
+    modules outside it dispatched zero test tiers whether edited or
+    deleted).
+    """
+    return path.endswith(".py") and "/" not in path and path != ".py"
+
+
+def discover_root_modules(repo: Path) -> list[Path]:
+    """Every repo-root .py file, derived from the tree."""
+    return sorted(
+        p.relative_to(repo) for p in repo.glob("*.py") if p.is_file()
+    )
 
 
 def discover_py_files(
     repo: Path, extra_roots: tuple[str, ...] = ()
 ) -> list[Path]:
-    """Walk SCAN_ROOTS (+ extra_roots) and collect every .py file."""
+    """Walk SCAN_ROOTS (+ extra_roots) and collect every .py file,
+    plus every repo-root .py entry module."""
     files: list[Path] = []
     for root in (*SCAN_ROOTS, *extra_roots):
         root_path = repo / root
         if not root_path.is_dir():
             continue
         files.extend(p.relative_to(repo) for p in root_path.rglob("*.py"))
-    for name in EXTRA_ROOTS:
-        p = repo / name
-        if p.is_file():
-            files.append(Path(name))
+    files.extend(discover_root_modules(repo))
     return files
 
 
@@ -204,14 +217,27 @@ def _extract_parametrize_modules(tree: ast.Module) -> list[str]:
     return modules
 
 
-def extract_imports(path: Path, repo: Path) -> list[str] | None:
+def extract_imports(
+    path: Path,
+    repo: Path,
+    root_modules: frozenset[str] | None = None,
+) -> list[str] | None:
     """Parse a .py file and return the dotted module names it imports.
 
     Covers static imports, importlib.import_module() /
     __import__() with string literals, PEP 562 lazy-export
     dicts, and project-internal module paths in string constants
     (e.g. ``@pytest.mark.parametrize`` arguments).
+
+    ``root_modules`` is the set of repo-root module names (raptor,
+    raptor_agentic, ...) whose imports must be kept alongside the
+    SCAN_ROOTS ones; when None it is derived from the tree. Callers
+    looping over many files (``build_graph``) pass it once.
     """
+    if root_modules is None:
+        root_modules = frozenset(
+            p.stem for p in discover_root_modules(repo)
+        )
     try:
         source = (repo / path).read_text(encoding="utf-8", errors="replace")
         tree = ast.parse(source, filename=str(path))
@@ -258,10 +284,16 @@ def extract_imports(path: Path, repo: Path) -> list[str] | None:
     # Project-internal module paths in string constants (parametrize etc.).
     modules.extend(_extract_parametrize_modules(tree))
 
-    # Only keep imports that point into our scan roots.
+    # Only keep imports that point into our scan roots or at a
+    # repo-root entry module. Filtering to SCAN_ROOTS alone erased
+    # every ``import raptor_agentic`` edge: the root modules sat in
+    # the graph as NODES but could never acquire reverse-dependents,
+    # so a PR editing only a root entry module dispatched zero test
+    # tiers while the tests importing it silently went unrun.
     return [
         m for m in modules
         if any(m == r or m.startswith(r + ".") for r in SCAN_ROOTS)
+        or m in root_modules
     ]
 
 
@@ -282,8 +314,9 @@ def build_graph(
     forward: dict[Path, set[Path]] = defaultdict(set)
     parse_failures = 0
 
+    root_modules = frozenset(p.stem for p in discover_root_modules(repo))
     for f in py_files:
-        imports = extract_imports(f, repo)
+        imports = extract_imports(f, repo, root_modules)
         if imports is None:
             parse_failures += 1
             continue
@@ -316,9 +349,11 @@ def missing_graph_covered_py(
     any hit as "cannot map" and fail toward a FULL scan / dispatch,
     never toward zero.
 
-    Only graph-covered paths count (under ``SCAN_ROOTS`` or named in
-    ``EXTRA_ROOTS``); a deleted .py elsewhere was never in the graph,
-    so its absence proves nothing about lost edges.
+    Only graph-covered paths count (under ``SCAN_ROOTS`` or a
+    repo-root entry module — ``is_root_module_path``, which is
+    pattern-based exactly so a DELETED root module still counts);
+    a deleted .py elsewhere was never in the graph, so its absence
+    proves nothing about lost edges.
     """
     missing: list[str] = []
     for f in sorted(changed_py):
@@ -327,7 +362,7 @@ def missing_graph_covered_py(
             continue
         covered = (
             any(s.startswith(r + "/") for r in SCAN_ROOTS)
-            or s in EXTRA_ROOTS
+            or is_root_module_path(s)
         )
         if covered and not (repo / f).is_file():
             missing.append(s)

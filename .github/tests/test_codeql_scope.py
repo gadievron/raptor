@@ -14,9 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from codeql_scope import (
     build_graph,
     discover_py_files,
+    discover_root_modules,
     extract_imports,
     file_to_module,
     init_imports,
+    is_root_module_path,
     load_base_config,
     missing_graph_covered_py,
     module_to_files,
@@ -112,6 +114,26 @@ class TestExtractImports:
         imports = extract_imports(Path("test.py"), tmp_path)
         assert imports == []
 
+    def test_root_module_import_kept(self, tmp_path):
+        # ``import entrymod`` targeting a repo-root entry module must
+        # survive the scan-root filter — dropping it left root modules
+        # with zero reverse-dependents and PRs editing them dispatched
+        # zero test tiers.
+        (tmp_path / "entrymod.py").write_text("X = 1\n", encoding="utf-8")
+        (tmp_path / "test.py").write_text(
+            "import entrymod\n", encoding="utf-8",
+        )
+        imports = extract_imports(Path("test.py"), tmp_path)
+        assert "entrymod" in imports
+
+    def test_single_name_without_root_file_filtered(self, tmp_path):
+        # Both directions: a bare third-party name with no matching
+        # repo-root module stays out of the graph.
+        (tmp_path / "test.py").write_text(
+            "import requests\n", encoding="utf-8",
+        )
+        assert extract_imports(Path("test.py"), tmp_path) == []
+
     def test_syntax_error_returns_none(self, tmp_path):
         (tmp_path / "bad.py").write_text(
             "def f(\n  # incomplete\n",
@@ -198,6 +220,23 @@ class TestBuildGraph:
         closure = transitive_dependents({Path("core/leaf.py")}, reverse)
         assert closure == {Path("core/leaf.py")}
 
+    def test_root_module_acquires_reverse_dependents(self, tmp_path):
+        # A repo-root entry module must be able to acquire reverse-
+        # dependents; with the import filter erasing its edges it was
+        # a permanently isolated node and PRs editing it dispatched
+        # zero tiers.
+        files = self._make_repo(tmp_path)
+        (tmp_path / "entrymod.py").write_text("MAIN = 1\n", encoding="utf-8")
+        (tmp_path / "core" / "uses_entry.py").write_text(
+            "import entrymod\n", encoding="utf-8",
+        )
+        files = [*files, Path("entrymod.py"), Path("core/uses_entry.py")]
+        reverse, failures = build_graph(files, tmp_path)
+        assert failures == 0
+        assert Path("core/uses_entry.py") in reverse.get(
+            Path("entrymod.py"), set()
+        )
+
 
 class TestInitImports:
     def test_init_change_pulls_package(self):
@@ -226,6 +265,28 @@ class TestInitImports:
         assert extra == set()
 
 
+class TestRootModuleDiscovery:
+    def test_pattern_covers_any_root_py(self):
+        # Pattern-based, not a name list: coverage must hold for root
+        # modules a PR deleted (no disk entry) and for entry points
+        # added after this code was written.
+        assert is_root_module_path("raptor.py")
+        assert is_root_module_path("raptor_codeql.py")
+        assert is_root_module_path("some_new_entrypoint.py")
+
+    def test_pattern_excludes_nested_and_non_py(self):
+        assert not is_root_module_path("core/x.py")
+        assert not is_root_module_path("docs/example.py")
+        assert not is_root_module_path("README.md")
+        assert not is_root_module_path(".py")
+
+    def test_discovery_derives_from_tree(self, tmp_path):
+        (tmp_path / "entrymod.py").write_text("X = 1\n")
+        (tmp_path / "core").mkdir()
+        (tmp_path / "core/nested.py").write_text("Y = 2\n")
+        assert discover_root_modules(tmp_path) == [Path("entrymod.py")]
+
+
 class TestMissingGraphCoveredPy:
     def test_deleted_scan_root_module_reported(self, tmp_path):
         (tmp_path / "core").mkdir()
@@ -235,9 +296,17 @@ class TestMissingGraphCoveredPy:
         )
         assert missing == ["core/deleted.py"]
 
-    def test_extra_root_module_reported(self, tmp_path):
-        missing = missing_graph_covered_py({Path("raptor.py")}, tmp_path)
-        assert missing == ["raptor.py"]
+    @pytest.mark.parametrize("root_module", [
+        "raptor.py",
+        # Deletion coverage is the pattern, not a list: these two sat
+        # outside the old hand-list, so DELETING them stayed "outside
+        # graph → inert" and dispatched zero tiers.
+        "raptor_codeql.py",
+        "future_entrypoint.py",
+    ])
+    def test_deleted_root_module_reported(self, tmp_path, root_module):
+        missing = missing_graph_covered_py({Path(root_module)}, tmp_path)
+        assert missing == [root_module]
 
     def test_missing_file_outside_graph_ignored(self, tmp_path):
         # A deleted .py the graph never covered proves nothing about
