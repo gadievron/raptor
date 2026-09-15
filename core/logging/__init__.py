@@ -56,6 +56,33 @@ def _raptor_root_console_handlers() -> list[logging.Handler]:
     ]
 
 
+class EscapingConsoleFormatter(logging.Formatter):
+    """Console formatter that escapes non-printable bytes in the
+    rendered line.
+
+    Log calls across the tree interpolate foreign-derived text —
+    scanned-repo file names, subprocess stderr, LLM response excerpts —
+    and per-site escaping has failed member-by-member (each campaign
+    re-finds unwrapped ``logger.*`` sites). The console handler is the
+    one point every logger-routed line passes on its way to the
+    operator's TTY, so escape here: ESC/BEL/C1/bidi become inert
+    ``\\xHH`` escapes, ``\\n``/``\\t`` stay structural (multi-line
+    messages and tracebacks keep their shape).
+
+    Console-only by design: the JSONL audit-trail formatter already
+    JSON-escapes control bytes, and RAPTOR's own deliberate terminal
+    styling (core/progress, direct prints) never routes through the
+    logger — nothing legitimate is lost. Per-site sanitisation remains
+    the right defence for length-bounding and secret redaction; this
+    chokepoint guarantees only that no control byte reaches the TTY.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        from core.security.log_sanitisation import escape_nonprintable
+        return escape_nonprintable(super().format(record),
+                                   preserve_newlines=True)
+
+
 class JSONFormatter(logging.Formatter):
     """Format log records as JSON for structured logging."""
 
@@ -202,7 +229,8 @@ class RaptorLogger:
             # Console handler with standard formatting
             console_handler = logging.StreamHandler(sys.stderr)
             console_handler.setLevel(logging.INFO)
-            console_formatter = logging.Formatter(RaptorConfig.LOG_FORMAT_CONSOLE)
+            console_formatter = EscapingConsoleFormatter(
+                RaptorConfig.LOG_FORMAT_CONSOLE)
             console_handler.setFormatter(console_formatter)
             self.logger.addHandler(console_handler)
 
