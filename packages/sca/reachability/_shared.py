@@ -17,10 +17,21 @@ unification.
 
 from __future__ import annotations
 
+import re
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+# A name the cross-language resolver can actually bind as a
+# namespace-chain prefix: dotted identifier segments. Composer
+# ``vendor/pkg`` names (slash), Maven ``group:artifact`` coordinates
+# (colon), and hyphenated crate spellings all fail this shape — the
+# resolver splits on "." and binds the head against imports, so a
+# prefix in any of those spellings guarantees NOT_CALLED.
+_NAMESPACE_HEAD_RE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*"
+)
 
 
 def _normalise_qualified(name: str) -> str:
@@ -41,23 +52,64 @@ def _normalise_qualified(name: str) -> str:
     )
 
 
-def extract_qualified_symbols(advisory: Any, dep_name: str) -> list[str]:
+def extract_qualified_symbols(
+    advisory: Any, dep_name: str, *, dep_is_namespace_head: bool = True,
+) -> list[str]:
     """Pull qualified affected-symbol names out of an OSV advisory.
 
     Handles the two shapes seen in real OSV records:
 
       * ``imports[].symbols`` (mirrors the Go convention) — each
-        symbol is qualified with the import's ``path``, falling back
-        to ``dep_name`` when the record omits it.
+        symbol is qualified with the import's ``path``; when the
+        record omits it the flat-list policy below applies.
       * Flat ``affected_symbols`` / ``affected_functions`` lists —
-        qualified with ``dep_name``.
+        emitted so that every name the resolver receives is BINDABLE:
+        an already-qualified symbol is emitted verbatim (normalised),
+        with a ``dep_name.``-prefixed variant added only when the dep
+        name can head a namespace chain; a bare symbol is emitted
+        only under such a prefix. Unconditional ``dep_name.symbol``
+        minting produced names like
+        ``symfony/http-foundation.Symfony.Component...`` and
+        ``actionpack.ActionDispatch...`` that the resolver's
+        dot-split import binding can never match — every one paired
+        as NOT_CALLED and manufactured a false high-confidence
+        ``not_function_reachable`` suppression.
+
+    ``dep_is_namespace_head`` is the per-ecosystem contract: True
+    where the package name heads real code namespaces (Rust crates,
+    NuGet root namespaces, Python distributions ≈ modules), False
+    where it never does (RubyGems gem names, Composer vendor/pkg) —
+    mirrors java_function_level's documented flat-arm refusal for
+    Maven coordinates. Even when True, a prefix is added only if the
+    dep name has the dotted-identifier shape and would not
+    double-prefix an already-qualified symbol.
 
     Both ``ecosystem_specific`` and ``database_specific`` are
     consulted. Non-dict sources and non-string / empty symbols are
-    skipped. Rust ``::`` and Ruby ``#`` separators are normalised to
-    ``.`` so the resolver's dot-split chain matching can see the
-    individual segments.
+    skipped. Rust ``::``, Ruby ``#``, and PHP ``\\`` separators are
+    normalised to ``.`` so the resolver's dot-split chain matching
+    can see the individual segments.
     """
+    dep_head = _normalise_qualified(dep_name) if dep_name else ""
+    prefix_ok = bool(
+        dep_is_namespace_head
+        and dep_head
+        and _NAMESPACE_HEAD_RE.fullmatch(dep_head)
+    )
+
+    def _emit(sym: str, out: list[str]) -> None:
+        ns = _normalise_qualified(sym)
+        if "." in ns:
+            out.append(ns)
+            if prefix_ok and not ns.startswith(dep_head + "."):
+                out.append(f"{dep_head}.{ns}")
+        elif prefix_ok:
+            out.append(f"{dep_head}.{ns}")
+        # A bare symbol under a non-namespace dep name has no
+        # bindable spelling — the bare-name lane
+        # (extract_function_names) covers it; minting an unbindable
+        # prefix here would only manufacture NOT_CALLED pairs.
+
     out: list[str] = []
     es = getattr(advisory, "ecosystem_specific", None) or {}
     ds = getattr(advisory, "database_specific", None) or {}
@@ -67,21 +119,23 @@ def extract_qualified_symbols(advisory: Any, dep_name: str) -> list[str]:
         for imp in source.get("imports") or []:
             if not isinstance(imp, dict):
                 continue
-            path = imp.get("path") or dep_name
+            path = imp.get("path")
+            if path is not None and not isinstance(path, str):
+                continue  # malformed entry — never dep-qualify junk
             symbols = imp.get("symbols") or []
-            out.extend(
-                _normalise_qualified(f"{path}.{s}")
-                for s in symbols
-                if isinstance(s, str) and s and isinstance(path, str)
-            )
+            for s in symbols:
+                if not (isinstance(s, str) and s):
+                    continue
+                if path:
+                    out.append(_normalise_qualified(f"{path}.{s}"))
+                else:
+                    _emit(s, out)
         for key in ("affected_symbols", "affected_functions"):
             v = source.get(key)
             if isinstance(v, list) and dep_name:
-                out.extend(
-                    _normalise_qualified(f"{dep_name}.{s}")
-                    for s in v
-                    if isinstance(s, str) and s
-                )
+                for s in v:
+                    if isinstance(s, str) and s:
+                        _emit(s, out)
     return out
 
 

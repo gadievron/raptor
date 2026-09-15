@@ -43,6 +43,7 @@ import logging
 from typing import Any, TYPE_CHECKING
 
 from ..models import Confidence, Dependency, Reachability
+from ._shared import extract_qualified_symbols as _extract_qualified
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -66,30 +67,19 @@ def build_nuget_symbol_map(
         dep_name = dep_key.split(":", 1)[1].split("@", 1)[0]
         qualified: list[str] = []
         for adv in r.advisories:
-            qualified.extend(_extract_qualified(adv, dep_name))
+            qualified.extend(_extract_qualified(
+                adv, dep_name, dep_is_namespace_head=True,
+            ))
         if qualified:
             out.setdefault(dep_key, []).extend(qualified)
     return {k: list(dict.fromkeys(v)) for k, v in out.items()}
 
 
-def _extract_qualified(advisory: Any, dep_name: str) -> list[str]:
-    out: list[str] = []
-    es = getattr(advisory, "ecosystem_specific", None) or {}
-    ds = getattr(advisory, "database_specific", None) or {}
-    for source in (es, ds):
-        if not isinstance(source, dict):
-            continue
-        for imp in source.get("imports") or []:
-            if not isinstance(imp, dict):
-                continue
-            path = imp.get("path") or dep_name
-            symbols = imp.get("symbols") or []
-            out.extend(f"{path}.{s}" for s in symbols if isinstance(s, str) and s and isinstance(path, str))
-        for key in ("affected_symbols", "affected_functions"):
-            v = source.get(key)
-            if isinstance(v, list) and dep_name:
-                out.extend(f"{dep_name}.{s}" for s in v if isinstance(s, str) and s)
-    return out
+# NuGet package ids commonly ARE the root namespace
+# ("Newtonsoft.Json"), so the shared extractor runs with
+# dep_is_namespace_head=True; the byte-similar local copy it replaces
+# double-prefixed already-qualified symbols and never normalised
+# separators.
 
 
 def refine_nuget_verdicts(

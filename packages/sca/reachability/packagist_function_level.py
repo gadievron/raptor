@@ -57,7 +57,13 @@ def build_packagist_symbol_map(
         dep_name = dep_key.split(":", 1)[1].split("@", 1)[0]
         qualified: list[str] = []
         for adv in r.advisories:
-            qualified.extend(_extract_qualified(adv, dep_name))
+            qualified.extend(_extract_qualified(
+                adv, dep_name,
+                # Gem / Composer package names never head code
+                # namespaces - a dep-prefixed spelling is
+                # unbindable by construction.
+                dep_is_namespace_head=False,
+            ))
         if qualified:
             out.setdefault(dep_key, []).extend(qualified)
     return {k: list(dict.fromkeys(v)) for k, v in out.items()}

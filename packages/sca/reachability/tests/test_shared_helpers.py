@@ -37,9 +37,53 @@ class TestExtractQualifiedSymbols:
                              "symbols": ["SmallVec::insert_many"]}]},
             ds={"affected_symbols": ["ActionDispatch::Routing::Mapper#draw"]},
         )
-        assert extract_qualified_symbols(adv, "actionpack") == [
+        # Namespace-head mode (crates/NuGet): the already-qualified
+        # flat symbol is emitted verbatim-normalised PLUS the
+        # dep-prefixed variant; the resolver binds whichever spelling
+        # the project imports.
+        assert extract_qualified_symbols(adv, "smallvec") == [
             "smallvec.SmallVec.insert_many",
-            "actionpack.ActionDispatch.Routing.Mapper.draw",
+            "ActionDispatch.Routing.Mapper.draw",
+            "smallvec.ActionDispatch.Routing.Mapper.draw",
+        ]
+        # Non-head mode (gems/composer): the gem name never heads a
+        # module chain — only the bindable spelling is emitted.
+        # (The old unconditional prefix minted
+        # "actionpack.ActionDispatch..." — unbindable, and every
+        # such name paired as NOT_CALLED toward a false
+        # high-confidence suppression.)
+        assert extract_qualified_symbols(
+            adv, "actionpack", dep_is_namespace_head=False,
+        ) == [
+            "smallvec.SmallVec.insert_many",
+            "ActionDispatch.Routing.Mapper.draw",
+        ]
+
+    def test_slash_bearing_dep_never_prefixes(self):
+        adv = _adv(ds={"affected_symbols": [
+            "Symfony\\Component\\HttpFoundation\\Request::create",
+            "bare_function",
+        ]})
+        # Even in head mode the slash-bearing composer name fails the
+        # namespace shape: qualified symbols are emitted unprefixed,
+        # bare symbols are left to the bare-name lane.
+        assert extract_qualified_symbols(
+            adv, "symfony/http-foundation",
+        ) == ["Symfony.Component.HttpFoundation.Request.create"]
+
+    def test_no_double_prefix_when_symbol_carries_dep_head(self):
+        adv = _adv(ds={"affected_symbols": [
+            "Newtonsoft.Json.JsonConvert.DeserializeObject",
+        ]})
+        assert extract_qualified_symbols(adv, "Newtonsoft.Json") == [
+            "Newtonsoft.Json.JsonConvert.DeserializeObject",
+        ]
+
+    def test_bare_symbol_under_head_shaped_dep_still_qualifies(self):
+        # The PyPI shape: distribution name == module name.
+        adv = _adv(ds={"affected_functions": ["extract_zipped_paths"]})
+        assert extract_qualified_symbols(adv, "requests") == [
+            "requests.extract_zipped_paths",
         ]
 
     def test_empty_symbol_in_flat_lists_skipped(self):
@@ -47,6 +91,14 @@ class TestExtractQualifiedSymbols:
         # "dep." qualified name.
         adv = _adv(es={"affected_symbols": ["", "real"]})
         assert extract_qualified_symbols(adv, "dep") == ["dep.real"]
+
+    def test_missing_import_path_uses_flat_policy(self):
+        # No path on the import record: same bindability policy as
+        # the flat lists (never an unconditional dep prefix).
+        adv = _adv(es={"imports": [{"symbols": ["Mod::run", "bare"]}]})
+        assert extract_qualified_symbols(
+            adv, "vendor/pkg", dep_is_namespace_head=False,
+        ) == ["Mod.run"]
 
     def test_import_path_falls_back_to_dep_name(self):
         adv = _adv(es={"imports": [{"symbols": ["run"]}]})
