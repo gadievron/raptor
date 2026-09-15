@@ -27098,6 +27098,89 @@ def _review_flow_traces(
     return result
 
 
+def _journal_finding_outcomes(
+    local_outcomes: list[ReviewOutcome],
+    config: OrchestratorConfig,
+) -> list[ReviewOutcome]:
+    """Prior-segment findings re-materialised from this run's own journal.
+
+    ``result.outcomes`` holds only THIS segment's reviews; a resumed
+    run's earlier segments live in the journal alone. The findings
+    persist is an idempotent full rewrite, so a finalize-only resume
+    segment (verdict re-import screened out, or a $0 finalize budget)
+    rewrote findings.json down to its segment-local outcomes — erasing
+    every prior-segment finding the journal still asserted. Journal
+    authority mirrors the report join
+    (``report._apply_journal_verdict_overrides``): the latest
+    function-grade, non-mechanical-echo row per site decides, so a
+    site whose finding a later correction row demoted stays out.
+    Functions with ANY outcome in this segment are skipped — the live
+    outcome (including a post-pass demotion not yet re-journalled)
+    supersedes its own earlier journal rows. Never raises.
+    """
+    out_dir = getattr(config, "out_dir", None)
+    if not out_dir:
+        return []
+    try:
+        from core.coverage.journal import latest_function_grade_collapse
+
+        from .journal import is_mechanical_echo, load_entries
+
+        entries = [
+            e for e in load_entries(Path(out_dir))
+            if not is_mechanical_echo(e)
+        ]
+        if not entries:
+            return []
+        local_keys = {(o.file, o.function) for o in local_outcomes}
+        collapsed = latest_function_grade_collapse(entries)
+        outcomes: list[ReviewOutcome] = []
+        for site_key in sorted(collapsed):
+            entry = collapsed[site_key]
+            if entry.verdict != "finding":
+                continue
+            # Deliberately COARSE (file, function) dedup against the
+            # segment-local outcomes, while the collapse above is
+            # per-site. Trade-off, both directions weighed:
+            # site-exact dedup would preserve a twin site's journal
+            # finding when this segment re-reviewed only its
+            # same-named sibling (macro redefinition / C++ overload),
+            # but ``outcome.line`` and the journal's ``line_start``
+            # are not guaranteed to agree (re-review after drift,
+            # line-less outcomes), so a site-joined key would
+            # DUPLICATE one finding — once from the live outcome,
+            # once from its own stale journal row. A dropped
+            # twin-site finding resurfaces on the next segment's
+            # re-review; a duplicated finding ships a phantom. Fail
+            # toward the recoverable direction.
+            if (entry.file, entry.function) in local_keys:
+                continue
+            hypotheses = [
+                h for h in (entry.hypotheses or [])
+                if isinstance(h, dict) and h.get("mechanism")
+            ]
+            outcome = ReviewOutcome(
+                file=entry.file,
+                function=entry.function,
+                status="finding",
+                body=entry.body or "",
+                hypothesis=hypotheses[0]["mechanism"] if hypotheses else "",
+                hypotheses=hypotheses or None,
+                evidence_tool="+".join(entry.evidence_tools or []),
+                model=entry.model or "",
+            )
+            outcome.line = entry.line_start or 0
+            outcome.provisional = bool(entry.provisional)
+            outcomes.append(outcome)
+        return outcomes
+    except Exception:
+        logger.debug(
+            "journal finding re-import for findings persist failed",
+            exc_info=True,
+        )
+        return []
+
+
 def _persist_findings(
     result: OrchestratorResult,
     config: OrchestratorConfig,
@@ -27122,8 +27205,16 @@ def _persist_findings(
     findings_dicts = []
     # Snapshot: the incremental-promotion tick calls this mid-loop
     # while review workers are still appending outcomes.
+    local_outcomes = list(result.outcomes)
+    # Prior-segment findings whose FINAL journal verdict still stands
+    # ride through the SAME dict builder below (identical tree-class
+    # stamping, receipt recording and provisional handling) — never a
+    # second, weaker persist lane.
+    all_outcomes = local_outcomes + _journal_finding_outcomes(
+        local_outcomes, config,
+    )
     for seq, outcome in enumerate(
-        (o for o in list(result.outcomes) if o.status == "finding"),
+        (o for o in all_outcomes if o.status == "finding"),
         start=1,
     ):
         finding: dict[str, Any] = {

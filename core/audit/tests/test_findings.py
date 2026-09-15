@@ -243,6 +243,188 @@ class TestPersistFindings:
         assert data[0]["tree_class"] == "vendored-compat"
 
 
+class TestPersistFindingsJournalReimport:
+    """A segment's ``result.outcomes`` holds only its own reviews; the
+    persist is a full rewrite. Finalization must therefore also persist
+    every function whose FINAL journal verdict is finding — a resumed
+    finalize segment used to rewrite prior-segment findings away."""
+
+    @staticmethod
+    def _config(tmp_path):
+        from core.audit.orchestrator import OrchestratorConfig
+
+        return OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
+
+    @staticmethod
+    def _journal_row(
+        tmp_path: Path,
+        *,
+        function: str,
+        verdict: str,
+        ts: str,
+        file: str = "src/net.c",
+        line_start: int = 10,
+        body: str = "prior-segment body",
+        evidence_tools: list[str] | None = None,
+        hypotheses: list[dict[str, str]] | None = None,
+        strategies: list[str] | None = None,
+    ) -> None:
+        from core.coverage.journal import ReviewJournalEntry
+
+        entry = ReviewJournalEntry(
+            ts=ts,
+            run_id="audit-run",
+            file=file,
+            function=function,
+            verdict=verdict,
+            source_hash="deadbeef",
+            line_start=line_start,
+            body=body,
+            evidence_tools=evidence_tools or [],
+            hypotheses=hypotheses or [],
+            strategies=strategies or [],
+            producer="audit",
+        )
+        with open(tmp_path / "review-journal.jsonl", "a") as fh:
+            fh.write(json.dumps(entry.to_dict()) + "\n")
+
+    def test_prior_segment_finding_survives_finalize_rewrite(self, tmp_path):
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            _persist_findings,
+        )
+
+        self._journal_row(
+            tmp_path,
+            function="parse_len",
+            verdict="finding",
+            ts="2026-01-01T00:00:01.000000Z",
+            evidence_tools=["smt:check-overflow", "joern:live"],
+            hypotheses=[{"mechanism": "len wraps before bounds check"}],
+        )
+        # Fresh finalize segment: no segment-local outcomes at all.
+        _persist_findings(OrchestratorResult(), self._config(tmp_path))
+        data = json.loads((tmp_path / "findings.json").read_text())
+        assert len(data) == 1
+        assert data[0]["function"] == "parse_len"
+        assert data[0]["file"] == "src/net.c"
+        assert data[0]["line"] == 10
+        assert data[0]["evidence_tool"] == "smt:check-overflow+joern:live"
+        assert data[0]["hypothesis"] == "len wraps before bounds check"
+        # Same seam as segment-local findings: tree class stamped.
+        assert data[0]["tree_class"] == "production"
+
+    def test_demoted_prior_finding_stays_out(self, tmp_path):
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            _persist_findings,
+        )
+
+        self._journal_row(
+            tmp_path, function="fp_fn", verdict="finding",
+            ts="2026-01-01T00:00:01.000000Z",
+        )
+        # Correction row: the run later demoted the verdict.
+        self._journal_row(
+            tmp_path, function="fp_fn", verdict="suspicious",
+            ts="2026-01-01T00:00:02.000000Z",
+        )
+        # The interrupted segment had persisted the finding already.
+        write_findings(
+            [{"id": "FIND-001", "file": "src/net.c", "function": "fp_fn"}],
+            tmp_path,
+        )
+        _persist_findings(OrchestratorResult(), self._config(tmp_path))
+        assert json.loads((tmp_path / "findings.json").read_text()) == []
+
+    def test_segment_local_outcome_supersedes_journal_rows(self, tmp_path):
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            ReviewOutcome,
+            _persist_findings,
+        )
+
+        self._journal_row(
+            tmp_path, function="rechecked", verdict="finding",
+            ts="2026-01-01T00:00:01.000000Z",
+        )
+        # This segment re-reviewed the function and a post pass demoted
+        # it — no corrective journal row exists yet at persist time.
+        result = OrchestratorResult()
+        result.outcomes.append(ReviewOutcome(
+            file="src/net.c", function="rechecked", status="clean",
+            body="demoted this segment",
+        ))
+        write_findings([{"id": "FIND-001", "function": "rechecked"}], tmp_path)
+        _persist_findings(result, self._config(tmp_path))
+        assert json.loads((tmp_path / "findings.json").read_text()) == []
+
+    def test_twin_site_journal_finding_yields_to_any_local_twin(
+        self, tmp_path,
+    ):
+        """Deliberate coarse-key behavior pin: the journal collapse is
+        per-site, but the segment-local dedup is (file, function) — a
+        journal finding at one site of a same-named twin is withheld
+        when THIS segment holds any outcome for the name, because a
+        site-joined key could double-ship the same finding when
+        outcome.line and the journal line_start disagree. The dropped
+        twin resurfaces on the next re-review; see the trade-off
+        comment at the dedup site before changing either direction."""
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            ReviewOutcome,
+            _persist_findings,
+        )
+
+        self._journal_row(
+            tmp_path, function="twin", verdict="finding",
+            ts="2026-01-01T00:00:01.000000Z", line_start=200,
+        )
+        result = OrchestratorResult()
+        # This segment re-reviewed only the OTHER same-named site.
+        clean_twin = ReviewOutcome(
+            file="src/net.c", function="twin", status="clean", body="b",
+        )
+        clean_twin.line = 10
+        result.outcomes.append(clean_twin)
+        _persist_findings(result, self._config(tmp_path))
+        assert not (tmp_path / "findings.json").exists()
+
+    def test_mechanical_echo_rows_carry_no_verdict_authority(self, tmp_path):
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            _persist_findings,
+        )
+
+        self._journal_row(
+            tmp_path, function="pattern_fn", verdict="finding",
+            ts="2026-01-01T00:00:01.000000Z",
+            strategies=["post-loop-mechanical"],
+        )
+        _persist_findings(OrchestratorResult(), self._config(tmp_path))
+        assert not (tmp_path / "findings.json").exists()
+
+    def test_journal_reimport_dedups_against_local_finding(self, tmp_path):
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            ReviewOutcome,
+            _persist_findings,
+        )
+
+        self._journal_row(
+            tmp_path, function="live_fn", verdict="finding",
+            ts="2026-01-01T00:00:01.000000Z",
+        )
+        result = OrchestratorResult()
+        result.outcomes.append(ReviewOutcome(
+            file="src/net.c", function="live_fn", status="finding",
+            body="this segment's own row for the same function",
+        ))
+        _persist_findings(result, self._config(tmp_path))
+        data = json.loads((tmp_path / "findings.json").read_text())
+        assert len(data) == 1
+
+
 class TestFindingsRobustness:
     def test_scalar_findings_json_degrades_to_empty(self, tmp_path):
         # Wrong-shaped VALID JSON must degrade like corrupt content
