@@ -926,7 +926,17 @@ def _analyze_major_bumps(
         if verdict is None:
             continue
 
-        if verdict.verdict == "safe":
+        # Auto-promotion floor: only a HIGH-confidence "safe" verdict
+        # moves a mechanically-blocked major bump into the applied
+        # plan — ``--allow-major`` is the operator's opt-in for
+        # exactly this, and a low-confidence LLM "safe" silently
+        # granting it defeats the mechanical gate. Trade-off, both
+        # directions: raising the floor to high leaves more
+        # CVE-fixing bumps in the manual-review bucket (they still
+        # pass ``refuse_unsafe_target`` and are one flag away);
+        # lowering it back to any-"safe" lets a hedged verdict apply
+        # a breaking major without operator consent.
+        if verdict.verdict == "safe" and verdict.confidence == "high":
             vuln_plans[key] = major_blocked.pop(key)
             approved.add(key)
         else:

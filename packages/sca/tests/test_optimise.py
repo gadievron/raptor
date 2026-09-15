@@ -1544,3 +1544,76 @@ class TestBarePinConfinement:
         new, applied, _ = optimise._pin_bare_pyproject(text, plan)
         assert applied
         assert '"requests==2.31.0",' in new
+
+
+class TestSafeVerdictConfidenceFloor:
+    """Only a HIGH-confidence "safe" verdict auto-promotes a
+    mechanically-blocked major bump; a hedged "safe" stays in the
+    review bucket with the verdict attached (both directions of the
+    floor pinned)."""
+
+    def _blocked(self):
+        key = ("PyPI", "pytest", "/r.txt")
+        plan = _PlanEntry(
+            ecosystem="PyPI", name="pytest",
+            installed="7.0.0", target="9.0.3",
+            manifest=Path("/r.txt"),
+            advisory_ids=["GHSA-y"],
+        )
+        return key, {key: plan}
+
+    def _run(self, verdict):
+        key, major_blocked = self._blocked()
+        vuln_plans = {}
+        with patch("packages.sca.llm.get_llm_client",
+                   return_value=object()), \
+             patch("packages.sca.llm.upgrade_impact_review."
+                   "assess_upgrade_impact", return_value=verdict):
+            approved, verdicts = optimise._analyze_major_bumps(
+                major_blocked, vuln_plans, Path("/project"),
+            )
+        return key, major_blocked, vuln_plans, approved, verdicts
+
+    def test_low_confidence_safe_stays_blocked(self):
+        from pydantic import BaseModel
+
+        class _HedgedSafe(BaseModel):
+            verdict: str = "safe"
+            confidence: str = "low"
+            summary: str = "probably fine"
+            breaking_changes: list = []
+
+        key, blocked, plans, approved, verdicts = self._run(_HedgedSafe())
+        assert approved == set()
+        assert key in blocked
+        assert key not in plans
+        # The verdict is retained so dry-run shows it for review.
+        assert key in verdicts
+
+    def test_medium_confidence_safe_stays_blocked(self):
+        from pydantic import BaseModel
+
+        class _MediumSafe(BaseModel):
+            verdict: str = "safe"
+            confidence: str = "medium"
+            summary: str = "looks compatible"
+            breaking_changes: list = []
+
+        key, blocked, plans, approved, verdicts = self._run(_MediumSafe())
+        assert approved == set()
+        assert key in blocked
+        assert key in verdicts
+
+    def test_high_confidence_safe_promotes(self):
+        from pydantic import BaseModel
+
+        class _HighSafe(BaseModel):
+            verdict: str = "safe"
+            confidence: str = "high"
+            summary: str = "no call sites affected"
+            breaking_changes: list = []
+
+        key, blocked, plans, approved, verdicts = self._run(_HighSafe())
+        assert key in approved
+        assert key in plans
+        assert key not in blocked
