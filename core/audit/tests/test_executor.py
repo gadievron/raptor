@@ -1255,3 +1255,76 @@ class TestExecutorStatsToDict:
         assert d["repass_completed"] == 2
         assert d["budget_stopped"] is True
         assert d["wall_time_s"] == 123.5
+
+
+class TestSerialGlanceBatchFailure:
+    """A raise from the batch build path (e.g. _build_context on one
+    malformed entry) must degrade to per-task error outcomes exactly
+    like the async path — pre-fix it propagated out of the serial
+    loop and cost the whole run's remaining reviews."""
+
+    def _glance_setup(self):
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeBucket:
+            value: str
+
+        @dataclass
+        class FakeTriageResult:
+            bucket: FakeBucket
+
+        wq = [
+            _gap("a.py", "base", 0.9),
+            _gap("a.py", "g1", 0.5),
+            _gap("a.py", "g2", 0.5),
+        ]
+        edges = [
+            _edge("a.py", "g1", "a.py", "base"),
+            _edge("a.py", "g2", "a.py", "base"),
+        ]
+        graph = TaskGraph.from_workqueue(wq, edges)
+        shared = MagicMock()
+        shared.triage_results = {
+            "a.py:g1:1": FakeTriageResult(FakeBucket("glance")),
+            "a.py:g2:1": FakeTriageResult(FakeBucket("glance")),
+        }
+        return graph, shared
+
+    def test_batch_raise_records_errors_and_continues(
+        self, monkeypatch,
+    ) -> None:
+        import core.audit.executor as executor_mod
+
+        graph, shared = self._glance_setup()
+        result = _FakeResult()
+
+        monkeypatch.setattr(
+            executor_mod, "_get_batch_review_fn",
+            lambda s, c: (lambda contexts, config: None),
+        )
+
+        def exploding_batch(tasks, *a, **kw):
+            raise ValueError("malformed checklist entry")
+
+        monkeypatch.setattr(
+            executor_mod, "_process_glance_batch", exploding_batch,
+        )
+
+        stats = run_executor_sync(
+            graph, MagicMock(), shared, MagicMock(), result,
+            ExecutorConfig(max_workers=1),
+            review_one_fn=_mock_review_fn,
+        )
+
+        # No propagation: the run drains, the glance members carry
+        # error verdicts, nothing is silently dropped.
+        assert stats.completed == 3
+        assert stats.failed == 2
+        assert not stats.budget_stopped
+        assert result.errors == 2
+        error_fns = {
+            o.function for o in result.outcomes
+            if getattr(o, "status", "") == "error"
+        }
+        assert error_fns == {"g1", "g2"}

@@ -278,6 +278,7 @@ def run_executor_sync(
                 stats.budget_stopped = True
                 glance_batch.clear()
                 return True
+        committed: set = set()
         try:
             _process_glance_batch(
                 glance_batch, batch_review_fn, shared, config,
@@ -294,14 +295,34 @@ def run_executor_sync(
                 collector=collector,
                 graph=graph,
                 reviewed_outcomes=reviewed_outcomes,
+                committed_keys=committed,
             )
-        except RuntimeError as exc:
-            if not is_budget_exceeded_error(exc):
-                raise
-            stats.budget_stopped = True
-            result.terminated_by = "llm_budget_exceeded"
+        except Exception as exc:  # noqa: BLE001 — budget stop or per-task error record
+            if _is_budget_stop(exc):
+                stats.budget_stopped = True
+                result.terminated_by = "llm_budget_exceeded"
+                glance_batch.clear()
+                return True
+            # Unexpected batch failure (e.g. a raise from
+            # _build_context before the per-item guards): record the
+            # uncommitted members as per-task error outcomes exactly
+            # like the async path — pre-fix the raise propagated out
+            # of the serial loop and one malformed entry cost the
+            # whole run's remaining reviews. Members committed before
+            # a mid-batch raise only need completion bookkeeping
+            # (error-recording them again would double-commit).
+            for t in glance_batch:
+                if t.key in committed:
+                    graph.mark_complete(t.key)
+                    stats.completed += 1
+                    review_idx += 1
+                    continue
+                _record_task_failure(
+                    t, exc, config, result, collector, graph, stats,
+                )
+                review_idx += 1
             glance_batch.clear()
-            return True
+            return False
         for t in glance_batch:
             graph.mark_complete(t.key)
             stats.completed += 1
