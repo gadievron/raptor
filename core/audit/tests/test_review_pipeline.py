@@ -691,6 +691,24 @@ void *alloc_obj(size_t n) {
             "def f(cmd):\n    from os import *\n    return helper(cmd)\n"
         )
 
+    def test_relative_import_delegate_still_skips(self):
+        # A relative import spells its delegate fully — the wrapper
+        # stays trivially skippable; only the ref parts are judged.
+        for body in (
+            "def f(cfg, line):\n"
+            "    from .cfg_utils import find_node\n"
+            "    return find_node(cfg, line)\n",
+            "def f(x):\n    from . import helpers\n"
+            "    return helpers.compute(x)\n",
+        ):
+            assert self._py_fn(body), body
+
+    def test_relative_import_sink_tail_not_skipped(self):
+        assert not self._py_fn(
+            "def f(c):\n    from .proc_utils import run\n"
+            "    return run(c)\n"
+        )
+
     def test_benign_alias_chain_still_skips(self):
         # Both directions: benign values flowing through the same
         # shapes keep the skip.

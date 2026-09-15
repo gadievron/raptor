@@ -907,6 +907,11 @@ def _py_wrapper_escape(
     }
 
     def bind(name: str, refs: set[str], ok: bool) -> None:
+        if ok and refs == {name}:
+            # A name grounding to itself (`import os` binds os->os)
+            # is not an alias; recording it would read as a cycle.
+            accounted.add(name)
+            return
         cur = bindings.get(name)
         if cur is not None:
             bindings[name] = (cur[0] | refs, cur[1] and ok)
@@ -984,11 +989,15 @@ def _py_wrapper_escape(
             for al in node.names:
                 if al.name == "*":
                     return None  # star import: unanalyzable binding set
-                if node.module and not node.level:
+                # Relative imports are spelled delegates too: the
+                # level dots drop and the module path joins the ref,
+                # so its parts face the same tail judgment as any
+                # project-local name.
+                if node.module:
                     bind(al.asname or al.name,
                          {f"{node.module}.{al.name}"}, True)
                 else:
-                    bind(al.asname or al.name, set(), False)
+                    bind(al.asname or al.name, {al.name}, True)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             # A decorator reference is executed at definition time —
             # a bare `@os.system` runs the sink on the function
