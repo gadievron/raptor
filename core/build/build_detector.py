@@ -975,7 +975,6 @@ class BuildDetector:
         r'-I.+|-D[A-Za-z_].*'           # include dirs / defines
         r'|-include|-std=.+'            # forced header / language std
         r'|-sourcepath|-cp|-classpath'  # javac shapes
-        r'|[^-].*'                      # positional value of a pair flag
         r')\Z'
     )
 
@@ -984,30 +983,71 @@ class BuildDetector:
 
         Accepts single tokens ("-DFOO", "-Idir with spaces" — one
         argv element, space is data) and known pair flags
-        ("-include header.h" — split into their two argv tokens).
-        Two gates, both required: no shell/Make metacharacters
-        (character level) AND a known flag name (_SAFE_FLAG_NAME).
+        ("-include header.h", or ["-sourcepath", "<dir>"] as two list
+        elements — emitted as their two argv tokens). Two gates, both
+        required: no shell/Make metacharacters (character level) AND a
+        known flag name (_SAFE_FLAG_NAME).
+
+        Pair flags validate ATOMICALLY: a rejected value drops its
+        name too, and a name with no value is dropped. Emitting the
+        bare name would make the compiler consume the NEXT argv
+        element (-d, a source file …) as its value — one rejected
+        repo path used to strand "-sourcepath", which then ate the
+        javac "-d" and silently broke the whole traced build. A bare
+        non-dash token is accepted ONLY in pair-value position:
+        standalone positionals would splice arbitrary extra argv
+        (an attacker-chosen source file) into every compile.
         """
-        safe: list = []
+        # Flatten to candidate argv tokens (pair strings split once).
+        tokens: list[str] = []
         for flag in flags:
             if not isinstance(flag, str) or not flag.strip():
                 continue
             first, _sep, rest = flag.partition(" ")
             if first in self._PAIR_FLAG_NAMES and rest.strip():
-                tokens = [first, rest.strip()]
+                tokens.extend([first, rest.strip()])
             else:
-                tokens = [flag]
-            if not all(self._SAFE_FLAG_TOKEN.match(t) for t in tokens):
-                logger.warning("Rejected unsafe compiler flag: %s", flag)
+                tokens.append(flag)
+
+        safe: list = []
+        i = 0
+        n = len(tokens)
+        while i < n:
+            tok = tokens[i]
+            if tok in self._PAIR_FLAG_NAMES:
+                value = tokens[i + 1] if i + 1 < n else None
+                if value is None or value.startswith("-"):
+                    # No value present — drop the name alone and keep
+                    # lexing from the next token (it is a flag, not a
+                    # value).
+                    logger.warning(
+                        "Dropped pair flag without a value: %s", tok)
+                    i += 1
+                    continue
+                if self._SAFE_FLAG_TOKEN.match(value):
+                    safe.extend([tok, value])
+                else:
+                    logger.warning(
+                        "Rejected unsafe compiler flag pair: %s %s",
+                        tok, value)
+                i += 2
                 continue
-            if not all(self._SAFE_FLAG_NAME.match(t) for t in tokens):
+            if not tok.startswith("-"):
+                logger.warning(
+                    "Dropped unpaired positional token: %s", tok)
+                i += 1
+                continue
+            if not self._SAFE_FLAG_TOKEN.match(tok):
+                logger.warning("Rejected unsafe compiler flag: %s", tok)
+            elif not self._SAFE_FLAG_NAME.match(tok):
                 logger.warning(
                     "Dropped compiler flag outside the synthesis "
                     "allowlist: %s (operators needing it: "
-                    "/project set build-command)", flag,
+                    "/project set build-command)", tok,
                 )
-                continue
-            safe.extend(tokens)
+            else:
+                safe.append(tok)
+            i += 1
         return safe
 
     def synthesise_build_command(self, language: str) -> BuildSystem | None:

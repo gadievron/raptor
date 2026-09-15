@@ -66,3 +66,53 @@ class TestStillRejected:
 
     def test_non_string_and_blank_skipped(self):
         assert _bd()._validate_flags([None, "", "   ", "-DOK"]) == ["-DOK"]
+
+
+class TestPairFlagsValidateAtomically:
+    # A pair flag's name must never be emitted without its value: the
+    # compiler would consume the NEXT argv element (-d, a source file)
+    # as the value, silently corrupting the whole synthesised build.
+
+    def test_rejected_pair_value_drops_the_name_too(self):
+        # Path with shell metacharacters fails the token charset — the
+        # pair must vanish atomically, not strand "-sourcepath".
+        assert _bd()._validate_flags(
+            ["-sourcepath", "/repo/$(evil)"],
+        ) == []
+
+    def test_rejected_pair_value_in_one_string_drops_both(self):
+        assert _bd()._validate_flags(["-include $(evil).h"]) == []
+
+    def test_pair_name_without_value_dropped(self):
+        assert _bd()._validate_flags(["-sourcepath"]) == []
+
+    def test_pair_name_followed_by_flag_keeps_the_flag(self):
+        # The next token is a flag, not a value: drop the name alone.
+        assert _bd()._validate_flags(
+            ["-sourcepath", "-DOK"],
+        ) == ["-DOK"]
+
+    def test_valid_pair_after_rejected_pair_survives(self):
+        assert _bd()._validate_flags(
+            ["-sourcepath", "/repo/$(evil)", "-cp", "lib/dep.jar"],
+        ) == ["-cp", "lib/dep.jar"]
+
+
+class TestStandalonePositionalsRejected:
+    # A bare token is accepted ONLY as a pair flag's value. Standalone
+    # positionals would splice arbitrary extra argv (an attacker-chosen
+    # source file from a prompt-injected CC reply) into every compile.
+
+    def test_bare_positional_dropped(self):
+        assert _bd()._validate_flags(["evil.c"]) == []
+
+    def test_bare_traversal_positional_dropped(self):
+        assert _bd()._validate_flags(["../../other/file.c", "-DOK"]) == [
+            "-DOK",
+        ]
+
+    def test_pair_value_position_still_accepts_bare_token(self):
+        # Both-directions guard: the pair-value lane stays open.
+        assert _bd()._validate_flags(
+            ["-sourcepath", "/repo/src"],
+        ) == ["-sourcepath", "/repo/src"]
