@@ -18,14 +18,26 @@ Anti-hallucination design:
     (dotted names), the Go import_alias (single identifier).
     Free-form code never reaches the harness.
   - The harness generates the test from a fixed template.
-  - The import/source path is validated against the finding's file
-    in EVERY language lane — Python's module path, the compiled
-    lanes' spliced source, Java's class stem, and the require-shaped
-    lanes (JS/TS/Ruby/PHP/Lua/Perl/Go), where a require_path /
-    use_module / import_path override must resolve to the finding's
-    file. The witness is likewise bound to the finding's FUNCTION —
-    a response naming any other function or module is rejected,
-    never executed.
+  - Module binding holds in the RESOLUTION direction: every language
+    lane asks whether the reference the harness hands the loader
+    resolves to the finding's file under the loader's real rules,
+    through one engine (_resolve.py) with per-language adapters —
+    C/C++/Rust register as structural lanes (compiled directly
+    against spec.file). The STATIC engine is the refusal authority:
+    an unresolvable reference, or one whose earlier loader slots are
+    occupied or unverifiable at validation time, is refused, never
+    executed — for the slot models the adapters encode, as probed
+    per lane with plantable lookalikes by TestLaneBindingClosure.
+    The Python/Ruby/Perl harnesses add a BEST-EFFORT post-load belt
+    (module __file__ / %INC / $LOADED_FEATURES): it reports
+    binding_error instead of a verdict for mis-binds where no plant
+    code runs, but it reads interpreter state after target code has
+    executed, so it is not a defense against executing plants — those
+    are the static engine's to refuse. Lua's package.searchpath
+    re-check runs BEFORE require and is the one belt target code
+    cannot have forged. The witness is likewise bound to the
+    finding's FUNCTION — a response naming any other function or
+    module is rejected, never executed.
   - The return value / crash signal is captured independently and
     authenticated: the harness embeds a per-execution token
     (generated in-process after the LLM response is parsed) in its
