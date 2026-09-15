@@ -42,6 +42,193 @@ def _finding(snippet: str, rule_id: str = "cpp/unbounded-write",
 
 
 # =====================================================================
+import pytest
+
+import packages.source_intel.adapter as _adapter_mod
+
+# Captured before the autouse grant below replaces the symbol — the
+# trust-focused tests re-install the real gate.
+_REAL_BUILD_FLAGS_TRUSTED = _adapter_mod._build_flags_trusted
+
+
+@pytest.fixture(autouse=True)
+def _grant_build_trust(monkeypatch):
+    """These tests pin the flag/rule/sink gating logic; the operator
+    `build` trust marker + one-target rule (a separate gate — declared
+    build config is plantable) is granted here and pinned by its own
+    tests below."""
+    import packages.source_intel.adapter as adapter
+    monkeypatch.setattr(adapter, "_build_flags_trusted",
+                        lambda *_a, **_k: True)
+
+
+def _fortify_result():
+    bf = BuildFlagsContext(
+        source="compile_commands.json",
+        extraction_confidence="high",
+        fortify_source_level=2,
+    )
+    return SourceIntelResult(build_flags=bf)
+
+
+def test_fortify_never_suppresses_without_build_trust(monkeypatch):
+    import packages.source_intel.adapter as adapter
+    monkeypatch.setattr(adapter, "_build_flags_trusted",
+                        lambda *_a, **_k: False)
+    monkeypatch.setattr(adapter, "_UNTRUSTED_BUILD_FLAGS_NOTICED", set())
+    finding = _finding("strcpy(buf, user_input);")
+    assert _fortify_source_blocks_finding(finding, _fortify_result()) is False
+
+
+def test_other_projects_marker_never_arms_cross_target(
+    monkeypatch, tmp_path,
+):
+    # One-target rule: a build-trusted project A ambient in the
+    # session must not arm suppression for a DIFFERENT tree B the run
+    # actually scans — that is exactly the plantable-config attack
+    # the gate exists to close. Trust primitives patched at the trust
+    # module so run_target_matches_project runs its real fail-closed
+    # comparison.
+    import core.project.trust as trust
+    import packages.source_intel.adapter as adapter
+    monkeypatch.setattr(adapter, "_build_flags_trusted",
+                        _REAL_BUILD_FLAGS_TRUSTED)
+    monkeypatch.setattr(
+        trust, "active_project_trust",
+        lambda run_dir=None: ({"build": "2026-09-14T00:00:00"},
+                              "trusted-app"),
+    )
+    monkeypatch.setattr(
+        trust, "active_project_target",
+        lambda run_dir=None: "/somewhere/else/trusted-app-tree",
+    )
+    monkeypatch.setattr(adapter, "_UNTRUSTED_BUILD_FLAGS_NOTICED", set())
+    finding = _finding("strcpy(buf, user_input);")
+    assert _fortify_source_blocks_finding(
+        finding, _fortify_result(), repo_root=tmp_path,
+    ) is False
+    # Matching target: the marker legitimately arms.
+    monkeypatch.setattr(
+        trust, "active_project_target",
+        lambda run_dir=None: str(tmp_path),
+    )
+    assert _fortify_source_blocks_finding(
+        finding, _fortify_result(), repo_root=tmp_path,
+    ) is True
+
+
+def test_unknown_repo_root_fails_closed(monkeypatch, tmp_path):
+    import core.project.trust as trust
+    monkeypatch.setattr(_adapter_mod, "_build_flags_trusted",
+                        _REAL_BUILD_FLAGS_TRUSTED)
+    monkeypatch.setattr(
+        trust, "active_project_trust",
+        lambda run_dir=None: ({"build": "x"}, "trusted-app"),
+    )
+    monkeypatch.setattr(
+        trust, "active_project_target",
+        lambda run_dir=None: str(tmp_path),
+    )
+    finding = _finding("strcpy(buf, user_input);")
+    # repo_root=None: the run target cannot be shown to be the
+    # project's — the marker must not apply.
+    assert _fortify_source_blocks_finding(
+        finding, _fortify_result(), repo_root=None,
+    ) is False
+
+
+def test_gate_is_not_process_cached(monkeypatch, tmp_path):
+    # A mid-process project switch must never carry a stale answer:
+    # trusted-and-matching first, then the ambient project clears its
+    # marker — the very next evaluation refuses.
+    import core.project.trust as trust
+    monkeypatch.setattr(_adapter_mod, "_build_flags_trusted",
+                        _REAL_BUILD_FLAGS_TRUSTED)
+    finding = _finding("strcpy(buf, user_input);")
+    state = {"markers": {"build": "x"}}
+    monkeypatch.setattr(
+        trust, "active_project_trust",
+        lambda run_dir=None: (state["markers"], "app"),
+    )
+    monkeypatch.setattr(
+        trust, "active_project_target",
+        lambda run_dir=None: str(tmp_path),
+    )
+    assert _fortify_source_blocks_finding(
+        finding, _fortify_result(), repo_root=tmp_path,
+    ) is True
+    state["markers"] = {}
+    assert _fortify_source_blocks_finding(
+        finding, _fortify_result(), repo_root=tmp_path,
+    ) is False
+
+
+def test_no_project_refuses_through_real_chain(monkeypatch, tmp_path):
+    # Integration-shaped: only the ambient-project NAME resolution is
+    # stubbed (no project); active_project_trust and the one-target
+    # comparison run for real.
+    from core.project.project import ProjectManager
+    monkeypatch.setattr(_adapter_mod, "_build_flags_trusted",
+                        _REAL_BUILD_FLAGS_TRUSTED)
+    monkeypatch.setattr(ProjectManager, "get_active",
+                        lambda self: None)
+    finding = _finding("strcpy(buf, user_input);")
+    assert _fortify_source_blocks_finding(
+        finding, _fortify_result(), repo_root=tmp_path,
+    ) is False
+
+
+def test_withheld_suppression_is_logged_once(monkeypatch, caplog, tmp_path):
+    # Trust state must never be invisible: build-flags evidence
+    # matched but the marker withheld suppression -> one notice.
+    import packages.source_intel.adapter as adapter
+    monkeypatch.setattr(adapter, "_build_flags_trusted",
+                        lambda *_a, **_k: False)
+    monkeypatch.setattr(adapter, "_UNTRUSTED_BUILD_FLAGS_NOTICED", set())
+    finding = _finding("strcpy(buf, user_input);")
+    with caplog.at_level("WARNING", logger=adapter.logger.name):
+        assert _fortify_source_blocks_finding(
+            finding, _fortify_result(), repo_root=tmp_path,
+        ) is False
+        assert _fortify_source_blocks_finding(
+            finding, _fortify_result(), repo_root=tmp_path,
+        ) is False
+    hits = [r for r in caplog.records
+            if "suppression is withheld" in r.message]
+    assert len(hits) == 1
+
+
+def test_trusted_direction_stays_silent(monkeypatch, caplog, tmp_path):
+    import packages.source_intel.adapter as adapter
+    monkeypatch.setattr(adapter, "_build_flags_trusted",
+                        lambda *_a, **_k: True)
+    monkeypatch.setattr(adapter, "_UNTRUSTED_BUILD_FLAGS_NOTICED", set())
+    finding = _finding("strcpy(buf, user_input);")
+    with caplog.at_level("WARNING", logger=adapter.logger.name):
+        assert _fortify_source_blocks_finding(
+            finding, _fortify_result(), repo_root=tmp_path,
+        ) is True
+    assert not [r for r in caplog.records
+                if "suppression is withheld" in r.message]
+
+
+def test_unmatched_evidence_never_notices(monkeypatch, caplog, tmp_path):
+    # The notice fires only when the EVIDENCE matched: a finding the
+    # suppressor would refuse anyway (wrong rule class) logs nothing.
+    import packages.source_intel.adapter as adapter
+    monkeypatch.setattr(adapter, "_build_flags_trusted",
+                        lambda *_a, **_k: False)
+    monkeypatch.setattr(adapter, "_UNTRUSTED_BUILD_FLAGS_NOTICED", set())
+    finding = _finding("strcpy(buf, user_input);",
+                       rule_id="cpp/null-dereference")
+    with caplog.at_level("WARNING", logger=adapter.logger.name):
+        assert _fortify_source_blocks_finding(
+            finding, _fortify_result(), repo_root=tmp_path,
+        ) is False
+    assert not [r for r in caplog.records
+                if "suppression is withheld" in r.message]
+
+
 # _fortify_source_blocks_finding helper
 # =====================================================================
 

@@ -1113,6 +1113,66 @@ _FORTIFIED_WRITE_CALLS: frozenset[str] = frozenset({
 })
 
 
+def _build_flags_trusted(repo_root: Path | str | None) -> bool:
+    """Operator ``build`` trust-marker gate for build-config-derived
+    SUPPRESSION — with the one-target rule.
+
+    ``extract_flags`` parses declarative text the SCANNED repo ships
+    — the parsing is line-anchored, but nothing verifies the parsed
+    file drives any real build: a planted ``.config`` or a dead
+    Makefile carrying ``-D_FORTIFY_SOURCE=2 -fstack-protector-strong``
+    arms the fortify / stack-protector suppressors with no trust
+    gate. Suppression therefore requires the operator's ``build``
+    trust marker (the exact contract project trust markers exist
+    for); without it the flags stay steering-only evidence in the
+    rendered prose.
+
+    One-target rule (the sibling marker consumer in
+    packages/sca/bump/orchestrator.py carries the same gate): the
+    marker is an assertion about ONE tree — the governing project's
+    ambient marker must never relax vetting for a DIFFERENT tree the
+    run actually scans, so the analysed root must be shown to be the
+    project's target (``run_target_matches_project`` — fail-closed on
+    unknown/unresolvable roots, including ``repo_root=None``).
+    Resolved per call, never process-cached: a mid-process project
+    switch or a multi-target process must not carry another
+    resolution's answer. Run-pin (``run_dir``) resolution is not
+    plumbed into this layer; the one-target rule is the operative
+    defence and matches the sibling consumer's shape.
+    """
+    try:
+        from core.project.trust import (
+            active_project_trust,
+            run_target_matches_project,
+        )
+    except ImportError:
+        return False
+    markers, _project = active_project_trust()
+    if "build" not in markers:
+        return False
+    return run_target_matches_project(repo_root)
+
+
+_UNTRUSTED_BUILD_FLAGS_NOTICED: set[str] = set()
+
+
+def _notice_untrusted_build_flags(kind: str) -> None:
+    """One logged line (per suppressor kind, per process) when
+    build-flags evidence matched but the missing/mismatched ``build``
+    trust marker withheld suppression — trust state must never be
+    invisible (the project-trust doctrine); operators otherwise see
+    extra findings with no stated cause."""
+    if kind in _UNTRUSTED_BUILD_FLAGS_NOTICED:
+        return
+    _UNTRUSTED_BUILD_FLAGS_NOTICED.add(kind)
+    logger.warning(
+        "source_intel: %s evidence matched but suppression is "
+        "withheld — declared build config is only suppression-grade "
+        "under the project's `build` trust marker for THIS target "
+        "(set with `/project trust build`)", kind,
+    )
+
+
 def _fortify_source_blocks_finding(
     finding: Finding,
     result: SourceIntelResult,
@@ -1123,7 +1183,10 @@ def _fortify_source_blocks_finding(
 
     * build_flags has fortify_source_level >= 2, AND
     * finding's rule_id is unbounded-write-class, AND
-    * the sink line names a FORTIFY-intercepted call.
+    * the sink line names a FORTIFY-intercepted call, AND
+    * the operator has asserted the ``build`` trust marker (see
+      :func:`_build_flags_trusted` — declared build config is
+      plantable and never suppression-grade on its own).
 
     The sink-line snippet check uses a token boundary check to
     avoid spurious matches on substrings (e.g. ``my_strcpy`` would
@@ -1169,7 +1232,14 @@ def _fortify_source_blocks_finding(
     # unchecked. Without this guard the verdict policy over-suppresses
     # findings on malloc'd destinations, which is the common case in
     # most userspace.
-    return not _fortified_dest_is_variable_size(finding, repo_root=repo_root)
+    if _fortified_dest_is_variable_size(finding, repo_root=repo_root):
+        return False
+    # Trust gate LAST so that reaching it means the evidence matched:
+    # the withheld direction gets its visibility notice.
+    if not _build_flags_trusted(repo_root):
+        _notice_untrusted_build_flags("fortify-source")
+        return False
+    return True
 
 
 _DYNAMIC_ALLOCATORS_PATTERN = re.compile(
@@ -2176,4 +2246,12 @@ def _stack_protector_suppresses_finding(
     fixed_array_re = re.compile(
         r"\b[A-Za-z_][A-Za-z_0-9]*\s+[A-Za-z_][A-Za-z_0-9]*\s*\[\s*\d+\s*\]"
     )
-    return any(fixed_array_re.search(lines[i]) for i in range(start, end))
+    if not any(fixed_array_re.search(lines[i]) for i in range(start, end)):
+        return False
+    # Trust gate LAST (declared build config is plantable — see
+    # _build_flags_trusted): reaching it means the evidence matched,
+    # so the withheld direction gets its visibility notice.
+    if not _build_flags_trusted(repo_root):
+        _notice_untrusted_build_flags("stack-protector")
+        return False
+    return True

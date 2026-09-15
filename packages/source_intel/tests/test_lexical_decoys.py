@@ -17,6 +17,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from core.dataflow.finding import Finding, Step
 from packages.source_intel.adapter import (
     _downstream_check_suppresses_finding,
@@ -154,6 +156,32 @@ class TestDownstreamCheckDecoy:
 
 class TestStackProtectorDecoy:
     RULE = "cpp/unbounded-write"
+
+    @pytest.fixture(autouse=True)
+    def _grant_build_trust(self, monkeypatch):
+        # The trust-marker gate is a separate control (pinned in
+        # test_build_flags_consumer); grant it so these tests pin the
+        # lexical-decoy axis in isolation.
+        import packages.source_intel.adapter as adapter
+        monkeypatch.setattr(adapter, "_build_flags_trusted",
+                            lambda *_a, **_k: True)
+
+    def test_stack_protector_never_suppresses_without_trust(
+        self, tmp_path, monkeypatch,
+    ):
+        import packages.source_intel.adapter as adapter
+        monkeypatch.setattr(adapter, "_build_flags_trusted",
+                            lambda *_a, **_k: False)
+        path = _write(tmp_path, (
+            "int f(const char *s) {\n"
+            "    char buf[64];\n"
+            "    strcpy(buf, s);\n"
+            "}\n"
+        ))
+        assert _stack_protector_suppresses_finding(
+            _finding_at(path, 3, self.RULE, snippet="strcpy(buf, s);"),
+            self._result(),
+        ) is False
 
     def _result(self):
         return SimpleNamespace(
