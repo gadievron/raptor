@@ -119,6 +119,22 @@ class TaintSummary:
     summary_unknown: bool = False
     summary_unknown_reason: str = ""
     summary_unconverged: bool = False
+    # Positional-binding boundary: how many leading ``params`` slots a
+    # call can fill BY POSITION (posonly + positional-or-keyword).
+    # ``params`` lists the ``*vararg``, keyword-only, and ``**kwarg``
+    # names as ordinary entries, so a positional arg at index >= this
+    # boundary lands in the vararg tuple (or nowhere) — index-based
+    # mapping through those slots mis-attributed flows (an
+    # exact-params-length call to ``def h(a, *rest, key=...)`` mapped
+    # its third arg onto ``key``). None = not computed (hand-built /
+    # seed summaries): consumers fall back to the legacy full-length
+    # mapping.
+    positional_limit: int | None = None
+    # Names a call can bind BY KEYWORD (positional-or-keyword +
+    # keyword-only). Excludes posonly names and the vararg/kwarg slot
+    # names — ``h(kw=1)`` against ``def h(**kw)`` lands INSIDE the kw
+    # dict, not on the ``kw`` params slot. None = not computed.
+    keyword_params: frozenset[str] | None = None
 
     # ----- query helpers -----
 
@@ -526,12 +542,30 @@ def _expr_taint(
         if (callee is not None and not callee.summary_unknown
                 and not has_starred):
             # In-module callee with a known summary. Positional args
-            # map by index; keyword args map to the callee param of
-            # the same name.
-            indexed: dict[int, TaintState] = dict(enumerate(arg_states))
-            opaque: list[TaintState] = []
+            # map by index — but only below the callee's
+            # positional-binding boundary: at or past the ``*vararg``
+            # slot the index no longer names the receiving parameter
+            # (the arg lands in the tuple; the NEXT index would name a
+            # keyword-only param a positional can never reach), so
+            # those args go opaque instead. Keyword args map to the
+            # callee param of the same name when that name is
+            # keyword-bindable.
+            pos_limit = callee.positional_limit
+            if pos_limit is None:
+                pos_limit = len(callee.params)
+            indexed: dict[int, TaintState] = {
+                i: st for i, st in enumerate(arg_states) if i < pos_limit
+            }
+            opaque: list[TaintState] = [
+                st for i, st in enumerate(arg_states) if i >= pos_limit
+            ]
             for kw_name, kw_state in kw_states:
-                if kw_name is not None and kw_name in callee.params:
+                kw_bindable = (
+                    kw_name in callee.keyword_params
+                    if callee.keyword_params is not None
+                    else kw_name in callee.params
+                )
+                if kw_name is not None and kw_bindable:
                     idx = callee.params.index(kw_name)
                     indexed[idx] = _merge_states(
                         indexed.get(idx, _empty_state()), kw_state,
@@ -549,11 +583,12 @@ def _expr_taint(
                 else:
                     stamped = _add_effect(arg_state, c_callee, a_callee)
                     result = _merge_states(result, stamped)
-            # A keyword with no matching callee param: the summary
-            # can't say whether it reaches the return, so keep the
-            # taint alive with the callee on its chain (an in-module
-            # name is never a catalog sanitizer — the consumer
-            # refuses rather than suppresses).
+            # A keyword with no matching (keyword-bindable) callee
+            # param, or a positional at/past the vararg boundary: the
+            # summary can't say whether it reaches the return, so keep
+            # the taint alive with the callee on its chain (an
+            # in-module name is never a catalog sanitizer — the
+            # consumer refuses rather than suppresses).
             for kw_state in opaque:
                 if kw_state:
                     result = _merge_states(
@@ -979,11 +1014,21 @@ def _compute_one_summary(
                     for pi, _ in arg_state:
                         call_arg_taint.add((callable_name, arg_idx, pi))
 
+    # Binding-shape facts for callers' positional/keyword mapping
+    # (params lists vararg/kwonly/kwarg names as ordinary entries).
+    fn_args = fn_ast.args
+    positional_limit = len(fn_args.posonlyargs) + len(fn_args.args)
+    keyword_params = frozenset(
+        a.arg for a in (*fn_args.args, *fn_args.kwonlyargs)
+    )
+
     return TaintSummary(
         function=qualified_name,
         params=params,
         return_effects=frozenset(return_effects),
         call_arg_taint=frozenset(call_arg_taint),
+        positional_limit=positional_limit,
+        keyword_params=keyword_params,
     )
 
 

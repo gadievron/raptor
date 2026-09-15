@@ -266,6 +266,17 @@ def synthetic_sanitizer_bindings(
                 # reasoning is meaningless past the end. Uncertainty
                 # → decline the binding (the docstring contract).
                 continue
+            if (summary.positional_limit is not None
+                    and len(arg_names) > summary.positional_limit):
+                # Positional args at/past the ``*vararg`` slot:
+                # ``params`` lists the vararg and keyword-only names
+                # as ordinary entries, so the length check above
+                # passes for an exact-length call to a vararg helper
+                # while index-based mapping walks THROUGH those slots
+                # (the arg after the vararg maps onto a keyword-only
+                # param it can never reach). Same uncertainty →
+                # decline.
+                continue
             # Review #1: a symbol passed at a position that taints the
             # return but is NOT cleanly sanitized reaches the sink
             # unsanitized through that position — so the helper does not
@@ -310,7 +321,13 @@ def synthetic_sanitizer_bindings(
             for kw_name, val_entry in kw_args:
                 if val_entry is _CONST_ARG:
                     continue
-                if kw_name is None or kw_name not in summary.params:
+                if (kw_name is None or kw_name not in summary.params
+                        or (summary.keyword_params is not None
+                            and kw_name not in summary.keyword_params)):
+                    # Unknown keyword, or a name that isn't
+                    # keyword-BINDABLE (the vararg/kwarg slot names,
+                    # posonly params): no trustworthy position to
+                    # reason about — decline.
                     binding_ok = False
                     break
                 idx = summary.params.index(kw_name)

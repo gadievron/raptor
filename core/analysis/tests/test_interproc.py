@@ -598,3 +598,78 @@ class TestOpaqueArgsDeclineBinding:
         )
         result = _evaluate(src, "handle", ["x"], "y", 4)
         assert not result.suppress
+
+
+# ---------------------------------------------------------------------------
+# Vararg positional-binding boundary
+# ---------------------------------------------------------------------------
+
+
+class TestVarargBoundary:
+    """The positional-overflow decline compares against the summary's
+    params length — which lists the *vararg and keyword-only names as
+    ordinary entries. An exact-params-length call to a vararg helper
+    therefore passed the check while index mapping walked THROUGH the
+    vararg slot onto a keyword-only param the call never binds,
+    minting a clean-sanitizer binding for a value that rides the
+    vararg tuple unsanitized."""
+
+    def test_exact_length_call_to_vararg_helper_declines(self):
+        src = (
+            "def helper(a, *rest, key=''):\n"
+            "    return html.escape(a) + html.escape(key) + str(rest)\n"
+            "def handler(x, y, z):\n"
+            "    clean = helper(x, y, z)\n"
+            "    render(clean)\n"
+        )
+        _, bindings = _bindings_for(src, "handler")
+        # Pre-fix: positions 0 and 2 read as cleanly sanitized, so a
+        # binding claimed z sanitized while it lands in ``rest``.
+        assert bindings == frozenset()
+
+    def test_call_below_vararg_boundary_still_binds(self):
+        src = (
+            "def helper(a, *rest, key=''):\n"
+            "    return html.escape(a) + html.escape(key) + str(rest)\n"
+            "def handler(x):\n"
+            "    clean = helper(x)\n"
+            "    render(clean)\n"
+        )
+        _, bindings = _bindings_for(src, "handler")
+        assert len(bindings) == 1
+        assert "x" in next(iter(bindings)).input_symbols
+
+    def test_exact_length_vararg_call_never_suppresses_e2e(self):
+        # End-to-end repro of the live false suppression: the helper
+        # sanitizes only ``a`` and returns ``rest[0]`` raw, yet the
+        # exact-length call earned a binding claiming ``x`` sanitized
+        # and the gate suppressed on it while ``w`` reaches the sink
+        # through the vararg tuple unsanitized.
+        src = (
+            "def _mix(a, *rest):\n"
+            "    return html.escape(a) + rest[0]\n"
+            "def handler(x, w):\n"
+            "    y = _mix(x, w)\n"
+            "    render(y)\n"
+        )
+        _, bindings = _bindings_for(src, "handler")
+        assert bindings == frozenset()
+        for source in ({"x"}, {"w"}, {"x", "w"}):
+            result = _evaluate(src, "handler", source, "y", 5)
+            assert result.suppress is False, source
+
+    def test_keyword_naming_the_vararg_slot_declines(self):
+        # ``rest=...`` cannot bind the vararg slot at runtime — a
+        # keyword matching a non-keyword-bindable name is the same
+        # no-trustworthy-position uncertainty as an unknown keyword,
+        # so the whole binding declines (pre-fix it mapped ``rest`` to
+        # its params index and kept the binding).
+        src = (
+            "def helper(a='', *rest):\n"
+            "    return html.escape(a) + str(rest)\n"
+            "def handler(x, y):\n"
+            "    clean = helper(x, rest=y)\n"
+            "    render(clean)\n"
+        )
+        _, bindings = _bindings_for(src, "handler")
+        assert bindings == frozenset()

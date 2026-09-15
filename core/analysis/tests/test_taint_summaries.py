@@ -794,3 +794,118 @@ class TestIifeDefaultArgsStayDirty:
             "def h(a):\n"
             "    return html.escape(a) + (lambda z=1: str(z))()\n"
         )
+
+
+# ---------------------------------------------------------------------------
+# Vararg / kwonly / kwarg positional-binding boundary
+# ---------------------------------------------------------------------------
+
+
+class TestVarargPositionalBinding:
+    """``params`` lists the ``*vararg``, keyword-only and ``**kwarg``
+    names as ordinary entries, so index-based positional mapping is
+    only trustworthy below the vararg boundary: an exact-params-length
+    call to ``def h(a, *rest, key=...)`` used to map its third arg
+    onto ``key`` (it lands in ``rest`` at runtime) — minting the
+    keyword-only param's sanitizer chain for a value that never
+    passed through it."""
+
+    def test_exact_length_call_does_not_map_through_vararg_slot(self):
+        _, summaries = _summaries(
+            "def helper(a, *rest, key=''):\n"
+            "    return html.escape(a) + html.escape(key) + str(rest)\n"
+            "def outer(x, y, z):\n"
+            "    return helper(x, y, z)\n"
+        )
+        from core.analysis.taint_summaries import _OPAQUE_ARG
+        s = summaries["outer"]
+        # x maps to ``a`` — the clean chain is preserved.
+        assert ("html.escape", 0) in s.return_sanitizers_for_param(0)
+        # z rides the vararg tuple at runtime (key keeps its default):
+        # it must NOT inherit key's html.escape chain, and its taint
+        # must stay alive with the helper stamped opaque (consumer
+        # refuses rather than suppresses).
+        for pi in (1, 2):
+            chains = s.return_sanitizers_for_param(pi)
+            assert ("html.escape", 0) not in chains
+            assert s.param_taints_return(pi)
+            assert ("helper", _OPAQUE_ARG) in chains
+
+    def test_vararg_at_position_zero(self):
+        _, summaries = _summaries(
+            "def h(*rest, key=''):\n"
+            "    return html.escape(key) + str(rest)\n"
+            "def outer(x, y):\n"
+            "    return h(x, y)\n"
+        )
+        s = summaries["outer"]
+        for pi in (0, 1):
+            assert s.param_taints_return(pi)
+            assert ("html.escape", 0) not in s.return_sanitizers_for_param(pi)
+
+    def test_vararg_at_position_two_maps_leading_params(self):
+        _, summaries = _summaries(
+            "def h(a, b, *rest):\n"
+            "    return html.escape(a) + html.escape(b) + str(rest)\n"
+            "def outer(x, y, z):\n"
+            "    return h(x, y, z)\n"
+        )
+        s = summaries["outer"]
+        # Below the boundary: index mapping preserved.
+        assert ("html.escape", 0) in s.return_sanitizers_for_param(0)
+        assert ("html.escape", 0) in s.return_sanitizers_for_param(1)
+        # At the boundary: opaque, alive.
+        assert s.param_taints_return(2)
+        assert ("html.escape", 0) not in s.return_sanitizers_for_param(2)
+
+    def test_positional_overflow_to_no_vararg_callee_stays_alive(self):
+        # A call passing MORE positional args than the callee binds
+        # (a latent runtime TypeError, but summaries are static): the
+        # overflow arg's taint used to be dropped silently; past the
+        # binding boundary it now reads opaque with taint ALIVE —
+        # refusal-ward, consumers refuse rather than suppress.
+        _, summaries = _summaries(
+            "def h(a):\n"
+            "    return html.escape(a)\n"
+            "def outer(x, y):\n"
+            "    return h(x, y)\n"
+        )
+        s = summaries["outer"]
+        assert ("html.escape", 0) in s.return_sanitizers_for_param(0)
+        assert s.param_taints_return(1)
+        assert ("html.escape", 0) not in s.return_sanitizers_for_param(1)
+
+    def test_no_vararg_exact_length_mapping_unchanged(self):
+        _, summaries = _summaries(
+            "def h(a, b):\n"
+            "    return html.escape(a) + html.escape(b)\n"
+            "def outer(x, y):\n"
+            "    return h(x, y)\n"
+        )
+        s = summaries["outer"]
+        assert ("html.escape", 0) in s.return_sanitizers_for_param(0)
+        assert ("html.escape", 0) in s.return_sanitizers_for_param(1)
+
+    def test_keyword_matching_kwarg_slot_name_does_not_bind(self):
+        # ``h(kw=x)`` against ``def h(a, **kw)`` lands INSIDE the kw
+        # dict; mapping it onto the ``kw`` params slot (whose summary
+        # says "does not taint return") silently DROPPED x's taint.
+        _, summaries = _summaries(
+            "def h(a='', **kw):\n"
+            "    return html.escape(a)\n"
+            "def outer(x):\n"
+            "    return h(kw=x)\n"
+        )
+        s = summaries["outer"]
+        assert s.param_taints_return(0)
+
+    def test_keyword_to_kwonly_param_still_maps(self):
+        _, summaries = _summaries(
+            "def h(a, *rest, key=''):\n"
+            "    return html.escape(a) + html.escape(key)\n"
+            "def outer(x, z):\n"
+            "    return h(x, key=z)\n"
+        )
+        s = summaries["outer"]
+        # Keyword binding to a kwonly param is index-correct.
+        assert ("html.escape", 0) in s.return_sanitizers_for_param(1)
