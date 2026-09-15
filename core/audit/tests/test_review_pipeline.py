@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 # ── Feature 1: Wrapper auto-clean ─────────────────────────────────
 
 class TestWrapperAutoClean:
@@ -962,6 +964,561 @@ void *alloc_obj(size_t n) {
             "python", [{"name": "compute_value"}],
         )
         assert is_wrapper
+
+
+class TestBinderConstructClosure:
+    """Mechanical closure over the installed Python grammar: every
+    ast node type that introduces or receives a name binding must be
+    either handled by the wrapper escape collector or covered by its
+    conservative runtime default (refuse the skip). The enumeration
+    is derived from the ast module itself, so a new grammar release
+    adding a binder construct fails here until it is classified —
+    while the runtime default already refuses it."""
+
+    def test_installed_binder_grammar_totally_classified(self):
+        import ast as ast_mod
+
+        from core.audit.prefilter import (
+            _PY_BINDER_FIELDS,
+            _PY_HANDLED_BINDERS,
+        )
+        binder_classes = {
+            obj for obj in vars(ast_mod).values()
+            if isinstance(obj, type)
+            and issubclass(obj, ast_mod.AST)
+            and set(getattr(obj, "_fields", ())) & _PY_BINDER_FIELDS
+        }
+        assert binder_classes, "binder-field enumeration went empty"
+        # Constructs deliberately left to the conservative runtime
+        # default: match patterns and type-parameter declarations
+        # refuse the skip instead of modelling their bindings.
+        conservatively_refused = {
+            getattr(ast_mod, name)
+            for name in (
+                "MatchAs", "MatchStar", "MatchMapping",
+                "TypeAlias", "TypeVar", "ParamSpec", "TypeVarTuple",
+            )
+            if hasattr(ast_mod, name)
+        }
+        unclassified = (
+            binder_classes
+            - set(_PY_HANDLED_BINDERS)
+            - conservatively_refused
+        )
+        assert not unclassified, (
+            "new binder constructs need classification in the "
+            f"wrapper escape collector: {sorted(c.__name__ for c in unclassified)}"
+        )
+
+    def test_unhandled_binder_construct_refuses_analysis(self):
+        # A match capture pattern binds through a construct the
+        # collector does not model — the conservative default must
+        # refuse the analysis (and therefore the skip).
+        from core.audit.prefilter import (
+            _is_trivial_wrapper,
+            _py_wrapper_escape,
+        )
+        src = (
+            "def f(c, x):\n"
+            "    match x:\n"
+            "        case g:\n"
+            "            return helper(c)\n"
+        )
+        assert _py_wrapper_escape(src) is None
+        assert not _is_trivial_wrapper(src, "python", None)[0]
+
+    def test_store_sweep_refuses_unaccounted_name(self, monkeypatch):
+        # Belt-and-braces behind the binder-field check: a
+        # Store-context Name the collector did not bind or account
+        # for refuses the analysis. Exercised by planting a synthetic
+        # binder whose holder type carries no binder-shaped field.
+        import ast as ast_mod
+
+        from core.audit.prefilter import _py_wrapper_escape
+        src = "def f(c):\n    return helper(c)\n"
+        tree = ast_mod.parse(src)
+
+        def planted_parse(_source: str) -> ast_mod.Module:
+            # graft a bare Store name under an expression statement
+            planted = ast_mod.Name(id="ghost", ctx=ast_mod.Store())
+            tree.body[0].body.insert(0, ast_mod.Expr(value=planted))
+            return tree
+
+        monkeypatch.setattr(ast_mod, "parse", planted_parse)
+        assert _py_wrapper_escape(src) is None
+
+
+
+#: Adversarial shape battery rows: (case id, language, source,
+#: expected skip verdict, project sinks, resolved callees).
+#: Historical escape shapes re-spelled independently of the pinned
+#: member tests, benign controls, and hostile candidates across
+#: every language leg.
+_ADVERSARIAL_CASES: list[tuple] = [
+    (
+        'H01-tuple-unpack', 'python',
+        'def f(c):\n    a, b = os.system, 1\n    return a(c)\n',
+        False, None, None,
+    ),
+    (
+        'H02-chained', 'python',
+        'def f(c):\n    a = b = os.system\n    return a(c)\n',
+        False, None, None,
+    ),
+    (
+        'H03-annotated', 'python',
+        'def f(c):\n    a: object = subprocess.run\n    return a(c)\n',
+        False, None, None,
+    ),
+    (
+        'H04-conditional-rhs', 'python',
+        'def f(c, z):\n    a = os.system if z else print\n    return a(c)\n',
+        False, None, None,
+    ),
+    (
+        'H05-spaced-attr', 'python',
+        'def f(c):\n    a = os . system\n    return a(c)\n',
+        False, None, None,
+    ),
+    (
+        'H06-default-arg', 'python',
+        'def f(c, run=subprocess.run):\n    return run(c)\n',
+        False, None, None,
+    ),
+    (
+        'H07-kwonly-default', 'python',
+        'def f(c, *, run=os.system):\n    return run(c)\n',
+        False, None, None,
+    ),
+    (
+        'H08-two-hop', 'python',
+        'def f(c):\n    a = os.system\n    b = a\n    return b(c)\n',
+        False, None, None,
+    ),
+    (
+        'H09-return-value-escape', 'python',
+        'def f(c):\n    log(c)\n    return os.system\n',
+        False, None, None,
+    ),
+    (
+        'H10-yield-escape', 'python',
+        'def f(c):\n    log(c)\n    yield subprocess.run\n',
+        False, None, None,
+    ),
+    (
+        'H11-walrus', 'python',
+        'def f(c):\n    return (a := os.system)(c)\n',
+        False, None, None,
+    ),
+    (
+        'H12-arg-value-escape', 'python',
+        'def f(c):\n    return pool.submit(os.system, c)\n',
+        False, None, None,
+    ),
+    (
+        'H13-container-store', 'python',
+        "def f(c, d):\n    d['k'] = os.system\n    return log(c)\n",
+        False, None, None,
+    ),
+    (
+        'H14-attr-store', 'python',
+        'def f(self, c):\n    self.h = os.system\n    return log(c)\n',
+        False, None, None,
+    ),
+    (
+        'H15-augassign', 'python',
+        'def f(c, acc):\n    acc += [os.system]\n    return log(c)\n',
+        False, None, None,
+    ),
+    (
+        'H16-import-alias', 'python',
+        'def f(c):\n    import os as o\n    return o.system(c)\n',
+        False, None, None,
+    ),
+    (
+        'H17-from-import', 'python',
+        'def f(c):\n    from os import system as s\n    return s(c)\n',
+        False, None, None,
+    ),
+    (
+        'H18-star-import', 'python',
+        'def f(c):\n    from os import *\n    return system(c)\n',
+        False, None, None,
+    ),
+    (
+        'H19-lambda-carry', 'python',
+        'def f(c):\n    g = lambda: os.system\n    return g(c)\n',
+        False, None, None,
+    ),
+    (
+        'H20-subscript-store', 'python',
+        'def f(c, tbl):\n    tbl[0] = subprocess.run\n    return log(c)\n',
+        False, None, None,
+    ),
+    (
+        'HC1-typedef-fnptr', 'c',
+        'void w(char *c) {\n    sighandler_t fp = system;\n    fp(c);\n}\n',
+        False, None, None,
+    ),
+    (
+        'HC2-auto', 'cpp',
+        'void w(char *c) {\n    auto fp = system;\n    fp(c);\n}\n',
+        False, None, None,
+    ),
+    (
+        'HC3-fnptr-declarator', 'c',
+        'void w(char *c) {\n    int (*fp)(const char*) = system;\n    fp(c);\n}\n',
+        False, None, None,
+    ),
+    (
+        'HC4-brace-init', 'cpp',
+        'void w(char *c) {\n    fn_t fp{system};\n    fp(c);\n}\n',
+        False, None, None,
+    ),
+    (
+        'HC5-ternary', 'c',
+        'void w(char *c, int z) {\n    fn_t fp = z ? system : puts;\n    fp(c);\n}\n',
+        False, None, None,
+    ),
+    (
+        'HC6-chained', 'c',
+        'void w(char *c) {\n    a = b = system;\n    a(c);\n}\n',
+        False, None, None,
+    ),
+    (
+        'HC7-ptr-store', 'c',
+        'void w(char *c, fn_t *slot) {\n    *slot = system;\n    log(c);\n}\n',
+        False, None, None,
+    ),
+    (
+        'HC8-return-cast', 'c',
+        'void *w(char *c) {\n    log(c);\n    return (void *)system;\n}\n',
+        False, None, None,
+    ),
+    (
+        'HC9-member-store', 'c',
+        'void w(struct ops *o, char *c) {\n    o->run = system;\n    log(c);\n}\n',
+        False, None, None,
+    ),
+    (
+        'HC10-compound', 'c',
+        'void w(char *c) {\n    fp += system;\n    fp(c);\n}\n',
+        False, None, None,
+    ),
+    (
+        'HG1-go-decl', 'go',
+        'func w(c string) {\n    h := system\n    h(c)\n}\n',
+        False, None, None,
+    ),
+    (
+        'HG2-go-two-hop', 'go',
+        'func w(c string) {\n    h := system\n    g := h\n    g(c)\n}\n',
+        False, None, None,
+    ),
+    (
+        'HJ1-js-const', 'js',
+        'function w(c) {\n    const h = eval;\n    return h(c);\n}\n',
+        False, None, None,
+    ),
+    (
+        'HJ2-js-arrow-carry', 'js',
+        'function w(c) {\n    const h = () => eval;\n    return h(c);\n}\n',
+        False, None, None,
+    ),
+    (
+        'HR1-getattr', 'python',
+        "def f(c):\n    return getattr(os, 'system')(c)\n",
+        False, None, None,
+    ),
+    (
+        'HR2-partial', 'python',
+        'def f(c):\n    return partial(sp.run)(c)\n',
+        False, None, None,
+    ),
+    (
+        'HR3-dunder-call', 'python',
+        'def f(c):\n    return os.system.__call__(c)\n',
+        False, None, None,
+    ),
+    (
+        'HR4-vars', 'python',
+        "def f(c):\n    return vars(os)['system'](c)\n",
+        False, None, None,
+    ),
+    (
+        'HR5-factory-result', 'python',
+        'def f(c):\n    return make()(c)\n',
+        False, None, None,
+    ),
+    (
+        'HR6-dlsym', 'c',
+        'void w(char *c) {\n    fn = dlsym(h, "system");\n}\n',
+        False, None, None,
+    ),
+    (
+        'B01-benign-delegate', 'python',
+        'def f(x):\n    return helper.compute(x)\n',
+        True, None, None,
+    ),
+    (
+        'B02-math-alias', 'python',
+        'def f(x):\n    s = math.sqrt\n    return s(x)\n',
+        True, None, None,
+    ),
+    (
+        'B03-bare-param-forward', 'python',
+        'def f(g, x):\n    return g(x)\n',
+        True, None, None,
+    ),
+    (
+        'B04-c-benign', 'c',
+        'int w(int x) {\n    return helper(x);\n}\n',
+        True, None, None,
+    ),
+    (
+        'B05-literal-default', 'python',
+        'def f(x, out=None):\n    return helper(x, out)\n',
+        True, None, None,
+    ),
+    (
+        'G01-nonlocal-cell', 'python',
+        'def f(c):\n    h = None\n    def s():\n        nonlocal h\n        h = os.system\n    return h(c)\n',
+        False, None, None,
+    ),
+    (
+        'G02-closure-return', 'python',
+        'def f(c):\n    def g():\n        return os.system\n    return g()(c)\n',
+        False, None, None,
+    ),
+    (
+        'G03-lambda-closure-smuggle', 'python',
+        'def f(c):\n    g = lambda: os.system\n    return apply_(g, c)\n',
+        False, None, None,
+    ),
+    (
+        'G04-class-attr-store', 'python',
+        'def f(c):\n    class C:\n        run = os.system\n    return C.run(c)\n',
+        False, None, None,
+    ),
+    (
+        'G05-class-attr-two-step', 'python',
+        'def f(c, C):\n    C.run = os.system\n    return log(c)\n',
+        False, None, None,
+    ),
+    (
+        'G06-comp-elt-leak', 'python',
+        'def f(c, y):\n    log(c)\n    return [os.system for _ in y]\n',
+        False, None, None,
+    ),
+    (
+        'G07-comp-iter', 'python',
+        'def f(c):\n    return [g for g in [os.system]]\n',
+        False, None, None,
+    ),
+    (
+        'G08-genexp-elt', 'python',
+        'def f(c, y):\n    log(c)\n    return (subprocess.run for _ in y)\n',
+        False, None, None,
+    ),
+    (
+        'G09-dictcomp-value', 'python',
+        'def f(c, y):\n    log(c)\n    return {k: os.system for k in y}\n',
+        False, None, None,
+    ),
+    (
+        'G10-subscript-display', 'python',
+        'def f(c):\n    log(c)\n    return [os.system][0]\n',
+        False, None, None,
+    ),
+    (
+        'G11-dict-subscript-display', 'python',
+        'def f(c):\n    log(c)\n    return {1: os.system}[1]\n',
+        False, None, None,
+    ),
+    (
+        'G12-slice-display', 'python',
+        'def f(c):\n    log(c)\n    return (os.system, print)[:1]\n',
+        False, None, None,
+    ),
+    (
+        'G13-bare-decorator', 'python',
+        '@os.system\ndef f(c):\n    return log(c)\n',
+        False, None, None,
+    ),
+    (
+        'G14-decorator-call', 'python',
+        '@wraps(os.system)\ndef f(c):\n    return log(c)\n',
+        False, None, None,
+    ),
+    (
+        'G15-reduce', 'python',
+        'def f(c, fns):\n    return reduce(chain_, [os.system], c)\n',
+        False, None, None,
+    ),
+    (
+        'G16-partialmethod', 'python',
+        'def f(c):\n    run = partialmethod(os.system)\n    return log(c)\n',
+        False, None, None,
+    ),
+    (
+        'G17-dict-dispatch', 'python',
+        "def f(c):\n    d = {'a': os.system}\n    return d['a'](c)\n",
+        False, None, None,
+    ),
+    (
+        'G18-inline-dict-dispatch', 'python',
+        "def f(c):\n    return {'a': os.system}['a'](c)\n",
+        False, None, None,
+    ),
+    (
+        'G19-eval-callee', 'python',
+        "def f(c):\n    return eval('os.system')(c)\n",
+        False, None, None,
+    ),
+    (
+        'G20-exec-bind', 'python',
+        "def f(c):\n    exec('h = os.system')\n    return h(c)\n",
+        False, None, None,
+    ),
+    (
+        'G21-eval-bind', 'python',
+        "def f(c):\n    h = eval('os.sys' + 'tem')\n    return h(c)\n",
+        False, None, None,
+    ),
+    (
+        'G22-sysmodules', 'python',
+        "def f(c, evil):\n    sys.modules['os'] = evil\n    return log(c)\n",
+        False, None, None,
+    ),
+    (
+        'G23-lambda-param-shadow-bare', 'python',
+        'def f(c):\n    g = lambda system: 0\n    return system(c)\n',
+        False, None, None,
+    ),
+    (
+        'G24-lambda-param-shadow-proj', 'python',
+        'def f(c):\n    g = lambda utilmod: 0\n    return utilmod.launch(c)\n',
+        False, frozenset({'utilmod.launch'}), None,
+    ),
+    (
+        'G25-own-param-shadow-proj', 'python',
+        'def f(c, utilmod=None):\n    return utilmod.launch(c)\n',
+        False, frozenset({'utilmod.launch'}), None,
+    ),
+    (
+        'G26-nesteddef-param-shadow', 'python',
+        'def f(c):\n    def g(system): pass\n    return system(c)\n',
+        False, None, None,
+    ),
+    (
+        'G27-global-store', 'python',
+        'def f(c):\n    global h\n    h = os.system\n    return log(c)\n',
+        False, None, None,
+    ),
+    (
+        'G28-callees-veto', 'c',
+        'void w(char *c) {\n    DOIT(c);\n}\n',
+        False, None, [{'name': 'system'}],
+    ),
+    (
+        'G29-callees-benign', 'c',
+        'void w(char *c) {\n    DOIT(c);\n}\n',
+        True, None, [{'name': 'project_helper'}],
+    ),
+    (
+        'G30-callees-proj-sink', 'c',
+        'void w(char *c) {\n    DOIT(c);\n}\n',
+        False, frozenset({'proj_sink'}), [{'name': 'proj_sink'}],
+    ),
+    (
+        'G31-rust-lifetime-swallow', 'rust',
+        "fn w(c: &str) {\n    let x: &'a str = y; let h = system; let z: &'b str = q;\n    h(c);\n}\n",
+        False, None, None,
+    ),
+    (
+        'G32-cpp-digit-sep', 'cpp',
+        "void w(char *c) {\n    int x = 1'000; fp = system; int y = 5'6;\n    fp(c);\n}\n",
+        False, None, None,
+    ),
+    (
+        # Known residual, pinned: `#`-leading lines are dropped from
+        # the C line view, so a same-body macro hiding the sink call
+        # skips as a benign delegate. The call-graph callee veto
+        # compensates when the extraction pipeline resolves the macro
+        # (the callees row below); lexer-grade preprocessor handling
+        # is out of this analysis' scope.
+        'G33-c-macro-hidden', 'c',
+        '#define FWD(x) system(x)\nvoid w(char *c) {\n    FWD(c);\n}\n',
+        True, None, None,
+    ),
+    (
+        'G33b-c-macro-hidden-callees-veto', 'c',
+        '#define FWD(x) system(x)\nvoid w(char *c) {\n    FWD(c);\n}\n',
+        False, None, [{'name': 'system'}],
+    ),
+    (
+        'G34-go-closure-capture', 'go',
+        'func w(c string) {\n    h := func() { system(c) }\n    h()\n}\n',
+        False, None, None,
+    ),
+    (
+        'G35-js-template-swallow', 'js',
+        'function w(c) {\n    const h = system;\n    return sh(c);\n}\n',
+        False, None, None,
+    ),
+    (
+        'G36-c-block-comment-ptr', 'c',
+        'void w(fn_t *s, char *c) {\n    /* doc\n     * more doc\n     */\n    *s = system;\n    log(c);\n}\n',
+        False, None, None,
+    ),
+    (
+        'G37-c-fake-block-close', 'c',
+        'void w(fn_t *s, char *c) {\n    *s = system; /* set\n     * handler */\n    log(c);\n}\n',
+        False, None, None,
+    ),
+    (
+        'G38-c-string-quote-swallow', 'c',
+        'void w(char *c) {\n    p = "a; q = \\"b"; fp = system; r = "c";\n    fp(c);\n}\n',
+        False, None, None,
+    ),
+    (
+        'G39-unresolved-delegate', 'python',
+        "def f(c, d):\n    h = d['k']\n    return h(c)\n",
+        False, None, None,
+    ),
+    (
+        'G40-cycle', 'python',
+        'def f(c):\n    a = b\n    b = a\n    return a(c)\n',
+        False, None, None,
+    ),
+]
+
+
+class TestWrapperAdversarialShapes:
+    """Each battery row pins today's verdict (skip or review) so a
+    grammar change that re-opens an escape shape — or starts
+    refusing a pinned benign control — fails loudly with its case
+    id."""
+
+    @pytest.mark.parametrize(
+        ("cid", "lang", "src", "expect_skip", "sinks", "callees"),
+        _ADVERSARIAL_CASES,
+        ids=[c[0] for c in _ADVERSARIAL_CASES],
+    )
+    def test_adversarial_shape(
+        self,
+        cid: str,
+        lang: str,
+        src: str,
+        expect_skip: bool,
+        sinks: frozenset | None,
+        callees: list[dict[str, Any]] | None,
+    ) -> None:
+        from core.audit.prefilter import _is_trivial_wrapper
+        skip, _reason = _is_trivial_wrapper(
+            src, lang, callees, project_sinks=sinks,
+        )
+        assert skip == expect_skip, cid
 
 
 # ── Multi-language prefilter patterns ─────────────────────────────
