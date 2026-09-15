@@ -947,3 +947,34 @@ def test_core_parse_failure_regex_run_continuations(
     deps = parse_dockerfile(p)
     assert any(d.name == "django" and d.version == "4.2.7"
                for d in deps), deps
+
+
+def test_dockerfile_core_parse_runs_once(tmp_path, monkeypatch):
+    """`parse_dockerfile` parses the file with the core dockerfile
+    parser ONCE and hands the result to both the apt extractor and
+    the RUN-block pass — the twin call sites each re-parsed the same
+    text (and a raising input warned twice, the second time without
+    the path)."""
+    import core.dockerfile as core_df
+
+    import packages.sca.parsers.inline_installs as ii
+
+    calls = {"n": 0}
+    real = core_df.parse_dockerfile
+
+    def _counting(text):
+        calls["n"] += 1
+        return real(text)
+
+    monkeypatch.setattr(core_df, "parse_dockerfile", _counting)
+    p = tmp_path / "Dockerfile"
+    p.write_text(
+        "FROM debian:bookworm\n"
+        "RUN apt-get install -y curl=7.88.1-10\n"
+        "RUN pip install flask==3.0.0\n"
+    )
+    deps = ii.parse_dockerfile(p)
+    names = {d.name for d in deps}
+    assert "curl" in names
+    assert "flask" in names
+    assert calls["n"] == 1

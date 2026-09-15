@@ -64,6 +64,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 from core.json.jsonc import load_jsonc
 
@@ -366,7 +367,23 @@ def parse_dockerfile(path: Path) -> list[Dependency]:
     # version (``1.0``) wins and the placeholder row is deduped out.
     from . import _arg_version_pins
     deps.extend(_arg_version_pins.extract(text, path))
-    apt_deps = _extract_apt_via_core_dockerfile(text, path)
+    # One core-dockerfile parse for the whole file: the apt extractor
+    # and the RUN-block pass both consume it — parsing twice doubled
+    # the work and double-warned (the second time without the path)
+    # on a raising input.
+    from core.dockerfile import parse_dockerfile as core_parse_dockerfile
+    try:
+        instructions = core_parse_dockerfile(text)
+    except Exception:                               # noqa: BLE001
+        logger.warning(
+            "sca.parsers.inline_installs: core.dockerfile parse "
+            "failed for %s — falling back to regex scanner",
+            path, exc_info=True,
+        )
+        instructions = None
+    apt_deps = _extract_apt_via_core_dockerfile(
+        text, path, instructions=instructions,
+    )
     # Debian is suppressed in the shell-line scanner only when the
     # core apt extractor actually RAN (it is the richer source —
     # stage/scope attribution, base-image suite). When the core
@@ -375,7 +392,7 @@ def parse_dockerfile(path: Path) -> list[Dependency]:
     # deps were silently dropped while the log claimed a fallback.
     skip: set[str] = {"Debian"} if apt_deps is not None else set()
     deps.extend(apt_deps or [])
-    runs = _extract_dockerfile_run_blocks(text)
+    runs = _extract_dockerfile_run_blocks(text, instructions=instructions)
     deps.extend(_scan_shell_lines(
         runs, declared_in=path, source_kind="dockerfile",
         skip_ecosystems=skip,
@@ -383,8 +400,15 @@ def parse_dockerfile(path: Path) -> list[Dependency]:
     return deps
 
 
+# Sentinel distinguishing "caller didn't pre-parse" (helper parses the
+# text itself — direct/test callers) from "caller parsed and it FAILED"
+# (``instructions=None`` — degrade to the documented fallback without
+# re-parsing and re-warning).
+_UNPARSED: Any = object()
+
+
 def _extract_apt_via_core_dockerfile(
-    text: str, path: Path,
+    text: str, path: Path, *, instructions: Any = _UNPARSED,
 ) -> list[Dependency] | None:
     """Use ``core.dockerfile.apt`` to extract Debian deps from a
     Dockerfile.
@@ -397,19 +421,26 @@ def _extract_apt_via_core_dockerfile(
     distinguish builder deps from runtime deps; absence of an ``AS
     <stage>`` clause falls back to ``scope="main"`` (the legacy
     default).
+
+    ``instructions``: pre-parsed ``core.dockerfile`` instructions
+    (``parse_dockerfile`` parses once for both passes); ``None``
+    means that parse failed.
     """
     from core.dockerfile import (
         extract_apt_packages,
         parse_dockerfile as core_parse_dockerfile,
     )
-    try:
-        instructions = core_parse_dockerfile(text)
-    except Exception:                               # noqa: BLE001
-        logger.warning(
-            "sca.parsers.inline_installs: core.dockerfile parse "
-            "failed for %s — falling back to regex scanner",
-            path, exc_info=True,
-        )
+    if instructions is _UNPARSED:
+        try:
+            instructions = core_parse_dockerfile(text)
+        except Exception:                           # noqa: BLE001
+            logger.warning(
+                "sca.parsers.inline_installs: core.dockerfile parse "
+                "failed for %s — falling back to regex scanner",
+                path, exc_info=True,
+            )
+            instructions = None
+    if instructions is None:
         return None
     from ._base_image_suite import stage_image_map
     stage_img = stage_image_map(instructions)
@@ -672,7 +703,9 @@ def classify_action_ref(ref: str) -> tuple[PinStyle, str | None]:
 _DOCKERFILE_RUN_RE = re.compile(r"^\s*RUN\s+", re.IGNORECASE)
 
 
-def _extract_dockerfile_run_blocks(text: str) -> list[tuple[int, str, bool]]:
+def _extract_dockerfile_run_blocks(
+    text: str, *, instructions: Any = _UNPARSED,
+) -> list[tuple[int, str, bool]]:
     """Yield ``(start_line, body, commented)`` for every RUN instruction.
 
     Live RUN instructions (and their backslash-continuations) come from
@@ -682,21 +715,28 @@ def _extract_dockerfile_run_blocks(text: str) -> list[tuple[int, str, bool]]:
     are surfaced via a tiny pre-pass below; the core parser skips
     comments by design (correct for most consumers, but SCA wants to
     surface commented installs as info-severity findings).
-    """
-    from core.dockerfile import parse_dockerfile as _parse_dockerfile_core
 
-    # Live RUN instructions — delegated. Guarded like the apt
-    # extractor's call to the same parser: a raising input previously
-    # aborted the WHOLE file here (discarding the ARG-pin deps already
-    # extracted); now it degrades to the regex RUN scan.
-    try:
-        instructions = _parse_dockerfile_core(text)
-    except Exception:                               # noqa: BLE001
-        logger.warning(
-            "sca.parsers.inline_installs: core.dockerfile parse "
-            "failed — falling back to regex RUN scan", exc_info=True,
+    ``instructions``: pre-parsed instructions from the caller's single
+    parse; ``None`` means that parse failed — degrade to the regex RUN
+    scan. A raising input previously aborted the WHOLE file here
+    (discarding the ARG-pin deps already extracted).
+    """
+    if instructions is _UNPARSED:
+        from core.dockerfile import (
+            parse_dockerfile as _parse_dockerfile_core,
         )
-        out: list[tuple[int, str, bool]] = _extract_live_run_blocks_regex(text)
+        try:
+            instructions = _parse_dockerfile_core(text)
+        except Exception:                           # noqa: BLE001
+            logger.warning(
+                "sca.parsers.inline_installs: core.dockerfile parse "
+                "failed — falling back to regex RUN scan",
+                exc_info=True,
+            )
+            instructions = None
+    out: list[tuple[int, str, bool]]
+    if instructions is None:
+        out = _extract_live_run_blocks_regex(text)
     else:
         out = [(inst.line, inst.args, False) for inst in instructions
                if inst.directive == "RUN" and inst.args]
