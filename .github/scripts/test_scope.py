@@ -31,15 +31,18 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import math
 import os
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codeql_scope import (
+    SCAN_ROOTS,
     build_graph,
     discover_py_files,
     init_imports,
@@ -247,6 +250,146 @@ def file_in_fast_tier(path: Path) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Non-Python resource files (runtime data, fixtures, templates)
+# ---------------------------------------------------------------------------
+
+_FIXTURE_DIR_NAMES = frozenset({"fixtures", "data", "testdata"})
+
+_FIXTURE_PATTERNS = (
+    "fixtures",
+    "data",
+    "testdata",
+    "FIXTURE",
+    "DATA_DIR",
+    "fixture_dir",
+    "data_dir",
+    "test_data",
+)
+
+
+def _resolve_path_div_chain(node: ast.expr) -> list[str]:
+    """Walk a ``Path(...) / "a" / "b"`` chain and return the string parts."""
+    parts: list[str] = []
+    while isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        rhs = node.right
+        if isinstance(rhs, ast.Constant) and isinstance(rhs.value, str):
+            parts.append(rhs.value)
+        else:
+            break
+        node = node.left
+    parts.reverse()
+    return parts
+
+
+def _extract_fixture_dirs(path: Path, repo: Path) -> list[Path]:
+    """Find fixture/data directories referenced by a test file.
+
+    Parses the AST for ``Path(__file__).parent / "fixtures" / "sub"``
+    chains, resolving the deepest directory that exists on disk.
+    Falls back to scanning for sibling fixture directories when the
+    AST doesn't yield results.
+    """
+    try:
+        source = (repo / path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    if not any(p in source for p in _FIXTURE_PATTERNS):
+        return []
+
+    dirs: set[Path] = set()
+    test_dir = (repo / path).parent
+
+    try:
+        tree = ast.parse(source, filename=str(path))
+    except (SyntaxError, ValueError):
+        return []
+
+    # Collect BinOp / nodes that are NOT the left child of another /.
+    # This gives us only the outermost (longest) chain, not sub-chains.
+    inner_lefts: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            inner_lefts.add(id(node.left))
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Div):
+            continue
+        if id(node) in inner_lefts:
+            continue
+        parts = _resolve_path_div_chain(node)
+        if not parts or parts[0] not in _FIXTURE_DIR_NAMES:
+            continue
+        candidate = test_dir
+        for part in parts:
+            candidate = candidate / part
+        if candidate.is_dir():
+            dirs.add(candidate)
+
+    if not dirs:
+        for name in _FIXTURE_DIR_NAMES:
+            candidate = test_dir / name
+            if candidate.is_dir() and name in source:
+                dirs.add(candidate)
+
+    return list(dirs)
+
+
+def _discover_data_files(dirs: list[Path], repo: Path) -> set[Path]:
+    """Collect all non-Python files under fixture directories."""
+    files: set[Path] = set()
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        for p in d.rglob("*"):
+            if p.is_file() and p.suffix != ".py" and p.suffix != ".pyc":
+                try:
+                    files.add(p.relative_to(repo))
+                except ValueError:
+                    pass
+    return files
+
+
+def build_data_file_map(
+    test_files: list[Path], repo: Path,
+) -> dict[Path, set[Path]]:
+    """Map data files → test files that use them."""
+    data_to_tests: dict[Path, set[Path]] = defaultdict(set)
+    for tf in test_files:
+        fixture_dirs = _extract_fixture_dirs(tf, repo)
+        if not fixture_dirs:
+            continue
+        data_files = _discover_data_files(fixture_dirs, repo)
+        for df in data_files:
+            data_to_tests[df].add(tf)
+    return dict(data_to_tests)
+
+
+def _owning_package_seeds(path: Path, all_py: list[Path]) -> set[Path]:
+    """The .py files of the package that owns a resource file.
+
+    Walks up from the resource's directory to (but not including) its
+    scan root, returning every known .py file under the nearest
+    ancestor that has any: the code reading a bundled resource lives
+    beside it (``core/x/data/foo.json`` → ``core/x``'s modules), and
+    the import graph then finds that code's tests. Membership is
+    checked against the discovered file list, not the disk, so a
+    deleted resource whose directory went with it still resolves.
+
+    Empty result = no owning package below the scan root; the caller
+    must treat the file as unmappable.
+    """
+    for parent in path.parents:
+        s = str(parent)
+        if s == "." or s in SCAN_ROOTS:
+            break
+        prefix = s + "/"
+        seeds = {af for af in all_py if str(af).startswith(prefix)}
+        if seeds:
+            return seeds
+    return set()
+
+
+# ---------------------------------------------------------------------------
 # Dynamic batching
 # ---------------------------------------------------------------------------
 
@@ -375,6 +518,69 @@ def compute_tier_dispatch(
     if parse_failures:
         print(f"  Parse failures: {parse_failures}")
 
+    # Non-Python resource files under the scan roots are runtime
+    # inputs (detector data lists, parser packs, templates, fixtures)
+    # — a change to them must run the tests of the code that consumes
+    # them, not zero tiers. Route each one through the first mapping
+    # that claims it; a file NO mapping claims cannot be scoped, so
+    # fail toward full dispatch rather than toward zero.
+    resource_files = [
+        f for f in changed_non_py
+        if any(f.startswith(r + "/") for r in SCAN_ROOTS)
+    ]
+    forced_tiers: set[str] = set()
+    resource_seeds: set[Path] = set()
+    data_map: dict[Path, set[Path]] | None = None
+    unmapped: list[str] = []
+    for rf in resource_files:
+        rp = Path(rf)
+        # (1) Directory ownership: a resource inside a tier's test
+        # tree belongs to that tier (packages/sca/data/* → sca).
+        tier_hits = {
+            name for name, cfg in TIERS.items()
+            if any(file_in_dir(rp, d) for d in cfg.get("test_dirs", []))
+        }
+        if tier_hits:
+            forced_tiers |= tier_hits
+            continue
+        # (2) Fixture data: tests that reference the file's fixture
+        # directory (built lazily — it parses every test file).
+        if data_map is None:
+            data_map = build_data_file_map(
+                [f for f in all_py if is_test_file(f)], repo,
+            )
+        mapped_tests = data_map.get(rp)
+        if mapped_tests:
+            resource_seeds |= mapped_tests
+            continue
+        # (3) Owning package: seed the .py files beside the resource
+        # and let the import graph find their tests — but only when
+        # it actually reaches a test, otherwise the seed proves
+        # nothing and the file stays unmapped.
+        seeds = _owning_package_seeds(rp, all_py)
+        if seeds and any(
+            is_test_file(t)
+            for t in transitive_dependents(seeds, reverse_graph)
+        ):
+            resource_seeds |= seeds
+            continue
+        unmapped.append(rf)
+    if unmapped:
+        print(
+            f"Changed resource file(s) with no owning tests "
+            f"({', '.join(sorted(unmapped))}) — cannot scope a runtime "
+            "data change to a tier; failing toward full tier dispatch"
+        )
+        result = _force_all_dispatch(repo)
+        result["_stats"] = {
+            "closure": total,
+            "total": total,
+            "changed": len(changed_files),
+            "dependents": 0,
+        }
+        return result
+    changed_py |= resource_seeds
+
     closure = transitive_dependents(changed_py, reverse_graph)
 
     pct = f"{len(closure) / total * 100:.0f}%" if total else "?"
@@ -415,6 +621,13 @@ def compute_tier_dispatch(
                         if file_matches_tier(f, tier_config)
                         and is_test_file(f)
                         and (repo / f).is_file()]
+            if tier_name in forced_tiers:
+                # A changed resource file lives in this tier's tree —
+                # the data could drive any of the tier's tests, so run
+                # them all (same shape as a full dispatch of the tier).
+                affected = sorted(
+                    set(affected) | set(_discover_tier_files(tier_config, repo))
+                )
             result[tier_name] = {"run": bool(affected), "files": affected}
 
     # Fast tier: tests in core/ and packages/ that aren't carved out.

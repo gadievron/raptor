@@ -221,8 +221,12 @@ def mini_repo(tmp_path_factory) -> Path:
     (repo / "core/pkga/__init__.py").write_text("")
     (repo / "core/pkga/mod.py").write_text("VALUE = 1\n")
     (repo / "core/pkga/tests").mkdir()
+    (repo / "core/pkga/tests/fixtures").mkdir()
+    (repo / "core/pkga/tests/fixtures/sample.json").write_text("{}")
     (repo / "core/pkga/tests/test_mod.py").write_text(
-        "import core.pkga.mod\n\ndef test_value():\n"
+        "from pathlib import Path\n\nimport core.pkga.mod\n\n"
+        'FIXTURES = Path(__file__).parent / "fixtures"\n\n'
+        "def test_value():\n"
         "    assert core.pkga.mod.VALUE == 1\n"
     )
     # Runtime data owned by pkga (no test references the file itself).
@@ -289,6 +293,68 @@ class TestDispatchFailsOpen:
         result = compute_tier_dispatch(["docs/example.py"], mini_repo)
         assert not _is_full_dispatch(result)
         assert _active(result) == []
+
+    def test_data_only_in_tier_tree_runs_that_tier(self, mini_repo):
+        # sca's test_dirs is the whole package: a data-only PR (the
+        # weekly refresh auto-PR shape) must run the tier's tests —
+        # corrupted detector data merged with zero tests before.
+        result = compute_tier_dispatch(
+            ["packages/sca/data/popular/pypi.json"], mini_repo,
+        )
+        assert result["sca"]["run"]
+        assert Path("packages/sca/tests/test_shape.py") in result["sca"]["files"]
+        assert not _is_full_dispatch(result)
+
+    def test_data_only_owning_package_seeds_its_tests(self, mini_repo):
+        # A runtime resource with no tier claim routes through the
+        # package that owns it: core/pkga/data → core/pkga's modules →
+        # their tests via the import graph.
+        result = compute_tier_dispatch(
+            ["core/pkga/data/rules.json"], mini_repo,
+        )
+        assert result["python"]["run"]
+        assert Path("core/pkga/tests/test_mod.py") in result["python"]["files"]
+        assert not _is_full_dispatch(result)
+
+    def test_fixture_data_routes_to_referencing_test(self, mini_repo):
+        # Fixture data maps to the tests that reference its directory
+        # (Path(__file__).parent / "fixtures" chain in the test file).
+        result = compute_tier_dispatch(
+            ["core/pkga/tests/fixtures/sample.json"], mini_repo,
+        )
+        assert result["python"]["run"]
+        assert Path("core/pkga/tests/test_mod.py") in result["python"]["files"]
+        assert not _is_full_dispatch(result)
+
+    @pytest.mark.parametrize("changed", [
+        # No .py-bearing ancestor below the scan root at all.
+        "core/orphan/blob.bin",
+        # Owning package exists but its closure reaches no test.
+        "core/untested/data/cfg.yml",
+    ])
+    def test_unmappable_data_forces_full_dispatch(self, mini_repo, changed):
+        result = compute_tier_dispatch([changed], mini_repo)
+        assert _is_full_dispatch(result), (
+            f"unmappable resource under-dispatched: only {_active(result)}"
+        )
+
+    def test_resource_outside_scan_roots_stays_inert(self, mini_repo):
+        # Both directions: docs and other out-of-tree files are not
+        # runtime inputs to any tier — they must not fall to full
+        # dispatch just because no mapping claims them.
+        result = compute_tier_dispatch(["docs/guide.md"], mini_repo)
+        assert _active(result) == []
+
+    def test_mixed_data_and_code_change(self, mini_repo):
+        # Mixed PR shape: tier-owned data + an imported module — both
+        # routes dispatch, still without a full fallback.
+        result = compute_tier_dispatch(
+            ["packages/sca/data/popular/pypi.json", "core/pkga/mod.py"],
+            mini_repo,
+        )
+        assert result["sca"]["run"]
+        assert result["python"]["run"]
+        assert not _is_full_dispatch(result)
 
 
 @pytest.mark.slow

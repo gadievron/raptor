@@ -52,6 +52,7 @@ from codeql_scope import (
 )
 from test_scope import (
     TIERS,
+    build_data_file_map,
     expand_conftest,
     file_in_fast_tier,
     file_matches_tier,
@@ -122,119 +123,6 @@ def tier_test_count(
         if tier:
             counts[tier] += 1
     return dict(counts)
-
-
-# -- Data-file dependencies ------------------------------------------------
-
-_FIXTURE_DIR_NAMES = frozenset({"fixtures", "data", "testdata"})
-
-_FIXTURE_PATTERNS = (
-    "fixtures",
-    "data",
-    "testdata",
-    "FIXTURE",
-    "DATA_DIR",
-    "fixture_dir",
-    "data_dir",
-    "test_data",
-)
-
-
-def _resolve_path_div_chain(node: ast.expr) -> list[str]:
-    """Walk a ``Path(...) / "a" / "b"`` chain and return the string parts."""
-    parts: list[str] = []
-    while isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-        rhs = node.right
-        if isinstance(rhs, ast.Constant) and isinstance(rhs.value, str):
-            parts.append(rhs.value)
-        else:
-            break
-        node = node.left
-    parts.reverse()
-    return parts
-
-
-def _extract_fixture_dirs(path: Path, repo: Path) -> list[Path]:
-    """Find fixture/data directories referenced by a test file.
-
-    Parses the AST for ``Path(__file__).parent / "fixtures" / "sub"``
-    chains, resolving the deepest directory that exists on disk.
-    Falls back to scanning for sibling fixture directories when the
-    AST doesn't yield results.
-    """
-    try:
-        source = (repo / path).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
-    if not any(p in source for p in _FIXTURE_PATTERNS):
-        return []
-
-    dirs: set[Path] = set()
-    test_dir = (repo / path).parent
-
-    try:
-        tree = ast.parse(source, filename=str(path))
-    except (SyntaxError, ValueError):
-        return []
-
-    # Collect BinOp / nodes that are NOT the left child of another /.
-    # This gives us only the outermost (longest) chain, not sub-chains.
-    inner_lefts: set[int] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-            inner_lefts.add(id(node.left))
-
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Div):
-            continue
-        if id(node) in inner_lefts:
-            continue
-        parts = _resolve_path_div_chain(node)
-        if not parts or parts[0] not in _FIXTURE_DIR_NAMES:
-            continue
-        candidate = test_dir
-        for part in parts:
-            candidate = candidate / part
-        if candidate.is_dir():
-            dirs.add(candidate)
-
-    if not dirs:
-        for name in _FIXTURE_DIR_NAMES:
-            candidate = test_dir / name
-            if candidate.is_dir() and name in source:
-                dirs.add(candidate)
-
-    return list(dirs)
-
-
-def _discover_data_files(dirs: list[Path], repo: Path) -> set[Path]:
-    """Collect all non-Python files under fixture directories."""
-    files: set[Path] = set()
-    for d in dirs:
-        if not d.is_dir():
-            continue
-        for p in d.rglob("*"):
-            if p.is_file() and p.suffix != ".py" and p.suffix != ".pyc":
-                try:
-                    files.add(p.relative_to(repo))
-                except ValueError:
-                    pass
-    return files
-
-
-def build_data_file_map(
-    test_files: list[Path], repo: Path,
-) -> dict[Path, set[Path]]:
-    """Map data files → test files that use them."""
-    data_to_tests: dict[Path, set[Path]] = defaultdict(set)
-    for tf in test_files:
-        fixture_dirs = _extract_fixture_dirs(tf, repo)
-        if not fixture_dirs:
-            continue
-        data_files = _discover_data_files(fixture_dirs, repo)
-        for df in data_files:
-            data_to_tests[df].add(tf)
-    return dict(data_to_tests)
 
 
 # -- Slow-test detection --------------------------------------------------
