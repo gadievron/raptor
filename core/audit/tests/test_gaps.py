@@ -20,9 +20,18 @@ from core.audit.gaps import (
 )
 
 
+# Hermetic fake target root: a path no unprivileged process can
+# create (/ is not world-writable). The old literal target root
+# under the system temp dir is plantable on a multi-user host —
+# when it EXISTS, compute_gaps' source reads (parser_shape
+# hydration, scope rebasing) succeed against foreign content and
+# can shift priorities.
+_FAKE_TARGET = "/nonexistent/raptor-gaps-test-target"
+
+
 def _sample_checklist():
     return {
-        "target_path": "/tmp/target",
+        "target_path": _FAKE_TARGET,
         "files": [
             {
                 "path": "src/handler.c",
@@ -227,14 +236,14 @@ class TestComputeGaps:
             assert {g["name"] for g in gaps} == {"check_password"}, scope
 
     def test_scope_absolute_under_target_matches(self):
-        # target_path is /tmp/target in _sample_checklist.
+        # target_path is _FAKE_TARGET in _sample_checklist.
         gaps = compute_gaps(
-            _sample_checklist(), [], scope="/tmp/target/src/auth",
+            _sample_checklist(), [], scope=_FAKE_TARGET + "/src/auth",
         )
         assert {g["name"] for g in gaps} == {"check_password"}
 
     def test_scope_absolute_target_root_means_whole_tree(self):
-        for scope in ("/tmp/target", "/tmp/target/"):
+        for scope in (_FAKE_TARGET, _FAKE_TARGET + "/"):
             gaps = compute_gaps(_sample_checklist(), [], scope=scope)
             assert len(gaps) == 4, scope
 
@@ -249,7 +258,7 @@ class TestComputeGaps:
         checklist = _sample_checklist()
         checklist.pop("target_path")
         with pytest.raises(ValueError, match="never match"):
-            compute_gaps(checklist, [], scope="/tmp/target/src/auth")
+            compute_gaps(checklist, [], scope=_FAKE_TARGET + "/src/auth")
 
     def test_scope_target_root_means_whole_tree(self):
         # "." is the parent of a repo-root file (a top-level
@@ -780,7 +789,7 @@ class TestCoveredKeyInjectivity:
 
     def _checklist(self):
         return {
-            "target_path": "/tmp/target",
+            "target_path": _FAKE_TARGET,
             "files": [
                 {
                     "path": "src/a.c:evil",
