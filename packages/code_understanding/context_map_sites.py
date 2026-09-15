@@ -130,6 +130,19 @@ def build_crypto_inventory(si: SourceIntelResult) -> list[dict[str, Any]]:
     return out
 
 
+def total_enriched_sites(counts: dict[str, int]) -> int:
+    """Total sites across EVERY section the enrichment injects.
+
+    The save/changed gates in the libexec shims consume this instead
+    of hand-summing named sections: a two-term hand sum silently
+    discarded shared_state/crypto-only enrichment (injected in
+    memory, never saved), and the duplicated gate had already drifted
+    between the two shims. Summing the whole counts dict keeps any
+    future section inside the gate by construction.
+    """
+    return sum(counts.values())
+
+
 def enrich_context_map_with_sites(
     cmap: dict[str, Any], si: SourceIntelResult,
     *, repo_root: str | Path | None = None,

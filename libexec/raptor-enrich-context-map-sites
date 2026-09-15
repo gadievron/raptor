@@ -147,22 +147,26 @@ def main() -> int:
     counts = enrich_context_map_with_sites(
         context_map, si, repo_root=target_path,
     )
-    total = counts["ownership_model"] + counts["privilege_model"]
-    if total:
+    from packages.code_understanding.context_map_sites import (
+        total_enriched_sites,
+    )
+    if total_enriched_sites(counts):
         enforce_context_map_budget(context_map)
         save_json(context_map_path, context_map)
         print(
             f"raptor-enrich-context-map-sites: enriched "
             f"{counts['ownership_model']} ownership + "
-            f"{counts['privilege_model']} privilege site(s) in "
+            f"{counts['privilege_model']} privilege + "
+            f"{counts['shared_state']} shared-state + "
+            f"{counts['crypto_inventory']} crypto site(s) in "
             f"{context_map_path}"
         )
     else:
         reason = getattr(si, "skipped_reason", None)
         suffix = f" ({reason})" if reason else ""
         print(
-            "raptor-enrich-context-map-sites: no ownership/privilege sites "
-            f"detected{suffix}",
+            "raptor-enrich-context-map-sites: no sites detected in any "
+            f"section{suffix}",
             file=sys.stderr,
         )
     return 0

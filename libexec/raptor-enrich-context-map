@@ -195,12 +195,16 @@ def main() -> int:
             counts = enrich_context_map_with_sites(
                 context_map, si, repo_root=target_path,
             )
-            total = counts["ownership_model"] + counts["privilege_model"]
-            if total:
+            from packages.code_understanding.context_map_sites import (
+                total_enriched_sites,
+            )
+            if total_enriched_sites(counts):
                 changed = True
                 summary.append(
                     f"sites: {counts['ownership_model']} ownership + "
-                    f"{counts['privilege_model']} privilege"
+                    f"{counts['privilege_model']} privilege + "
+                    f"{counts['shared_state']} shared-state + "
+                    f"{counts['crypto_inventory']} crypto"
                 )
         except Exception as e:
             _stage_failed("sites enrichment", e)
