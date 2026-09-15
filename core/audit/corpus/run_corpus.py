@@ -2207,11 +2207,9 @@ def _record_scorecard(
     if not model or not results:
         return
     try:
+        from core.llm.scorecard.paths import default_scorecard_path
         from core.llm.scorecard.scorecard import EventType, ModelScorecard
-        scorecard_path = Path(
-            os.environ.get("RAPTOR_DIR", "."),
-        ) / "out" / "llm_scorecard.json"
-        scorecard = ModelScorecard(scorecard_path)
+        scorecard = ModelScorecard(default_scorecard_path())
         for r in results:
             if r.get("actual") == "error":
                 continue

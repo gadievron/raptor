@@ -137,8 +137,12 @@ class TestCorpusProducerRecordsAgain:
         # Regression for the silent corpus-producer breakage: the
         # harness recorded against EventType.CORPUS_GROUND_TRUTH,
         # which didn't exist — AttributeError was swallowed and no
-        # audit:<bug_class> cell was ever written.
-        monkeypatch.setenv("RAPTOR_DIR", str(tmp_path))
+        # audit:<bug_class> cell was ever written. The producer
+        # resolves the sidecar through the shared resolver, so the
+        # override — not a hand-rolled RAPTOR_DIR/out — names the
+        # ledger under test.
+        sidecar = tmp_path / "llm_scorecard.json"
+        monkeypatch.setenv("RAPTOR_SCORECARD_PATH", str(sidecar))
         from core.audit.corpus.run_corpus import _record_scorecard
         _record_scorecard(
             [{
@@ -151,5 +155,5 @@ class TestCorpusProducerRecordsAgain:
             }],
             model="m1",
         )
-        sc = ModelScorecard(tmp_path / "out" / "llm_scorecard.json")
+        sc = ModelScorecard(sidecar)
         assert sc.get_stat("audit:CWE-190", "m1") is not None
