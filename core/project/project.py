@@ -984,7 +984,19 @@ class ProjectManager:
         directory — REFUSED while any run under it is live (another
         session's in-flight run would have its dir deleted underneath
         it; the same ``split_live_runs`` predicate clean/dedup/merge
-        already use — purge never had it). ``force=True`` overrides."""
+        already use — purge never had it). ``force=True`` overrides.
+
+        Holds the registry-file RMW lock for the whole load → unlink
+        window: an in-flight locked mutator (trust marker, setting,
+        threat-model stamp) that loaded before an UNLOCKED delete
+        unlinked the file would ``_save()`` afterwards and resurrect
+        the deleted project as a zombie registry entry.
+        """
+        with self._mutation_lock(name):
+            self._delete_locked(name, purge=purge, force=force)
+
+    def _delete_locked(self, name: str, *, purge: bool,
+                       force: bool) -> None:
         project = self.load(name)
         if not project:
             msg = f"Project '{name}' not found"
@@ -1126,8 +1138,28 @@ class ProjectManager:
         contract as run pins); a --force rename past live runs keeps
         the old path and warns. Operator-chosen custom output dirs are
         never moved.
+
+        Holds BOTH names' registry-file RMW locks (fixed sorted order,
+        so two crossing renames cannot deadlock) across the whole
+        load → save(new) → unlink(old) window: an in-flight locked
+        mutator that loaded the old name before an UNLOCKED rename
+        completed would ``_save()`` afterwards and recreate the
+        old-name file — the project then exists under BOTH names over
+        ONE output dir, the exact forbidden state the shared-dir
+        refusals exist to prevent.
         """
         self._validate_name(new_name)
+        if new_name == old_name:
+            # Identical names would self-deadlock on the double lock;
+            # keep the pre-existing error shape for this input.
+            msg = f"Project '{new_name}' already exists"
+            raise ValueError(msg)
+        first, second = sorted((old_name, new_name))
+        with self._mutation_lock(first), self._mutation_lock(second):
+            return self._rename_locked(old_name, new_name, force)
+
+    def _rename_locked(self, old_name: str, new_name: str,
+                       force: bool) -> Project:
         project = self.load(old_name)
         if not project:
             msg = f"Project '{old_name}' not found"

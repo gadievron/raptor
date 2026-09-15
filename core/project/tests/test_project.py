@@ -649,3 +649,82 @@ class TestThreatModelStampRMW(unittest.TestCase):
             fresh = mgr.load("p2")
             self.assertEqual(fresh.threat_model_path, "/x/tm.json")
             self.assertEqual(fresh.threat_model_updated, "t2")
+
+
+class TestRegistryMutationLockDiscipline(unittest.TestCase):
+    """rename() and delete() must participate in the registry-file RMW
+    lock discipline: a locked mutator that loaded before an UNLOCKED
+    rename/delete completed would _save() afterwards and resurrect the
+    old-name / deleted registry file (duplicate registration over one
+    output dir, zombie project). The recorder wraps the real lock so
+    the critical-section state is observed at lock release.
+    """
+
+    def setUp(self):
+        self.tmpdir = TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        out_base = Path(self.tmpdir.name) / "out" / "projects"
+        _ob = patch("core.project.project.DEFAULT_OUTPUT_BASE", out_base)
+        _ob.start()
+        self.addCleanup(_ob.stop)
+        self.projects_dir = Path(self.tmpdir.name) / "projects"
+        self.mgr = ProjectManager(projects_dir=self.projects_dir)
+        self.target = str(Path(self.tmpdir.name) / "code")
+
+    def _install_recorder(self):
+        import contextlib
+
+        from core.project import project as project_mod
+        records = []
+        real = project_mod.project_file_lock
+
+        @contextlib.contextmanager
+        def _recording(path):
+            p = Path(path)
+            records.append(("enter", p.name))
+            with real(path):
+                try:
+                    yield
+                finally:
+                    registry = sorted(
+                        f.name for f in self.projects_dir.glob("*.json"))
+                    records.append(("exit", p.name, registry))
+
+        patcher = patch.object(
+            project_mod, "project_file_lock", _recording)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return records
+
+    def test_delete_unlinks_inside_the_registry_lock(self):
+        self.mgr.create("myapp", self.target, resolve_target=False)
+        records = self._install_recorder()
+        self.mgr.delete("myapp")
+        self.assertIn(("enter", "myapp.json"), records)
+        exits = [r for r in records
+                 if r[0] == "exit" and r[1] == "myapp.json"]
+        self.assertTrue(exits, "delete released no registry lock")
+        # At lock release the file is already gone: a blocked mutator
+        # resuming after us loads nothing instead of resurrecting.
+        self.assertNotIn("myapp.json", exits[-1][2])
+
+    def test_rename_holds_both_locks_in_sorted_order(self):
+        self.mgr.create("beta", self.target, resolve_target=False)
+        records = self._install_recorder()
+        self.mgr.rename("beta", "alpha")
+        enters = [r[1] for r in records if r[0] == "enter"]
+        # Both names locked, sorted order (crossing renames can't
+        # deadlock), both held before the registry transition.
+        self.assertEqual(enters[:2], ["alpha.json", "beta.json"])
+        exits = [r for r in records if r[0] == "exit"]
+        # The transition is complete at every lock release: new file
+        # present, old file gone.
+        for _tag, _name, registry in exits[:2]:
+            self.assertIn("alpha.json", registry)
+            self.assertNotIn("beta.json", registry)
+
+    def test_rename_to_same_name_raises_without_deadlock(self):
+        self.mgr.create("same", self.target, resolve_target=False)
+        with self.assertRaises(ValueError):
+            self.mgr.rename("same", "same")
+        self.assertIsNotNone(self.mgr.load("same"))
