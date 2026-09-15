@@ -3258,3 +3258,41 @@ def test_chain_loop_backedge_same_line_trailing_rebind_kills():
         tree, "x", 3, 4, "        os.system(x)",
         sanitizer_call_tails=frozenset({"sub"}),
     ) is False
+
+
+def test_chain_class_body_global_rebind_kills():
+    """Class bodies execute inline: ``class C: global x; x = raw``
+    between validator and sink rebinds the enclosing ``x`` exactly
+    like a top-level assignment.  ``_walk_same_scope`` skips class
+    bodies (their ordinary bindings are class attributes), so the
+    declared-global escape needs its own kill lane."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "x = request.args.get('x')\n"
+        "if not re.match(r'^[a-z]+$', x):\n"        # line 2
+        "    raise ValueError\n"
+        "class C:\n"                                 # line 4
+        "    global x\n"
+        "    x = request.args.get('raw')\n"          # line 6
+        "print(open(x))\n"                           # line 7
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "x", 2, 7, "print(open(x))",
+    ) is False
+
+
+def test_chain_class_body_plain_binding_stays_class_scoped():
+    """Two-direction: WITHOUT the declaration a class-body binding is
+    a class attribute — the enclosing chain member survives."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "x = request.args.get('x')\n"
+        "if not re.match(r'^[a-z]+$', x):\n"        # line 2
+        "    raise ValueError\n"
+        "class C:\n"                                 # line 4
+        "    x = request.args.get('raw')\n"          # line 5
+        "print(open(x))\n"                           # line 6
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "x", 2, 6, "print(open(x))",
+    ) is True

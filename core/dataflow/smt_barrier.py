@@ -1801,6 +1801,56 @@ def _is_sanitizing_binding_node(
     return False
 
 
+def _class_body_escaping_bindings(
+    scope_root: ast.AST,
+) -> list[tuple[ast.AST, frozenset]]:
+    """``(node, declared_names)`` pairs for bindings inside class
+    bodies that can rebind an ENCLOSING-scope name.
+
+    Class bodies execute inline at definition time (unlike function
+    bodies), and a ``global`` / ``nonlocal`` declaration inside the
+    body redirects that name's bindings to the enclosing/module scope
+    — ``class C: global x; x = raw`` between validator and sink
+    rebinds the validated ``x`` exactly like a top-level assignment,
+    while :func:`_walk_same_scope` correctly keeps ordinary
+    class-namespace bindings out of the chain walk.  Kill-direction
+    only: a class-body binding never GROWS the chain (an undeclared
+    target is a class attribute, and modelling even the declared case
+    as growth buys nothing the kill doesn't).
+
+    Nested classes are collected by the outer scan; function bodies
+    inside class bodies stay excluded (they do not execute inline).
+    """
+    classes: list[ast.ClassDef] = []
+    stack = list(ast.iter_child_nodes(scope_root))
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.Lambda)):
+            continue
+        if isinstance(node, ast.ClassDef):
+            classes.append(node)
+        stack.extend(ast.iter_child_nodes(node))
+    out: list[tuple[ast.AST, frozenset]] = []
+    for cls in classes:
+        declared: set = set()
+        body_nodes: list[ast.AST] = []
+        inner = list(ast.iter_child_nodes(cls))
+        while inner:
+            n = inner.pop()
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef,
+                              ast.Lambda, ast.ClassDef)):
+                continue  # nested classes handled by the outer scan
+            if isinstance(n, (ast.Global, ast.Nonlocal)):
+                declared.update(n.names)
+            body_nodes.append(n)
+            inner.extend(ast.iter_child_nodes(n))
+        if declared:
+            frozen = frozenset(declared)
+            out.extend((n, frozen) for n in body_nodes)
+    return out
+
+
 def _sanitizer_tails_for_spec_kind(kind: str) -> frozenset | None:
     """Callee-name tails identifying the sanitizing binding on the
     validator line for a mechanical :class:`ValidatorSpec` kind.
@@ -1969,12 +2019,32 @@ def _python_chain_reaches_sink(
     # ``y = name`` certified ``y`` from the ALREADY-REBOUND raw value
     # (false SOUND).  Killing at the rebind's own position means every
     # later derivation sees the member already gone.
-    window = [
-        node for node in _walk_same_scope(scope_root)
+    window: list = [
+        (node, None) for node in _walk_same_scope(scope_root)
         if validator_line <= (getattr(node, "lineno", None) or -1) <= sink_line
     ]
-    window.sort(key=lambda n: (n.lineno, getattr(n, "col_offset", 0)))
-    for node in window:
+    # Class bodies execute inline: their ``global``/``nonlocal``-
+    # declared bindings rebind THIS scope's names, so they join the
+    # ordered window as kill-only events (see
+    # :func:`_class_body_escaping_bindings`).
+    window += [
+        (node, decls)
+        for node, decls in _class_body_escaping_bindings(scope_root)
+        if validator_line <= (getattr(node, "lineno", None) or -1) <= sink_line
+    ]
+    window.sort(
+        key=lambda pair: (pair[0].lineno,
+                          getattr(pair[0], "col_offset", 0)),
+    )
+    for node, class_decls in window:
+        if class_decls is not None:
+            # Kill-only: a class-body binding of a declared name
+            # escapes to this scope; everything else in the body is
+            # class-namespace and never touches the chain.
+            for var in list(chain):
+                if var in class_decls and _node_rebinds_var(node, var):
+                    chain.discard(var)
+            continue
         if not isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
             # Non-Assign binding forms: walrus / loop targets,
             # ``with|except ... as``, match-case captures, import
