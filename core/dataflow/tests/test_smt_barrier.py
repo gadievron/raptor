@@ -175,20 +175,94 @@ def test_dominance_false_on_syntax_error():
 
 
 def test_find_validator_line_locates_exact_source_line():
-    src = (
-        "a()\n"
-        "b()\n"
-        "if not re.match(r'^x$', n): pass\n"        # line 3
-        "c()\n"
-    )
-    spec = sb.ValidatorSpec(
-        "charset", "n", "x", "if not re.match(r'^x$', n): pass", 0)
+    # Producer-real needle: the exact shape the extractor lifts (the
+    # anchored lookup re-extracts at each candidate line).
+    needle = "if not re.match(r'^[x]+$', n): pass"
+    src = "a()\nb()\n" + needle + "\nc()\n"        # needle on line 3
+    spec = sb.ValidatorSpec("charset", "n", "x", needle, 0)
     assert sb.find_validator_line(src, spec) == 3
 
 
 def test_find_validator_line_none_when_absent():
-    spec = sb.ValidatorSpec("charset", "n", "x", "if not re.match(r'^x$', n): pass", 0)
+    needle = "if not re.match(r'^[x]+$', n): pass"
+    spec = sb.ValidatorSpec("charset", "n", "x", needle, 0)
     assert sb.find_validator_line("a()\nb()\n", spec) is None
+
+
+def test_find_validator_line_skips_string_decoy_copy():
+    # A planted earlier copy of the validator text inside a
+    # triple-quoted string must not shadow the real validator line.
+    needle = "if not re.match(r'^[x]+$', n): pass"
+    src = (
+        "doc = " + '"' * 3 + "\n"
+        + needle + "\n"                             # line 2: prose
+        + '"' * 3 + "\n"
+        + needle + "\n"                             # line 4: code
+    )
+    spec = sb.ValidatorSpec("charset", "n", "x", needle, 0)
+    assert sb.find_validator_line(src, spec) == 4
+
+
+def test_extract_refuses_comment_and_string_spans():
+    # Comment decoy on a code-carrying line: refused.
+    assert sb.extract_validator_from_line(
+        "p = str(n)  # n = re.sub(r'[/.]+', " + '""' + ", n)", "python",
+    ) is None
+    # String decoy: refused.
+    assert sb.extract_validator_from_line(
+        'doc = "n = re.sub(r' + "'[/.]+', '', n)" + '"', "python",
+    ) is None
+    assert sb.extract_validator_from_line(
+        "// if (!/^[a-z0-9]+$/.test(name)) { return; }", "javascript",
+    ) is None
+    # Real spellings keep extracting.
+    assert sb.extract_validator_from_line(
+        "n = re.sub(r'[/.]+', '', n)", "python",
+    ) is not None
+    assert sb.extract_validator_from_line(
+        "if (!/^[a-z0-9]+$/.test(name)) { return; }", "javascript",
+    ) is not None
+
+
+def test_substitution_dominance_requires_real_sub_binding():
+    # The sanitizer exists only in a trailing comment - the AST
+    # node-anchor must refuse dominance (pre-anchor this certified).
+    src = (
+        "import re\n"
+        "def h(n):\n"
+        "    p = str(n)  # n = re.sub(r'[/.]+', '', n)\n"   # line 3
+        "    open('/etc/' + n)\n"                            # line 4
+    )
+    assert sb.substitution_dominates_sink(src, 3, 4, "n") is False
+    # Control: the real binding still dominates.
+    src_ok = (
+        "import re\n"
+        "def h(n):\n"
+        "    n = re.sub(r'[/.]+', '', n)\n"
+        "    open('/etc/' + n)\n"
+    )
+    assert sb.substitution_dominates_sink(src_ok, 3, 4, "n") is True
+
+
+def test_guard_dominance_requires_call_in_test():
+    # Decoy comment sharing a line with an unrelated exiting guard:
+    # the if's test carries no call, so the charset cannot have come
+    # from it - refuse.
+    src = (
+        "import re\n"
+        "def h(n, flag):\n"
+        "    if not flag: raise ValueError"
+        "  # if not re.match(r'^[a-z]+$', n): raise\n"
+        "    open('/etc/' + n)\n"
+    )
+    assert sb.validator_dominates_sink(src, 3, 4) is False
+    src_ok = (
+        "import re\n"
+        "def h(n):\n"
+        "    if not re.match(r'^[a-z]+$', n): raise ValueError\n"
+        "    open('/etc/' + n)\n"
+    )
+    assert sb.validator_dominates_sink(src_ok, 3, 4) is True
 
 
 # ---------------------------------------------------------------------------

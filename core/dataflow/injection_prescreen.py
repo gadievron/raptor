@@ -59,6 +59,7 @@ from core.dataflow.smt_barrier import (
     _python_chain_reaches_sink,
     _lexical_var_reaches_sink,
     _sanitizer_tails_for_spec_kind,
+    code_view_lines,
     extract_validator_from_line,
     extractor_languages,
     prove_neutralizes,
@@ -396,7 +397,19 @@ def prescreen_finding(
             if source_text is None:
                 continue
             line_text = _line_text(source_text, step.line)
-            spec = extract_validator_from_line(line_text, language)
+            # Anchor the lift against the whole-file comment/string-
+            # blanked view: a validator that exists only inside a
+            # comment or a multi-line string is prose planted by the
+            # scanned repo, not a barrier (the single-line default
+            # view cannot see enclosing multi-line constructs).
+            view_lines = code_view_lines(source_text, language)
+            view_line = (
+                view_lines[step.line - 1]
+                if 1 <= step.line <= len(view_lines) else ""
+            )
+            spec = extract_validator_from_line(
+                line_text, language, code_view=view_line,
+            )
             if spec is None:
                 continue
             if not _strict_lift(line_text, spec, language, sink_classes):

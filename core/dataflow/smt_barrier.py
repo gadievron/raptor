@@ -429,12 +429,49 @@ def _charset_body_is_safe(body: str) -> bool:
     return _ALPHA_BACKSLASH_ESCAPE.search(body) is None
 
 
-def _try_charset_validator(line: str) -> ValidatorSpec | None:
+def _code_view_line(line: str, language: str) -> str:
+    """Comment/string-blanked view of ONE line (no file context).
+
+    Uses the shared core.audit.source_view scanner (lazy leaf import —
+    source_view depends only on ``re``, so the downward-only import
+    doctrine is not violated at module import time). Single-line
+    scanning cannot see enclosing multi-line constructs; callers that
+    hold the whole file pass a full-file view line instead.
+    """
+    from core.audit.source_view import sanitized_view
+
+    return sanitized_view(line, language=language)
+
+
+def code_view_lines(source_text: str, language: str) -> list[str]:
+    """Comment/string-blanked view of a whole file, split into lines
+    (newlines are preserved by the scanner, so indices map 1:1)."""
+    from core.audit.source_view import sanitized_view
+
+    return sanitized_view(source_text, language=language).splitlines()
+
+
+def _span_is_code(view: str | None, start: int) -> bool:
+    """True when a regex match starting at ``start`` is anchored in
+    executable code: the view (comments and string interiors blanked
+    to spaces) still carries a non-space character there.  Every
+    extractor regex starts its match on a non-space char, so a space
+    in the view means the span is prose — a comment or string decoy
+    must never mint a validator.
+    """
+    if view is None:
+        return True
+    return start < len(view) and view[start] != " "
+
+
+def _try_charset_validator(
+    line: str, view: str | None = None,
+) -> ValidatorSpec | None:
     """Match the whole-string `re.match`/`re.fullmatch` over `^[chars]+$`
     pattern.  Returns ``None`` on no match so the caller can try other
     extractors."""
     m = _RE_MATCH_CALL.search(line)
-    if not m:
+    if not m or not _span_is_code(view, m.start()):
         return None
     call_kind = m.group("kind")
     pattern = _strip_string_literal(m.group("pat"))
@@ -450,11 +487,13 @@ def _try_charset_validator(line: str) -> ValidatorSpec | None:
     )
 
 
-def _try_charset_sub_validator(line: str) -> ValidatorSpec | None:
+def _try_charset_sub_validator(
+    line: str, view: str | None = None,
+) -> ValidatorSpec | None:
     """Match the ``x = re.sub('[forbidden]+', '', x)`` rebind pattern.
     Returns ``None`` on no match."""
     m = _RE_SUB_REBIND.search(line)
-    if not m:
+    if not m or not _span_is_code(view, m.start()):
         return None
     pattern = _strip_string_literal(m.group("pat"))
     cs = _SUB_CHARSET.match(pattern)
@@ -472,12 +511,16 @@ def _try_charset_sub_validator(line: str) -> ValidatorSpec | None:
     )
 
 
-def _try_jsts_validator(line: str) -> ValidatorSpec | None:
+def _try_jsts_validator(
+    line: str, view: str | None = None,
+) -> ValidatorSpec | None:
     """JS / TS guard-and-exit shapes.  Single regex match implies both
     the validator and its exit-on-fail are on the line — dominance is
     established by the diff itself."""
     m = _JS_GUARD_TEST.search(line) or _JS_GUARD_MATCH.search(line)
-    if m is None or not _charset_body_is_safe(m.group("chars")):
+    if m is None or not _span_is_code(view, m.start()):
+        return None
+    if not _charset_body_is_safe(m.group("chars")):
         return None
     return ValidatorSpec(
         kind="charset", var_name=m.group("var"), charset=m.group("chars"),
@@ -485,7 +528,9 @@ def _try_jsts_validator(line: str) -> ValidatorSpec | None:
     )
 
 
-def _try_java_validator(line: str) -> ValidatorSpec | None:
+def _try_java_validator(
+    line: str, view: str | None = None,
+) -> ValidatorSpec | None:
     """Java ``String.matches`` guard-and-exit shape.
 
     The captured class body is the SOURCE spelling of a Java string
@@ -496,7 +541,7 @@ def _try_java_validator(line: str) -> ValidatorSpec | None:
     from the model.
     """
     m = _JAVA_GUARD.search(line)
-    if m is None:
+    if m is None or not _span_is_code(view, m.start()):
         return None
     chars = _string_escape_decode(m.group("chars"))
     if not _charset_body_is_safe(chars):
@@ -507,7 +552,9 @@ def _try_java_validator(line: str) -> ValidatorSpec | None:
     )
 
 
-def _try_ruby_validator(line: str) -> ValidatorSpec | None:
+def _try_ruby_validator(
+    line: str, view: str | None = None,
+) -> ValidatorSpec | None:
     r"""Ruby ``unless x =~ /…/`` and ``if x !~ /…/`` guard shapes.
 
     Only ``\A[chars]+\z``-anchored patterns lift — Ruby ``^``/``$``
@@ -515,7 +562,9 @@ def _try_ruby_validator(line: str) -> ValidatorSpec | None:
     string (see the anchor note on the guard regexes above).
     """
     m = _RUBY_GUARD_UNLESS.search(line) or _RUBY_GUARD_IF_NOT_MATCH.search(line)
-    if m is None or not _charset_body_is_safe(m.group("chars")):
+    if m is None or not _span_is_code(view, m.start()):
+        return None
+    if not _charset_body_is_safe(m.group("chars")):
         return None
     return ValidatorSpec(
         kind="charset", var_name=m.group("var"), charset=m.group("chars"),
@@ -543,7 +592,7 @@ def extractor_languages() -> frozenset:
 
 
 def extract_validator_from_line(
-    line: str, language: str = "python",
+    line: str, language: str = "python", *, code_view: str | None = None,
 ) -> ValidatorSpec | None:
     """Run the per-``language`` extractor table on ONE source line.
 
@@ -552,12 +601,22 @@ def extract_validator_from_line(
     lifts validators from dataflow-path step lines instead of diff
     ``+`` lines. First matching extractor wins; None when the line
     carries no recognised validator shape.
+
+    Every match is anchored against a comment/string-blanked view of
+    the line: a validator that exists only inside a comment or string
+    literal is prose, and lifting it would let the scanned repo
+    neutralise its own live flows (mint refutations) with a planted
+    decoy.  ``code_view`` is the view line when the caller holds the
+    whole file (needed to see enclosing multi-line comments/strings);
+    by default the line itself is scanned in isolation.
     """
     extractors = _LANG_EXTRACTORS.get(language)
     if not extractors:
         return None
+    if code_view is None:
+        code_view = _code_view_line(line, language)
     for try_fn in extractors:
-        spec = try_fn(line)
+        spec = try_fn(line, code_view)
         if spec is not None:
             return spec
     return None
@@ -1093,20 +1152,36 @@ def _lexical_validator_in_branch(
     )
 
 
-def find_validator_line(source_text: str, spec: ValidatorSpec) -> int | None:
+def find_validator_line(
+    source_text: str, spec: ValidatorSpec, *, language: str = "python",
+) -> int | None:
     """Locate the validator's 1-based line number in the post-fix source
     text.  Matches by the stripped line-text the extractor saved on the
-    spec; first occurrence wins (multiple matches are unusual and any of
-    them would gate the sink the same way).
+    spec; first CODE occurrence wins (multiple matches are unusual and
+    any of them would gate the sink the same way).
+
+    Anchored against the comment/string-blanked view of the file: a
+    line whose validator text lives inside a comment or a multi-line
+    string is prose — matching it would bind the dominance check to a
+    decoy location (a planted earlier copy inside a docstring would
+    otherwise shadow the real validator).
 
     Pre-fix this read the file from disk; the refactor pulls the I/O out
     to :func:`try_tier0` so the source text can be reused by the
     dominance check without a second read.
     """
     needle = spec.source_line
-    for idx, ln in enumerate(source_text.splitlines()):
-        if ln.strip() == needle:
-            return idx + 1
+    lines = source_text.splitlines()
+    view = code_view_lines(source_text, language)
+    for idx, ln in enumerate(lines):
+        if ln.strip() != needle:
+            continue
+        view_ln = view[idx] if idx < len(view) else None
+        if extract_validator_from_line(
+            ln, language, code_view=view_ln,
+        ) is None:
+            continue
+        return idx + 1
     return None
 
 
@@ -1600,6 +1675,54 @@ def validator_dominates_sink(
     return lexical
 
 
+def _if_test_contains_call(tree: ast.AST, line: int) -> bool:
+    """True when the :class:`ast.If` at ``line`` tests a CALL result.
+
+    Node-anchor for the guard kind: the certified charset always comes
+    from a validation call (``re.match``/``fullmatch``/method guard),
+    so the ``if`` at the validator line must actually test one.  A
+    decoy sharing a line with an unrelated exiting guard (``if not
+    flag: raise  # if not re.match(...): raise``) has a call-free
+    test — prose next to code must not certify.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and node.lineno == line:
+            return any(
+                isinstance(sub, ast.Call) for sub in ast.walk(node.test)
+            )
+    return False
+
+
+def _sub_call_bound_at_line(
+    tree: ast.AST, line: int, var_name: str,
+) -> bool:
+    """True when ``line`` really binds ``var_name`` from a ``.sub``
+    call — the AST node-anchor for ``kind="charset_sub"``.  A
+    substitution that exists only inside a comment or string literal
+    is invisible to the AST, so requiring the real binding kills
+    comment/string decoys for every lift lane (mechanical and
+    LLM-pointed alike)."""
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+            continue
+        if node.lineno != line or node.value is None:
+            continue
+        targets = (
+            node.targets if isinstance(node, ast.Assign) else [node.target]
+        )
+        if not any(
+            isinstance(t, ast.Name) and t.id == var_name for t in targets
+        ):
+            continue
+        for sub in ast.walk(node.value):
+            if isinstance(sub, ast.Call):
+                func = sub.func
+                if (isinstance(func, ast.Attribute) and func.attr == "sub") \
+                        or (isinstance(func, ast.Name) and func.id == "sub"):
+                    return True
+    return False
+
+
 def _lexical_validator_dominates(
     source_text: str, validator_line: int, sink_line: int,
 ) -> bool:
@@ -1615,6 +1738,8 @@ def _lexical_validator_dominates(
     if not _same_function_in_order(tree, validator_line, sink_line):
         return False
     if not _validator_block_exits_on_failure(tree, validator_line):
+        return False
+    if not _if_test_contains_call(tree, validator_line):
         return False
     # Enclosing-conditional gate: an exit-on-fail guard nested inside
     # another conditional (``if cond: if not re.match(...): raise``)
@@ -2240,6 +2365,8 @@ def _lexical_substitution_dominates(
         tree = ast.parse(source_text)
     except SyntaxError:
         return False
+    if not _sub_call_bound_at_line(tree, validator_line, var_name):
+        return False
     if not _same_function_in_order(tree, validator_line, sink_line):
         return False
     if _variable_reassigned_between(tree, var_name, validator_line, sink_line):
@@ -2567,7 +2694,7 @@ def try_tier0(
             spec=spec,
         )
     source_text = got[0]
-    line = find_validator_line(source_text, spec)
+    line = find_validator_line(source_text, spec, language=language)
     if line is None:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,

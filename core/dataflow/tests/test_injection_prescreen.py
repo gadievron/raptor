@@ -545,3 +545,106 @@ class TestReadSourceContainment:
         repo.mkdir()
         os.symlink(outside, repo / "link.py")
         assert ip._read_source(repo, "link.py") is None
+
+
+# ---------------------------------------------------------------------------
+# Comment / string decoys must never certify — the lift and the
+# dominance layers both require the validator span to be executable
+# code, not prose (comment-stripped/string-blanked view anchoring).
+# ---------------------------------------------------------------------------
+
+
+class TestDecoyValidatorsNeverRefute:
+    def test_python_comment_sub_decoy_no_refutation(self, tmp_path):
+        # The sanitizer exists only inside a trailing comment on a
+        # real code line — the flow is live and must reach the LLM.
+        app = (
+            "import os\n"
+            "import re\n"
+            "\n"
+            "\n"
+            "def handler(request):\n"
+            "    name = request.args.get('name')\n"
+            "    p = str(name)  # name = re.sub(r'[/\\\\.]+', '', name)\n"
+            "    open('/etc/app/' + name)\n"
+        )
+        repo = _write_app(tmp_path, app)
+        assert prescreen_finding(
+            paths=[_path("app.py", 6, [7], 8)], repo_root=repo,
+            rule_id="py/path-injection",
+        ) is None
+
+    def test_python_docstring_guard_decoy_no_refutation(self, tmp_path):
+        # Validator text inside a (multi-line) string literal: the
+        # line-level view alone cannot see the enclosing quotes, so
+        # the anchor must come from the whole-file view.
+        app = (
+            "import os\n"
+            "import re\n"
+            "\n"
+            "\n"
+            "def handler(request):\n"
+            "    name = request.args.get('name')\n"
+            "    doc = '''example:\n"
+            "    if not re.match(r'^[A-Za-z0-9_+-]+$', name): return\n"
+            "    '''\n"
+            "    open('/etc/app/' + name)\n"
+        )
+        repo = _write_app(tmp_path, app)
+        assert prescreen_finding(
+            paths=[_path("app.py", 6, [8], 10)], repo_root=repo,
+            rule_id="py/path-injection",
+        ) is None
+
+    def test_js_comment_guard_decoy_no_refutation(self, tmp_path):
+        app = (
+            "function h(req){\n"
+            "  let name = req.query.name;\n"
+            "  // if (!/^[a-z0-9]+$/.test(name)) { return; }\n"
+            "  exec('ls ' + name);\n"
+            "}\n"
+        )
+        repo = _write_app(tmp_path, app, name="app.js")
+        assert prescreen_finding(
+            paths=[_path("app.js", 2, [3], 4)], repo_root=repo,
+            rule_id="js/command-line-injection",
+        ) is None
+
+    def test_js_block_comment_guard_decoy_no_refutation(self, tmp_path):
+        app = (
+            "function h(req){\n"
+            "  let name = req.query.name;\n"
+            "  /*\n"
+            "  if (!/^[a-z0-9]+$/.test(name)) { return; }\n"
+            "  */\n"
+            "  exec('ls ' + name);\n"
+            "}\n"
+        )
+        repo = _write_app(tmp_path, app, name="app.js")
+        assert prescreen_finding(
+            paths=[_path("app.js", 2, [4], 6)], repo_root=repo,
+            rule_id="js/command-line-injection",
+        ) is None
+
+    def test_js_string_guard_decoy_no_refutation(self, tmp_path):
+        app = (
+            "function h(req){\n"
+            "  let name = req.query.name;\n"
+            "  let doc = \"if (!/^[a-z0-9]+$/.test(name)) { return; }\";\n"
+            "  exec('ls ' + name);\n"
+            "}\n"
+        )
+        repo = _write_app(tmp_path, app, name="app.js")
+        assert prescreen_finding(
+            paths=[_path("app.js", 2, [3], 4)], repo_root=repo,
+            rule_id="js/command-line-injection",
+        ) is None
+
+    def test_real_validator_control_still_refutes(self, guard_repo):
+        # Two-direction guard: the anchored lift must keep certifying
+        # the genuine guard shape.
+        verdict = prescreen_finding(
+            paths=[_guard_path()], repo_root=guard_repo,
+            rule_id="py/path-injection",
+        )
+        assert verdict is not None and verdict.refuted is True
