@@ -121,6 +121,15 @@ def _vendored_stdlib_roots(lang: str) -> list[Path]:
     return []
 
 
+def vendored_stdlib_roots(lang: str) -> list[Path]:
+    """Public seam over ``_vendored_stdlib_roots`` for out-of-package
+    consumers (``core.iris.codeql_runner``): the vendored ``<lang>-all``
+    root inside a cached standard query pack is the only
+    network-free way to resolve a generated query pack's stdlib
+    dependency under ``block_network`` analyzes."""
+    return _vendored_stdlib_roots(lang)
+
+
 _STDERR_LENGTH_CAP = 256 * 1024  # 256 KB; codeql stderr is typically <16 KB
 
 
@@ -1239,6 +1248,23 @@ class QueryRunner:
             duration_seconds=time.time() - analysis_start,
             errors=[err] if err else [],
             suite_name=suite_name,
+        )
+
+    def run_local_pack(
+        self, lang: str, db: Path, pack_dir: Path, out_dir: Path,
+        *, suite_name: str, sarif_name: str, label: str,
+        extra_analyze_args: tuple[str, ...] = (),
+        skip_install: bool = False,
+    ) -> "QueryResult":
+        """Public seam over ``_run_local_pack`` for out-of-package
+        consumers (``core.iris.codeql_runner``): lazy proxy-routed pack
+        install (unless *skip_install* / deps already cached) followed
+        by a sandboxed network-blocked ``database analyze``."""
+        return self._run_local_pack(
+            lang, db, pack_dir, out_dir,
+            suite_name=suite_name, sarif_name=sarif_name, label=label,
+            extra_analyze_args=extra_analyze_args,
+            skip_install=skip_install,
         )
 
     def _count_sarif_findings(self, sarif_path: Path) -> int:

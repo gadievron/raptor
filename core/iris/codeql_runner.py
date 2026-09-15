@@ -1,6 +1,6 @@
 """CodeQL tool runner for the IRIS refinement loop.
 
-Adapts ``compile_codeql_config`` → temp QL pack → ``run_custom_queries``
+Adapts ``compile_codeql_config`` → temp QL pack → ``run_local_pack``
 → SARIF parse → ``RefinementFeedback``.  Plugs into ``refine_loop``'s
 ``tool_runner`` slot alongside (or instead of) the Joern runner.
 """
@@ -15,7 +15,11 @@ from core.run.scratch import scratch_dir
 from core.sarif.parser import load_sarif
 
 from .refine import RefinementFeedback
-from .specs import TaintSpec, compile_codeql_config
+from .specs import (
+    CODEQL_QUERY_LANGUAGES,
+    TaintSpec,
+    compile_codeql_config,
+)
 from .store import _spec_key
 
 if TYPE_CHECKING:
@@ -115,7 +119,7 @@ def _match_to_spec_keys(match: dict, specs: list[TaintSpec]) -> list[str]:
 def make_codeql_tool_runner(
     db_path: Path,
     out_dir: Path,
-    language: str = "cpp",
+    language: str | None = None,
 ):
     """Build a ``ToolRunner`` callable for the IRIS refinement loop.
 
@@ -126,16 +130,25 @@ def make_codeql_tool_runner(
     out_dir:
         Output directory for SARIF results.
     language:
-        Target language (``cpp``, ``python``, ``java``, etc.).
+        Target language (CodeQL canonical name). ``None`` — the
+        default — probes the DATABASE's own metadata
+        (``codeql-database.yml`` ``primaryLanguage``). A hardcoded
+        default here used to pin every caller to ``cpp``: a java /
+        python / any-other-language database got a cpp-library query
+        and every analyze failed, so the language must come from the
+        database unless the caller genuinely knows better.
 
     Returns
     -------
     A callable ``(specs: list[TaintSpec]) -> RefinementFeedback``.
-    Returns ``None`` if CodeQL CLI is not available.
+    Returns ``None`` if the CodeQL CLI is not available, the database
+    is missing, or its language has no query template
+    (``CODEQL_QUERY_LANGUAGES``).
     """
     try:
         from packages.codeql import is_available as codeql_available
         from packages.codeql.query_runner import QueryRunner as CodeQLRunner
+        from packages.codeql.query_runner import vendored_stdlib_roots
     except ImportError:
         logger.debug("CodeQL runner not importable")
         return None
@@ -159,6 +172,19 @@ def make_codeql_tool_runner(
         logger.debug("CodeQL database not found at %s", db_path)
         return None
 
+    if language is None:
+        from core.audit.codeql_dbs import database_language
+        language = database_language(db_path)
+    if language not in CODEQL_QUERY_LANGUAGES:
+        # Operator-visible, not DEBUG-buried: an unsupported-language
+        # database means the CodeQL confirmation lane is off for the
+        # whole run, exactly like a failed construction.
+        logger.warning(
+            "IRIS CodeQL runner disabled: no query template for "
+            "database language %r (%s)", language, db_path,
+        )
+        return None
+
     def _run(specs: list[TaintSpec]) -> RefinementFeedback:
         query_text = compile_codeql_config(specs, language=language)
         if not query_text.strip():
@@ -167,11 +193,28 @@ def make_codeql_tool_runner(
         with scratch_dir("raptor-iris-codeql-") as tmp_root:
             try:
                 pack_dir = _write_temp_pack(query_text, language, tmp_root)
-                result = runner.run_custom_queries(
-                    database_path=db_path,
-                    query_path=pack_dir,
-                    out_dir=out_dir,
-                    language=language,
+                # The temp pack pins its stdlib dep as `codeql/
+                # <lang>-all: "*"` with no lockfile, and the analyze
+                # runs under block_network — registry resolution can
+                # never happen there. The vendored `<lang>-all` root
+                # inside the cached standard query pack resolves the
+                # dep entirely offline (single-version tree, full
+                # transitive closure); when nothing is cached,
+                # run_local_pack's lazy proxy-routed `pack install`
+                # is the fallback that CAN reach the registry.
+                vendored = vendored_stdlib_roots(language)
+                result = runner.run_local_pack(
+                    language,
+                    db_path,
+                    pack_dir,
+                    out_dir,
+                    suite_name="raptor-iris-refine",
+                    sarif_name=f"codeql_{language}_iris_refine.sarif",
+                    label="IRIS refinement",
+                    extra_analyze_args=tuple(
+                        f"--additional-packs={root}" for root in vendored
+                    ),
+                    skip_install=bool(vendored),
                 )
 
                 if not result.success or not result.sarif_path:

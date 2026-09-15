@@ -216,28 +216,144 @@ def test_tool_runner_none_when_constructor_raises(tmp_path, monkeypatch):
     assert make_codeql_tool_runner(db, tmp_path) is None
 
 
-def test_tool_runner_constructs_with_stub_cli(tmp_path, monkeypatch):
-    """End-to-end construction smoke: a stub codeql on PATH must yield
-    a CALLABLE runner (the lane exists), not a crash and not None."""
-    from core.iris.codeql_runner import make_codeql_tool_runner
+def _stub_cli(tmp_path, monkeypatch) -> None:
     stub = tmp_path / "bin" / "codeql"
-    stub.parent.mkdir()
+    stub.parent.mkdir(exist_ok=True)
     stub.write_text("#!/bin/sh\nexit 0\n")
     stub.chmod(0o755)
     monkeypatch.setenv("PATH", str(stub.parent))
     monkeypatch.delenv("CODEQL_CLI", raising=False)
+
+
+def _stub_db(tmp_path, language: str = "cpp") -> Path:
     db = tmp_path / "db"
-    db.mkdir()
+    db.mkdir(exist_ok=True)
+    (db / "codeql-database.yml").write_text(
+        f"primaryLanguage: {language}\n",
+    )
+    return db
+
+
+def test_tool_runner_constructs_with_stub_cli(tmp_path, monkeypatch):
+    """End-to-end construction smoke: a stub codeql on PATH must yield
+    a CALLABLE runner (the lane exists), not a crash and not None."""
+    from core.iris.codeql_runner import make_codeql_tool_runner
+    _stub_cli(tmp_path, monkeypatch)
+    db = _stub_db(tmp_path)
     runner = make_codeql_tool_runner(db, tmp_path)
     assert callable(runner)
 
 
 def test_tool_runner_none_when_db_missing(tmp_path, monkeypatch):
     from core.iris.codeql_runner import make_codeql_tool_runner
-    stub = tmp_path / "bin" / "codeql"
-    stub.parent.mkdir()
-    stub.write_text("#!/bin/sh\nexit 0\n")
-    stub.chmod(0o755)
-    monkeypatch.setenv("PATH", str(stub.parent))
-    monkeypatch.delenv("CODEQL_CLI", raising=False)
+    _stub_cli(tmp_path, monkeypatch)
     assert make_codeql_tool_runner(tmp_path / "nodb", tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# Language resolution
+# ---------------------------------------------------------------------------
+# The sole production caller passes no language, so the factory's
+# default IS the language policy. A hardcoded `language="cpp"` default
+# meant every non-cpp database got a cpp-library query and every
+# analyze failed — the language must come from the database itself.
+
+
+def test_tool_runner_probes_db_language(tmp_path, monkeypatch):
+    """No language argument → the database's primaryLanguage decides
+    which language's query the runner generates."""
+    from core.iris.codeql_runner import make_codeql_tool_runner
+    from core.iris.specs import TaintSpec
+
+    _stub_cli(tmp_path, monkeypatch)
+    db = _stub_db(tmp_path, language="java")
+
+    captured: dict = {}
+
+    import packages.codeql.query_runner as qr
+
+    class _Recorder:
+        def run_local_pack(self, lang, db_, pack_dir, out_dir, **kwargs):
+            captured["language"] = lang
+            captured["kwargs"] = kwargs
+            captured["query"] = (Path(pack_dir) / "IrisSpecs.ql").read_text()
+            return qr.QueryResult(
+                success=False, language=lang, database_path=db_,
+                sarif_path=None, findings_count=0, duration_seconds=0.0,
+                errors=["stub"], suite_name="raptor-iris-refine",
+            )
+
+    monkeypatch.setattr(qr, "QueryRunner", lambda: _Recorder())
+    runner = make_codeql_tool_runner(db, tmp_path)
+    assert runner is not None
+    runner([
+        TaintSpec(function="readIn", file="A.java", role="source"),
+        TaintSpec(function="runIt", file="B.java", role="sink"),
+    ])
+    assert captured["language"] == "java"
+    assert "import semmle.code.java.dataflow.DataFlow" in captured["query"]
+
+
+def test_tool_runner_passes_vendored_roots_offline(tmp_path, monkeypatch):
+    """A cached vendored stdlib root must reach the analyze as
+    --additional-packs with the install skipped — under block_network
+    that root is the only way the temp pack's `*` dep can resolve."""
+    from core.iris.codeql_runner import make_codeql_tool_runner
+    from core.iris.specs import TaintSpec
+
+    _stub_cli(tmp_path, monkeypatch)
+    db = _stub_db(tmp_path, language="cpp")
+    vendored = tmp_path / "vendored" / "codeql"
+    vendored.mkdir(parents=True)
+
+    captured: dict = {}
+
+    import packages.codeql.query_runner as qr
+
+    class _Recorder:
+        def run_local_pack(self, lang, db_, pack_dir, out_dir, **kwargs):
+            captured["kwargs"] = kwargs
+            return qr.QueryResult(
+                success=False, language=lang, database_path=db_,
+                sarif_path=None, findings_count=0, duration_seconds=0.0,
+                errors=["stub"], suite_name="raptor-iris-refine",
+            )
+
+    monkeypatch.setattr(qr, "QueryRunner", lambda: _Recorder())
+    monkeypatch.setattr(
+        qr, "vendored_stdlib_roots", lambda _lang: [vendored],
+    )
+    runner = make_codeql_tool_runner(db, tmp_path)
+    runner([TaintSpec(function="f", file="a.c", role="sink")])
+    assert captured["kwargs"]["extra_analyze_args"] == (
+        f"--additional-packs={vendored}",
+    )
+    assert captured["kwargs"]["skip_install"] is True
+
+
+def test_tool_runner_none_when_db_language_unknown(tmp_path, monkeypatch):
+    """A database whose language cannot be determined gets NO runner —
+    a guessed language means a query for the wrong library."""
+    from core.iris.codeql_runner import make_codeql_tool_runner
+    _stub_cli(tmp_path, monkeypatch)
+    db = tmp_path / "opaque-database-dir"
+    db.mkdir()
+    assert make_codeql_tool_runner(db, tmp_path) is None
+
+
+def test_tool_runner_none_when_db_language_unsupported(tmp_path, monkeypatch):
+    from core.iris.codeql_runner import make_codeql_tool_runner
+    _stub_cli(tmp_path, monkeypatch)
+    db = _stub_db(tmp_path, language="swift")
+    assert make_codeql_tool_runner(db, tmp_path) is None
+
+
+def test_tool_runner_explicit_language_wins(tmp_path, monkeypatch):
+    """An explicit language bypasses the probe (caller asserts
+    knowledge); an explicit UNSUPPORTED language still refuses."""
+    from core.iris.codeql_runner import make_codeql_tool_runner
+    _stub_cli(tmp_path, monkeypatch)
+    db = tmp_path / "db"
+    db.mkdir()  # no metadata at all
+    assert callable(make_codeql_tool_runner(db, tmp_path, language="ruby"))
+    assert make_codeql_tool_runner(db, tmp_path, language="rust") is None
