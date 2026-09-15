@@ -121,3 +121,91 @@ def test_migrate_survives_non_dict_occupant_at_target_key(
     entries = json.loads(index_path.read_text(encoding="utf-8"))["entries"]
     assert entries[key]["function"] == "parse_header"
     assert entries[key]["legacy"] is True
+
+
+# --- hostile legacy-source containment --------------------------------------
+#
+# The legacy sources (coverage-audit.json, checklist.json) sit in
+# target-writable project dirs. One hostile node must quarantine to
+# that node/record; the writer must never emit a row its own reader
+# permanently refuses.
+
+
+def test_hostile_coverage_audit_shapes_quarantine_per_node(
+    migrate_mod, tmp_path,
+):
+    import json
+
+    run = tmp_path / "run1"
+    run.mkdir()
+    (run / "coverage-audit.json").write_text(json.dumps({
+        "functions_analysed": [
+            "junk",
+            {"file": "a.c", "function": "f", "status": "clean",
+             "hash": "abc", "ts": "2020-01-01T00:00:00.000000Z"},
+        ],
+        "files": {
+            "b.c": {"functions": {"g": {"status": "clean"},
+                                  "h": "junk"}},
+            "c.c": "junk",
+            "d.c": {"functions": ["junk"]},
+        },
+    }))
+    rows = list(migrate_mod._iter_run_coverage_audit(tmp_path))
+    got = {(r.get("file"), r.get("function")) for _, r in rows}
+    assert got == {("a.c", "f"), ("b.c", "g")}
+
+
+def test_hostile_checklist_shapes_quarantine_per_node(
+    migrate_mod, tmp_path,
+):
+    import json
+
+    (tmp_path / "checklist.json").write_text(json.dumps({
+        "files": [
+            "junk",
+            {"path": "a.c", "items": [
+                {"name": "f", "line_start": 1, "checked_by": ["audit"]},
+                {"name": "g", "checked_by": "audit"},
+                {"name": "h", "checked_by": [5, "agentic:x"]},
+                "junk",
+            ]},
+            {"path": 7, "items": [
+                {"name": "k", "checked_by": ["audit"]},
+            ]},
+        ],
+    }))
+    rows = list(migrate_mod._iter_checked_by_entries(tmp_path))
+    assert {(r["file"], r["function"]) for r in rows} == {
+        ("a.c", "f"), ("a.c", "h"),
+    }
+
+
+def test_migrate_never_writes_rows_its_reader_refuses(
+    migrate_mod, tmp_path,
+):
+    import json
+
+    from core.coverage.journal import load_index_full
+
+    run = tmp_path / "run1"
+    run.mkdir()
+    (run / "coverage-audit.json").write_text(json.dumps({
+        "files": {
+            # status present-but-None: the verdict would be dropped at
+            # serialisation and the reader would quarantine forever.
+            "a.c": {"functions": {"f": {"status": None}}},
+            "b.c": {"functions": {"g": {"status": "clean",
+                                        "hash": "abc"}}},
+        },
+        "functions_analysed": [
+            {"file": "c.c", "function": "h", "status": "clean",
+             "ts": 12345},        # non-str ts breaks ordering compares
+        ],
+    }))
+    added = migrate_mod._migrate(tmp_path)
+    assert added == 1
+    loaded = load_index_full(tmp_path)
+    assert len(loaded) == 1
+    entry = next(iter(loaded.values()))
+    assert (entry.file, entry.function) == ("b.c", "g")

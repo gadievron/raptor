@@ -59,8 +59,12 @@ sys.path.insert(0, str(REPO))
 import core.startup.process_init  # noqa: E402,F401
 
 from core.coverage.journal import (  # noqa: E402
-    INDEX_FILENAME, IndexUnreadable, ReviewJournalEntry, _flock,
-    _load_index, _row_ts, _write_index, now_iso,
+    INDEX_FILENAME, IndexUnreadable, IndexWriteOverBudget,
+    ReviewJournalEntry, _entry_from_dict, _flock, _load_index,
+    _row_ts, _write_index, now_iso,
+)
+from core.coverage.schema import (  # noqa: E402
+    _opt_int, iter_file_entries, iter_item_entries,
 )
 from core.json import load_json  # noqa: E402
 
@@ -91,18 +95,31 @@ def _iter_run_coverage_audit(project_dir: Path) -> Iterable[Dict[str, Any]]:
             continue
         # Two historical shapes: ``functions_analysed: [...]`` (list)
         # and ``files: {path: {functions: {name: {status, hash}}}}``
-        # (nested dict). Handle both.
-        for fn in data.get("functions_analysed", []) or []:
-            yield run_dir.name, fn
-        for file_path, fe in (data.get("files") or {}).items():
-            for name, meta in (fe.get("functions") or {}).items():
-                if isinstance(meta, dict):
-                    yield run_dir.name, {
-                        "file": file_path,
-                        "function": name,
-                        "status": meta.get("status"),
-                        "hash": meta.get("hash"),
-                    }
+        # (nested dict). Handle both. Legacy artifacts sit in
+        # target-writable project dirs, so container shapes are as
+        # hostile as values — walk tolerantly, one bad node skips
+        # that node only.
+        fa = data.get("functions_analysed")
+        if isinstance(fa, list):
+            for fn in fa:
+                if isinstance(fn, dict):
+                    yield run_dir.name, fn
+        files = data.get("files")
+        if isinstance(files, dict):
+            for file_path, fe in files.items():
+                if not isinstance(fe, dict):
+                    continue
+                funcs = fe.get("functions")
+                if not isinstance(funcs, dict):
+                    continue
+                for name, meta in funcs.items():
+                    if isinstance(meta, dict):
+                        yield run_dir.name, {
+                            "file": file_path,
+                            "function": name,
+                            "status": meta.get("status"),
+                            "hash": meta.get("hash"),
+                        }
 
 
 def _iter_annotation_entries(project_dir: Path) -> Iterable[Dict[str, Any]]:
@@ -176,14 +193,18 @@ def _iter_checked_by_entries(project_dir: Path) -> Iterable[Dict[str, Any]]:
     checklist = load_json(path, max_bytes=_MAX_CHECKLIST_BYTES)
     if not isinstance(checklist, dict):
         return
-    for fe in checklist.get("files", []):
+    for fe in iter_file_entries(checklist):
         file_path = fe.get("path")
-        if not file_path:
+        if not file_path or not isinstance(file_path, str):
             continue
-        for item in fe.get("items", fe.get("functions", [])) or []:
-            checked_by = item.get("checked_by") or []
-            if not any(t in ("audit", "agentic")
-                       or t.startswith("audit:") or t.startswith("agentic:")
+        for item in iter_item_entries(fe):
+            checked_by = item.get("checked_by")
+            if not isinstance(checked_by, list):
+                continue
+            if not any(isinstance(t, str)
+                       and (t in ("audit", "agentic")
+                            or t.startswith("audit:")
+                            or t.startswith("agentic:"))
                        for t in checked_by):
                 continue
             yield {
@@ -206,8 +227,10 @@ def _to_journal_entry(record: Dict[str, Any], run_id: str = "") -> ReviewJournal
         function=record.get("function", ""),
         verdict=record.get("status", "reviewed"),
         source_hash=record.get("hash", "") or "",
-        line_start=record.get("line_start", 0),
-        line_end=record.get("line_end"),
+        # Genuine ints only — a junk legacy span would otherwise be
+        # written verbatim and clamped by every reader forever.
+        line_start=_opt_int(record.get("line_start")) or 0,
+        line_end=_opt_int(record.get("line_end")),
     )
 
 
@@ -254,15 +277,40 @@ def _migrate(project_dir: Path) -> int:
         # corrupt-but-recoverable index into a silent full rewrite.
         # IndexUnreadable propagates to main() as a loud refusal.
         index = _load_index(index_path, for_write=True)
+        skipped = 0
         for source, rec in legacy_entries:
-            entry = _to_journal_entry(rec, run_id=source)
-            key = entry.key
+            try:
+                entry = _to_journal_entry(rec, run_id=source)
+                key = entry.key
+                new_dict = entry.to_dict()
+                new_dict["legacy"] = True
+                # Writer self-check: a migrated row must round-trip
+                # the journal's own reader. Legacy sources carry
+                # arbitrary shapes (a present-but-None status becomes
+                # a dropped verdict; a non-string ts breaks ordering
+                # compares) — a row the reader would refuse forever
+                # must be skipped HERE, not written as permanent
+                # quarantine noise in the index. The catch is total:
+                # any failure in constructing or validating one
+                # legacy record quarantines that record.
+                _entry_from_dict(dict(new_dict))
+            except Exception as exc:  # noqa: BLE001 — record containment
+                skipped += 1
+                print(
+                    f"warning: skipping unmigratable legacy record "
+                    f"from {source}: {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+                continue
             existing = index.get(key)
-            new_dict = entry.to_dict()
-            new_dict["legacy"] = True
             if existing is None or entry.ts > _row_ts(existing):
                 index[key] = new_dict
                 added += 1
+        if skipped:
+            print(
+                f"warning: {skipped} legacy record(s) skipped as "
+                "unmigratable", file=sys.stderr,
+            )
         _write_index(index_path, index)
     return added
 
@@ -289,7 +337,10 @@ def main() -> int:
 
     try:
         added = _migrate(project_dir)
-    except IndexUnreadable as e:
+    except (IndexUnreadable, IndexWriteOverBudget) as e:
+        # Both writer refusals leave the on-disk index untouched:
+        # unreadable history is never overwritten, and an index
+        # the read budget would refuse is never written.
         print(f"error: {e}", file=sys.stderr)
         return 1
     print(
