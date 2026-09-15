@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import re
+from functools import lru_cache
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -270,6 +271,51 @@ def rewrite_file_with(
     return results
 
 
+@lru_cache(maxsize=2)
+def _blank_xml_comments(text: str) -> str:
+    """XML comment spans replaced with same-length spaces (newlines
+    kept), so match offsets computed on the view splice 1:1 into the
+    original text.
+
+    The MSBuild rewriters are regex-over-raw-text by design (comments
+    are preserved on write), which made a commented-out declaration
+    match identically to a live one: a stale plan then reported
+    ``applied`` while only mutating a comment, and commented entries
+    polluted the ``partial``/``value_mismatch`` verdicts with prose.
+    The parser side is immune (defusedxml drops comments), so plans
+    are always generated from live entries — matching must see the
+    same view. An unterminated ``<!--`` is malformed XML: the
+    remainder is left unblanked (the parser side would have refused
+    the file anyway).
+
+    Linear ``str.find`` scan, never a regex: a non-greedy
+    ``<!--.*?-->`` pattern re-scans to EOF for EVERY unterminated
+    ``<!--``, so a hostile props file made of ``<!--`` repeats cost
+    quadratic time per edit — the same hostile-manifest hang class
+    the helm rewriter closes. Cached (the per-edit driver re-blanks
+    the same file text once per plan entry otherwise; maxsize 2
+    covers the one-file-at-a-time rewrite loop).
+    """
+    out: list[str] = []
+    pos = 0
+    while True:
+        start = text.find("<!--", pos)
+        if start == -1:
+            out.append(text[pos:])
+            break
+        end = text.find("-->", start + 4)
+        if end == -1:
+            out.append(text[pos:])
+            break
+        out.append(text[pos:start])
+        out.append(
+            "".join(c if c == "\n" else " "
+                    for c in text[start:end + 3])
+        )
+        pos = end + 3
+    return "".join(out)
+
+
 def apply_version_edit(
     text: str,
     edit: RewriteEdit,
@@ -299,9 +345,13 @@ def apply_version_edit(
       explicit ``partial:`` reason so the run never reports a clean
       apply over a mixed file.
     """
+    # Match against the comment-blanked view; splice into the
+    # original (offsets map 1:1 — see _blank_xml_comments). Every
+    # consumer of this driver is an MSBuild XML rewriter.
+    view = _blank_xml_comments(text)
     for pattern_builder in pattern_builders:
         pat = pattern_builder(edit.locator)
-        matches = list(pat.finditer(text))
+        matches = list(pat.finditer(view))
         if not matches:
             continue
         needs_bump = [

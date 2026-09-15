@@ -126,3 +126,134 @@ def test_no_old_value_and_stray_is_value_mismatch():
     assert result.applied is False
     assert "value_mismatch" in result.reason
     assert new_text == text
+
+
+class TestXmlCommentBlindness:
+    """The MSBuild rewriters are regex-over-raw-text by design, so a
+    commented-out declaration matched identically to a live one:
+    with a stale plan (old=1.0.0, live entry already at 2.0.0, old
+    pin kept in a migration-era comment) the comment matched
+    needs_bump and the edit reported applied=True while only mutating
+    the comment — exactly the case the value_mismatch/no_change
+    ladder exists to refuse. Comments are blanked from the MATCH view
+    (same-length spaces) so offsets still splice the original text."""
+
+    def _builders(self):
+        from packages.sca.rewriters import (
+            build_element_attr_version_pattern,
+        )
+
+        def _b(locator):
+            return build_element_attr_version_pattern(
+                ("PackageVersion",), "Include", locator, "Version",
+            )
+        return (_b,)
+
+    def test_stale_plan_with_commented_old_pin_is_no_change(self):
+        from packages.sca.rewriters import RewriteEdit, apply_version_edit
+        text = (
+            '<Project><ItemGroup>\n'
+            '<!-- <PackageVersion Include="Newtonsoft.Json"'
+            ' Version="1.0.0"/> -->\n'
+            '<PackageVersion Include="Newtonsoft.Json"'
+            ' Version="2.0.0"/>\n'
+            '</ItemGroup></Project>\n'
+        )
+        edit = RewriteEdit(locator="Newtonsoft.Json",
+                           old_value="1.0.0", new_value="2.0.0")
+        new_text, result = apply_version_edit(
+            text, edit, self._builders())
+        assert result.applied is False
+        assert result.reason == "no_change"
+        assert new_text == text
+
+    def test_commented_third_value_does_not_pollute_verdict(self):
+        from packages.sca.rewriters import RewriteEdit, apply_version_edit
+        text = (
+            '<Project><ItemGroup>\n'
+            '<!-- <PackageVersion Include="Newtonsoft.Json"'
+            ' Version="0.9.0"/> -->\n'
+            '<PackageVersion Include="Newtonsoft.Json"'
+            ' Version="1.0.0"/>\n'
+            '</ItemGroup></Project>\n'
+        )
+        edit = RewriteEdit(locator="Newtonsoft.Json",
+                           old_value="1.0.0", new_value="2.0.0")
+        new_text, result = apply_version_edit(
+            text, edit, self._builders())
+        assert result.applied is True
+        assert result.reason == ""  # not partial: the 0.9.0 is prose
+        assert 'Version="2.0.0"' in new_text
+        # The comment is preserved byte-for-byte.
+        assert 'Version="0.9.0"/> -->' in new_text
+
+    def test_multiline_comment_span_blanked(self):
+        from packages.sca.rewriters import RewriteEdit, apply_version_edit
+        text = (
+            '<Project><ItemGroup>\n'
+            '<!--\n'
+            '<PackageVersion Include="Newtonsoft.Json"'
+            ' Version="1.0.0"/>\n'
+            '-->\n'
+            '</ItemGroup></Project>\n'
+        )
+        edit = RewriteEdit(locator="Newtonsoft.Json",
+                           old_value="1.0.0", new_value="2.0.0")
+        new_text, result = apply_version_edit(
+            text, edit, self._builders())
+        assert result.applied is False
+        assert result.reason == "not_found"
+        assert new_text == text
+
+    def test_live_entry_still_bumped_control(self):
+        from packages.sca.rewriters import RewriteEdit, apply_version_edit
+        text = (
+            '<PackageVersion Include="Newtonsoft.Json"'
+            ' Version="1.0.0"/>\n'
+        )
+        edit = RewriteEdit(locator="Newtonsoft.Json",
+                           old_value="1.0.0", new_value="2.0.0")
+        new_text, result = apply_version_edit(
+            text, edit, self._builders())
+        assert result.applied is True
+        assert 'Version="2.0.0"' in new_text
+
+    def test_comment_bomb_is_linear(self):
+        # Hostile props file made of unterminated "<!--" repeats: a
+        # non-greedy regex re-scanned to EOF per opener (quadratic —
+        # 12s at 128KB, per EDIT). Both-direction bound: fast AND the
+        # live entry still bumps (the unterminated-comment remainder
+        # is left raw — malformed XML).
+        import time
+
+        from packages.sca.rewriters import RewriteEdit, apply_version_edit
+        text = (
+            "<!--" * 65536
+            + '\n<PackageVersion Include="Newtonsoft.Json"'
+            ' Version="1.0.0"/>\n'
+        )
+        start = time.monotonic()
+        new_text, result = apply_version_edit(
+            text, RewriteEdit(locator="Newtonsoft.Json",
+                              old_value="1.0.0", new_value="2.0.0"),
+            self._builders())
+        assert time.monotonic() - start < 5.0
+        assert result.applied is True
+        assert 'Version="2.0.0"' in new_text
+
+    def test_paired_comment_bomb_is_linear(self):
+        import time
+
+        from packages.sca.rewriters import RewriteEdit, apply_version_edit
+        text = (
+            "<!-- x -->" * 65536
+            + '\n<PackageVersion Include="Newtonsoft.Json"'
+            ' Version="1.0.0"/>\n'
+        )
+        start = time.monotonic()
+        _new_text, result = apply_version_edit(
+            text, RewriteEdit(locator="Newtonsoft.Json",
+                              old_value="1.0.0", new_value="2.0.0"),
+            self._builders())
+        assert time.monotonic() - start < 5.0
+        assert result.applied is True
