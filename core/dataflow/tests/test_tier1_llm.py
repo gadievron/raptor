@@ -209,6 +209,38 @@ def test_sound_via_known_safe_call_table(tmp_path: Path):
     assert r.artifact.startswith("library:")
 
 
+def test_known_safe_call_refuses_on_unparseable_python(tmp_path: Path):
+    """One syntax error anywhere in a Python file must REFUSE the
+    known-safe-call certification, not silently drop every dominance
+    gate. Pre-fix ``tree = None`` fell through and this branch-wrapped
+    safe call (live flow when the branch is skipped) certified SOUND
+    with the same-function, binding-target, and branch gates all
+    conditioned away — a plantable false-suppression primitive."""
+    (tmp_path / "app.py").write_text(
+        "from werkzeug.security import safe_join\n"        # line 1
+        "def f(path, flag):\n"                              # line 2
+        "    if flag:\n"                                    # line 3
+        "        abs_path = safe_join(BASE, path)\n"        # line 4
+        "    return open(abs_path)\n"                       # line 5 = sink
+        "def broken(:\n"                                    # line 6 — SyntaxError
+    )
+    diff = "+        abs_path = safe_join(BASE, path)\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "abs_path = safe_join(BASE, path)",
+        "variable_name": "abs_path",
+        "charset": "", "forbidden": "",
+        "library_call": "werkzeug.security.safe_join",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=5, sink_class="pathtrav",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+    assert "syntax errors" in r.reasoning
+
+
 def test_decline_when_library_not_in_curated_table(tmp_path: Path):
     """LLM claims a library is safe but it's not in the curated table
     — DECLINE.  This is the trust-surface gate."""

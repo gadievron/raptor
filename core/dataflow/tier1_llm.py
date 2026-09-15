@@ -480,11 +480,26 @@ def _try_known_safe_call(
     # Source-order + same-function check (the helper above already
     # picked a same-function candidate when possible; this confirms
     # for the AST-aware Python path).
-    try:
-        import ast
-        tree = ast.parse(source_text) if language == "python" else None
-    except SyntaxError:
-        tree = None
+    tree = None
+    if language == "python":
+        try:
+            import ast
+            tree = ast.parse(source_text)
+        except SyntaxError:
+            # Refuse, never degrade: every dominance gate below
+            # (same-function, binding-target, branch) is conditioned
+            # on `tree is not None` for Python, so carrying on with
+            # tree=None silently certified with ALL gates skipped —
+            # one syntax error anywhere in the file (common in py2 /
+            # newer-syntax corpora, and plantable in a scanned repo)
+            # disabled dominance for every known-safe-call
+            # certification in it. Same behaviour as the tier1b
+            # extraction lane's parse refusal below.
+            return Tier0Result(
+                Tier0Status.NOT_APPLICABLE,
+                "post-fix source has syntax errors — Python dominance "
+                "gates unavailable for a known-safe-call certification",
+            )
     if tree is not None and not _same_function_in_order(
             tree, validator_line, sink_line):
         return Tier0Result(
