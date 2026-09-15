@@ -1098,25 +1098,35 @@ class AutonomousSecurityAgentV2:
             logger.info("  False positive: %s", validation.get('false_positive'))
 
             if validation.get('sanitizer_details'):
+                # LLM-authored free text: escape + bound before the
+                # log line (the console formatter escapes as a
+                # backstop; the site owns the length bound).
+                from core.security.log_sanitisation import (
+                    sanitise_for_terminal as _sft,
+                )
                 logger.info("\n  Sanitizer Analysis:")
                 for san_detail in validation.get('sanitizer_details', []):
-                    logger.info("    - %s", san_detail.get('name'))
-                    logger.info("      Purpose: %s", san_detail.get('purpose'))
+                    logger.info("    - %s",
+                                _sft(str(san_detail.get('name')), max_len=128))
+                    logger.info("      Purpose: %s",
+                                _sft(str(san_detail.get('purpose')), max_len=200))
                     logger.info(
                         "      Bypassable: %s",
                         san_detail.get("bypass_possible"),
                     )
                     if san_detail.get('bypass_method'):
-                        bm = san_detail.get(
-                            "bypass_method"
-                        )[:100]
+                        bm = _sft(str(san_detail.get("bypass_method")), max_len=100)
                         logger.info(
                             "      Bypass: %s", bm,
                         )
 
             if validation.get('attack_payload_concept'):
+                from core.security.log_sanitisation import (
+                    sanitise_for_terminal as _sft,
+                )
                 logger.info("\n  Attack Payload Concept:")
-                logger.info("    %s", validation.get('attack_payload_concept')[:200])
+                logger.info("    %s",
+                            _sft(str(validation.get('attack_payload_concept')), max_len=200))
 
             # Save validation details
             val_name = f"{_safe_id(vuln.finding_id)}_validation.json"
@@ -1383,10 +1393,13 @@ class AutonomousSecurityAgentV2:
                     analysis.get("dataflow_exploitable", "N/A"),
                 )
 
-            reasoning = (analysis.get("reasoning") or "")[:150]
+            from core.security.log_sanitisation import (
+                sanitise_for_terminal as _sft,
+            )
+            reasoning = _sft(str(analysis.get("reasoning") or ""), max_len=150)
             logger.info("\n  Reasoning: %s...", reasoning)
             if analysis.get('attack_scenario'):
-                scenario = analysis.get("attack_scenario")[:150]
+                scenario = _sft(str(analysis.get("attack_scenario")), max_len=150)
                 logger.info(
                     "  Attack Scenario: %s...", scenario,
                 )

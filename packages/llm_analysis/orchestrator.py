@@ -1104,9 +1104,12 @@ def orchestrate(
             # this list. `probe_result` itself may be unbound when
             # every model raised RuntimeError (the strict-mode
             # path), so refer to `_failed_probe_models` instead.
-            _fail_summary = "; ".join(
+            # Probe error strings can quote provider/model-authored
+            # bytes — escape + bound before the stderr banners below.
+            from core.security.log_sanitisation import sanitise_for_terminal
+            _fail_summary = sanitise_for_terminal("; ".join(
                 f"{_m}={_e}" for _m, _e in _failed_probe_models
-            )
+            ), max_len=512)
             if not accept_weakened_defenses:
                 print(f"\n  ✗ Envelope probe failed for {model_label}: {_fail_summary}", file=sys.stderr)
                 print("  The model cannot honour the defence envelope — aborting.", file=sys.stderr)

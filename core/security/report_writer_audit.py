@@ -171,7 +171,11 @@ _REPORT_WRITER_FILES = (
     # inline _generate_report/_render_finding_lines) — same artifact,
     # same finding-derived interpolations, must stay under audit.
     "packages/exploitability_validation/orchestrator.py",
+    "packages/llm_analysis/agent.py",
+    "packages/llm_analysis/dispatch.py",
+    "packages/llm_analysis/orchestrator.py",
     "packages/llm_analysis/patch_gate.py",
+    "packages/llm_analysis/tasks.py",
     "libexec/raptor-audit",
     "libexec/raptor-review",
     "libexec/raptor-annotate",
@@ -246,6 +250,36 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
             "_format_summary — a registered writer that routes every "
             "free-text field through _line — so the string is "
             "sanitised at construction"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/llm_analysis/orchestrator.py",
+        func_name="orchestrate",
+        kind="unsanitised_llm_value",
+        detail="n_corr",
+        audit_note=(
+            "integer count from the internally-built correlation "
+            "summary (total_correlated), not LLM text"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/llm_analysis/orchestrator.py",
+        func_name="orchestrate",
+        kind="unsanitised_llm_value",
+        detail="n_agreed",
+        audit_note=(
+            "integer count from the internally-built correlation "
+            "summary (agreed), not LLM text"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/llm_analysis/orchestrator.py",
+        func_name="orchestrate",
+        kind="unsanitised_llm_value",
+        detail="n_disputed",
+        audit_note=(
+            "integer count from the internally-built correlation "
+            "summary (disputed), not LLM text"
         ),
     ),
     AllowlistEntry(
