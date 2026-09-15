@@ -691,6 +691,12 @@ def _reaper_children() -> list:
 
 _PR_SET_PDEATHSIG = 1
 _libc = None
+# Cached resolution failure: _get_libc's consumers run POST-FORK
+# (set_pdeathsig's preexec, _reaper_split), where a re-probe via
+# find_library("c") — which can shell out to /sbin/ldconfig — is the
+# banned fork-storm pattern. A failed parent-side resolve must
+# therefore stick, never retry in a child.
+_LIBC_UNAVAILABLE = object()
 
 # ── OOM child scoring ───────────────────────────────────────────────
 #
@@ -738,12 +744,48 @@ def raise_oom_score_adj() -> None:
         os.close(fd)
 
 
-def _get_libc():
+def _get_libc() -> ctypes.CDLL | None:
+    """Resolve libc once, caching failure as well as success.
+
+    Resolution must happen PARENT-SIDE (the ``set_pdeathsig`` factory
+    primes it): the consumers run in forked children, where
+    ``find_library("c")``'s possible ldconfig shell-out is the banned
+    fork-storm pattern. Post-fork calls are pure cache reads.
+
+    ``find_library("c")`` legitimately returns None on hosts without
+    ldconfig (musl-shaped); ``dlopen(NULL)`` then exposes the
+    already-loaded libc through the process's own namespace — the
+    same fallback the probe lanes use. Only when THAT also fails (or
+    lacks ``prctl``) is failure cached, and loudly: a silent None
+    would disable pdeathsig AND the reaper/subreaper split for every
+    subsequent spawn.
+    """
     global _libc
+    if _libc is _LIBC_UNAVAILABLE:
+        return None
     if _libc is None:
+        handle: ctypes.CDLL | None = None
         name = ctypes.util.find_library("c")
         if name:
-            _libc = ctypes.CDLL(name, use_errno=True)
+            try:
+                handle = ctypes.CDLL(name, use_errno=True)
+            except OSError:
+                handle = None
+        if handle is None:
+            try:
+                handle = ctypes.CDLL(None, use_errno=True)
+                handle.prctl  # noqa: B018 — dlsym check, AttributeError if absent
+            except (OSError, AttributeError):
+                handle = None
+        if handle is None:
+            _libc = _LIBC_UNAVAILABLE
+            logger.warning(
+                "libc unavailable (find_library and dlopen(NULL) both "
+                "failed): child pdeathsig and the reaper/subreaper "
+                "split are disabled for every spawn in this process"
+            )
+            return None
+        _libc = handle
     return _libc
 
 
@@ -763,6 +805,13 @@ def set_pdeathsig(sig=signal.SIGKILL):
     """
     if sys.platform != "linux":
         return lambda: None
+
+    # Prime the libc cache HERE, in the parent: _apply (and
+    # _reaper_split, whose preexec chain is built through this
+    # factory) runs post-fork, where a first-time find_library
+    # resolution would be the banned fork-storm pattern. After this,
+    # every post-fork _get_libc is a cache read.
+    _get_libc()
 
     def _apply() -> None:
         libc = _get_libc()

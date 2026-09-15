@@ -25,7 +25,7 @@ pytestmark = pytest.mark.skipif(
 class TestChildDispatchGuarded:
 
     def test_child_exception_reports_unavailable(self, monkeypatch):
-        def _boom():
+        def _boom(libc):
             raise TypeError("simulated ctypes Structure failure")
 
         monkeypatch.setattr(landlock, "_run_selftest_in_child", _boom)
@@ -33,7 +33,7 @@ class TestChildDispatchGuarded:
         assert landlock._landlock_functional_self_test() is False
 
     def test_child_exception_leaves_no_zombie(self, monkeypatch):
-        def _boom():
+        def _boom(libc):
             raise ValueError("simulated child crash")
 
         monkeypatch.setattr(landlock, "_run_selftest_in_child", _boom)

@@ -43,6 +43,8 @@ restores AUDIT/OBSERVE signal that was missing. The Linux
 from __future__ import annotations
 
 import contextlib
+import ctypes
+import ctypes.util
 import json
 import logging
 import os
@@ -110,7 +112,7 @@ _PR_SET_PTRACER = 0x59616d61
 _PR_SET_PTRACER_ANY = 0xFFFFFFFFFFFFFFFF  # cast of (-1) to unsigned long
 
 
-def _set_ptracer_any_in_child() -> None:
+def _set_ptracer_any_in_child(libc: ctypes.CDLL | None) -> None:
     """``prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY)`` so a sibling
     tracer can attach under Yama scope 1.
 
@@ -121,17 +123,20 @@ def _set_ptracer_any_in_child() -> None:
     explicitly opt in to being traced by ``any`` process. Same
     approach the mount-ns spawn uses inside its preexec.
 
-    Failures are best-effort silent: on hosts without Yama (older
+    ``libc`` is the CDLL handle resolved PRE-FORK by the parent
+    (``run_landlock_audit``): this function runs in the forked target child,
+    where ``ctypes.util.find_library("c")`` — which can shell out to
+    /sbin/ldconfig — would be the banned fork-storm pattern (same
+    parent-side capture as ``_spawn._parent_libc``).
+
+    Failures are best-effort silent: ``libc is None`` (load failure)
+    keeps the historic degrade; on hosts without Yama (older
     kernels, some containers) prctl returns EINVAL and ptrace
     works without this opt-in. If Yama IS the gate, the tracer's
     SEIZE will fail and the parent's diagnostic fires there.
     """
-    import ctypes
-    import ctypes.util
-    _libc_name = ctypes.util.find_library("c")
-    if not _libc_name:
+    if libc is None:
         return
-    libc = ctypes.CDLL(_libc_name, use_errno=True)
     libc.prctl.argtypes = [
         ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
         ctypes.c_ulong, ctypes.c_ulong,
@@ -512,6 +517,20 @@ def run_landlock_audit(
         from core.config import RaptorConfig
         env = RaptorConfig.get_safe_env()
 
+    # libc handle resolved PRE-FORK for the target child's
+    # PR_SET_PTRACER opt-in: find_library("c") can shell out to
+    # /sbin/ldconfig, and spawning a subprocess from the forked child
+    # of this multi-threaded parent is the banned fork-storm pattern
+    # (same parent-side capture as _spawn._parent_libc). None → the
+    # child degrades best-effort silent, exactly as the load-failure
+    # branch always did.
+    _parent_libc: ctypes.CDLL | None = None
+    with contextlib.suppress(OSError, AttributeError):
+        _parent_libc = ctypes.CDLL(
+            ctypes.util.find_library("c") or "libc.so.6",
+            use_errno=True,
+        )
+
     target_pid = -1
     tracer_pid = -1
     def _cleanup_fds() -> None:
@@ -599,7 +618,7 @@ def run_landlock_audit(
                 # rlimits + ptracer-any
                 if rlimit_preexec is not None:
                     rlimit_preexec()
-                _set_ptracer_any_in_child()
+                _set_ptracer_any_in_child(_parent_libc)
 
                 # Block until parent says tracer is attached.
                 byte = os.read(p_go_r, 1)

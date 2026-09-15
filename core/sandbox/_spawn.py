@@ -2189,6 +2189,20 @@ def run_sandboxed(
                 use_errno=True,
             )
 
+        # Persona lane: step 8.5's set_uts lazily resolves
+        # fingerprint's own libc binding on first use, which without
+        # this prime happens inside the forked child of the FIRST
+        # persona spawn — the same banned pattern. Resolve (or cache
+        # the failure) in the parent now; the child's call is then a
+        # lock-free cache read, or an immediate OSError it already
+        # degrades on. Also imports the module pre-fork, so the
+        # child's `from .fingerprint import set_uts` is a
+        # sys.modules hit.
+        if persona is not None:
+            with contextlib.suppress(ImportError, OSError):
+                from .fingerprint import _get_libc as _fp_get_libc
+                _fp_get_libc()
+
         # posix_spawn() can't do the bespoke namespace setup, so we
         # need raw fork; the multi-threaded-fork DeprecationWarning is
         # filtered once at module level (fork-safety contract in the

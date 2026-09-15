@@ -137,6 +137,19 @@ def _landlock_functional_self_test() -> bool:
     """
     import os
     import warnings
+
+    # libc resolved HERE, pre-fork: find_library("c") can shell out
+    # to /sbin/ldconfig, and spawning a subprocess from the forked
+    # self-test child of this (possibly multi-threaded) parent is the
+    # banned fork-storm pattern — a wedged child would hang the
+    # parent's os.read on the verdict pipe indefinitely. None → the
+    # child reports 0 (broken), the same fail-safe as the historic
+    # load-failure branch.
+    try:
+        libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    except Exception:  # noqa: BLE001 — any libc-load failure means the test cannot run; fail closed to unavailable
+        libc = None
+
     r, w = os.pipe()
     try:
         # Suppress Python 3.12+ DeprecationWarning about multi-threaded
@@ -174,7 +187,7 @@ def _landlock_functional_self_test() -> bool:
         # and correctly reports Landlock unavailable (fail-safe).
         try:
             os.close(r)
-            result_code = _run_selftest_in_child()
+            result_code = _run_selftest_in_child(libc)
             os.write(w, bytes([result_code]))
             os.close(w)
         except BaseException:  # noqa: BLE001 — post-fork child must never unwind
@@ -203,7 +216,7 @@ def _landlock_functional_self_test() -> bool:
             pass
 
 
-def _run_selftest_in_child() -> int:
+def _run_selftest_in_child(libc: ctypes.CDLL | None) -> int:
     """Run the Landlock enforcement test in the forked child.
 
     Returns 1 on confirmed enforcement, 0 on failure/breakage.
@@ -246,9 +259,10 @@ def _run_selftest_in_child() -> int:
     except OSError:
         pass
 
-    try:
-        libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
-    except Exception:  # noqa: BLE001 — self-test child: any libc-load failure means the test cannot run; report broken (0)
+    # libc was resolved PRE-FORK by _landlock_functional_self_test —
+    # this function runs in the forked child, where find_library's
+    # possible ldconfig shell-out is the banned fork-storm pattern.
+    if libc is None:
         _cleanup(test_path)
         return 0
 

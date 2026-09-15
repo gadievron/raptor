@@ -669,6 +669,7 @@ def _trim_proc_version() -> str:
 # included in the unshare flags.
 
 _libc: ctypes.CDLL | None = None
+_libc_error: str | None = None
 _libc_lock = threading.Lock()
 
 
@@ -681,15 +682,32 @@ def _get_libc() -> ctypes.CDLL:
     referenced a now-orphaned handle. Practical impact small
     (CDLL is just a thin handle wrapper) but the race is real.
     Lock ensures exactly-once construction.
+
+    The consumer (``set_uts``) runs in _spawn's FORKED child, where
+    ``find_library("c")`` — which can shell out to /sbin/ldconfig —
+    is the banned fork-storm pattern, and taking ``_libc_lock``
+    risks a fork-copied-locked wedge. _spawn primes this cache in
+    the PARENT pre-fork; the failure is cached too (never
+    re-resolved) so the child path is always a lock-free cache read
+    or an immediate OSError, which set_uts's caller already handles
+    as a silent degrade.
     """
-    global _libc
+    global _libc, _libc_error
     if _libc is not None:
         return _libc
+    if _libc_error is not None:
+        raise OSError(_libc_error)
     with _libc_lock:
+        if _libc is None and _libc_error is None:
+            try:
+                _libc = ctypes.CDLL(
+                    _ctypes_util.find_library("c"), use_errno=True,
+                )
+            except OSError as e:
+                _libc_error = f"libc unavailable: {e}"
+                raise
         if _libc is None:
-            _libc = ctypes.CDLL(
-                _ctypes_util.find_library("c"), use_errno=True,
-            )
+            raise OSError(_libc_error or "libc unavailable")
         return _libc
 
 
