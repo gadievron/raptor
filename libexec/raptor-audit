@@ -304,6 +304,13 @@ def cmd_record(args: argparse.Namespace) -> int:
     audit_log = load_audit_log(out_dir)
     func_key = f"{args.file}:{args.function}"
     related_to = args.related_to
+    # Display spellings: file/function names come from the scanned
+    # target's checklist (hostile-repo bytes) — every gate error and
+    # status line below escapes them, matching cmd_sweep's discipline.
+    _k = sanitise_for_terminal(func_key)
+    _f = sanitise_for_terminal(str(args.file), max_len=200)
+    _fn = sanitise_for_terminal(str(args.function), max_len=128)
+    _rel = sanitise_for_terminal(str(related_to), max_len=200) if related_to else ""
 
     has_own_context = any(
         e.get("action") == "context" and e.get("key") == func_key
@@ -319,8 +326,8 @@ def cmd_record(args: argparse.Namespace) -> int:
         rel_file = related_to.split(":")[0] if ":" in related_to else ""
         if rel_file != args.file:
             print(
-                f"error [G5 READ-FIRST]: --related-to {related_to} is in a "
-                f"different file than {func_key}.\n"
+                f"error [G5 READ-FIRST]: --related-to {_rel} is in a "
+                f"different file than {_k}.\n"
                 f"  --related-to is for sibling functions in the same file.",
                 file=sys.stderr,
             )
@@ -331,15 +338,15 @@ def cmd_record(args: argparse.Namespace) -> int:
         if related_to:
             print(
                 f"error [G5 READ-FIRST]: no context call recorded for "
-                f"primary function {related_to}.\n"
+                f"primary function {_rel}.\n"
                 f"  The --related-to function must have a context breadcrumb.",
                 file=sys.stderr,
             )
         else:
             print(
-                f"error [G5 READ-FIRST]: no context call recorded for {func_key}.\n"
+                f"error [G5 READ-FIRST]: no context call recorded for {_k}.\n"
                 f"  Run: libexec/raptor-audit context --target <path> "
-                f"--file {args.file} --function {args.function} --out {out_dir}",
+                f"--file {_f} --function {_fn} --out {out_dir}",
                 file=sys.stderr,
             )
         return 1
@@ -448,7 +455,7 @@ def cmd_record(args: argparse.Namespace) -> int:
         if not has_receipt and matching:
             print(
                 "error [G2 TOOL-GROUNDED]: the confirmed "
-                f"'{base_tool}' receipt(s) for {func_key} are "
+                f"'{base_tool}' receipt(s) for {_k} are "
                 "detection-grade (e.g. bare reachability) — they "
                 "corroborate but cannot ground --status finding "
                 "alone. Record as suspicious, or earn a "
@@ -460,7 +467,7 @@ def cmd_record(args: argparse.Namespace) -> int:
         if not has_receipt:
             print(
                 "error [G2 TOOL-GROUNDED]: no executed confirmed "
-                f"'{base_tool}' sweep receipt found for {func_key}.\n"
+                f"'{base_tool}' sweep receipt found for {_k}.\n"
                 "  Run the sweep first (raptor-audit sweep --tool "
                 f"{base_tool} ...) — operator-attested outcomes "
                 "(manual --outcome logging) do not satisfy G2.",
@@ -488,11 +495,11 @@ def cmd_record(args: argparse.Namespace) -> int:
     if last_record_idx is not None:  # noqa: SIM102
         if last_sweep_idx is None or last_sweep_idx < last_record_idx:
             print(
-                f"error [G3 NO-SELF-CRITIQUE]: {func_key} was already recorded "
+                f"error [G3 NO-SELF-CRITIQUE]: {_k} was already recorded "
                 f"(entry #{last_record_idx}). Re-recording requires a sweep "
                 f"(tool-grounded check) since the last record.\n"
                 f"  Run a tool first, then: libexec/raptor-audit sweep "
-                f"--out {out_dir} --file {args.file} --function {args.function} "
+                f"--out {out_dir} --file {_f} --function {_fn} "
                 f"--tool <tool> --outcome <confirmed|refuted>",
                 file=sys.stderr,
             )
@@ -601,7 +608,7 @@ def cmd_record(args: argparse.Namespace) -> int:
 
             if binary_absent:
                 print(
-                    f"error [G7 REACHABILITY]: {func_key} has zero static "
+                    f"error [G7 REACHABILITY]: {_k} has zero static "
                     f"callers AND binary oracle says absent (full DWARF). "
                     f"This function was removed by the compiler.\n"
                     f"  Use --status dormant (real bug, unreachable code) "
@@ -611,7 +618,7 @@ def cmd_record(args: argparse.Namespace) -> int:
                 return 1
             elif not args.reach_via:
                 print(
-                    f"error [G7 REACHABILITY]: {func_key} has zero static "
+                    f"error [G7 REACHABILITY]: {_k} has zero static "
                     f"callers. This may be dead code.\n"
                     f"  Provide --reach-via explaining how this function "
                     f"is reachable (e.g. 'callback registered at foo.c:42', "
@@ -671,7 +678,7 @@ def cmd_record(args: argparse.Namespace) -> int:
     try:
         append_entry(out_dir, entry)
     except Exception as exc:  # noqa: BLE001
-        print(f"error: journal append failed: {exc}", file=sys.stderr)
+        print(f"error: journal append failed: {sanitise_for_terminal(str(exc))}", file=sys.stderr)
         return 1
 
     # Audit-log event mirrors the journal entry with the gate-flavour
@@ -718,7 +725,7 @@ def cmd_record(args: argparse.Namespace) -> int:
         )
 
     status_display = args.status.title()
-    print(f"recorded: {args.file}:{args.function} → {status_display}")
+    print(f"recorded: {_k} → {status_display}")
     return 0
 
 
@@ -1244,7 +1251,7 @@ def cmd_stale(args: argparse.Namespace) -> int:
 
         full_path = target_path / ann.file
         if not full_path.exists():
-            print(f"  deleted: {ann.file}:{ann.function}")
+            print(f"  deleted: {sanitise_for_terminal(f'{ann.file}:{ann.function}')}")
             stale_count += 1
             continue
 
@@ -1261,7 +1268,9 @@ def cmd_stale(args: argparse.Namespace) -> int:
         if line_start and line_end:
             new_hash = compute_function_hash(full_path, line_start, line_end)
             if new_hash and new_hash != old_hash:
-                print(f"  stale: {ann.file}:{ann.function} (hash {old_hash} → {new_hash})")
+                print(f"  stale: {sanitise_for_terminal(f'{ann.file}:{ann.function}')} "
+                      f"(hash {sanitise_for_terminal(str(old_hash), max_len=32)} → "
+                      f"{sanitise_for_terminal(str(new_hash), max_len=32)})")
                 stale_count += 1
 
     print(f"\n{stale_count} stale annotation(s)")
@@ -1477,7 +1486,8 @@ def cmd_critique(args: argparse.Namespace) -> int:
     if low_sweep:
         print(f"Low tool coverage ({len(low_sweep)} functions with <2 sweeps):")
         for key, count, status in low_sweep[:15]:
-            print(f"  {key} — {count} sweep(s), status={status}")
+            print(f"  {sanitise_for_terminal(key)} — {count} sweep(s), "
+                  f"status={sanitise_for_terminal(str(status), max_len=32)}")
         if len(low_sweep) > 15:
             print(f"  ... and {len(low_sweep) - 15} more")
         print()
@@ -1485,15 +1495,20 @@ def cmd_critique(args: argparse.Namespace) -> int:
     if mode2_gaps:
         print(f"Mode 2 gaps ({len(mode2_gaps)} findings without codebase-wide rules):")
         for key, hyp in mode2_gaps[:10]:
-            hyp_short = (hyp[:60] + "...") if hyp and len(hyp) > 60 else hyp
-            print(f"  {key} — {hyp_short or '(no hypothesis recorded)'}")
+            # hypothesis is LLM-authored free text; key is target-
+            # derived file:function — both round-trip through the
+            # audit-log dict → tuple-in-list container, so escape at
+            # the sink.
+            hyp_short = sanitise_for_terminal(hyp, max_len=60) if hyp else None
+            print(f"  {sanitise_for_terminal(key)} — "
+                  f"{hyp_short or '(no hypothesis recorded)'}")
         print("  → Generate checker rules to sweep the whole codebase")
         print()
 
     if suspicious_retestable:
         print(f"Suspicious functions with untried tools ({len(suspicious_retestable)}):")
         for key, untried in suspicious_retestable[:10]:
-            print(f"  {key} — try: {', '.join(untried)}")
+            print(f"  {sanitise_for_terminal(key)} — try: {', '.join(untried)}")
         print()
 
     if not low_sweep and not mode2_gaps and not suspicious_retestable:
