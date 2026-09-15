@@ -7,6 +7,7 @@ Provides save/load/query functionality for evidence objects.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from .schema.common import EvidenceSource
@@ -16,6 +17,8 @@ if TYPE_CHECKING:
     from .schema import AnyEvidence, AnyEvent, AnyObservation
     from collections.abc import Callable, Iterator, Sequence
     from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 class EvidenceStore:
@@ -36,8 +39,27 @@ class EvidenceStore:
         self._by_id: dict[str, AnyEvidence] = {e.evidence_id: e for e in self._evidence}
 
     def add(self, evidence: AnyEvidence) -> None:
-        """Add evidence to the store (replaces existing with same ID)."""
+        """Add evidence to the store (replaces existing with same ID).
+
+        Ids are deterministic per source row (parsers key them with
+        the row timestamp + lifecycle action), so a same-id add is a
+        re-ingest and replacement is the idempotent outcome. A
+        same-id add whose CONTENT differs is a keying collision —
+        replacement would silently destroy a timeline event, so it is
+        logged loudly before the (documented) replace happens.
+        """
         if evidence.evidence_id in self._by_id:
+            prior = self._by_id[evidence.evidence_id]
+            if prior != evidence:
+                logger.warning(
+                    "evidence-id collision: %r replaces DIFFERENT "
+                    "content under the same id — a timeline event is "
+                    "being destroyed; the producer's id is "
+                    "under-keyed (prior what=%r, new what=%r)",
+                    evidence.evidence_id,
+                    getattr(prior, "what", "?"),
+                    getattr(evidence, "what", "?"),
+                )
             self._evidence = [e for e in self._evidence if e.evidence_id != evidence.evidence_id]
         self._evidence.append(evidence)
         self._by_id[evidence.evidence_id] = evidence

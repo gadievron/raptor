@@ -313,3 +313,48 @@ class TestEvidenceStoreMerge:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestCollisionLoudness:
+    """A same-id add with DIFFERENT content is a keying collision —
+    replacement silently destroys a timeline event, so it must be
+    logged; identical re-ingest stays silent (idempotent)."""
+
+    def _event(self, what: str):
+        from datetime import datetime, timezone
+
+        from src.schema.common import (
+            EvidenceSource,
+            GitHubActor,
+            GitHubRepository,
+            VerificationInfo,
+        )
+        from src.schema.events import Event
+        return Event(
+            evidence_id="EVD-COLLIDE",
+            when=datetime(2024, 1, 15, 10, 30, tzinfo=timezone.utc),
+            who=GitHubActor(login="someone"),
+            what=what,
+            repository=GitHubRepository(owner="o", name="r",
+                                        full_name="o/r"),
+            verification=VerificationInfo(
+                source=EvidenceSource.GHARCHIVE,
+                bigquery_table="githubarchive.day.20240115"),
+        )
+
+    def test_differing_collision_logs_warning(self, caplog):
+        from src.store import EvidenceStore
+        store = EvidenceStore()
+        store.add(self._event("first event"))
+        with caplog.at_level("WARNING", logger="src.store"):
+            store.add(self._event("second, different event"))
+        assert any("collision" in r.message for r in caplog.records)
+
+    def test_identical_reingest_is_silent(self, caplog):
+        from src.store import EvidenceStore
+        store = EvidenceStore()
+        store.add(self._event("same event"))
+        with caplog.at_level("WARNING", logger="src.store"):
+            store.add(self._event("same event"))
+        assert not caplog.records
+        assert len(store) == 1
