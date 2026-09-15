@@ -204,6 +204,7 @@ from .record import (
 from .scorecard_events import (
     buffer_confirmed_findings as _sc_buffer_confirmed_findings,
     flush_scorecard_events as _sc_flush_events,
+    is_reconcilable as _sc_is_reconcilable,
     outcome_key as _sc_outcome_key,
     record_adversarial_outcome as _sc_record_adversarial,
     record_mechanical_refutation as _sc_record_refutation,
@@ -1276,6 +1277,20 @@ class OrchestratorResult:
     # write, nothing on the per-function hot path. Plain
     # ``list.append`` from parallel workers is atomic under the GIL.
     scorecard_events: list[dict[str, Any]] = field(default_factory=list)
+    # Incremental scorecard-flush bookkeeping (see
+    # ``_flush_scorecard_events_now``): monotonic throttle mark,
+    # the cross-flush dedup set, and the single-flight guard that
+    # keeps concurrent flushes off that shared set while the sidecar
+    # write happens outside ``_lock``.
+    _scorecard_flushed_at: float = field(default=0.0, repr=False)
+    _scorecard_flush_seen: set[tuple[str, str, str, str, str]] = field(
+        default_factory=set,
+        repr=False,
+    )
+    _scorecard_flush_lock: _threading.Lock = field(
+        default_factory=_threading.Lock,
+        repr=False,
+    )
     _lock: _threading.Lock = field(
         default_factory=_threading.Lock,
         repr=False,
@@ -9642,24 +9657,11 @@ def _run_audit_body(
             models=config.models,
             receipt_check=_promotion_grade_receipt,
         )
-        _store, _sc_disabled = _sc_resolve_store(
-            config.llm_client or config.llm_budget_client,
-        )
-        if not _sc_disabled:
-            _sc_flush_events(
-                result.scorecard_events,
-                # Same capped key builder the events buffered with —
-                # a raw f-string here would stop matching any
-                # function whose file:function exceeds the key cap,
-                # silently breaking reconciliation in BOTH grade
-                # directions.
-                finding_keys={
-                    _sc_outcome_key(o)
-                    for o in result.outcomes
-                    if o.status == "finding"
-                },
-                scorecard=_store,
-            )
+        # Final flush: everything the incremental budget-poll flushes
+        # have not shipped yet — the reconcilable tool_evidence grades
+        # held for end-of-run finding-set reconciliation, plus any
+        # events buffered since the last incremental slot.
+        _flush_scorecard_events_now(config, result, final=True)
     except Exception:
         logger.debug("audit scorecard flush failed", exc_info=True)
 
@@ -12812,6 +12814,131 @@ def _persist_spend_floor(
         logger.debug("spend floor persist failed", exc_info=True)
 
 
+_SCORECARD_FLUSH_INTERVAL_S = 60.0
+
+
+def _flush_scorecard_events_now(
+    config: OrchestratorConfig,
+    result: OrchestratorResult,
+    *,
+    final: bool,
+) -> int:
+    """Ship pending scorecard events to the sidecar. Never raises.
+
+    ``final=False`` (incremental) ships only events the flush never
+    reconciles against the finding set (consistency-axis events and
+    refuter grades — see ``scorecard_events.is_reconcilable``);
+    reconcilable ``tool_evidence`` grades are held for the final
+    flush, because reconciliation (dropping a buffered refutation
+    when the function ends the run as a finding, and vice versa) is
+    only decidable at end of run. ``final=True`` ships everything
+    still pending, with the finding-set reconciliation.
+
+    Cross-flush duplicate defence is two-layered: shipped (or
+    deliberately dropped) event dicts are marked ``_flushed`` so no
+    later flush re-selects them, and the run-scoped dedup set rides
+    into every flush so a later event for an already-written cell is
+    dropped even though the earlier dict is no longer in the batch.
+    A failed batch write rolls the marks back so the events stay
+    retryable. Returns the number of events written.
+    """
+    try:
+        # Single-flight: flushes select-and-mark under ``result._lock``
+        # but write the sidecar OUTSIDE it (the write takes a
+        # cross-process flock and must never stall the tally hot
+        # path); this guard keeps two concurrent flushes from racing
+        # the shared cross-flush dedup set around that unlocked
+        # write. An incremental flush racing another flush just skips
+        # its slot; the final flush must wait and ship the remainder.
+        guard = result._scorecard_flush_lock
+        if not guard.acquire(blocking=final):
+            return 0
+        try:
+            # Resolve the store BEFORE claiming any events: a disabled
+            # scorecard writes nothing, and returning between the mark
+            # and the write would strand ``_flushed`` claims with no
+            # rollback — harmless while ``scorecard_enabled`` is
+            # per-run-static, but the claim/rollback invariant should
+            # not depend on that staying true.
+            store, disabled = _sc_resolve_store(
+                config.llm_client or config.llm_budget_client,
+            )
+            if disabled:
+                return 0
+            seen = result._scorecard_flush_seen
+            with result._lock:
+                batch = [
+                    ev for ev in result.scorecard_events
+                    if isinstance(ev, dict)
+                    and not ev.get("_flushed")
+                    and (final or not _sc_is_reconcilable(ev))
+                ]
+                if not batch:
+                    return 0
+                for ev in batch:
+                    ev["_flushed"] = True
+            # Same capped key builder the events buffered with — a raw
+            # f-string here would stop matching any function whose
+            # file:function exceeds the key cap, silently breaking
+            # reconciliation in BOTH grade directions.
+            finding_keys = (
+                {
+                    _sc_outcome_key(o)
+                    for o in result.outcomes
+                    if o.status == "finding"
+                }
+                if final
+                else frozenset()
+            )
+            written = _sc_flush_events(
+                batch,
+                finding_keys=finding_keys,
+                scorecard=store,
+                seen=seen,
+            )
+            if not written:
+                # Nothing landed (write failure, or every entry was a
+                # dedup/validation drop): roll the claim back so the
+                # final flush re-adjudicates the batch.
+                with result._lock:
+                    for ev in batch:
+                        ev.pop("_flushed", None)
+            return written
+        finally:
+            guard.release()
+    except Exception:  # noqa: BLE001 — telemetry must never break the run
+        logger.debug("scorecard flush failed", exc_info=True)
+        return 0
+
+
+def _flush_scorecard_events_incremental(
+    config: OrchestratorConfig,
+    result: OrchestratorResult,
+    *,
+    force: bool = False,
+) -> None:
+    """Throttled incremental flush of settled scorecard events.
+
+    The single end-of-run flush lost the whole run's graded events
+    whenever a segment was hard-killed (SIGKILL, OOM) before the
+    post-artifact finalize seam. Riding the budget poll (the same
+    seam as ``_persist_spend_floor``) keeps the never-reconciled
+    majority of the buffer at most an interval stale on disk;
+    reconcilable grades still wait for the final flush so the
+    reconciliation contract is preserved exactly. Never raises.
+    """
+    try:
+        now = time.monotonic()
+        with result._lock:
+            last = result._scorecard_flushed_at
+            if not force and now - last < _SCORECARD_FLUSH_INTERVAL_S:
+                return
+            result._scorecard_flushed_at = now
+        _flush_scorecard_events_now(config, result, final=False)
+    except Exception:  # noqa: BLE001 — telemetry must never break the run
+        logger.debug("incremental scorecard flush failed", exc_info=True)
+
+
 def _environment_stop_booked(
     config: OrchestratorConfig,
     result: OrchestratorResult,
@@ -12857,12 +12984,17 @@ def _check_budget(
     # rails — this is what books a hard-killed segment's spend for
     # the next resume segment.
     _persist_spend_floor(config, result)
+    # Same seam, same rationale: keep the sidecar's settled
+    # (never-reconciled) scorecard events fresh so a hard-killed
+    # segment doesn't lose the whole run's graded telemetry.
+    _flush_scorecard_events_incremental(config, result)
     # SIGTERM rides the budget-exhaustion rails: every loop and
     # post-loop pass that polls this stops dispatching, and the study
     # consumer's state-aware drain sees "exhausted" and stops too.
     if is_sigterm_requested():
         result.terminated_by = "sigterm"
         _persist_spend_floor(config, result, force=True)
+        _flush_scorecard_events_incremental(config, result, force=True)
         return True
     # Environment guard conclusion rides the same rails: every loop
     # that polls the budget (executor, study consumer, deepen, error

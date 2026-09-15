@@ -748,7 +748,7 @@ class TestInlineSitePins:
         from core.audit import orchestrator as orch
 
         src = inspect.getsource(orch._run_audit_body)
-        flush_idx = src.index("_sc_flush_events")
+        flush_idx = src.index("_flush_scorecard_events_now")
         assert src.index("_persist_findings", 0, flush_idx) > 0
         assert src.index("_rejournal_final_statuses", 0, flush_idx) > 0
         assert src.index("write_graded_findings", 0, flush_idx) > 0
@@ -756,11 +756,13 @@ class TestInlineSitePins:
     def test_flush_respects_disabled_store(self) -> None:
         from core.audit import orchestrator as orch
 
-        src = inspect.getsource(orch._run_audit_body)
+        src = inspect.getsource(orch._flush_scorecard_events_now)
         idx = src.index("_sc_resolve_store")
-        segment = src[idx:idx + 900]
-        assert "if not _sc_disabled:" in segment
-        assert "_sc_flush_events" in segment
+        segment = src[idx:]
+        assert "if disabled:" in segment
+        assert segment.index("if disabled:") < segment.index(
+            "_sc_flush_events",
+        )
         # finding_keys must be built with the SAME capped key builder
         # the events buffered with — a raw f-string comprehension
         # breaks reconciliation for over-cap file:function keys.
@@ -867,3 +869,264 @@ class TestOrchestratedRunBinding:
         # … but the disabled client config suppresses the sidecar
         # write entirely — no default-path fallback.
         assert not Path(os.environ["RAPTOR_SCORECARD_PATH"]).exists()
+
+
+class TestCrossFlushDedup:
+    """The per-call dedup cannot see across calls; the caller-owned
+    ``seen`` set must."""
+
+    def test_seen_set_blocks_rewrite_of_shipped_cell(self) -> None:
+        seen: set = set()
+        store = _CapturingStore()
+        events: list[dict] = []
+        record_self_consistency_violation(
+            events, _outcome(status="suspicious"), detail="flip",
+        )
+        assert flush_scorecard_events(events, scorecard=store, seen=seen) == 1
+        # A later event for the SAME cell/function/direction buffers
+        # after the first flush shipped — it must not land twice.
+        later: list[dict] = []
+        record_self_consistency_violation(
+            later, _outcome(status="suspicious"), detail="another flip",
+        )
+        assert flush_scorecard_events(later, scorecard=store, seen=seen) == 0
+        assert len(store.batches) == 1
+
+    def test_failed_write_does_not_poison_the_seen_set(self) -> None:
+        seen: set = set()
+        events: list[dict] = []
+        record_self_consistency_violation(
+            events, _outcome(status="suspicious"), detail="flip",
+        )
+        assert flush_scorecard_events(
+            events, scorecard=_RaisingStore(), seen=seen,
+        ) == 0
+        # The write failed, so the cell stays retryable.
+        assert seen == set()
+        store = _CapturingStore()
+        assert flush_scorecard_events(events, scorecard=store, seen=seen) == 1
+
+
+class TestIsReconcilable:
+    def test_only_non_refuter_tool_evidence_is_reconcilable(self) -> None:
+        from core.audit.scorecard_events import is_reconcilable
+
+        events: list[dict] = []
+        record_mechanical_refutation(events, _outcome(), gate="g", reason="r")
+        record_self_consistency_violation(events, _outcome(), detail="d")
+        buffer_event(
+            events, model="m", cwe="", event_type="cross_family_consistency",
+            grade="incorrect", key="src/a.c:parse",
+        )
+        buffer_event(
+            events, model="m", cwe="", event_type="tool_evidence",
+            grade="incorrect", key="src/a.c:parse", grades_refuter=True,
+        )
+        assert [is_reconcilable(ev) for ev in events] == [
+            True, False, False, False,
+        ]
+
+
+class TestIncrementalFlushSeam:
+    """The budget-poll incremental flush (orchestrator seam): settled
+    event kinds ship mid-run so a hard-killed segment loses at most an
+    interval's worth; reconcilable ``tool_evidence`` grades hold for
+    the final flush's finding-set reconciliation; nothing ever lands
+    in the sidecar twice."""
+
+    @staticmethod
+    def _rig(tmp_path):
+        from core.audit.orchestrator import (
+            OrchestratorConfig,
+            OrchestratorResult,
+        )
+
+        store = _CapturingStore()
+        config = OrchestratorConfig(
+            target_path=tmp_path, out_dir=tmp_path,
+            llm_client=SimpleNamespace(scorecard=store),
+        )
+        return config, OrchestratorResult(), store
+
+    @staticmethod
+    def _written(store) -> list[tuple]:
+        return [
+            (e["model"], e["event_type"], e["outcome"])
+            for batch in store.batches for e in batch
+        ]
+
+    def test_incremental_ships_only_never_reconciled_kinds(self, tmp_path):
+        from core.audit.orchestrator import (
+            _flush_scorecard_events_incremental,
+        )
+
+        config, result, store = self._rig(tmp_path)
+        record_self_consistency_violation(
+            result.scorecard_events, _outcome(model="m1"), detail="flip",
+        )
+        buffer_event(
+            result.scorecard_events, model="m2", cwe="",
+            event_type="cross_family_consistency", grade="incorrect",
+            key="src/a.c:parse",
+        )
+        buffer_event(
+            result.scorecard_events, model="m3", cwe="",
+            event_type="tool_evidence", grade="incorrect",
+            key="src/a.c:parse", grades_refuter=True,
+        )
+        # Reconcilable: must be HELD for the final flush.
+        record_mechanical_refutation(
+            result.scorecard_events, _outcome(model="m4"),
+            gate="g", reason="r",
+        )
+        _flush_scorecard_events_incremental(config, result, force=True)
+        written = self._written(store)
+        assert ("m1", "self_consistency", "incorrect") in written
+        assert ("m2", "cross_family_consistency", "incorrect") in written
+        assert ("m3", "tool_evidence", "incorrect") in written
+        assert not any(m == "m4" for m, _, _ in written)
+
+    def test_long_loop_flushes_land_every_event_exactly_once(self, tmp_path):
+        from core.audit.orchestrator import (
+            ReviewOutcome,
+            _flush_scorecard_events_incremental,
+            _flush_scorecard_events_now,
+        )
+
+        config, result, store = self._rig(tmp_path)
+        # Loop tick 1 buffers a consistency event, poll flushes it.
+        record_self_consistency_violation(
+            result.scorecard_events, _outcome(model="m1"), detail="flip",
+        )
+        _flush_scorecard_events_incremental(config, result, force=True)
+        # Loop tick 2 buffers another consistency event AND a
+        # reconcilable confirmation; poll flushes again.
+        record_self_consistency_violation(
+            result.scorecard_events,
+            _outcome(model="m2", function="other"), detail="flip",
+        )
+        record_adversarial_outcome(
+            result.scorecard_events, _outcome(model="m1"),
+            producer_model="model-a", refuter_model="model-b",
+            verdict="refuted", overturned_by="smt:check",
+        )
+        _flush_scorecard_events_incremental(config, result, force=True)
+        # End of run: the function ends as a finding, so the held
+        # producer confirmation ships at the final flush.
+        result.outcomes.append(ReviewOutcome(
+            file="src/a.c", function="parse", status="finding", body="b",
+        ))
+        _flush_scorecard_events_now(config, result, final=True)
+        written = self._written(store)
+        assert len(written) == len(set(written)) == 4
+        assert ("model-a", "tool_evidence", "correct") in written
+
+    def test_reconcilable_events_still_reconciled_at_final(self, tmp_path):
+        from core.audit.orchestrator import (
+            ReviewOutcome,
+            _flush_scorecard_events_incremental,
+            _flush_scorecard_events_now,
+        )
+
+        config, result, store = self._rig(tmp_path)
+        # Mid-run mechanical refutation of a function that a later
+        # pass RESCUES: the final reconciliation must drop the grade —
+        # which is exactly why it may not ship incrementally.
+        record_mechanical_refutation(
+            result.scorecard_events, _outcome(model="m1"),
+            gate="g", reason="r",
+        )
+        _flush_scorecard_events_incremental(config, result, force=True)
+        assert self._written(store) == []
+        result.outcomes.append(ReviewOutcome(
+            file="src/a.c", function="parse", status="finding", body="b",
+        ))
+        _flush_scorecard_events_now(config, result, final=True)
+        assert self._written(store) == []
+
+    def test_throttle_interval_and_force_flag(self, tmp_path):
+        from core.audit.orchestrator import (
+            _flush_scorecard_events_incremental,
+        )
+
+        config, result, store = self._rig(tmp_path)
+        record_self_consistency_violation(
+            result.scorecard_events, _outcome(model="m1"), detail="flip",
+        )
+        # First poll of the run: interval elapsed vs the epoch mark.
+        _flush_scorecard_events_incremental(config, result)
+        assert len(self._written(store)) == 1
+        record_self_consistency_violation(
+            result.scorecard_events,
+            _outcome(model="m2", function="other"), detail="flip",
+        )
+        # Immediate re-poll: throttled.
+        _flush_scorecard_events_incremental(config, result)
+        assert len(self._written(store)) == 1
+        # Forced (SIGTERM arm): bypasses the interval.
+        _flush_scorecard_events_incremental(config, result, force=True)
+        assert len(self._written(store)) == 2
+
+    def test_final_flush_never_reships_incremental_events(self, tmp_path):
+        from core.audit.orchestrator import (
+            _flush_scorecard_events_incremental,
+            _flush_scorecard_events_now,
+        )
+
+        config, result, store = self._rig(tmp_path)
+        record_self_consistency_violation(
+            result.scorecard_events, _outcome(model="m1"), detail="flip",
+        )
+        _flush_scorecard_events_incremental(config, result, force=True)
+        # A duplicate observation for the same cell buffers afterwards
+        # (a second pass re-detecting the same contradiction).
+        record_self_consistency_violation(
+            result.scorecard_events, _outcome(model="m1"), detail="again",
+        )
+        _flush_scorecard_events_now(config, result, final=True)
+        assert self._written(store) == [
+            ("m1", "self_consistency", "incorrect"),
+        ]
+
+    def test_disabled_store_claims_no_events(self, tmp_path):
+        """A disabled scorecard writes nothing — and must also CLAIM
+        nothing: stranded _flushed marks with no rollback would break
+        the claim/rollback invariant if enablement ever became
+        per-flush-dynamic."""
+        from core.audit.orchestrator import (
+            _flush_scorecard_events_incremental,
+        )
+
+        config, result, _store = self._rig(tmp_path)
+        config.llm_client = SimpleNamespace(
+            scorecard=None,
+            config=SimpleNamespace(scorecard_enabled=False),
+        )
+        record_self_consistency_violation(
+            result.scorecard_events, _outcome(model="m1"), detail="flip",
+        )
+        _flush_scorecard_events_incremental(config, result, force=True)
+        assert not any(
+            ev.get("_flushed") for ev in result.scorecard_events
+        )
+
+    def test_failed_incremental_write_stays_retryable(self, tmp_path):
+        from core.audit.orchestrator import (
+            _flush_scorecard_events_incremental,
+            _flush_scorecard_events_now,
+        )
+
+        config, result, _store = self._rig(tmp_path)
+        raising = _RaisingStore()
+        config.llm_client = SimpleNamespace(scorecard=raising)
+        record_self_consistency_violation(
+            result.scorecard_events, _outcome(model="m1"), detail="flip",
+        )
+        _flush_scorecard_events_incremental(config, result, force=True)
+        # Sidecar came back before the end of the run.
+        store = _CapturingStore()
+        config.llm_client = SimpleNamespace(scorecard=store)
+        _flush_scorecard_events_now(config, result, final=True)
+        assert self._written(store) == [
+            ("m1", "self_consistency", "incorrect"),
+        ]

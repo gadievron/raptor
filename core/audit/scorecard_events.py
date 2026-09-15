@@ -88,7 +88,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Private bookkeeping keys stripped before the batch write.
-_PRIVATE_KEYS = ("_key", "_grades_refuter")
+_PRIVATE_KEYS = ("_key", "_grades_refuter", "_flushed")
 
 # Cap on the ``file:function`` key. The key is target-controlled (a
 # hostile repo can mint megabyte function names) and rides into the
@@ -469,6 +469,28 @@ def resolve_scorecard_store(client: Any) -> tuple[Any, bool]:
         return None, False
 
 
+def is_reconcilable(ev: dict[str, Any]) -> bool:
+    """True when the flush reconciles this event against the final
+    finding set — a ``tool_evidence`` grade that does not grade the
+    refuter. Reconciliation is only decidable at END of run (a
+    buffered refutation is dropped when its function ends as a
+    finding), so reconcilable events must never ship in an
+    incremental mid-run flush: consistency-axis events and refuter
+    grades are settled the moment they buffer, these are not."""
+    try:
+        from core.llm.scorecard import EventType
+
+        return (
+            ev.get("event_type") == EventType.TOOL_EVIDENCE
+            and not ev.get("_grades_refuter")
+        )
+    except Exception:  # noqa: BLE001 — telemetry must never break the run
+        logger.debug("reconcilability probe failed", exc_info=True)
+        # Fail toward holding the event for the final flush, which
+        # applies the full reconciliation rules.
+        return True
+
+
 def _valid_pending(ev: dict[str, Any], all_event_types: Any) -> bool:
     """Pre-flight the shape ``record_events`` validates pre-lock.
 
@@ -488,6 +510,7 @@ def flush_scorecard_events(
     *,
     finding_keys: Any = frozenset(),
     scorecard: Any = None,
+    seen: set[tuple[str, str, str, str, str]] | None = None,
 ) -> int:
     """Reconcile the buffered events and write them in ONE batch.
 
@@ -502,6 +525,13 @@ def flush_scorecard_events(
       mechanical passes counts one miss, not several, while an
       opposite-direction grade for the same cell is preserved for the
       reconciliation above to arbitrate.
+    * ``seen``: caller-owned cross-flush dedup state. A run that
+      flushes incrementally passes the same set to every flush so a
+      cell already written by an earlier flush is never re-written by
+      a later one — the per-call dedup alone cannot see across calls.
+      Tuples for this call's events are committed into the caller's
+      set only AFTER the batch write succeeds, so a failed write
+      leaves them retryable instead of silently dropped.
     * Drops entries that would fail ``record_events``' pre-lock
       validation per entry, instead of letting one malformed dict
       abort the whole batch.
@@ -518,7 +548,9 @@ def flush_scorecard_events(
 
         keys = set(finding_keys or ())
         pending: list[dict[str, Any]] = []
-        seen: set[tuple[str, str, str, str, str]] = set()
+        seen_local: set[tuple[str, str, str, str, str]] = (
+            set(seen) if seen else set()
+        )
         for ev in events or ():
             if not isinstance(ev, dict):
                 continue
@@ -542,9 +574,9 @@ def flush_scorecard_events(
                 str(ev.get("outcome") or ""),
                 key,
             )
-            if key and dedup in seen:
+            if key and dedup in seen_local:
                 continue
-            seen.add(dedup)
+            seen_local.add(dedup)
             pending.append({
                 k: v for k, v in ev.items() if k not in _PRIVATE_KEYS
             })
@@ -555,6 +587,8 @@ def flush_scorecard_events(
 
             scorecard = ModelScorecard(default_scorecard_path())
         scorecard.record_events(pending)
+        if seen is not None:
+            seen.update(seen_local)
         logger.info(
             "audit scorecard: recorded %d reliability event(s)",
             len(pending),
@@ -574,6 +608,7 @@ __all__ = [
     "buffer_event",
     "cap_key",
     "flush_scorecard_events",
+    "is_reconcilable",
     "lone_model",
     "outcome_key",
     "record_adversarial_outcome",
