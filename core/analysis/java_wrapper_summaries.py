@@ -226,27 +226,28 @@ def _straight_line_locals(body, params: tuple[str, ...],
             locals_map[name] = value
             continue
         if stmt.type == _EXPR_STMT:
-            if strict_state:
-                msg = "bare assignment in a cross-class helper body"
-                raise _Refused(msg)
             inner = next((c for c in stmt.children if c.is_named), None)
             if inner is None or inner.type != _ASSIGNMENT:
                 msg = "non-assignment statement in body"
                 raise _Refused(msg)
             left = inner.child_by_field_name("left")
-            right = inner.child_by_field_name("right")
-            op = inner.child_by_field_name("operator")
-            if (left is None or left.type != _IDENT or right is None
-                    or _text(op) != "="):
-                msg = "unsupported assignment shape in body"
-                raise _Refused(msg)
-            name = _text(left)
-            if name in assigned or name in params:
+            name = _text(left) if left is not None \
+                and left.type == _IDENT else None
+            if name is not None and (name in assigned or name in params):
                 msg = "local reassignment / parameter shadowing"
                 raise _Refused(msg)
-            assigned.add(name)
-            locals_map[name] = right
-            continue
+            # Any other bare ``name = expr`` target is NEVER a
+            # declared local: declaration goes through the
+            # _LOCAL_DECL lane and reassigning a declared local
+            # refuses above — so the target can only be a FIELD (or
+            # an outer binding), which any interleaved call in a
+            # later statement can rewrite before the return.
+            # Modelling it as a local temp minted a "sanitizes
+            # positions" summary over a rewritable slot; refuse in
+            # EVERY lane (previously only cross-class instance
+            # helpers refused).
+            msg = "bare assignment target may be a field"
+            raise _Refused(msg)
         msg = f"unsupported body statement: {stmt.type}"
         raise _Refused(msg)
     ret = stmts[-1]
@@ -944,8 +945,13 @@ def _walk_conduit_body(
         if name in params:
             msg = "parameter reassigned in body"
             raise _Refused(msg)
-        if strict_state and name not in declared:
-            msg = "bare assignment in a cross-class helper body"
+        if name not in declared:
+            # An undeclared assignment target resolves to a FIELD
+            # (or an outer binding) — a slot any interleaved call
+            # can rewrite before the return, so it must never be
+            # modelled as a local temp. EVERY lane refuses
+            # (previously only cross-class instance helpers did).
+            msg = "assignment target is not a declared local"
             raise _Refused(msg)
         env[name] = _classify_expr(rhs, params, env)
 
@@ -1024,8 +1030,10 @@ def _walk_conduit_body(
                     msg = "partially assigned local (unknown fall-through)"
                     raise _Refused(msg)
                 merged = _merge_vals(then_val, prior)
-            if strict_state and name not in declared:
-                msg = "bare assignment in a cross-class helper body"
+            if name not in declared:
+                # Same undeclared-target-may-be-a-field rule as
+                # ``assign`` — the if-arm merge writes the name too.
+                msg = "assignment target is not a declared local"
                 raise _Refused(msg)
             if name in params:
                 msg = "parameter reassigned in body"

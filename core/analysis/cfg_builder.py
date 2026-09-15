@@ -32,7 +32,7 @@ vertex-cut check works at function granularity for C/C++.
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -136,6 +136,16 @@ class PyCFGNode:
     The legacy ``calls`` field is preserved for back-compat with
     phase 5–7 callers; ``{cs.name for cs in call_sites}`` will agree
     with it.
+
+    ``may_escape`` is the aliasing-conservatism bit shared with the
+    C/C++ and Java node contracts. A Python statement that stores to
+    a name the function declared ``global`` or ``nonlocal`` is NOT a
+    clean local rebinding: any callee (or, for ``nonlocal``, any
+    sibling closure) can rewrite the same binding between this
+    statement and a later read, so the value gate must not treat the
+    stored value's identity as proven at the sink.
+    ``evaluate_finding`` downgrades ``SUPPRESS → CANDIDATE_ONLY``
+    when a ``may_escape`` node sits on a source→sink path.
     """
     kind: str          # "entry" | "exit" | "stmt"
     lineno: int
@@ -144,6 +154,7 @@ class PyCFGNode:
     defs: frozenset[str] = frozenset()
     uses: frozenset[str] = frozenset()
     call_sites: tuple[CallSite, ...] = ()
+    may_escape: bool = False
 
     def __repr__(self) -> str:                              # pragma: no cover
         return (
@@ -622,9 +633,14 @@ class _PythonCFGBuilder:
     structured-block CFG idiom.
     """
 
-    def __init__(self, function_name: str, file_path: str) -> None:
+    def __init__(self, function_name: str, file_path: str,
+                 escape_names: frozenset[str] = frozenset()) -> None:
         self.function_name = function_name
         self.file_path = file_path
+        # Names this function declared ``global`` / ``nonlocal``.
+        # Stores to them are not clean local rebindings — see
+        # :meth:`_apply_scope_escape`.
+        self._escape_names = escape_names
         self.entry = PyCFGNode(
             kind="entry", lineno=ENTRY_LINENO,
             label=f"ENTRY:{function_name}",
@@ -651,9 +667,35 @@ class _PythonCFGBuilder:
         for s in srcs:
             self._link(s, dst)
 
+    def _apply_scope_escape(
+        self, defs: frozenset[str], call_sites: tuple[CallSite, ...],
+    ) -> tuple[bool, tuple[CallSite, ...]]:
+        """Demote stores to ``global`` / ``nonlocal`` names.
+
+        A bare-name store to such a name binds OUTSIDE the local
+        frame: a callee (or sibling closure) can rewrite it between
+        this statement and a later read, so granting it the clean
+        local-rebinding semantics (``assigned_names`` — sanitizer-
+        output identity) would let the value gate prove exclusivity
+        over a binding it does not own. The def itself stays — an
+        extra definer can only break an exclusivity proof, never
+        grant identity (refusal direction) — but the node is stamped
+        ``may_escape`` and its call sites lose the escaping names
+        from ``assigned_names``.
+        """
+        if not (defs & self._escape_names):
+            return False, call_sites
+        call_sites = tuple(
+            replace(cs, assigned_names=cs.assigned_names - self._escape_names)
+            if cs.assigned_names & self._escape_names else cs
+            for cs in call_sites
+        )
+        return True, call_sites
+
     def _new_node(self, kind: str, stmt: ast.stmt,
                   *, label: str | None = None) -> PyCFGNode:
         calls, defs, uses, call_sites = _extract_statement_payload(stmt)
+        escapes, call_sites = self._apply_scope_escape(defs, call_sites)
         node = PyCFGNode(
             kind=kind, lineno=stmt.lineno,
             label=label or _short_label(stmt),
@@ -661,6 +703,7 @@ class _PythonCFGBuilder:
             defs=defs,
             uses=uses,
             call_sites=call_sites,
+            may_escape=escapes,
         )
         self._all_nodes.append(node)
         return node
@@ -845,14 +888,19 @@ class _PythonCFGBuilder:
                     lineno=child.lineno,
                     col_offset=getattr(child, "col_offset", 0),
                 ))
+        frozen_defs = frozenset(defs)
+        escapes, sites = self._apply_scope_escape(
+            frozen_defs, tuple(site_records),
+        )
         node = PyCFGNode(
             kind="stmt",
             lineno=case.pattern.lineno,
             label=f"case (line {case.pattern.lineno})",
-            calls=frozenset(cs.name for cs in site_records),
-            defs=frozenset(defs),
+            calls=frozenset(cs.name for cs in sites),
+            defs=frozen_defs,
             uses=frozenset(uses),
-            call_sites=tuple(site_records),
+            call_sites=sites,
+            may_escape=escapes,
         )
         self._all_nodes.append(node)
         return node
@@ -951,6 +999,32 @@ def _function_params(
     return tuple(names)
 
 
+def _scope_escape_names(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> frozenset[str]:
+    """Names ``func`` declares ``global`` or ``nonlocal``.
+
+    The declarations are compile-time properties of the WHOLE scope
+    (a ``global x`` inside an ``if`` branch still binds every ``x``
+    store in the function), so the walk covers the entire body but
+    stops at nested scopes — a nested def's own ``global``/
+    ``nonlocal`` declarations bind names in the NESTED frame, not
+    this one. Lambdas and comprehensions cannot contain statements.
+    """
+    out: set[str] = set()
+    stack: list[ast.AST] = list(func.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef)):
+            continue
+        if isinstance(node, (ast.Global, ast.Nonlocal)):
+            out.update(node.names)
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+    return frozenset(out)
+
+
 def build_python_cfg(
     source: str | Path, function_name: str,
 ) -> PythonCFG | None:
@@ -976,7 +1050,10 @@ def build_python_cfg(
             break
     if func is None:
         return None
-    builder = _PythonCFGBuilder(function_name, file_path)
+    builder = _PythonCFGBuilder(
+        function_name, file_path,
+        escape_names=_scope_escape_names(func),  # type: ignore[arg-type]
+    )
     return builder.build(func)  # type: ignore[arg-type]
 
 

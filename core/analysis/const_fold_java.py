@@ -24,9 +24,14 @@ Soundness posture (refusal-first, mirroring the Java CFG builder):
   disagreeing constants refuse (the branch taken is unknown).
 * Java locals cannot be aliased (no address-of), so a local whose
   every reaching definition folds is genuinely constant at the use;
-  array elements and fields CAN alias, and they refuse structurally:
-  an array/field store is not a ``name = expr`` shape this module
-  accepts as a definition.
+  array elements and fields CAN alias. Qualified stores (``obj.f =``,
+  ``a[i] =``) refuse structurally — not a ``name = expr`` shape —
+  and BARE-NAME field stores (``data = "x";`` with no local
+  ``data``, legal Java for a field of the enclosing class) refuse
+  by scope: the index only serves identifier-LHS definitions whose
+  name is a declared local/parameter of the enclosing method-like
+  scope, because a field's value can be rewritten by any
+  interleaved call the reaching-defs oracle cannot see.
 * Recursion is bounded (depth cap, visited set) — cyclic definitions
   refuse.
 
@@ -149,6 +154,41 @@ def _parser():
     return _get_parser()
 
 
+# Scope shapes whose bodies bind their own locals. Lambdas are their
+# own scope too: a bare-name store inside one is either a lambda
+# local (its params/declarators) or a field — never an enclosing-
+# method local (Java's effectively-final rule forbids that write).
+_METHOD_SCOPE_TYPES = frozenset({
+    "method_declaration",
+    "constructor_declaration",
+    "compact_constructor_declaration",
+    "static_initializer",
+    "lambda_expression",
+})
+
+
+def _collect_local_scopes(
+    root: Node,
+) -> list[tuple[int, int, Any]]:
+    """Byte spans + positional local-scope oracles of every
+    method-like scope under ``root``. Shares the CFG builder's scope
+    oracle
+    (:func:`core.analysis.cfg_builder_java._declared_local_scopes`)
+    so the index and the builder can never disagree on what counts
+    as a local."""
+    from core.analysis.cfg_builder_java import _declared_local_scopes
+    out: list[tuple[int, int, Any]] = []
+    stack = [root]
+    while stack:
+        n = stack.pop()
+        if n.type in _METHOD_SCOPE_TYPES:
+            out.append(
+                (n.start_byte, n.end_byte, _declared_local_scopes(n)),
+            )
+        stack.extend(c for c in n.children if c.is_named)
+    return out
+
+
 class JavaConstIndex:
     """Per-file index of simple definitions: (line, name) → RHS node.
 
@@ -156,6 +196,19 @@ class JavaConstIndex:
     assignments within ``line_span`` are indexed — anything else
     (array stores, field stores, compound assignments, ++/--) is
     absent, so lookups on it refuse.
+
+    Scope discipline: a definition is indexed only when it sits
+    inside a method-like scope (method / constructor / initializer)
+    that declares the name as a local or parameter. A bare-name
+    store whose name is NOT a declared local resolves to a FIELD of
+    the enclosing class — the same ``name = expr`` syntax, but a
+    binding any interleaved call can rewrite, which the reaching-
+    defs oracle (call nodes define nothing) cannot see. Serving such
+    a definition let ``all_definers_constant`` prove "constant sink
+    argument" over a field a callee re-taints. Class-level field
+    declarators are likewise skipped (and poison the receiver-type
+    oracle for their name — a field's exact class is not stable
+    across calls).
     """
 
     def __init__(self, source_text: str,
@@ -176,6 +229,9 @@ class JavaConstIndex:
         # name -> exact created class, poisoned to None on any
         # non-creation or differently-typed definition.
         self._creation_types: dict[str, str | None] = {}
+        # (start_byte, end_byte, positional local-scope oracle) per
+        # method-like scope — the bare-name field-store gate.
+        self._scopes: list[tuple[int, int, Any]] = []
         self.xfile = None
         if java_file_path:
             # repo_root may be absent: the resolver then serves only
@@ -195,6 +251,7 @@ class JavaConstIndex:
             tree = parser.parse(source_text.encode("utf-8"))
         except Exception:  # noqa: BLE001
             return
+        self._scopes = _collect_local_scopes(tree.root_node)
         lo, hi = line_span
         stack = [tree.root_node]
         while stack:
@@ -207,6 +264,14 @@ class JavaConstIndex:
                 if (name is not None and name.type == "identifier"
                         and value is not None):
                     nm = name.text.decode()
+                    if not self._is_scoped_local(n, nm):
+                        # Class-level field declarator (or a
+                        # declarator inside a scope shape the
+                        # collector doesn't model): never a local
+                        # definition — skip, and poison the
+                        # receiver-type oracle for the name.
+                        self._creation_types[nm] = None
+                        continue
                     key = (n.start_point[0] + 1, nm)
                     if key in self._defs:
                         self._multi_write_lines.add(key)
@@ -223,6 +288,16 @@ class JavaConstIndex:
                         # model; every lookup of the name must refuse.
                         self._compound_writers.add(lname)
                     elif right is not None:
+                        if not self._is_scoped_local(n, lname):
+                            # Bare-name FIELD store (no declared
+                            # local of that name in the enclosing
+                            # method): same syntax as a local
+                            # rebinding, but any interleaved call
+                            # can rewrite the field — never index
+                            # (absence refuses the lookup), and
+                            # poison the receiver-type oracle.
+                            self._creation_types[lname] = None
+                            continue
                         akey = (n.start_point[0] + 1, lname)
                         if akey in self._defs:
                             self._multi_write_lines.add(akey)
@@ -234,6 +309,23 @@ class JavaConstIndex:
                         self._compound_writers.add(ch.text.decode())
             stack.extend(n.children)
         self.ok = True
+
+    def _is_scoped_local(self, node: Node, name: str) -> bool:
+        """True when ``node`` sits inside a method-like scope where a
+        preceding in-scope declarator vouches for ``name`` AT THE
+        NODE's position. The INNERMOST containing scope decides — a
+        local class's methods are their own scopes, never windows
+        into the enclosing method. Positional vouching means a dead
+        block-scoped declarator elsewhere in the method (after the
+        store, in a disjoint block) serves nothing."""
+        innermost: tuple[int, int, Any] | None = None
+        for s, e, scopes in self._scopes:
+            if s <= node.start_byte and node.end_byte <= e:
+                if innermost is None or (e - s) < \
+                        (innermost[1] - innermost[0]):
+                    innermost = (s, e, scopes)
+        return innermost is not None and \
+            innermost[2].vouches(name, node.start_byte)
 
     def _note_creation(self, name: str, value: Node) -> None:
         """Track exact-creation-typed locals: usable as a method-call

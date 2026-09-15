@@ -153,6 +153,143 @@ class TestSummaryDerivation:
         assert not summaries
 
 
+class TestUndeclaredAssignmentTargets:
+    """A bare ``name = expr`` whose target is not a declared local
+    resolves to a FIELD — a slot any interleaved call can rewrite
+    before the return. Every lane must refuse (the non-strict lanes
+    — enclosing-class helpers, static cross-class helpers — accepted
+    these as local temps and minted sanitizing summaries over
+    rewritable state)."""
+
+    FIELD_TEMP_SRC = (_IMP + "public class T {\n"
+                      "    static String tmp;\n"
+                      "    static String other;\n"
+                      "    private static String wrap(String s) {\n"
+                      "        tmp = Encode.forHtml(s);\n"
+                      "        other = mutate();\n"
+                      "        return tmp;\n"
+                      "    }\n"
+                      "    public void handle(String x, "
+                      "java.io.PrintWriter out) {\n"
+                      "        String y = wrap(x);\n"
+                      "        out.println(y);\n"
+                      "    }\n}\n")
+
+    def test_enclosing_static_field_temp_refuses(self):
+        summaries, decisions = derive_wrapper_summaries(
+            self.FIELD_TEMP_SRC, (11, 11), "CWE-79", "java")
+        assert ("T", "wrap", 1) not in summaries
+        assert any("field" in d for d in decisions), decisions
+
+    def test_enclosing_instance_field_temp_refuses(self):
+        src = (_IMP + "public class T {\n"
+               "    String tmp;\n"
+               "    private String wrap(String s) {\n"
+               "        tmp = Encode.forHtml(s);\n"
+               "        mutate();\n"
+               "        return tmp;\n"
+               "    }\n"
+               "    public void handle(String x, "
+               "java.io.PrintWriter out) {\n"
+               "        String y = wrap(x);\n"
+               "        out.println(y);\n"
+               "    }\n}\n")
+        summaries, _ = derive_wrapper_summaries(
+            src, (10, 10), "CWE-79", "java")
+        assert ("T", "wrap", 1) not in summaries
+
+    def test_cross_class_static_field_temp_refuses(self):
+        src = (_IMP + "public class Other {\n"
+               "    static String tmp;\n"
+               "    static String wrap(String s) {\n"
+               "        tmp = Encode.forHtml(s);\n"
+               "        mutate();\n"
+               "        return tmp;\n"
+               "    }\n"
+               "}\n"
+               "public class T {\n"
+               "    public void handle(String x, "
+               "java.io.PrintWriter out) {\n"
+               "        String y = Other.wrap(x);\n"
+               "        out.println(y);\n"
+               "    }\n}\n")
+        summaries, _ = derive_wrapper_summaries(
+            src, (12, 12), "CWE-79", "java")
+        assert not summaries
+
+    def test_field_temp_never_suppresses_e2e(self):
+        # Production wiring: synthetic_wrapper_bindings_java →
+        # evaluate_finding. Pre-fix the field-temp summary earned a
+        # "value-bound vertex-cut" suppression while ``mutate()``
+        # could rewrite ``tmp`` before the return.
+        from core.analysis.sanitizer_cut import evaluate_finding
+        src, hint = self.FIELD_TEMP_SRC, (11, 11)
+        cfg = build_java_intraproc_cfg(src, "handle", line_hint=hint)
+        assert cfg is not None
+        bindings = synthetic_wrapper_bindings_java(
+            cfg, src, hint, "CWE-79", "java")
+        assert not bindings
+        sink = next(n for n in cfg.nodes() if "out.println" in n.label)
+        result = evaluate_finding(
+            cfg, [cfg.entry], sink,
+            cwe="CWE-79", language="java",
+            source_symbols=["x"], sink_arg="y",
+            java_source_text=src, extra_bindings=bindings,
+        )
+        assert not result.suppress
+
+    def test_declared_local_temp_still_binds_and_suppresses(self):
+        from core.analysis.sanitizer_cut import evaluate_finding
+        src = (_IMP + "public class T {\n"
+               "    private static String wrap(String s) {\n"
+               "        String t = Encode.forHtml(s);\n"
+               "        return t;\n"
+               "    }\n"
+               "    public void handle(String x, "
+               "java.io.PrintWriter out) {\n"
+               "        String y = wrap(x);\n"
+               "        out.println(y);\n"
+               "    }\n}\n")
+        hint = (8, 8)
+        cfg = build_java_intraproc_cfg(src, "handle", line_hint=hint)
+        assert cfg is not None
+        bindings = synthetic_wrapper_bindings_java(
+            cfg, src, hint, "CWE-79", "java")
+        assert len(bindings) == 1
+        sink = next(n for n in cfg.nodes() if "out.println" in n.label)
+        result = evaluate_finding(
+            cfg, [cfg.entry], sink,
+            cwe="CWE-79", language="java",
+            source_symbols=["x"], sink_arg="y",
+            java_source_text=src, extra_bindings=bindings,
+        )
+        assert result.suppress
+
+    def test_conduit_field_temp_refuses(self):
+        from core.analysis.java_wrapper_summaries import (
+            derive_conduit_summaries,
+        )
+        src = ("public class T {\n"
+               "    static String cache;\n"
+               "    private static String pick(String s) {\n"
+               '        cache = "safe";\n'
+               "        return cache;\n"
+               "    }\n"
+               "    public void handle(String x, "
+               "java.io.PrintWriter out) {\n"
+               "        String y = pick(x);\n"
+               "        out.println(y);\n"
+               "    }\n}\n")
+        summaries, _ = derive_conduit_summaries(src, (8, 8))
+        assert ("T", "pick", 1) not in summaries
+        # The declared-local twin keeps its const conduit.
+        local = src.replace(
+            '        cache = "safe";\n        return cache;\n',
+            '        String c = "safe";\n        return c;\n')
+        summaries2, _ = derive_conduit_summaries(local, (8, 8))
+        assert ("T", "pick", 1) in summaries2
+
+
 class TestBindingSynthesis:
     def _bindings(self, src, hint=None):
         hint = hint or _hint(src)

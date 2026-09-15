@@ -26,6 +26,11 @@
     "count": 25,
     "kind": "literal"
   },
+  "core/analysis/cfg_builder_java.py::_LOCAL_SCOPE_BOUNDS": {
+    "count": 12,
+    "kind": "literal",
+    "note": "tree-sitter-java GRAMMAR node-type set bounding a declarator's scope window (language grammar taxonomy, not target API names; over-inclusion only narrows vouch windows \u2014 refusal direction)"
+  },
   "core/analysis/cfg_conditions.py::keywords": {
     "count": 29,
     "kind": "literal"

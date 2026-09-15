@@ -565,7 +565,9 @@ def _payload_from_local_var_decl(decl, resolver):
     return frozenset(calls), frozenset(defs), frozenset(uses), tuple(css)
 
 
-def _payload_from_assignment(expr: Node, resolver):
+def _payload_from_assignment(
+        expr: Node, resolver,
+        local_scopes: "_LocalNameScopes | None" = None):
     lhs = expr.child_by_field_name("left")
     rhs = expr.child_by_field_name("right")
     op_node = expr.child_by_field_name("operator")
@@ -579,9 +581,17 @@ def _payload_from_assignment(expr: Node, resolver):
     if rhs is not None:
         # Assignment through a field / array LHS is NOT a clean
         # rebinding of the base name — the sanitizer-output identity
-        # doesn't transfer. Only a plain-identifier LHS earns
-        # assigned_names (may_escape additionally covers the store).
-        clean_lhs = lhs is not None and lhs.type == _IDENT and op == "="
+        # doesn't transfer. Neither is a BARE-NAME store to a name
+        # that no in-scope preceding declarator of the enclosing
+        # method vouches for: Java resolves ``data = …`` with no
+        # local ``data`` in scope AT THE STORE to a FIELD write,
+        # which any interleaved call can rewrite. Only a
+        # plain-identifier LHS a declarator positionally vouches for
+        # earns assigned_names (may_escape additionally covers the
+        # store).
+        clean_lhs = (lhs is not None and lhs.type == _IDENT
+                     and op == "=" and local_scopes is not None
+                     and local_scopes.vouches(lhs_name, lhs.start_byte))
         assigned = defs if clean_lhs else frozenset()
         css.extend(_walk_call_sites(rhs, resolver, assigned_for_root=assigned))
         uses |= _walk_uses(rhs, resolver)
@@ -608,27 +618,35 @@ def _embedded_store_names(n) -> frozenset[str]:
     extra definer can break an exclusivity proof but never grants
     sanitizer-output identity.
     """
+    return frozenset(name for name, _ in _embedded_store_sites(n))
+
+
+def _embedded_store_sites(n) -> tuple[tuple[str, int], ...]:
+    """``(name, store_byte)`` pairs for the same stores
+    :func:`_embedded_store_names` collects — positional so the scope
+    oracle can bind each store site to a preceding in-scope
+    declarator rather than method-wide name presence."""
     if n is None:
-        return frozenset()
-    out: set[str] = set()
+        return ()
+    out: list[tuple[str, int]] = []
     stack = [n]
     while stack:
         cur = stack.pop()
         if cur.type == _ASSIGNMENT:
             name = _base_ident(cur.child_by_field_name("left"))
             if name:
-                out.add(name)
+                out.append((name, cur.start_byte))
         elif cur.type == _UPDATE:
             name = _base_ident(cur)
             if name:
-                out.add(name)
+                out.append((name, cur.start_byte))
         elif cur.type == "resource":
             name_node = cur.child_by_field_name("name")
             name = _node_text(name_node) if name_node is not None else None
             if name:
-                out.add(name)
+                out.append((name, cur.start_byte))
         stack.extend(c for c in cur.children if c.is_named)
-    return frozenset(out)
+    return tuple(out)
 
 
 def _payload_from_subtree(n, resolver):
@@ -676,6 +694,124 @@ def _method_params(decl) -> tuple[str, ...]:
     return tuple(out)
 
 
+# Nested scopes whose declarations are NOT locals of the enclosing
+# method (a local class's fields/locals, a lambda's parameters). The
+# builder refuses methods containing these anyway; the collector still
+# stops at them so the const-index reuse stays sound on its own.
+_LOCAL_SCOPE_BARRIERS = frozenset({
+    "class_declaration",
+    "anonymous_class_body",
+    "lambda_expression",
+    "method_reference",
+})
+
+# Constructs that bound a declarator's vouch window: a declaration
+# inside one of these is out of scope past its end. Missing a member
+# here widens a window toward the method end (suppression-ward), so
+# the set errs inclusive — an over-narrow window only refuses.
+_LOCAL_SCOPE_BOUNDS = frozenset({
+    _BLOCK,
+    "for_statement",
+    _ENHANCED_FOR,
+    "while_statement",
+    "do_statement",
+    "if_statement",
+    "switch_expression",
+    "switch_block",
+    "try_statement",
+    "try_with_resources_statement",
+    "catch_clause",
+    "synchronized_statement",
+})
+
+
+class _LocalNameScopes:
+    """Positional scope oracle over a method's declared locals/params.
+
+    Each declared name carries vouch windows ``[declarator_start,
+    enclosing_scope_end)``: a bare-name store earns local-grade
+    semantics only when some window of its name contains the store's
+    byte offset. Flat per-method name membership was steerable — a
+    dead block-scoped declarator anywhere in the method (after the
+    sink, in unreachable code) re-armed local-grade semantics for
+    every same-named FIELD store. Binding the store site to a
+    declarator that PRECEDES it inside a live scope closes that;
+    Java's declare-before-use rule for locals means the positional
+    check never refuses a genuinely local store."""
+
+    __slots__ = ("_windows",)
+
+    def __init__(
+        self, windows: dict[str, tuple[tuple[int, int], ...]],
+    ) -> None:
+        self._windows = windows
+
+    def vouches(self, name: str, store_byte: int) -> bool:
+        return any(
+            lo <= store_byte < hi
+            for lo, hi in self._windows.get(name, ())
+        )
+
+
+_EMPTY_LOCAL_SCOPES = _LocalNameScopes({})
+
+
+def _declared_local_scopes(decl: Node) -> _LocalNameScopes:
+    """Positional oracle for every name ``decl`` (a method /
+    constructor / initializer declaration) binds as a local or
+    parameter: formal parameters, declarators, catch parameters,
+    enhanced-for variables, try-with-resources names, and pattern
+    bindings (``instanceof String x``, ``type_pattern`` /
+    record-pattern components).
+
+    This is the scope oracle behind the value gate's "Java locals
+    are unaliasable" premise: an identifier-LHS store that no
+    in-scope PRECEDING declarator vouches for resolves to a field
+    (or an outer binding) that interleaved calls can rewrite, so it
+    must not earn local-grade rebinding semantics.
+    """
+    windows: dict[str, list[tuple[int, int]]] = {}
+
+    def add(name: str, decl_byte: int, bound_end: int) -> None:
+        windows.setdefault(name, []).append((decl_byte, bound_end))
+
+    for p in _method_params(decl):
+        add(p, decl.start_byte, decl.end_byte)
+    body = decl.child_by_field_name("body")
+    if body is None:
+        body = next((c for c in decl.children if c.type == _BLOCK), None)
+    if body is None:
+        return _LocalNameScopes(
+            {k: tuple(v) for k, v in windows.items()})
+    stack: list[tuple[Node, int]] = [(body, body.end_byte)]
+    while stack:
+        cur, bound = stack.pop()
+        t = cur.type
+        if t in _LOCAL_SCOPE_BARRIERS:
+            continue
+        if t in _LOCAL_SCOPE_BOUNDS:
+            bound = min(bound, cur.end_byte)
+        if t == _VAR_DECLARATOR:
+            nm = cur.child_by_field_name("name")
+            if nm is not None and nm.type == _IDENT:
+                add(_node_text(nm), cur.start_byte, bound)
+        elif t == "catch_formal_parameter":
+            idents = [c for c in cur.children if c.type == _IDENT]
+            if idents:
+                add(_node_text(idents[-1]), cur.start_byte, bound)
+        elif t in (_ENHANCED_FOR, "resource", "instanceof_expression"):
+            nm = cur.child_by_field_name("name")
+            if nm is not None and nm.type == _IDENT:
+                add(_node_text(nm), cur.start_byte, bound)
+        elif t in ("type_pattern", "record_pattern_component"):
+            for c in cur.children:
+                if c.type == _IDENT:
+                    add(_node_text(c), cur.start_byte, bound)
+        stack.extend(
+            (c, bound) for c in cur.children if c.is_named)
+    return _LocalNameScopes({k: tuple(v) for k, v in windows.items()})
+
+
 def find_enclosing_method(
     source_text: str, source_line: int, sink_line: int,
 ) -> tuple[str | None, int]:
@@ -717,10 +853,18 @@ class _RefusedConstruct(Exception):
 
 class _JavaCFGBuilder:
     def __init__(self, function_name: str, file_path: str,
-                 resolver: _NameResolver) -> None:
+                 resolver: _NameResolver,
+                 local_scopes: _LocalNameScopes = _EMPTY_LOCAL_SCOPES,
+                 ) -> None:
         self.function_name = function_name
         self.file_path = file_path
         self.resolver = resolver
+        # Positional scope oracle over the method's declared
+        # locals/params. The fail-closed default (empty) demotes
+        # EVERY bare-name store to may_escape — refusal direction —
+        # so a caller that forgets the scope oracle can only
+        # over-refuse.
+        self._local_scopes = local_scopes
         self.entry = JavaCFGNode(
             kind="entry", lineno=ENTRY_LINENO,
             label=f"ENTRY:{function_name}",
@@ -780,6 +924,20 @@ class _JavaCFGBuilder:
     def _short_label(self, n) -> str:
         text = _node_text(n).split("\n", 1)[0].strip()
         return text[:60] + ("…" if len(text) > 60 else "")
+
+    def _escapes(self, n) -> bool:
+        """Alias-conservatism stamp for one payload subtree: the
+        structural escapes (array access, field store, arraycopy)
+        plus any embedded/direct store no in-scope preceding
+        declarator vouches for — a bare-name FIELD write any
+        interleaved call can rewrite (the value gate demotes
+        SUPPRESS → CANDIDATE_ONLY on may_escape paths)."""
+        if _subtree_may_escape(n, self.resolver):
+            return True
+        return any(
+            not self._local_scopes.vouches(name, byte)
+            for name, byte in _embedded_store_sites(n)
+        )
 
     def _ambient_catch_link(self, node: JavaCFGNode) -> None:
         """Liberal try-edge: any statement inside a try body may
@@ -870,7 +1028,7 @@ class _JavaCFGBuilder:
             inner = next((c for c in stmt.children if c.is_named), None)
             if inner is not None and inner.type == _ASSIGNMENT:
                 calls, defs, uses, css = _payload_from_assignment(
-                    inner, self.resolver)
+                    inner, self.resolver, self._local_scopes)
             elif inner is not None and inner.type == _UPDATE:
                 tgt = _base_ident(inner)
                 defs = frozenset({tgt}) if tgt else frozenset()
@@ -886,7 +1044,7 @@ class _JavaCFGBuilder:
             lineno=stmt.start_point[0] + 1,
             label=self._short_label(stmt),
             calls=calls, defs=defs, uses=uses, call_sites=css,
-            may_escape=_subtree_may_escape(stmt, self.resolver),
+            may_escape=self._escapes(stmt),
         )
 
     def _cond_node(self, stmt: Node, prefix: str) -> JavaCFGNode:
@@ -900,7 +1058,7 @@ class _JavaCFGBuilder:
             label=f"{prefix} {self._short_label(cond)}" if cond is not None
             else prefix,
             calls=calls, defs=defs, uses=uses, call_sites=css,
-            may_escape=_subtree_may_escape(cond, self.resolver),
+            may_escape=self._escapes(cond),
         )
 
     def _build_if(self, stmt: Node, incoming):
@@ -1017,7 +1175,7 @@ class _JavaCFGBuilder:
             calls=calls,
             defs=header_defs,
             uses=uses, call_sites=css,
-            may_escape=_subtree_may_escape(value, self.resolver),
+            may_escape=self._escapes(value),
         )
         self._link_many(incoming, header)
         self._ambient_catch_link(header)
@@ -1186,7 +1344,7 @@ class _JavaCFGBuilder:
             lineno=stmt.start_point[0] + 1,
             label=f"switch {self._short_label(disc)}",
             calls=calls, defs=defs, uses=uses, call_sites=css,
-            may_escape=_subtree_may_escape(disc, self.resolver),
+            may_escape=self._escapes(disc),
         )
         self._link_many(incoming, cond_node)
         self._ambient_catch_link(cond_node)
@@ -1292,7 +1450,8 @@ def build_java_intraproc_cfg(
 
     type_imports, static_imports = build_import_map(root)
     resolver = _NameResolver(type_imports, static_imports)
-    builder = _JavaCFGBuilder(function_name, "<memory>", resolver)
+    builder = _JavaCFGBuilder(function_name, "<memory>", resolver,
+                              local_scopes=_declared_local_scopes(decl))
     try:
         tails = builder._build_stmts(body, [builder.entry])
     except _RefusedConstruct as rc:

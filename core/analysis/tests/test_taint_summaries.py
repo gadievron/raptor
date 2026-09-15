@@ -328,6 +328,48 @@ class TestSummaryUnknown:
         assert summaries["f"].summary_unknown
         assert "kwargs" in summaries["f"].summary_unknown_reason
 
+    def test_global_declaration_marks_unknown(self):
+        # ``tmp`` binds the MODULE slot: ``other()`` can rewrite it
+        # between the tracked assignment and the return, so the
+        # straight-line-locals premise is void — a clean-sanitizer
+        # summary here suppressed a live flow end-to-end.
+        _, summaries = _summaries(
+            "def _clean(s):\n"
+            "    global tmp\n"
+            "    tmp = html.escape(s)\n"
+            "    other()\n"
+            "    return tmp\n"
+        )
+        s = summaries["_clean"]
+        assert s.summary_unknown
+        assert "global" in s.summary_unknown_reason
+
+    def test_nonlocal_declaration_marks_unknown(self):
+        _, summaries = _summaries(
+            "def outer():\n"
+            "    tmp = ''\n"
+            "    def _clean(s):\n"
+            "        nonlocal tmp\n"
+            "        tmp = html.escape(s)\n"
+            "        other()\n"
+            "        return tmp\n"
+            "    return _clean\n"
+        )
+        s = summaries["outer._clean"]
+        assert s.summary_unknown
+        assert "nonlocal" in s.summary_unknown_reason
+
+    def test_nested_def_global_does_not_poison_outer(self):
+        _, summaries = _summaries(
+            "def outer(s):\n"
+            "    def inner():\n"
+            "        global tmp\n"
+            "        tmp = 1\n"
+            "    return html.escape(s)\n"
+        )
+        assert summaries["outer"].summary_unknown is False
+        assert summaries["outer.inner"].summary_unknown is True
+
     def test_nested_dynamic_does_not_poison_outer(self):
         """A nested function with dynamic dispatch doesn't infect
         the outer function's summary."""

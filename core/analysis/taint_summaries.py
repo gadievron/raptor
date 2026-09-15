@@ -253,12 +253,22 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     * ``**kwargs`` forwarding — any call whose keyword args list
       contains a ``**`` expansion (``g(**kwargs)``). The expanded
       content can't be statically resolved.
+    * A ``global`` / ``nonlocal`` declaration — a name bound outside
+      the local frame is not a local: any call between the tracked
+      assignment and the return can rewrite it (module slot /
+      enclosing closure), so the straight-line-locals premise the
+      propagation runs on is void for the whole function.
 
     Only the FUNCTION's own body is checked — nested function
     definitions are summarised separately so their dynamic dispatch
     doesn't poison the outer summary.
     """
     for node in ast.walk(fn_ast):
+        if isinstance(node, (ast.Global, ast.Nonlocal)):
+            if _inside_nested_function(node, fn_ast):
+                continue
+            kind = "global" if isinstance(node, ast.Global) else "nonlocal"
+            return f"declares {kind} {', '.join(node.names)}"
         if not isinstance(node, ast.Call):
             continue
         # Skip calls inside nested function definitions — those will

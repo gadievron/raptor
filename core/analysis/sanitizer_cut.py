@@ -252,8 +252,10 @@ def _may_escape_on_path(
 
     Cheap: O(V + E) per call (one forward BFS + one reverse BFS).
     Pure function. Uses ``getattr(node, "may_escape", False)`` so
-    PyCFGNode (which lacks the attribute) always returns False — the
-    Python evaluate_finding paths stay bit-identical.
+    node types without the attribute always read False. All three
+    language builders now stamp the flag (Python sets it on stores
+    to ``global`` / ``nonlocal`` names — a non-local binding a callee
+    can rewrite behind the gate's back).
     """
     return bool(_may_escape_nodes_on_path(graph, sources, sink, excluded))
 
@@ -1585,7 +1587,11 @@ def evaluate_finding(
     # when every reaching definition of the sink argument folds to the
     # same compile-time constant, the consumed value cannot carry
     # taint — a suppression that needs no sanitizer at all, so it runs
-    # before the catalog gates. Java locals are unaliasable, so the
+    # before the catalog gates. Java LOCALS are unaliasable, and the
+    # premise is enforced, not assumed: JavaConstIndex serves only
+    # identifier-LHS definitions whose name is a declared local/param
+    # of the enclosing method (a bare-name FIELD store — same syntax,
+    # rewritable by any interleaved call — refuses), so the
     # reaching-defs argument is airtight for the shapes the folder
     # accepts (see core/analysis/const_fold_java's refusal list).
     if (
