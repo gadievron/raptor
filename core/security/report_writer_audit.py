@@ -214,6 +214,13 @@ _REPORT_WRITER_FILES = (
     "core/project/cli.py",
     "core/reporting/renderer.py",
     "core/run/provenance.py",
+    # SAGE boot-payload review: the compare display prints
+    # server-derived variant diffs at the operator's approve/reject
+    # surface. Terminal writer — sanitise_for_terminal grade via its
+    # `_line` helper. (The install-lane sibling display lives in
+    # libexec/raptor-sage-setup, a bash script this AST detector
+    # cannot walk; the approval-surface registry test covers it.)
+    "core/sage/boot_payload_review.py",
     "core/llm/scorecard/audit.py",
     "core/llm/scorecard/cli.py",
     "core/project/report.py",
