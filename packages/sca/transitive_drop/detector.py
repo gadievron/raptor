@@ -311,13 +311,16 @@ def _latest_stable_version(
     metadata shape. Dispatches because each registry exposes
     versions slightly differently:
 
-      * PyPI / Composer (Packagist): ``releases: {<ver>: [...]}``
-        (Packagist returns ``packages[<name>]: [{version, ...}]``,
-        adapted below)
+      * PyPI: ``releases: {<ver>: [...]}``
       * npm: ``versions: {<ver>: {...}}``
-      * Maven / Cargo / RubyGems / NuGet: also via ``releases:``
-        (our stubs normalise into that shape; real clients may
-        vary)
+      * Packagist: ``packages[<name>]: [{version, ...}]``
+        (adapted below)
+      * Cargo: raw crates.io aggregate
+        ``versions: [{num, yanked, ...}]`` — ``CratesClient
+        .get_metadata`` returns the registry response verbatim,
+        with no ``releases`` adapter
+      * Maven / RubyGems / NuGet: also via ``releases:`` (their
+        clients ship aggregate-shape adapters)
     """
     meta = client.get_metadata(name) \
         if hasattr(client, "get_metadata") else None
@@ -334,6 +337,18 @@ def _latest_stable_version(
                 for v in vlist:
                     if isinstance(v, dict) and v.get("version"):
                         candidates.append(v["version"])
+    elif ecosystem == "Cargo":
+        # Raw crates.io aggregate: ``versions`` is a LIST of
+        # ``{num, yanked, ...}`` rows. Reading ``releases`` here
+        # returned an empty candidate set for every real
+        # CratesClient response, silently killing the Cargo lane.
+        # Yanked versions are not bump targets.
+        for v in meta.get("versions") or []:
+            if not isinstance(v, dict) or v.get("yanked"):
+                continue
+            num = v.get("num")
+            if isinstance(num, str) and num:
+                candidates.append(num)
     else:
         candidates = list((meta.get("releases") or {}).keys())
     stable = [v for v in candidates if _is_stable(ecosystem, v)]

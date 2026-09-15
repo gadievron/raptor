@@ -387,12 +387,18 @@ class _StubCargo:
     def get_metadata(self, name):
         if name not in self._latest:
             return None
-        # crates.io aggregate: ``{crate: {newest_version}, versions: [...]}``
+        # Real crates.io aggregate shape, exactly as
+        # CratesClient.get_metadata returns it (no ``releases``
+        # adapter exists for Cargo): ``{crate: {...}, versions:
+        # [{num, yanked, ...}, ...]}``. A hand-normalised
+        # ``releases`` dict here masked a dead detector branch.
         return {
-            "releases": {
-                v: [] for (c, v) in self._d if c == name
-            },
-            "info": {"version": self._latest[name]},
+            "crate": {"name": name,
+                      "newest_version": self._latest[name]},
+            "versions": [
+                {"num": v, "yanked": False}
+                for (c, v) in self._d if c == name
+            ],
         }
 
     def get_version_dependencies(self, name, version):
@@ -441,6 +447,67 @@ def test_cargo_dep_moves_to_optional() -> None:
     assert len(findings) == 1
     assert findings[0].transitive_status_in_latest == "extras-gated"
     assert findings[0].extra_name == "optional-feature"
+
+
+def test_cargo_lane_joins_real_crates_client_shape() -> None:
+    """Producer/consumer join closure: drive the Cargo lane through
+    the REAL ``CratesClient`` over canned HTTP responses, so the
+    metadata shape the detector consumes is the client's actual
+    output, not a hand-built stub that can drift. The aggregate
+    carries a yanked newest version and a prerelease — neither may
+    be picked as the bump target."""
+    from packages.sca.registries.crates import CratesClient
+
+    aggregate = {
+        "crate": {"name": "parent", "newest_version": "3.0.0"},
+        "versions": [
+            {"num": "3.0.0", "yanked": True},
+            {"num": "2.1.0-alpha.1", "yanked": False},
+            {"num": "2.0.0", "yanked": False},
+            {"num": "1.0.0", "yanked": False},
+        ],
+    }
+    deps_by_version = {
+        "1.0.0": [{"crate_id": "dep", "kind": "normal",
+                   "optional": False}],
+        "2.0.0": [{"crate_id": "dep", "kind": "normal",
+                   "optional": True}],
+    }
+
+    class _Http:
+        def get_json(self, url: str):
+            if url.endswith("/dependencies"):
+                version = url.rstrip("/").split("/")[-2]
+                return {"dependencies": deps_by_version[version]}
+            return aggregate
+
+    client = CratesClient(_Http())
+    parent = Dependency(
+        ecosystem="Cargo", name="parent", version="1.0.0",
+        declared_in=Path("/test"), scope="main",
+        is_lockfile=False, pin_style=PinStyle.EXACT, direct=True,
+        purl="pkg:cargo/parent@1.0.0",
+        parser_confidence=Confidence("high", reason="test"),
+    )
+    transitive = Dependency(
+        ecosystem="Cargo", name="dep", version="1.0.0",
+        declared_in=Path("/test"), scope="main",
+        is_lockfile=False, pin_style=PinStyle.EXACT, direct=False,
+        purl="pkg:cargo/dep@1.0.0",
+        parser_confidence=Confidence("high", reason="test"),
+        source_kind="cascade_resolver",
+        source_extra={"via": ["parent"]},
+    )
+    findings = detect_droppable_transitives(
+        [parent, transitive],
+        vuln_findings=[_vuln(transitive)],
+        cargo_client=client,
+    )
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.parent_latest_version == "2.0.0"   # not yanked 3.0.0
+    assert f.transitive_status_in_latest == "extras-gated"
+    assert f.extra_name == "optional-feature"
 
 
 # ---------------------------------------------------------------------------
