@@ -43,6 +43,7 @@ from codeql_scope import (
     build_graph,
     discover_py_files,
     init_imports,
+    missing_graph_covered_py,
     transitive_dependents,
 )
 
@@ -318,6 +319,34 @@ def compute_tier_dispatch(
         print(
             f"Root harness change ({', '.join(harness_hits)}) — "
             "full tier dispatch (see ROOT_HARNESS_FILES)"
+        )
+        result = _force_all_dispatch(repo)
+        n_all = len(discover_py_files(repo))
+        result["_stats"] = {
+            "closure": n_all,
+            "total": n_all,
+            "changed": len(changed_files),
+            "dependents": 0,
+        }
+        return result
+
+    # Deleted / renamed graph-covered modules: the reverse graph is
+    # keyed by on-disk files, so a changed .py that no longer exists
+    # (a deletion, or the OLD path of a rename) has no key — every
+    # importer the change broke drops out of the closure and the
+    # ``(repo / f).is_file()`` tier filter then discards the path
+    # itself, dispatching ZERO tiers for a PR that breaks its
+    # importers. Cannot map → full dispatch, mirroring the harness
+    # gate above.
+    missing_py = missing_graph_covered_py(
+        {Path(f) for f in changed_files if f.endswith(".py")}, repo
+    )
+    if missing_py:
+        print(
+            f"Changed Python file(s) missing from disk "
+            f"({', '.join(missing_py)}) — deleted or renamed modules "
+            "have no import-graph key, so their broken importers "
+            "cannot be resolved; failing toward full tier dispatch"
         )
         result = _force_all_dispatch(repo)
         n_all = len(discover_py_files(repo))

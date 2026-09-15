@@ -200,6 +200,97 @@ class TestTierConsistency:
                 )
 
 
+def _active(result: dict) -> list[str]:
+    return sorted(t for t, i in result.items()
+                  if not t.startswith("_") and i["run"])
+
+
+def _is_full_dispatch(result: dict) -> bool:
+    return all(i["run"] for t, i in result.items() if not t.startswith("_"))
+
+
+@pytest.fixture(scope="module")
+def mini_repo(tmp_path_factory) -> Path:
+    """Synthetic scan tree exercising every PR shape the dispatcher
+    must map: imported modules, package tests, tier-owned packages,
+    runtime data files with and without an owning package, and a
+    package with code but no test coverage."""
+    repo = tmp_path_factory.mktemp("mini_repo")
+    # Imported module + its test (fast tier).
+    (repo / "core/pkga").mkdir(parents=True)
+    (repo / "core/pkga/__init__.py").write_text("")
+    (repo / "core/pkga/mod.py").write_text("VALUE = 1\n")
+    (repo / "core/pkga/tests").mkdir()
+    (repo / "core/pkga/tests/test_mod.py").write_text(
+        "import core.pkga.mod\n\ndef test_value():\n"
+        "    assert core.pkga.mod.VALUE == 1\n"
+    )
+    # Runtime data owned by pkga (no test references the file itself).
+    (repo / "core/pkga/data").mkdir()
+    (repo / "core/pkga/data/rules.json").write_text("{}")
+    # Data directory with NO .py-bearing ancestor below the scan root.
+    (repo / "core/orphan").mkdir()
+    (repo / "core/orphan/blob.bin").write_text("x")
+    # Package with code but no tests and no importers.
+    (repo / "core/untested").mkdir()
+    (repo / "core/untested/helper.py").write_text("X = 1\n")
+    (repo / "core/untested/data").mkdir()
+    (repo / "core/untested/data/cfg.yml").write_text("a: 1\n")
+    # Tier-owned package (sca's test_dirs is the whole package).
+    (repo / "packages/sca/tests").mkdir(parents=True)
+    (repo / "packages/sca/__init__.py").write_text("")
+    (repo / "packages/sca/optimise.py").write_text("Y = 2\n")
+    (repo / "packages/sca/tests/test_shape.py").write_text(
+        "def test_shape():\n    assert True\n"
+    )
+    (repo / "packages/sca/data/popular").mkdir(parents=True)
+    (repo / "packages/sca/data/popular/pypi.json").write_text("[]")
+    return repo
+
+
+class TestDispatchFailsOpen:
+    """Simulation harness for the PR shapes that must never dispatch
+    zero tiers: deleted / renamed imported modules, data-only changes,
+    and workflow-harness-only changes. The dispatch decision fails
+    toward FULL dispatch on any file it cannot map — never toward
+    zero — while mappable shapes stay scoped."""
+
+    def test_plain_edit_stays_scoped(self, mini_repo):
+        # Control: an in-place edit of the same module dispatches its
+        # test without falling to full dispatch.
+        result = compute_tier_dispatch(["core/pkga/mod.py"], mini_repo)
+        assert result["python"]["run"]
+        assert Path("core/pkga/tests/test_mod.py") in result["python"]["files"]
+        assert not _is_full_dispatch(result)
+
+    def test_deleted_module_forces_full_dispatch(self, mini_repo):
+        # A deletion PR lists the removed path; the file is absent
+        # from the checkout, so the reverse graph has no key for it —
+        # its broken importers cannot be resolved.
+        result = compute_tier_dispatch(["core/pkga/gone.py"], mini_repo)
+        assert _is_full_dispatch(result), (
+            f"deleted module under-dispatched: only {_active(result)}"
+        )
+
+    def test_renamed_module_forces_full_dispatch(self, mini_repo):
+        # A rename arrives as [old_path, new_path]; the old path is
+        # absent from the checkout while importers still name it.
+        result = compute_tier_dispatch(
+            ["core/pkga/old_name.py", "core/pkga/mod.py"], mini_repo,
+        )
+        assert _is_full_dispatch(result), (
+            f"renamed module under-dispatched: only {_active(result)}"
+        )
+
+    def test_missing_py_outside_graph_stays_scoped(self, mini_repo):
+        # Both directions: a deleted .py the graph never covered
+        # (outside core//packages) proves nothing about lost import
+        # edges and must NOT torch scoping with a full dispatch.
+        result = compute_tier_dispatch(["docs/example.py"], mini_repo)
+        assert not _is_full_dispatch(result)
+        assert _active(result) == []
+
+
 @pytest.mark.slow
 class TestOnRealRepo:
     """Integration tests against the actual RAPTOR codebase."""

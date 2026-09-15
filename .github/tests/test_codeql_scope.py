@@ -18,6 +18,7 @@ from codeql_scope import (
     file_to_module,
     init_imports,
     load_base_config,
+    missing_graph_covered_py,
     module_to_files,
     transitive_dependents,
     write_scoped_config,
@@ -223,6 +224,34 @@ class TestInitImports:
         changed = {Path("core/llm/client.py")}
         extra = init_imports(changed, all_files)
         assert extra == set()
+
+
+class TestMissingGraphCoveredPy:
+    def test_deleted_scan_root_module_reported(self, tmp_path):
+        (tmp_path / "core").mkdir()
+        (tmp_path / "core/present.py").write_text("X = 1\n")
+        missing = missing_graph_covered_py(
+            {Path("core/present.py"), Path("core/deleted.py")}, tmp_path,
+        )
+        assert missing == ["core/deleted.py"]
+
+    def test_extra_root_module_reported(self, tmp_path):
+        missing = missing_graph_covered_py({Path("raptor.py")}, tmp_path)
+        assert missing == ["raptor.py"]
+
+    def test_missing_file_outside_graph_ignored(self, tmp_path):
+        # A deleted .py the graph never covered proves nothing about
+        # lost import edges — it must not trigger a full scan.
+        missing = missing_graph_covered_py(
+            {Path("docs/example.py"), Path("libexec/tool.py")}, tmp_path,
+        )
+        assert missing == []
+
+    def test_non_py_paths_ignored(self, tmp_path):
+        missing = missing_graph_covered_py(
+            {Path("core/data/rules.json")}, tmp_path,
+        )
+        assert missing == []
 
 
 class TestLoadBaseConfig:

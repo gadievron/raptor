@@ -216,11 +216,17 @@ jobs:
           #     for very large PRs or transient API failures.
           # We treat "no list" the same as the first-push case: fall
           # through to compute_filters and force all filters true.
+          #
+          # Renames also emit ``previous_filename``: the OLD path of a
+          # renamed module is what other files still import, and
+          # test_scope.py resolves dependents from the changed paths —
+          # with only the new name in the list, the broken importers
+          # were never seeded and the PR dispatched zero tiers.
           case "$EVENT" in
             pull_request|pull_request_target)
               gh api --paginate \
                 "repos/${REPO}/pulls/${PR_NUMBER}/files" \
-                --jq '(. // [])[]?.filename' >> "$out"
+                --jq '(. // [])[]? | .filename, (.previous_filename // empty)' >> "$out"
               ;;
             push)
               if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
@@ -230,7 +236,7 @@ jobs:
               else
                 gh api --paginate \
                   "repos/${REPO}/compare/${BEFORE}...${AFTER}" \
-                  --jq '(.files // [])[]?.filename' >> "$out"
+                  --jq '(.files // [])[]? | .filename, (.previous_filename // empty)' >> "$out"
               fi
               ;;
             *)

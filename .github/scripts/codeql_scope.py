@@ -302,6 +302,38 @@ def build_graph(
     return dict(reverse), parse_failures
 
 
+def missing_graph_covered_py(
+    changed_py: set[Path], repo: Path
+) -> list[str]:
+    """Changed .py paths the import graph is responsible for but which
+    are absent from disk — deleted files, or the pre-rename path of a
+    renamed file.
+
+    The reverse graph resolves edges only through files present on
+    disk (``discover_py_files`` → ``mod_to_file``), so a deleted or
+    renamed-away module has no key in it: the importers the change
+    just broke silently drop out of the closure. Callers must treat
+    any hit as "cannot map" and fail toward a FULL scan / dispatch,
+    never toward zero.
+
+    Only graph-covered paths count (under ``SCAN_ROOTS`` or named in
+    ``EXTRA_ROOTS``); a deleted .py elsewhere was never in the graph,
+    so its absence proves nothing about lost edges.
+    """
+    missing: list[str] = []
+    for f in sorted(changed_py):
+        s = str(f)
+        if not s.endswith(".py"):
+            continue
+        covered = (
+            any(s.startswith(r + "/") for r in SCAN_ROOTS)
+            or s in EXTRA_ROOTS
+        )
+        if covered and not (repo / f).is_file():
+            missing.append(s)
+    return missing
+
+
 def transitive_dependents(
     changed: set[Path], reverse: dict[Path, set[Path]]
 ) -> set[Path]:
@@ -468,6 +500,16 @@ def main() -> int:
                     full_reason = "requirements file changed"
                 elif not changed_py:
                     full_reason = "no Python files in changeset"
+                else:
+                    missing = missing_graph_covered_py(changed_py, repo)
+                    if missing:
+                        # Deleted / renamed-away modules have no key in
+                        # the reverse graph — their broken importers
+                        # cannot be resolved, so scan everything.
+                        full_reason = (
+                            "changed Python file(s) missing from disk "
+                            f"(deleted or renamed): {', '.join(missing)}"
+                        )
 
     # Discover all .py files and build the graph.
     all_py = discover_py_files(repo)
