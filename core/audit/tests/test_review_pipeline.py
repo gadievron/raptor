@@ -493,6 +493,36 @@ void *alloc_obj(size_t n) {
         result = self._py_wrapper("helper.process(arg) == request.param")
         assert result.skip_llm
 
+    def test_callgraph_resolved_dangerous_callee_not_skipped(self):
+        # The extraction pipeline resolved the delegate to a dangerous
+        # callee the body text does not spell (macro indirection) —
+        # the call-graph veto must refuse the skip.
+        from core.audit.prefilter import _is_trivial_wrapper
+        is_wrapper, _ = _is_trivial_wrapper(
+            "int f(int x) {\n    return DO_OP(x);\n}\n",
+            "c", [{"name": "system"}],
+        )
+        assert not is_wrapper
+
+    def test_callgraph_resolved_project_sink_callee_not_skipped(self):
+        from core.audit.prefilter import _is_trivial_wrapper
+        is_wrapper, _ = _is_trivial_wrapper(
+            "def f(x):\n    return do_op(x)\n",
+            "python", [{"name": "render_query"}],
+            project_sinks=frozenset({"render_query"}),
+        )
+        assert not is_wrapper
+
+    def test_callgraph_benign_callee_still_skips(self):
+        # Exact-name match only: a benign resolved callee (even one
+        # sharing no name with the body spelling) keeps the skip.
+        from core.audit.prefilter import _is_trivial_wrapper
+        is_wrapper, _ = _is_trivial_wrapper(
+            "def f(x):\n    return do_op(x)\n",
+            "python", [{"name": "compute_value"}],
+        )
+        assert is_wrapper
+
 
 # ── Multi-language prefilter patterns ─────────────────────────────
 

@@ -695,7 +695,7 @@ def _strip_executor_dunders(name: str) -> str:
 def _is_trivial_wrapper(
     source: str,
     lang: str,
-    _callees: list[dict[str, Any]] | None,
+    callees: list[dict[str, Any]] | None,
     *,
     project_sinks: frozenset | None = None,
     extra_dangerous: frozenset = frozenset(),
@@ -707,6 +707,22 @@ def _is_trivial_wrapper(
     """
     if not source or not source.strip():
         return False, ""
+
+    # Call-graph veto: when the extraction pipeline already resolved
+    # this function's callees, a dangerous resolved name refuses the
+    # skip regardless of how the body spells the call (macro
+    # indirection, token paste, an alias the textual analysis below
+    # cannot see). Exact-name match, mirroring _is_trivially_clean's
+    # callee check — tail matching here would flip wrappers delegating
+    # to project functions that merely share a bare name with a sink.
+    for c in callees or []:
+        cname = c.get("name", "")
+        if not cname:
+            continue
+        if cname in _WRAPPER_DANGEROUS_CALLEES or cname in extra_dangerous:
+            return False, ""
+        if project_sinks and cname in project_sinks:
+            return False, ""
 
     lines = source.strip().splitlines()
     code_lines = [
