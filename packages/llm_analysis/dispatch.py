@@ -24,6 +24,7 @@ from core.llm.structured_call import (
 from core.llm.structured_call import (
     is_auth_error_text as _is_auth_error,
 )
+from core.security.log_sanitisation import escape_nonprintable
 
 logger = logging.getLogger(__name__)
 
@@ -539,8 +540,13 @@ def _dispatch_inner(
                         thinking_tokens=item_thinking,
                     )
 
-                # Progress line
-                display = task.get_item_display(item)
+                # Progress line. `display` derives from the scanned
+                # (hostile) repo — file basenames, group criterion
+                # values — and goes straight to the operator TTY:
+                # escape non-printables so a crafted filename cannot
+                # drive ANSI/OSC sequences (title changes, log-line
+                # forgery) onto the terminal mid-run.
+                display = escape_nonprintable(task.get_item_display(item))
                 if "is_exploitable" in processed:
                     exploitable = processed.get("is_exploitable", False)
                     score = processed.get("exploitability_score")
@@ -586,7 +592,7 @@ def _dispatch_inner(
                     "error_type": "circuit_breaker",
                     "analysed_by": model_name,
                 })
-                display = task.get_item_display(item)
+                display = escape_nonprintable(task.get_item_display(item))
                 prefix = (
                     f"  [{completed}/{total} "
                     f"{_format_elapsed(elapsed)} "
@@ -606,13 +612,16 @@ def _dispatch_inner(
                 results.append({"finding_id": item_id, "error": err_str,
                                 "error_type": error_type,
                                 "analysed_by": model_name})
-                display = task.get_item_display(item)
+                display = escape_nonprintable(task.get_item_display(item))
                 prefix = (
                     f"  [{completed}/{total} "
                     f"{_format_elapsed(elapsed)} "
                     f"${running_cost:.2f}]"
                 )
-                print(f"{prefix} {display} FAILED — {err_str}")
+                # err_str can embed response excerpts on the external
+                # LLM path (the CC path pre-escapes; this one is the
+                # chokepoint for everything else).
+                print(f"{prefix} {display} FAILED — {escape_nonprintable(err_str)}")
 
                 # Record schema failure telemetry (skip auth/network errors)
                 if error_type not in ("auth", "timeout") and profile_name:

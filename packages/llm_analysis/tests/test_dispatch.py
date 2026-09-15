@@ -477,6 +477,53 @@ class TestDispatchTaskIntegration:
         summary = ct.get_summary()
         assert "test-model" in summary["cost_by_model"]
 
+    def test_progress_line_escapes_hostile_display(self, capsys):
+        # The progress line's display derives from the scanned
+        # (hostile) repo's file names and prints straight to the
+        # operator TTY — a raw ESC would allow ANSI/OSC injection
+        # (title changes, log-line forgery) mid-run.
+        hostile = _make_finding(
+            "f-001", file_path="src/\x1b]0;pwned\x07evil.py",
+        )
+
+        def mock_fn(prompt, schema, system_prompt, temperature, model):
+            return _make_dispatch_result(exploitable=True, score=0.9)
+
+        dispatch_task(
+            task=AnalysisTask(),
+            items=[hostile],
+            dispatch_fn=mock_fn,
+            role_resolution={},
+            prior_results={},
+            cost_tracker=CostTracker(0),
+            max_parallel=1,
+        )
+        out = capsys.readouterr().out
+        assert "\x1b" not in out
+        assert "evil.py" in out  # content survives, escaped
+
+    def test_failure_line_escapes_llm_derived_error(self, capsys):
+        # External-LLM errors can embed response excerpts — the
+        # FAILED progress line must escape them (the CC path
+        # pre-escapes; this is the chokepoint for everything else).
+        findings = [_make_finding("f-001")]
+
+        def failing_fn(prompt, schema, system_prompt, temperature, model):
+            raise RuntimeError("response said \x1b[2J\x1b[H wipe")
+
+        dispatch_task(
+            task=AnalysisTask(),
+            items=findings,
+            dispatch_fn=failing_fn,
+            role_resolution={},
+            prior_results={},
+            cost_tracker=CostTracker(0),
+            max_parallel=1,
+        )
+        out = capsys.readouterr().out
+        assert "FAILED" in out
+        assert "\x1b" not in out
+
     def test_dispatch_handles_errors(self):
         """dispatch_task handles exceptions gracefully."""
         findings = [_make_finding("f-001")]
