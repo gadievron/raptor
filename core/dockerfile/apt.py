@@ -160,10 +160,12 @@ def _split_commands(args: str) -> list[list[str]]:
 
     Tokenisation goes through ``shlex.split`` (POSIX mode) so quoted
     arguments are unquoted (``"curl"`` -> ``curl``) and backslash
-    escapes are honoured. ``&&`` / ``||`` / ``;`` / ``|`` split
-    commands whether they're standalone (``a && b``) or fused
+    escapes are honoured. ``&&`` / ``||`` / ``;`` / ``|`` / ``&``
+    split commands whether they're standalone (``a && b``) or fused
     (``update;install``, ``yes|apt-get``) — the connectors are
-    pre-padded so shlex sees them as their own tokens.
+    pre-padded so shlex sees them as their own tokens. Backgrounding
+    ``&`` is a separator like ``;``: ``foo & apt-get install pkg``
+    starts a NEW command whose installs must not be missed.
 
     On unbalanced quotes (``shlex.ValueError``) we fall back to
     plain whitespace splitting so a broken Dockerfile doesn't
@@ -171,14 +173,17 @@ def _split_commands(args: str) -> list[list[str]]:
     """
     # Pre-process so connectors are always standalone tokens. Order
     # matters: pad ``&&`` / ``||`` first so the ``;`` / ``|`` pads
-    # don't turn ``&&`` into ``& &``. The final ``|  |`` reverse
-    # repairs ``||`` that the bare-``|`` pad would otherwise split.
+    # don't turn ``&&`` into ``& &``. The ``|  |`` / ``&  &`` reverse
+    # repairs restore ``||`` / ``&&`` that the bare-character pads
+    # split.
     padded = (
         args.replace("&&", " && ")
         .replace("||", " || ")
         .replace(";", " ; ")
         .replace("|", " | ")
         .replace("|  |", "||")
+        .replace("&", " & ")
+        .replace("&  &", "&&")
     )
     try:
         tokens = shlex.split(padded, comments=False, posix=True)
@@ -187,7 +192,7 @@ def _split_commands(args: str) -> list[list[str]]:
     out: list[list[str]] = []
     current: list[str] = []
     for tok in tokens:
-        if tok in ("&&", "||", ";", "|"):
+        if tok in ("&&", "||", ";", "|", "&"):
             if current:
                 out.append(current)
                 current = []
@@ -210,9 +215,13 @@ def _packages_from_command(
     Subshell parens are unwrapped: tokens with a leading ``(`` or
     trailing ``)`` are stripped. ``( apt-get install -y pkg )`` and
     ``(apt-get install -y pkg)`` both parse the same as the bare
-    form.
+    form. Command-substitution spans are dropped FIRST — paren
+    stripping would otherwise launder a fragment like ``pkgs.txt)``
+    (from ``$(cat pkgs.txt)``) past ``_parse_pkg``'s ``)`` rejection
+    and into the inventory as a phantom package name.
     """
-    tokens = [_strip_subshell_paren(t) for t in tokens if t]
+    tokens = _drop_substitution_spans([t for t in tokens if t])
+    tokens = [_strip_subshell_paren(t) for t in tokens]
     tokens = [t for t in tokens if t]
     i = 0
     # Skip ``KEY=VALUE`` env-var prefixes (e.g. DEBIAN_FRONTEND),
@@ -319,6 +328,43 @@ def _recurse_shell_c(
         # Non-flag before any ``-c`` — script invocation, out of scope.
         return []
     return []
+
+
+def _drop_substitution_spans(tokens: list[str]) -> list[str]:
+    """Drop every token covered by a command substitution span.
+
+    ``shlex.split`` has no substitution awareness: ``$(cat pkgs.txt)``
+    arrives as ``["$(cat", "pkgs.txt)"]`` and ``$(cat a b)`` leaves the
+    MIDDLE fragments as bare clean-looking tokens. None of them are
+    package names — the substitution's output is unknowable statically
+    — so the whole span (``$(``/`` ` `` through its close, tracked
+    across tokens) is removed before any further token cleaning.
+    Tokens outside every span pass through untouched, so a real
+    package next to a substitution is still extracted. A plain ``)``
+    at depth 0 (subshell close) is NOT treated as a span end —
+    ``_strip_subshell_paren`` keeps handling that shape.
+    """
+    out: list[str] = []
+    depth = 0
+    in_backtick = False
+    for tok in tokens:
+        in_span = depth > 0 or in_backtick
+        i = 0
+        while i < len(tok):
+            c = tok[i]
+            if c == "`":
+                in_backtick = not in_backtick
+            elif c == "$" and tok.startswith("$(", i):
+                depth += 1
+                i += 2
+                continue
+            elif c == ")" and depth > 0:
+                depth -= 1
+            i += 1
+        if in_span or depth > 0 or in_backtick or "$(" in tok or "`" in tok:
+            continue
+        out.append(tok)
+    return out
 
 
 def _strip_subshell_paren(tok: str) -> str:
