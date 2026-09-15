@@ -1776,8 +1776,14 @@ def _python_chain_reaches_sink(
     value — the validator's constraint no longer applies to it.
     Without the kill, ``y = name; y = request.args.get('raw')`` left
     ``y`` "validated" at the sink and the Tier 0 verdict suppressed a
-    live flow.  Assignments are processed in source order (single
-    forward pass) so a later rebind wins over earlier derivation.
+    live flow.  ALL binding forms — Assign-family and the non-Assign
+    rebinds :func:`_node_rebinds_var` enumerates (loop targets, walrus,
+    ``with``/``except … as``, match captures, imports, def/class) —
+    are processed in ONE pass ordered by source position, so a later
+    rebind wins over an earlier derivation AND a derivation from an
+    already-rebound variable never joins (a kill that ran after chain
+    growth let ``for name in …: … ; y = name`` certify ``y`` from the
+    raw loop value).
     Loop-carried back-edges ARE modeled in the kill direction: a
     rebind sharing a loop with the sink removes the member (see
     :func:`_rebound_in_loop_containing_sink` — a rebind after the sink
@@ -1796,16 +1802,44 @@ def _python_chain_reaches_sink(
     # straight-line same-scope code and extended the validated chain
     # across scopes (false SOUND).  Walk only the sink's own scope.
     scope_root = _function_containing(tree, sink_line) or tree
-    assigns = [
+    # ONE ordered pass over the whole window — Assign-family chain
+    # grow/kill AND the non-Assign rebind-KILL interleaved by source
+    # position.  A separate position-insensitive kill pass ran AFTER
+    # chain growth and only removed the rebound name itself, so
+    # ``for name in request.args.getlist('e'):`` followed by
+    # ``y = name`` certified ``y`` from the ALREADY-REBOUND raw value
+    # (false SOUND).  Killing at the rebind's own position means every
+    # later derivation sees the member already gone.
+    window = [
         node for node in _walk_same_scope(scope_root)
-        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign))
-        and validator_line <= (getattr(node, "lineno", None) or 0) <= sink_line
-        and node.value is not None
+        if validator_line <= (getattr(node, "lineno", None) or -1) <= sink_line
     ]
-    assigns.sort(key=lambda n: (n.lineno, n.col_offset))
-    for node in assigns:
+    window.sort(key=lambda n: (n.lineno, getattr(n, "col_offset", 0)))
+    for node in window:
+        if not isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            # Non-Assign binding forms: walrus / loop targets,
+            # ``with|except ... as``, match-case captures, import
+            # aliases, nested def/class shadowing.  Shrink-only —
+            # back-edges never GROW the chain.  The validator line's
+            # own binding IS the sanitization (e.g. a walrus wrapping
+            # the substitution), so it is exempt, mirroring the
+            # Assign-family ``at_validator`` exemption below.
+            if node.lineno == validator_line:
+                continue
+            for var in list(chain):
+                if _node_rebinds_var(node, var):
+                    chain.discard(var)
+            continue
+        if node.value is None:
+            continue  # bare annotation (``x: int``) binds nothing
+        # Load-context names only: a walrus TARGET inside the RHS
+        # (``y = (x := raw)``) is a simultaneous rebind, not a read of
+        # the (possibly validated) old value — counting it as a read
+        # certified ``y`` from stale ``x`` while ``x`` was being
+        # rebound to raw data in the same statement.
         rhs_names = {
-            n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)
+            n.id for n in ast.walk(node.value)
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
         }
         targets = (list(node.targets) if isinstance(node, ast.Assign)
                    else [node.target])
@@ -1847,26 +1881,6 @@ def _python_chain_reaches_sink(
             # Rebind from non-chain RHS: the target no longer carries
             # the validated value.
             chain -= target_names
-    # Rebind-KILL for non-Assign binding forms: walrus targets,
-    # for/async-for loop targets, ``with ... as``, ``except ... as``,
-    # nested def/class shadowing. The ordered forward pass above sees
-    # only Assign/AugAssign/AnnAssign, so
-    # ``for name in request.args.getlist('e'):`` between validator and
-    # sink left ``name`` "validated" while the sink consumes the loop
-    # rebind. Shrink-only and position-insensitive inside the window —
-    # conservative; the charset twin ``_variable_reassigned_between``
-    # already handles these forms via ``_node_rebinds_var``.
-    for node in _walk_same_scope(scope_root):
-        line = getattr(node, "lineno", None)
-        if line is None or not (validator_line <= line <= sink_line):
-            continue
-        if line == validator_line:
-            continue
-        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
-            continue  # the ordered forward pass owns these
-        for var in list(chain):
-            if _node_rebinds_var(node, var):
-                chain.discard(var)
     # Loop back-edge kill: a rebind textually AFTER the sink (or before
     # the validator) still reaches the sink on the next iteration when
     # it shares a loop with the sink — the flat forward pass cannot see

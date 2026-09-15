@@ -2996,3 +2996,63 @@ def test_chain_kills_import_as_rebind():
     assert sb._python_chain_reaches_sink(
         tree, "x", 3, 6, "    return open(x)",
     ) is False
+
+
+def test_chain_kill_precedes_derivation_from_rebound_var():
+    """Rebind then derive: ``for name in ...:`` rebinds, ``y = name``
+    then derives from the RAW loop value.  Pre-fix the kill pass ran
+    after chain growth and removed only ``name`` — ``y`` certified from
+    the already-rebound value (false SOUND)."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    name = request.args.get('name')\n"
+        "    if not re.match(r'^[a-z]+$', name):\n"    # line 3
+        "        return 'bad'\n"
+        "    for name in request.args.getlist('e'):\n"  # line 5 — rebind
+        "        pass\n"
+        "    y = name\n"                                # line 7 — derive
+        "    return open(y)\n"                          # line 8 — sink
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "name", 3, 8, "    return open(y)",
+    ) is False
+
+
+def test_chain_derive_then_rebind_still_certifies():
+    """Two-direction: derive BEFORE the rebind — ``y`` captured the
+    validated value while it was still validated, so the later loop
+    rebind of ``name`` must not kill ``y``."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    name = request.args.get('name')\n"
+        "    if not re.match(r'^[a-z]+$', name):\n"    # line 3
+        "        return 'bad'\n"
+        "    y = name\n"                                # line 5 — derive
+        "    for name in request.args.getlist('e'):\n"  # line 6 — rebind
+        "        pass\n"
+        "    return open(y)\n"                          # line 8 — sink
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "name", 3, 8, "    return open(y)",
+    ) is True
+
+
+def test_chain_walrus_target_in_rhs_is_not_a_read():
+    """``y = (name := raw)`` rebinds ``name`` and binds ``y`` to the
+    RAW value in one statement.  The walrus TARGET inside the RHS is a
+    simultaneous rebind, not a read of the validated old value — ``y``
+    must never join the chain through it."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    name = request.args.get('name')\n"
+        "    if not re.match(r'^[a-z]+$', name):\n"        # line 3
+        "        return 'bad'\n"
+        "    y = (name := request.args.get('raw'))\n"       # line 5
+        "    return open(y)\n"                              # line 6
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "name", 3, 6, "    return open(y)",
+    ) is False
