@@ -52,6 +52,7 @@ from core.json import (  # noqa: E402
     load_json,
     save_json,
 )
+from core.security.log_sanitisation import sanitise_for_terminal  # noqa: E402
 
 # Trace files are analysis artifacts (operator- or RAPTOR-produced).
 _MAX_TRACES_BYTES = 64 * 1024 * 1024
@@ -430,7 +431,8 @@ def _rank_hunt_items(items: list, args: argparse.Namespace) -> tuple[list, float
         return [r.item for r in result.ranked] + rest, result.stats.cost
     except Exception as e:  # noqa: BLE001 — ordering refinement must
         # never break the hunt pipeline.
-        print(f"  Rank: failed ({e}); merge order kept", file=sys.stderr)
+        print(f"  Rank: failed ({sanitise_for_terminal(str(e))}); merge order kept",
+              file=sys.stderr)
         return items, 0.0
 
 
@@ -619,7 +621,12 @@ def _build_cost_and_verbose_helpers(verbose: bool):
 
     def _verbose_logger(line: str) -> None:
         # Print to stderr so the JSON output on stdout stays clean.
-        print(line, file=sys.stderr, flush=True)
+        # The lines relay model-authored text and tool-argument
+        # summaries (which quote hostile target-file content read via
+        # the sandboxed tools) — escape control bytes at the sink so
+        # every producer is covered.
+        print(sanitise_for_terminal(line, max_len=400),
+              file=sys.stderr, flush=True)
 
     return cost_by_model, (_verbose_logger if verbose else None)
 
@@ -694,7 +701,6 @@ def _print_summary(payload: dict, output_path: Path) -> None:
             if err:
                 # Truncate AND escape — model error text can relay
                 # response excerpts with terminal controls.
-                from core.security.log_sanitisation import sanitise_for_terminal
                 print(f"  {m}: {sanitise_for_terminal(str(err), max_len=200)}",
                       file=sys.stderr)
 
@@ -710,7 +716,6 @@ def _print_summary(payload: dict, output_path: Path) -> None:
             print(f"Cost: ${total_cost:.4f}")
     if summary:
         # Generic summary print — keys vary by adapter
-        from core.security.log_sanitisation import sanitise_for_terminal
         keys = sorted(k for k in summary if k not in ("models",))
         parts = [
             f"{sanitise_for_terminal(str(k), max_len=48)}="

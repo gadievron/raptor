@@ -19,6 +19,7 @@ import re
 from typing import Any, TYPE_CHECKING
 
 from core.json import dumps_display
+from core.security.log_sanitisation import sanitise_for_terminal
 from core.llm.providers import create_provider
 from core.llm.tool_use import (
     CacheControl,
@@ -230,16 +231,24 @@ def _make_event_callback(
     def _on_event(event) -> None:
         # Only log the high-signal events. Skip low-signal ones (TurnStarted,
         # ToolCallReturned which would double-log).
+        # Model text and tool args quote hostile target-file content —
+        # escape control bytes at production so every logger consumer
+        # (not just the raptor-understand stderr sink, which escapes
+        # again) receives terminal-safe lines.
         if isinstance(event, TurnCompleted):
             for blk in event.response.content:
                 if isinstance(blk, ToolCall):
                     verbose_logger(
-                        f"[{mode}/{model_name}] tool: {blk.name}"
-                        f"({_short_args(blk.input)})"
+                        f"[{mode}/{model_name}] tool: "
+                        f"{sanitise_for_terminal(blk.name, max_len=80)}"
+                        f"({sanitise_for_terminal(_short_args(blk.input))})"
                     )
                 elif hasattr(blk, "text") and blk.text.strip():
                     snippet = blk.text.strip()[:120].replace("\n", " ")
-                    verbose_logger(f"[{mode}/{model_name}] text: {snippet}")
+                    verbose_logger(
+                        f"[{mode}/{model_name}] text: "
+                        f"{sanitise_for_terminal(snippet)}"
+                    )
     return _on_event
 
 

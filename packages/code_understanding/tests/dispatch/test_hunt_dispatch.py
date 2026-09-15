@@ -722,3 +722,42 @@ class TestSandboxBoundary:
         read_tool = next(t for t in tools if t.name == "read_file")
         out = json.loads(read_tool.handler({"path": "../../etc/passwd"}))
         assert "error" in out
+
+
+class TestVerboseCallbackScrub:
+    """The verbose callback relays model-authored text and tool-arg
+    summaries, which quote hostile target-file content — the lines
+    must be terminal-safe for ANY logger consumer."""
+
+    def _emit(self, blocks) -> list:
+        from core.llm.tool_use import StopReason, TurnCompleted, TurnResponse
+        from packages.code_understanding.dispatch.hunt_dispatch import (
+            _make_event_callback,
+        )
+        lines: list = []
+        cb = _make_event_callback("m", "hunt", lines.append)
+        cb(TurnCompleted(
+            iteration=1,
+            response=TurnResponse(
+                content=blocks, stop_reason=StopReason.COMPLETE,
+                input_tokens=1, output_tokens=1,
+            ),
+            cost_usd=0.0,
+        ))
+        return lines
+
+    def test_model_text_escaped(self) -> None:
+        from core.llm.tool_use import TextBlock
+        lines = self._emit([TextBlock(text="pwn \x1b[2J\x9bhidden")])
+        assert lines, "text block should log"
+        assert all("\x1b" not in ln and "\x9b" not in ln for ln in lines)
+        assert any("pwn" in ln for ln in lines)
+
+    def test_tool_args_escaped(self) -> None:
+        from core.llm.tool_use import ToolCall
+        lines = self._emit([ToolCall(
+            id="t1", name="Grep",
+            input={"pattern": "x \x1b]0;evil\x07"},
+        )])
+        assert lines, "tool call should log"
+        assert all("\x1b" not in ln and "\x07" not in ln for ln in lines)

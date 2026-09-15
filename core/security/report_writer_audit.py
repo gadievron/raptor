@@ -249,6 +249,15 @@ _REPORT_WRITER_FILES = (
     # inline _generate_report/_render_finding_lines) — same artifact,
     # same finding-derived interpolations, must stay under audit.
     "packages/exploitability_validation/orchestrator.py",
+    # /understand verbose producers: model text + tool-arg summaries
+    # reach the operator's stderr through a consumer-supplied logger
+    # CALLBACK (raptor-understand's _verbose_logger). Callback
+    # invocations are outside the detector's sink vocabulary (a
+    # documented walk-scope limit) — the lanes are sanitised at
+    # production AND at the raptor-understand sink; registration keeps
+    # any future direct print/write lanes in these files under audit.
+    "packages/code_understanding/dispatch/hunt_dispatch.py",
+    "packages/code_understanding/dispatch/trace_dispatch.py",
     "packages/frida/cli.py",
     # Patch oracle: captured target stdio rides RuntimeError text to
     # the operator terminal; escaped at construction and at the CLI
