@@ -1064,3 +1064,54 @@ def test_php_grammar_absent_fails_closed(monkeypatch):
     monkeypatch.setattr(lexical_view, "_VALIDATED", {})
     src = "<?php\ndie('disabled');\n"
     assert detect_module_load_abort("php", src) is None
+def test_rust_compile_error_in_macro_rules_arm_no_fabricated_abort():
+    # A compile_error! inside a macro_rules! arm is the ubiquitous
+    # "bad invocation" guard — it fires only on a caller's mistake,
+    # never at module load. Flagging it hard-suppressed live files.
+    src = (
+        "macro_rules! sel {\n"
+        "    ($x:expr) => { $x };\n"
+        "    () => {\n"
+        '        compile_error!("requires at least one branch")\n'
+        "    };\n"
+        "}\n"
+        "fn live() {}\n"
+    )
+    assert detect_module_load_abort("rust", src) is None
+
+
+def test_rust_compile_error_in_fn_body_no_fabricated_abort():
+    src = (
+        "fn f() {\n"
+        'compile_error!("x");\n'
+        "}\n"
+    )
+    assert detect_module_load_abort("rust", src) is None
+
+
+def test_rust_compile_error_in_paren_macro_token_tree_no_fabricated_abort():
+    # Macro invocations take any token-tree delimiter: a compile_error!
+    # inside ``ignore_it!( ... )`` never expands (the file compiles —
+    # rustc-verified) yet leaves the prefix BRACE-balanced; only the
+    # dangling ``(`` betrays the token tree.
+    src = (
+        "macro_rules! ignore_it { ($($t:tt)*) => {}; }\n"
+        "ignore_it!(\n"
+        'compile_error!("never expands")\n'
+        ");\n"
+        "pub fn live() {}\n"
+    )
+    assert detect_module_load_abort("rust", src) is None
+
+
+def test_rust_compile_error_in_bracket_macro_token_tree_no_fabricated_abort():
+    # Same shape with the ``[`` token-tree delimiter (rustc-verified
+    # to compile).
+    src = (
+        "macro_rules! ignore_it { ($($t:tt)*) => {}; }\n"
+        "ignore_it![\n"
+        'compile_error!("never expands")\n'
+        "];\n"
+        "pub fn live() {}\n"
+    )
+    assert detect_module_load_abort("rust", src) is None

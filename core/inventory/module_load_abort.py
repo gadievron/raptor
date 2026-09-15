@@ -506,10 +506,30 @@ def _detect_rust(content: str) -> ModuleLoadAbort | None:
     m = _RUST_COMPILE_ERROR.search(stripped)
     if not m:
         return None
+    # Module scope only: a ``compile_error!`` nested inside braces is
+    # most commonly a ``macro_rules!`` arm (the ubiquitous "bad
+    # invocation" guard, e.g. a fallback match arm) or function-body
+    # code — sites that fire conditionally or never, where flagging
+    # would hard-suppress a live file. A ``mod``-nested unconditional
+    # compile_error is skipped too: a missed deferral, the module-wide
+    # cheap (false-negative) direction. All three delimiter pairs
+    # count: macro invocations take any token-tree delimiter, and a
+    # ``compile_error!`` inside ``ignore_it!( ... )`` / ``ignore_it![
+    # ... ]`` never expands (rustc-verified) but leaves the prefix
+    # brace-balanced — only the dangling ``(`` / ``[`` betrays it.
+    # Valid Rust code before a genuine module-scope statement nets
+    # zero on every pair; delimiters inside strings/comments are
+    # already blanked, so raw counts over the prefix are exact.
+    prefix = stripped[: m.start()]
+    if any(
+        prefix.count(op) - prefix.count(cl) != 0
+        for op, cl in (("{", "}"), ("(", ")"), ("[", "]"))
+    ):
+        return None
     # Check that the preceding non-whitespace token isn't ``]`` (end
     # of an attribute). A bare attribute-attached compile_error like
     # ``#[cfg(...)] compile_error!(...)`` is conditional; skip it.
-    before = stripped[: m.start()].rstrip()
+    before = prefix.rstrip()
     if before.endswith("]"):
         return None
     line_no = stripped.count("\n", 0, m.start()) + 1
