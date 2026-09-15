@@ -199,6 +199,29 @@ _LLM_PHASES = frozenset({
     # Both are ledger rows, not tool invocations (each warned as an
     # "unsandboxed tool" on a live run).
     "checker_synthesis_ondemand", "prior_segments",
+    # Pass-ledger phase names the orchestrator books directly
+    # (``_phase(...)`` / ``start_phase(...)`` literals) — prep stages,
+    # post-loop passes, and resolution sweeps. Same construction
+    # argument as above: ledger rows, never tool invocations (a live
+    # run's finalize warned on every one of these as an "unsandboxed
+    # tool"). The closure test enumerates the orchestrator's literals
+    # so a new phase name cannot silently re-open the advisory noise.
+    "adversarial_refute", "auto_synthesize_rules",
+    "confidence_propagation", "flow_trace_review", "iterative_re_review",
+    "live_sink_requeue", "post_deepen_sweep", "post_loop_checks",
+    "prep_artifact_import", "prep_capability_probe",
+    "prep_channel_prepasses", "prep_consistency_prepass",
+    "prep_context_map", "prep_context_sets", "prep_edge_pass",
+    "prep_evidence_index", "prep_fail_open_census", "prep_finalize",
+    "prep_gap_compute", "prep_gap_scoring", "prep_iris_specs",
+    "prep_lifecycle_channels", "prep_macro_recovery",
+    "prep_mechanical_detectors", "prep_peer_groups", "prep_taint_passes",
+    "prep_triage", "resolve_gate_demoted", "sweep_promotion",
+    # Direct per-call ledger mints (``cost_tracker.record_call``
+    # literals) that no pass-ledger phase name covers: the IRIS
+    # refinement health-gate skip marker, the tier-1 edge-contract
+    # review class, and the adversarial-refuter pass.
+    "adversarial", "edge_review", "iris_refinement_skipped",
 })
 
 

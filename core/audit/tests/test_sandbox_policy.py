@@ -164,3 +164,46 @@ class TestLedgerPseudoPhasesExcluded:
         assert validate_all_tools_sandboxed(["mystery_binary"]) == [
             "mystery_binary"
         ]
+
+
+class TestLedgerPhaseClosure:
+    """Every phase name the orchestrator can book into the cost
+    ledger must be allowlisted in _LLM_PHASES (or carry a tool
+    policy): the ledger holds LLM spend classes exclusively, so each
+    un-allowlisted name is one guaranteed false "unsandboxed tool"
+    advisory line at every finalize."""
+
+    def test_orchestrator_phase_literals_are_covered(self):
+        import inspect
+        import re
+
+        from core.audit import orchestrator
+        from core.audit.sandbox_policy import validate_all_tools_sandboxed
+
+        src = inspect.getsource(orchestrator)
+        # Every ledger mint shape: pass-ledger phases AND direct
+        # per-call bookings (record_call / record_failed_attempt),
+        # whose first-arg literal becomes a phase key just the same.
+        names = set(re.findall(
+            r'(?:_phase|start_phase|record_call|record_failed_attempt)'
+            r'\(\s*"([a-z_]+)"',
+            src,
+        ))
+        assert len(names) > 30, (
+            "phase-literal extraction shrank — regex stale?"
+        )
+        missing = validate_all_tools_sandboxed(sorted(names))
+        assert missing == [], (
+            f"cost-ledger phase name(s) missing from _LLM_PHASES: {missing}"
+        )
+
+    def test_outcome_and_class_booked_phases_are_covered(self):
+        from core.audit.sandbox_policy import validate_all_tools_sandboxed
+
+        # Phases minted outside the pass ledger: outcome-level review
+        # bookings and the resume/synthesis pseudo-phases.
+        assert validate_all_tools_sandboxed([
+            "review", "re_review", "error_retry", "refinement",
+            "checker_synthesis_ondemand", "prior_segments",
+            "unclassified",
+        ]) == []
