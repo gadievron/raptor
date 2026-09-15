@@ -2535,3 +2535,61 @@ class TestMechanicalPatternsAreRealSemgrep:
         assert cfg.get("pattern") or cfg.get("rule")
         if cfg.get("pattern"):
             assert cfg.get("keyword") == "missing bounds check"
+
+
+class TestPremiseGateProfileLockstep:
+    """The premise-vacuity gate must model premises under exactly the
+    profile the verb's MAIN query uses. A gate profile looser than
+    the query's (e.g. the dual-signedness ``None``) would pass
+    premises that are contradictory under the query profile — the
+    main query then goes UNSAT and mints an authoritative "refuted"
+    (the masquerade the gate exists to block). A stricter/different
+    pin re-opens the same from the other side."""
+
+    def test_every_gate_profile_matches_the_following_query(self):
+        import ast as _ast
+
+        src = (
+            Path(__file__).resolve().parents[1] / "sweep.py"
+        ).read_text()
+        tree = _ast.parse(src)
+        events: list[tuple[int, str, str]] = []
+        for node in _ast.walk(tree):
+            if not isinstance(node, _ast.Call):
+                continue
+            fn = node.func
+            name = (
+                fn.id if isinstance(fn, _ast.Name)
+                else fn.attr if isinstance(fn, _ast.Attribute) else ""
+            )
+            if name == "_premise_gate" and len(node.args) >= 2:
+                arg = node.args[1]
+                if isinstance(arg, _ast.Constant):
+                    events.append((node.lineno, "gate", str(arg.value)))
+            elif name.startswith("check_"):
+                for kw in node.keywords:
+                    if kw.arg == "profile" and isinstance(
+                        kw.value, _ast.Constant,
+                    ):
+                        events.append(
+                            (node.lineno, "query", str(kw.value.value)),
+                        )
+        events.sort()
+        gates = [e for e in events if e[1] == "gate"]
+        assert gates, "sweep.py no longer premise-gates any SMT verb"
+        for lineno, _, gate_profile in gates:
+            following = [
+                e for e in events if e[0] > lineno
+            ]
+            nxt = following[0] if following else None
+            assert nxt is not None and nxt[1] == "query", (
+                f"_premise_gate at line {lineno} has no following "
+                f"profile-pinned query call"
+            )
+            assert nxt[2] == gate_profile, (
+                f"_premise_gate at line {lineno} vets premises under "
+                f"{gate_profile!r} but the main query at line {nxt[0]} "
+                f"models them under {nxt[2]!r} — cross-profile vacuous "
+                f"premises would reach the query and masquerade as "
+                f"refuted"
+            )

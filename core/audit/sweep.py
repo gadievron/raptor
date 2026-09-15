@@ -2538,6 +2538,21 @@ def _premise_gate(premises: list[str], profile: str) -> str | None:
     inconclusive-reason string.  The premise-vacuity check matters
     because contradictory premises would drive the *full* query UNSAT
     and masquerade as an authoritative "refuted".
+
+    ``profile`` is deliberately the SAME single profile the verb's
+    main query uses, even though the extracted premises' true
+    signedness is a guess — the gate models the premises exactly as
+    the main query will consume them. Both directions of the
+    trade-off: relaxing the gate to the dual-signedness check
+    (``profile=None``) would pass premises that are contradictory
+    under the main query's profile, and the main query's resulting
+    UNSAT maps to an authoritative "refuted" — the exact masquerade
+    this gate exists to block. Keeping the pin means premises whose
+    real signedness differs from the verb's modeling frame degrade to
+    "vacuous premises" → inconclusive: lost coverage, never a wrong
+    verdict. Widening safely requires dual-profiling the verb layer
+    itself (gate + main query agreeing under both profiles), a design
+    change, not a gate tweak.
     """
     if not premises:
         return (
