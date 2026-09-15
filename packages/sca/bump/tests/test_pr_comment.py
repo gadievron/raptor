@@ -472,3 +472,14 @@ def test_terminal_report_untrusted_fields_defanged(
     strings (maintainer names, advisory summaries, skip reasons)."""
     text = render_report(_hostile_report(tmp_path))
     assert "\x1b" not in text
+
+
+def test_code_cell_is_the_shared_neutraliser():
+    """The table-cell neutraliser is load-bearing (pipe escaping
+    keeps forged report cells out of GFM tables) — pr_comment must
+    use the one shared implementation so a hardening fix can't land
+    in one copy and miss a private twin."""
+    from packages.sca import _md
+    from packages.sca.bump import pr_comment
+
+    assert pr_comment._code_cell is _md.code_cell

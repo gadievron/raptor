@@ -39,6 +39,7 @@ from __future__ import annotations
 import heapq
 from io import StringIO
 
+from .._md import code_cell as _code_cell
 from .._md import inline_code, neutralize_inline
 from .orchestrator import (
     BumpReport, BumpResult,
@@ -199,17 +200,6 @@ def _verdict_label_md(verdict: int) -> str:
     if verdict == _VERDICT_REVIEW:
         return "⚠ Review"
     return "✓ Clean"
-
-
-def _code_cell(value: object) -> str:
-    """Untrusted value as a code span INSIDE a table cell.
-
-    ``inline_code`` neutralises backticks / newlines / non-printables,
-    but a raw ``|`` must also be escaped here: GFM parses table
-    structure BEFORE inline spans, so a pipe inside a code span still
-    splits the row (forged report cells).
-    """
-    return inline_code(value).replace("|", "\\|")
 
 
 def _truncate_one_line(text: str, max_len: int) -> str:
