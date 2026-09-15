@@ -1089,7 +1089,11 @@ def find_kubernetes_image_refs(target: Path) -> list[ImageRefSource]:
     except ImportError:
         return out
     from .discovery import EXCLUDED_DIR_NAMES
-    from .parsers.kubernetes import _WORKLOAD_KINDS, _is_k8s_manifest
+    from .parsers.kubernetes import (
+        _WORKLOAD_KINDS,
+        _is_k8s_manifest,
+        resolve_workload_pod_spec,
+    )
     for root, dirs, files in os.walk(target):
         dirs[:] = [
             d for d in dirs
@@ -1119,12 +1123,10 @@ def find_kubernetes_image_refs(target: Path) -> list[ImageRefSource]:
                 spec = doc.get("spec")
                 if not isinstance(spec, dict):
                     continue
-                template_spec = spec
-                template = spec.get("template")
-                if isinstance(template, dict):
-                    ts = template.get("spec")
-                    if isinstance(ts, dict):
-                        template_spec = ts
+                # Shared kind-nesting rule (CronJob's jobTemplate
+                # depth included) — a re-implemented walk here drifted
+                # from the parser and dropped every CronJob image.
+                template_spec = resolve_workload_pod_spec(spec, kind)
                 for cf in (
                     "containers", "initContainers", "ephemeralContainers",
                 ):

@@ -896,6 +896,85 @@ def test_find_kubernetes_image_refs_skips_symlinked_file(tmp_path: Path):
     assert find_kubernetes_image_refs(target) == []
 
 
+def test_find_kubernetes_image_refs_reaches_cronjob_containers(
+    tmp_path: Path,
+):
+    """CronJob nests its pod spec one level deeper
+    (``spec.jobTemplate.spec.template.spec``) — the walker must use
+    the parser's shared kind-nesting rule; a ``spec.template.spec``-
+    only walk silently dropped every CronJob image from base-image
+    SBOM/OSV scanning and the egress allowlist derivation."""
+    from packages.sca.dockerfile_from import find_kubernetes_image_refs
+
+    manifest = (
+        "apiVersion: batch/v1\n"
+        "kind: CronJob\n"
+        "metadata:\n"
+        "  name: backup\n"
+        "spec:\n"
+        "  schedule: '0 0 * * *'\n"
+        "  jobTemplate:\n"
+        "    spec:\n"
+        "      template:\n"
+        "        spec:\n"
+        "          containers:\n"
+        "            - name: backup\n"
+        "              image: alpine:3.19\n"
+        "          initContainers:\n"
+        "            - name: prep\n"
+        "              image: busybox:1.36\n"
+    )
+    target = tmp_path / "repo"
+    target.mkdir()
+    (target / "cronjob.yaml").write_text(manifest)
+
+    refs = find_kubernetes_image_refs(target)
+    assert sorted(r.image for r in refs) == ["alpine:3.19", "busybox:1.36"]
+    assert all(r.source_kind == "k8s" for r in refs)
+
+
+def test_walker_and_parser_agree_on_every_workload_kind(tmp_path: Path):
+    """Closure across the twin walkers: for EVERY kind in
+    ``_WORKLOAD_KINDS`` the image-source walker must find exactly the
+    images the parser extracts — the walker importing the kind list
+    but re-implementing the nesting is how CronJob got dropped."""
+    from packages.sca.dockerfile_from import find_kubernetes_image_refs
+    from packages.sca.parsers.kubernetes import (
+        _WORKLOAD_KINDS,
+        _extract_images,
+    )
+
+    api = {"CronJob": "batch/v1", "Job": "batch/v1", "Pod": "v1"}
+    for kind in sorted(_WORKLOAD_KINDS):
+        pod_spec = {
+            "containers": [{"name": "c", "image": f"img-{kind.lower()}:1"}],
+        }
+        if kind == "Pod":
+            spec = pod_spec
+        elif kind == "CronJob":
+            spec = {"jobTemplate": {"spec": {"template": {"spec": pod_spec}}}}
+        else:
+            spec = {"template": {"spec": pod_spec}}
+        doc = {
+            "apiVersion": api.get(kind, "apps/v1"),
+            "kind": kind,
+            "metadata": {"name": "w"},
+            "spec": spec,
+        }
+        parser_images = {img for img, _ctx, _name in
+                         _extract_images(doc, kind=kind)}
+
+        import yaml as _yaml
+
+        target = tmp_path / f"repo-{kind.lower()}"
+        target.mkdir()
+        (target / "workload.yaml").write_text(_yaml.safe_dump(doc))
+        walker_images = {r.image for r in find_kubernetes_image_refs(target)}
+        assert walker_images == parser_images == {f"img-{kind.lower()}:1"}, (
+            f"walker/parser drift for kind {kind}"
+        )
+
+
 def test_find_gitlab_ci_image_refs_skips_symlinked_file(tmp_path: Path):
     from packages.sca.dockerfile_from import find_gitlab_ci_image_refs
 

@@ -158,6 +158,38 @@ def _is_k8s_manifest(path: Path) -> bool:
     return name not in ("action.yml", "action.yaml")
 
 
+def resolve_workload_pod_spec(spec: dict, kind: str) -> dict:
+    """Return the pod-level spec that carries ``containers`` for this
+    workload ``kind``.
+
+    ``Pod`` carries containers at ``spec`` directly; ``Deployment`` /
+    ``StatefulSet`` / etc. wrap them in ``spec.template.spec``;
+    ``CronJob`` nests one level deeper:
+    ``spec.jobTemplate.spec.template.spec``. This kind-nesting rule is
+    THE drift-prone enumeration boundary, so it has exactly one owner —
+    the image-source walker (``dockerfile_from``) consumes it too; a
+    re-implemented walk silently dropped every CronJob container.
+    Falls back to ``spec`` when the expected nesting is absent.
+    """
+    if kind == "CronJob":
+        jt = spec.get("jobTemplate")
+        if isinstance(jt, dict):
+            jt_spec = jt.get("spec")
+            if isinstance(jt_spec, dict):
+                jt_template = jt_spec.get("template")
+                if isinstance(jt_template, dict):
+                    ts = jt_template.get("spec")
+                    if isinstance(ts, dict):
+                        return ts
+        return spec
+    template = spec.get("template")
+    if isinstance(template, dict):
+        ts = template.get("spec")
+        if isinstance(ts, dict):
+            return ts
+    return spec
+
+
 def _extract_images(
     doc: dict, *, kind: str,
 ) -> Iterable[tuple[str, str, str | None]]:
@@ -171,25 +203,7 @@ def _extract_images(
     spec = doc.get("spec")
     if not isinstance(spec, dict):
         return
-    # Higher-level workload wrappers nest under ``template.spec``.
-    # CronJob nests one level deeper: ``spec.jobTemplate.spec.template.spec``.
-    template_spec = spec
-    if kind == "CronJob":
-        jt = spec.get("jobTemplate")
-        if isinstance(jt, dict):
-            jt_spec = jt.get("spec")
-            if isinstance(jt_spec, dict):
-                jt_template = jt_spec.get("template")
-                if isinstance(jt_template, dict):
-                    ts = jt_template.get("spec")
-                    if isinstance(ts, dict):
-                        template_spec = ts
-    else:
-        template = spec.get("template")
-        if isinstance(template, dict):
-            ts = template.get("spec")
-            if isinstance(ts, dict):
-                template_spec = ts
+    template_spec = resolve_workload_pod_spec(spec, kind)
 
     metadata = doc.get("metadata") or {}
     workload_name = (
