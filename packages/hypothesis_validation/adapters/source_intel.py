@@ -297,13 +297,21 @@ class SourceIntelAdapter(ToolAdapter):
         analyze_mod = importlib.import_module(
             "packages.source_intel.analyze"
         )
+        # Derive the cache key ONCE and reuse it for the lookup and
+        # the store: get()/put() each re-hash the live tree, so a
+        # get → analyze → put spanning a minutes-long analyze() would,
+        # if the tree drifted mid-analyze, store a result computed
+        # over the OLD tree under the NEW tree's hash — and serve it
+        # as fresh thereafter.
+        key = None
         if self._cache is not None:
-            cached = self._cache.get(target)
+            key = self._cache.key_for(target)
+            cached = self._cache.get_by_key(key)
             if cached is not None:
                 return cached
         result = analyze_mod.analyze(target)
-        if self._cache is not None:
-            self._cache.put(target, None, result)
+        if self._cache is not None and key is not None:
+            self._cache.put_by_key(key, result)
         return result
 
     def _collect_axis(

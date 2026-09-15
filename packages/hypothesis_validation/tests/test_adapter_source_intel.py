@@ -366,11 +366,14 @@ class TestCaching:
                 self.gets = 0
                 self.puts = 0
 
-            def get(self, target, rules_dir=None):
+            def key_for(self, target, rules_dir=None):
+                return ("tree-hash", "rules-hash")
+
+            def get_by_key(self, key):
                 self.gets += 1
                 return cached
 
-            def put(self, target, rules_dir, result):
+            def put_by_key(self, key, result):
                 self.puts += 1
 
         cache = _DummyCache()
@@ -388,6 +391,34 @@ class TestCaching:
         assert ev.success
         assert cache.gets == 1
         assert cache.puts == 0
+
+    def test_mid_analyze_drift_stores_under_old_tree_key(self, tmp_path):
+        # The cache key must be derived ONCE, before analyze() runs:
+        # a tree that drifts mid-analyze would otherwise get the OLD
+        # tree's result stored under the NEW tree's hash and served
+        # as fresh thereafter.
+        from packages.source_intel.cache import SourceIntelCache
+
+        (tmp_path / "a.c").write_text("int f(void) { return 0; }\n")
+        cache = SourceIntelCache()
+        adapter = SourceIntelAdapter(cache=cache)
+        result = _attr_result()
+
+        def _drifting_analyze(target):
+            # Simulate a checkout switching branches mid-analyze.
+            (tmp_path / "b.c").write_text("int g(void) { return 1; }\n")
+            return result
+
+        with patch(
+            "packages.source_intel.analyze.analyze",
+            side_effect=_drifting_analyze,
+        ):
+            got = adapter._load_result(tmp_path)
+        assert got is result
+        # The stored entry is pinned to the tree state the lookup
+        # saw — the drifted tree's key must MISS, forcing a fresh
+        # analyze instead of serving the stale result.
+        assert cache.get(tmp_path) is None
 
 
 # ---- skip semantics ---------------------------------------------------
