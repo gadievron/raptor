@@ -313,6 +313,46 @@ class TestDisplayIntegrity(TestAuthorizeBootPayload):
             "previous record must survive byte-for-byte")
 
 
+class TestCorruptHeaderReplaceDisplay(TestDisplayIntegrity):
+    """Stamp-replacing --reauthorize over an unparseable SHA256 header
+    is an approval: the old stamp is unreadable (no hash → no diff),
+    so the FULL current payload must be rendered — escaped — before
+    the replace, and an unrenderable payload must refuse."""
+
+    def _corrupt_header(self):
+        text = self.authorized.read_text(encoding="utf-8")
+        self.authorized.write_text(
+            text.replace("# SHA256: ", "# SHA-BROKEN: "),
+            encoding="utf-8")
+
+    def test_replace_displays_escaped_payload(self):
+        self._run("### initialize.instructions\noriginal payload")
+        self._corrupt_header()
+        proc = self._run_pty(self.HOSTILE)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("re-authorized follows", proc.stdout)
+        self.assertNotIn("\x1b", proc.stdout,
+                         "raw ESC reached the authorization TTY")
+        self.assertIn("\\x1b[2A", proc.stdout)
+        self.assertIn("evil", proc.stdout)
+        # Replace still happened; the stamp keeps the raw bytes.
+        stamped = self.authorized.read_text(encoding="utf-8")
+        self.assertIn("\x1b[2A", stamped)
+        self.assertIn("# SHA256: ", stamped)
+
+    def test_sanitiser_failure_refuses_replace(self):
+        self._run("### initialize.instructions\noriginal payload")
+        self._corrupt_header()
+        corrupted = self.authorized.read_text(encoding="utf-8")
+        self._break_sanitiser()
+        proc = self._run_pty(self.HOSTILE)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("could not render", proc.stderr)
+        self.assertEqual(
+            self.authorized.read_text(encoding="utf-8"), corrupted,
+            "unreviewable payload must not replace the stamp")
+
+
 class TestStampCreationGate(TestAuthorizeBootPayload):
     """Stamp CREATION is TTY-gated when prior-install evidence exists:
     deleting the stamp (or uninstall && install) must not launder a

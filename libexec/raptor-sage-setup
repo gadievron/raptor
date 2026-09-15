@@ -1061,6 +1061,22 @@ sys.stdout.write("\n".join(
                 echo "  bin/raptor sage-setup install --reauthorize" >&2
                 return 0
             fi
+            # An approval must render what is being approved: the old
+            # stamp is unreadable (no parseable hash → no diff), so
+            # show the FULL current payload the operator is stamping,
+            # exactly like the first-capture lane. Refusing on an
+            # unrenderable payload beats replacing the stamp sight
+            # unseen.
+            echo "Existing stamp has no parseable SHA256 header; the payload being"
+            echo "re-authorized follows (non-printables escaped for display):"
+            echo "-----------------------------------------------------------"
+            if ! printf '%s\n' "$payload" | _render_payload_display; then
+                echo "raptor-sage-setup: could not render the payload text safely (sanitiser failed)." >&2
+                echo "Refusing to replace a stamp with a payload that could not be reviewed." >&2
+                echo "The previous record is kept." >&2
+                return 0
+            fi
+            echo "-----------------------------------------------------------"
             echo "Existing stamp had no parseable SHA256 header — replaced (--reauthorize)."
         elif [ "$old_sha" = "$sha" ]; then
             echo "SAGE boot payload unchanged since last authorization (sha256 ${sha:0:12})."
