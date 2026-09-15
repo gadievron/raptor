@@ -52,6 +52,19 @@ def _baseline(tmp_path: Path, entries: dict) -> Path:
     return p
 
 
+# Whole-tree run: genuinely heavy (the gate walks and AST-audits every
+# tracked runtime file; it breached the default tier's per-test budget
+# on contended CI runners) AND duplicated daily by CI: the lint
+# workflow's "Run report-writer closure gate against baseline" step
+# (.github/workflows/lint.yml) runs this exact script against the
+# current tree on every PR. Trade-off, both directions: unmarking it
+# puts a multi-second, contention-sensitive tree scan back in every
+# default-tier run for no added coverage; dropping it entirely would
+# lose the "0 new" stdout-contract pin and leave the green direction
+# untested wherever the lint gate step is not wired (nightly keeps it
+# honest). The fail-direction mechanics stay default-tier in the
+# scratch-repo tests below.
+@pytest.mark.slow
 def test_gate_green_on_current_tree():
     cp = _run([])
     assert cp.returncode == 0, cp.stdout + cp.stderr
@@ -308,9 +321,10 @@ def test_stale_bash_entry_warns_clean(tmp_path):
 
 
 def test_every_bash_launcher_has_manual_audit_entry():
-    """Closure over the REAL tree: the gate run in
-    test_gate_green_on_current_tree already enforces this; this pin
-    keeps the requirement visible when editing the baseline."""
+    """Closure over the REAL tree: the lint workflow's closure gate
+    step (and the nightly test_gate_green_on_current_tree run) already
+    enforces this; this pin keeps the requirement visible when editing
+    the baseline."""
     baseline = json.loads(
         (REPO_ROOT / ".github" / "scripts"
          / "report_writer_closure_baseline.json").read_text())
