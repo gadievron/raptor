@@ -101,7 +101,21 @@ def triage_findings(
         logger.debug("sca.llm.triage: failed: %s", result.error)
         return None
 
-    return result.model  # type: ignore[return-value]
+    model: TriageResult = result.model  # type: ignore[assignment]
+    if result.preflight_hit:
+        # Injection haircut, same rule as every other stage
+        # consuming run_stage: the FINDINGS_LIST block carries
+        # advisory-derived remote text; a preflight hit means the
+        # ranking may have been steered, so no per-item verdict
+        # ships at full confidence.
+        model = model.model_copy(update={
+            "items": [
+                item.model_copy(update={"confidence": "medium"})
+                if item.confidence == "high" else item
+                for item in model.items
+            ],
+        })
+    return model
 
 
 def _dominant_ecosystem(rows: list[dict[str, Any]]) -> str:
