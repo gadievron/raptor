@@ -180,12 +180,36 @@ def _is_under_root(source_root: Path, candidate: str) -> bool:
 #: See the rejection comment in _resolve_uri.
 _MAX_URI_COMPONENTS = 256
 
+#: Aggregate budget for FAILED full depth-loop scans per import. The
+#: per-URI component cap bounds one resolution at sub-second cost, but
+#: the document cap admits ~147k cap-sized findings, so per-URI
+#: soundness still summed to hours across the import loop — the
+#: aggregate axis of the same wedge. Legitimate imports do not carry
+#: thousands of unmappable URIs (a real path mismatch resolves via the
+#: strip-depth cache after the first success), so after this many
+#: full scans that found nothing, unknown URIs stop paying for the
+#: depth loop and resolve only through the cheap cached-depth path.
+#: Trade-off, both directions: too low turns a genuinely mixed-root
+#: import into silent unresolved skips after few failures; too high
+#: re-opens the hours-scale aggregate wedge (64 × ~60 ms cap-sized
+#: scans ≈ 4 s worst case).
+_MAX_FAILED_URI_SCANS = 64
+
+#: Negative-memo ceiling: entries are attacker-chosen URI strings, so
+#: the memo itself must not become the memory wedge (~147k cap-sized
+#: URIs ≈ 100 MB). Past the cap, repeats of NEW failed URIs fall back
+#: to the scan budget above.
+_MAX_FAILED_URI_MEMO = 4096
+
 
 def _resolve_uri(
     uri: str,
     source_root: Path,
     file_index: dict[str, list[Path]],
     depth_cache: list[int | None],
+    *,
+    failed_memo: set[str] | None = None,
+    scan_budget: list[int] | None = None,
 ) -> str | None:
     """Resolve a SARIF URI to a relative path under *source_root*.
 
@@ -196,15 +220,32 @@ def _resolve_uri(
     Rejects any resolved path that escapes *source_root* (traversal
     defence for untrusted SARIF).
 
+    ``failed_memo`` (per-import) short-circuits URIs that already
+    failed — the depth loop memoised only SUCCESSFUL strip depths, so
+    147k findings carrying the SAME unresolvable URI each re-paid the
+    full quadratic scan. ``scan_budget`` (per-import, mutable cell)
+    bounds the number of failed full scans; once exhausted, unknown
+    URIs resolve only through the cheap cached-depth fast path (see
+    ``_MAX_FAILED_URI_SCANS``).
+
     Returns a POSIX-style relative path string, or None.
     """
+    if failed_memo is not None and uri in failed_memo:
+        return None
+
+    def _fail() -> None:
+        if (failed_memo is not None
+                and len(failed_memo) < _MAX_FAILED_URI_MEMO):
+            failed_memo.add(uri)
+        return None
+
     clean = unquote(_strip_file_scheme(uri))
     if clean.startswith("/"):
         clean = clean.lstrip("/")
 
     parts = Path(clean).parts
     if not parts:
-        return None
+        return _fail()
     # Component cap before the depth loop: each iteration resolves a
     # path of O(N) components, so an N-component URI costs O(N²) —
     # measured 62s at 8000 components (~16 KB of SARIF text), and the
@@ -220,12 +261,18 @@ def _resolve_uri(
             "URI rejected: %d path components exceeds the %d cap",
             len(parts), _MAX_URI_COMPONENTS,
         )
-        return None
+        return _fail()
 
     if depth_cache[0] is not None:
         candidate = str(Path(*parts[depth_cache[0]:])) if depth_cache[0] < len(parts) else None
         if candidate and _is_under_root(source_root, candidate):
             return candidate
+
+    if scan_budget is not None and scan_budget[0] <= 0:
+        # Aggregate budget exhausted: no more O(N²) full scans this
+        # import. The cached-depth fast path above still resolves the
+        # established scanner shape.
+        return _fail()
 
     for depth in range(len(parts)):
         candidate = str(Path(*parts[depth:]))
@@ -241,7 +288,17 @@ def _resolve_uri(
             logger.debug("URI %s: basename-only match → %s", uri, resolved)
             return resolved
 
-    return None
+    if scan_budget is not None:
+        scan_budget[0] -= 1
+        if scan_budget[0] == 0:
+            logger.warning(
+                "SARIF import: %d full URI scans found nothing — "
+                "further unknown URIs skip resolution (hostile or "
+                "wrong-root SARIF; resolved shapes keep the cached-"
+                "depth fast path)",
+                _MAX_FAILED_URI_SCANS,
+            )
+    return _fail()
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +397,8 @@ def normalize_imported_findings(
 
     file_index = _build_file_index(source_root)
     depth_cache: list[int | None] = [None]
+    failed_memo: set[str] = set()
+    scan_budget: list[int] = [_MAX_FAILED_URI_SCANS]
 
     for idx, finding in enumerate(findings):
         uri = finding.get("file") or ""
@@ -364,7 +423,10 @@ def normalize_imported_findings(
         finding["startLine"] = start_line
 
         # --- URI rebasing ---
-        resolved = _resolve_uri(uri, source_root, file_index, depth_cache)
+        resolved = _resolve_uri(
+            uri, source_root, file_index, depth_cache,
+            failed_memo=failed_memo, scan_budget=scan_budget,
+        )
         if resolved is None:
             result.warnings.append(ImportWarning(
                 idx, "file",

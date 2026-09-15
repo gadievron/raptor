@@ -1192,3 +1192,116 @@ class TestResolveUriComponentCap:
         findings = [_make_finding(file=prefixed)]
         result = normalize_imported_findings(findings, root)
         assert result.stats.total_imported == 1
+
+
+# ---------------------------------------------------------------------------
+# Aggregate URI-resolution budget + negative memo
+# ---------------------------------------------------------------------------
+
+class TestResolveUriAggregateBudget:
+    """The per-URI component cap bounds ONE scan, but the document cap
+    admits ~147k cap-sized findings — the aggregate axis of the same
+    wedge. Structural assertions (counting _is_under_root probes), not
+    wall-clock ones."""
+
+    def _counting_root(self, tmp_path, monkeypatch):
+        from core.sarif import import_normalizer as mod
+        root = _source_tree(tmp_path)
+        calls = {"n": 0}
+        real = mod._is_under_root
+
+        def counted(source_root, candidate):
+            calls["n"] += 1
+            return real(source_root, candidate)
+
+        monkeypatch.setattr(mod, "_is_under_root", counted)
+        return root, calls
+
+    def test_failed_memo_kills_repeat_scans(self, tmp_path, monkeypatch):
+        root, calls = self._counting_root(tmp_path, monkeypatch)
+        bad = "/".join(["x"] * 40) + "/nope.c"
+        memo: set = set()
+        budget = [999]
+        cache = [None]
+        assert _resolve_uri(bad, root, {}, cache,
+                            failed_memo=memo, scan_budget=budget) is None
+        first = calls["n"]
+        assert first > 0
+        # Same URI again: memo answers, zero probes — pre-fix each of
+        # 147k identical-URI findings re-paid the full quadratic scan.
+        assert _resolve_uri(bad, root, {}, cache,
+                            failed_memo=memo, scan_budget=budget) is None
+        assert calls["n"] == first
+
+    def test_scan_budget_stops_full_scans(self, tmp_path, monkeypatch):
+        root, calls = self._counting_root(tmp_path, monkeypatch)
+        memo: set = set()
+        budget = [2]
+        cache = [None]
+        for i in range(2):  # consume the budget with distinct failures
+            assert _resolve_uri(f"a/b/c/miss{i}.c", root, {}, cache,
+                                failed_memo=memo,
+                                scan_budget=budget) is None
+        assert budget[0] == 0
+        before = calls["n"]
+        # New distinct unresolvable URI: no probes spent at all.
+        assert _resolve_uri("d/e/f/other.c", root, {}, cache,
+                            failed_memo=memo, scan_budget=budget) is None
+        assert calls["n"] == before
+
+    def test_cached_depth_survives_budget_exhaustion(
+        self, tmp_path, monkeypatch,
+    ):
+        root, calls = self._counting_root(tmp_path, monkeypatch)
+        memo: set = set()
+        budget = [1]
+        cache = [None]
+        # Establish the scanner shape (strips /ci/workspace).
+        assert _resolve_uri("/ci/workspace/src/auth.c", root,
+                            {"auth.c": [Path("src/auth.c")]}, cache,
+                            failed_memo=memo,
+                            scan_budget=budget) == "src/auth.c"
+        # Exhaust the budget.
+        _resolve_uri("a/b/miss.c", root, {}, cache,
+                     failed_memo=memo, scan_budget=budget)
+        assert budget[0] == 0
+        # The established shape still resolves via the cached depth.
+        assert _resolve_uri("/ci/workspace/src/auth.c", root, {}, cache,
+                            failed_memo=memo,
+                            scan_budget=budget) == "src/auth.c"
+
+    def test_successful_scans_never_consume_budget(self, tmp_path):
+        root = _source_tree(tmp_path)
+        memo: set = set()
+        budget = [3]
+        for _ in range(10):
+            cache = [None]  # force the full scan each time
+            assert _resolve_uri("/ci/ws/src/auth.c", root, {}, cache,
+                                failed_memo=memo,
+                                scan_budget=budget) == "src/auth.c"
+        assert budget[0] == 3
+
+    def test_memo_size_is_capped(self, tmp_path):
+        from core.sarif import import_normalizer as mod
+        root = _source_tree(tmp_path)
+        memo: set = set()
+        budget = [10 ** 9]
+        cap = mod._MAX_FAILED_URI_MEMO
+        for i in range(cap + 10):
+            _resolve_uri(f"m/{i}.c", root, {}, [None],
+                         failed_memo=memo, scan_budget=budget)
+        assert len(memo) <= cap
+
+    def test_import_loop_threads_budget(self, tmp_path, monkeypatch):
+        """normalize_imported_findings wires memo+budget: a document of
+        identical unresolvable URIs costs one scan, and all findings
+        still degrade to skipped/unresolved (never a crash)."""
+        root, calls = self._counting_root(tmp_path, monkeypatch)
+        bad = "/".join(["x"] * 30) + "/nope.c"
+        findings = [
+            _make_finding(file=bad, finding_id=f"f{i}") for i in range(50)
+        ]
+        result = normalize_imported_findings(findings, root)
+        assert result.stats.uri_unresolved == 50
+        # One full scan's worth of probes, not 50 (memo short-circuit).
+        assert calls["n"] <= 40
