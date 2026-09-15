@@ -487,7 +487,27 @@ class ConsistencyVerifier:
             return VerificationResult(is_valid=False, errors=[f"GH Archive verification error: {e}"])
 
     def _verify_gharchive_observation(self, obs: Observation) -> VerificationResult:
-        """Verify observation against GH Archive BigQuery."""
+        """Verify observation against GH Archive BigQuery.
+
+        Type- and payload-aware, mirroring ``_verify_gharchive_event``.
+        This lane is the deletion-claim oracle — the GitHub-side
+        verifier fail-closes deletion claims onto it — and its records
+        ("recovered deleted issue/PR/commit") are the highest-stakes
+        evidence type in a supply-chain timeline. A repo/actor/minute
+        existence check alone let ANY same-minute row "verify" a
+        fabricated recovery carrying attacker-chosen title/body. The
+        observation's type derives the GH Archive type filter; at
+        least one returned row must carry its discriminating payload
+        value (issue/PR number, commit sha) AND match the
+        observation's verbatim-copied free text where both sides carry
+        it — title/body for issue/PR recoveries, message and author
+        name/email for commit recoveries (all are copied verbatim from
+        the archive row at recovery, and the free text is exactly what
+        a fabricated record forges). Force-push rows carry no
+        ``commits[]`` and hence no free text — sha-only is all the
+        archive can corroborate there. Observation types this verifier
+        cannot discriminate fail closed.
+        """
         if not obs.verification.bigquery_table:
             return VerificationResult(is_valid=False, errors=["No BigQuery table specified"])
 
@@ -497,14 +517,113 @@ class ConsistencyVerifier:
                 warnings=["GH Archive verification skipped - no credentials - not checked"],
             )
 
+        obs_type = getattr(obs, "observation_type", None)
+        if obs_type == "issue":
+            is_pr = bool(getattr(obs, "is_pull_request", False))
+            gharchive_type = "PullRequestEvent" if is_pr else "IssuesEvent"
+            payload_key = "pull_request" if is_pr else "issue"
+            number = getattr(obs, "issue_number", None)
+            title = getattr(obs, "title", None)
+            body = getattr(obs, "body", None)
+
+            def _row_matches(payload: dict[str, Any]) -> bool:
+                item = _sub(payload, payload_key)
+                if number is None or _num(item.get("number")) != number:
+                    return False
+                if title is not None and item.get("title") != title:
+                    return False
+                return not (body is not None and item.get("body") != body)
+
+        elif obs_type == "commit":
+            gharchive_type = "PushEvent"
+            sha = getattr(obs, "sha", None)
+            message = getattr(obs, "message", None)
+            obs_author = getattr(obs, "author", None)
+            author_name = getattr(obs_author, "name", None)
+            author_email = getattr(obs_author, "email", None)
+
+            def _free_text_matches(commit: dict[str, Any]) -> bool:
+                # message and author name/email are copied VERBATIM
+                # from the archive row at recovery — the identical
+                # rationale as the issue leg's title/body rule: the
+                # free text is what a fabricated record forges. Where
+                # the sha-matched row entry carries the field and the
+                # observation's copy is non-empty (recovery stamps ""
+                # when the payload lacked it), they must agree.
+                if (message and "message" in commit
+                        and commit.get("message") != message):
+                    return False
+                row_author = commit.get("author")
+                if isinstance(row_author, dict):
+                    if (author_name and "name" in row_author
+                            and row_author.get("name") != author_name):
+                        return False
+                    if (author_email and "email" in row_author
+                            and row_author.get("email") != author_email):
+                        return False
+                return True
+
+            def _row_matches(payload: dict[str, Any]) -> bool:
+                if not isinstance(sha, str) or not sha:
+                    return False
+                commits = payload.get("commits", [])
+                for commit in commits:
+                    row_sha = commit.get("sha") if isinstance(commit, dict) else None
+                    # Prefix-tolerant in both directions, matching the
+                    # recovery collector (pre-2015 rows carry short shas).
+                    if (isinstance(row_sha, str) and row_sha
+                            and (row_sha.startswith(sha)
+                                 or sha.startswith(row_sha))
+                            and _free_text_matches(commit)):
+                        return True
+                # Force-push recovery rows carry no commits[]; head /
+                # after / before are their only sha-bearing fields, so
+                # sha-only is all the archive can corroborate there.
+                # Rows that DO carry commits[] never fall through to
+                # this arm: a head/after match on such a row would let
+                # forged free text ride a sha the row's own commits[]
+                # entry (with its verbatim text) refused above.
+                if commits:
+                    return False
+                return sha in (payload.get("head"), payload.get("after"),
+                               payload.get("before"))
+
+        else:
+            # Fail closed — this verifier is the anti-fabrication
+            # chokepoint; an observation type it cannot discriminate
+            # must not read as verified.
+            return VerificationResult(
+                is_valid=False,
+                errors=[
+                    "GH Archive observation verification unsupported "
+                    f"for observation type {obs_type!r}"
+                ],
+            )
+
         try:
+            # No actor filter: recovered commits stamp original_who
+            # with the commit AUTHOR NAME (not a GitHub login), and a
+            # recovered issue row's actor can be a later actor (close/
+            # edit) rather than the creator — filtering on it fails
+            # legitimate recoveries. Type + repo + minute + the
+            # discriminating payload match is the evidence.
             rows = self.gharchive_client.query_events(
                 repo=obs.repository.full_name if obs.repository else None,
-                actor=obs.original_who.login if obs.original_who else None,
+                event_type=gharchive_type,
                 from_date=obs.observed_when.strftime("%Y%m%d%H%M") if obs.observed_when else None,
             )
             if not rows:
                 return VerificationResult(is_valid=False, errors=["No matching observation found in GH Archive"])
-            return VerificationResult(is_valid=True, errors=[])
+            for row in rows:
+                if _row_matches(_row_payload(row)):
+                    return VerificationResult(is_valid=True, errors=[])
+            return VerificationResult(
+                is_valid=False,
+                errors=[
+                    f"GH Archive rows of type {gharchive_type} exist for "
+                    "the repo/minute, but none carries the observation's "
+                    "discriminating payload values"
+                ],
+            )
         except Exception as e:
             return VerificationResult(is_valid=False, errors=[f"GH Archive observation verification error: {e}"])
