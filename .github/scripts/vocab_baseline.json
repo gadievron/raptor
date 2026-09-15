@@ -1557,6 +1557,16 @@
     "count": 60,
     "kind": "literal"
   },
+  "core/security/credential_env.py::CREDENTIAL_FILE_POINTER_ENV_VARS": {
+    "count": 15,
+    "kind": "literal",
+    "note": "closed security taxonomy: environment-variable NAMES that point at credential/config files (canonical credential-env vocabulary, the single home every strip/blocklist surface consumes; closure-tested in core/security/tests/test_credential_env_closure.py) \u2014 env-var names, not a learned target-API vocabulary"
+  },
+  "core/security/credential_env.py::_CREDENTIAL_NAME_SEGMENTS": {
+    "count": 11,
+    "kind": "literal",
+    "note": "closed security taxonomy: underscore-segment grammar for credential-shaped env names (TOKEN/KEY/SECRET/... variants backing is_credential_shaped) \u2014 a fixed shape grammar, not a learned name vocabulary"
+  },
   "core/security/prompt_envelope_audit.py::_NON_LLM_CALLS": {
     "count": 18,
     "kind": "literal"
