@@ -228,6 +228,68 @@ class TestClassifyFunctionRouting:
         )
         assert next(iter(res.values())).bucket == TriageBucket.SKIP
 
+    def test_over_cap_generated_file_demotes_not_skips(
+        self, tmp_path, monkeypatch,
+    ):
+        # Plant-evasion: a "generated" file that pads the resolver's
+        # read cap BEFORE its dangerous import must not keep the
+        # corroborated skip — the resolver saw only the prefix, so
+        # its silence is not evidence. Truncated read = glance with
+        # the incompleteness named.
+        import core.audit.triage as triage_mod
+        from core.audit.triage import classify_all
+
+        real_read = triage_mod.read_text_capped
+        monkeypatch.setattr(
+            triage_mod, "read_text_capped",
+            lambda path, *a, **kw: real_read(path, 64),
+        )
+        (tmp_path / "gen").mkdir()
+        (tmp_path / "gen" / "evil_pb2.py").write_text(
+            "# " + "x" * 100 + "\n"
+            "import subprocess as sp\n"
+            "def unmarshal(b):\n"
+            "    return sp.run(b)\n",
+            encoding="utf-8",
+        )
+        res = classify_all(
+            [{"file": "gen/evil_pb2.py", "name": "unmarshal",
+              "line_start": 3, "line_end": 4, "sloc": 2}],
+            target_path=tmp_path,
+            vendor_verdicts={"gen/evil_pb2.py": _generated(True)},
+        )
+        tr = next(iter(res.values()))
+        assert tr.bucket == TriageBucket.GLANCE
+        assert any("resolver cap" in r for r in tr.reasons)
+
+    def test_within_cap_benign_file_still_skips(
+        self, tmp_path, monkeypatch,
+    ):
+        # Both directions: an in-cap benign generated file keeps the
+        # skip through the truncation rule.
+        import core.audit.triage as triage_mod
+        from core.audit.triage import classify_all
+
+        real_read = triage_mod.read_text_capped
+        monkeypatch.setattr(
+            triage_mod, "read_text_capped",
+            lambda path, *a, **kw: real_read(path, 4096),
+        )
+        (tmp_path / "gen").mkdir()
+        (tmp_path / "gen" / "wire_pb2.py").write_text(
+            "import struct\n"
+            "def unmarshal(b):\n"
+            "    return struct.unpack('<I', b)\n",
+            encoding="utf-8",
+        )
+        res = classify_all(
+            [{"file": "gen/wire_pb2.py", "name": "unmarshal",
+              "line_start": 2, "line_end": 3, "sloc": 2}],
+            target_path=tmp_path,
+            vendor_verdicts={"gen/wire_pb2.py": _generated(True)},
+        )
+        assert next(iter(res.values())).bucket == TriageBucket.SKIP
+
     def test_go_aliased_import_resolves(self):
         import pytest
 

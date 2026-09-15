@@ -134,7 +134,7 @@ def classify_function(
     branch_count: int = 0,
     caller_count: int = 0,
     vendor_verdict: VendorVerdict | None = None,
-    vendor_file_dangerous: bool = False,
+    vendor_file_dangerous: str | None = None,
 ) -> TriageResult:
     """Classify a single function into a triage bucket.
 
@@ -274,8 +274,11 @@ def classify_function(
                         # The per-function evidence matches surface
                         # spellings; this signal is the file-level
                         # import-RESOLVED check (aliased imports,
-                        # method-value references).
-                        signal = "import-resolved dangerous callees"
+                        # method-value references) — the value carries
+                        # the resolver's own wording (resolved
+                        # dangerous callee, or an over-cap file whose
+                        # resolution is incomplete).
+                        signal = vendor_file_dangerous
                     reasons.append(
                         f"generated code ({vendor_verdict.signal}) "
                         f"with {signal} — glance: {vendor_verdict.detail}"
@@ -459,7 +462,7 @@ def classify_all(
         # signals match surface spellings — aliased imports and
         # method-value references evade them). One resolver run per
         # file, memoised for the call.
-        vendor_file_dangerous = False
+        vendor_file_dangerous = None
         if (
             vendor_verdict is not None
             and vendor_verdict.kind == KIND_GENERATED
@@ -663,19 +666,37 @@ def _alias_resolved_dangerous(source: str, ext: str) -> bool:
     return False
 
 
-def _vendor_file_dangerous(file_path: str, target_path: Path) -> bool:
+def _vendor_file_dangerous(
+    file_path: str, target_path: Path,
+) -> str | None:
     """Import-resolved dangerous-callee check for one vendored file.
 
-    Containment + cap identical to :func:`_read_function_source`;
-    any read failure is no-evidence (skip stays)."""
+    Returns the glance-demotion signal string, or None when the skip
+    may stand. Containment identical to :func:`_read_function_source`;
+    a read FAILURE is no-evidence (skip stays) — but a TRUNCATED read
+    is not: this check exists so a planted "generated" file with
+    dangerous calls never becomes invisible, and a plant that pads the
+    read cap before its `import subprocess as sp` would otherwise keep
+    the corroborated skip. An over-cap file demotes to glance with the
+    incompleteness named (unlike the stack-buffer veto's documented
+    fail-open-toward-SKIP, which preserves pre-veto behaviour — here
+    fail-open would contradict the check's anti-plant purpose)."""
     resolved = safe_join(target_path, file_path)
     if resolved is None:
-        return False
+        return None
     got = read_text_capped(resolved)
     if got is None:
-        return False
+        return None
+    text, truncated = got
     ext = "." + file_path.rsplit(".", 1)[-1] if "." in file_path else ""
-    return _alias_resolved_dangerous(got[0], ext)
+    if _alias_resolved_dangerous(text, ext):
+        return "import-resolved dangerous callees"
+    if truncated:
+        return (
+            "file exceeds the dangerous-callee resolver cap — "
+            "resolution incomplete"
+        )
+    return None
 
 
 def _read_function_source(gap: dict[str, Any], target_path: Path) -> str:
