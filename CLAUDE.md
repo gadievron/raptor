@@ -50,6 +50,8 @@ When a `/command` fires:
 /audit - Hypothesis-driven code audit — `dispatch: skill`, see below
 /review - Navigate audit results — `libexec/raptor-review $ARGUMENTS`
 /annotate - Per-function prose annotations (human notes get authority; agent notes are hint-tier) — `libexec/raptor-annotate <subcommand> [args]`
+/hardware - Hardware security: recon → interface enum → firmware extraction → analysis — `dispatch: skill`, see below
+/firmware - Firmware scan of an extracted root (ELF inventory + firmware rules) — `dispatch: skill`, see below
 
 **Coverage:** When asked about coverage, run `libexec/raptor-coverage-summary` (no args = active project). Use `--detailed` for per-file table, `--gaps` for unreviewed functions. See `.claude/skills/coverage.md` for mark/unmark and the full API.
 
@@ -268,6 +270,34 @@ The `/oss-forensics` command provides evidence-backed forensic investigation for
 
 ---
 
+## HARDWARE SECURITY
+
+The `/hardware` command provides guided hardware security research from physical reconnaissance through firmware extraction and analysis. The `/firmware` command covers the analysis leg on its own: it runs `python3 raptor.py scan --firmware-root <extracted_root>` over an extracted firmware filesystem (ELF inventory + arch detection via `core/binary/firmware_inventory.py`, firmware-specific Semgrep rules in `engine/semgrep/rules/firmware/`), writing `firmware-inventory.json` alongside the SARIF results. `/agentic --firmware-root <extracted_root>` runs the full scan → dedup → LLM analysis pipeline in firmware mode: CodeQL and the host binary-oracle are skipped, and findings in the inventory's high-value targets are prioritized (implicit prefer-globs + checklist priority stamps). `raptor.py sca <extracted_root> --firmware-elf` extracts component versions (busybox, dropbear, openssl, ...) from the ELF binaries and checks them against OSV's Debian advisory shard (madison-assisted version mapping when online).
+
+**Usage:** `/hardware` (interactive guided session) — enumeration itself is `python3 raptor.py hardware [--voltage <V>] [--pins <range>] [--jtag] [--baseline]`
+
+**Workflow:** Recon → Interface Enumeration → Extraction → Firmware Analysis
+
+**Skills** (in `.claude/skills/hardware-research/`):
+- `hardware-recon` - PCB inspection, chip ID, test point mapping, target map creation
+- `glasgow-interaction` - Glasgow Python API patterns, applet usage, scripted workflows
+- `jtag-exploitation` - JTAG chain enumeration, boundary scan, debug access, chain ID
+- `swd-exploitation` - ARM SWD: DAP/AP traversal, CoreSight, memory extraction, RDP/APPROTECT/CRP bypass
+- `uart-exploitation` - UART discovery, baud detection, U-Boot exploitation, shell escape
+- `spi-flash-extraction` - SPI NOR flash ID, in-circuit/out-of-circuit read, verify, patch, write-back
+- `i2c-enumeration` - I2C bus scan, EEPROM read/write, secure element interaction
+- `fault-injection` - Methodology: characterise, voltage glitch, EMFI
+- `chipwhisperer` - CW-Lite/Pro/Husky: voltage glitch, clock glitch, power trace, CPA
+- `firmware-extraction` - Unpack/triage firmware, hand off to the scan pipeline
+
+**Persona:** `tiers/personas/hardware_security_researcher.md`
+
+**Requirements:** Glasgow Interface Explorer installed from source (the `glasgow` pip package is a placeholder), physical access to target
+
+**Output:** enumeration → `out/hardware_<run>/hardware-report.json`; firmware scan → run output directory (`firmware-inventory.json`, `scan-manifest.json` with arch/kernel, SARIF)
+
+---
+
 ## EXPLOITABILITY VALIDATION
 
 The `/validate` command validates that vulnerability findings are real, reachable, and exploitable.
@@ -382,6 +412,7 @@ The `/annotate` command attaches free-form prose to individual functions, stored
 **When errors occur:** Load `tiers/recovery.md` (recovery protocol)
 **When requested:** Load `tiers/personas/[name].md` (expert personas)
 **When running /understand:** Load `.claude/skills/code-understanding/SKILL.md` (gates, config) plus the relevant mode file: `map.md`, `trace.md`, `hunt.md`, `teach.md`, or `study.md`
+**When doing hardware security:** Load `tiers/personas/hardware_security_researcher.md` + `.claude/skills/hardware-research/SKILL.md`, then the per-interface skill the findings call for (`uart-exploitation`, `swd-exploitation`, ...)
 
 ---
 

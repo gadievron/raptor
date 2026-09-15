@@ -1,0 +1,589 @@
+#!/usr/bin/python3 -I
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""RAPTOR pid-1 shim for the subprocess-path sandbox.
+
+-I (isolated mode) is belt-and-braces: the sandbox's get_safe_env() strips
+PYTHONPATH/PYTHONHOME/PYTHONSTARTUP already, but caller-supplied env=
+dicts are passed through verbatim by design (context.py:544). -I makes
+python ignore PYTHON* env variables regardless, so an attacker-influenced
+PYTHONPATH can't inject code into OUR interpreter between the kernel's
+execve and main(). Without -I, a sitecustomize.py on an attacker path
+would run at interpreter startup — before a single line of this script.
+
+Why this exists
+---------------
+When `core/sandbox/context.py` invokes the subprocess path
+(`unshare --user --pid --fork --ipc [--net]`), the forked child
+becomes pid-1 of the new pid-ns and runs the target directly.
+Linux's pid-ns signal-filter policy (see `man pid_namespaces`)
+drops signals sent to pid-1 via `raise()` / `kill(getpid(), ...)`
+unless a handler is installed — so a target that calls `abort()`,
+`raise(SIGFPE)`, `_exit_via_assert()`, etc. has its death signal
+silently swallowed, and the parent sees a normal exit.
+
+Nested pid-ns setups (Docker-in-CI, systemd-nspawn, kata) can
+amplify this: in some kernel/util-linux combinations even
+synchronous CPU exceptions (div-by-zero, null-deref) get filtered
+when pid-1 is deeply nested. The sandbox's observability then
+reports `crashed: False` for a process that genuinely crashed,
+breaking target-bug detection.
+
+The fix is to wrap the target so the TARGET isn't pid-1. Target
+becomes pid-2, shim is pid-1. Signal delivery to target is
+governed by normal (non-init) rules. Shim reaps target, mirrors
+exit status back via either normal exit code or a self-re-raised
+signal — so the caller (subprocess.run's waitpid) sees the same
+returncode shape it would see running the binary outside the
+sandbox.
+
+This is the standard pattern used by tini, dumb-init, and every
+container runtime's in-box init. We ship a small Python version
+rather than a new C dependency — RAPTOR already requires Python,
+and the shim's overhead (one fork + waitpid) is ~5ms on typical
+hosts, negligible against the build-tool invocations it wraps.
+
+Used by the subprocess path only. The mount-ns (`_spawn.py`) path
+already does the equivalent via its own double-fork layout; no
+separate shim needed there.
+
+Behaviour contract
+------------------
+* Argv: shim path, followed by target argv. `shim cmd arg1 arg2`
+  → exec's `cmd arg1 arg2` as pid-2.
+* Normal exit of target → shim exits with the same code.
+* Target killed by signal → shim re-raises that signal on self
+  with SIG_DFL disposition, so waitpid on the shim sees
+  WIFSIGNALED with the same WTERMSIG. Caller's returncode is
+  negative (subprocess convention), observe._interpret_result
+  decodes it as `crashed: True`.
+* SIGTERM/SIGINT/SIGHUP/SIGQUIT to the shim → forwarded to target.
+  Shim otherwise stays out of the way of its own signal
+  disposition (no trap on SIGFPE etc., so it dies if those arrive
+  — same as an unwrapped target would).
+* Orphan processes (zombies not the direct target) are reaped but
+  their exit status is discarded. Only the target's status is
+  mirrored.
+"""
+
+from __future__ import annotations
+
+import faulthandler
+import signal
+import sys
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+
+
+# Shim exit code used when the orchestrator-liveness pipe goes EOF (the
+# orchestrator died) and the shim tears the pid-ns down. Nobody meaningful
+# reaps it (the orchestrator is gone); distinct from the target's own codes
+# and the 254/255 sentinels purely for post-mortem log clarity.
+_DEATH_TEARDOWN_EXIT = 137
+
+
+def _lo_up_ioctl() -> None:
+    """SIOCSIFFLAGS to set IFF_UP on lo in the current netns. Inline
+    copy of core/sandbox/_proxy_bridge._bring_up_loopback (this script
+    runs with -I and no RAPTOR sys.path; it cannot import core.*).
+    Raises OSError on failure."""
+    import fcntl
+    import socket
+    import struct
+    SIOCSIFFLAGS = 0x8914
+    IFF_UP, IFF_LOOPBACK, IFF_RUNNING = 0x1, 0x8, 0x40
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        ifr = b"lo".ljust(16, b"\x00") + struct.pack(
+            "h", IFF_UP | IFF_LOOPBACK | IFF_RUNNING
+        )
+        fcntl.ioctl(s, SIOCSIFFLAGS, ifr)
+    finally:
+        s.close()
+
+
+def _ensure_loopback_up() -> None:
+    """Bring lo up in the sandbox netns (--netns-lo flag from context).
+
+    A fresh netns (``unshare --net``) has lo DOWN: bind() works but
+    self-connect fails ENETUNREACH, which breaks every loopback-IPC
+    tool (gradle daemon, language servers, self-connecting test
+    suites) under block_network. Two attempts:
+
+    1. Direct SIOCSIFFLAGS — works when this process still holds
+       CAP_NET_ADMIN over the netns (map_root runs: the mapped euid 0
+       retains capabilities across the exec into this shim).
+    2. Nested in-process ``unshare(CLONE_NEWUSER | CLONE_NEWNET)`` +
+       retry — only possible when a uid mapping exists (an UNMAPPED
+       euid cannot create a child user-ns, user_namespaces(7) EPERM).
+
+    On the default subprocess chain neither works: the unshare CLI
+    writes no uid_map, deliberately — the NPROC containment design
+    needs the sandbox uid to be ns-nobody (zero pre-existing
+    processes), and mapping the current user would count the
+    operator's host processes against the fork-bomb limit. So the
+    unmapped case stays loopback-down (exactly the pre-flag
+    behaviour), SILENTLY — this runs on every block_network subprocess
+    call and a routine stderr line would pollute captured tool output.
+    The spawn path (core/sandbox/_spawn), which creates namespaces
+    in-process and never drops capabilities, brings lo up reliably —
+    that is the path loopback-IPC workloads take (target/output set,
+    tool visible in the mount tree).
+    """
+    try:
+        _lo_up_ioctl()
+        return
+    except OSError:
+        pass
+    CLONE_NEWUSER = getattr(os, "CLONE_NEWUSER", 0x10000000)
+    CLONE_NEWNET = getattr(os, "CLONE_NEWNET", 0x40000000)
+    try:
+        os.unshare(CLONE_NEWUSER | CLONE_NEWNET)
+        _lo_up_ioctl()
+    except OSError:
+        pass
+
+
+def _resolve_death_fd():
+    """Resolve the orchestrator-liveness ("death") pipe read-end fd, or None.
+
+    context.py creates ONE pipe per orchestrator process, keeps the WRITE end
+    open for the orchestrator's whole lifetime, and passes the READ end down
+    to this shim (Popen ``pass_fds`` + the ``_RAPTOR_DEATH_FD`` env var). When
+    the orchestrator — and every copy of the write end — dies, INCLUDING on
+    SIGKILL / OOM / crash that no cleanup handler can catch, this read end
+    goes EOF; the shim then exits and the kernel cascade-SIGKILLs the pid-ns.
+
+    Security/hygiene: this fd is a one-bit liveness signal for the trusted
+    shim only — nothing is ever written to it, so it carries no data and is
+    no IPC/side channel. Set CLOEXEC so the sandboxed (untrusted) target,
+    forked + exec'd below, never inherits it; non-blocking so the post-select
+    read can never stall the shim.
+    """
+    raw = os.environ.get("_RAPTOR_DEATH_FD")
+    if not raw:
+        return None
+    try:
+        fd = int(raw)
+        os.fstat(fd)  # validate it's a real, open fd
+    except (ValueError, OSError):
+        return None
+    try:
+        os.set_inheritable(fd, False)  # CLOEXEC → target can't inherit it
+        os.set_blocking(fd, False)
+    except OSError:
+        return None
+    return fd
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        # No target argv supplied — operator bug.
+        sys.stderr.write(
+            "raptor-pid1-shim: missing target argv. "
+            "Usage: raptor-pid1-shim <target> [args...]\n"
+        )
+        return 2
+
+    target_argv = sys.argv[1:]
+
+    # --netns-lo (from context.py, only when the unshare chain used
+    # --net): bring lo up in the fresh netns. Before fork so the whole
+    # target subtree sees a working loopback. Consumed here — the
+    # target never sees the flag.
+    if target_argv and target_argv[0] == "--netns-lo":
+        target_argv = target_argv[1:]
+        _ensure_loopback_up()
+        if not target_argv:
+            sys.stderr.write(
+                "raptor-pid1-shim: missing target argv after --netns-lo\n"
+            )
+            return 2
+
+    # --keep-trust-markers (from context.run() ONLY): keep the two
+    # trust markers in the target env. Out-of-band by design — the
+    # old _RAPTOR_KEEP_TRUST_MARKERS ENV flag meant any caller-
+    # supplied env dict carrying the key preserved the markers for
+    # untrusted code; an argv flag can only come from the code that
+    # builds this command line.
+    keep_trust_markers = False
+    # --strip-raptor-dir (from context.run() ONLY, set on the
+    # untrusted-target contract): also remove RAPTOR_DIR at target
+    # exec. Out-of-band for the same reason as --keep-trust-markers.
+    strip_raptor_dir = False
+    if target_argv and target_argv[0] == "--strip-raptor-dir":
+        target_argv = target_argv[1:]
+        strip_raptor_dir = True
+        if not target_argv:
+            sys.stderr.write(
+                "raptor-pid1-shim: missing target argv after "
+                "--strip-raptor-dir\n"
+            )
+            # Usage error, same as the --netns-lo / --keep-trust-markers
+            # branches. 125 is reserved for exec-errno failures — a
+            # wrapper usage bug must not masquerade as one.
+            return 2
+    if target_argv and target_argv[0] == "--keep-trust-markers":
+        target_argv = target_argv[1:]
+        keep_trust_markers = True
+        if not target_argv:
+            sys.stderr.write(
+                "raptor-pid1-shim: missing target argv after "
+                "--keep-trust-markers\n"
+            )
+            return 2
+
+    # Orchestrator-liveness pipe (read end), or None when not configured.
+    # Resolved BEFORE the fork so the CLOEXEC set here is in place for the
+    # target's exec; we additionally close it explicitly in the target
+    # branch below (belt-and-braces — the target subtree never holds it).
+    death_fd = _resolve_death_fd()
+
+    # Install signal handlers BEFORE fork. The shim runs as pid-1
+    # in the new pid namespace, where the kernel's default
+    # delivery policy DROPS signals from same-namespace senders
+    # but external signals (delivered before the namespace is
+    # fully sealed) still hit pid-1 with the default disposition.
+    # Pre-fix the four-signal install happened AFTER the fork,
+    # so a SIGINT delivered in the brief fork→install window
+    # killed pid-1 with the default disposition (terminate),
+    # which tore down the entire pid namespace before the target
+    # had a chance to start. Race window was small but real on
+    # heavily-loaded hosts; surfaced as "agentic run died with
+    # no output" with no traceback.
+    #
+    # Initial install ignores the signals (SIG_IGN) — at the
+    # parent layer they're harmless once the target is up
+    # because we'll replace them with `_forward` below. The
+    # forked child resets handlers to default automatically at
+    # execvp() (POSIX), so the IGN doesn't propagate to the
+    # target binary.
+    for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
+        try:
+            signal.signal(s, signal.SIG_IGN)
+        except (OSError, ValueError):
+            pass
+
+    child = os.fork()
+    if child == 0:
+        # Target branch — close the death-pipe read end immediately so it
+        # never reaches the (untrusted) target or its descendants. CLOEXEC
+        # would drop it at the grandchild's exec anyway; this also keeps the
+        # non-exec intermediate (pid-2) from holding a stray copy.
+        if death_fd is not None:
+            try:
+                os.close(death_fd)
+            except OSError:
+                pass
+        # We want the target to be the session leader
+        # of its pid-ns — matches pre-shim behaviour where target was
+        # pid-1 and (under start_new_session=True from the Popen
+        # preexec) effectively the session leader. `ps -o sid` then
+        # shows pid==sid, and /dev/tty opens return ENXIO.
+        #
+        # But: `unshare --fork` sets up pid-1 such that its children
+        # are born as process-group leaders (pgid == their own pid)
+        # — so a direct `setsid()` in this fork'd child fails with
+        # EPERM ("calling process is already a process group
+        # leader"). Sidestep via a double-fork: the grandchild is
+        # NOT a pgrp leader and CAN setsid.
+        #
+        # Layout after this:
+        #   shim (pid-1, pid-ns init)  ← waits for first child
+        #   intermediate (pid-2)       ← forks grandchild, exits 0
+        #   target (pid-3)             ← session leader, execs target
+        #
+        # Shim's waitpid returns intermediate's status. The
+        # intermediate exits 0 IFF fork+exec of target succeeded up
+        # to the point the grandchild was spawned. But we can't then
+        # report the TARGET's exit from the intermediate once it has
+        # already left. Use a pipe for the intermediate to forward
+        # the target's wait status before exiting.
+        #
+        # Simpler alternative used here: intermediate execs target
+        # AFTER calling setsid, and exits with target's status
+        # naturally via execve. Before setsid, we must NOT be a
+        # pgrp leader — so we fork once more and the GRANDCHILD
+        # (which is not a pgrp leader by virtue of inheriting from
+        # a non-leader intermediate) does setsid + execve. The
+        # intermediate waitpids the grandchild and mirrors its exit
+        # via _exit(128+sig) / _exit(code) so the shim sees the
+        # right status.
+        intermediate_grandchild = os.fork()
+        if intermediate_grandchild == 0:
+            # Grandchild — inherits intermediate's pgrp (not leader
+            # of any pgrp), so setsid is permitted.
+            try:
+                os.setsid()
+            except OSError:
+                pass
+            # Reset the four termination signals to SIG_DFL before
+            # exec. POSIX execve(2) rule: handlers reset to default
+            # across exec, BUT signals set to SIG_IGN STAY ignored
+            # in the new image. The pre-fork shim installs SIG_IGN
+            # to close the race window where pid-1 has default
+            # handlers — that's correct for the shim, but the IGN
+            # disposition is then INHERITED through the
+            # intermediate fork AND survives the target's execvp
+            # below. The target binary then ignores SIGTERM /
+            # SIGINT / SIGHUP / SIGQUIT silently, breaking
+            # `kill -TERM $$` from inside a shell-form target
+            # (and breaking the shim's own forwarder, which kills
+            # a target that won't die). Reset to SIG_DFL here so
+            # the target sees default disposition.
+            for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
+                try:
+                    signal.signal(s, signal.SIG_DFL)
+                except (OSError, ValueError):
+                    pass
+            # Don't leak RAPTOR-internal markers into the (untrusted) target's
+            # env. _RAPTOR_DEATH_FD names an fd already CLOEXEC'd shut; the
+            # trust marker authorizes RAPTOR's OWN dispatch scripts (this shim
+            # included) and has no business being visible to the sandboxed
+            # target. Strip both so nothing _RAPTOR_* crosses into the target.
+            # Exception: _RAPTOR_KEEP_TRUST_MARKERS (set only by
+            # run_untrusted_networked(keep_trust_markers=True) for RAPTOR's
+            # own Claude Code skill dispatches) keeps the two trust markers
+            # so the child can drive libexec/ helpers; the flag itself and
+            # the death fd are stripped unconditionally.
+            # The env key is stripped UNCONDITIONALLY and no longer
+            # trusted — the keep decision arrives via the argv flag
+            # (see above), which only context.run() can set.
+            os.environ.pop("_RAPTOR_KEEP_TRUST_MARKERS", None)
+            # Keep this tuple in sync with core.config's
+            # TARGET_ENV_STRIP_SET (the shim runs inside namespace
+            # setup and cannot import core): trust markers + the
+            # session credential never reach target code; the
+            # keep-trust dispatch arm keeps both by design.
+            _strip = (
+                ("_RAPTOR_DEATH_FD",) if keep_trust_markers
+                else ("_RAPTOR_DEATH_FD", "_RAPTOR_TRUSTED", "CLAUDECODE",
+                      "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
+                      "RAPTOR_ALLOW_DEGRADED_UNTRUSTED",
+                      # Framework-identity values (checkout path,
+                      # output layout, target-kind override) are pure
+                      # "inside RAPTOR" tells — no target consumes
+                      # them and no libexec script accepts them as a
+                      # trust input.
+                      "RAPTOR_DIR", "RAPTOR_OUT_DIR",
+                      "RAPTOR_TARGET_KIND")
+            )
+            if strip_raptor_dir and not keep_trust_markers:
+                # --strip-raptor-dir predates RAPTOR_DIR joining the
+                # base strip tuple above; kept for argv compatibility
+                # with older callers — a no-op today.
+                _strip = (*_strip, "RAPTOR_DIR")
+            for _m in _strip:
+                os.environ.pop(_m, None)
+            # Re-apply quarantined loader variables (LD_*/DYLD_*) for
+            # the TARGET only. context.run() moved them out of the
+            # launcher chain's live env into this JSON payload so they
+            # could not inject code into unshare/prlimit/this shim
+            # (which run with the trust marker and, on the map-root
+            # path, with not-yet-dropped ns capabilities); the target
+            # exec below is where the caller intended them to apply.
+            _restore_raw = os.environ.pop("_RAPTOR_ENV_RESTORE", None)
+            if _restore_raw:
+                import json as _json
+                try:
+                    _restore = _json.loads(_restore_raw)
+                except ValueError:
+                    _restore = None
+                if isinstance(_restore, dict):
+                    for _rk, _rv in _restore.items():
+                        if isinstance(_rk, str) and isinstance(_rv, str) \
+                                and (_rk.startswith(("LD_", "DYLD_"))
+                                     or _rk in ("GCONV_PATH",
+                                                "GLIBC_TUNABLES")):
+                            os.environ[_rk] = _rv
+            # Exec-failure convention (mirrors the shell's): 127 not
+            # found, 126 found-but-not-executable, 125 any other exec
+            # errno (ETXTBSY, ENOEXEC, ELOOP, ...). This lane has no
+            # exec-status pipe, so the exit code is the only machine
+            # channel — additionally name the errno on stderr with the
+            # "sandbox: " prefix so consumers (and humans reading a CI
+            # log) can tell "the target never ran" from a target that
+            # ran and chose one of these exit codes. An exec that
+            # fails writes nothing else, so the line cannot interleave
+            # with target output.
+            def _exec_fail(code: int, exc: OSError) -> None:
+                # Best-effort diagnostic in a dying pre-exec child —
+                # never let it mask the exit code.
+                try:
+                    import errno as _errno
+                    name = _errno.errorcode.get(exc.errno or 0,
+                                                "errno %s" % exc.errno)
+                    os.write(2, (
+                        "sandbox: pid1-shim: exec of target failed "
+                        "(%s): %s\n" % (name, exc.strerror or "")
+                    ).encode("utf-8", "replace"))
+                except Exception:  # noqa: BLE001
+                    pass
+                os._exit(code)
+
+            try:
+                os.execvp(target_argv[0], target_argv)
+            except FileNotFoundError as e:
+                _exec_fail(127, e)
+            except PermissionError as e:
+                _exec_fail(126, e)
+            except OSError as e:
+                _exec_fail(125, e)
+            os._exit(125)  # unreachable
+
+        # Intermediate — forward termination signals to the grandchild
+        # (which called setsid, so os.kill by pid is the only path).
+        # The pre-fork SIG_IGN is still in effect here; replace it with
+        # a forwarder so the shim's os.kill(child, sig) reaches the
+        # actual target.
+        def _fwd_to_grandchild(sig: int, _frame) -> None:
+            try:
+                os.kill(intermediate_grandchild, sig)
+            except ProcessLookupError:
+                pass
+
+        for _s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
+            try:
+                signal.signal(_s, _fwd_to_grandchild)
+            except (OSError, ValueError):
+                pass
+
+        # waitpid grandchild, mirror status.
+        while True:
+            try:
+                _, g_status = os.waitpid(intermediate_grandchild, 0)
+                break
+            except InterruptedError:
+                continue
+        if os.WIFEXITED(g_status):
+            os._exit(os.WEXITSTATUS(g_status))
+        if os.WIFSIGNALED(g_status):
+            os._exit(128 + os.WTERMSIG(g_status))
+        os._exit(255)
+
+    # Shim (pid-1 of the new pid-ns) branch: forward common
+    # termination signals to the target, wait for target to exit,
+    # mirror status.
+    def _forward(sig: int, _frame) -> None:
+        try:
+            os.kill(child, sig)
+        except ProcessLookupError:
+            # Target already gone — ignore.
+            pass
+
+    for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
+        try:
+            signal.signal(s, _forward)
+        except (OSError, ValueError):
+            # Some envs (e.g. restrictive seccomp) may reject
+            # individual signal installs. Non-fatal — the shim
+            # still works, signals just won't forward cleanly.
+            pass
+
+    # Reap until the target is seen. Other zombies (if target
+    # forked) are collected but their status is discarded.
+    target_status = None
+    if death_fd is None:
+        # No liveness pipe configured — original blocking reap (unchanged).
+        while True:
+            try:
+                reaped_pid, status = os.waitpid(-1, 0)
+            except ChildProcessError:
+                # No children left — target must have been reaped
+                # already (shouldn't happen with our single-fork
+                # layout, but be defensive).
+                break
+            except InterruptedError:
+                # A forwarded signal interrupted waitpid. Loop.
+                continue
+            if reaped_pid == child:
+                target_status = status
+                break
+            # Orphan reaped; continue waiting for target.
+    else:
+        # Liveness pipe configured: multiplex the reap with a watch on the
+        # orchestrator-death fd. When the orchestrator (and every copy of
+        # the write end) dies — including SIGKILL/OOM/crash that no cleanup
+        # handler can catch — this read end goes EOF; the shim exits and the
+        # kernel cascade-SIGKILLs the whole pid-ns (target + descendants).
+        # select() with a short timeout also lets us notice the target
+        # exiting (SIGCHLD is ignored by default, so it won't interrupt the
+        # wait); a forwarded signal interrupting select() just re-loops.
+        import select as _select
+        while target_status is None:
+            try:
+                ready, _, _ = _select.select([death_fd], [], [], 0.1)
+            except InterruptedError:
+                ready = ()
+            if ready:
+                try:
+                    _alive = os.read(death_fd, 256)
+                except BlockingIOError:
+                    _alive = b"x"          # spurious wake, not EOF
+                except OSError:
+                    _alive = b""           # fd error → fail safe to teardown
+                if not _alive:
+                    # EOF → orchestrator gone → tear the pid-ns down.
+                    os._exit(_DEATH_TEARDOWN_EXIT)
+            # Reap whatever has exited (non-blocking).
+            no_children = False
+            while True:
+                try:
+                    reaped_pid, status = os.waitpid(-1, os.WNOHANG)
+                except ChildProcessError:
+                    no_children = True
+                    break
+                if reaped_pid == 0:
+                    break                  # nothing ready right now
+                if reaped_pid == child:
+                    target_status = status
+                    break
+                # Orphan reaped; keep going.
+            if no_children:
+                break
+
+    if target_status is None:
+        # Fell out without seeing target — shouldn't happen. Report
+        # a sentinel rc so operators can tell the shim misbehaved
+        # rather than the target returning 255 legitimately.
+        os._exit(254)
+
+    if os.WIFEXITED(target_status):
+        os._exit(os.WEXITSTATUS(target_status))
+
+    if os.WIFSIGNALED(target_status):
+        sig = os.WTERMSIG(target_status)
+        # Exit with 128+sig per unix convention. Can't re-raise the
+        # signal on self because the shim IS pid-1 of the new pid-
+        # ns and the kernel's pid-ns filter drops raise() /
+        # kill(self,...) from pid-1 without an installed handler —
+        # the very filter we're interposing to insulate the target
+        # from. observe._interpret_result decodes 128+sig the same
+        # way it decodes a negative return code (both → died by
+        # signal, both → crashed=True).
+        os._exit(128 + sig)
+
+    # WIFSTOPPED / WIFCONTINUED / unknown. Propagate a non-zero rc
+    # so the caller sees the anomaly.
+    os._exit(255)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

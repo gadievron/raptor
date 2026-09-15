@@ -28,6 +28,8 @@ Before any manual enumeration, build the source inventory (the understand comman
 
 Read the resulting `checklist.json`. It provides every source file with language, line count, SHA-256 checksum, and every function with name, line number, and signature. Excluded files are recorded with reasons.
 
+**Firmware roots:** if `firmware-inventory.json` exists in `$WORKDIR`, in `$WORKDIR/scan/`, or in the target's scan run, read it. Its `high_value_targets` (network daemons, CGI handlers, credential stores — ranked by interest score) are mandatory entry-point coverage: enumerate each as an entry point even though the binary itself has no readable source, and prioritize their directories (init scripts, CGI sources, configs) throughout the map. MAP-5's normaliser also backfills these mechanically (`type: firmware_service`, `origin: firmware-inventory`) as a safety net — your job is the semantic detail the backfill can't infer (what the daemon listens on, what the CGI parses).
+
 If tree-sitter is installed, functions also include a `metadata` field with:
 - `attributes` — decorators (Python) and annotations (Java) that identify entry points and auth gates
 - `visibility` — public/private/static/exported/extern

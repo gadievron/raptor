@@ -14,10 +14,6 @@
     "kind": "literal",
     "note": "serializer field manifest for the reachability adjacency cache JSON format (persistence schema keys, not a learned name vocabulary; must stay in lockstep with _index_from_jsonable)"
   },
-  "packages/static-analysis/scanner.py::main": {
-    "count": 13,
-    "kind": "literal"
-  },
   "core/analysis/binary_oracle.py::_BOILERPLATE_NAMES": {
     "count": 10,
     "kind": "literal"
@@ -981,6 +977,10 @@
     "count": 10,
     "kind": "literal",
     "note": "serialization field names, not a name vocabulary"
+  },
+  "core/binary/firmware_inventory.py::_HIGH_VALUE_NAMES": {
+    "count": 18,
+    "kind": "literal"
   },
   "core/concepts/audit_bridge.py::_STOPWORDS": {
     "count": 24,
@@ -2205,6 +2205,10 @@
     "kind": "literal",
     "note": "annotation-status enum to human label map (core/annotations status values + understand roles), fixed taxonomy not target API names"
   },
+  "packages/hardware/enumerator.py::report": {
+    "count": 10,
+    "kind": "literal"
+  },
   "packages/hypothesis_validation/adapters/codeql.py::describe": {
     "count": 10,
     "kind": "literal"
@@ -2557,6 +2561,10 @@
   },
   "packages/static-analysis/scanner.py::_SEMGREP_LANG_ALIASES": {
     "count": 11,
+    "kind": "literal"
+  },
+  "packages/static-analysis/scanner.py::main": {
+    "count": 13,
     "kind": "literal"
   },
   "packages/web/api_testing.py::run_graphql_probes": {

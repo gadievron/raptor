@@ -422,10 +422,16 @@ def format_text(report: DescribeReport) -> str:
     analysis_target = report.archive_path or s.target_path
     lines.append("")
     lines.append("For host-level setup, run `raptor doctor`.")
-    lines.append(
-        f"To start analysis, run `raptor.py agentic --repo "
-        f"{analysis_target}` (runs sandboxed)."
-    )
+    if s.firmware_like:
+        lines.append(
+            f"To start analysis, run `raptor.py agentic --firmware-root "
+            f"{analysis_target}` (runs sandboxed)."
+        )
+    else:
+        lines.append(
+            f"To start analysis, run `raptor.py agentic --repo "
+            f"{analysis_target}` (runs sandboxed)."
+        )
 
     return "\n".join(lines)
 
@@ -444,6 +450,8 @@ def format_json(report: DescribeReport) -> str:
         "target_type": s.target_type,
         "total_files": s.total_files,
         "total_lines": s.total_lines,
+        "elf_count": s.elf_count,
+        "firmware_like": s.firmware_like,
         "file_extensions": s.file_extensions,
         "language_lines": s.language_lines,
         "git": (
