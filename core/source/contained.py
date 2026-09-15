@@ -15,15 +15,27 @@ SARIF locations, finding records, crash artifacts:
   still races a growing plant). Without it, a multi-hundred-MB
   generated/planted file is loaded whole into host memory per
   finding.
-- **Regular files only, race-free** — the open itself carries
-  ``O_NOFOLLOW | O_NONBLOCK`` and the opened fd is ``fstat``-checked
-  ``S_ISREG`` before any read. A plain ``open()`` on a repo-planted
-  reader-less FIFO blocks the analyser forever, and any check-by-name
-  (``is_file()``) can be swapped between check and open — the guard
-  must live on the fd. Symlinks at the FINAL path component are
-  refused by the capped readers; callers that legitimately read
-  through symlinks resolve first (``read_contained`` does, via
-  ``confine``), which also keeps resolved in-root symlinks working.
+- **Regular files only, race-free regularity** — the open itself
+  carries ``O_NOFOLLOW | O_NONBLOCK`` and the opened fd is
+  ``fstat``-checked ``S_ISREG`` before any read. A plain ``open()``
+  on a repo-planted reader-less FIFO blocks the analyser forever, and
+  any check-by-name (``is_file()``) can be swapped between check and
+  open — the guard must live on the fd. Symlinks at the FINAL path
+  component are refused by the capped readers; callers that
+  legitimately read through symlinks resolve first
+  (``read_contained`` does, via ``confine``), which also keeps
+  resolved in-root symlinks working.
+
+  Scope of the race-free claim: it covers the REGULARITY check (fd,
+  not name) and the final component (``O_NOFOLLOW``). CONTAINMENT is
+  resolve-then-open: an attacker with concurrent local write access
+  inside the target tree can swap an INTERMEDIATE directory for an
+  out-of-tree symlink between ``confine()``'s resolve and the open,
+  steering the read out of root — a materially narrower threat than
+  the static plants above (it needs an active local attacker racing
+  the analyser, not repo content), and closable only with
+  ``openat2(RESOLVE_BENEATH)`` / a dir-fd walk. Consumers must not
+  build on a stronger reading.
 
 Sites that need distinct refusal messaging (outside-root vs
 unreadable) compose :func:`core.paths.confine` with
