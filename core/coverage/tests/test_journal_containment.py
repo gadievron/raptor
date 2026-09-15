@@ -19,10 +19,18 @@ import pytest
 
 import core.json.utils as json_utils
 from core.coverage.journal import (
+    INDEX_FILENAME,
     JOURNAL_FILENAME,
+    IndexUnreadable,
+    _load_index,
     latest_entries,
     load_entries,
+    load_index,
+    load_index_full,
+    merge_into_index,
+    merge_run_into_index,
     now_iso,
+    rehome_legacy_keys,
     reviewed_set,
 )
 
@@ -164,6 +172,125 @@ class TestReaderPreParseContainment:
             r for r in caplog.records if r.levelname == "WARNING"
         ]
         assert len(warnings) <= 25, len(warnings)
+
+    def test_index_nesting_bomb_readers_degrade_writers_refuse(
+        self, tmp_path: Path,
+    ):
+        """A nesting-bomb index file: readers degrade to empty, the
+        merge writer refuses and leaves the file byte-identical."""
+        project = tmp_path / "project"
+        run = tmp_path / "run"
+        project.mkdir()
+        run.mkdir()
+        bomb = '{"schema_version": 1, "entries": {"k": ' \
+            + "[" * 200_000 + "]" * 200_000 + "}}"
+        index = project / INDEX_FILENAME
+        index.write_text(bomb)
+        (run / JOURNAL_FILENAME).write_bytes(_valid_line(0))
+        for name, override in _both_backends():
+            saved = json_utils._orjson
+            try:
+                json_utils._orjson = override
+                assert load_index(project) == {}, name
+                assert load_index_full(project) == {}, name
+                assert merge_run_into_index(project, run) == 0, name
+                assert index.read_text() == bomb, name
+                with pytest.raises(IndexUnreadable):
+                    _load_index(index, for_write=True)
+            finally:
+                json_utils._orjson = saved
+
+    def test_hostile_index_row_quarantined_and_never_dropped(
+        self, tmp_path: Path,
+    ):
+        """A planted row that fails entry validation is skipped by
+        readers, left in place by the re-home walk, and survives a
+        merge byte-for-byte (never-drop)."""
+        project = tmp_path / "project"
+        run = tmp_path / "run"
+        project.mkdir()
+        run.mkdir()
+        good = json.loads(_valid_line(7))
+        hostile = {"ts": 5, "file": ["x"], "verdict": None}
+        index = project / INDEX_FILENAME
+        index.write_text(json.dumps({
+            "schema_version": 1,
+            "entries": {"good:key": good, "hostile:key": hostile},
+        }))
+        loaded = load_index_full(project)
+        assert list(loaded) == ["good:key"]
+
+        (run / JOURNAL_FILENAME).write_bytes(_valid_line(8))
+        assert merge_run_into_index(project, run) == 1
+        persisted = json.loads(index.read_text())["entries"]
+        assert persisted["hostile:key"] == hostile
+
+    def test_merge_never_writes_an_over_budget_index(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A merge must never WRITE an index larger than the read
+        budget: the per-run entry cap bounds row count, not bytes
+        (indent-2 re-serialization inflates list-heavy rows), so an
+        under-cap run journal could push the index past the cap in
+        one merge — after which every reader degraded to empty and
+        every writer (compaction included) refused: a permanently
+        frozen index. The write gate refuses the MERGE instead; the
+        index stays readable/writable and the run journal keeps its
+        rows."""
+        import core.coverage.journal as journal_mod
+        # Scaled cap: 8 KiB budget stands in for the 256 MiB default.
+        monkeypatch.setattr(journal_mod, "_MAX_JOURNAL_BYTES", 8 * 1024)
+        project = tmp_path / "project"
+        run = tmp_path / "run"
+        run2 = tmp_path / "run2"
+        project.mkdir()
+        run.mkdir()
+        run2.mkdir()
+        # Pre-seed accumulated history that a frozen index would lose.
+        (run2 / JOURNAL_FILENAME).write_bytes(_valid_line(0))
+        assert merge_run_into_index(project, run2) == 1
+        index = project / INDEX_FILENAME
+        before = index.read_bytes()
+        # An UNDER-cap run journal whose merged index would serialize
+        # over the cap.
+        rows = b"".join(
+            json.dumps({
+                "ts": now_iso(), "run_id": "r", "file": f"g{i}.c",
+                "function": f"gfn{i}", "verdict": "clean",
+                "source_hash": "", "schema_version": 1,
+                "body": "x" * 900,
+            }).encode() + b"\n"
+            for i in range(6)
+        )
+        assert len(rows) < 8 * 1024
+        (run / JOURNAL_FILENAME).write_bytes(rows)
+        assert merge_into_index(project, run) == 0
+        # Index untouched; readers see the history; writers still work.
+        assert index.read_bytes() == before
+        assert set(load_index(project)) == {"src/f0.c:fn0"}
+        (run2 / JOURNAL_FILENAME).write_bytes(_valid_line(1))
+        assert merge_run_into_index(project, run2) == 1
+        assert set(load_index(project)) == {"src/f0.c:fn0", "src/f1.c:fn1"}
+
+    def test_rehome_quarantines_rows_outside_the_legacy_tuple(self):
+        """Rows whose validation raises classes the old enumerated
+        tuple missed must also stay in place, not crash the walk."""
+        deep: list = []
+        cur = deep
+        for _ in range(100_000):
+            nxt: list = []
+            cur.append(nxt)
+            cur = nxt
+        good = json.loads(_valid_line(3))
+        index = {
+            "legacy:key": good,
+            "deep:key": {**json.loads(_valid_line(4)), "hypotheses": deep},
+            "nondict:key": "scalar",
+        }
+        moved = rehome_legacy_keys(index)
+        assert moved == 1
+        assert "deep:key" in index and "nondict:key" in index
+        assert good in index.values()
 
     def test_deep_field_inside_valid_json_row_quarantined(
         self, tmp_path: Path,

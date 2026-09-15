@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
-from core.json import load_json, loads, save_json
+from core.json import load_json, loads
 
 try:
     import fcntl
@@ -746,7 +746,12 @@ def _validate_serializable(raw: dict[str, Any]) -> None:
     """
     try:
         json.dumps(raw, ensure_ascii=False, allow_nan=False).encode("utf-8")
-    except (TypeError, ValueError) as exc:  # UnicodeEncodeError ⊂ ValueError
+    except (TypeError, ValueError, RecursionError) as exc:
+        # UnicodeEncodeError ⊂ ValueError. RecursionError: a structure
+        # deep enough to blow the ENCODER's recursion (parse and dump
+        # limits differ with stack depth at the call site) is just as
+        # unserializable — normalise it to the same refusal so callers'
+        # ValueError arms (row quarantine, IndexUnreadable) see it.
         msg = f"row does not round-trip the journal serializer: {exc}"
         raise ValueError(msg) from exc
 
@@ -1034,6 +1039,47 @@ def _row_ts(row: Any) -> str:
     return ts if isinstance(ts, str) else ""
 
 
+def rehome_legacy_keys(index: dict[str, Any]) -> int:
+    """Re-home rows whose on-disk key predates the current
+    ``index_key`` format (span suffix, producer segment, and any
+    earlier key-format generation). Mutates *index* in place and
+    returns the number of rows moved.
+
+    The row CONTENT is untouched — fields are the source of truth and
+    keys are opaque handles — so the move is lossless; latest-ts wins
+    when the new home is already occupied, which merges stale legacy
+    duplicates away. Rows that cannot be parsed stay in place under
+    their old key (never drop history the reader refuses). The single
+    implementation for every index writer (run-completion merge,
+    compaction) — the walk was previously duplicated verbatim and the
+    copies had already begun to drift.
+    """
+    rehomed = 0
+    for old_key in list(index.keys()):
+        row = index[old_key]
+        if not isinstance(row, dict):
+            # A non-dict value has no .get and would crash the re-home
+            # inside the writer's flock.
+            continue  # unreadable row: leave in place, never drop
+        try:
+            entry = _entry_from_dict(row)
+        except Exception:  # noqa: BLE001 — row containment boundary
+            # Total per-row quarantine, same rationale as load_entries:
+            # index rows arrive via archive import and per-run merges,
+            # so any exception class a planted row can raise must
+            # contain to that row.
+            continue  # unreadable row: leave in place, never drop
+        new_key = entry.index_key
+        if new_key == old_key:
+            continue
+        existing = index.get(new_key)
+        if existing is None or entry.ts > _row_ts(existing):
+            index[new_key] = row
+        del index[old_key]
+        rehomed += 1
+    return rehomed
+
+
 def merge_into_index(project_dir: Path, run_dir: Path) -> int:
     """Merge run journal entries into the project-level index.
 
@@ -1076,33 +1122,7 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
             return 0
         merged = 0
 
-        # Lazy legacy-key migration: re-home any row whose on-disk key
-        # no longer matches its entry's current ``index_key`` (span
-        # suffix added, and any earlier key-format generation). The
-        # entry CONTENT is untouched — fields are the source of truth
-        # and keys are opaque handles — so this is lossless; latest-ts
-        # wins if the new home is already occupied. Without re-homing,
-        # a legacy coarse key would sit forever as a stale duplicate
-        # of one of its per-site successors.
-        rehomed = 0
-        for old_key in list(index.keys()):
-            if not isinstance(index[old_key], dict):
-                # Same disposition as an unparseable dict row below:
-                # a non-dict value has no .get and crashed the
-                # re-home inside the flock.
-                continue  # unreadable row: leave in place, never drop
-            try:
-                entry = _entry_from_dict(index[old_key])
-            except (TypeError, KeyError, ValueError):
-                continue  # unreadable row: leave in place, never drop
-            new_key = entry.index_key
-            if new_key == old_key:
-                continue
-            existing = index.get(new_key)
-            if existing is None or entry.ts > _row_ts(existing):
-                index[new_key] = index[old_key]
-            del index[old_key]
-            rehomed += 1
+        rehomed = rehome_legacy_keys(index)
         if rehomed:
             logger.info(
                 "journal index: re-homed %d legacy-format key(s)", rehomed,
@@ -1116,7 +1136,17 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
                 merged += 1
 
         if merged or rehomed:
-            _write_index(index_path, index)
+            try:
+                _write_index(index_path, index)
+            except IndexWriteOverBudget as e:
+                # Same loud-refusal convention as IndexUnreadable: the
+                # index on disk stays readable AND writable (compaction
+                # included), and the run journal keeps every row — a
+                # refused merge loses nothing durable.
+                logger.error(
+                    "journal: %s — run %s NOT merged (the run journal "
+                    "keeps its rows)", e, run_dir)
+                return 0
 
     return merged
 
@@ -1195,7 +1225,10 @@ def load_index_full(project_dir: Path) -> dict[str, ReviewJournalEntry]:
             continue
         try:
             result[key] = _entry_from_dict(entry_dict)
-        except (TypeError, KeyError, ValueError) as exc:
+        except Exception as exc:  # noqa: BLE001 — row containment boundary
+            # Total per-row quarantine (same boundary as load_entries):
+            # one planted index row must never crash the consumers of
+            # the full-history view.
             logger.warning("journal index: skipping %s: %s", key, exc)
     return result
 
@@ -1220,7 +1253,14 @@ def _load_index(path: Path, for_write: bool = False
         return {}
     try:
         data = load_json(path, strict=True, max_bytes=_MAX_JOURNAL_BYTES)
-    except (OSError, ValueError) as e:
+    except Exception as e:  # noqa: BLE001 — intake containment boundary
+        # Total by design: the strict parse raises OSError/ValueError
+        # for the common corruptions but also RecursionError for a
+        # nesting-bomb index (stdlib backend) — and the index arrives
+        # via /project archive import, so any exception class a
+        # planted file can raise must resolve to the same two
+        # dispositions: readers degrade to empty, writers refuse via
+        # IndexUnreadable (never rewrite history that failed to read).
         if for_write:
             raise IndexUnreadable(
                 f"journal index at {path} is unreadable ({e}) — "
@@ -1271,14 +1311,43 @@ def _load_index(path: Path, for_write: bool = False
     return entries
 
 
+class IndexWriteOverBudget(RuntimeError):
+    """The serialized index would exceed the read budget — the write
+    refuses so the ON-DISK index always stays readable. Writing past
+    the cap manufactured a permanently frozen index: every later read
+    degraded to empty (accumulated history invisible) and every
+    writer — including compaction, the in-band remedy — refused via
+    :class:`IndexUnreadable`. The per-run merge-entry cap bounds row
+    COUNT, not bytes (indent-2 re-serialization inflates list-heavy
+    rows several-fold), so the byte bound must sit at the write."""
+
+
 def _write_index(path: Path, entries: dict[str, dict[str, Any]]) -> None:
-    """Atomic write of the index file."""
+    """Atomic write of the index file, bounded by the read budget.
+
+    Raises :class:`IndexWriteOverBudget` (file untouched) when the
+    serialized document would exceed ``_MAX_JOURNAL_BYTES`` — an index
+    the writer cannot re-read is destroyed history, so it must never
+    reach disk. Serialization matches :func:`core.json.save_json`
+    (same encoder arms, newline, atomic tempfile + rename).
+    """
+    from core.atomic_fs import write_text_atomically
+    from core.json.utils import dumps_artifact
+
     index_data = {
         "schema_version": INDEX_SCHEMA_VERSION,
         "updated_at": now_iso(),
         "entries": entries,
     }
-    save_json(path, index_data)
+    content = dumps_artifact(index_data) + "\n"
+    size = len(content.encode("utf-8"))
+    if size > _MAX_JOURNAL_BYTES:
+        raise IndexWriteOverBudget(
+            f"journal index at {path} would serialize to {size} bytes "
+            f"(over the {_MAX_JOURNAL_BYTES} byte read budget) — "
+            "refusing to write an index its own reader must refuse"
+        )
+    write_text_atomically(path, content, tmp_prefix=".~savejson-")
 
 
 # ── Domain model hash ───────────────────────────────────────────────
@@ -1395,7 +1464,11 @@ def domain_model_context(out_dir: Path) -> dict[str, Any] | None:
             # Parse the same bytes the staleness hash below covers;
             # core.json.loads accepts bytes directly.
             raw = loads(content)
-        except (OSError, ValueError):
+        except Exception:  # noqa: BLE001 — intake containment boundary
+            # domain-model.json sits in the same writable dirs as the
+            # journal; a nesting bomb (RecursionError, stdlib backend)
+            # or any other planted shape means "no comparison basis" —
+            # the same disposition as unreadable/malformed.
             return None
         if not isinstance(raw, dict):
             return None

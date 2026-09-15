@@ -1174,11 +1174,11 @@ def cmd_compact(args) -> None:
 
     from core.coverage.journal import (
         IndexUnreadable,
-        _entry_from_dict,
+        IndexWriteOverBudget,
         _flock,
         _load_index,
-        _row_ts,
         _write_index,
+        rehome_legacy_keys,
     )
 
     # Same lock every index writer takes (merge_into_index) — a
@@ -1198,28 +1198,22 @@ def cmd_compact(args) -> None:
             sys.exit(1)
 
         before = len(entries)
-        rehomed = 0
-        for old_key in list(entries.keys()):
-            if not isinstance(entries[old_key], dict):
-                # Same disposition as merge_into_index's re-home walk:
-                # a non-dict value has no .get and AttributeError is
-                # outside the quarantine tuple below.
-                continue  # unreadable row: leave in place, never drop
-            try:
-                entry = _entry_from_dict(entries[old_key])
-            except (TypeError, KeyError, ValueError):
-                continue  # unreadable row: leave in place, never drop
-            new_key = entry.index_key
-            if new_key == old_key:
-                continue
-            existing = entries.get(new_key)
-            if existing is None or entry.ts > _row_ts(existing):
-                entries[new_key] = entries[old_key]
-            del entries[old_key]
-            rehomed += 1
+        # The journal module's own walk — compaction and the
+        # run-completion merge must re-home (and quarantine) rows
+        # identically, so there is exactly one implementation.
+        rehomed = rehome_legacy_keys(entries)
 
         if rehomed:
-            _write_index(index_path, entries)
+            try:
+                _write_index(index_path, entries)
+            except IndexWriteOverBudget as e:
+                # The write gate refuses rather than freeze the index
+                # (an over-budget file degrades every reader to empty
+                # and every writer to refusal); the on-disk index is
+                # untouched.
+                print(f"  Index rewrite refused — not compacting: {e}",
+                      file=sys.stderr)
+                sys.exit(1)
             print(f"  Compacted: {before} -> {len(entries)} entries "
                   f"({rehomed} legacy key(s) re-homed).")
         else:
