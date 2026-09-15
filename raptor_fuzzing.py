@@ -147,6 +147,29 @@ def _resolve_dict_path(args: argparse.Namespace, out_dir):
         return None
 
 
+def _exploitability_from_deep_analysis(level: object) -> str | None:
+    """Map the multi-turn dialogue's graded exploitability level onto
+    the CrashContext verdict vocabulary, preserving abstention.
+
+    The producer (``packages/autonomous/dialogue.py``) deliberately
+    keeps ``"unknown"`` as a non-verdict when the model never
+    committed to a level. Splitting the tri-state domain with a bare
+    membership test (``in ['high', 'medium']`` … else
+    ``'not_exploitable'``) collapsed unknown/absent/junk into a
+    definitive negative — and, through
+    ``record_crash_pattern(exploitable=False)``, persisted cross-run
+    "not exploitable" facts no model produced. ``None`` means the
+    analysis abstained: leave the context's existing value untouched
+    and record nothing durable. Same mapping direction as the
+    crash agent's single-shot lane (explicit True/False/unknown).
+    """
+    if level in ("high", "medium"):
+        return "exploitable"
+    if level == "low":
+        return "not_exploitable"
+    return None
+
+
 def _load_generated_exploit(agent_out_dir: Path, crash_id: str) -> str | None:
     """Re-read the exploit PoC the crash agent just generated.
 
@@ -1133,21 +1156,23 @@ Examples:
 
                 # Update crash context with deep analysis
                 crash_context.vulnerability_type = deep_analysis.get('vulnerability_type', crash_context.crash_type)
-                if deep_analysis.get('exploitability') in ['high', 'medium']:
-                    crash_context.exploitability = 'exploitable'
-                else:
-                    crash_context.exploitability = 'not_exploitable'
+                verdict = _exploitability_from_deep_analysis(
+                    deep_analysis.get('exploitability'))
+                if verdict is not None:
+                    crash_context.exploitability = verdict
 
                 analysed += 1
 
-                # Record crash pattern in memory
-                if memory:
-                    is_exploitable = crash_context.exploitability == 'exploitable'
+                # Record crash pattern in memory — real verdicts
+                # only. An abstention recorded as exploitable=False
+                # became a durable cross-run "not exploitable" fact
+                # no model ever produced.
+                if memory and verdict is not None:
                     memory.record_crash_pattern(
                         signal=crash_context.signal,
                         function=crash_context.function_name or "unknown",
                         binary_hash=binary_hash,
-                        exploitable=is_exploitable
+                        exploitable=(verdict == 'exploitable')
                     )
             # Standard single-shot analysis
             elif llm_agent.analyse_crash(

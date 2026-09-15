@@ -147,3 +147,28 @@ class TestScanOnlyRecordsBuildReliability:
         assert "store_codeql_build_reliability(" in block
         # Distinguishes findings-bearing scans from empty ones.
         assert '"no_findings"' in block
+
+
+# ---------------------------------------------------------------------------
+# _exploitability_from_deep_analysis
+# ---------------------------------------------------------------------------
+
+
+class TestExploitabilityFromDeepAnalysis:
+    def test_definitive_levels_map_to_verdicts(self):
+        fuzzing = _import_fuzzing()
+        fn = fuzzing._exploitability_from_deep_analysis
+        assert fn("high") == "exploitable"
+        assert fn("medium") == "exploitable"
+        assert fn("low") == "not_exploitable"
+
+    def test_abstention_and_junk_are_none_not_negative(self):
+        # The multi-turn producer preserves "unknown" as a
+        # non-verdict; absent and junk shapes are the same
+        # abstention. Pre-fix all of these minted the definitive
+        # "not_exploitable" (and a durable exploitable=False memory
+        # fact) from a verdict no model produced.
+        fuzzing = _import_fuzzing()
+        fn = fuzzing._exploitability_from_deep_analysis
+        for level in ("unknown", None, "", "critical", 0.9, ["high"], {}):
+            assert fn(level) is None
