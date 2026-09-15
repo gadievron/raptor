@@ -1305,3 +1305,42 @@ def test_writable_path_allows_var_tmp_children(tmp_path: Path) -> None:
     from core.git.clone import _validate_writable_path
     _validate_writable_path(Path("/var/tmp/raptor-wt/repo"), role="target")
     _validate_writable_path(tmp_path / "repo", role="target")
+
+
+def test_git_failure_messages_escape_remote_controlled_bytes(
+    tmp_path: Path,
+) -> None:
+    """git relays server-controlled ``remote:`` banners verbatim into
+    stderr; the RuntimeError message flows to consumer logs/terminals,
+    so ESC/C1 control bytes must be neutralised at the message-builder
+    (and hostile banners length-capped)."""
+    hostile = "remote: \x1b]0;pwned\x07\x1b[2J fatal: nope"
+    with patch("core.sandbox.run_untrusted_networked") as mock_run:
+        mock_run.return_value = _completed(128, stderr=hostile)
+        with pytest.raises(RuntimeError) as exc_info:
+            clone_repository("https://github.com/foo/bar", tmp_path / "out")
+    msg = str(exc_info.value)
+    assert "\x1b" not in msg and "\x07" not in msg
+    assert "fatal: nope" in msg          # the useful part survives
+
+    with patch("core.sandbox.run_untrusted") as mock_local, \
+         patch("core.sandbox.run_untrusted_networked") as mock_net:
+        mock_local.side_effect = _local_ok
+        mock_net.return_value = _completed(128, stderr=hostile)
+        with pytest.raises(RuntimeError) as exc_info:
+            fetch_commit(tmp_path / "repo",
+                         "https://github.com/foo/bar", _VALID_SHA)
+    msg = str(exc_info.value)
+    assert "\x1b" not in msg and "\x07" not in msg
+
+
+def test_git_failure_messages_are_length_capped(tmp_path: Path) -> None:
+    """A hostile remote can stream an arbitrarily long banner; the
+    message must stay bounded (and still identify the operation)."""
+    with patch("core.sandbox.run_untrusted_networked") as mock_run:
+        mock_run.return_value = _completed(128, stderr="A" * 100_000)
+        with pytest.raises(RuntimeError) as exc_info:
+            clone_repository("https://github.com/foo/bar", tmp_path / "out")
+    msg = str(exc_info.value)
+    assert len(msg) < 3000
+    assert msg.startswith("git clone failed:")

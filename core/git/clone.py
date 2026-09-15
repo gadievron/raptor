@@ -533,6 +533,21 @@ _FETCH_LOCAL_CONFIG_BENIGN = frozenset({
 })
 
 
+def _proc_error_detail(proc) -> str:
+    """stderr-or-stdout detail for git failure messages, neutralised at
+    the message-builder: git relays server-controlled ``remote:`` banner
+    lines verbatim into stderr, so ESC/C1 control bytes would otherwise
+    ride the RuntimeError into whichever consumer prints it (consumers
+    forward ``str(exc)`` onward). Escaping HERE means every present and
+    future consumer inherits the scrub; newlines are preserved for
+    multi-line git errors and the result is length-capped (a hostile
+    banner can be arbitrarily long)."""
+    stderr = (proc.stderr or "").strip()
+    stdout = (proc.stdout or "").strip()
+    detail = stderr or stdout or "unknown error"
+    return escape_nonprintable(detail, preserve_newlines=True)[:2000]
+
+
 def _foreign_local_config_keys(listing_nul: str) -> list:
     """Keys in a ``git config --local -z --list`` dump that fetch_commit's
     own init/remote-add steps would never write.
@@ -637,9 +652,7 @@ def clone_repository(
         text=True,
     )
     if proc.returncode != 0:
-        stderr = (proc.stderr or "").strip()
-        stdout = (proc.stdout or "").strip()
-        msg = f"git clone failed: {stderr or stdout or 'unknown error'}"
+        msg = f"git clone failed: {_proc_error_detail(proc)}"
         raise RuntimeError(msg)
     # Host-side materialisation check. git's exit status reports what
     # happened INSIDE the sandbox — under the mount-ns backend the
@@ -778,7 +791,7 @@ def fetch_commit(
             msg = (
                 "pre-existing repo_dir local config unreadable — "
                 "refusing to fetch over an unverifiable configuration: "
-                f"{(listing.stderr or listing.stdout or 'unknown error').strip()}"
+                f"{_proc_error_detail(listing)}"
             )
             raise RuntimeError(msg)
         foreign = _foreign_local_config_keys(listing.stdout or "")
@@ -805,10 +818,7 @@ def fetch_commit(
             network=False,
         )
         if proc.returncode != 0:
-            msg = (
-                f"git init failed: "
-                f"{(proc.stderr or proc.stdout or 'unknown error').strip()}"
-            )
+            msg = f"git init failed: {_proc_error_detail(proc)}"
             raise RuntimeError(msg)
 
     # ``remote add`` is idempotent-ish — if origin already exists we
@@ -831,12 +841,10 @@ def fetch_commit(
             network=False,
         )
         if set_proc.returncode != 0:
-            add_msg = (add_proc.stderr or add_proc.stdout or "").strip()
-            set_msg = (set_proc.stderr or set_proc.stdout or "").strip()
             msg = (
                 f"git remote add/set-url failed: "
-                f"add={add_msg or 'unknown error'}; "
-                f"set-url={set_msg or 'unknown error'}"
+                f"add={_proc_error_detail(add_proc)}; "
+                f"set-url={_proc_error_detail(set_proc)}"
             )
             raise RuntimeError(msg)
 
@@ -855,10 +863,7 @@ def fetch_commit(
         network=True,
     )
     if proc.returncode != 0:
-        msg = (
-            f"git fetch failed: "
-            f"{(proc.stderr or proc.stdout or 'unknown error').strip()}"
-        )
+        msg = f"git fetch failed: {_proc_error_detail(proc)}"
         raise RuntimeError(msg)
 
     # Verify WHAT the remote actually sent. A zero exit only proves
@@ -880,7 +885,7 @@ def fetch_commit(
         logger.warning(
             "git fetch reported success but FETCH_HEAD does not "
             "resolve to a commit: %s",
-            (verify.stderr or verify.stdout or "unknown error").strip(),
+            _proc_error_detail(verify),
         )
         return False
     resolved = (verify.stdout or "").strip().lower()
@@ -1124,9 +1129,7 @@ def ls_remote(
         )
 
     if proc.returncode != 0:
-        stderr = (proc.stderr or "").strip()
-        stdout = (proc.stdout or "").strip()
-        msg = f"git ls-remote failed: {stderr or stdout or 'unknown error'}"
+        msg = f"git ls-remote failed: {_proc_error_detail(proc)}"
         raise RuntimeError(msg)
 
     refs: list[tuple[str, str]] = []
