@@ -91,3 +91,63 @@ def test_remove_labeled_networks_scopes_by_label() -> None:
                            "--filter", "label=raptor-env.id=abc123"]
     assert captured[1] == ["docker", "network", "rm", "n1", "n2"]
     assert lc.remove_labeled_networks("raptor-env.id", "") == 0
+
+
+def test_remove_containers_partial_failure_counts_per_id() -> None:
+    """One already-gone id makes the batch exit non-zero — the N-1
+    real removals (echoed on stdout) must still be counted, not
+    reported as 0."""
+    def run(cmd: list[str], **_kw: Any) -> RunOutcome:
+        if cmd[:2] == ["docker", "ps"]:
+            return RunOutcome(returncode=0, stdout="a1\nb2\nc3\n",
+                              stderr="", timed_out=False)
+        return RunOutcome(
+            returncode=1, stdout="a1\nc3\n",
+            stderr="Error: No such container: b2\n", timed_out=False)
+
+    with patch.object(lc, "run_cli", side_effect=run):
+        assert lc.remove_labeled_containers("k", "v") == 2
+
+
+def test_remove_networks_partial_failure_counts_per_id() -> None:
+    def run(cmd: list[str], **_kw: Any) -> RunOutcome:
+        if cmd[:3] == ["docker", "network", "ls"]:
+            return RunOutcome(returncode=0, stdout="n1\nn2\n", stderr="",
+                              timed_out=False)
+        return RunOutcome(returncode=1, stdout="n2\n",
+                          stderr="Error: network n1 has active endpoints\n",
+                          timed_out=False)
+
+    with patch.object(lc, "run_cli", side_effect=run):
+        assert lc.remove_labeled_networks("k", "v") == 1
+
+
+def test_remove_containers_total_failure_still_reports_zero() -> None:
+    """Best-effort contract intact: a wedged daemon (no stdout echo)
+    degrades to 0, never raises."""
+    def run(cmd: list[str], **_kw: Any) -> RunOutcome:
+        if cmd[:2] == ["docker", "ps"]:
+            return RunOutcome(returncode=0, stdout="a1\n", stderr="",
+                              timed_out=False)
+        return RunOutcome(returncode=None, stdout="", stderr="boom",
+                          timed_out=True)
+
+    with patch.object(lc, "run_cli", side_effect=run):
+        assert lc.remove_labeled_containers("k", "v") == 0
+
+
+def test_remove_images_partial_failure_counts_untagged_lines() -> None:
+    """docker rmi reports each removed tag as an ``Untagged:`` line
+    even when the batch exits non-zero."""
+    def run(cmd: list[str], **_kw: Any) -> RunOutcome:
+        if cmd[:2] == ["docker", "images"]:
+            return RunOutcome(returncode=0,
+                              stdout="repo:CVE-1\nrepo:CVE-2\n",
+                              stderr="", timed_out=False)
+        return RunOutcome(
+            returncode=1,
+            stdout="Untagged: repo:CVE-1\nDeleted: sha256:aa\n",
+            stderr="Error: No such image: repo:CVE-2\n", timed_out=False)
+
+    with patch.object(lc, "run_cli", side_effect=run):
+        assert lc.remove_labeled_images("k", "CVE") == 1

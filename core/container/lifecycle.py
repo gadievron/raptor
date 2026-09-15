@@ -9,7 +9,21 @@ never raises into a caller's teardown path.
 
 from __future__ import annotations
 
-from core.container.proc import run_cli
+from core.container.proc import RunOutcome, run_cli
+
+
+def _count_removed(requested: list[str], outcome: RunOutcome) -> int:
+    """Per-item success count for a batch removal.
+
+    ``docker rm -f`` / ``docker network rm`` echo each successfully
+    removed id on stdout and exit non-zero when ANY id failed —
+    rc-only accounting reported N-1 real removals as 0 whenever one
+    id was already gone.
+    """
+    if outcome.returncode == 0:
+        return len(requested)
+    removed = {line.strip() for line in (outcome.stdout or "").splitlines()}
+    return sum(1 for item in requested if item in removed)
 
 
 def remove_labeled_containers(label: str, value: str,
@@ -29,7 +43,7 @@ def remove_labeled_containers(label: str, value: str,
     if not ids:
         return 0
     outcome = run_cli(["docker", "rm", "-f", *ids], timeout=timeout)
-    return len(ids) if outcome.returncode == 0 else 0
+    return _count_removed(ids, outcome)
 
 
 def remove_labeled_networks(label: str, value: str,
@@ -54,7 +68,7 @@ def remove_labeled_networks(label: str, value: str,
     if not ids:
         return 0
     outcome = run_cli(["docker", "network", "rm", *ids], timeout=timeout)
-    return len(ids) if outcome.returncode == 0 else 0
+    return _count_removed(ids, outcome)
 
 
 def prune_labeled_dangling(label: str, value: str,
@@ -146,7 +160,17 @@ def remove_labeled_images(
     if not tags:
         return 0
     outcome = run_cli(["docker", "rmi", *tags], timeout=timeout)
-    return len(tags) if outcome.returncode == 0 else 0
+    if outcome.returncode == 0:
+        return len(tags)
+    # Partial success: ``docker rmi`` reports each removed tag as an
+    # ``Untagged: <tag>`` stdout line even when the batch exits
+    # non-zero because one tag was already gone.
+    untagged = {
+        line.split(": ", 1)[1].strip()
+        for line in (outcome.stdout or "").splitlines()
+        if line.startswith("Untagged: ")
+    }
+    return sum(1 for t in tags if t in untagged)
 
 
 def prune_dangling_images(timeout: float = 30.0) -> None:
