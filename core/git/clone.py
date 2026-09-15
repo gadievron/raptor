@@ -40,6 +40,7 @@ from urllib.parse import urlparse
 from core.config import RaptorConfig
 from core.git.validate import validate_repo_url
 from core.logging import log_security_event as _log_security_event
+from core.security.log_sanitisation import escape_nonprintable
 from core.security.redaction import redact_url_secrets_only
 
 # Backwards-compat re-export — historical callers + tests reference
@@ -181,6 +182,19 @@ def get_safe_git_env(*, preserve_proxy: bool = False) -> dict[str, str]:
 # worktree files: `rev-parse`, `diff-index` WITHOUT a preceding
 # refresh (stat-cache comparison only), `ls-files`. See
 # core.run.provenance.target_snapshot for the pattern.
+#
+# KNOWN LIMIT — the same repo-chosen-key-name problem covers the
+# TRANSPORT class: `url.<base>.insteadOf` (rewrites any fetch URL),
+# `http.<url>.*` (URL-scoped proxy / sslVerify / sslCAInfo /
+# extraHeader — URL specificity beats a `-c http.<key>` pin), and
+# `credential.<url>.helper`. `http.proxy` is additionally
+# value-unpinnable: an empty value tells curl to DISABLE proxying,
+# which would sever the sandbox's env-based egress proxy. Network
+# operations therefore never trust a pre-existing repo's local
+# config — fetch_commit audits it against the keys it writes itself
+# (see ``_foreign_local_config_keys``) and refuses to fetch over
+# anything else; clone_repository and ls_remote have no pre-existing
+# local config in scope.
 #
 # Use `safe_git_command(*args)` below instead of building bare
 # `["git", ...]` lists when operating on a target repo.
@@ -445,6 +459,84 @@ def _validate_writable_path(p: Path, *, role: str) -> None:
             raise ValueError(msg)
 
 
+# fetch_commit OWNS the shape of the repos it fetches into: it creates
+# them via ``git init`` and configures exactly one remote. The local
+# config of a PRE-EXISTING ``repo_dir`` is therefore verifiable against
+# the keys those two steps write — anything else was planted by someone
+# other than us and gets the fetch refused.
+#
+# Why an allowlist and not more ``-c`` pins: an entire CLASS of
+# transport-altering config keys carries a repo-chosen component in the
+# key NAME, so no finite ``-c`` list can neutralise them (same shape as
+# the clean/smudge KNOWN LIMIT above):
+#
+#   - ``url.<base>.insteadOf`` rewrites ANY fetch URL — including to a
+#     different allowlisted host serving attacker content;
+#   - ``http.<url>.*`` scopes every http key (``proxy``, ``sslVerify``,
+#     ``sslCAInfo``, ``extraHeader``, …) by URL, and URL-scoped config
+#     is MORE SPECIFIC than a ``-c http.<key>`` pin, so it wins
+#     regardless of `-c`'s file-precedence;
+#   - ``credential.<url>.helper`` re-opens the credential-helper RCE
+#     behind a URL-scoped key;
+#   - ``remote.<name>.proxy`` / ``.vcs`` / ``.uploadpack`` alter
+#     transport per remote name.
+#
+# ``http.proxy`` itself is value-unpinnable too: git hands the value to
+# curl, and an EMPTY value disables proxying outright — including the
+# env-based egress proxy the sandbox injects — so `-c http.proxy=`
+# would break every sandboxed fetch instead of protecting it.
+#
+# The exec-vector keys (`core.fsmonitor`, hooks, editor, pager, gpg,
+# filter/diff drivers, …) stay pinned or refused via
+# ``_SAFE_GIT_OVERRIDES``; this audit closes the transport class by
+# refusing to run the NETWORK step over a config we didn't write.
+#
+# Trade-off, both directions: an allowlist FAILS LOUD if a future git
+# version's ``init`` writes a new default key (extend the set — the
+# error names the key); a denylist would instead FAIL OPEN on the next
+# transport key git grows, which is the direction this audit exists to
+# prevent.
+_FETCH_LOCAL_CONFIG_BENIGN = frozenset({
+    # `git init` defaults (platform-dependent members included).
+    "core.repositoryformatversion",
+    "core.filemode",
+    "core.bare",
+    "core.logallrefupdates",
+    "core.ignorecase",
+    "core.precomposeunicode",
+    "core.symlinks",
+})
+
+
+def _foreign_local_config_keys(listing_nul: str) -> list:
+    """Keys in a ``git config --local -z --list`` dump that fetch_commit's
+    own init/remote-add steps would never write.
+
+    ``-z`` output is ``key\\n[value]\\0`` per entry — NUL framing means a
+    hostile VALUE containing newlines cannot forge or hide an entry
+    (line-wise parsing of the non-``-z`` form could be steered by a
+    value line that looks like a key). Keys are matched lowercased;
+    git already lowercases section and variable names, and the only
+    case-preserved part (subsection) is never load-bearing here.
+    """
+    foreign = set()
+    for entry in listing_nul.split("\0"):
+        if not entry:
+            continue
+        key = entry.split("\n", 1)[0].strip().lower()
+        if not key or key in _FETCH_LOCAL_CONFIG_BENIGN:
+            continue
+        parts = key.split(".")
+        # remote.<name>.url / remote.<name>.fetch are fetch_commit's own
+        # ``remote add`` footprint (url is re-pinned via set-url before
+        # every fetch, so a pre-existing value cannot steer the remote).
+        if (parts[0] == "remote" and len(parts) >= 3
+                and parts[-1] in ("url", "fetch")):
+            continue
+        foreign.add(key)
+    return sorted(foreign)
+
+
 def clone_repository(
     url: str, target: Path, depth: int | None = 1,
 ) -> bool:
@@ -643,6 +735,41 @@ def fetch_commit(
         return run_untrusted(cmd, **kwargs)
 
     is_repo = (repo_dir / ".git").exists()
+    if is_repo:
+        # PRE-EXISTING repo: its .git/config is untrusted, and the
+        # network step below honours transport-altering keys that no
+        # finite ``-c`` pin list can neutralise (URL-scoped
+        # ``url.<base>.insteadOf`` / ``http.<url>.*`` /
+        # ``credential.<url>.*``, per-remote proxy/vcs — see the
+        # closure commentary on ``_foreign_local_config_keys``).
+        # Refuse to fetch over a local config we didn't write.
+        listing = _run(
+            safe_git_readonly_command(
+                "-C", str(repo_dir), "config", "--local", "-z", "--list",
+            ),
+            network=False,
+        )
+        if listing.returncode != 0:
+            msg = (
+                "pre-existing repo_dir local config unreadable — "
+                "refusing to fetch over an unverifiable configuration: "
+                f"{(listing.stderr or listing.stdout or 'unknown error').strip()}"
+            )
+            raise RuntimeError(msg)
+        foreign = _foreign_local_config_keys(listing.stdout or "")
+        if foreign:
+            shown = ", ".join(
+                escape_nonprintable(k)[:80] for k in foreign[:8]
+            )
+            msg = (
+                f"pre-existing repo_dir carries local git config keys "
+                f"fetch_commit never writes ({shown}) — a planted "
+                f"config can redirect or proxy the fetch "
+                f"(url.*.insteadOf, http.*), so the network step "
+                f"refuses to run over it. Re-create {str(repo_dir)!r} "
+                f"fresh (empty dir) to fetch."
+            )
+            raise RuntimeError(msg)
     if not is_repo:
         logger.info("git init: %s", repo_dir)
         proc = _run(
