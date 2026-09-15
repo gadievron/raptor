@@ -794,3 +794,32 @@ int careless(void) {
         )
         assert confirmed == ["api_boundary:caller-contract"]
         assert counters["api_boundary"].confirmed == 1
+
+
+class TestDeclaredLocallyDerefStore:
+    """A deref-store (`*g = x;` — assignment THROUGH g) is not a
+    declaration OF g: the old bare-star alternative read it as a
+    local declaration, so a single-call contract over a global
+    pointer whose pointee is stored pre-call could be graded guarded
+    and feed a refuted aggregate."""
+
+    @staticmethod
+    def _risk(before: str):
+        from core.audit.api_boundary import _single_call_precall_risk
+        return _single_call_precall_risk(
+            {"before_body": before, "after_window": ""}, "g",
+        )
+
+    def test_deref_store_is_not_a_local_declaration(self):
+        risk = self._risk("int f(int x) { *g = x; f2(g); ")
+        assert risk is not None
+        assert "not provably local" in risk
+
+    def test_pointer_parameter_still_counts(self):
+        assert self._risk("int f(char *g) { ") is None
+
+    def test_local_pointer_declaration_still_counts(self):
+        assert self._risk("int f(void) { struct buf *g; ") is None
+
+    def test_multi_declarator_star_still_counts(self):
+        assert self._risk("int f(void) { int a, *g; ") is None

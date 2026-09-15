@@ -1106,8 +1106,14 @@ def _declared_locally(before_body: str, base: str) -> bool:
     multiple callers in sequence, which no per-caller analysis can
     order — so refutation must decline."""
     b = re.escape(base)
+    # A type token must precede the identifier: a bare-star
+    # alternative made the deref-store `*g = x;` (assignment THROUGH
+    # g, not a declaration OF g) read as a local declaration and
+    # weakened this decline-to-refute rule. Pointer declarators are
+    # already covered by the type branch (`char *p`, `int a, *p` —
+    # the `[\s*]` tail matches the star).
     return bool(re.search(
-        rf"(?:\b(?:{_DECL_TYPE_TOKENS})\b[^;(){{}}=]*[\s*]|\*\s*)"
+        rf"\b(?:{_DECL_TYPE_TOKENS})\b[^;(){{}}=]*[\s*]"
         rf"{b}\s*[=;,)\[]",
         before_body,
     ))
