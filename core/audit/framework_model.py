@@ -261,11 +261,15 @@ _DETECTORS: list[_FrameworkDetector] = [
             ),
             # JdbcTemplate parameterised queries
             (
+                # Bounded argument window (never DOTALL .*): with the
+                # whole file in scope, a ? ANYWHERE later (comment,
+                # URL, string) minted the "parameterised" hint for a
+                # concatenated query — steering review away from the
+                # exact sites the hint claims are safe.
                 re.compile(
                     r"JdbcTemplate"
                     r"|NamedParameterJdbcTemplate"
-                    r"|\.query\s*\(.*\?",
-                    re.DOTALL,
+                    r"|\.query\s*\((?:[^()]|\n){0,200}?\?",
                 ),
                 ["CWE-89"],
             ),
@@ -299,12 +303,13 @@ _DETECTORS: list[_FrameworkDetector] = [
         [
             # database/sql parameterised queries
             (
+                # Bounded argument windows — see the spring CWE-89
+                # detector note.
                 re.compile(
                     r"\"database/sql\""
-                    r"|\.QueryRow\s*\(.*(?:\$\d|\?)"
-                    r"|\.Query\s*\(.*(?:\$\d|\?)"
-                    r"|\.Exec\s*\(.*(?:\$\d|\?)",
-                    re.DOTALL,
+                    r"|\.QueryRow\s*\((?:[^()]|\n){0,200}?(?:\$\d|\?)"
+                    r"|\.Query\s*\((?:[^()]|\n){0,200}?(?:\$\d|\?)"
+                    r"|\.Exec\s*\((?:[^()]|\n){0,200}?(?:\$\d|\?)",
                 ),
                 ["CWE-89"],
             ),
@@ -320,10 +325,11 @@ _DETECTORS: list[_FrameworkDetector] = [
         [
             # ActiveRecord parameterised queries
             (
+                # Bounded argument window — see the spring CWE-89
+                # detector note.
                 re.compile(
-                    r"ActiveRecord|\.where\s*\(.*\?"
+                    r"ActiveRecord|\.where\s*\((?:[^()]|\n){0,200}?\?"
                     r"|class\s+\w+\s*<\s*ApplicationRecord",
-                    re.DOTALL,
                 ),
                 ["CWE-89"],
             ),

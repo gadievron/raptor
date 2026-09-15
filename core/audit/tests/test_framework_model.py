@@ -130,3 +130,55 @@ class TestFormatFrameworkContext:
         assert "Django" in text
         assert "CWE-89" in text
         assert "Framework conventions:" in text
+
+
+class TestBoundedDetectorWindows:
+    """The parameterised-query detectors must not span the whole file:
+    with DOTALL `.*`, a concatenated-SQL call plus a `?` ANYWHERE
+    later in the file (comment, URL, string) minted the "framework
+    negates CWE-89" hint — steering review away from exactly the
+    unparameterised sites the hint claims are safe."""
+
+    def test_go_distant_question_mark_does_not_negate(self):
+        source = (
+            'db.Exec(fmt.Sprintf("SELECT * FROM t WHERE n = %s", user))\n'
+            + "x := 1\n" * 30
+            + "// see https://example.com/docs?page=1\n"
+        )
+        assert framework_negates_cwe("q.go", source, "CWE-89") is None
+
+    def test_go_parameterised_call_still_negates(self):
+        source = 'db.Exec("SELECT * FROM t WHERE n = ?", user)\n'
+        result = framework_negates_cwe("q.go", source, "CWE-89")
+        assert result is not None
+        assert result.framework == "go"
+
+    def test_spring_distant_question_mark_does_not_negate(self):
+        source = (
+            'tmpl.query(sql + userInput);\n'
+            + "int x = 1;\n" * 30
+            + "// what? nothing.\n"
+        )
+        assert framework_negates_cwe("Dao.java", source, "CWE-89") is None
+
+    def test_spring_multiline_parameterised_call_still_negates(self):
+        source = (
+            'tmpl.query(\n    "SELECT * FROM t WHERE n = ?",\n    name);\n'
+        )
+        result = framework_negates_cwe("Dao.java", source, "CWE-89")
+        assert result is not None
+        assert result.framework == "spring"
+
+    def test_rails_distant_question_mark_does_not_negate(self):
+        source = (
+            'User.where("name = " + params[:n])\n'
+            + "y = 1\n" * 30
+            + "# huh?\n"
+        )
+        assert framework_negates_cwe("user.rb", source, "CWE-89") is None
+
+    def test_rails_parameterised_where_still_negates(self):
+        source = 'User.where("name = ?", params[:n])\n'
+        result = framework_negates_cwe("user.rb", source, "CWE-89")
+        assert result is not None
+        assert result.framework == "rails"
