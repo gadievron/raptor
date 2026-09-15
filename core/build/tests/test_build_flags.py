@@ -119,10 +119,43 @@ def test_cc_stack_protector_strong(tmp_path):
 
 
 def test_cc_stack_protector_disabled(tmp_path):
-    """-fno-stack-protector dominates any earlier -fstack-protector*."""
+    """Within ONE command line the LAST flag wins (gcc semantics)."""
     target = _write_cc(tmp_path, [{
         "command": "gcc -fstack-protector-strong -fno-stack-protector foo.c",
     }])
+    ctx = extract_flags(target)
+    assert ctx.stack_protector_level == "none"
+
+
+def test_cc_stack_protector_reenabled_last_wins(tmp_path):
+    # The other direction of last-wins: disable then re-enable.
+    target = _write_cc(tmp_path, [{
+        "command": "gcc -fno-stack-protector -fstack-protector-strong foo.c",
+    }])
+    ctx = extract_flags(target)
+    assert ctx.stack_protector_level == "strong"
+
+
+def test_cc_stack_protector_strongest_across_tus(tmp_path):
+    """Across TUs the field carries the MOST-HARDENED observed setting
+    (the documented union rule): one unprotected TU must not flip a
+    mostly -fstack-protector-strong project to "none" — Stage-D
+    consumers weight mitigation evidence, and the least-hardened
+    reading overstates exploitability."""
+    target = _write_cc(tmp_path, [
+        {"command": "gcc -fno-stack-protector legacy.c"},
+        {"command": "gcc -fstack-protector-strong main.c"},
+        {"command": "gcc -fstack-protector util.c"},
+    ])
+    ctx = extract_flags(target)
+    assert ctx.stack_protector_level == "strong"
+
+
+def test_cc_stack_protector_all_tus_disabled_is_none(tmp_path):
+    target = _write_cc(tmp_path, [
+        {"command": "gcc -fno-stack-protector a.c"},
+        {"command": "gcc -fno-stack-protector b.c"},
+    ])
     ctx = extract_flags(target)
     assert ctx.stack_protector_level == "none"
 

@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -215,11 +216,29 @@ def _from_compile_commands(path: Path) -> BuildFlagsContext:
         elif isinstance(entry.get("arguments"), list):
             pieces.append(" ".join(str(a) for a in entry["arguments"]))
     combined = " ".join(pieces)
-    return _parse_flag_string(
+    ctx = _parse_flag_string(
         combined,
         source="compile_commands.json",
         confidence="high",
     )
+    # Strongest OBSERVED stack protector across TUs — the docstring's
+    # most-hardened union rule. The concatenated-text parse is
+    # order-dependent: one TU built with -fno-stack-protector flipped
+    # the whole project to "none" even when every other TU is
+    # -fstack-protector-strong, and Stage-D consumers weighting
+    # mitigation evidence then overstated exploitability on
+    # mostly-hardened builds. (The other direction — reporting
+    # "strong" for a project with an unprotected TU — understates
+    # the WEAKEST link instead; per the documented union rule this
+    # field carries the most-hardened observed setting, and per-TU
+    # gaps are per-finding questions, not project posture.)
+    levels = {_stack_protector_from_text(piece) for piece in pieces}
+    levels.discard(None)
+    if levels:
+        strongest = next(
+            lvl for lvl in _STACK_PROTO_ORDER if lvl in levels)
+        ctx = dataclasses.replace(ctx, stack_protector_level=strongest)
+    return ctx
 
 
 _HARDENING_CONFIGS: tuple[str, ...] = (
@@ -355,6 +374,32 @@ _FORTIFY_UNDEF_RE = re.compile(r"-U_FORTIFY_SOURCE(?:\s|$)")
 _STACK_PROTO_RE = re.compile(
     r"-fstack-protector(?:-(strong|all|explicit))?(?:\s|$)"
 )
+
+# Hardening order for the strongest-observed union across TUs (GCC
+# semantics: -all guards every function, -strong the risky ones, the
+# bare flag a narrower set, -explicit only attributed functions).
+_STACK_PROTO_ORDER: tuple[str, ...] = (
+    "all", "strong", "weak", "explicit", "none",
+)
+
+_STACK_PROTO_OFF_RE = re.compile(r"-fno-stack-protector(?:\s|$)")
+
+
+def _stack_protector_from_text(text: str) -> str | None:
+    """Stack-protector level of ONE command line, last-flag-wins.
+
+    GCC applies the last of conflicting -fstack-protector*/-fno-
+    stack-protector flags; "any -fno- anywhere dominates" misread a
+    command that disables and then re-enables the protector.
+    """
+    last: tuple[int, str] | None = None
+    for m in _STACK_PROTO_OFF_RE.finditer(text):
+        if last is None or m.start() > last[0]:
+            last = (m.start(), "none")
+    for m in _STACK_PROTO_RE.finditer(text):
+        if last is None or m.start() > last[0]:
+            last = (m.start(), m.group(1) or "weak")
+    return last[1] if last else None
 _SANITIZE_RE = re.compile(r"-fsanitize=([a-zA-Z0-9_,-]+)")
 
 
@@ -397,13 +442,7 @@ def _parse_flag_string(
             fortify_source_level = 1
 
     # -- Stack protector -------------------------------------------------
-    stack_protector_level: str | None = None
-    if "-fno-stack-protector" in text:
-        stack_protector_level = "none"
-    else:
-        m = _STACK_PROTO_RE.search(text)
-        if m:
-            stack_protector_level = m.group(1) or "weak"
+    stack_protector_level = _stack_protector_from_text(text)
 
     # -- delete-null-pointer-checks --------------------------------------
     delete_null_pointer_checks: bool | None = None
