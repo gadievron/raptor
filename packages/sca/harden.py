@@ -104,11 +104,14 @@ class HardenCandidate:
       - ``promoted``         — version pinned, change emitted
       - ``degraded_safety``  — no fully-clean version exists; promoted
                                 the version with fewest residual
-                                advisories (gated behind ``--allow-degraded``)
+                                advisories (gated behind ``--allow-degraded``;
+                                a major-crossing target ALSO needs
+                                ``--allow-major`` /
+                                ``--allow-major-without-review``)
       - ``downgraded_safety`` — no clean version exists at/above the pin;
                                 bounded downgrade to the highest clean
                                 version >= the recorded corridor floor
-                                (gated behind ``--allow-degraded``)
+                                (same gating as ``degraded_safety``)
       - ``up_to_date``       — already at latest safe in range
       - ``review_required``  — bump exists but crosses a major (gated;
                                 appliable only via
@@ -315,6 +318,7 @@ def main(argv: Sequence[str]) -> int:
             candidates,
             allow_major_without_review=args.allow_major_without_review,
             allow_degraded=args.allow_degraded,
+            allow_major=args.allow_major,
             ecosystem_allowlist=ecosystem_allowlist,
         )
         _write_report(out_dir / "report.md", candidates, [],
@@ -334,6 +338,7 @@ def main(argv: Sequence[str]) -> int:
     changes = _apply(candidates, target=target, out_dir=out_dir,
                      allow_major_without_review=args.allow_major_without_review,
                      allow_degraded=args.allow_degraded,
+                     allow_major=args.allow_major,
                      ecosystem_allowlist=ecosystem_allowlist)
     applied = [c for c in changes if c.skipped_reason is None]
     want_patch = args.git_patch or args.apply
@@ -922,7 +927,12 @@ def _plan_one(
     # authority across two phases and reintroduce the skipped-check
     # window on any future apply path. The per-dep cost is the same
     # ~30-60s/week figure the check's design already accepts.
-    if (target_status in ("promoted", "degraded_safety")
+    # ``downgraded_safety`` is included: a downgrade target is applied
+    # under ``--allow-degraded`` exactly like a degraded promotion, so
+    # it gets the same suspicious-install-hook / platform-regression
+    # evaluation — the write target is what matters, not the direction.
+    if (target_status in (
+            "promoted", "degraded_safety", "downgraded_safety")
             and not offline):
         sc_findings = _evaluate_promotion_safety(
             dep=dep, target_version=target_version,
@@ -948,12 +958,30 @@ def _plan_one(
             return cand
 
     if crosses and not allow_major:
-        cand.status = "review_required"
-        cand.detail = (
-            f"latest safe ({target_version}) crosses a major boundary "
-            f"from {dep.version}; rerun with --allow-major or wait for "
-            f"LLM impact analysis"
-        )
+        if cand.status in ("degraded_safety", "downgraded_safety"):
+            # Keep the safety-lane status: overwriting it to
+            # ``review_required`` swapped the two opt-in gates —
+            # ``--allow-major-without-review`` (a flag about major
+            # BUMPS) applied a residual-advisory promotion or a
+            # major-crossing DOWNGRADE without ``--allow-degraded``,
+            # and the degraded/downgraded detail text was lost. The
+            # recorded ``crosses_major`` makes apply require major
+            # consent AS WELL (both gates, not either — see
+            # ``_count_actionable`` / ``_apply``).
+            cand.detail = (
+                (cand.detail + "; " if cand.detail else "")
+                + f"also crosses a major boundary from {dep.version} — "
+                "applying requires --allow-major or "
+                "--allow-major-without-review in addition to "
+                "--allow-degraded"
+            )
+        else:
+            cand.status = "review_required"
+            cand.detail = (
+                f"latest safe ({target_version}) crosses a major boundary "
+                f"from {dep.version}; rerun with --allow-major or wait for "
+                f"LLM impact analysis"
+            )
     return cand
 
 
@@ -1436,6 +1464,7 @@ def _run_self_test(
             post_candidates,
             allow_major_without_review=allow_major_without_review,
             allow_degraded=allow_degraded,
+            allow_major=allow_major,
             ecosystem_allowlist=ecosystem_allowlist,
         )
 
@@ -1498,28 +1527,62 @@ def _rank_key(kv: tuple[int, Any]) -> tuple[int, int, float, int, int]:
             len(c.advisory_ids), idx)
 
 
+def _safety_lane_appliable(
+    c: HardenCandidate, *,
+    allow_degraded: bool,
+    allow_major: bool,
+    allow_major_without_review: bool,
+) -> bool:
+    """Gate for ``degraded_safety`` / ``downgraded_safety`` candidates.
+
+    ``--allow-degraded`` is the lane's own opt-in; a candidate that
+    ALSO crosses a major boundary additionally needs major consent
+    (``--allow-major`` or ``--allow-major-without-review``) — BOTH
+    gates, never either. Trade-off, both directions: requiring only
+    the degraded flag would let a major-crossing downgrade in without
+    any major consent; letting the major flag alone through re-opens
+    the gate-swap where a flag about major bumps applied
+    residual-advisory / downgrade targets.
+    """
+    if c.status not in ("degraded_safety", "downgraded_safety"):
+        return False
+    if not allow_degraded:
+        return False
+    if c.crosses_major and not (allow_major or allow_major_without_review):
+        return False
+    return True
+
+
 def _count_actionable(
     candidates: list[HardenCandidate],
     *,
     allow_major_without_review: bool,
     allow_degraded: bool,
+    allow_major: bool = False,
     ecosystem_allowlist: set | None = None,
 ) -> int:
     """Number of candidates that *would* be applied at current flag levels.
 
     Used by ``--check`` to decide its exit code. Mirrors the gating in
     ``_apply``: ``promoted`` always counts; ``review_required`` only if
-    the operator's flags would let it through; ``degraded_safety`` only
-    if the operator opted in. ``ecosystem_allowlist`` (from
-    ``--ecosystems``) further filters by ecosystem.
+    the operator's flags would let it through; ``degraded_safety`` /
+    ``downgraded_safety`` only if the operator opted in (plus major
+    consent when the target also crosses a major boundary).
+    ``ecosystem_allowlist`` (from ``--ecosystems``) further filters by
+    ecosystem.
     """
     total = 0
     for c in candidates:
         if (ecosystem_allowlist is not None
                 and c.ecosystem not in ecosystem_allowlist):
             continue
-        if c.status == "promoted" or (c.status == "review_required" and allow_major_without_review) or (c.status in ("degraded_safety", "downgraded_safety")
-              and allow_degraded):
+        if (c.status == "promoted"
+                or (c.status == "review_required"
+                    and allow_major_without_review)
+                or _safety_lane_appliable(
+                    c, allow_degraded=allow_degraded,
+                    allow_major=allow_major,
+                    allow_major_without_review=allow_major_without_review)):
             total += 1
     return total
 
@@ -1531,6 +1594,7 @@ def _apply(
     out_dir: Path,
     allow_major_without_review: bool,
     allow_degraded: bool,
+    allow_major: bool = False,
     ecosystem_allowlist: set | None = None,
 ) -> list[UpgradeChange]:
     """Build _PlanEntry for every applicable candidate and run the same
@@ -1543,9 +1607,13 @@ def _apply(
         if (ecosystem_allowlist is not None
                 and cand.ecosystem not in ecosystem_allowlist):
             continue
-        if cand.status == "promoted" or (cand.status == "review_required" and
-              allow_major_without_review and cand.to_version) or (cand.status in ("degraded_safety", "downgraded_safety") and
-              allow_degraded and cand.to_version):
+        if (cand.status == "promoted"
+                or (cand.status == "review_required"
+                    and allow_major_without_review and cand.to_version)
+                or (cand.to_version and _safety_lane_appliable(
+                    cand, allow_degraded=allow_degraded,
+                    allow_major=allow_major,
+                    allow_major_without_review=allow_major_without_review))):
             pass
         else:
             continue

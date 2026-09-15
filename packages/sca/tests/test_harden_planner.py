@@ -474,16 +474,30 @@ def test_degraded_picks_fewer_when_severity_tied() -> None:
     assert cand.to_version == "1.8"     # fewer advisories at same severity
 
 
-def test_degraded_with_major_crossing_still_review_required() -> None:
-    """Even degraded candidates respect the major-crossing gate."""
+def test_degraded_with_major_crossing_needs_both_gates() -> None:
+    """Degraded candidates respect the major-crossing gate WITHOUT
+    losing their own: the status stays ``degraded_safety`` (so
+    ``--allow-degraded`` is still required) and the recorded crossing
+    additionally demands major consent. The old rewrite to
+    ``review_required`` let ``--allow-major-without-review`` alone
+    apply a residual-advisory target without the degraded opt-in."""
+    from packages.sca.harden import _count_actionable
+
     dep = _dep(version="1.0")
     osv = _FakeOsv(advisories_by_version={
         "2.0": [_adv("GHSA-x", "low")],
     })
     cand = _plan_one(dep, registries={"PyPI": _FakeRegistry(["2.0"])},
                      osv=osv, offline=False, allow_major=False)
-    assert cand.status == "review_required"
+    assert cand.status == "degraded_safety"
     assert cand.to_version == "2.0"
+    assert cand.crosses_major is True
+    assert _count_actionable([cand], allow_major_without_review=True,
+                             allow_degraded=False) == 0
+    assert _count_actionable([cand], allow_major_without_review=False,
+                             allow_degraded=True) == 0
+    assert _count_actionable([cand], allow_major_without_review=True,
+                             allow_degraded=True) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1613,3 +1627,114 @@ def test_no_cache_zeroes_lookup_ttls(tmp_path):
     assert osv._query_ttl == 24 * 3600
     assert kev._ttl == 24 * 3600
     assert epss._ttl == 24 * 3600
+
+
+# ---------------------------------------------------------------------------
+# Downgrade lane gate wiring: safety check + both-gates major crossing
+# ---------------------------------------------------------------------------
+
+
+def test_downgrade_target_gets_promotion_safety_check() -> None:
+    """A ``downgraded_safety`` write target is applied under
+    ``--allow-degraded`` exactly like a degraded promotion, so it must
+    pass the same supply-chain evaluation — a recently-published
+    downgrade target demotes instead of staying appliable."""
+    from datetime import datetime, timezone
+
+    class _StubDowngradePyPI:
+        ecosystem = "PyPI"
+
+        def list_versions(self, name):
+            return ["2.5", "2.7.0", "2.8"]
+
+        def get_metadata(self, name):
+            now_iso = datetime.now(timezone.utc).isoformat().replace(
+                "+00:00", "Z")
+            release = [{
+                "upload_time_iso_8601": now_iso,
+                "url": "https://example/x.whl",
+                "filename": "x.whl",
+                "digests": {"sha256": "abc"},
+                "size": 1234,
+                "packagetype": "bdist_wheel",
+                "python_version": "py3",
+                "yanked": False,
+            }]
+            return {
+                "info": {"yanked": False, "maintainer": "alice"},
+                "releases": {v: release for v in ("2.5", "2.7.0", "2.8")},
+            }
+
+    dep = replace(_dep(pin_style=PinStyle.EXACT, version="2.7.0"),
+                  version_floor="2.0")
+    osv = _FakeOsv({
+        "2.7.0": [_adv("CVE-B")],
+        "2.8": [_adv("CVE-C")],
+        # 2.5 absent => clean, below the pin → downgrade target.
+    })
+    cand = _plan_one(
+        dep,
+        registries={"PyPI": _StubDowngradePyPI()},
+        osv=osv, offline=False, allow_major=False,
+    )
+    assert cand.status == "demoted_safety", cand.status
+    assert "recent_publish" in (cand.detail or "")
+
+
+def test_major_crossing_downgrade_needs_both_gates() -> None:
+    """A major-crossing downgrade keeps ``downgraded_safety`` (its own
+    ``--allow-degraded`` gate) and additionally requires major consent
+    — previously the major gate rewrote it to ``review_required``, so
+    ``--allow-major-without-review`` alone applied it WITHOUT the
+    degraded opt-in (the two gates traded places)."""
+    from packages.sca.harden import _count_actionable
+
+    dep = replace(_dep(pin_style=PinStyle.EXACT, version="2.7.0"),
+                  version_floor="1.0")
+    osv = _FakeOsv({
+        "2.7.0": [_adv("CVE-B")],
+        "2.8": [_adv("CVE-C")],
+        # 1.5 absent => clean; only clean version is below the major.
+    })
+    cand = _plan_one(
+        dep,
+        registries={"PyPI": _FakeRegistry(["1.5", "2.7.0", "2.8"])},
+        osv=osv, offline=False, allow_major=False,
+    )
+    assert cand.status == "downgraded_safety", cand.status
+    assert cand.crosses_major is True
+    assert "--allow-degraded" in cand.detail
+
+    # Neither flag alone applies it; both together do.
+    assert _count_actionable([cand], allow_major_without_review=False,
+                             allow_degraded=True) == 0
+    assert _count_actionable([cand], allow_major_without_review=True,
+                             allow_degraded=False) == 0
+    assert _count_actionable([cand], allow_major_without_review=True,
+                             allow_degraded=True) == 1
+    # Planner-level --allow-major also counts as major consent.
+    assert _count_actionable([cand], allow_major_without_review=False,
+                             allow_degraded=True, allow_major=True) == 1
+
+
+def test_non_crossing_downgrade_still_applies_with_degraded_only() -> None:
+    """Other direction of the gate: a downgrade WITHIN the major needs
+    only ``--allow-degraded`` — the both-gates rule must not tighten
+    the pre-existing single-gate path."""
+    from packages.sca.harden import _count_actionable
+
+    dep = replace(_dep(pin_style=PinStyle.EXACT, version="2.7.0"),
+                  version_floor="2.0")
+    osv = _FakeOsv({
+        "2.7.0": [_adv("CVE-B")],
+        "2.8": [_adv("CVE-C")],
+    })
+    cand = _plan_one(
+        dep,
+        registries={"PyPI": _FakeRegistry(["2.5", "2.7.0", "2.8"])},
+        osv=osv, offline=False, allow_major=False,
+    )
+    assert cand.status == "downgraded_safety", cand.status
+    assert cand.crosses_major is False
+    assert _count_actionable([cand], allow_major_without_review=False,
+                             allow_degraded=True) == 1
