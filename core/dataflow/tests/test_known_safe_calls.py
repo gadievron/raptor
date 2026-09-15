@@ -8,7 +8,10 @@ from core.dataflow import known_safe_calls as ksc
 def test_find_exact_match_python_pathtrav():
     e = ksc.find("werkzeug.security.safe_join", "pathtrav", "python")
     assert e is not None
-    assert e.input_arg_kind == "validate"
+    # transform, not validate: werkzeug's safe_join returns None on
+    # traversal instead of raising (raising is Flask's wrapper), so
+    # only its RETURN value — never the input argument — is safe.
+    assert e.input_arg_kind == "transform"
 
 
 def test_find_returns_none_for_wrong_sink_class():
@@ -85,10 +88,27 @@ def test_percent_encoders_never_certify_pathtrav():
 
 def test_pathtrav_entries_defeat_dot_segments():
     """Every remaining pathtrav claim must handle '..' itself, not just
-    separators: safe_join raises NotFound on traversal; secure_filename
+    separators: safe_join returns None on traversal; secure_filename
     strips leading/trailing '.' (so a bare '..' collapses to '')."""
     pathtrav = [e for e in ksc.all_entries() if e.sink_class == "pathtrav"]
     assert {e.library_call for e in pathtrav} == {
         "werkzeug.security.safe_join",
         "werkzeug.utils.secure_filename",
     }
+
+
+def test_validate_kind_entries_document_raising_semantics():
+    """The validate-kind chain rule (input variable stays the chain
+    start) is sound ONLY for calls that RAISE on bad input.  A
+    sentinel-returning validator leaves the raw input live and must be
+    classed transform — werkzeug.security.safe_join (returns None) is
+    the precedent.  Pin the contract: every validate entry's
+    soundness_note must state its raising behaviour."""
+    for e in ksc.all_entries():
+        if e.input_arg_kind != "validate":
+            continue
+        assert "raise" in e.soundness_note.lower(), (
+            f"{e.library_call}: validate-kind entry must document that "
+            f"the call RAISES on bad input (sentinel-returning "
+            f"validators belong in transform)"
+        )

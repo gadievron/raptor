@@ -1078,3 +1078,80 @@ def test_transform_chained_assign_both_targets_join(tmp_path: Path):
         language="python", complete=_fake_complete(reply),
     )
     assert r.status is t1.Tier0Status.SOUND
+
+
+def test_safe_join_raw_input_at_sink_declines(tmp_path: Path):
+    """werkzeug.security.safe_join returns None on traversal — it does
+    not raise — so the call never constrains its INPUT variable.
+    Pre-fix the entry was classed validate-kind and the input stayed
+    the chain start, certifying `p = safe_join(base, fn)` with raw
+    ``fn`` at the sink as SOUND while `open(fn)` with
+    fn='../../etc/passwd' is live."""
+    (tmp_path / "app.py").write_text(
+        "from werkzeug.security import safe_join\n"
+        "def f(base, fn):\n"
+        "    p = safe_join(base, fn)\n"   # line 3
+        "    return open(fn)\n"           # line 4 — RAW input at sink
+    )
+    diff = "+    p = safe_join(base, fn)\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "p = safe_join(base, fn)",
+        "variable_name": "fn", "charset": "", "forbidden": "",
+        "library_call": "werkzeug.security.safe_join",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="pathtrav",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+
+
+def test_safe_join_discarded_result_declines(tmp_path: Path):
+    """Bare ``safe_join(base, fn)`` with the result discarded sanitizes
+    nothing — same transform-gate rule as the escapers."""
+    (tmp_path / "app.py").write_text(
+        "from werkzeug.security import safe_join\n"
+        "def f(base, fn):\n"
+        "    safe_join(base, fn)\n"       # line 3 — discarded
+        "    return open(fn)\n"           # line 4
+    )
+    diff = "+    safe_join(base, fn)\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "safe_join(base, fn)",
+        "variable_name": "fn", "charset": "", "forbidden": "",
+        "library_call": "werkzeug.security.safe_join",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="pathtrav",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+    assert "not bound" in r.reasoning
+
+
+def test_safe_join_bound_result_at_sink_still_sound(tmp_path: Path):
+    """Two-direction: the canonical correct fix — sink consumes the
+    safe_join RETURN value — keeps certifying."""
+    (tmp_path / "app.py").write_text(
+        "from werkzeug.security import safe_join\n"
+        "def f(base, fn):\n"
+        "    p = safe_join(base, fn)\n"   # line 3
+        "    return open(p)\n"            # line 4 — return value at sink
+    )
+    diff = "+    p = safe_join(base, fn)\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "p = safe_join(base, fn)",
+        "variable_name": "fn", "charset": "", "forbidden": "",
+        "library_call": "werkzeug.security.safe_join",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="pathtrav",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.SOUND

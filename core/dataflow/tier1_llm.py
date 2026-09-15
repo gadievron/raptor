@@ -430,8 +430,12 @@ def _try_known_safe_call(
     # leave raw ``name`` at the sink, the exact incomplete-fix class
     # this gate exists to catch (the curated-table contract says "the
     # return value (or a name assigned from it)"). Validate-kind
-    # (raising) entries constrain the input itself, so the LLM's
-    # variable stays the chain start there.
+    # entries constrain the input itself, so the LLM's variable stays
+    # the chain start there — sound ONLY because the table contract
+    # requires validate-kind calls to RAISE on bad input (a
+    # sentinel-returning validator leaves the raw input live and must
+    # be classed transform; see the KnownSafeCall docstring and the
+    # werkzeug.security.safe_join precedent).
     chain_vars: set[str] = (
         {spec.variable_name} if spec.variable_name else set()
     )

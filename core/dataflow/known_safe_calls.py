@@ -30,17 +30,24 @@ class KnownSafeCall:
 
     ``input_arg_kind`` distinguishes:
 
-      * ``"transform"`` — the call takes user input and returns the
-        sanitized value (e.g. ``html.escape(x)``).  The CHAIN must show
-        the return value (or a name assigned from it) reaching the sink.
-      * ``"validate"`` — the call validates user input and raises /
-        returns sentinel on bad input (e.g. ``werkzeug.security.safe_join``
-        raises ``NotFound`` on traversal).  Same chain requirement
-        applies to the return value.
+      * ``"transform"`` — the call's RETURN VALUE is the safe value
+        (e.g. ``html.escape(x)``).  The CHAIN must show the return
+        value (or a name assigned from it) reaching the sink; the
+        input variable itself is never constrained.
+      * ``"validate"`` — the call RAISES on bad input, so after it
+        returns the INPUT variable itself is constrained and stays the
+        chain start.  Raising is load-bearing: a validator that merely
+        returns a sentinel (``None``, ``False``) on bad input does NOT
+        constrain the input — control continues with the raw value
+        live — and MUST be classed ``"transform"`` instead (its safety
+        lives in the return value).  ``werkzeug.security.safe_join``
+        is the precedent: it returns ``None`` on traversal (only
+        Flask's ``flask.helpers.safe_join`` wrapper raises), so it is
+        a transform entry despite its validating flavour.
 
-    Both kinds are treated identically for chain checking — the
-    distinction is documented so reviewers can verify the semantic
-    claim matches the library's actual behaviour.
+    The chain-check consequences of the two kinds differ (input-start
+    vs binding-target-start) — reviewers must verify the raise/return
+    claim against the library's actual behaviour before picking a kind.
     """
     library_call: str
     sink_class: str
@@ -57,10 +64,16 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         library_call="werkzeug.security.safe_join",
         sink_class="pathtrav",
         languages=("python",),
-        input_arg_kind="validate",
+        # transform, NOT validate: werkzeug's safe_join returns None on
+        # traversal — it does not raise (raising NotFound is Flask's
+        # flask.helpers.safe_join WRAPPER).  With no raise the input
+        # variable is unconstrained after the call, so only the RETURN
+        # value may start the chain; the None return cannot traverse (a
+        # path sink consuming None fails with TypeError, not escape).
+        input_arg_kind="transform",
         soundness_note=(
-            "werkzeug.security.safe_join (since werkzeug 0.5) raises "
-            "NotFound if the joined path escapes the base directory or "
+            "werkzeug.security.safe_join (since werkzeug 0.5) returns "
+            "None if the joined path escapes the base directory or "
             "contains traversal sequences.  Return value, when not None, "
             "is provably inside the base directory."
         ),
