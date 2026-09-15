@@ -91,6 +91,19 @@ class TestGraduatedRuleFeedback:
         )
         assert calls == []
 
+    def test_junk_verdict_shape_records_nothing(self, monkeypatch):
+        # A truthy non-bool ("yes", 1) is a non-verdict: bool()-
+        # coercing it recorded a fabricated TRUE-positive precision
+        # event to the rule library.
+        calls = _patch_library(monkeypatch)
+        agent = _agent_stub()
+        for junk in ("yes", 1, [], "false"):
+            agent._record_graduated_rule_feedback(
+                _vuln("synthesized:uaf-variant-3",
+                      {"is_true_positive": junk}),
+            )
+        assert calls == []
+
     def test_missing_checker_synthesis_package_is_suppressed(
         self, monkeypatch,
     ):

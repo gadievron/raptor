@@ -218,8 +218,12 @@ def _snapshot_verdicts(
     out: dict[str, bool | None] = {}
     for fid, r in results_by_id.items():
         if isinstance(r, dict) and "error" not in r:
-            v = r.get("is_exploitable")
-            out[fid] = None if v is None else bool(v)
+            # Tri-state read: a junk shape snapshots as None too —
+            # bool()-coercing it wrote a fabricated primary vote
+            # into the ledgers (a phantom voter that could break a
+            # genuine judge tie and mint a "correct" outcome for a
+            # vote never cast).
+            out[fid] = read_verdict(r, "is_exploitable")
     return out
 
 

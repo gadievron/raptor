@@ -506,6 +506,19 @@ def test_abstaining_full_analysis_not_recorded_as_disagreement(llm):
     assert record_prefilter_outcomes(client, claims, results) == 0
 
 
+def test_junk_verdict_shape_not_recorded(llm):
+    """A truthy non-bool that survived validation is a non-verdict —
+    recording it adjudicated the cheap claim as 'incorrect'
+    (full_says_fp=False) on a verdict no model produced."""
+    client, prov = llm
+    claims = {
+        "f1": {"decision_class": "agentic:py/sql-injection",
+               "model": "haiku-stub", "cheap_reasoning": "r"},
+    }
+    results = [{"finding_id": "f1", "is_true_positive": "yes"}]
+    assert record_prefilter_outcomes(client, claims, results) == 0
+
+
 def test_real_verdicts_still_adjudicated(llm):
     # Two-direction: definite verdicts keep recording.
     client, prov = llm

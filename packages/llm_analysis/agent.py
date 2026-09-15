@@ -1332,7 +1332,11 @@ class AutonomousSecurityAgentV2:
                     validated.quality, validated.incomplete,
                 )
 
-            vuln.exploitable = analysis.get("is_exploitable") or False
+            # Bool record field: an abstention (None) and a junk
+            # shape both land False here — the record field cannot
+            # carry the tri-state; the analysis dict (attached
+            # below) keeps the honest value.
+            vuln.exploitable = read_verdict(analysis, "is_exploitable") is True
             vuln.exploitability_score = analysis.get("exploitability_score") or 0.0
             if exemplar_usage.get("exemplars_used"):
                 # Which L3 exemplars primed this analysis — persisted
@@ -1472,11 +1476,12 @@ class AutonomousSecurityAgentV2:
                             )
                             vuln.exploitable = False
                             vuln.exploitability_score = 0.0
-                        elif validation.get('is_exploitable') is None:
+                        elif read_verdict(validation, 'is_exploitable') is None:
                             # Schema validation nulls a missing or
                             # malformed is_exploitable — an abstention,
-                            # not a verdict. Casting it as
-                            # "not exploitable" silently demoted a
+                            # not a verdict (a junk shape that slipped
+                            # past it reads the same way). Casting it
+                            # as "not exploitable" silently demoted a
                             # finding off a degraded response; leave
                             # the verdict untouched instead.
                             logger.info(
@@ -1484,7 +1489,7 @@ class AutonomousSecurityAgentV2:
                                 "exploitability verdict (abstained) — "
                                 "verdict unchanged"
                             )
-                        elif validation.get('is_exploitable') is False:
+                        elif read_verdict(validation, 'is_exploitable') is False:
                             logger.info(
                                 "⚠️  Validation determined "
                                 "Not Exploitable:"
@@ -2104,18 +2109,21 @@ class AutonomousSecurityAgentV2:
         if not rule_id.startswith(self._SYNTHESIZED_RULE_PREFIX):
             return
         analysis = vuln.analysis if isinstance(vuln.analysis, dict) else {}
-        is_tp = analysis.get("is_true_positive")
+        is_tp = read_verdict(analysis, "is_true_positive")
         if is_tp is None:
-            return  # no verdict, nothing to record
+            # No verdict (absent, schema-nulled, or a junk shape —
+            # a non-verdict either way): recording it would write a
+            # fabricated precision event to the rule library.
+            return
         library_rule_id = rule_id[len(self._SYNTHESIZED_RULE_PREFIX):]
         from packages.checker_synthesis.library import RuleLibrary
         # Default library dir — the same resolution /audit's
         # graduation pass uses, so feedback lands on the same
         # manifest the rule graduated from.
-        RuleLibrary().record_match(library_rule_id, is_tp=bool(is_tp))
+        RuleLibrary().record_match(library_rule_id, is_tp=is_tp)
         logger.debug(
             "graduated-rule feedback: %s is_tp=%s",
-            library_rule_id, bool(is_tp),
+            library_rule_id, is_tp,
         )
 
     def _get_verified_outcomes(self):

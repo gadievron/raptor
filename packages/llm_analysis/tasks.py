@@ -191,7 +191,7 @@ class ExploitTask(DispatchTask):
             prior = prior_results.get(fid, {})
             if prior.get("exploit_code"):
                 continue
-            if prior.get("is_exploitable"):
+            if read_verdict(prior, "is_exploitable") is True:
                 selected.append(f)
                 continue
             # SCA findings: select if reachable or KEV-listed.
@@ -307,7 +307,7 @@ class PatchTask(DispatchTask):
             prior = prior_results.get(fid, {})
             if prior.get("patch_code"):
                 continue
-            if prior.get("is_exploitable"):
+            if read_verdict(prior, "is_exploitable") is True:
                 selected.append(f)
                 continue
             # SCA findings with a known fix version get a manifest patch.
@@ -696,9 +696,10 @@ class JudgeTask(DispatchTask):
         # structurally impossible for the judge to critique the
         # primary analyst's ORIGINAL conclusion on any finding
         # consensus had touched.
-        primary_verdict = primary.get(
-            "pre_consensus_is_exploitable",
-            primary.get("is_exploitable", "unknown"),
+        primary_verdict = (
+            primary["pre_consensus_is_exploitable"]
+            if "pre_consensus_is_exploitable" in primary
+            else read_verdict(primary, "is_exploitable")
         )
         if primary_verdict is None:
             # Abstained primary (schema-nulled verdict or a None
@@ -769,8 +770,12 @@ class JudgeTask(DispatchTask):
                 panel = tally_verdict_votes(
                     ja.get("is_exploitable") for ja in judge_analyses
                 )
+                # Same parsed-primary tally feed as the consensus
+                # stage: the primary's vote is the tri-state value
+                # the abstention snapshot below reads, never the raw
+                # field (a junk shape is not a vote).
                 tally = tally_verdict_votes(
-                    [primary.get("is_exploitable")]
+                    [primary_exploitable]
                     + [ja.get("is_exploitable") for ja in judge_analyses]
                 )
 
@@ -793,7 +798,7 @@ class JudgeTask(DispatchTask):
                     ]
                     continue
 
-                primary_abstained = primary.get("is_exploitable") is None
+                primary_abstained = primary_exploitable is None
                 n_judges = len(judge_analyses)
                 if primary_abstained:
                     # The primary cast NO vote (missing/null
@@ -1077,7 +1082,8 @@ class GroupAnalysisTask(DispatchTask):
         si_blocks: tuple[UntrustedBlock, ...] = ()
         for fid in finding_ids:
             r = self.results_by_id.get(fid, {})
-            exploitable = r.get("is_exploitable", "unknown")
+            _v = read_verdict(r, "is_exploitable")
+            exploitable = "unknown" if _v is None else _v
             score = r.get("exploitability_score", "?")
             reasoning = (r.get("reasoning") or "")[:300]
             summaries.append(f"- {fid}: exploitable={exploitable}, score={score}\n  {reasoning}")

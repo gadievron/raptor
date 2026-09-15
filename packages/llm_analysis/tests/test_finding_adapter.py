@@ -40,9 +40,12 @@ class TestItemId:
 
 
 class TestNormalizeVerdict:
-    """Mirrors legacy ``r.get("is_exploitable", False)`` truthy check:
-    truthy → positive, anything else → negative. There is no "unknown"
-    bucket — legacy treated missing-as-False (negative-equivalent)."""
+    """Only a genuine ``is_exploitable is True`` ranks positive;
+    everything else — missing, explicit None, junk shape — ranks
+    negative. There is no "unknown" bucket: the MISSING case keeps
+    legacy ``r.get("is_exploitable", False)`` semantics (missing ==
+    definite negative), and non-bool junk is a non-verdict that must
+    not out-rank a clean negative (the tri-state accessor rule)."""
 
     def test_exploitable_true_is_positive(self):
         adapter = FindingAdapter()
@@ -62,12 +65,14 @@ class TestNormalizeVerdict:
         adapter = FindingAdapter()
         assert adapter.normalize_verdict({"is_exploitable": None}) == "negative"
 
-    def test_truthy_non_bool_is_positive(self):
-        # Legacy used truthy check, not strict True. "yes" / 1 / etc.
-        # rank as positive in legacy. We preserve that.
+    def test_truthy_non_bool_is_negative(self):
+        # A non-bool shape that bypassed response validation is a
+        # non-verdict: ranking "yes" / 1 as positive promoted a
+        # malformed response over a clean negative — the exact
+        # quality-floor failure mode select_primary defends against.
         adapter = FindingAdapter()
-        assert adapter.normalize_verdict({"is_exploitable": "yes"}) == "positive"
-        assert adapter.normalize_verdict({"is_exploitable": 1}) == "positive"
+        assert adapter.normalize_verdict({"is_exploitable": "yes"}) == "negative"
+        assert adapter.normalize_verdict({"is_exploitable": 1}) == "negative"
 
     def test_falsy_non_bool_is_negative(self):
         adapter = FindingAdapter()
@@ -246,19 +251,17 @@ class TestLegacyQuirksPreserved:
         # r2 has 1.0 default. r2 wins.
         assert adapter.select_primary([r1, r2])["analysed_by"] == "m2"
 
-    def test_truthy_non_bool_is_exploitable_treated_as_exploitable(self):
-        # Legacy: `if r_expl` is truthy for "yes", 1, [...], etc.
-        # Substrate's strict ``is True`` check would have rejected
-        # them. Preserve legacy's truthy behaviour.
-        # batch 346 — quality floor takes precedence over verdict
-        # rank, so the truthy-positive needs above-floor quality
-        # to actually win the selection.
+    def test_truthy_non_bool_is_exploitable_ranks_negative(self):
+        # A truthy non-bool ("yes", 1, [...]) is a non-verdict: it
+        # must not out-rank a clean explicit negative on the verdict
+        # axis (the tri-state accessor rule — legacy's truthy check
+        # promoted exactly this malformed-positive shape). Both are
+        # above the quality floor; both rank "negative", so the
+        # tiebreak falls to quality and the clean negative wins.
         adapter = FindingAdapter()
         r1 = {"is_exploitable": False, "_quality": 0.9, "analysed_by": "m1"}
         r2 = {"is_exploitable": "yes", "_quality": 0.5, "analysed_by": "m2"}
-        # Both above floor (0.3); r2 ranks positive (truthy) and
-        # wins on the verdict axis.
-        assert adapter.select_primary([r1, r2])["analysed_by"] == "m2"
+        assert adapter.select_primary([r1, r2])["analysed_by"] == "m1"
 
     def test_quality_floor_demotes_low_quality_positive(self):
         # batch 346 — a positive verdict with quality below the

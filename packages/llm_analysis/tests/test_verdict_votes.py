@@ -324,6 +324,19 @@ class TestJudgeFinalizeAbstention:
 
 
 class TestJudgeSelectItemsAbstention:
+    def test_junk_primary_verdict_is_abstained_for_the_stamp(self):
+        # The one-idiom rule: the abstained-primary snapshot goes
+        # through read_verdict, so a non-bool shape that bypassed
+        # response validation reads as an abstention. Pre-fix the raw
+        # `.get(...) is None` treated junk as a voted primary and the
+        # single-judge branch "preserved" a verdict that never
+        # existed.
+        primary = {"is_exploitable": "true"}
+        results = [_judge("f1", False, "j1")]
+        JudgeTask().finalize(results, {"f1": primary})
+        assert primary["judge"] == "panel-verdict"
+        assert primary["is_exploitable"] is False
+
     def test_abstained_tp_still_reaches_judge_panel(self):
         # A schema-nulled is_true_positive is an abstention, not a
         # "false positive" verdict. Pre-fix the truthiness gate read

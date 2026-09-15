@@ -2677,7 +2677,7 @@ def _try_structural_fallback(
             )
             _attach_result(analysis, result, method="structural-treesitter")
             n_validated += 1
-            if result.refuted and analysis.get("is_exploitable"):
+            if result.refuted and read_verdict(analysis, "is_exploitable") is True:
                 n_downgrades += 1
         except Exception as exc:  # noqa: BLE001 — fail-open validation loop
             logger.debug(
@@ -2732,7 +2732,7 @@ def _attach_result(
         else:
             evidence.append(str(e))
     recommends_downgrade = (
-        result.refuted and bool(analysis.get("is_exploitable"))
+        result.refuted and read_verdict(analysis, "is_exploitable") is True
     )
     analysis["dataflow_validation"] = {
         "verdict": result.verdict,

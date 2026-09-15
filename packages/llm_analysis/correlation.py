@@ -186,7 +186,8 @@ def correlate_results(results_by_id: dict[str, dict]) -> dict[str, Any]:
 
             # Majority/minority over models that actually voted.
             exploitable_models = [
-                a.get("model", "?") for a in analyses if a.get("is_exploitable")
+                a.get("model", "?") for a in analyses
+                if read_verdict(a, "is_exploitable") is True
             ]
             non_exploitable_models = [
                 a.get("model", "?") for a in analyses
@@ -200,12 +201,13 @@ def correlate_results(results_by_id: dict[str, dict]) -> dict[str, Any]:
                 # BOTH sides, each labelled with its own verdict and
                 # an explicit tie marker.
                 for a in analyses:
-                    if a.get("is_exploitable") is None:
+                    verdict = read_verdict(a, "is_exploitable")
+                    if verdict is None:
                         continue
                     unique.append({
                         "finding_id": fid,
                         "model": a.get("model", "?"),
-                        "verdict": bool(a["is_exploitable"]),
+                        "verdict": verdict,
                         "tie": True,
                         "reasoning": (a.get("reasoning") or "")[:200],
                     })

@@ -247,6 +247,26 @@ class TestPanelSummaryParts:
             "1 agreed", "2 panel-verdict",
         ]
 
+    def test_junk_primary_snapshot_is_an_abstention(self):
+        # The pre-judge/pre-retry snapshots feed the scorecard
+        # producers: a junk shape bool()-coerced at snapshot time
+        # became a phantom primary vote that could break a genuine
+        # judge tie and mint a fabricated "correct" JUDGE_REVIEW
+        # event. Tri-state read: junk snapshots as abstention.
+        from packages.llm_analysis.orchestrator import _snapshot_verdicts
+        snap = _snapshot_verdicts({
+            "f1": {"is_exploitable": "yes"},
+            "f2": {"is_exploitable": True},
+            "f3": {"is_exploitable": None},
+            "f4": {"is_exploitable": False},
+            "f5": {"is_exploitable": True, "error": "boom"},
+        })
+        assert snap["f1"] is None
+        assert snap["f2"] is True
+        assert snap["f3"] is None
+        assert snap["f4"] is False
+        assert "f5" not in snap
+
     def test_count_panel_stamps_counts_every_stage_outcome(self):
         # The summary counters for BOTH stages come from this one
         # counter — including the panel-verdict bucket for panels

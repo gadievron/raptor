@@ -7,7 +7,8 @@ Options B and C will migrate the dispatch loop and reviewers.
 Schema mapping:
     item_id            ← finding_id
     normalize_verdict  ← derived from is_exploitable (True → positive,
-                         else → negative; matches legacy's truthy check)
+                         else → negative; missing ranks negative, per
+                         the legacy rule)
     select_primary     ← overridden to mirror legacy _select_primary_result
                          exactly — see method docstring for the quirks.
 """
@@ -17,6 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.llm.multi_model import BaseVerdictAdapter
+from core.run.finding_status import read_verdict
 
 
 class FindingAdapter(BaseVerdictAdapter):
@@ -36,13 +38,16 @@ class FindingAdapter(BaseVerdictAdapter):
         return fid
 
     def normalize_verdict(self, item: dict[str, Any]) -> str:
-        # Mirror legacy ``_select_primary_result``'s truthy check:
-        # ``r.get("is_exploitable", False)`` defaults missing to False
-        # (negative-equivalent). The substrate's BaseVerdictAdapter
-        # default would have mapped missing → "unknown" (rank 1, between
-        # positive and negative), but legacy treats missing as definite
-        # negative. Preserve that rule here.
-        return "positive" if item.get("is_exploitable") else "negative"
+        # Mirror legacy ``_select_primary_result``'s rule for the
+        # MISSING case: ``r.get("is_exploitable", False)`` defaults
+        # missing to False (negative-equivalent). The substrate's
+        # BaseVerdictAdapter default would have mapped missing →
+        # "unknown" (rank 1, between positive and negative), but
+        # legacy treats missing as definite negative. Preserve that
+        # rule; the tri-state accessor additionally keeps a junk
+        # shape from ranking "positive" (only a genuine True does).
+        verdict = read_verdict(item, "is_exploitable")
+        return "positive" if verdict is True else "negative"
 
     def extract_analysis_record(
         self, result: dict[str, Any], model_name: str,
@@ -120,7 +125,7 @@ class FindingAdapter(BaseVerdictAdapter):
            the malformed positive falls to the bottom of the
            pile but is still selectable if it's the only one
            (preserves "always return *something*").
-        2. Verdict rank — positive (truthy is_exploitable)
+        2. Verdict rank — positive (`is_exploitable is True`)
            ranks above negative.
         3. -quality (higher quality wins ties).
         4. -score (higher exploitability_score wins remaining ties).
@@ -128,8 +133,9 @@ class FindingAdapter(BaseVerdictAdapter):
         Two legacy quirks preserved from `_select_primary_result`:
         - `_quality` defaults to 1.0 when missing (legacy treated
           "no quality field" as "perfect quality").
-        - `is_exploitable` is truthy-checked (covered by
-          normalize_verdict).
+        - a MISSING `is_exploitable` ranks as a definite negative
+          (covered by normalize_verdict, via the tri-state
+          accessor — abstained and junk shapes rank negative too).
         """
         if not model_results:
             msg = "select_primary called with empty list"

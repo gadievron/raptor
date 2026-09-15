@@ -28,6 +28,7 @@ import logging
 from typing import Any
 
 from core.llm.task_types import TaskType
+from core.run.finding_status import read_verdict
 from core.security.prompt_defense_profiles import CONSERVATIVE
 from core.security.prompt_envelope import (
     TaintedString,
@@ -324,10 +325,11 @@ def record_prefilter_outcomes(
         claim = pending_claims.get(str(result.get("finding_id") or ""))
         if claim is None:
             continue
-        full_verdict = result.get("is_true_positive")
+        full_verdict = read_verdict(result, "is_true_positive")
         if full_verdict is None:
             # The full analysis abstained (quality-degraded response
-            # with no verdict field). An abstention is not a
+            # with no verdict field, or a malformed shape that is a
+            # non-verdict either way). An abstention is not a
             # disagreement — recording it as "incorrect" would erode
             # fast-tier trust on zero evidence, the same
             # abstention-as-vote miscount the correlation engine
