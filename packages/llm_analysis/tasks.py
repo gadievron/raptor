@@ -632,7 +632,13 @@ class JudgeTask(DispatchTask):
             r = prior_results.get(fid, {"error": True})
             if "error" in r:
                 continue
-            if not r.get("is_true_positive", True):
+            # Only an EXPLICIT False skips the judge. Response
+            # validation nulls a missing/malformed is_true_positive
+            # (an abstention, not a verdict); a truthiness check read
+            # that None as "false positive" and silently dropped from
+            # the judge panel exactly the malformed-response findings
+            # that most need a second opinion.
+            if r.get("is_true_positive") is False:
                 continue
             if r.get("cross_family_agreed"):
                 continue
@@ -697,7 +703,8 @@ class JudgeTask(DispatchTask):
         return _budget_for_task(self, model)
 
     def finalize(self, results, prior_results):
-        """Apply judge verdicts: preserve primary (single), majority (multi)."""
+        """Apply judge verdicts: preserve primary (single), majority
+        (multi); when the primary abstained, the panel verdict stands."""
         judge_by_finding: dict[str, list[dict]] = {}
         for r in results:
             fid = r.get("finding_id")
@@ -743,9 +750,27 @@ class JudgeTask(DispatchTask):
                     ]
                     continue
 
+                primary_abstained = primary.get("is_exploitable") is None
                 n_judges = len(judge_analyses)
-                if n_judges == 1:
+                if primary_abstained:
+                    # The primary cast NO vote (missing/null
+                    # is_exploitable — errored / refused / schema-
+                    # nulled). select_items admits these findings
+                    # precisely because they need a real review, so
+                    # the panel's verdict stands regardless of panel
+                    # size; "preserve primary" here would throw that
+                    # review away and keep the non-verdict. And
+                    # "agreed" would mint corroboration from a
+                    # one-sided pair — the primary never voted, so
+                    # there is nothing to agree with. A tied panel
+                    # yields None: the abstention survives honestly.
+                    final = panel.majority()
+                    primary["judge"] = (
+                        "disputed" if panel.disputed else "panel-verdict"
+                    )
+                elif n_judges == 1:
                     final = primary_exploitable
+                    primary["judge"] = "disputed" if disputed else "agreed"
                 else:
                     majority = tally.majority()
                     # No majority (a tie once abstainers are
@@ -755,8 +780,8 @@ class JudgeTask(DispatchTask):
                     # preserve-primary rule.
                     final = (primary_exploitable if majority is None
                              else majority)
+                    primary["judge"] = "disputed" if disputed else "agreed"
 
-                primary["judge"] = "disputed" if disputed else "agreed"
                 primary["is_exploitable"] = final
                 primary["judge_analyses"] = [
                     {"model": ja.get("analysed_by", "?"),
@@ -777,8 +802,11 @@ class JudgeTask(DispatchTask):
                 # count drops; preserve the original ``contradictions``
                 # list + a new ``contradiction_resolved_by_judge``
                 # marker so the audit trail survives for operators
-                # who want to inspect HOW it was resolved.
-                if primary.get("self_contradictory"):
+                # who want to inspect HOW it was resolved. `final`
+                # is None only for an abstained primary over a tied
+                # panel — no verdict was produced, so nothing exists
+                # to tie-break with.
+                if final is not None and primary.get("self_contradictory"):
                     primary["contradiction_resolved_by_judge"] = True
                     primary["self_contradictory"] = False
 

@@ -193,3 +193,81 @@ class TestJudgeFinalizeAbstention:
         JudgeTask().finalize(results, {"f1": primary})
         assert primary["is_exploitable"] is False
         assert primary["judge"] == "disputed"
+
+    def test_abstained_primary_single_judge_vote_stands(self):
+        # The common single-judge config: the primary abstained
+        # (schema-nulled verdict) and the judge cast a real vote.
+        # Pre-fix "preserve primary" kept the None — the exact
+        # second opinion select_items admitted the finding for was
+        # thrown away — and "agreed" was stamped, minting
+        # corroboration from a one-sided pair.
+        primary = {"is_exploitable": None}
+        results = [_judge("f1", True, "j1")]
+        JudgeTask().finalize(results, {"f1": primary})
+        assert primary["is_exploitable"] is True
+        assert primary["judge"] == "panel-verdict"
+
+    def test_abstained_primary_single_judge_false_vote_stands(self):
+        primary = {"is_exploitable": None}
+        results = [_judge("f1", False, "j1")]
+        JudgeTask().finalize(results, {"f1": primary})
+        assert primary["is_exploitable"] is False
+        assert primary["judge"] == "panel-verdict"
+
+    def test_abstained_primary_panel_majority_stands(self):
+        primary = {"is_exploitable": None}
+        results = [
+            _judge("f1", True, "j1"),
+            _judge("f1", True, "j2"),
+            _judge("f1", False, "j3"),
+        ]
+        JudgeTask().finalize(results, {"f1": primary})
+        assert primary["is_exploitable"] is True
+        assert primary["judge"] == "disputed"
+
+    def test_abstained_primary_tied_panel_keeps_abstention(self):
+        # No majority among the actual voters and no primary vote to
+        # fall back on: the abstention survives honestly instead of
+        # being coerced to either side.
+        primary = {"is_exploitable": None, "self_contradictory": True}
+        results = [_judge("f1", True, "j1"), _judge("f1", False, "j2")]
+        JudgeTask().finalize(results, {"f1": primary})
+        assert primary["is_exploitable"] is None
+        assert primary["judge"] == "disputed"
+        # A tied panel produced no verdict — nothing exists to
+        # tie-break the self-contradiction with.
+        assert primary["self_contradictory"] is True
+        assert "contradiction_resolved_by_judge" not in primary
+
+    def test_absent_primary_verdict_panel_vote_stands(self):
+        # Absent key is the same abstention the combined tally
+        # already read it as.
+        primary = {}
+        results = [_judge("f1", True, "j1")]
+        JudgeTask().finalize(results, {"f1": primary})
+        assert primary["is_exploitable"] is True
+        assert primary["judge"] == "panel-verdict"
+
+
+class TestJudgeSelectItemsAbstention:
+    def test_abstained_tp_still_reaches_judge_panel(self):
+        # A schema-nulled is_true_positive is an abstention, not a
+        # "false positive" verdict. Pre-fix the truthiness gate read
+        # the None as falsy and silently dropped the finding from the
+        # judge panel — exactly the malformed-response findings that
+        # most need a second opinion.
+        findings = [{"finding_id": "f1"}]
+        prior = {"f1": {"is_true_positive": None, "is_exploitable": True}}
+        assert JudgeTask().select_items(findings, prior) == findings
+
+    def test_absent_tp_still_reaches_judge_panel(self):
+        findings = [{"finding_id": "f1"}]
+        prior = {"f1": {"is_exploitable": True}}
+        assert JudgeTask().select_items(findings, prior) == findings
+
+    def test_explicit_false_tp_still_skips_judge(self):
+        # Two-direction: an explicit not-a-true-positive verdict is
+        # still excluded from the panel.
+        findings = [{"finding_id": "f1"}]
+        prior = {"f1": {"is_true_positive": False, "is_exploitable": False}}
+        assert JudgeTask().select_items(findings, prior) == []

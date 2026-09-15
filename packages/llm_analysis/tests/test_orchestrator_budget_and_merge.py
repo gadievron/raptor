@@ -146,6 +146,40 @@ class TestMergeResultsStatuses:
         assert get_status(f) == "analysed"
 
 
+class TestMergeContradictionFloor:
+
+    def test_abstained_tp_never_demotes_exploitable(self):
+        # Response validation nulls a malformed is_true_positive —
+        # an abstention, not a "false positive" verdict. Pre-fix the
+        # floor's truthiness check read the None as not-a-true-positive
+        # and flipped a voted is_exploitable=True to False at the final
+        # merge, dropping the exploit artifact with it.
+        prep = _prep_report([{"finding_id": "f1", "rule_id": "r"}])
+        cc = [{"finding_id": "f1", "is_true_positive": None,
+               "is_exploitable": True, "exploitability_score": 0.9,
+               "exploit_code": "poc"}]
+        merged = _merge_results(prep, cc)
+        f = merged["results"][0]
+        assert f["is_exploitable"] is True
+        assert f["exploitable"] is True
+        assert f["has_exploit"] is True
+        assert merged["exploitable"] == 1
+
+    def test_explicit_false_tp_still_demotes(self):
+        # Two-direction: the floor still enforces the invariant on an
+        # EXPLICIT contradiction (is_true_positive=False + exploitable).
+        prep = _prep_report([{"finding_id": "f1", "rule_id": "r"}])
+        cc = [{"finding_id": "f1", "is_true_positive": False,
+               "is_exploitable": True, "exploitability_score": 0.9,
+               "exploit_code": "poc"}]
+        merged = _merge_results(prep, cc)
+        f = merged["results"][0]
+        assert f["is_exploitable"] is False
+        assert f["exploitable"] is False
+        assert f["has_exploit"] is False
+        assert "exploit_code" not in f
+
+
 class TestCapFindings:
 
     def test_dropped_tail_stamped(self):

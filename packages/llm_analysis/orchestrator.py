@@ -260,12 +260,15 @@ def _classify_absent_consensus(
 
 def _panel_summary_parts(
     agreed: int, disputed: int, no_verdict: int,
+    panel_verdict: int = 0,
 ) -> list[str]:
     """Human-readable parts for a review-panel (consensus / judge)
-    summary line. The three counts partition panels that RAN: an
+    summary line. The counts partition panels that RAN: an
     all-abstain panel resolves to "no-verdict" — neither agreed nor
     disputed — and omitting it made the printed line silently
-    undercount panels that ran. Zero counts stay off the line."""
+    undercount panels that ran. A judge panel that voted on an
+    abstained primary resolves to "panel-verdict" (there was no
+    primary vote to agree with). Zero counts stay off the line."""
     parts: list[str] = []
     if agreed:
         parts.append(f"{agreed} agreed")
@@ -273,6 +276,8 @@ def _panel_summary_parts(
         parts.append(f"{disputed} disputed")
     if no_verdict:
         parts.append(f"{no_verdict} no-verdict")
+    if panel_verdict:
+        parts.append(f"{panel_verdict} panel-verdict")
     return parts
 
 
@@ -1760,6 +1765,8 @@ def orchestrate(
                          if r.get("judge") == "disputed")
     judge_no_verdict = sum(1 for r in per_finding_results
                            if r.get("judge") == "no-verdict")
+    judge_panel_verdict = sum(1 for r in per_finding_results
+                              if r.get("judge") == "panel-verdict")
     cross_family_checked = sum(1 for r in per_finding_results
                                if r.get("cross_family_check"))
     cross_family_disputes = sum(1 for r in per_finding_results
@@ -1792,6 +1799,10 @@ def orchestrate(
         "judge_agreed": judge_agreed,
         "judge_disputes": judge_disputes,
         "judge_no_verdict": judge_no_verdict,
+        # Judge panels that voted on an abstained primary: the panel
+        # verdict stood in for the missing primary vote — neither
+        # "agreed" (nothing to agree with) nor "disputed".
+        "judge_panel_verdict": judge_panel_verdict,
         "aggregate_models": [m.model_name for m in aggregate_models],
         "aggregated": aggregation is not None,
         "calibrated_aggregation": calibrated_summary,
@@ -1877,7 +1888,8 @@ def orchestrate(
     elif consensus_budget_skipped:
         print(f"  Consensus: skipped (budget > {int(ConsensusTask.budget_cutoff * 100)}%)")
     jg_parts = _panel_summary_parts(
-        judge_agreed, judge_disputes, judge_no_verdict)
+        judge_agreed, judge_disputes, judge_no_verdict,
+        judge_panel_verdict)
     if jg_parts:
         print(f"  Judge: {', '.join(jg_parts)}")
     if aggregation:
@@ -2403,10 +2415,18 @@ def _merge_results(
         # exploitable. The LLM sometimes contradicts itself (e.g.
         # is_true_positive=False but is_exploitable=True); enforce
         # the logical floor here so downstream consumers never see
-        # an impossible verdict combination.
+        # an impossible verdict combination. Only an EXPLICIT False
+        # fires the floor: response validation nulls a missing or
+        # malformed ``is_true_positive`` (an abstention, not a
+        # verdict), and a truthiness check read that None as "not a
+        # true positive" — silently flipping a voted-exploitable
+        # finding to not-exploitable at the final merge and dropping
+        # its exploit/patch artifacts. Same no-vote rule as
+        # ``tally_verdict_votes``: an abstained TP field casts no
+        # vote either way.
         _is_tp = cc.get("is_true_positive", True)
         _is_exp = cc.get("is_exploitable", False)
-        if not _is_tp and _is_exp:
+        if _is_tp is False and _is_exp:
             _is_exp = False
         finding["exploitable"] = _is_exp
         finding["is_exploitable"] = _is_exp
