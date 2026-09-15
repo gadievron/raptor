@@ -713,6 +713,36 @@ def test_resolver_failure_never_retried_unconfined(tmp_path: Path) -> None:
     assert len(calls) == 1
 
 
+def test_resolver_fallback_refuses_truncated_output(tmp_path: Path) -> None:
+    """Unconfined-fallback leg: a tail-capped resolver stdout can still
+    be a VALID YAML document describing a subset stack — parsing it would
+    sanitize and launch a partial model as if complete. A truncated
+    outcome must refuse (fail closed); an untruncated one must keep
+    flowing (the refuse-good-runs direction)."""
+    from core.container.proc import RunOutcome
+    from core.sandbox import SandboxSetupError
+
+    import core.sandbox as sb
+
+    def _outcome(truncated: bool) -> RunOutcome:
+        return RunOutcome(returncode=0, stdout="services: {}\n",
+                          stderr="", timed_out=False, truncated=truncated)
+
+    with patch.object(sb, "run",
+                      side_effect=SandboxSetupError("no sandbox tier")):
+        with patch.object(cco, "run_cli",
+                          return_value=_outcome(truncated=True)), \
+             pytest.raises(cco.ComposeError, match="truncated"):
+            cco._run_resolver(["docker", "compose", "config"], tmp_path,
+                              cco._resolver_env(tmp_path))
+        with patch.object(cco, "run_cli",
+                          return_value=_outcome(truncated=False)):
+            raw = cco._run_resolver(
+                ["docker", "compose", "config"], tmp_path,
+                cco._resolver_env(tmp_path))
+        assert raw == "services: {}\n"
+
+
 def test_primary_compose_file_size_capped(tmp_path: Path) -> None:
     """The primary document gets the same 5MiB budget as gated
     extends/env_file targets — an oversized hostile compose file must

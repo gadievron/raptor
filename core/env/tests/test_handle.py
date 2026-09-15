@@ -113,3 +113,36 @@ def test_sandbox_handle_exec_strips_loader_env(tmp_path) -> None:
     # layer; the handle passes the dict through unmodified).
     assert kwargs["env"]["LD_PRELOAD"] == "/rootfs/evil.so"
     assert kwargs["rootfs"] == str(tmp_path)
+
+
+def test_sandbox_handle_log_retention_is_bounded(tmp_path) -> None:
+    """Exec output is hostile workload output — retaining it uncapped
+    for the handle's lifetime was a persistent memory-DoS lever (one
+    gigabyte-spamming exec_check inflated RSS until teardown). Each
+    retained chunk and the total retained bytes are bounded; logs()
+    still replays the tail."""
+    from unittest.mock import MagicMock
+
+    from core.env import handle as handle_mod
+    from core.env.handle import SandboxHandle, sandbox_rootfs_supported
+
+    if not sandbox_rootfs_supported():
+        import pytest
+        pytest.skip("sandbox image-rootfs mode unavailable on this tree")
+
+    (tmp_path / "bin").mkdir()
+    h = SandboxHandle(tmp_path)
+    huge = ("x" * 79 + "\n") * 100_000  # 8 MB, far past both caps
+    run_mock = MagicMock()
+    run_mock.return_value = MagicMock(
+        returncode=0, stdout=huge, stderr="tail-marker\n", sandbox_info={},
+    )
+    with patch("core.sandbox.run", run_mock):
+        for _ in range(40):
+            h.exec("true")
+    retained = sum(len(c) for c in h._log_chunks)
+    assert all(len(c) <= handle_mod._LOG_CHUNK_CAP_BYTES
+               for c in h._log_chunks)
+    assert retained <= handle_mod._LOG_RETAIN_CAP_BYTES
+    # Replay still serves the tail of the most recent execs.
+    assert "tail-marker" in h.logs(tail=5)

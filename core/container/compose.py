@@ -795,6 +795,14 @@ def _run_resolver(
             f"compose config failed (rc={outcome.returncode}): {stderr}",
             stderr=stderr,
         )
+    if outcome.truncated:
+        # The resolved model is PARSED, not sliced for diagnostics — a
+        # head-dropped tail could still be a valid YAML document
+        # describing a SUBSET stack, which would then be sanitized and
+        # launched as if complete. Refuse (fail closed).
+        msg = ("compose config output exceeded the capture bound and was "
+               "truncated — refusing to parse a partial resolved model")
+        raise ComposeError(msg)
     return outcome.stdout or ""
 
 
