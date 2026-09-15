@@ -44,7 +44,7 @@ from pathlib import Path
 
 
 from .models import Dependency, Manifest
-from .osv import _canonical_name as _osv_canonical_name
+from .naming import parent_join_key as _parent_join_key
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -86,19 +86,15 @@ _REQ_INCLUDE_MAX_DEPTH = 5
 
 def _parent_map_key(ecosystem: str, name: str) -> str:
     """Canonical key for the child → parents maps extracted from
-    cascade lockfiles.
+    cascade lockfiles — keys AND parent values.
 
-    PyPI needs full PEP 503 folding (runs of ``-``/``_``/``.`` → ``-``,
-    via the shared OSV canonicaliser) so dotted names emitted by
-    pip-compile (``zope.interface``) join with the parser-canonicalised
-    dep names (``zope-interface``) — a partial fold on one side loses
-    the parent linkage and the transitive-drop detector skips the dep.
-    Other ecosystems' maps store plain case-folded names (dots are
-    significant in npm / Cargo package names).
+    Delegates to the shared rule (:func:`packages.sca.naming
+    .parent_join_key`) because the transitive-drop detector joins
+    ``source_extra["via"]`` back against direct deps: producer and
+    consumer must fold identically or mixed-case parents silently
+    lose their linkage.
     """
-    if ecosystem == "PyPI":
-        return _osv_canonical_name(ecosystem, name)
-    return name.lower()
+    return _parent_join_key(name, ecosystem)
 
 
 def _requirements_include_targets(path: Path) -> set[Path]:
@@ -763,7 +759,9 @@ def _extract_cargo_lock_parents(blob: bytes) -> dict[str, list[str]]:
             # ``"<name> <version> (<source>)"`` or ``"<name>"``.
             child = dep_str.split(" ", 1)[0]
             if child:
-                out.setdefault(child.lower(), []).append(parent_name.lower())
+                out.setdefault(
+                    _parent_map_key("Cargo", child), [],
+                ).append(_parent_map_key("Cargo", parent_name))
     return out
 
 
@@ -788,8 +786,8 @@ def _extract_composer_lock_parents(blob: bytes) -> dict[str, list[str]]:
                 continue
             for child_name in (pkg.get("require") or {}):
                 out.setdefault(
-                    child_name.lower(), [],
-                ).append(parent_name.lower())
+                    _parent_map_key("Packagist", child_name), [],
+                ).append(_parent_map_key("Packagist", parent_name))
     return out
 
 
@@ -832,9 +830,11 @@ def _extract_gemfile_lock_parents(blob: bytes) -> dict[str, list[str]]:
         # Top-level gems in specs: are 4-space indented;
         # their children are 6-space indented (2 deeper).
         if len(indent) == 4:
-            current_parent = name.lower()
+            current_parent = _parent_map_key("RubyGems", name)
         elif len(indent) >= 6 and current_parent is not None:
-            out.setdefault(name.lower(), []).append(current_parent)
+            out.setdefault(
+                _parent_map_key("RubyGems", name), [],
+            ).append(current_parent)
     return out
 
 
@@ -874,9 +874,22 @@ def _extract_npm_lock_parents(blob: bytes) -> dict[str, list[str]]:
         # means y is a child of x. The path's last segment is the
         # package name; everything before identifies the parent.
         for dep_name in (meta.get("dependencies") or {}):
-            child_canon = dep_name.lower()
-            out.setdefault(child_canon, []).append(parent_name.lower())
+            child_canon = _parent_map_key("npm", dep_name)
+            out.setdefault(child_canon, []).append(
+                _parent_map_key("npm", parent_name),
+            )
     return out
+
+
+def _strip_pep508_extras(name: str) -> str:
+    """Drop a PEP 508 extras suffix (``Celery[redis]`` → ``Celery``).
+
+    Extras are requirement syntax, not part of the package name —
+    PEP 503 canonical names never contain brackets, so an extras-
+    carrying name is its own fold fixpoint yet can never equal a
+    direct dep's join key. Strip before folding or the linkage is
+    silently lost."""
+    return name.split("[", 1)[0].strip()
 
 
 def _extract_pip_compile_via(blob: bytes) -> dict[str, list[str]]:
@@ -892,6 +905,14 @@ def _extract_pip_compile_via(blob: bytes) -> dict[str, list[str]]:
             #   instructor
             #   sphinx
 
+    Pinned lines may carry PEP 508 extras (``celery[redis]==5.3.6``,
+    pip-compile default keeps them) and environment markers
+    (``redis==4.5.0 ; python_version >= "3.9"``); via annotations
+    name the requirement as written, extras included
+    (``# via celery[redis]``). Both are requirement syntax, not part
+    of the name — extras are stripped and markers ignored so the
+    edge still joins.
+
     We only need the parent list per package; downstream consumers
     use it to ask "if I bump <parent>, does this transitive
     disappear?". Keys AND parent values are PEP 503 canonicalised
@@ -900,10 +921,13 @@ def _extract_pip_compile_via(blob: bytes) -> dict[str, list[str]]:
     import re as _re
 
     text = blob.decode("utf-8", errors="replace")
-    # Match: ``<name>==<version>`` followed by indented ``# via``
-    # block, possibly continuing across lines as ``#   <parent>``.
+    # Match: ``<name>[extras]==<version> ; marker`` (extras group and
+    # marker tail optional) followed by an indented ``# via`` block,
+    # possibly continuing across lines as ``#   <parent>``. The name
+    # capture excludes the extras group; versions never contain ``;``.
     pkg_re = _re.compile(
-        r"^([A-Za-z0-9][A-Za-z0-9._-]*)==[^\s]+\s*$",
+        r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?"
+        r"==[^\s;]+\s*(?:;.*)?$",
         _re.MULTILINE,
     )
     out: dict[str, list[str]] = {}
@@ -928,14 +952,15 @@ def _extract_pip_compile_via(blob: bytes) -> dict[str, list[str]]:
                 if rest:
                     # Single-line form: ``# via <parent>``
                     for p in rest.split(","):
-                        p = p.strip()
+                        p = _strip_pep508_extras(p)
                         if p and not p.startswith("-"):
                             parents.append(_parent_map_key("PyPI", p))
                 in_via = True
             elif in_via:
                 # Continuation: ``#   <parent>``
-                if content and not content.startswith("-"):
-                    parents.append(_parent_map_key("PyPI", content))
+                parent = _strip_pep508_extras(content)
+                if parent and not parent.startswith("-"):
+                    parents.append(_parent_map_key("PyPI", parent))
             j += 1
         if parents:
             out[name] = parents

@@ -572,6 +572,124 @@ def test_rubygems_dep_moves_to_development() -> None:
     assert findings[0].extra_name == "development"
 
 
+def test_via_parent_join_survives_mixed_case_producer() -> None:
+    """Producer/consumer join closure for ``source_extra["via"]``:
+    the cascade parent maps case-fold every non-PyPI name, so the
+    detector must join them case-insensitively against mixed-case
+    direct deps. The ``via`` list here comes from the REAL
+    Gemfile.lock producer over a mixed-case parent (``RedCloth``) —
+    a hand-set lowercase ``via=["parent"]`` masks exactly this
+    boundary."""
+    from packages.sca.transitive import (
+        _extract_gemfile_lock_parents,
+        _parent_map_key,
+    )
+
+    lock = (
+        b"GEM\n"
+        b"  remote: https://rubygems.org/\n"
+        b"  specs:\n"
+        b"    RedCloth (4.3.4)\n"
+        b"      dep (= 1.0.0)\n"
+        b"    dep (1.0.0)\n"
+        b"\n"
+        b"PLATFORMS\n"
+        b"  ruby\n"
+        b"\n"
+        b"DEPENDENCIES\n"
+        b"  RedCloth\n"
+    )
+    parents_by_name = _extract_gemfile_lock_parents(lock)
+    via = parents_by_name[_parent_map_key("RubyGems", "dep")]
+    assert via == ["redcloth"]   # the producer's real (folded) shape
+
+    rg = _StubRubyGems({
+        ("RedCloth", "4.3.4"): {
+            "runtime": [{"name": "dep", "requirements": ">= 1.0"}],
+            "development": [],
+        },
+        ("RedCloth", "5.0.0"): {
+            "runtime": [],
+            "development": [{"name": "dep", "requirements": ">= 2.0"}],
+        },
+    })
+    parent = Dependency(
+        ecosystem="RubyGems", name="RedCloth", version="4.3.4",
+        declared_in=Path("/test"), scope="main",
+        is_lockfile=False, pin_style=PinStyle.EXACT, direct=True,
+        purl="pkg:gem/RedCloth@4.3.4",
+        parser_confidence=Confidence("high", reason="test"),
+    )
+    transitive = Dependency(
+        ecosystem="RubyGems", name="dep", version="1.0.0",
+        declared_in=Path("/test"), scope="main",
+        is_lockfile=False, pin_style=PinStyle.EXACT, direct=False,
+        purl="pkg:gem/dep@1.0.0",
+        parser_confidence=Confidence("high", reason="test"),
+        source_kind="cascade_resolver",
+        source_extra={"via": via},
+    )
+    findings = detect_droppable_transitives(
+        [parent, transitive],
+        vuln_findings=[_vuln(transitive)],
+        rubygems_client=rg,
+    )
+    assert len(findings) == 1
+    f = findings[0]
+    # Registry queries and the operator-facing parent name carry the
+    # manifest spelling, not the producer's folded form.
+    assert f.parent_name == "RedCloth"
+    assert f.parent_latest_version == "5.0.0"
+    assert f.transitive_status_in_latest == "extras-gated"
+
+
+def test_pypi_extras_carrying_via_parent_joins() -> None:
+    """Producer/consumer join closure for the OTHER pip-compile
+    shape: via annotations name the requirement as written, extras
+    included (``# via Celery[redis]``). ``celery[redis]`` is its own
+    PEP 503 fixpoint, so without producer-side stripping the parent
+    can never equal the direct dep's join key and the candidate is
+    silently skipped. The via list comes from the REAL pip-compile
+    producer — a hand-set bare ``via=["celery"]`` masks exactly this
+    boundary."""
+    from packages.sca.transitive import (
+        _extract_pip_compile_via,
+        _parent_map_key,
+    )
+
+    lock = (
+        b"Redis==4.5.0\n"
+        b"    # via Celery[redis]\n"
+    )
+    parents_by_name = _extract_pip_compile_via(lock)
+    via = parents_by_name[_parent_map_key("PyPI", "Redis")]
+    assert via == ["celery"]   # extras stripped, pep503-folded
+
+    pypi = _StubPyPI({
+        "celery": {
+            "5.3.6": {"requires_dist": ["redis>=4.5.0"]},
+            "5.4.0": {
+                "requires_dist": ['redis>=4.5.0; extra == "redis"'],
+            },
+        },
+        "redis": {"4.5.0": {}},
+    })
+    deps = [
+        _dep("Celery", "5.3.6", direct=True),
+        _dep("redis", "4.5.0", direct=False,
+             source_kind="cascade_resolver", via=via),
+    ]
+    findings = detect_droppable_transitives(
+        deps, vuln_findings=[_vuln(deps[1])], pypi_client=pypi,
+    )
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.parent_name == "Celery"
+    assert f.parent_latest_version == "5.4.0"
+    assert f.transitive_status_in_latest == "extras-gated"
+    assert f.extra_name == "redis"
+
+
 # ---------------------------------------------------------------------------
 # Composer (Packagist)
 # ---------------------------------------------------------------------------

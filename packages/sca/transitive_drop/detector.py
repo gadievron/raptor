@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass
 
 from packages.sca.findings import severity_rank
-from packages.sca.naming import fold_name, pep503_name
+from packages.sca.naming import fold_name, parent_join_key, pep503_name
 from packages.sca.versions import VersionError
 from packages.sca.versions import compare as version_compare
 
@@ -152,13 +152,20 @@ def detect_droppable_transitives(
         canon = _canonical_name(d.ecosystem, d.name)
         by_eco_name.setdefault((d.ecosystem, canon), []).append(d)
 
-    # Direct deps indexed by (ecosystem, canonical name) — we need
+    # Direct deps indexed by (ecosystem, parent-join key) — we need
     # their currently-pinned version when querying parent metadata.
-    direct_versions: dict[tuple[str, str], str] = {}
+    # The join key MUST be the same rule the cascade parent-map
+    # producer uses (``source_extra["via"]`` values are emitted
+    # through it), not the pipeline-wide fold: the producer
+    # case-folds every ecosystem, so a case-preserving key here
+    # silently skips mixed-case parents. The value keeps the direct
+    # dep's manifest spelling for registry queries (case-sensitive
+    # registries) and operator-facing output.
+    direct_versions: dict[tuple[str, str], tuple[str, str]] = {}
     for d in deps_list:
         if d.direct and d.version and d.ecosystem in clients:
-            canon = _canonical_name(d.ecosystem, d.name)
-            direct_versions[(d.ecosystem, canon)] = d.version
+            jk = parent_join_key(d.name.strip(), d.ecosystem)
+            direct_versions[(d.ecosystem, jk)] = (d.name, d.version)
 
     for (eco, canon_name), transitive_deps in by_eco_name.items():
         client = clients[eco]
@@ -171,28 +178,34 @@ def detect_droppable_transitives(
         underlying_sev = issue_keys[key]
 
         for parent in sample.source_extra.get("via") or []:
-            parent_canon = _canonical_name(eco, parent)
-            pair = (eco, canon_name, parent_canon)
+            parent_join = parent_join_key(parent.strip(), eco)
+            pair = (eco, canon_name, parent_join)
             if pair in seen_pairs:
                 continue
             seen_pairs.add(pair)
 
-            parent_pinned = direct_versions.get((eco, parent_canon))
-            if not parent_pinned:
+            direct_entry = direct_versions.get((eco, parent_join))
+            if not direct_entry:
                 # The "parent" came from the cascade resolver but
                 # isn't in our direct dep set — could be a
                 # transitive-of-transitive. Skip; cross-version
                 # diff needs the operator's current pin.
                 continue
+            parent_spelled, parent_pinned = direct_entry
+            # Registry queries use the direct dep's manifest
+            # spelling (pipeline-canonicalised) — the ``via``
+            # string is producer-case-folded and would 404 on
+            # case-sensitive registries.
+            parent_query = _canonical_name(eco, parent_spelled)
 
             try:
                 latest = _latest_stable_version(
-                    eco, client, parent_canon,
+                    eco, client, parent_query,
                 )
             except Exception as e:                       # noqa: BLE001
                 logger.debug(
                     "transitive_drop: latest-version lookup failed for "
-                    "parent %s: %s", parent_canon, e,
+                    "parent %s: %s", parent_query, e,
                 )
                 continue
             if latest is None:
@@ -213,10 +226,10 @@ def detect_droppable_transitives(
             # Diff current's dep state against latest's. Per-ecosystem
             # dep-state extraction is dispatched here.
             current_state = _dep_state_in_version(
-                eco, client, parent_canon, parent_pinned, canon_name,
+                eco, client, parent_query, parent_pinned, canon_name,
             )
             latest_state = _dep_state_in_version(
-                eco, client, parent_canon, latest, canon_name,
+                eco, client, parent_query, latest, canon_name,
             )
             if current_state is None or latest_state is None:
                 continue
@@ -238,7 +251,7 @@ def detect_droppable_transitives(
                     transitive_name=sample.name,
                     transitive_version=sample.version or "",
                     transitive_finding_severity=underlying_sev,
-                    parent_name=parent,
+                    parent_name=parent_spelled,
                     parent_current_version=parent_pinned or "(unknown)",
                     parent_latest_version=latest,
                     transitive_status_in_latest=transitive_status,

@@ -51,4 +51,26 @@ def fold_name(
     return name
 
 
-__all__ = ["fold_name", "pep503_name"]
+def parent_join_key(name: str, ecosystem: str) -> str:
+    """Join key for lockfile-derived parent linkage — the child →
+    parents maps extracted from cascade lockfiles AND every consumer
+    that looks a parent up by name (``source_extra["via"]``).
+
+    Deliberately CASE-INSENSITIVE for every ecosystem, unlike
+    :func:`fold_name`: lockfile writers normalise case differently
+    from manifests (composer.lock stores lowercase canonical names,
+    pip-compile emits PEP 503 forms, Gemfile.lock preserves gemspec
+    spelling), so a case-preserving key on either side of the
+    producer/consumer pair silently drops the linkage for any
+    mixed-case name. The fold cannot merge two distinct packages —
+    registries reject new names that collide under case. PyPI
+    additionally needs the full PEP 503 fold so dotted pip-compile
+    names (``zope.interface``) join parser-canonicalised ones
+    (``zope-interface``).
+    """
+    if ecosystem == "PyPI":
+        return pep503_name(name)
+    return name.lower()
+
+
+__all__ = ["fold_name", "parent_join_key", "pep503_name"]
