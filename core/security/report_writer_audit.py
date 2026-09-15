@@ -176,6 +176,7 @@ _REPORT_WRITER_FILES = (
     # bodies printed to the operator terminal by libexec/raptor-audit.
     "core/audit/_util.py",
     "core/llm/multi_model/replay.py",
+    "core/progress/__init__.py",
     "core/project/cli.py",
     "core/run/provenance.py",
     "core/llm/scorecard/audit.py",

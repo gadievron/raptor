@@ -11,6 +11,21 @@ from datetime import datetime
 from types import TracebackType
 from typing import Literal
 
+from core.security.log_sanitisation import sanitise_for_terminal
+
+
+def _scrub(text: object, *, max_len: int = 256) -> str:
+    """Escape + bound caller-supplied text at the module chokepoint.
+
+    Progress output is TTY-only by construction, and callers pass
+    target-derived strings (dependency names, advisory ids, finding
+    ids) — a hostile name carrying ESC/OSC must not drive the
+    operator's terminal. Applied to the FIELD values only; the
+    module's own framing (spinners, bars, \r\033[K redraws) stays
+    raw.
+    """
+    return sanitise_for_terminal(str(text), max_len=max_len)
+
 
 # Thread-local "last stage that ran" — readable by out-of-band
 # exception handlers via :func:`last_stage_name`. See the
@@ -82,7 +97,7 @@ class HackerProgress:
     def __init__(self, total: int | None = None, operation: str = "Processing",
                  disabled: bool = False) -> None:
         self.total = total
-        self.operation = operation
+        self.operation = _scrub(operation, max_len=120)
         self.disabled = disabled
         self.current = 0
         self.start_time = time.time()
@@ -182,7 +197,7 @@ class HackerProgress:
             status = f"[{timestamp}] {spinner} {self.operation} | Elapsed: {elapsed}"
 
         if message:
-            status += f" | {message}"
+            status += f" | {_scrub(message)}"
 
         # Overwrite previous line. `\033[K` clears from the cursor
         # to end-of-line AFTER the carriage return — without it,
@@ -216,6 +231,7 @@ class HackerProgress:
         # Force-flush the final counter line unconditionally
         # (bypassing the 1s throttle in ``update``).
         clear = "\r\033[K" if self._tty else ""
+        message = _scrub(message)
         if self.total:
             progress = f"{self.current}/{self.total}"
             sys.stderr.write(
@@ -355,7 +371,10 @@ class HackerProgressBar:
         # (operator opt-out) but emitted in oneline mode (CI logs
         # benefit from the target prelude).
         if self._mode != "silent" and self._target:
-            self._stream.write(f"sca > {self._target}\n")
+            # The target is caller-supplied (typically an operator
+            # path, but the module contract is fields-escaped) —
+            # scrub like every other field this bar writes.
+            self._stream.write(f"sca > {_scrub(self._target, max_len=256)}\n")
             self._stream.flush()
 
     def __enter__(self):
@@ -373,6 +392,7 @@ class HackerProgressBar:
         """Begin a new stage. Finalises any prior in-flight stage."""
         if self._stage is not None:
             self._finalise_stage(detail=self._stage_detail)
+        name = _scrub(name, max_len=64)
         self._stage = name
         self._stage_total = total
         self._stage_done = 0
@@ -394,7 +414,7 @@ class HackerProgressBar:
         else:
             self._stage_done += 1
         if detail:
-            self._stage_detail = detail
+            self._stage_detail = _scrub(detail)
         if self._disabled:
             return
         now = time.time()
@@ -410,9 +430,9 @@ class HackerProgressBar:
         # Clear the active line, write the flash, leave a newline,
         # then re-render the active stage line below.
         self._clear_active_line()
-        sev = severity.upper()[:5]
+        sev = _scrub(severity.upper()[:5], max_len=8)
         self._stream.write(
-            f"      {self._FLASH_GLYPH} {sev:5s} {message}\n"
+            f"      {self._FLASH_GLYPH} {sev:5s} {_scrub(message)}\n"
         )
         self._stream.flush()
         self._render()
@@ -445,6 +465,9 @@ class HackerProgressBar:
     # ----- internals -----
 
     def _finalise_stage(self, *, detail: str) -> None:
+        # done()/end() summaries arrive here unscrubbed; tick details
+        # are already escaped (idempotent on escaped text).
+        detail = _scrub(detail) if detail else detail
         if self._mode == "silent":
             self._stage = None
             return
