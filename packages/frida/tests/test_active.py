@@ -7,6 +7,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from packages.frida.active import (
@@ -598,3 +599,33 @@ class TestAutoObserveTemplateAwareness:
 
         monkeypatch.setattr(active, "observe_target", boom)
         assert active.auto_observe("/bin/t", [tmp_path]) is None
+
+
+class TestSandboxedProbeEnvHygiene:
+    def test_find_frida_site_probe_uses_sanitised_env(
+        self, tmp_path, monkeypatch,
+    ):
+        # The interpreter probe would import through the shell's
+        # PYTHONPATH / PYTHONSTARTUP (the codeql version-probe idiom).
+        from packages.frida import sandboxed
+
+        py = tmp_path / "python3"
+        py.write_text("#!/bin/sh\n")
+
+        seen: dict = {}
+
+        def fake_run(cmd, **kw):
+            seen["env"] = kw.get("env")
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        monkeypatch.setenv("PYTHONPATH", "/evil")
+        monkeypatch.setenv("PYTHONSTARTUP", "/evil/rc.py")
+        monkeypatch.setattr(sandboxed.sys, "executable", str(py))
+
+        sandboxed._find_frida_site()
+
+        env = seen.get("env")
+        assert env is not None, "probe ran with inherited environment"
+        assert "PYTHONPATH" not in env
+        assert "PYTHONSTARTUP" not in env

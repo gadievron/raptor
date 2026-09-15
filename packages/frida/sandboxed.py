@@ -40,10 +40,17 @@ def _find_frida_site() -> str | None:
         if not python or not os.path.isfile(python):
             return None
         try:
+            # Sanitised env (the codeql version-probe idiom): a bare
+            # python probe would import through the shell's
+            # PYTHONPATH / PYTHONSTARTUP.
+            from core.security.env_sanitisation import (
+                safe_subprocess_env,
+            )
             r = subprocess.run(
                 [python, "-c",
                  "import frida; print(frida.__file__)"],
                 capture_output=True, text=True, timeout=5,
+                env=safe_subprocess_env(strip_target_markers=True),
             )
             if r.returncode == 0 and r.stdout.strip():
                 site = Path(r.stdout.strip()).parent.parent

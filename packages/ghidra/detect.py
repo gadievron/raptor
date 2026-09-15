@@ -227,11 +227,16 @@ def get_ghidra_version() -> Optional[str]:
     if not binary:
         return None
     try:
+        # Sanitised env (the codeql version-probe idiom): Ghidra is a
+        # JVM launcher and honours JAVA_TOOL_OPTIONS / _JAVA_OPTIONS
+        # from the shell (agent attach at startup).
+        from core.security.env_sanitisation import safe_subprocess_env
         r = subprocess.run(
             [binary, "--help"],
             capture_output=True,
             text=True,
             timeout=10,
+            env=safe_subprocess_env(strip_target_markers=True),
         )
         # Version appears in stderr banner like "Ghidra 11.1.2 ..."
         for line in (r.stdout + r.stderr).splitlines():

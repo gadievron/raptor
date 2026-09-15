@@ -143,9 +143,13 @@ class YarnResolver:
 def _detect_major_version() -> int | None:
     """Return Yarn's major version, or None if it can't be parsed."""
     try:
+        # Sanitised env (the codeql version-probe idiom): yarn is a
+        # node launcher and honours NODE_OPTIONS from the shell.
+        from core.security.env_sanitisation import safe_subprocess_env
         proc = subprocess.run(
             ["yarn", "--version"],
             capture_output=True, text=True, timeout=5,
+            env=safe_subprocess_env(strip_target_markers=True),
         )
     except (FileNotFoundError, subprocess.SubprocessError, OSError):
         return None

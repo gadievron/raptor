@@ -195,8 +195,14 @@ def _check_tool(cmd: list, *, timeout: int = 5) -> bool:
     if key in _CHECK_TOOL_CACHE:
         return _CHECK_TOOL_CACHE[key]
     try:
+        # Sanitised env for the availability probe (the codeql
+        # version-probe idiom): trusted tool, no target input, but a
+        # bare run inherits LD_PRELOAD / PYTHONPATH / JVM agent vars
+        # from the operator shell.
+        from core.security.env_sanitisation import safe_subprocess_env
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout,
+            env=safe_subprocess_env(strip_target_markers=True),
         )
         result = proc.returncode == 0 and bool(
             proc.stdout.strip() or proc.stderr.strip())

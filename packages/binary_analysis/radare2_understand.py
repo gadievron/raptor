@@ -450,11 +450,17 @@ def probe_capability() -> dict[str, Any]:
     if r2_bin and has_r2pipe:
         # Probe r2ghidra by listing plugins
         try:
+            # Sanitised env (the codeql version-probe idiom): r2
+            # honours R2_* / LD_* env from the shell.
+            from core.security.env_sanitisation import (
+                safe_subprocess_env,
+            )
             result = subprocess.run(  # noqa: PLW1510 — wrapped in try/except
                 [r2_bin, "-q", "-c", "Lc~ghidra", "/dev/null"],
                 capture_output=True,
                 text=True,
                 timeout=10,
+                env=safe_subprocess_env(strip_target_markers=True),
             )
             has_r2ghidra = "ghidra" in (result.stdout or "").lower()
         except Exception:  # noqa: BLE001 — capability probe, absence = False
