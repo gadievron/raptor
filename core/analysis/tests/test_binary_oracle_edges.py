@@ -647,6 +647,7 @@ def test_extract_script_appends_av_to_single_session(monkeypatch, tmp_path):
     class _Proc:
         def __init__(self, stdout):
             self.stdout = stdout
+            self.returncode = 0
 
     def fake_sandbox_run(argv, **kwargs):
         calls.append(list(argv))
@@ -685,3 +686,75 @@ def test_extract_script_appends_av_to_single_session(monkeypatch, tmp_path):
     callees = idx.callees
     assert "callee" in callees          # direct edge parsed
     assert "Widget::draw" in callees    # vtable edge merged
+
+
+def _rc_extract_setup(monkeypatch, tmp_path, rc):
+    """Common stub: aflj lists two functions, the script session
+    returns ONE parsed batch with exit status ``rc`` — the torn-
+    transcript shape (r2 killed mid-script by OOM / rlimit / signal)."""
+    import core.sandbox as _sb
+    import core.analysis.binary_oracle_edges as edges_mod
+    from core.config import RaptorConfig
+
+    monkeypatch.setattr(RaptorConfig, "BASE_OUT_DIR", tmp_path)
+    monkeypatch.setattr(edges_mod.shutil, "which",
+                        lambda t: f"/usr/bin/{t}")
+    monkeypatch.setattr(edges_mod, "_try_graph_store", lambda p: None)
+    monkeypatch.setattr(edges_mod, "read_build_id",
+                        lambda p: "feedface" * 5)
+
+    binary = tmp_path / "demo"
+    binary.write_bytes(b"\x7fELF-stub")
+
+    class _Proc:
+        def __init__(self, stdout, returncode=0):
+            self.stdout = stdout
+            self.stderr = ""
+            self.returncode = returncode
+
+    def fake_sandbox_run(argv, **kwargs):
+        if "-c" in argv:  # aflj listing
+            return _Proc(
+                '[{"name":"main","addr":4096,"size":10},'
+                '{"name":"sym.callee","addr":8192,"size":10}]'
+            )
+        # Script session killed after the first batch: partial
+        # transcript + non-zero exit.
+        return _Proc(
+            "BATCH 4096\n"
+            '[{"type":"CALL","ref":8192}]\n',
+            returncode=rc,
+        )
+
+    monkeypatch.setattr(_sb, "run", fake_sandbox_run)
+    return binary
+
+
+def test_nonzero_r2_exit_uses_partial_edges_but_never_caches(
+        tmp_path, monkeypatch) -> None:
+    """r2 killed mid-script exits non-zero with a truncated
+    transcript. The partial edges may serve THIS run (the witness is
+    promote-only), but caching them under the build-id would forfeit
+    every function past the cut for all later runs, permanently and
+    silently — the cache write must be skipped."""
+    from core.analysis.binary_oracle_edges import (
+        _cache_path_for,
+        extract_direct_call_edges,
+    )
+    binary = _rc_extract_setup(monkeypatch, tmp_path, rc=137)
+    idx = extract_direct_call_edges(binary, use_cache=True)
+    # Best-effort for this run: the parsed prefix is still served.
+    assert "callee" in idx.callees
+    # ... but the partial index is never cached.
+    assert not _cache_path_for("feedface" * 5).exists()
+
+
+def test_zero_r2_exit_still_caches(tmp_path, monkeypatch) -> None:
+    from core.analysis.binary_oracle_edges import (
+        _cache_path_for,
+        extract_direct_call_edges,
+    )
+    binary = _rc_extract_setup(monkeypatch, tmp_path, rc=0)
+    idx = extract_direct_call_edges(binary, use_cache=True)
+    assert "callee" in idx.callees
+    assert _cache_path_for("feedface" * 5).exists()

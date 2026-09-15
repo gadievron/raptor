@@ -468,6 +468,7 @@ def extract_direct_call_edges(
     # + writable) inside mount-ns — the per-sandbox /tmp would
     # otherwise hide it from r2. TemporaryDirectory guarantees the
     # script is removed however the block exits.
+    complete_run = True
     try:
         with tempfile.TemporaryDirectory(
                 prefix="raptor-bo-edges-") as scratch:
@@ -481,6 +482,22 @@ def extract_direct_call_edges(
                 capture_output=True, text=True, check=False,
                 timeout=timeout, errors="replace",
             )
+            if proc.returncode != 0:
+                # r2 killed mid-script (OOM, sandbox rlimit, signal)
+                # leaves a PARTIAL transcript. Parse it best-effort
+                # for THIS run — the witness is promote-only, so a
+                # partial edge set can only rescue fewer functions —
+                # but it must never be cached: a cached partial index
+                # is reused by every later run under this build-id
+                # and permanently forfeits the missing rescues while
+                # reading green (never cache a partial result — the
+                # exception paths' standing rule).
+                complete_run = False
+                logger.warning(
+                    "binary_oracle_edges: r2 rc=%s for %s — using "
+                    "partial edges for this run only, not caching",
+                    proc.returncode, binary_path,
+                )
             axffj_part, vtable_part = _split_at_vtable_sentinel(
                 proc.stdout or "")
             _parse_axffj_batch(axffj_part, addr_to_name, index)
@@ -506,7 +523,7 @@ def extract_direct_call_edges(
         index.edges.append(edge)
         index.callees.add(edge.callee)
 
-    if cache_file is not None:
+    if cache_file is not None and complete_run:
         _save_cached_index(cache_file, index)
         logger.info(
             "binary_oracle_edges: cached %d edges for %s (build_id=%s)",
