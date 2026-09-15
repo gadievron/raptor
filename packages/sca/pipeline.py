@@ -1315,13 +1315,23 @@ def _run_maintainer_review(client, supply_chain_findings, canonical, http, optio
     pypi = PyPIClient(http, cache, offline=options.offline)
     npm = NpmClient(http, cache, offline=options.offline)
 
+    from .llm.registry_view import build_registry_view
+
     for dep in deps_to_review[:20]:
         meta = {}
         try:
+            # Raw registry documents (PyPI JSON / npm packument) carry
+            # none of the keys the renderer contract reads — project
+            # them through the seam constructor so the trust prompt
+            # actually sees maintainers / publish history / repo.
             if dep.ecosystem == "PyPI":
-                meta = pypi.get_metadata(dep.name) or {}
+                meta = build_registry_view(
+                    dep.ecosystem, pypi.get_metadata(dep.name),
+                )
             elif dep.ecosystem == "npm":
-                meta = npm.get_metadata(dep.name) or {}
+                meta = build_registry_view(
+                    dep.ecosystem, npm.get_metadata(dep.name),
+                )
             else:
                 continue
         except Exception as e:  # noqa: BLE001
@@ -1454,10 +1464,18 @@ def _run_slopsquat_review(
 
         meta: dict[str, Any] = {}
         try:
+            # Project the raw registry document through the renderer-
+            # contract constructor (see the maintainer-trust stage).
+            from .llm.registry_view import build_registry_view
+
             if dep.ecosystem == "PyPI":
-                meta = pypi.get_metadata(dep.name) or {}
+                meta = build_registry_view(
+                    dep.ecosystem, pypi.get_metadata(dep.name),
+                )
             elif dep.ecosystem == "npm":
-                meta = npm.get_metadata(dep.name) or {}
+                meta = build_registry_view(
+                    dep.ecosystem, npm.get_metadata(dep.name),
+                )
             else:
                 # Other ecosystems don't have client metadata
                 # wired today — skip the LLM call rather than

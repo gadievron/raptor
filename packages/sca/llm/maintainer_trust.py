@@ -106,21 +106,23 @@ def _format_metadata(dep: Dependency, meta: dict[str, Any]) -> str:
     ]
 
     maintainers = meta.get("maintainers", [])
-    if maintainers:
+    if isinstance(maintainers, list) and maintainers:
+        from .registry_view import iter_maintainers
+
         lines.append(f"Maintainers ({len(maintainers)}):")
-        for m in maintainers[:20]:
+        # iter_maintainers skips hostile entry shapes (non-dict rows,
+        # non-string fields) so a poisoned packument degrades instead
+        # of raising out of the review stage.
+        for name, email, added in iter_maintainers(meta, 20):
             # Per-field caps: registry-sourced strings are attacker
             # publishable; 20 maintainers x unbounded names/emails is
             # an easy budget-domination channel into a trust verdict
             # (same rationale as the readme_preview cap).
-            name = str(m.get("name", m.get("username", "?")))[:_FIELD_CAP]
-            email = str(m.get("email", ""))[:_FIELD_CAP]
-            added = str(m.get("added", ""))[:_FIELD_CAP]
-            line = f"  - {name}"
+            line = f"  - {name[:_FIELD_CAP]}"
             if email:
-                line += f" <{email}>"
+                line += f" <{email[:_FIELD_CAP]}>"
             if added:
-                line += f" (added {added})"
+                line += f" (added {added[:_FIELD_CAP]})"
             lines.append(line)
 
     publish_dates = meta.get("publish_dates", [])

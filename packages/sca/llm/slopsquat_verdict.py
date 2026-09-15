@@ -190,15 +190,18 @@ def _format_metadata(
     if latest_pub:
         lines.append(f"Latest version published: {latest_pub}")
     maintainers = meta.get("maintainers", [])
-    if maintainers:
+    if isinstance(maintainers, list) and maintainers:
+        from .registry_view import iter_maintainers
+
         lines.append(f"Maintainers ({len(maintainers)}):")
-        for m in maintainers[:10]:
+        # iter_maintainers skips hostile entry shapes — mirrors
+        # maintainer_trust; one poisoned row must not abort the stage.
+        for name, email, _added in iter_maintainers(meta, 10):
             # Per-field caps mirror maintainer_trust (attacker-
             # publishable strings must not dominate the prompt budget).
-            name = str(m.get("name", m.get("username", "?")))[:_FIELD_CAP]
-            email = str(m.get("email", ""))[:_FIELD_CAP]
             lines.append(
-                f"  - {name}" + (f" <{email}>" if email else "")
+                f"  - {name[:_FIELD_CAP]}"
+                + (f" <{email[:_FIELD_CAP]}>" if email else "")
             )
     repo = meta.get("repository_url")
     if repo:
