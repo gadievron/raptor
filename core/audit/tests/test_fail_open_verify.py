@@ -115,9 +115,15 @@ def _annotations_dir(tmp_path, source_file, function, status):
     base = tmp_path / "annotations"
     from core.annotations.models import Annotation
     from core.annotations.storage import write_annotation
+    # A full human-grade note: registry-grade role evidence requires
+    # source=human plus the interactive-TTY stamp (a stamp-less note
+    # demotes to detection grade — see test_fail_open_annotation_role).
     write_annotation(base, Annotation(
         file=source_file, function=function,
-        body="fixture", metadata={"status": status, "source": "human"},
+        body="fixture", metadata={
+            "status": status, "source": "human",
+            "provenance": "interactive-tty", "tty": "stdin",
+        },
     ))
     return base
 

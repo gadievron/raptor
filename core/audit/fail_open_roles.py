@@ -472,7 +472,17 @@ def registry_budget_violations() -> list[str]:
 def _annotation_role(
     names: Sequence[str], file_path: str, ctx: RoleContext,
 ) -> RoleEvidence | None:
-    """Operator annotations — the strongest learned source."""
+    """Operator annotations — the strongest learned source.
+
+    Registry grade requires human provenance: annotations are the one
+    learned source whose authority comes from an operator having
+    personally asserted the role, and the provenance contract
+    (``core.annotations.provenance``) grants that weight only to
+    ``source=human`` notes with an interactive-TTY stamp. Agent-written
+    notes still bind the role, but at detection grade — hint tier,
+    promote-capable only with independent corroboration (the same
+    split the sibling annotation consumers apply).
+    """
     base = ctx.annotations_dir
     if base is None and ctx.out_dir is not None:
         candidate = Path(ctx.out_dir) / "annotations"
@@ -480,8 +490,13 @@ def _annotation_role(
     if base is None:
         return None
     try:
-        from core.annotations.storage import read_file_annotations
+        from core.annotations.provenance import is_human_grade
+        from core.annotations.storage import (
+            annotation_file_mtime,
+            read_file_annotations,
+        )
         annotations = read_file_annotations(Path(base), file_path)
+        ann_mtime = annotation_file_mtime(Path(base), file_path)
     except Exception:
         logger.debug("fail_open role: annotation read failed", exc_info=True)
         return None
@@ -489,13 +504,14 @@ def _annotation_role(
     for ann in annotations:
         status = (ann.metadata or {}).get("status", "")
         if status in _ROLE_ANNOTATION_STATUSES and ann.function in wanted:
+            human = is_human_grade(ann.metadata, note_mtime=ann_mtime)
             return RoleEvidence(
                 kind=status,
                 source="annotation",
                 matched=ann.function,
-                confidence="high",
+                confidence="high" if human else "low",
                 provenance="annotation",
-                grade=GRADE_REGISTRY,
+                grade=GRADE_REGISTRY if human else GRADE_DETECTION,
             )
     return None
 
