@@ -431,6 +431,23 @@ class TestAutoBackPropFromValidateRun:
         )
         assert auto_back_prop_from_validate_run(run, scorecard=scorecard) == 0
 
+    def test_abstained_analysis_never_scored_as_negative(self, tmp_path, scorecard):
+        """An analysis record with NO is_exploitable field (an
+        abstained / errored analysis shape) issued no verdict — the
+        back-prop must skip it. Pre-fix the default-False read booked
+        it as an explicit not-exploitable verdict against the
+        validator: here that minted an INCORRECT cell for a model
+        that never concluded anything."""
+        run = tmp_path / "v"
+        self._write_run(
+            run,
+            analysis_records=[{"finding_id": "f", "rule_id": "r",
+                               "analysed_by": "m"}],  # no verdict field
+            validation_findings=[{"finding_id": "f", "is_exploitable": True}],
+        )
+        assert auto_back_prop_from_validate_run(run, scorecard=scorecard) == 0
+        assert _stat(scorecard, "agentic:r", "m") == (0, 0)
+
     def test_missing_files_returns_zero(self, tmp_path, scorecard):
         """No orchestrated_report.json (standalone /validate) → silent 0."""
         run = tmp_path / "empty"

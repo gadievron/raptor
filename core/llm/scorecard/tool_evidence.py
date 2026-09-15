@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from core.json import load_json
+from core.run.finding_status import read_verdict
 
 from . import _MAX_REASONING_CHARS
 from .scorecard import EventType, ModelScorecard
@@ -247,14 +248,15 @@ def auto_back_prop_from_validate_run(
         if not isinstance(vf, dict):
             continue
         fid = vf.get("finding_id")
-        verdict = vf.get("is_exploitable")
+        verdict = read_verdict(vf, "is_exploitable")
         # Tighten: a finding_id must be a non-empty str/int (a list/dict in
         # that slot would stringify to nonsense and miscount silently).
         if not isinstance(fid, (str, int)) or fid == "":
             continue
         # Tighten: is_exploitable must be a real bool — JSON spec says bool;
-        # a stringy "true"/"false" or "yes" shouldn't be quietly coerced.
-        if not isinstance(verdict, bool):
+        # a stringy "true"/"false" or "yes" shouldn't be quietly coerced
+        # (read_verdict reads those, None, and absence as no-verdict).
+        if verdict is None:
             continue
         val_by_id[str(fid)] = verdict
     if not val_by_id:
@@ -275,12 +277,12 @@ def auto_back_prop_from_validate_run(
         # under a stringified key and silently mangle attribution).
         if not isinstance(model, str) or not model:
             continue
-        # No default: a missing is_exploitable is the same abstention
-        # as a schema-nulled one — the isinstance gate below must
-        # skip BOTH, not record a fabricated "not exploitable"
+        # Tri-state read: a record with NO analysis verdict (missing,
+        # nulled, or malformed is_exploitable) is the same abstention —
+        # skip it rather than record a fabricated "not exploitable"
         # analysis verdict against the validation outcome.
-        analysis_verdict = r.get("is_exploitable")
-        if not isinstance(analysis_verdict, bool):
+        analysis_verdict = read_verdict(r, "is_exploitable")
+        if analysis_verdict is None:
             continue
         records.append({
             "model": model,
