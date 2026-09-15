@@ -231,6 +231,29 @@ def test_rule_ignores_non_sink_reads():
     assert audit_source(src) == []
 
 
+def test_rule_accepts_sanitise_for_terminal():
+    """Terminal-only writers route foreign-derived fields through
+    ``sanitise_for_terminal`` (escape + length bound); the rule must
+    recognise it, or every registered terminal writer needs a
+    per-site allowlist entry."""
+    src = (
+        "def show(f):\n"
+        '    print(f"finding: {sanitise_for_terminal(f.get(\'title\'))}")\n'
+    )
+    assert audit_source(src) == []
+
+
+def test_rule_still_rejects_escape_nonprintable():
+    # Two-direction guard: escape_nonprintable alone (no length bound,
+    # no markdown defang) stays outside the recognised sanitiser set.
+    src = (
+        "def show(f):\n"
+        '    print(f"finding: {escape_nonprintable(f.get(\'title\'))}")\n'
+    )
+    vs = audit_source(src)
+    assert any(v.detail == "title" for v in vs)
+
+
 def test_rule_ignores_string_method_calls():
     """`severity.title()` is a str method, not a field read."""
     src = (

@@ -99,11 +99,20 @@ _LLM_DERIVED_KEYS = frozenset({
 # rendering. A subtree rooted at one of these calls is considered
 # sanitised. ``escape_nonprintable`` is intentionally NOT in this set:
 # it kills ANSI/control bytes but does not strip autofetch markup or
-# defang markdown — the report layer requires the full
-# prompt_output_sanitise pipeline.
+# defang markdown, and it has no length bound — the report layer
+# requires the full prompt_output_sanitise pipeline.
+# ``sanitise_for_terminal`` IS accepted: terminal-only writers escape
+# control bytes and bound length, and markdown never renders on a TTY
+# (the full pipeline would additionally strip line-leading `#`/`*`
+# from operator-visible paths — wrong for terminal output). The
+# surface type (terminal vs markdown) is adjudicated at file-add
+# time, the registry's review checkpoint: markdown writers must use
+# the prompt_output_sanitise family, terminal writers may use
+# ``sanitise_for_terminal``.
 _SANITISERS = frozenset({
     "sanitise_string",
     "sanitise_code",
+    "sanitise_for_terminal",
     # Per-module single-line / cell / prose helpers built on the above.
     # exploitability_validation.report's shared helpers (sanitise_line
     # wraps sanitise_string; sanitise_cell adds pipe-escaping on top).
