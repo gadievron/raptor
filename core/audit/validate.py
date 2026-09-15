@@ -27,7 +27,7 @@ from core.orchestration.skill_dispatch import (
 )
 from core.schema_constants import CWE_TO_VULN_TYPE, normalise_vuln_type
 
-from .record import append_audit_log
+from .record import _resolve_annotations_dir, append_audit_log
 from .tree_class import NON_PRODUCTION_TREE_CLASSES, classify_tree_class
 
 if TYPE_CHECKING:
@@ -585,12 +585,11 @@ def _extract_cwe(outcome: ReviewOutcome) -> str:
     return ""
 
 
-def _resolve_annotations_dir(out_dir: Path) -> Path:
-    """Resolve the annotations directory for this run."""
-    ann_dir = out_dir / "annotations"
-    if ann_dir.is_dir():
-        return ann_dir
-    return out_dir.parent / "annotations"
+# Annotations resolve through record._resolve_annotations_dir (run-pin
+# aware) — a local pre-pin twin here resolved --out and standalone
+# runs to a shared bare out_dir.parent pseudo-project dir, so the
+# Reflexion auto-feedback read/wrote annotations at a different level
+# than the orchestrator's writer.
 
 
 def _auto_feedback(

@@ -266,13 +266,16 @@ def _load_suppression_records(
 
 
 def _annotations_dir(out_dir: Path | None) -> Path | None:
+    """Annotation base for READS — the run pin decides the project
+    level (record.py's resolver, shared with the orchestrator and
+    validate writers). A bare marker+parent probe here read
+    annotations at a DIFFERENT level than the writers for --out and
+    standalone runs, so operator notes landed where no view showed
+    them."""
     if not out_dir:
         return None
-    run_marker = out_dir / ".raptor-run.json"
-    if run_marker.is_file():
-        ann = out_dir.parent / "annotations"
-    else:
-        ann = out_dir / "annotations"
+    from core.audit.record import _resolve_annotations_dir
+    ann = _resolve_annotations_dir(out_dir)
     return ann if ann.is_dir() else None
 
 
@@ -700,9 +703,8 @@ def _write_base(args) -> str | None:
     out_dir = _resolve_out_dir(args)
     if out_dir is None:
         return None
-    if (out_dir / ".raptor-run.json").is_file():
-        return str(out_dir.parent / "annotations")
-    return str(out_dir / "annotations")
+    from core.audit.record import _resolve_annotations_dir
+    return str(_resolve_annotations_dir(out_dir))
 
 
 def cmd_note(args):

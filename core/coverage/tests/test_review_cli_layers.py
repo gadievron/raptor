@@ -506,3 +506,61 @@ def test_live_skips_line_larger_than_budget(tmp_path, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "yyyy" not in out
     assert "run completed." in out
+
+
+# ── Annotation base resolution (reads and note-writes) ──────────────
+
+
+def test_annotations_dir_uses_pin_aware_resolver(tmp_path):
+    """Reader and note-writer resolve the annotation base through
+    record.py's pin-aware resolver — the same one the orchestrator
+    and validate writers use. A local marker+parent probe here read
+    (and `note` wrote) annotations at a different level than the
+    writers for --out and standalone runs."""
+    sentinel = tmp_path / "resolved" / "annotations"
+    sentinel.mkdir(parents=True)
+    run = tmp_path / "run"
+    run.mkdir()
+    with patch(
+        "core.audit.record._resolve_annotations_dir",
+        return_value=sentinel,
+    ) as resolver:
+        assert _cli._annotations_dir(run) == sentinel
+    resolver.assert_called_once_with(run)
+
+
+def test_write_base_uses_pin_aware_resolver(tmp_path):
+    sentinel = tmp_path / "resolved" / "annotations"
+    run = tmp_path / "run"
+    run.mkdir()
+    with patch(
+        "core.audit.record._resolve_annotations_dir",
+        return_value=sentinel,
+    ) as resolver:
+        base = _cli._write_base(_ns(out=str(run), project=None))
+    assert base == str(sentinel)
+    resolver.assert_called_once_with(run)
+
+
+def test_annotations_dir_marker_and_standalone_levels(tmp_path):
+    """Pin-less legacy shapes keep their levels: a marker run reads
+    the project level, a bare standalone dir stays run-local."""
+    project = tmp_path / "project"
+    run = project / "run_1"
+    run.mkdir(parents=True)
+    (run / ".raptor-run.json").write_text("{}", encoding="utf-8")
+    (project / "annotations").mkdir()
+    assert _cli._annotations_dir(run) == project / "annotations"
+
+    standalone = tmp_path / "solo"
+    (standalone / "annotations").mkdir(parents=True)
+    assert (
+        _cli._annotations_dir(standalone) == standalone / "annotations"
+    )
+
+
+def test_annotations_dir_missing_dir_is_none(tmp_path):
+    run = tmp_path / "run"
+    run.mkdir()
+    assert _cli._annotations_dir(run) is None
+    assert _cli._annotations_dir(None) is None

@@ -692,18 +692,35 @@ class TestValidateDefault:
 
 
 class TestAutoFeedback:
-    def test_resolve_annotations_dir_exists(self, tmp_path):
-        from core.audit.validate import _resolve_annotations_dir
-        ann = tmp_path / "annotations"
-        ann.mkdir()
-        assert _resolve_annotations_dir(tmp_path) == ann
+    def test_resolver_is_records_pin_aware_resolver(self):
+        # One resolver, used by writer (orchestrator via record) and
+        # this reader alike — a local twin here resolved --out and
+        # standalone runs to a different level than the writer.
+        from core.audit import record, validate
+        assert (
+            validate._resolve_annotations_dir
+            is record._resolve_annotations_dir
+        )
 
-    def test_resolve_annotations_dir_fallback(self, tmp_path):
+    def test_unpinned_standalone_run_stays_run_local(self, tmp_path):
+        # Pre-fix the local twin fell back to bare out_dir.parent:
+        # standalone runs of unrelated targets shared a pseudo-project
+        # annotations dir and the Reflexion feedback never reached the
+        # run's real annotations.
         from core.audit.validate import _resolve_annotations_dir
         run_dir = tmp_path / "run1"
         run_dir.mkdir()
-        result = _resolve_annotations_dir(run_dir)
-        assert result == tmp_path / "annotations"
+        assert (
+            _resolve_annotations_dir(run_dir) == run_dir / "annotations"
+        )
+
+    def test_project_run_marker_resolves_to_project_level(self, tmp_path):
+        from core.audit.validate import _resolve_annotations_dir
+        project = tmp_path / "project"
+        run = project / "run_20260914"
+        run.mkdir(parents=True)
+        (run / ".raptor-run.json").write_text("{}")
+        assert _resolve_annotations_dir(run) == project / "annotations"
 
     def test_auto_feedback_no_findings_json(self, tmp_path):
         from core.audit.validate import _auto_feedback
