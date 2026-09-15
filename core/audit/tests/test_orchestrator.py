@@ -7007,18 +7007,23 @@ class TestDiscardPresweepFuture:
         from core.audit.orchestrator import _discard_presweep_future
 
         ev = threading.Event()
+        started = threading.Event()
 
         def fake_build():
             # Step-boundary polling stand-in: waits for the abort,
             # then fails — exercising both the interrupt and the
             # logging callback.
+            started.set()
             assert ev.wait(timeout=10)
             raise RuntimeError("pre-sweep died")
 
         pool = ThreadPoolExecutor(max_workers=1)
         try:
             fut = pool.submit(fake_build)
-            _time.sleep(0.05)  # task is running: cancel() cannot land
+            # Condition-latch, not a clock: on a loaded runner a fixed
+            # sleep may elapse before the worker picks the task up, in
+            # which case cancel() lands and the assertion below flakes.
+            assert started.wait(timeout=10)  # running: cancel() cannot land
             with caplog.at_level(
                 _logging.DEBUG, logger="core.audit.orchestrator",
             ):
