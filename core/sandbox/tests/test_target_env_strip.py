@@ -82,10 +82,16 @@ def test_fuzzing_env_hygiene_scrubs_the_set():
 def test_frida_safe_env_excludes_the_set(monkeypatch):
     for member in STRIP_SET:
         monkeypatch.setenv(member, "leak-me")
-    from core.audit.frida_observe import _safe_env
-    env = _safe_env()
+    from core.security.env_sanitisation import safe_subprocess_env
+    env = safe_subprocess_env(strip_target_markers=True)
     for member in STRIP_SET:
         assert member not in env, f"{member} reached the frida CLI env"
+    # And the frida-observe spawn site actually requests the strip —
+    # the semantic assertion above is only load-bearing if the call
+    # site opts in.
+    src = (_REPO_ROOT / "core" / "audit" / "frida_observe.py").read_text(
+        encoding="utf-8")
+    assert "safe_subprocess_env(strip_target_markers=True)" in src
 
 
 def test_frida_safe_env_strips_the_marker_family(monkeypatch):
@@ -96,8 +102,8 @@ def test_frida_safe_env_strips_the_marker_family(monkeypatch):
     monkeypatch.setenv("RAPTOR_EF_TIMEOUT_S", "5")
     monkeypatch.setenv("RAPTOR_CI", "1")
     monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
-    from core.audit.frida_observe import _safe_env
-    env = _safe_env()
+    from core.security.env_sanitisation import safe_subprocess_env
+    env = safe_subprocess_env(strip_target_markers=True)
     for name in ("RAPTOR_EF_TIMEOUT_S", "RAPTOR_CI", "_RAPTOR_TRUSTED"):
         assert name not in env, f"{name} fingerprints RAPTOR to the target"
 

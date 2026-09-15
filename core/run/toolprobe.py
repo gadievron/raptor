@@ -10,8 +10,9 @@ module fixes once:
   toolchain recorder) instead of ``RaptorConfig.get_safe_env()`` —
   version probes exec real binaries, and env-injection vectors
   (``JAVA_TOOL_OPTIONS``, ``LD_PRELOAD``…) apply to them like any
-  other subprocess. Probes here always use the safe env when
-  ``core.config`` is importable.
+  other subprocess. Probes here always use the sanitised env
+  (``safe_subprocess_env``): when ``core.config`` cannot import,
+  the probe gets a minimal allowlisted env — never the parent's.
 * **TOCTOU**: some probes ``which()``-checked availability and then
   exec'd the BARE tool name, letting a PATH rewrite between check and
   exec swap the binary (the race packages/coccinelle/runner.py
@@ -38,6 +39,7 @@ import shutil
 import subprocess
 import threading
 from dataclasses import dataclass, field
+from core.security.env_sanitisation import safe_subprocess_env
 
 logger = logging.getLogger(__name__)
 
@@ -88,16 +90,6 @@ class ToolInfo:
         return tuple(int(g) for g in m.groups() if g is not None)
 
 
-def _safe_env() -> dict | None:
-    """Sanitised env for the probe; ``None`` (inherit) only when
-    core.config is unimportable (early-bootstrap callers)."""
-    try:
-        from core.config import RaptorConfig
-    except ImportError:
-        return None
-    return RaptorConfig.get_safe_env()
-
-
 def probe(
     name: str,
     *,
@@ -131,7 +123,7 @@ def probe(
                 text=True,
                 check=False,
                 timeout=timeout,
-                env=_safe_env(),
+                env=safe_subprocess_env(),
             )
             info = ToolInfo(
                 name=name, path=path, args=args,

@@ -20,6 +20,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from core.security.env_sanitisation import safe_subprocess_env
 
 logger = logging.getLogger(__name__)
 
@@ -412,7 +413,13 @@ def _run_frida_session(
             "-t", str(session_s),
         ]
 
-        env = _safe_env()
+        # Sanitised + target-marker-stripped env (shared fail-closed
+        # helper): this is a RAW spawn (no core.sandbox chokepoint)
+        # and frida spawn-mode TARGETS inherit the CLI's environ, so
+        # every RAPTOR-identifying name must go. The helper's
+        # fallback is a minimal allowlist carrying no markers and no
+        # credentials.
+        env = safe_subprocess_env(strip_target_markers=True)
 
         result = subprocess.run(
             cmd,
@@ -544,35 +551,3 @@ def _parse_observations(log_file: Path) -> list[FridaObservation]:
                     pending.retval = data.get("retval")
 
     return observations
-
-
-def _safe_env() -> dict[str, str]:
-    """Build a sanitised environment for the Frida subprocess.
-
-    This is a RAW spawn (no core.sandbox chokepoint), and frida
-    spawn-mode TARGETS inherit the CLI's environ — so the
-    target-strip set (trust markers + session credential) must be
-    removed here explicitly; the frida CLI needs none of them.
-    """
-    try:
-        from core.config import RaptorConfig
-        # Whole marker-family strip, not just TARGET_ENV_STRIP_SET:
-        # several RAPTOR_* names legitimately ride the safe-env
-        # allowlist for RAPTOR's own tool children, but to the
-        # spawned TARGET every one is a one-getenv "you are inside
-        # RAPTOR" tell (packages/frida/runner.py adopted the same
-        # helper for its spawn path).
-        return RaptorConfig.strip_target_exec_markers(
-            RaptorConfig.get_safe_env(),
-        )
-    except Exception:  # noqa: BLE001 — config unavailable: fall back to manual scrub
-        # Hand-copied prefixes mirror TARGET_EXEC_MARKER_ENV_PREFIXES
-        # (config is unimportable on this branch).
-        env = {
-            k: v for k, v in os.environ.items()
-            if not k.startswith(("RAPTOR_", "_RAPTOR"))
-        }
-        for key in ("CLAUDECODE", "TERMINAL", "EDITOR", "VISUAL",
-                    "BROWSER", "PAGER"):
-            env.pop(key, None)
-        return env

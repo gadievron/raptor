@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.json import save_json
+from core.security.env_sanitisation import safe_subprocess_env
 
 logger = logging.getLogger(__name__)
 
@@ -105,15 +106,6 @@ def _has_coverage_data(coverage_dir: Path) -> bool:
     return False
 
 
-def _safe_env() -> dict:
-    try:
-        from core.config import RaptorConfig
-        return RaptorConfig.get_safe_env()
-    except Exception:  # noqa: BLE001 — checker must run in degraded envs
-        import os
-        return {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
-
-
 def _resolve_checker(
     coverage_dir: Path,
     checker_path: str | Path | None,
@@ -139,7 +131,7 @@ def _resolve_checker(
         proc = subprocess.run(
             ["g++", "-O3", "-std=c++17", str(cpp), "-o", str(local)],
             capture_output=True, text=True, timeout=120, check=False,
-            env=_safe_env(),
+            env=safe_subprocess_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         logger.warning("blamed_lines: line-checker build failed: %s", exc)
@@ -198,7 +190,7 @@ def check_blamed_lines(
             proc = subprocess.run(
                 argv, capture_output=True, text=True,
                 timeout=_CHECKER_TIMEOUT_S, check=False,
-                cwd=str(coverage_dir), env=_safe_env(),
+                cwd=str(coverage_dir), env=safe_subprocess_env(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             for ln in lines:

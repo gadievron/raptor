@@ -16,6 +16,7 @@ two primitives so future callers (new subprocess-spawning code, new
 blocklists) get one canonical vocabulary.
 """
 
+import os
 from collections.abc import Iterable
 
 
@@ -56,3 +57,47 @@ def intersect_env_vars(env: dict, names: Iterable[str]) -> list:
     """
     blocklist = frozenset(names)
     return sorted(k for k in env if k in blocklist)
+
+
+#: Fallback allowlist for :func:`safe_subprocess_env` when the config
+#: chokepoint is unavailable. Deliberately tiny: enough for a tool
+#: subprocess to run (interpreter/tool resolution, temp files, locale)
+#: and nothing that carries credentials or code-exec vectors.
+MINIMAL_ENV_KEEP = ("PATH", "HOME", "TMPDIR", "LANG", "TZ")
+
+
+def safe_subprocess_env(*, strip_target_markers: bool = False) -> dict[str, str]:
+    """Sanitised subprocess environment that NEVER falls open.
+
+    The canonical wrapper for the ``RaptorConfig.get_safe_env()``
+    call every subprocess spawn is required to make. Callers that
+    must survive environments where ``core.config`` cannot import
+    (early bootstrap, degraded/partial installs, bare test runs)
+    previously each carried their own ``_safe_env`` copy — and the
+    copies drifted on the one axis that matters: what happens on
+    import failure. One member returned ``None`` (subprocess then
+    INHERITS the full parent environment — API keys and injection
+    vectors included); others scrubbed by blocklist. This helper
+    fails CLOSED instead: on any config failure the child gets a
+    minimal allowlisted environment (``MINIMAL_ENV_KEEP`` +
+    ``LC_*``), never the parent's env.
+
+    ``strip_target_markers=True`` additionally removes every
+    RAPTOR-identifying variable (``strip_target_exec_markers``) —
+    for spawn paths whose child observes or IS the analysed target.
+    The fallback allowlist contains no marker names, so the fallback
+    branch satisfies the same contract for free.
+    """
+    try:
+        from core.config import RaptorConfig
+        env = RaptorConfig.get_safe_env()
+        if strip_target_markers:
+            env = RaptorConfig.strip_target_exec_markers(env)
+        return env
+    except Exception:  # noqa: BLE001 — any config failure fails closed, never open
+        env = {
+            k: v for k, v in os.environ.items()
+            if k in MINIMAL_ENV_KEEP or k.startswith("LC_")
+        }
+        env.setdefault("PATH", "/usr/bin:/bin")
+        return env

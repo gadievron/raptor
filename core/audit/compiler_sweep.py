@@ -48,6 +48,7 @@ from core.run.scratch import scratch_dir
 from ._util import safe_join
 from .run_memo import BoundedMemo
 from .sweep import SweepResult
+from core.security.env_sanitisation import safe_subprocess_env
 
 logger = logging.getLogger(__name__)
 
@@ -253,14 +254,6 @@ def _reset_probe_cache() -> None:
         _PROBE_CACHE.clear()
 
 
-def _safe_env() -> dict | None:
-    try:
-        from core.config import RaptorConfig
-        return RaptorConfig.get_safe_env()
-    except ImportError:
-        return None
-
-
 def _gcc_probe_ok(gcc: str, fmt: str) -> bool:
     """Check gcc accepts ``-fanalyzer`` + the diagnostics format.
 
@@ -276,7 +269,7 @@ def _gcc_probe_ok(gcc: str, fmt: str) -> bool:
                 [gcc, "-fanalyzer", f"-fdiagnostics-format={fmt}",
                  "-fsyntax-only", "-x", "c", os.devnull],
                 capture_output=True, text=True, check=False,
-                timeout=_PROBE_TIMEOUT_S, env=_safe_env(), cwd=td,
+                timeout=_PROBE_TIMEOUT_S, env=safe_subprocess_env(), cwd=td,
             )
         except (OSError, subprocess.SubprocessError):
             return False

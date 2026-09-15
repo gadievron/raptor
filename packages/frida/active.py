@@ -21,6 +21,7 @@ from pathlib import Path
 from core.logging import get_logger
 
 from .evidence import discover_evidence
+from core.security.env_sanitisation import safe_subprocess_env
 
 log = get_logger("frida.active")
 
@@ -31,21 +32,15 @@ _MAX_STDOUT_CAPTURE = 10 * 1024 * 1024  # 10MB cap on captured output
 
 
 def _safe_env() -> dict[str, str]:
-    """Build a safe subprocess environment via RaptorConfig.get_safe_env().
+    """Frida-CLI subprocess environment.
 
-    Falls back to a minimal env if RaptorConfig is unavailable (e.g., in
-    tests without full RAPTOR bootstrap).
+    Sanitised base from the shared fail-closed helper
+    (``safe_subprocess_env``), minus the target-facing strip set,
+    plus the RAPTOR runtime variables the hook pipeline itself needs
+    (the frida CLI is RAPTOR tooling, not the observed target — the
+    markers are re-added deliberately below).
     """
-    try:
-        from core.config import RaptorConfig
-        env = RaptorConfig.get_safe_env()
-    except (ImportError, AttributeError, TypeError):
-        env = {
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-            "HOME": os.environ.get("HOME", "/tmp"),
-            "LANG": os.environ.get("LANG", "C.UTF-8"),
-            "TERM": "dumb",
-        }
+    env = safe_subprocess_env()
     # Subtract the target-facing strip set (trust markers + the
     # session credential): several of its members sit on the safe-env
     # allowlist for RAPTOR's own tooling, but the process observed

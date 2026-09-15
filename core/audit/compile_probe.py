@@ -65,6 +65,7 @@ import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
+from core.security.env_sanitisation import safe_subprocess_env
 
 logger = logging.getLogger(__name__)
 
@@ -98,14 +99,6 @@ _TOOLCHAIN_LOCK = threading.Lock()
 _TOOLCHAIN_CACHE: dict[str, tuple[str, str] | None] = {}
 
 
-def _safe_env() -> dict | None:
-    try:
-        from core.config import RaptorConfig
-        return RaptorConfig.get_safe_env()
-    except ImportError:
-        return None
-
-
 def _reset_toolchain_cache() -> None:
     """Test hook."""
     with _TOOLCHAIN_LOCK:
@@ -131,14 +124,14 @@ def _find_toolchain(lang: str) -> tuple[str, str] | None:
             ok = subprocess.run(
                 [path, "-fsyntax-only", "-x", lang, os.devnull],
                 capture_output=True, text=True, check=False,
-                timeout=_PROBE_COMPILE_TIMEOUT_S, env=_safe_env(),
+                timeout=_PROBE_COMPILE_TIMEOUT_S, env=safe_subprocess_env(),
             )
             if ok.returncode != 0:
                 continue
             ver = subprocess.run(
                 [path, "--version"],
                 capture_output=True, text=True, check=False,
-                timeout=_PROBE_COMPILE_TIMEOUT_S, env=_safe_env(),
+                timeout=_PROBE_COMPILE_TIMEOUT_S, env=safe_subprocess_env(),
             )
             version = (ver.stdout or "").splitlines()[0].strip() if (
                 ver.stdout

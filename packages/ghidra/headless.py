@@ -14,6 +14,7 @@ from typing import Optional
 from .detect import get_project_dir, get_project_name
 from .export_script_java import EXPORT_SCRIPT_JAVA
 from .project_util import prepare_working_copy
+from core.security.env_sanitisation import safe_subprocess_env
 
 logger = logging.getLogger(__name__)
 
@@ -38,17 +39,14 @@ def _safe_env() -> dict:
 
     Sets ``GHIDRA_HEADLESS_MAXMEM`` to 4G if not already set — the
     default 2G is tight for large binaries with decompilation.
-    Falls back to ``os.environ.copy()`` if ``RaptorConfig`` isn't available.
+    The base comes from the shared fail-closed helper: when
+    ``RaptorConfig`` is unavailable the JVM gets a minimal
+    allowlisted environment, never the full caller environment
+    (which would hand API keys to a JVM that parses
+    attacker-controlled data and falsify the
+    ``env_caller_filtered=True`` assertion at the sandbox call).
     """
-    try:
-        from core.config import RaptorConfig
-        env = RaptorConfig.get_safe_env()
-    except Exception:
-        # Fail closed: a minimal PATH-only environment. Passing the
-        # full caller environment here would hand API keys to a JVM
-        # that parses attacker-controlled data (and would falsify the
-        # env_caller_filtered=True assertion at the sandbox call).
-        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+    env = safe_subprocess_env()
     env.setdefault("GHIDRA_HEADLESS_MAXMEM", "4G")
     return env
 

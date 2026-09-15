@@ -37,24 +37,9 @@ _TIMEOUT = 300
 
 
 import logging
+from core.security.env_sanitisation import safe_subprocess_env
 
 logger = logging.getLogger(__name__)
-
-
-def _safe_env() -> dict[str, str]:
-    try:
-        from core.config import RaptorConfig
-        return RaptorConfig.get_safe_env()
-    except (ImportError, AttributeError):
-        # Fail CLOSED: gcov/llvm-cov run over attacker-influenced
-        # build trees, and the repo rule is always-get_safe_env. If
-        # the config chokepoint is unavailable, hand subprocesses a
-        # minimal allowlisted env instead of the full inherited one.
-        keep = ("PATH", "HOME", "TMPDIR", "LANG", "TZ")
-        return {
-            k: v for k, v in os.environ.items()
-            if k in keep or k.startswith("LC_")
-        }
 
 
 # Per-.gcda cap on gcov report size. A legitimate report is
@@ -147,7 +132,7 @@ def collect_gcov(build_dir, env: dict[str, str] | None = None) -> dict[str, set[
     gcda = list(build.rglob("*.gcda"))
     if not gcda:
         return {}
-    env = dict(env) if env else _safe_env()
+    env = dict(env) if env else safe_subprocess_env()
     out: dict[str, set[int]] = {}
     for f in gcda:
         with tempfile.TemporaryDirectory(prefix="raptor-gcov-") as td:
@@ -192,7 +177,7 @@ def collect_llvm(binary, profdata, env: dict[str, str] | None = None) -> dict[st
     grant, the profdata's directory an extra readable path."""
     from .parsers import parse_lcov
 
-    env = dict(env) if env else _safe_env()
+    env = dict(env) if env else safe_subprocess_env()
     try:
         target = str(Path(binary).resolve().parent)
         prof_dir = str(Path(profdata).resolve().parent)
@@ -238,7 +223,7 @@ def collect_addr2line(binary, addresses, env: dict[str, str] | None = None) -> d
     addrs = [a for a in addresses if a is not None]
     if not addrs:
         return {}
-    env = dict(env) if env else _safe_env()
+    env = dict(env) if env else safe_subprocess_env()
     try:
         target = str(Path(binary).resolve().parent)
     except OSError:

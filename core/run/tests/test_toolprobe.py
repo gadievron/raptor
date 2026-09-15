@@ -58,6 +58,25 @@ class TestProbe:
             assert mock_env.called
             assert mock_run.call_args.kwargs["env"] == {"PATH": "/sanitised"}
 
+    def test_probe_env_fails_closed_without_core_config(self, monkeypatch):
+        # Pre-fix the probe's env helper returned None when
+        # core.config could not import — subprocess then INHERITED
+        # the caller's full environment (secrets and injection
+        # vectors included). The shared helper fails closed to a
+        # minimal allowlist instead; env= must never be None.
+        import sys as _sys
+        monkeypatch.setenv("SUPER_SECRET_API_KEY", "hunter2")
+        monkeypatch.setitem(_sys.modules, "core.config", None)
+        with patch("shutil.which", return_value="/opt/bin/sometool"), \
+                patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="", stderr="", returncode=0)
+            probe("sometool")
+            env = mock_run.call_args.kwargs["env"]
+            assert env is not None
+            assert "SUPER_SECRET_API_KEY" not in env
+            assert "PATH" in env
+
     def test_probe_failure_yields_toolinfo_not_raise(self):
         with patch("shutil.which", return_value="/opt/bin/sometool"), \
                 patch(

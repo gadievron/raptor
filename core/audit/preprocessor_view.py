@@ -57,6 +57,7 @@ from core.run.scratch import scratch_dir
 
 from ._util import safe_join
 from .compiler_sweep import _derive_include_dirs
+from core.security.env_sanitisation import safe_subprocess_env
 
 logger = logging.getLogger(__name__)
 
@@ -179,14 +180,6 @@ def _reset_probe_cache() -> None:
         _PROBE_CACHE.clear()
 
 
-def _safe_env() -> dict | None:
-    try:
-        from core.config import RaptorConfig
-        return RaptorConfig.get_safe_env()
-    except ImportError:
-        return None
-
-
 def _probe_ok(argv: list) -> bool:
     """Check the preprocessor accepts ``-E`` on RAPTOR-chosen input.
 
@@ -197,7 +190,7 @@ def _probe_ok(argv: list) -> bool:
     try:
         proc = subprocess.run(
             argv, capture_output=True, text=True, check=False,
-            timeout=_PROBE_TIMEOUT_S, env=_safe_env(),
+            timeout=_PROBE_TIMEOUT_S, env=safe_subprocess_env(),
         )
     except (OSError, subprocess.SubprocessError):
         return False
