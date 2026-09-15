@@ -262,6 +262,7 @@ class TestParsers:
         raw = (
             "RAPTOR_FLOW_FUNC:found\nRAPTOR_FLOW_SRC:1\n"
             "RAPTOR_FLOW_SNK:2\nRAPTOR_FLOW_COUNT:1\n"
+            "RAPTOR_FLOW_DEEP:0\n"
         )
         facts = _parse_flow_facts(raw)
         assert facts == {
@@ -269,6 +270,7 @@ class TestParsers:
             "source_count": 1,
             "sink_count": 2,
             "flow_count": 1,
+            "deep_callee_count": 0,
         }
 
     def test_flow_parse_empty(self):
@@ -456,13 +458,64 @@ class TestRunFlowReachability:
         assert r.outcome == "inconclusive"
 
     def test_no_flow_with_endpoints_present_refutes(self, tmp_path: Path):
+        # Refutation requires the depth-bound witness too: the call
+        # tree fully covered within the engine's maxCallDepth.
         raw = (
             "RAPTOR_FLOW_FUNC:found\nRAPTOR_FLOW_SRC:2\n"
             "RAPTOR_FLOW_SNK:1\nRAPTOR_FLOW_COUNT:0\n"
+            "RAPTOR_FLOW_DEEP:0\n"
         )
         r = self._run(tmp_path, FakeServer(raw))
         assert r.outcome == "refuted"
         assert r.details["source_count"] == 2
+        assert r.details["max_call_depth"] == 2
+        assert r.details["deep_callee_count"] == 0
+
+    def test_no_flow_with_deep_call_tree_is_inconclusive(
+        self, tmp_path: Path,
+    ):
+        # A genuine flow threaded through helpers nested past the
+        # engine's maxCallDepth produces the same zero-flow silence —
+        # depth-bounded silence must not read as a mechanical
+        # refutation.
+        raw = (
+            "RAPTOR_FLOW_FUNC:found\nRAPTOR_FLOW_SRC:2\n"
+            "RAPTOR_FLOW_SNK:1\nRAPTOR_FLOW_COUNT:0\n"
+            "RAPTOR_FLOW_DEEP:3\n"
+        )
+        r = self._run(tmp_path, FakeServer(raw))
+        assert r.outcome == "inconclusive"
+        assert "depth" in r.details["reason"]
+        assert r.details["deep_callee_count"] == 3
+        assert r.details["max_call_depth"] == 2
+
+    def test_no_flow_with_failed_depth_probe_is_inconclusive(
+        self, tmp_path: Path,
+    ):
+        # Probe failed (-1) or sentinel absent: an unverified silence
+        # never refutes.
+        for deep_line in ("RAPTOR_FLOW_DEEP:-1\n", ""):
+            raw = (
+                "RAPTOR_FLOW_FUNC:found\nRAPTOR_FLOW_SRC:2\n"
+                "RAPTOR_FLOW_SNK:1\nRAPTOR_FLOW_COUNT:0\n"
+                + deep_line
+            )
+            r = self._run(tmp_path, FakeServer(raw))
+            assert r.outcome == "inconclusive", deep_line
+            assert "depth" in r.details["reason"]
+
+    def test_flow_confirm_unaffected_by_deep_call_tree(
+        self, tmp_path: Path,
+    ):
+        # Confirm-direction is depth-safe: a found flow is a found
+        # flow.
+        raw = (
+            "RAPTOR_FLOW_FUNC:found\nRAPTOR_FLOW_SRC:1\n"
+            "RAPTOR_FLOW_SNK:1\n" + _flow_line()
+            + "\nRAPTOR_FLOW_COUNT:1\nRAPTOR_FLOW_DEEP:9\n"
+        )
+        r = self._run(tmp_path, FakeServer(raw))
+        assert r.outcome == "confirmed"
 
     def test_no_flow_missing_source_is_inconclusive(self, tmp_path: Path):
         raw = (

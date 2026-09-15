@@ -125,6 +125,10 @@ _FLOW_FUNC = "RAPTOR_FLOW_FUNC:"
 _FLOW_SRC = "RAPTOR_FLOW_SRC:"
 _FLOW_SNK = "RAPTOR_FLOW_SNK:"
 _FLOW_COUNT = "RAPTOR_FLOW_COUNT:"
+# Count of internal (CPG-resident) methods reachable one call level
+# BEYOND the engine's maxCallDepth — the depth-bound witness for the
+# refutation lane. -1 = probe failed (Try fallback).
+_FLOW_DEEP = "RAPTOR_FLOW_DEEP:"
 
 
 def normalize_cwe(cwe: str) -> str:
@@ -473,7 +477,37 @@ def build_flow_query(
         'raptorSinkArgs.reachableByFlows(raptorSources).take(20).l\n'
         f'{flow_print}'
         f'  println("{_FLOW_COUNT}" + raptorFlows.size)\n'
+        f'{_depth_probe_scala(int(max_call_depth))}'
         '}\n'
+    )
+
+
+def _depth_probe_scala(max_call_depth: int) -> str:
+    """Scala for the depth-bound witness: count internal methods one
+    call level beyond the engine's ``maxCallDepth`` horizon.
+
+    Zero flows is a refutation only within the engine's depth bound —
+    a genuine flow threaded through more nested helper calls is
+    invisible and produces the same silence. The probe walks the
+    static call tree ``max_call_depth + 1`` levels (internal callees
+    only; the bounded unroll tolerates recursion — a cycle just keeps
+    the frontier non-empty, which is exactly the depth-exceeded
+    answer). Wrapped in Try: a probe failure prints -1 and the
+    consumer refuses to refute rather than trusting an unverified
+    silence.
+    """
+    hop = (
+        "raptorLvl = raptorLvl.flatMap("
+        "_.call.callee.filterNot(_.isExternal).dedup.l).distinct\n"
+    )
+    return (
+        "  val raptorDeepCount = scala.util.Try {\n"
+        "    var raptorLvl = raptorFn.flatMap("
+        "_.call.callee.filterNot(_.isExternal).dedup.l).distinct\n"
+        + ("    " + hop) * max_call_depth
+        + "    raptorLvl.size\n"
+        "  }.getOrElse(-1)\n"
+        f'  println("{_FLOW_DEEP}" + raptorDeepCount)\n'
     )
 
 
@@ -543,6 +577,7 @@ def _parse_flow_facts(raw: str) -> dict[str, Any]:
         "source_count": None,
         "sink_count": None,
         "flow_count": None,
+        "deep_callee_count": None,
     }
     for line in _sentinel_lines(raw):
         idx = line.find(_FLOW_FUNC)
@@ -557,6 +592,7 @@ def _parse_flow_facts(raw: str) -> dict[str, Any]:
             (_FLOW_SRC, "source_count"),
             (_FLOW_SNK, "sink_count"),
             (_FLOW_COUNT, "flow_count"),
+            (_FLOW_DEEP, "deep_callee_count"),
         ):
             idx = line.find(marker)
             if idx >= 0:
@@ -906,6 +942,32 @@ def run_flow_reachability_check(
             },
         )
 
+    # Depth-bound witness: zero flows is only a refutation WITHIN the
+    # engine's maxCallDepth. When the static call tree descends past
+    # that horizon (or the probe failed), a genuine flow threaded
+    # through deeper helper calls would produce the same silence —
+    # inconclusive, never refuted. Confirm-direction is unaffected.
+    deep = facts.get("deep_callee_count")
+    if deep is None or deep < 0 or deep > 0:
+        why = (
+            f"call tree descends beyond the engine depth bound "
+            f"({deep} internal method(s) past maxCallDepth="
+            f"{max_call_depth})"
+            if deep is not None and deep > 0
+            else "depth-bound probe unavailable"
+        )
+        return _inconclusive(
+            tool_stamp, file_path, function_name,
+            f"no dataflow from {source_id!r} to {sink_bare!r} within "
+            f"engine depth {max_call_depth}, but {why} — depth-bounded "
+            f"silence cannot refute",
+            details={
+                "source_count": facts["source_count"],
+                "sink_count": facts["sink_count"],
+                "max_call_depth": max_call_depth,
+                "deep_callee_count": deep,
+            },
+        )
     return SweepResult(
         tool="joern",
         file_path=file_path,
@@ -916,9 +978,13 @@ def run_flow_reachability_check(
         details={
             "reason": (
                 f"no dataflow from {source_id!r} to {sink_bare!r} in "
-                f"{function_name!r} (both endpoints present in CPG)"
+                f"{function_name!r} (both endpoints present in CPG; "
+                f"call tree fully covered within maxCallDepth="
+                f"{max_call_depth})"
             ),
             "source_count": facts["source_count"],
             "sink_count": facts["sink_count"],
+            "max_call_depth": max_call_depth,
+            "deep_callee_count": deep,
         },
     )
