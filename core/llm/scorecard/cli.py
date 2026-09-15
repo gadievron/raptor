@@ -786,9 +786,14 @@ def cmd_chain_closure(args: argparse.Namespace) -> int:
             candidates.append(s)
 
     if not candidates:
+        # Honest remedy: the exploit-engine producer for this event
+        # type has not landed, so there is no flag or run that
+        # populates it yet — sending the operator to one is a wall.
         msg = (
             f"no chain-closure data for {target_dc!r} — nothing to rank. "
-            f"Fire /exploit with --scorecard <path> to populate."
+            f"The exploit-engine producer for exploit_chain_closure "
+            f"events is not wired in this tree yet; this view populates "
+            f"once it lands."
         )
         if getattr(args, "json", False):
             print(dumps_display({

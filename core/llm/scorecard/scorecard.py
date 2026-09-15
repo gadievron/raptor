@@ -156,23 +156,25 @@ class EventType:
     # :mod:`core.llm.semantic_entropy`.
     REASONING_DIVERGENCE = "reasoning_divergence"
     # IntentMatchJudge v1 verdict on whether an LLM-generated exploit
-    # targets the finding it was generated for. Producer:
-    # :mod:`packages.llm_analysis.intent_match`. Keyed by
-    # (generator_model, judge_model). ``correct`` = ``matches``
+    # targets the finding it was generated for. RESERVED — no producer
+    # writes it yet (packages.llm_analysis.intent_match exists but is
+    # not wired to the scorecard; the producer lands with the
+    # exploit-engine arc). Planned semantics: keyed by
+    # (generator_model, judge_model); ``correct`` = ``matches``
     # verdict; ``incorrect`` = ``off_target``; ``unknown`` =
     # ``uncertain`` (no calibrated answer). v1 is a weak signal —
     # heuristic-first with a 2-step LLM tiebreak, no ground-truth
     # calibration.
     EXPLOIT_INTENT_MATCH = "exploit_intent_match"
     # Terminal-fire chain-closure outcome from /exploit's engine.
-    # ``correct`` = engine verdict achieved (post-confirm-k, post-
-    # harness-side-channel demotion). ``incorrect`` = attempted +
-    # returned candidate code but couldn't achieve the goal on this
-    # target. Producer: ``packages.llm_analysis.exploit_engine.
-    # labeled_attempt_bridge.persist_engine_labeled_attempt``.
-    # Uncertain outcomes (budget cap, interrupt, no candidate) and
-    # HARNESS_SIDE_CHANNEL demotions are intentionally NOT recorded
-    # — they measure substrate limits, not model reliability.
+    # RESERVED — the producer lands with the exploit-engine arc; no
+    # module writes it yet. Planned semantics: ``correct`` = engine
+    # verdict achieved (post-confirm-k, post-harness-side-channel
+    # demotion). ``incorrect`` = attempted + returned candidate code
+    # but couldn't achieve the goal on this target. Uncertain outcomes
+    # (budget cap, interrupt, no candidate) and HARNESS_SIDE_CHANNEL
+    # demotions are intentionally NOT recorded — they measure
+    # substrate limits, not model reliability.
     EXPLOIT_CHAIN_CLOSURE = "exploit_chain_closure"
     # Per-call structured-output validity: did the response parse + match the
     # schema. ``correct`` = passed first time, ``incorrect`` = failed (the

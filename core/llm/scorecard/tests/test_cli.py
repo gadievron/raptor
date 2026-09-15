@@ -938,8 +938,9 @@ def test_chain_closure_scoped_to_specific_cwe(tmp_path):
 
 def test_chain_closure_empty_reports_clearly(tmp_path):
     """No chain-closure data → informational message to stderr,
-    exit 0 (informational, not error). Points operators at
-    --scorecard flag on /exploit."""
+    exit 0 (informational, not error). The message must be honest:
+    no producer for the event type is wired yet, so it must not send
+    the operator to a flag or run that cannot populate it."""
     ModelScorecard(tmp_path / "sc.json")
     rc, _, err = _capture(
         cli_mod.cmd_chain_closure,
@@ -947,7 +948,8 @@ def test_chain_closure_empty_reports_clearly(tmp_path):
     )
     assert rc == 0
     assert "no chain-closure data" in err
-    assert "/exploit with --scorecard" in err
+    assert "not wired" in err
+    assert "--scorecard" not in err
 
 
 def test_chain_closure_rate_zero_never_recommended(tmp_path):
