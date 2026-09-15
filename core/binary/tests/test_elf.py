@@ -117,17 +117,14 @@ class TestRealBinaryParse:
         assert len(meta.imports) > 10
 
     def test_parse_bin_ls_fast(self):
-        """Sub-50ms — generous bound that still catches a
-        regression to the slow path."""
-        import time
-        t0 = time.perf_counter()
-        meta = parse_elf(Path("/bin/ls"))
-        elapsed = time.perf_counter() - t0
+        """Sub-50ms of CPU — generous budget that still catches a
+        regression to the slow path. CPU, not wall: a 50ms wall
+        bound is one scheduler stall away from false-failing on a
+        loaded runner, while the slow-path regression burns CPU."""
+        from core.testing.wallclock import cpu_budget
+        with cpu_budget(0.05, what="native ELF parse of /bin/ls"):
+            meta = parse_elf(Path("/bin/ls"))
         assert meta is not None
-        assert elapsed < 0.05, (
-            f"native ELF parser took {elapsed*1000:.1f}ms — "
-            f"suggests regression to a non-stdlib path"
-        )
 
     def test_idempotent(self):
         """Same binary parsed twice → identical metadata.

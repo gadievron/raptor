@@ -653,16 +653,20 @@ class TestRealBinaryFingerprint:
         ls = Path("/bin/ls")
         if not ls.exists():
             pytest.skip("/bin/ls not present on host")
-        t0 = time.time()
+        t0 = time.monotonic()
         fp = capability_fingerprint(ls)
-        elapsed = time.time() - t0
+        elapsed = time.monotonic() - t0
         assert fp is not None
-        # Be generous — 30s leaves headroom for slow CI runners
-        # while still catching a regression to the multi-minute
-        # default-pipeline path.
-        assert elapsed < 30, (
-            f"quick fingerprint took {elapsed:.1f}s — likely "
-            f"regressed to the full-analysis pipeline"
+        # Quick mode runs in ~1-2s; the regression this pins (the
+        # full `aaa` pipeline) took 5+ minutes. 120s keeps >2x
+        # separation below the regression while giving a loaded
+        # runner real headroom over the healthy path — the r2 work
+        # happens in a child process, so a wall bound (not a CPU
+        # budget) is the only measurable quantity here.
+        from core.testing.wallclock import check_wall_deadline
+        check_wall_deadline(
+            elapsed, 120.0, code_bound_s=300.0,
+            what="quick-mode fingerprint of /bin/ls",
         )
         # Sanity-check the fingerprint shape
         assert fp.schema_version == FINGERPRINT_SCHEMA_VERSION
