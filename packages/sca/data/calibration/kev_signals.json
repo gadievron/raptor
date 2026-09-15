@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-09-08T10:15:53Z",
+    "fetched_at": "2026-09-15T10:40:09Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -1768,7 +1768,7 @@
       "date_added": "2021-11-03",
       "kev": true,
       "product": "Win32k",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Microsoft"
     },
     "CVE-2016-7256": {
@@ -3161,7 +3161,7 @@
       "date_added": "2021-11-03",
       "kev": true,
       "product": "Win32k",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Microsoft"
     },
     "CVE-2019-0863": {
@@ -7242,7 +7242,7 @@
       "date_added": "2022-10-20",
       "kev": true,
       "product": "Zimbra Collaboration Suite (ZCS)",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Synacor"
     },
     "CVE-2022-42475": {
@@ -9748,7 +9748,7 @@
       "date_added": "2025-12-19",
       "kev": true,
       "product": "Firebox",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "WatchGuard"
     },
     "CVE-2025-14847": {
@@ -10037,6 +10037,13 @@
       "product": "VeraCore",
       "ransomware_use": false,
       "vendor": "Advantive"
+    },
+    "CVE-2025-25249": {
+      "date_added": "2026-09-09",
+      "kev": true,
+      "product": "Multiple Products",
+      "ransomware_use": false,
+      "vendor": "Fortinet"
     },
     "CVE-2025-25257": {
       "date_added": "2025-07-18",
@@ -11053,10 +11060,24 @@
       "ransomware_use": false,
       "vendor": "N-able"
     },
+    "CVE-2026-19490": {
+      "date_added": "2026-09-09",
+      "kev": true,
+      "product": "NetScaler",
+      "ransomware_use": false,
+      "vendor": "Citrix"
+    },
     "CVE-2026-20045": {
       "date_added": "2026-01-21",
       "kev": true,
       "product": "Unified Communications Manager",
+      "ransomware_use": false,
+      "vendor": "Cisco"
+    },
+    "CVE-2026-20079": {
+      "date_added": "2026-09-09",
+      "kev": true,
+      "product": "Secure Firewall Management Center (FMC) and Security Cloud Control (SCC) Firewall Management",
       "ransomware_use": false,
       "vendor": "Cisco"
     },
@@ -11134,7 +11155,7 @@
       "date_added": "2026-07-29",
       "kev": true,
       "product": "Secure Firewall Management Center (FMC)",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Cisco"
     },
     "CVE-2026-20349": {
@@ -11473,6 +11494,20 @@
       "ransomware_use": true,
       "vendor": "WebPros"
     },
+    "CVE-2026-42016": {
+      "date_added": "2026-09-11",
+      "kev": true,
+      "product": "Artifactory",
+      "ransomware_use": false,
+      "vendor": "JFrog"
+    },
+    "CVE-2026-42018": {
+      "date_added": "2026-09-11",
+      "kev": true,
+      "product": "Artifactory",
+      "ransomware_use": false,
+      "vendor": "JFrog"
+    },
     "CVE-2026-42208": {
       "date_added": "2026-05-08",
       "kev": true,
@@ -11680,7 +11715,7 @@
       "date_added": "2026-08-18",
       "kev": true,
       "product": "VMware vCenter",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Broadcom"
     },
     "CVE-2026-59822": {
@@ -11739,6 +11774,13 @@
       "ransomware_use": false,
       "vendor": "JFrog"
     },
+    "CVE-2026-67277": {
+      "date_added": "2026-09-10",
+      "kev": true,
+      "product": "RouterOS",
+      "ransomware_use": false,
+      "vendor": "MikroTik"
+    },
     "CVE-2026-68820": {
       "date_added": "2026-08-11",
       "kev": true,
@@ -11788,6 +11830,20 @@
       "ransomware_use": false,
       "vendor": "Arista"
     },
+    "CVE-2026-75650": {
+      "date_added": "2026-09-08",
+      "kev": true,
+      "product": "Commerce and Magento",
+      "ransomware_use": false,
+      "vendor": "Adobe"
+    },
+    "CVE-2026-76461": {
+      "date_added": "2026-09-14",
+      "kev": true,
+      "product": "Secure Email Gateway",
+      "ransomware_use": false,
+      "vendor": "Cisco"
+    },
     "CVE-2026-8037": {
       "date_added": "2026-08-07",
       "kev": true,
@@ -11801,6 +11857,13 @@
       "product": "NG/MF",
       "ransomware_use": false,
       "vendor": "PaperCut"
+    },
+    "CVE-2026-81963": {
+      "date_added": "2026-09-08",
+      "kev": true,
+      "product": "Windows",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
     },
     "CVE-2026-82078": {
       "date_added": "2026-08-31",
@@ -11844,8 +11907,50 @@
       "ransomware_use": false,
       "vendor": "Citrix"
     },
+    "CVE-2026-84869": {
+      "date_added": "2026-09-11",
+      "kev": true,
+      "product": "ScreenConnect",
+      "ransomware_use": false,
+      "vendor": "ConnectWise"
+    },
     "CVE-2026-85046": {
       "date_added": "2026-09-04",
+      "kev": true,
+      "product": "Chromium V8",
+      "ransomware_use": false,
+      "vendor": "Google"
+    },
+    "CVE-2026-85706": {
+      "date_added": "2026-09-11",
+      "kev": true,
+      "product": "Community Edition and Enterprise Edition",
+      "ransomware_use": false,
+      "vendor": "GitLab"
+    },
+    "CVE-2026-85880": {
+      "date_added": "2026-09-08",
+      "kev": true,
+      "product": "Windows",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
+    },
+    "CVE-2026-86060": {
+      "date_added": "2026-09-10",
+      "kev": true,
+      "product": "RouterOS",
+      "ransomware_use": false,
+      "vendor": "MikroTik"
+    },
+    "CVE-2026-86218": {
+      "date_added": "2026-09-08",
+      "kev": true,
+      "product": "N-central",
+      "ransomware_use": false,
+      "vendor": "N-able"
+    },
+    "CVE-2026-87491": {
+      "date_added": "2026-09-09",
       "kev": true,
       "product": "Chromium V8",
       "ransomware_use": false,
