@@ -1199,3 +1199,84 @@ class TestCountResults(unittest.TestCase):
             count_results({"runs": ["corrupt", {"results": [{}]}]}), 1)
         self.assertEqual(
             count_results({"runs": [{"results": "corrupt"}]}), 0)
+
+
+class TestExtensionRules(unittest.TestCase):
+    """SARIF places pack-/plugin-provided rules on
+    tool.extensions[*].rules (CodeQL pack-based runs emit that layout).
+    A driver-only get_rules dropped their severity defaults and CWE
+    tags — every extension-ruled result flattened to warning with no
+    CWE mapping."""
+
+    @staticmethod
+    def _extensions_shaped(results, ext_rules, driver_rules=None):
+        return {
+            "version": "2.1.0",
+            "runs": [{
+                "tool": {
+                    "driver": {
+                        "name": "codeql",
+                        "rules": driver_rules or [],
+                    },
+                    "extensions": [{
+                        "name": "codeql/python-queries",
+                        "rules": ext_rules,
+                    }],
+                },
+                "results": results,
+            }],
+        }
+
+    def test_get_rules_unions_extensions(self):
+        from core.sarif.parser import get_rules
+
+        run = self._extensions_shaped(
+            [], [{"id": "py/sql-injection"}],
+            driver_rules=[{"id": "drv-rule"}],
+        )["runs"][0]
+        rules = get_rules(run)
+        self.assertIn("py/sql-injection", rules)
+        self.assertIn("drv-rule", rules)
+
+    def test_get_rules_driver_wins_id_collision(self):
+        from core.sarif.parser import get_rules
+
+        run = self._extensions_shaped(
+            [],
+            [{"id": "shared", "defaultConfiguration": {"level": "note"}}],
+            driver_rules=[
+                {"id": "shared", "defaultConfiguration": {"level": "error"}},
+            ],
+        )["runs"][0]
+        rules = get_rules(run)
+        self.assertEqual(
+            rules["shared"]["defaultConfiguration"]["level"], "error",
+        )
+
+    def test_extension_rule_severity_and_cwe_join(self):
+        """A level-less result whose ruleId is defined only on an
+        extension component inherits that rule's severity and CWE."""
+        from core.sarif.parser import parse_sarif_findings
+
+        r = _result(rule_id="py/sql-injection")
+        del r["level"]
+        sarif = self._extensions_shaped(
+            [r],
+            [{
+                "id": "py/sql-injection",
+                "defaultConfiguration": {"level": "error"},
+                "properties": {"tags": ["external/cwe/cwe-089"]},
+            }],
+        )
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".sarif", delete=False,
+        ) as fh:
+            json.dump(sarif, fh)
+            path = Path(fh.name)
+        try:
+            findings = parse_sarif_findings(path)
+        finally:
+            path.unlink()
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["level"], "error")
+        self.assertEqual(findings[0]["cwe_id"], "CWE-89")

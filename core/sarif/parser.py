@@ -573,17 +573,38 @@ def get_tool_name(run: dict[str, Any]) -> str:
 def get_rules(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Extract rules from a SARIF run, keyed by rule ID.
 
+    Rules are collected from ``tool.driver.rules`` AND every
+    ``tool.extensions[*].rules`` array: SARIF places pack-/plugin-
+    provided rules on extension toolComponents (CodeQL's pack-based
+    runs emit that layout), and a driver-only read silently dropped
+    their severity defaults and CWE tags — every such result flattened
+    to "warning" with no CWE mapping. On an id collision the driver's
+    definition wins (extensions are secondary components). Results
+    that reference extension rules by ``ruleIndex``/
+    ``rule.toolComponent.index`` WITHOUT a ``ruleId`` string still
+    don't join (the result-side lookup is keyed on ruleId only).
+
     Non-object rules and non-string rule ids (spec violations in
     untrusted SARIF) are dropped rather than crashing the parse."""
-    driver = _as_dict(_as_dict(run.get("tool")).get("driver"))
-    rules = driver.get("rules")
-    if not isinstance(rules, list):
-        return {}
-    return {
-        r["id"]: r
-        for r in rules
-        if isinstance(r, dict) and isinstance(r.get("id"), str) and r["id"]
-    }
+    tool = _as_dict(run.get("tool"))
+
+    def _component_rules(component: Any) -> dict[str, dict[str, Any]]:
+        rules = _as_dict(component).get("rules")
+        if not isinstance(rules, list):
+            return {}
+        return {
+            r["id"]: r
+            for r in rules
+            if isinstance(r, dict) and isinstance(r.get("id"), str) and r["id"]
+        }
+
+    out: dict[str, dict[str, Any]] = {}
+    extensions = tool.get("extensions")
+    if isinstance(extensions, list):
+        for ext in extensions:
+            out.update(_component_rules(ext))
+    out.update(_component_rules(tool.get("driver")))
+    return out
 
 
 def rule_default_level(rule: dict[str, Any]) -> str | None:
