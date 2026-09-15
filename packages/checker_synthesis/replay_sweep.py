@@ -98,6 +98,10 @@ class SweepReport:
     matches: list[SweepMatch] = field(default_factory=list)
     capped: dict[str, int] = field(default_factory=dict)  # "rule@target" -> dropped
     errors: list[str] = field(default_factory=list)
+    # "rule@target" keys whose engine run ERRORED but still produced
+    # matches — the matches are reported (flagged partial here), only
+    # the coverage recording is skipped.
+    partial: list[str] = field(default_factory=list)
     cocci_skipped_targets: list[str] = field(default_factory=list)
     recorded_updates: int = 0
 
@@ -112,6 +116,7 @@ class SweepReport:
             "total_matches": len(self.matches),
             "capped": self.capped,
             "errors": self.errors,
+            "partial": self.partial,
             "cocci_skipped_targets": self.cocci_skipped_targets,
             "recorded_updates": self.recorded_updates,
         }
@@ -207,20 +212,26 @@ def _sweep_semgrep_rule(
     tier: str,
     tp_rate: float | None,
     targets_tested: int,
-) -> list[SweepMatch] | None:
+) -> tuple[list[SweepMatch], bool]:
     """Run one semgrep library rule against *target*.
 
-    Returns the (capped) matches, or ``None`` when the engine
-    errored — an errored run is NOT a zero-match run and must never
-    become coverage evidence (see the ``None`` handling in
-    ``run_sweep``). The error is recorded on ``report.errors``.
+    Returns ``(matches, engine_errored)``. An errored run is NOT a
+    zero-match run and must never become coverage evidence (see the
+    ``engine_errored`` handling in ``run_sweep``), but the matches
+    the rule DID produce before/around the error (fatal per-file
+    failures land in ``errors`` alongside real findings on large
+    targets) are still worth reporting — they are returned flagged
+    partial instead of being discarded with the failure. The error
+    is recorded on ``report.errors``.
     """
     result = semgrep_runner.run_rule(target, str(rule_path), name=rule_id)
-    if result.errors:
+    errored = bool(result.errors)
+    if errored:
         report.errors.extend(
             f"semgrep {rule_id} @ {target}: {e}" for e in result.errors
         )
-        return None
+        if result.findings:
+            report.partial.append(f"{rule_id}@{target}")
     hits = _cap(report, rule_id, target, result.findings)
     return [
         SweepMatch(
@@ -237,7 +248,7 @@ def _sweep_semgrep_rule(
             targets_tested=targets_tested,
         )
         for f in hits
-    ]
+    ], errored
 
 
 def _sweep_cocci_rule(
@@ -251,15 +262,17 @@ def _sweep_cocci_rule(
     targets_tested: int,
     provenance: str = "rule-library",
     tier: str = "library",
-) -> list[SweepMatch] | None:
+) -> tuple[list[SweepMatch], bool]:
     """Coccinelle counterpart to ``_sweep_semgrep_rule`` — same
-    ``None``-on-engine-error contract."""
+    ``(matches, engine_errored)`` contract."""
     result = cocci_runner.run_rule(target, rule_path, no_includes=True)
-    if result.errors:
+    errored = bool(result.errors)
+    if errored:
         report.errors.extend(
             f"coccinelle {rule_id} @ {target}: {e}" for e in result.errors
         )
-        return None
+        if result.matches:
+            report.partial.append(f"{rule_id}@{target}")
     hits = _cap(report, rule_id, target, result.matches)
     return [
         SweepMatch(
@@ -276,7 +289,7 @@ def _sweep_cocci_rule(
             targets_tested=targets_tested,
         )
         for m in hits
-    ]
+    ], errored
 
 
 def _record(
@@ -298,12 +311,16 @@ def _record(
     only hit-targets).
 
     Engine-ERRORED runs never reach this function: a target the
-    engine could not scan proves nothing (same fail-closed stance as
-    synthesis's fixture handling), so the sweep runners return
-    ``None`` and ``run_sweep`` skips both the match extend and this
-    record — the failure lives on ``report.errors`` (one explicit
-    entry per rule@target) instead of becoming zero-match coverage
-    that inflates targets_tested and feeds auto-archive.
+    engine could not fully scan proves nothing about coverage (same
+    fail-closed stance as synthesis's fixture handling), so
+    ``run_sweep`` skips this record when the runner flags
+    ``engine_errored`` — the failure lives on ``report.errors`` (one
+    explicit entry per rule@target) instead of becoming zero-match
+    coverage that inflates targets_tested and feeds auto-archive.
+    The matches such a run DID produce still flow to
+    ``report.matches`` (flagged on ``report.partial``): reporting is
+    not coverage, and discarding real hits over one fatal per-file
+    failure silently cost every variant hit on large targets.
     """
     entry = lib.update(
         rule_id,
@@ -398,7 +415,7 @@ def run_sweep(
                     f"({rule_path})"
                 )
                 continue
-            matches = _sweep_semgrep_rule(
+            matches, errored = _sweep_semgrep_rule(
                 report, target, rule_path,
                 rule_id=entry.rule_id,
                 cwe=entry.cwe,
@@ -407,10 +424,10 @@ def run_sweep(
                 tp_rate=entry.tp_rate,
                 targets_tested=len(entry.targets),
             )
-            if matches is None:
-                continue  # engine error — recorded on report.errors
             report.matches.extend(matches)
-            if record:
+            if record and not errored:
+                # Errored runs are never coverage evidence — the
+                # failure is on report.errors, matches flow above.
                 _record(lib, report, entry.rule_id, target, matches,
                         timestamp)
 
@@ -423,17 +440,15 @@ def run_sweep(
                         f"({rule_path})"
                     )
                     continue
-                matches = _sweep_cocci_rule(
+                matches, errored = _sweep_cocci_rule(
                     report, target, rule_path,
                     rule_id=entry.rule_id,
                     cwe=entry.cwe,
                     tp_rate=entry.tp_rate,
                     targets_tested=len(entry.targets),
                 )
-                if matches is None:
-                    continue  # engine error — recorded on report.errors
                 report.matches.extend(matches)
-                if record:
+                if record and not errored:
                     _record(lib, report, entry.rule_id, target, matches,
                             timestamp)
 
@@ -445,7 +460,7 @@ def run_sweep(
                 (e for e in lib.all_entries() if e.rule_id == rule_id),
                 None,
             )
-            matches = _sweep_semgrep_rule(
+            matches, errored = _sweep_semgrep_rule(
                 report, target, rule_file,
                 rule_id=rule_id,
                 cwe=entry.cwe if entry else "",
@@ -454,10 +469,8 @@ def run_sweep(
                 tp_rate=entry.tp_rate if entry else None,
                 targets_tested=len(entry.targets) if entry else 0,
             )
-            if matches is None:
-                continue  # engine error — recorded on report.errors
             report.matches.extend(matches)
-            if record and rule_id in library_rule_ids:
+            if record and not errored and rule_id in library_rule_ids:
                 _record(lib, report, rule_id, target, matches, timestamp)
 
         if target_is_c:
@@ -469,7 +482,7 @@ def run_sweep(
                     (e for e in lib.all_entries() if e.rule_id == rule_id),
                     None,
                 )
-                matches = _sweep_cocci_rule(
+                matches, errored = _sweep_cocci_rule(
                     report, target, rule_file,
                     rule_id=rule_id,
                     cwe=entry.cwe if entry else "",
@@ -478,10 +491,8 @@ def run_sweep(
                     provenance="graduated",
                     tier="graduated",
                 )
-                if matches is None:
-                    continue  # engine error — recorded on report.errors
                 report.matches.extend(matches)
-                if record and rule_id in library_rule_ids:
+                if record and not errored and rule_id in library_rule_ids:
                     _record(lib, report, rule_id, target, matches, timestamp)
 
     return report

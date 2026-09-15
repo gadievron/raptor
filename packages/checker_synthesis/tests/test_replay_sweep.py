@@ -333,6 +333,30 @@ class TestRecording:
         assert len(entry.targets) == 1  # original only — no sweep record
         assert (lib_dir / "manifest.json").read_text() == before
 
+    def test_errored_run_keeps_matches_but_records_no_coverage(
+        self, tmp_path, monkeypatch,
+    ):
+        # One fatal per-file failure on a large target must not
+        # discard every match the rule DID produce: the matches stay
+        # in the report (flagged partial), only the coverage
+        # recording is skipped — an errored run is not evidence.
+        lib_dir = _write_library(tmp_path, [_manifest_entry("sg")])
+        before = (lib_dir / "manifest.json").read_text()
+        target = tmp_path / "t"
+        target.mkdir()
+        partial = _semgrep_result(2, rule_id="sg")
+        partial.errors = ["fatal: src/broken.c parse failure"]
+        monkeypatch.setattr(
+            rs.semgrep_runner, "run_rule", lambda *a, **k: partial,
+        )
+        report = rs.run_sweep([target], library_dir=lib_dir, record=True)
+        assert len(report.matches) == 2
+        assert report.partial == [f"sg@{target}"]
+        assert len(report.errors) == 1
+        # No coverage: no recorded update, manifest untouched.
+        assert report.recorded_updates == 0
+        assert (lib_dir / "manifest.json").read_text() == before
+
     def test_cocci_errored_run_records_no_coverage(
         self, tmp_path, monkeypatch,
     ):
