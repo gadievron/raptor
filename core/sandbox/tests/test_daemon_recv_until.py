@@ -10,12 +10,12 @@ and returned nothing, even though the bytes had already arrived.
 
 import subprocess
 import sys
-import time
 
 from core.sandbox import _daemon
+from core.testing.wallclock import wall_deadline
 
 
-def _spawn_writer(payload: str, hold_open_s: float = 10.0):
+def _spawn_writer(payload: str, hold_open_s: float = 180.0):
     """Child writes *payload* to stdout in one burst, then idles."""
     code = (
         "import sys, time\n"
@@ -40,13 +40,17 @@ def test_recv_until_fixed_length_sees_bytes_beyond_first_read():
     """
     proc = _spawn_writer("ABCDEFGH")
     try:
-        first = _daemon._recv_until(proc, 4, per_recv_timeout=5.0)
+        first = _daemon._recv_until(proc, 4, per_recv_timeout=60.0)
         assert first == b"ABCD"
-        t0 = time.monotonic()
-        second = _daemon._recv_until(proc, 4, per_recv_timeout=5.0)
-        elapsed = time.monotonic() - t0
-        assert second == b"EFGH"
-        assert elapsed < 2.0, (
+        # The per-recv timeout (and the writer's hold-open) sit far
+        # past the assert bound: a stalled second recv either serves
+        # the 60s timeout or recovers at pipe EOF (180s) — both are
+        # unambiguously beyond the 20s prompt-return window even on a
+        # heavily loaded runner.
+        with wall_deadline(20.0, code_bound_s=60.0,
+                           what="second recv"):
+            second = _daemon._recv_until(proc, 4, per_recv_timeout=60.0)
+        assert second == b"EFGH", (
             "second recv stalled — bytes stranded in a Python-level "
             "buffer invisible to select()"
         )
@@ -60,16 +64,17 @@ def test_recv_until_newline_then_fixed_length():
     not strand the post-newline bytes."""
     proc = _spawn_writer("header\nBODY")
     try:
-        line = _daemon._recv_until(proc, "newline", per_recv_timeout=5.0)
+        line = _daemon._recv_until(proc, "newline", per_recv_timeout=60.0)
         assert line.startswith(b"header\n")
         already = line[len(b"header\n"):]
         want = 4 - len(already)
         if want > 0:
-            t0 = time.monotonic()
-            rest = _daemon._recv_until(proc, want, per_recv_timeout=5.0)
-            elapsed = time.monotonic() - t0
+            # Separation as in the fixed-length test above.
+            with wall_deadline(20.0, code_bound_s=60.0,
+                               what="post-newline recv"):
+                rest = _daemon._recv_until(
+                    proc, want, per_recv_timeout=60.0)
             assert already + rest == b"BODY"
-            assert elapsed < 2.0
     finally:
         proc.kill()
         proc.communicate(timeout=5)

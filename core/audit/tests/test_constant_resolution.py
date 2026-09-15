@@ -10,10 +10,10 @@ Adversarial tests from the safety contract's documented blind spots:
 
 from __future__ import annotations
 
-import time
-
 import pytest
 from pathlib import Path
+
+from core.testing.wallclock import cpu_budget
 
 from core.audit.constant_resolution import (
     build_unique_constants,
@@ -139,9 +139,10 @@ class TestEvaluationCaps:
     quickly instead of forcing a huge bigint."""
 
     def test_huge_shift_returns_none_quickly(self):
-        t0 = time.monotonic()
-        assert _try_evaluate("(1<<999999999999)") is None
-        assert time.monotonic() - t0 < 1.0
+        # CPU budget, not wall clock: the pin is "no bigint work",
+        # which burns CPU; a loaded runner stalls wall time only.
+        with cpu_budget(1.0, what="huge-shift evaluation"):
+            assert _try_evaluate("(1<<999999999999)") is None
 
     def test_shift_past_cap(self):
         assert _try_evaluate("1 << 257") is None
@@ -182,10 +183,10 @@ class TestTryEvaluateBounds:
     resolve truth values as constants."""
 
     def test_hex_shift_bomb_returns_none_quickly(self):
-        import time
-        start = time.monotonic()
-        assert _try_evaluate("1<<0x7fffffff") is None
-        assert time.monotonic() - start < 1.0
+        # CPU budget, not wall clock — see
+        # test_huge_shift_returns_none_quickly.
+        with cpu_budget(1.0, what="hex-shift-bomb evaluation"):
+            assert _try_evaluate("1<<0x7fffffff") is None
 
     def test_decimal_shift_bomb(self):
         assert _try_evaluate("(1<<999999999999)") is None

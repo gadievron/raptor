@@ -16,6 +16,7 @@ Coverage priorities, most-important-first:
 """
 
 from core.json.tolerant import parse_llm_json
+from core.testing.wallclock import cpu_budget
 
 # ─────────────────────────────────────────────────────────────────
 # Naturalistic capture — a plausible model output shape.
@@ -479,25 +480,21 @@ class TestNeverRaises:
         hard reject with a diagnostic — the caller sees exactly what
         happened, no ambiguity."""
         text = "{" * (2 * 1024 * 1024)  # 2 MiB of open braces
-        import time
-        t0 = time.perf_counter()
-        parsed, diag = parse_llm_json(text)
-        elapsed = time.perf_counter() - t0
+        # CPU budget, not wall clock: the hang this pins burns CPU.
+        with cpu_budget(0.5, what="parse of capped input"):
+            parsed, diag = parse_llm_json(text)
         assert parsed is None
         assert diag.strategy == "failed"
         assert "cap" in (diag.final_error or "")
-        assert elapsed < 0.5, f"parser took {elapsed:.2f}s on capped input"
 
     def test_deeply_nested_braces_below_cap_dont_hang(self):
         """Even under the cap, a hostile deeply-nested input should
         finish in linear time thanks to the single-pass walker."""
         text = "{" * 10_000 + "}" * 10_000
-        import time
-        t0 = time.perf_counter()
-        _parsed, diag = parse_llm_json(text, require_object=False)
-        elapsed = time.perf_counter() - t0
-        # May or may not parse as strict; must not hang.
-        assert elapsed < 0.5, f"nested-brace parser took {elapsed:.2f}s"
+        # May or may not parse as strict; must not hang. CPU budget,
+        # not wall clock: superlinear parsing burns CPU.
+        with cpu_budget(0.5, what="nested-brace parse"):
+            _parsed, diag = parse_llm_json(text, require_object=False)
         # Should complete with SOME diagnostic.
         assert diag.strategy in {
             "strict", "fence", "brace_span", "quasi_json_fixup", "failed",
@@ -509,11 +506,10 @@ class TestNeverRaises:
         catastrophic backtracking. Verify with hostile input a real
         model would never emit: dozens of nearly-matching openers."""
         text = ("```json\n" * 500) + '{"ok": 1}\n```'
-        import time
-        t0 = time.perf_counter()
-        parsed, _ = parse_llm_json(text)
-        elapsed = time.perf_counter() - t0
-        assert elapsed < 0.5, f"fence regex took {elapsed:.2f}s on hostile input"
+        # CPU budget, not wall clock: catastrophic backtracking is a
+        # CPU signature.
+        with cpu_budget(0.5, what="fence regex on hostile input"):
+            parsed, _ = parse_llm_json(text)
         # We don't assert on parsed result — either the first fence
         # matched or the parser fell through to brace_span. Either
         # way, it must not hang.
@@ -614,26 +610,22 @@ class TestFenceScan:
         """200 KB of newline/space runs after a fence open with no
         close — the old lazy-body regex burned seconds-to-minutes of
         CPU here (quadratic close-scan restarts); the linear scan must
-        finish effectively instantly. Generous 5s bound for slow CI."""
-        import time
+        finish effectively instantly. CPU budget (generous 5s): the
+        quadratic restarts burn CPU, which load cannot fake."""
         text = "```json\n" + (" \n \n  " * 40_000)  # ~200 KB, no close
         assert len(text) > 200_000
-        t0 = time.perf_counter()
-        parsed, diag = parse_llm_json(text)
-        elapsed = time.perf_counter() - t0
-        assert elapsed < 5.0, f"fence scan took {elapsed:.2f}s on hostile input"
+        with cpu_budget(5.0, what="fence scan on open-without-close"):
+            parsed, diag = parse_llm_json(text)
         assert parsed is None
         assert diag.strategy == "failed"
 
     def test_adversarial_many_near_openers_linear_time(self):
         """Many opener-shaped lines with whitespace padding and no
-        parseable payload — must also stay linear."""
-        import time
+        parseable payload — must also stay linear. CPU budget:
+        see the sibling above."""
         text = ("```x\n" + " " * 40 + "\n") * 4_000  # ~200 KB
-        t0 = time.perf_counter()
-        parse_llm_json(text)
-        elapsed = time.perf_counter() - t0
-        assert elapsed < 5.0, f"fence scan took {elapsed:.2f}s on hostile input"
+        with cpu_budget(5.0, what="fence scan on near-openers"):
+            parse_llm_json(text)
 
 
 class TestRecursionBombContract:

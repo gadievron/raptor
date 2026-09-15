@@ -19,6 +19,8 @@ import types
 
 import pytest
 
+from core.testing.wallclock import wall_deadline
+
 from core.audit.orchestrator import (
     OrchestratorConfig,
     OrchestratorResult,
@@ -66,12 +68,13 @@ class TestStudyQueueStop:
     def test_dequeue_returns_immediately_after_stop(self):
         q = StudyQueue()
         q.request_stop()
-        t0 = time.monotonic()
-        batch = q.dequeue_batch(timeout=30.0)
+        # The regression is the dequeue serving its full 300s timeout
+        # despite the stop; 10s of load headroom stays unambiguously
+        # on the prompt-return side of that bound.
+        with wall_deadline(10.0, code_bound_s=300.0,
+                           what="dequeue after stop"):
+            batch = q.dequeue_batch(timeout=300.0)
         assert batch == []
-        assert time.monotonic() - t0 < 1.0, (
-            "dequeue must not block once a stop was requested"
-        )
 
     def test_stop_wakes_a_blocked_dequeue(self):
         q = StudyQueue()

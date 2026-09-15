@@ -10,8 +10,6 @@ safe on a large or hostile tree.
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
 from core.audit.gaps import (
@@ -22,6 +20,7 @@ from core.audit.gaps import (
     read_gap_source,
 )
 from core.audit.negative_space import discover_conventions
+from core.testing.wallclock import cpu_budget
 
 # Matches _GENERIC_PATTERNS[CONCERN_AUTH]; four occurrences clear
 # MIN_CONVENTION_OCCURRENCES so a convention is actually discovered.
@@ -220,14 +219,12 @@ class TestScalesToManySpans:
     def test_many_spans_over_a_large_file_is_fast(self, tmp_path):
         (tmp_path / "f.py").write_text("x = 1\n" * 200_000)
         spans = [(i * 10 + 1, i * 10 + 5) for i in range(2000)]
-        started = time.monotonic()
-        got = _read_spans(tmp_path, "f.py", spans)
-        elapsed = time.monotonic() - started
+        # CPU budget, not wall clock: the per-line-per-span scan burns
+        # ~0.7s of CPU here, the sweep ~0.005s — the quadratic
+        # regression is a CPU signature a scheduler stall can't fake.
+        with cpu_budget(1.0, what="many-spans sweep"):
+            got = _read_spans(tmp_path, "f.py", spans)
         assert len(got) == 2000
-        # The per-line-per-span scan takes ~0.7s here; the sweep ~0.005s.
-        # 1.0s gives loaded CI runners headroom while still catching
-        # the quadratic O(lines x spans) regression.
-        assert elapsed < 1.0, f"took {elapsed:.3f}s — sweep may have regressed"
 
 
 class TestMalformedInputIsSurvivable:

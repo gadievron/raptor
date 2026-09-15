@@ -10,9 +10,8 @@ between sites, so one pathological condition stalled the harness.
 
 from __future__ import annotations
 
-import time
-
 from core.audit.protocol_state import _bare_fields
+from core.testing.wallclock import cpu_budget
 
 
 class TestBareFieldsSemantics:
@@ -47,23 +46,23 @@ class TestBareFieldsSemantics:
 
 
 class TestBareFieldsTiming:
+    # CPU budgets, not wall clock: these pin the superlinear-
+    # backtracking regression, which burns CPU — a loaded runner
+    # stalls wall time without burning any.
     def test_long_chain_with_match_is_fast(self):
         text = "a." * 16000 + "name"  # ~32k chars
-        t0 = time.monotonic()
-        out = _bare_fields(text, {"name"})
-        assert time.monotonic() - t0 < 1.0
+        with cpu_budget(1.0, what="long-chain substitution"):
+            out = _bare_fields(text, {"name"})
         assert out == "name"
 
     def test_long_chain_without_match_is_fast(self):
         text = "a." * 16000 + "other"
-        t0 = time.monotonic()
-        out = _bare_fields(text, {"name"})
-        assert time.monotonic() - t0 < 1.0
+        with cpu_budget(1.0, what="long-chain substitution"):
+            out = _bare_fields(text, {"name"})
         assert out == text
 
     def test_repeated_name_chain_is_fast(self):
         text = "name." * 6000 + "name"
-        t0 = time.monotonic()
-        out = _bare_fields(text, {"name"})
-        assert time.monotonic() - t0 < 1.0
+        with cpu_budget(1.0, what="repeated-name substitution"):
+            out = _bare_fields(text, {"name"})
         assert out == "name"

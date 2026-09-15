@@ -4,6 +4,8 @@ import asyncio
 import threading
 import time
 
+from core.testing.wallclock import wall_deadline
+
 from core.audit.orchestrator import (
     ConceptIndex,
     StudyQueue,
@@ -64,11 +66,13 @@ class TestStudyQueue:
 
     def test_dequeue_timeout_empty(self):
         q = StudyQueue()
-        t0 = time.monotonic()
-        batch = q.dequeue_batch(max_items=10, timeout=0.1)
-        elapsed = time.monotonic() - t0
+        # The regression is an ignored timeout (blocking until a
+        # producer signal that never comes) — generous wall headroom
+        # over the 0.1s timeout still catches that unambiguously.
+        with wall_deadline(5.0, code_bound_s=float("inf"),
+                           what="empty dequeue with 0.1s timeout"):
+            batch = q.dequeue_batch(max_items=10, timeout=0.1)
         assert batch == []
-        assert elapsed < 1.0
 
     def test_signal_producer_done_wakes_waiter(self):
         q = StudyQueue()

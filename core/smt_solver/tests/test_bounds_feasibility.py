@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sys
-import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,19 +15,20 @@ from core.smt_solver.bounds_feasibility import (
     _BOUNDS_CONDITION_RE,
     check_bounds_infeasible,
 )
+from core.testing.wallclock import cpu_budget
 
-# Generous wall-clock budget: the current pattern finishes in well under
-# 10ms on every adversarial input below; the previous pattern (three
-# sequential [^)]* segments) backtracked super-linearly (cubic) and
-# needed ~27s on the 8KB case.
+# CPU budget, not wall clock: the current pattern finishes in well
+# under 10ms on every adversarial input below; the previous pattern
+# (three sequential [^)]* segments) backtracked super-linearly (cubic)
+# and needed ~27s on the 8KB case. Backtracking burns CPU, which a
+# loaded runner cannot fake the way it inflates wall time.
 _TIME_BUDGET_S = 2.0
 
 
 def _assert_scans_fast(source: str) -> None:
-    start = time.perf_counter()
-    matches = list(_BOUNDS_CONDITION_RE.finditer(source))
-    elapsed = time.perf_counter() - start
-    assert elapsed < _TIME_BUDGET_S, f"regex took {elapsed:.2f}s on {len(source)}B input"
+    with cpu_budget(_TIME_BUDGET_S,
+                    what=f"regex scan of {len(source)}B input"):
+        matches = list(_BOUNDS_CONDITION_RE.finditer(source))
     assert matches == []
 
 
@@ -117,11 +117,9 @@ class TestCheckBoundsInfeasible:
 
     def test_pathological_source_returns_none_quickly(self):
         source = "if (" + "len< " * 1600
-        start = time.perf_counter()
-        result = check_bounds_infeasible(source, "CWE-120")
-        elapsed = time.perf_counter() - start
+        with cpu_budget(_TIME_BUDGET_S, what="pathological-source check"):
+            result = check_bounds_infeasible(source, "CWE-120")
         assert result is None
-        assert elapsed < _TIME_BUDGET_S
 
     def test_refuses_to_conjoin_distinct_guards(self):
         """Multiple DISTINCT guards carry no path structure — they may

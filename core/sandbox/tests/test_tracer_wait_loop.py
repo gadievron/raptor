@@ -40,6 +40,7 @@ from pathlib import Path
 
 import pytest
 from core.sandbox.tests.capability import requires_landlock
+from core.testing.wallclock import check_wall_deadline
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux",
@@ -89,7 +90,7 @@ if pid == 0:
     time.sleep(0.2)
     os._exit(0)
 t0 = time.monotonic()
-_idle_wait_for_sigchld(5.0)
+_idle_wait_for_sigchld(120.0)
 elapsed = time.monotonic() - t0
 os.waitpid(pid, 0)
 print(f"ELAPSED={elapsed:.3f}")
@@ -143,12 +144,14 @@ class TestIdleWaitForSigchld:
 
     def test_wakes_on_child_exit_before_tick(self):
         """A child state change must wake the wait immediately — NOT on
-        the next tick. Pre-fix equivalent (plain sleep) would hold the
-        full tick; with a 5s tick that difference is unmistakable."""
+        the next tick. The probe's 120s tick sits far past the assert
+        bound (and past the probe's own 30s subprocess timeout), so a
+        regressed tick-bound sleep is unmistakable while a loaded
+        runner's stall stays inside the margin."""
         elapsed = _run_single_threaded(_SUBPROC_WAKE_ON_EXIT)
-        assert elapsed < 3.0, (
-            f"idle wait held {elapsed:.2f}s despite a child exiting at "
-            f"0.2s — event-driven wakeup regressed to tick-bound sleep"
+        check_wall_deadline(
+            elapsed, 15.0, code_bound_s=120.0,
+            what="idle wait with a child exiting at 0.2s",
         )
 
     def test_pending_sigchld_returns_immediately(self):
@@ -156,9 +159,9 @@ class TestIdleWaitForSigchld:
         entered (between the caller's WNOHANG drain and the wait) must
         be seen as pending and return immediately."""
         elapsed = _run_single_threaded(_SUBPROC_PENDING)
-        assert elapsed < 1.0, (
-            f"idle wait held {elapsed:.2f}s with SIGCHLD already "
-            f"pending — the no-lost-wakeup contract is broken"
+        check_wall_deadline(
+            elapsed, 15.0, code_bound_s=120.0,
+            what="idle wait with SIGCHLD already pending",
         )
 
     def test_tick_bounded_when_no_event(self):
@@ -177,9 +180,12 @@ class TestIdleWaitForSigchld:
             elapsed = time.monotonic() - t0
         finally:
             signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
-        assert elapsed < 3.0, (
-            f"idle wait held {elapsed:.2f}s with a 0.1s tick — the "
-            f"watchdog bound is gone"
+        # If the watchdog bound is gone the wait never returns (no
+        # event ever arrives) — returning at all is the pin, so the
+        # ceiling can be generous.
+        check_wall_deadline(
+            elapsed, 10.0, code_bound_s=float("inf"),
+            what="idle wait with a 0.1s tick and no event",
         )
         # And it actually waited (didn't spin through instantly and
         # turn the wait loop into a busy poll).

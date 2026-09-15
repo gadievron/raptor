@@ -299,7 +299,7 @@ def test_runner_shaped_etc_completes_fast(tmp_path, monkeypatch,
     (Locally proven against a planted 100k-entry / 200MB skel; the
     committed fixture keeps CI runtime negligible while exercising
     the same code path.)"""
-    import time
+    from core.testing.wallclock import cpu_budget
 
     src = tmp_path / "src"
     (src / "ssl" / "certs").mkdir(parents=True)
@@ -316,13 +316,11 @@ def test_runner_shaped_etc_completes_fast(tmp_path, monkeypatch,
         (skel / ".cargo" / "bin" / name).write_bytes(b"\x7fELF" + b"\x00" * (2 << 20))
 
     dst = tmp_path / "dst"
-    start = time.monotonic()
-    _copy(monkeypatch, src, dst, force_byte_copy=True)
-    elapsed = time.monotonic() - start
-
-    assert elapsed < 2.0, (
-        f"runner-shaped /etc copy took {elapsed:.2f}s — the skel skip "
-        f"or budget is not engaging")
+    # CPU budget, not wall clock: a disengaged skel skip/budget shows
+    # up as CPU+sys time walking and copying the toolchain-stuffed
+    # skel; a loaded runner only stalls wall time.
+    with cpu_budget(2.0, what="runner-shaped /etc copy"):
+        _copy(monkeypatch, src, dst, force_byte_copy=True)
     assert not (dst / "skel").exists()
     for f in ("passwd", "hosts", "resolv.conf"):
         assert (dst / f).exists()

@@ -1174,17 +1174,16 @@ class TestResolveUriComponentCap:
     def test_pathological_uri_rejected_fast(self, tmp_path):
         # O(N^2) resolution: 8000 components measured ~62s pre-fix.
         # The cap must reject far past-cap URIs in well under a
-        # second (structural bound: the loop never starts).
-        import time as _time
+        # second (structural bound: the loop never starts). CPU
+        # budget, not wall clock: the quadratic loop burns CPU.
+        from core.testing.wallclock import cpu_budget
 
         root = _source_tree(tmp_path)
         evil = "/".join(["d"] * 5000) + "/x.c"
         findings = [_make_finding(file=evil)]
-        t0 = _time.monotonic()
-        result = normalize_imported_findings(findings, root)
-        elapsed = _time.monotonic() - t0
+        with cpu_budget(5.0, what="pathological-URI normalisation"):
+            result = normalize_imported_findings(findings, root)
         assert result.stats.findings_skipped == 1
-        assert elapsed < 5.0, f"component cap did not bound the loop ({elapsed:.1f}s)"
 
     def test_deep_but_real_paths_still_resolve(self, tmp_path):
         # Two-direction: a deep-but-plausible prefix strips fine.
