@@ -35,6 +35,7 @@ def _extract_function(name: str) -> str:
 DRIVER_TEMPLATE = """
 set -uo pipefail
 declare -a _RAPTOR_TMP_FILES=()
+RAPTOR_DIR="$TEST_RAPTOR_DIR"
 COMPOSE_FILE=/nonexistent/docker-compose.yml
 AUTHORIZED_PAYLOAD="$TEST_AUTHORIZED"
 REAUTHORIZE="${REAUTHORIZE:-0}"
@@ -69,6 +70,7 @@ class TestAuthorizeBootPayload(unittest.TestCase):
              running_digest: str):
         import os
         env = dict(os.environ)
+        env["TEST_RAPTOR_DIR"] = str(REPO_ROOT)
         env["TEST_AUTHORIZED"] = str(self.authorized)
         env["FAKE_PAYLOAD"] = payload
         env["FAKE_RUNNING_DIGEST"] = running_digest
@@ -243,6 +245,72 @@ class TestAuthorizeBootPayload(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDisplayIntegrity(TestAuthorizeBootPayload):
+    """Payload text shown at the authorization TTY is server-derived —
+    the hostile party in this surface's threat model. The display must
+    escape non-printables (a raw ESC/CSI could re-render the diff with
+    a forged clean verdict at the moment of decision) while the
+    RECORDED stamp keeps the raw bytes (the guard's enforcement
+    equality compares raw text)."""
+
+    HOSTILE = (
+        "### initialize.instructions\n"
+        "benign line\x1b[2A\x1b[K FORGED-CLEAN\x1b[31m\x07evil"
+    )
+
+    def test_first_capture_display_escapes_stamp_keeps_raw(self):
+        proc = self._run(self.HOSTILE)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("Payload text follows", proc.stdout)
+        self.assertNotIn("\x1b", proc.stdout,
+                         "raw ESC reached the authorization TTY")
+        self.assertNotIn("\x07", proc.stdout)
+        self.assertIn("\\x1b[2A", proc.stdout)
+        self.assertIn("evil", proc.stdout)
+        # Display-only: the recorded stamp keeps the raw bytes.
+        self.assertIn(
+            "\x1b[2A", self.authorized.read_text(encoding="utf-8"))
+
+    def test_changed_payload_diff_display_escapes(self):
+        self._run("### initialize.instructions\noriginal payload")
+        proc = self._run(self.HOSTILE)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("CHANGED", proc.stdout)
+        self.assertNotIn("\x1b", proc.stdout,
+                         "raw ESC reached the authorization TTY")
+        self.assertIn("\\x1b[2A", proc.stdout)
+        # The honest diff content is still shown.
+        self.assertIn("-original payload", proc.stdout)
+
+    def _break_sanitiser(self):
+        # Shadow python3 inside the driver: the nested display helper
+        # is the only python3 consumer on these paths.
+        self.driver = self.driver.replace(
+            'REAUTHORIZE="${REAUTHORIZE:-0}"',
+            'REAUTHORIZE="${REAUTHORIZE:-0}"\npython3() { return 1; }',
+        )
+
+    def test_sanitiser_failure_refuses_first_capture(self):
+        """Fail closed: an un-renderable payload must not be recorded
+        — recording sight-unseen is uninformed authorization."""
+        self._break_sanitiser()
+        proc = self._run(self.HOSTILE)
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("could not render", proc.stderr)
+        self.assertFalse(self.authorized.exists())
+
+    def test_sanitiser_failure_keeps_previous_record_on_change(self):
+        self._run("### initialize.instructions\noriginal payload")
+        original = self.authorized.read_text(encoding="utf-8")
+        self._break_sanitiser()
+        proc = self._run(self.HOSTILE)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("could not render", proc.stderr)
+        self.assertEqual(
+            self.authorized.read_text(encoding="utf-8"), original,
+            "previous record must survive byte-for-byte")
 
 
 class TestStampCreationGate(TestAuthorizeBootPayload):

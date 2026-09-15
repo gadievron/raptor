@@ -987,6 +987,32 @@ authorize_boot_payload() {
     # payload from live sessions until the operator re-authorizes.
     # Non-fatal: without the recorded file, the wrapper withholds
     # server boot instructions from agent sessions.
+    #
+    # Display-lane sanitiser for payload text shown at the
+    # authorization TTY: non-printables escaped to \xHH, each line
+    # bounded with an explicit elision marker. The payload is
+    # server-derived — a hostile variant carrying ESC/CSI/OSC or bidi
+    # controls could re-render the diff (cursor moves forging a clean
+    # verdict) at the moment the operator decides. DISPLAY ONLY: the
+    # recorded stamp keeps the raw bytes (the guard's enforcement
+    # equality compares raw text). Fail direction: callers treat a
+    # non-zero exit as "could not render safely" and refuse the
+    # authorization step — never fall back to raw output. Defined
+    # nested so test drivers that extract authorize_boot_payload alone
+    # stay self-contained.
+    _render_payload_display() {
+        RAPTOR_DIR="$RAPTOR_DIR" python3 -c '
+import os
+import sys
+
+sys.path.insert(0, os.environ["RAPTOR_DIR"])
+from core.security.log_sanitisation import sanitise_for_terminal
+
+data = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+sys.stdout.write("\n".join(
+    sanitise_for_terminal(line, max_len=2000) for line in data.split("\n")))
+'
+    }
     local payload
     if ! payload=$(capture_boot_payload) || [ -z "$payload" ]; then
         echo "Warning: could not capture the SAGE boot payload." >&2
@@ -1040,9 +1066,21 @@ authorize_boot_payload() {
             echo "SAGE boot payload unchanged since last authorization (sha256 ${sha:0:12})."
         else
             echo "SAGE boot payload CHANGED since last authorization:"
-            sed '1,/^# ---$/d' "$AUTHORIZED_PAYLOAD" \
+            # diff exits 1 on difference (always, here) — compute the
+            # text first, then sanitise for the TTY. The diff below is
+            # what the operator's y/N answer authorizes: refusing to
+            # prompt over an unrenderable diff beats prompting over
+            # raw server bytes.
+            local payload_diff
+            payload_diff=$(sed '1,/^# ---$/d' "$AUTHORIZED_PAYLOAD" \
                 | diff -u --label previous --label current - <(printf '%s\n' "$payload") \
-                || true
+                || true)
+            if ! printf '%s\n' "$payload_diff" | _render_payload_display; then
+                echo "raptor-sage-setup: could not render the payload diff safely (sanitiser failed)." >&2
+                echo "The previous record is kept; nothing was re-authorized. The MCP wrapper" >&2
+                echo "will strip the changed payload from agent sessions." >&2
+                return 0
+            fi
             if [ "$REAUTHORIZE" = "1" ]; then
                 # Same TTY gate as the unparseable-header branch above:
                 # a changed payload is exactly what the flag launders
@@ -1111,11 +1149,16 @@ authorize_boot_payload() {
             return 1
         fi
         # First capture on this machine: show the operator exactly what
-        # they are authorizing.
+        # they are authorizing — non-printables escaped so the display
+        # is honest (the recorded stamp keeps the raw bytes).
         echo "Recording the SAGE boot payload as operator-authorized."
-        echo "Payload text follows:"
+        echo "Payload text follows (non-printables escaped for display):"
         echo "-----------------------------------------------------------"
-        printf '%s\n' "$payload"
+        if ! printf '%s\n' "$payload" | _render_payload_display; then
+            echo "raptor-sage-setup: could not render the payload text safely (sanitiser failed)." >&2
+            echo "Refusing to record a boot-payload stamp that could not be reviewed." >&2
+            return 1
+        fi
         echo "-----------------------------------------------------------"
     fi
     # Same-fs mktemp + atomic mv — see enable_sage_env for the rationale.
