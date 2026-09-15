@@ -200,7 +200,11 @@ def format_progress_trend(store_path) -> str | None:
         return None
     rows = []
     try:
-        with Path(progress).open(encoding="utf-8") as f:
+        # Raw bytes, decoded per line by the parser: text-mode
+        # iteration decodes DURING the for-loop, so one undecodable
+        # byte raised outside the per-line quarantine below (the same
+        # pre-parse class the journal reader contains).
+        with Path(progress).open("rb") as f:
             for line in f:
                 line = line.strip()
                 if not line:
