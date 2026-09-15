@@ -10,6 +10,9 @@
     "artifacts:orphan_reader::*.osv.json": {
       "note": "external-input pattern: cve_bridge.load_cve_run consumes an operator-supplied /cve-diff output directory via glob(\"*.osv.json\"); the writers (packages/cve_diff cli/main.py, cli/bench.py) spell the name f\"{cve_id}.osv.json\", which the artifact indexer normalises to a different key, so the glob reader looks orphaned"
     },
+    "artifacts:orphan_reader::*.sarif.json": {
+      "note": "external-input pattern: ingest_codeql_sarif globs *.sarif.json in each run dir; the files are produced by the external CodeQL CLI, not by repo python"
+    },
     "artifacts:orphan_reader::*.txt": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
@@ -76,6 +79,9 @@
     "artifacts:orphan_reader::exploit-context.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:orphan_reader::findings-deduped.json": {
+      "note": "runtime pipeline artifact: produced by /agentic dedup step (raptor_agentic.py save_json), consumed by graph ingest (ingest.py:317) to seed finding nodes"
+    },
     "artifacts:orphan_reader::flow.jsonl": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
@@ -85,11 +91,20 @@
     "artifacts:orphan_reader::ghidra-export.json": {
       "note": "written by the JVM, not Python: ExportRaptor.java (sandboxed analyzeHeadless post-script) writes this file; packages/ghidra bridge.import_project's headless fallback parses it via parser.parse_export"
     },
+    "artifacts:orphan_reader::graph-diff.json": {
+      "note": "runtime pipeline artifact: produced by raptor-graph-query --diff CLI (stdout JSON piped to file), consumed by diagram renderer (renderer.py:292) for diff visualisation"
+    },
+    "artifacts:orphan_reader::hunt-result.json": {
+      "note": "runtime pipeline artifact: produced by /understand --hunt (libexec/raptor-understand save_json), consumed by graph ingest (ingest.py:37) to seed hypothesis nodes"
+    },
     "artifacts:orphan_reader::joern-flows.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:orphan_reader::layer0-findings.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::lifecycle.json": {
+      "note": "runtime pipeline artifact: produced by raptor-run-lifecycle (shell script writes JSON), consumed by graph ingest (ingest.py:763) to resolve run target and creation time for the rebuild walk"
     },
     "artifacts:orphan_reader::lifecycle.log": {
       "note": "externally produced input: written by libexec/raptor-run-lifecycle (shell), read by run tooling"
@@ -127,8 +142,17 @@
     "artifacts:orphan_reader::study-discards.json": {
       "note": "writer exists (core/concepts/study.py writes it via save_json; core/audit/orchestrator.py reads) \u2014 the artifact indexer does not resolve the substrate writer call through the path variable, so the read looks orphaned"
     },
+    "artifacts:orphan_reader::trace-result.json": {
+      "note": "runtime pipeline artifact: produced by /understand --trace (libexec/raptor-understand save_json), consumed by graph ingest (ingest.py:37) to seed flow-trace nodes"
+    },
     "artifacts:orphan_reader::trajectory-*.json": {
       "note": "salvage-file reader: the writer emits trajectory-<hex>.json via a computed name on run_id collision (_write_atomic fallback), so the literal glob has no textual writer; reader and writer are pinned together by the store round-trip tests"
+    },
+    "artifacts:orphan_reader::understand-graph-diff.json": {
+      "note": "runtime pipeline artifact: alias of graph-diff.json (different naming convention), consumed by diagram renderer (renderer.py:292) for diff visualisation"
+    },
+    "artifacts:orphan_reader::validation-outcomes.json": {
+      "note": "runtime pipeline artifact: produced by /validate (validation_report.py save_json), consumed by graph ingest (ingest.py:412) to promote exploitability verdicts into graph nodes"
     },
     "artifacts:write_only_artifact::-manifest.json": {
       "note": "seed-harvest corpus manifest (packages/frida/seeds.py writes <seeds>-manifest.json): operator-facing harvest accounting, deliberately written NEXT TO the corpus dir so AFL never ingests it as a seed; consumed by the operator reviewing a harvest, production code uses extract_seeds' return value"
@@ -246,6 +270,9 @@
     },
     "artifacts:write_only_artifact::context-guard-report.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::context-map.graph.json": {
+      "note": "written by understand_bridge.save_json (understand_bridge.py:641), read by diagram renderer via string-list iteration (renderer.py:123) and raptor_agentic.py:176 \u2014 the checker's literal-name index misses both read sites due to the list-driven loading pattern"
     },
     "artifacts:write_only_artifact::correlation.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
