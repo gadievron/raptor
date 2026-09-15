@@ -331,6 +331,34 @@ _is_per_process_procfs = is_per_process_procfs
 _canonical_bind_path = canonical_bind_path
 
 
+def _required_pin_fd(
+    src_fds: dict[str, int] | None, path: str,
+) -> int | None:
+    """Pin lookup for a REQUIRED bind source (target/output/rootfs).
+
+    When the parent supplied pins at all, every required bind was
+    pinned (``_pin_bind_sources`` raises otherwise), so a lookup miss
+    here is always a JOIN BUG (parent/child key-spelling drift) or
+    tampering — and ``_bind_pinned_source`` with ``pinned_fd=None``
+    silently downgrades to mount-time window-narrowing, losing the
+    validation→mount containment on exactly the surfaces the pin was
+    built for. Refuse with the tamper convention (ESTALE) instead:
+    a produced-but-unconsumed pin must fail the spawn loudly, never
+    weaken it silently.
+    """
+    if src_fds is None:
+        return None
+    fd = src_fds.get(path)
+    if fd is None:
+        msg = (
+            f"mount_ns: no validation pin under key {path!r} — "
+            "required bind would silently lose its inode pin "
+            "(parent/child key drift or tampering)"
+        )
+        raise OSError(_ESTALE, msg)
+    return fd
+
+
 def _refuse_image_symlink_components(root: str, abs_path: str) -> None:
     """Rootfs mode: refuse pre-existing symlink components below the
     image root.
@@ -1049,9 +1077,14 @@ def setup_mount_ns(target: str | None, output: str | None,
         # the environment's upper layer (_spawn grants the post-pivot
         # "/" to Landlock when a write mask engages; the namespace
         # itself is the write boundary in this mode).
-        rootfs = os.path.abspath(rootfs)
+        # Canonicalise with the SAME helper the parent keys pins
+        # with — plain abspath preserves an exactly-two-slash prefix,
+        # so a "//"-spelled rootfs looked its pin up under the wrong
+        # key, missed, and downgraded to mount-time window-narrowing
+        # on the environment's ROOT (bound writable).
+        rootfs = _canonical_bind_path(rootfs)
         _bind_pinned_source(rootfs, root, MS_BIND,
-                            pinned_fd=_src_fd(rootfs))
+                            pinned_fd=_required_pin_fd(src_fds, rootfs))
         # Exported image tarballs routinely lack /run, ship an empty
         # /dev, etc. — create the per-namespace mount points inside
         # the (writable) rootfs so steps 5-7 can stack their mounts.
@@ -1555,7 +1588,7 @@ def setup_mount_ns(target: str | None, output: str | None,
         _step8_refuse_symlink_walk(target)
         os.makedirs(inside, exist_ok=True)
         _bind_pinned_source(target, inside, MS_BIND,
-                            pinned_fd=_src_fd(target))
+                            pinned_fd=_required_pin_fd(src_fds, target))
         _bound_dirs.add(target)
         # Remount-bind-ro is best-effort. Skip when output == target
         # since output must remain writable. Landlock enforces
@@ -1586,7 +1619,7 @@ def setup_mount_ns(target: str | None, output: str | None,
         _step8_refuse_symlink_walk(output)
         os.makedirs(inside, exist_ok=True)
         _bind_pinned_source(output, inside, MS_BIND,
-                            pinned_fd=_src_fd(output))
+                            pinned_fd=_required_pin_fd(src_fds, output))
         _bound_dirs.add(output)
 
     _do_target = bool(target and not _shadows_per_ns(target))

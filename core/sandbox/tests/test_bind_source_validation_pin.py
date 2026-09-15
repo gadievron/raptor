@@ -792,3 +792,46 @@ class TestAttackRegressionE2E(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRequiredPinJoin(unittest.TestCase):
+    """The parent keys pins with canonical_bind_path; the child's
+    REQUIRED-bind lookups must join on the same key, and a miss must
+    refuse (ESTALE tamper convention) instead of silently downgrading
+    to mount-time window-narrowing — a produced-but-unconsumed pin is
+    always a join bug or tampering."""
+
+    def setUp(self) -> None:
+        self.base = Path(tempfile.mkdtemp(prefix="pinjoin-"))
+        self.addCleanup(shutil.rmtree, self.base, ignore_errors=True)
+
+    def test_double_slash_rootfs_pin_joins_canonical_key(self) -> None:
+        from core.sandbox._pathpin import canonical_bind_path
+        from core.sandbox._spawn import _pin_bind_sources
+        from core.sandbox.mount_ns import _required_pin_fd
+
+        tgt = self.base / "tgt"
+        tgt.mkdir()
+        rootfs = self.base / "rootfs"
+        rootfs.mkdir()
+        spelled = "//" + str(rootfs).lstrip("/")
+        fds = _pin_bind_sources(str(tgt), None, spelled, None)
+        self.addCleanup(_close_all, fds)
+        child_key = canonical_bind_path(spelled)
+        # The join: the child's canonicalised key finds the pin...
+        self.assertIsNotNone(_required_pin_fd(fds, child_key))
+        # ...while the pre-fix child spelling (plain abspath keeps
+        # the '//' prefix) does not name any pinned key.
+        self.assertNotIn(os.path.abspath(spelled), fds)
+
+    def test_missing_required_pin_refuses_estale(self) -> None:
+        from core.sandbox.mount_ns import _ESTALE, _required_pin_fd
+
+        with self.assertRaises(OSError) as ctx:
+            _required_pin_fd({"/some/other": 7}, "/required/bind")
+        self.assertEqual(ctx.exception.errno, _ESTALE)
+
+    def test_no_pins_supplied_is_legacy_unpinned(self) -> None:
+        from core.sandbox.mount_ns import _required_pin_fd
+
+        self.assertIsNone(_required_pin_fd(None, "/required/bind"))
