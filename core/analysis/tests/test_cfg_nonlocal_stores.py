@@ -317,6 +317,113 @@ class TestJavaConstIndexScope:
         assert idx.receiver_type("h") == "Helper"
 
 
+class TestNestedTypeBodyBarriers:
+    """Anonymous-class and local record/enum/interface BODIES declare
+    members, not method locals. The refusal walk and the scope
+    collector key on the body node types the installed grammar
+    actually produces (anonymous classes emit ``class_body``; there is
+    no ``anonymous_class_body``), so a member declarator can never
+    re-arm the vouch oracle for a same-named field store."""
+
+    @pytest.fixture(autouse=True)
+    def _grammar(self):
+        pytest.importorskip("tree_sitter_java")
+
+    def _build(self, body: str):
+        from core.analysis.cfg_builder_java import build_java_intraproc_cfg
+        src = ('public class T {\n'
+               '    String data;\n'
+               '    void handle(String req, java.io.PrintWriter out) {\n'
+               f'{body}'
+               '        data = "safe";\n'
+               '        process(req);\n'
+               '        out.println(data);\n'
+               '    }\n'
+               '}\n')
+        return build_java_intraproc_cfg(src, "handle"), src
+
+    def test_anonymous_class_refuses(self):
+        cfg, _ = self._build(
+            '        Object o = new Object() { String data = "x"; };\n')
+        assert cfg is None, (
+            "method containing an anonymous class must refuse — its "
+            "declarators are members, not locals"
+        )
+
+    def test_local_record_refuses(self):
+        cfg, _ = self._build(
+            '        record R(int a) { static String data = "x"; }\n')
+        assert cfg is None
+
+    def test_local_enum_refuses(self):
+        cfg, _ = self._build(
+            '        enum E { A; }\n')
+        assert cfg is None
+
+    def test_local_interface_refuses(self):
+        cfg, _ = self._build(
+            '        interface I { String data = "x"; }\n')
+        assert cfg is None
+
+    def test_plain_method_still_builds(self):
+        cfg, _ = self._build("")
+        assert cfg is not None
+
+    def test_anonymous_body_declarator_earns_no_vouch_window(self):
+        # Scope-collector unit: the member declarator inside the
+        # anonymous class body must not vouch a later bare-name store
+        # in the enclosing method.
+        import tree_sitter_java as tsj
+        from core.analysis.cfg_builder_java import _declared_local_scopes
+        from core.inventory.call_graph import _get_ts_parser
+        src = ('public class T {\n'
+               '    String data;\n'
+               '    void handle(String req) {\n'
+               '        Object o = new Object() { String data = "x"; };\n'
+               '        data = "safe";\n'
+               '    }\n'
+               '}\n')
+        parser = _get_ts_parser(tsj.language)
+        tree = parser.parse(src.encode())
+        stack = [tree.root_node]
+        method = None
+        while stack:
+            cur = stack.pop()
+            if cur.type == "method_declaration":
+                method = cur
+                break
+            stack.extend(cur.children)
+        assert method is not None
+        scopes = _declared_local_scopes(method)
+        store_byte = src.index('data = "safe"')
+        assert not scopes.vouches("data", store_byte), (
+            "anonymous-class member declarator re-armed the vouch "
+            "oracle for a field store"
+        )
+
+    def test_const_index_refuses_anonymous_rearmed_store(self):
+        # JavaConstIndex shares the scope collector; the bare field
+        # store after an anonymous-body declarator must not serve as
+        # a scoped-local definition.
+        from core.analysis.const_fold_java import JavaConstIndex
+        src = ('public class T {\n'
+               '    String data;\n'
+               '    void handle(java.sql.Statement stmt, Req req)'
+               ' throws Exception {\n'
+               '        Object o = new Object() { String data = "x"; };\n'
+               '        data = "safe";\n'
+               '        process(req);\n'
+               '        stmt.execute(data);\n'
+               '    }\n'
+               '}\n')
+        idx = JavaConstIndex(src, (1, src.count("\n") + 1))
+        assert idx.ok
+        assert idx.rhs_at(5, "data") is None, (
+            "anonymous-body declarator granted the field store a "
+            "scoped-local definition"
+        )
+
+
 # ---------------------------------------------------------------------------
 # End-to-end through the production suppression gate
 # ---------------------------------------------------------------------------

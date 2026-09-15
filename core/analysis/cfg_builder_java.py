@@ -196,7 +196,18 @@ _REFUSED_NODE_TYPES = frozenset({
     "switch_expression",
     "switch_statement",
     "class_declaration",         # local class inside a method body
-    "anonymous_class_body",      # older grammar name
+    # Class-like BODIES, not declaration kinds: refusing the body node
+    # covers every spelling that can nest one in a method — anonymous
+    # classes (object_creation_expression carrying a class_body, the
+    # only class-shaped construct with no declaration node), local
+    # records (class_body), local enums / interfaces / annotations.
+    # A declarator inside any of these binds a MEMBER of the nested
+    # type, not a method local; modelling it as a local hands
+    # field-grade names the "locals are unaliasable" premise.
+    "class_body",
+    "enum_body",
+    "interface_body",
+    "annotation_type_body",
 })
 
 _SWITCH_TYPES = ("switch_expression", "switch_statement")
@@ -711,7 +722,15 @@ def _method_params(decl) -> tuple[str, ...]:
 # stops at them so the const-index reuse stays sound on its own.
 _LOCAL_SCOPE_BARRIERS = frozenset({
     "class_declaration",
-    "anonymous_class_body",
+    # Class-like bodies (see _REFUSED_NODE_TYPES): an anonymous class
+    # or local record/enum/interface body declares MEMBERS — its
+    # declarators must never earn a method-local vouch window (a
+    # same-named bare-name store would then read as an unaliasable
+    # local while it is really a field any interleaved call rewrites).
+    "class_body",
+    "enum_body",
+    "interface_body",
+    "annotation_type_body",
     "lambda_expression",
     "method_reference",
 })
