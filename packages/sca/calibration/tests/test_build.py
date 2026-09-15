@@ -761,3 +761,31 @@ def test_write_if_changed_writes_atomically(
     assert calls == [out]
     import json as _json
     assert _json.loads(out.read_text())["rows"] == [1]
+
+
+def test_edb_csv_fetched_once_across_derived_builders(
+    tmp_path: Path,
+) -> None:
+    """exploitdb and github_poc both parse the same ~64MB EDB index;
+    a build must download it ONCE (the two builders run concurrently
+    under the default pool, previously starting two downloads)."""
+    from packages.sca.calibration.build import build_corpus
+
+    calls: list[str] = []
+
+    class _CountingHttp(_StubHttp):
+        def get_bytes(self, url: str, *, max_bytes: int = 0) -> bytes:
+            calls.append(url)
+            return super().get_bytes(url, max_bytes=max_bytes)
+
+    http = _CountingHttp({
+        "https://gitlab.com/exploit-database/exploitdb/-/raw/HEAD/"
+        "files_exploits.csv": _EDB_CSV,
+    })
+    results = build_corpus(
+        out_dir=tmp_path, http=http,
+        sources=["exploitdb", "github_poc"], jobs=2,
+    )
+    assert all(r.error is None for r in results), results
+    edb_fetches = [u for u in calls if u.endswith("files_exploits.csv")]
+    assert len(edb_fetches) == 1

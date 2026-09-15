@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import weakref
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -128,6 +130,14 @@ def build_corpus(
     if jobs <= 0:
         jobs = min(len(sources), 8) or 1
 
+    # Fresh EDB CSV per build: an injected long-lived client must not
+    # reuse a previous build's download.
+    with _EDB_FETCH_LOCK:
+        try:
+            _EDB_FETCH_MEMO.pop(http, None)
+        except TypeError:
+            pass
+
     results: list[BuildResult | None] = [None] * len(sources)
     if jobs <= 1 or len(sources) <= 1:
         for i, source in enumerate(sources):
@@ -189,9 +199,9 @@ def _build_kev(out_dir: Path, http: Any) -> BuildResult:
     )
 
 
-# Exploit-DB index CSV. Fetched by BOTH _build_exploitdb and
-# _build_github_poc (the latter re-parses it for github.com PoC URLs),
-# so it lives here as a single source of truth. The ``HEAD`` ref
+# Exploit-DB index CSV. Parsed by BOTH _build_exploitdb and
+# _build_github_poc (the latter re-parses it for github.com PoC URLs)
+# but downloaded once per build via _fetch_edb_csv. The ``HEAD`` ref
 # resolves to the repo's default branch at request time (GitLab raw
 # honours HEAD), so a branch rename upstream can't 404 us.
 # Every remote host the corpus builders talk to. Passed as the egress
@@ -209,6 +219,38 @@ _EDB_CSV_URL = (
     "https://gitlab.com/exploit-database/exploitdb/-/raw/HEAD/"
     "files_exploits.csv"
 )
+
+# One EDB CSV download per corpus build. Both EDB-derived builders
+# parse the same ~64MB index, and under the default parallel pool
+# they used to start two concurrent downloads of it. Memoised per
+# http client (build_corpus constructs one client per run and clears
+# its entry up front, so the memo's lifetime is exactly one build);
+# the weak keying drops the bytes with the client.
+_EDB_FETCH_LOCK = threading.Lock()
+_EDB_FETCH_MEMO: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _fetch_edb_csv(http: Any) -> bytes:
+    """Fetch (or reuse) the Exploit-DB index CSV for this build.
+
+    The lock spans the download deliberately: the second builder
+    blocks until the first fetch lands, then reuses the bytes.
+    Clients that can't be weak-referenced fall back to a plain
+    fetch (still correct, just unshared).
+    """
+    with _EDB_FETCH_LOCK:
+        try:
+            cached = _EDB_FETCH_MEMO.get(http)
+        except TypeError:
+            cached = None
+        if cached is not None:
+            return cached
+        raw = http.get_bytes(_EDB_CSV_URL, max_bytes=64 * 1024 * 1024)
+        try:
+            _EDB_FETCH_MEMO[http] = raw
+        except TypeError:
+            pass
+        return raw
 
 
 def _build_exploitdb(out_dir: Path, http: Any) -> BuildResult:
@@ -236,7 +278,7 @@ def _build_exploitdb(out_dir: Path, http: Any) -> BuildResult:
     import csv
     import io
 
-    raw = http.get_bytes(_EDB_CSV_URL, max_bytes=64 * 1024 * 1024)
+    raw = _fetch_edb_csv(http)
     text = raw.decode("utf-8", errors="replace")
     reader = csv.DictReader(io.StringIO(text))
     cve_to_ids: dict[str, list[int]] = {}
@@ -386,7 +428,7 @@ def _build_github_poc(out_dir: Path, http: Any) -> BuildResult:
     import csv
     import io
 
-    raw = http.get_bytes(_EDB_CSV_URL, max_bytes=64 * 1024 * 1024)
+    raw = _fetch_edb_csv(http)
     text = raw.decode("utf-8", errors="replace")
     reader = csv.DictReader(io.StringIO(text))
     cve_to_urls: dict[str, list[str]] = {}
