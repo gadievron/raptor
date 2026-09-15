@@ -135,7 +135,33 @@ def _param_names(m: Node) -> set[str]:
     return out
 
 
-def _collect_writes_and_returns(body):
+def _enclosing_class_field_names(method: Node) -> set[str]:
+    """Names of the fields/constants declared by the class-like body
+    directly enclosing ``method``. A helper-local that shares a name
+    with a field is a shadow-collision hazard for the flow-insensitive
+    union (a bare read can bind the FIELD — ambient, rewritable —
+    where the union sees only the local's writes), so such names
+    refuse resolution outright."""
+    body = method.parent
+    while body is not None and body.type not in (
+            "class_body", "enum_body", "interface_body",
+            "annotation_type_body", "enum_body_declarations"):
+        body = body.parent
+    names: set[str] = set()
+    if body is None:
+        return names
+    for member in body.children:
+        if member.type not in ("field_declaration", "constant_declaration"):
+            continue
+        for c in member.children:
+            if c.type == "variable_declarator":
+                nm = c.child_by_field_name("name")
+                if nm is not None:
+                    names.add(nm.text.decode())
+    return names
+
+
+def _collect_writes_and_returns(body, scopes, field_names):
     """(writes[name] -> [rhs nodes], returns -> [expr nodes]) or
     (None, None) when the body exceeds the node budget.
 
@@ -144,9 +170,28 @@ def _collect_writes_and_returns(body):
     assignments and unary updates poison the name via a ``None`` RHS
     entry.  Bare declarations without initializer write nothing (Java
     definite assignment guarantees a later write before any read).
+
+    Scope discipline: the union is only sound for LOCALS (definite
+    assignment guarantees a body write precedes any read). Both
+    directions are vouched through ``scopes`` (the builders'
+    positional oracle):
+
+    * store direction — a bare-name store with no in-scope preceding
+      declarator writes a FIELD or outer binding whose ambient value
+      the union never sees, so it poisons the name;
+    * read direction — a bare-name VALUE READ outside every vouch
+      window of that name binds a field or outer binding (same-class,
+      inherited, or captured — no superclass resolution needed) even
+      where every store is declared-local, so an un-vouched read
+      poisons the name too.
+
+    A name colliding with a directly-enclosing-class field
+    (``field_names``) additionally poisons unconditionally — the
+    cheap belt-and-braces for the same-class shadow shape.
     """
     writes: dict[str, list[object]] = {}
     returns: list[object] = []
+    reads: list[tuple[str, int]] = []
     count = 0
     stack = [body]
     while stack:
@@ -155,11 +200,18 @@ def _collect_writes_and_returns(body):
         if count > _MAX_BODY_NODES:
             return None, None
         t = n.type
-        if t == "variable_declarator":
+        if t == "identifier":
+            if _is_value_read(n):
+                reads.append((n.text.decode(), n.start_byte))
+        elif t == "variable_declarator":
             nm = n.child_by_field_name("name")
             val = n.child_by_field_name("value")
             if nm is not None and val is not None:
-                writes.setdefault(nm.text.decode(), []).append(val)
+                name = nm.text.decode()
+                if name in field_names:
+                    writes.setdefault(name, []).append(None)
+                else:
+                    writes.setdefault(name, []).append(val)
         elif t == "assignment_expression":
             lhs = n.child_by_field_name("left")
             rhs = n.child_by_field_name("right")
@@ -171,6 +223,12 @@ def _collect_writes_and_returns(body):
                         op_txt = c.type
                         break
                 if op_txt and op_txt != "=":
+                    writes.setdefault(name, []).append(None)
+                elif (name in field_names
+                      or not scopes.vouches(name, n.start_byte)):
+                    # FIELD / outer-binding store (or a store before
+                    # the declarator): the ambient value is an
+                    # invisible union member — poison.
                     writes.setdefault(name, []).append(None)
                 else:
                     writes.setdefault(name, []).append(rhs)
@@ -185,7 +243,45 @@ def _collect_writes_and_returns(body):
                     expr = c
             returns.append(expr)
         stack.extend(n.children)
+    # Read-direction poisoning (only names the union would otherwise
+    # resolve — never-written names refuse at resolution regardless).
+    for name, byte in reads:
+        if name in writes and not scopes.vouches(name, byte):
+            writes[name].append(None)
     return writes, returns
+
+
+# Identifier positions that are NOT bare value reads: declaration /
+# binding names, store targets (the store rule owns those), callee
+# names, and ``obj.member`` member selectors. Over-approximating reads
+# is the cheap (refuse-a-summary) direction; missing a read is the
+# false-suppression direction, so anything unlisted counts as a read.
+_NON_READ_PARENT_FIELDS = (
+    ("variable_declarator", "name"),
+    ("assignment_expression", "left"),
+    ("method_invocation", "name"),
+    ("field_access", "field"),
+    ("method_reference", None),
+    ("labeled_statement", None),
+    ("break_statement", None),
+    ("continue_statement", None),
+    ("enhanced_for_statement", "name"),
+    ("catch_formal_parameter", "name"),
+    ("formal_parameter", "name"),
+    ("type_pattern", "name"),
+)
+
+
+def _is_value_read(n: Node) -> bool:
+    p = n.parent
+    if p is None:
+        return False
+    for ptype, field in _NON_READ_PARENT_FIELDS:
+        if p.type != ptype:
+            continue
+        if field is None or p.child_by_field_name(field) == n:
+            return False
+    return True
 
 
 def derive_tf_helpers(source_text: str, span=None) -> TfHelperIndex:
@@ -228,7 +324,11 @@ def derive_tf_helpers(source_text: str, span=None) -> TfHelperIndex:
             idx._refuse("no-body")
             continue
         params = _param_names(m)
-        writes, returns = _collect_writes_and_returns(body)
+        from core.analysis.cfg_builder_java import _declared_local_scopes
+        scopes = _declared_local_scopes(m)
+        field_names = _enclosing_class_field_names(m)
+        writes, returns = _collect_writes_and_returns(
+            body, scopes, field_names)
         if writes is None:
             idx._refuse("body-too-large")
             continue
@@ -242,8 +342,10 @@ def derive_tf_helpers(source_text: str, span=None) -> TfHelperIndex:
             def resolve(name: str, depth: int,
                         _visiting: set[str] | None = None):
                 # Union resolution over ALL writes to the local.
-                # Params, fields, and unknown names refuse; cycles
-                # refuse via the visiting set.
+                # Params and unwritten names refuse here; field and
+                # outer-binding stores were poisoned at collection
+                # (None entries), so they refuse below; cycles refuse
+                # via the visiting set.
                 if _visiting is None:
                     _visiting = set()
                 if depth > _MAX_DEPTH or name in _params \

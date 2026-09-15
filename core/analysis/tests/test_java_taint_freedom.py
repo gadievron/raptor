@@ -400,3 +400,130 @@ class TestBanThreadingComposedSurfaces:
             rd, sink, expr, index, allow_taint_free=True,
             ban_tf_system_reads=True) is REFUSE
         assert TAINT_FREE is not REFUSE  # keep both imports honest
+class TestFieldStoreScopeDiscipline:
+    """Bare-name FIELD stores must never count as helper-local writes:
+    the flow-insensitive union is sound only for locals (definite
+    assignment guarantees a body write precedes any read); a field's
+    ambient — possibly tainted — value on the un-written path is an
+    invisible union member."""
+
+    def test_field_write_helper_refuses(self):
+        # The confirmed shape: `data` is a FIELD tainted elsewhere;
+        # `get(false)` returns the ambient attacker value while the
+        # union folds only the body write ("safe").
+        src = _cls(
+            "    private String data;\n"
+            "    public void seed(String req) { data = req; }\n"
+            "    private String get(boolean flag) {\n"
+            "        if (flag) { data = \"safe\"; }\n"
+            "        return data;\n"
+            "    }\n"
+        )
+        idx = derive_tf_helpers(src)
+        assert idx.ok
+        assert ("get", 1) not in idx.taint_free, (
+            "field store counted as a local write — returns-taint-free "
+            "claim on a helper that returns ambient field state"
+        )
+
+    def test_declared_local_control_still_qualifies(self):
+        src = _cls(
+            "    private boolean flag = false;\n"
+            "    private String get() {\n"
+            "        String d = \"other\";\n"
+            "        if (flag) { d = \"safe\"; }\n"
+            "        return d;\n"
+            "    }\n"
+        )
+        idx = derive_tf_helpers(src)
+        assert ("get", 0) in idx.taint_free
+
+    def test_field_shadowing_local_refuses(self):
+        # A local sharing a FIELD's name is a shadow-collision hazard:
+        # a bare read before the declarator binds the field. The name
+        # refuses outright.
+        src = _cls(
+            "    private String d;\n"
+            "    private String get(boolean flag) {\n"
+            "        String r = d;\n"
+            "        String d = \"safe\";\n"
+            "        return flag ? r : d;\n"
+            "    }\n"
+        )
+        idx = derive_tf_helpers(src)
+        assert ("get", 1) not in idx.taint_free
+
+    def test_inherited_field_shadow_read_refuses(self):
+        # Read direction, INHERITED field: the block-local declarator
+        # writes "safe" (a vouched store), but the OUTER `return data`
+        # read binds the superclass field — invisible to the
+        # directly-enclosing-class field scan, caught by vouching the
+        # read site positionally (no superclass resolution needed).
+        src = (
+            "class Base {\n"
+            "    protected String data;\n"
+            "    public void seed(String req) { data = req; }\n"
+            "}\n"
+            "class T extends Base {\n"
+            "    private String get(boolean f) {\n"
+            "        if (f) { String data = \"safe\"; return data; }\n"
+            "        return data;\n"
+            "    }\n"
+            "}\n"
+        )
+        idx = derive_tf_helpers(src)
+        assert idx.ok
+        assert ("get", 1) not in idx.taint_free, (
+            "un-vouched read bound the inherited field — "
+            "returns-taint-free claim on ambient superclass state"
+        )
+
+    def test_inherited_field_shadow_rhs_read_refuses(self):
+        # Same mechanism one hop removed: the returned local is
+        # vouched everywhere, but one of its RHS reads binds the
+        # inherited field outside the shadow declarator's window.
+        src = (
+            "class Base {\n"
+            "    protected String data;\n"
+            "    public void seed(String req) { data = req; }\n"
+            "}\n"
+            "class T extends Base {\n"
+            "    private String get(boolean f) {\n"
+            "        String out = \"init\";\n"
+            "        if (f) { String data = \"safe\"; out = data; }\n"
+            "        else { out = data; }\n"
+            "        return out;\n"
+            "    }\n"
+            "}\n"
+        )
+        idx = derive_tf_helpers(src)
+        assert idx.ok
+        assert ("get", 1) not in idx.taint_free
+
+    def test_vouched_reads_still_qualify(self):
+        # The read vouch must not refuse genuinely local flow: every
+        # read of `d` sits inside its method-level declarator window.
+        src = _cls(
+            "    private String get(boolean f) {\n"
+            "        String d = \"other\";\n"
+            "        if (f) { d = \"safe\"; }\n"
+            "        String e = d;\n"
+            "        return e;\n"
+            "    }\n"
+        )
+        idx = derive_tf_helpers(src)
+        assert ("get", 1) in idx.taint_free
+
+    def test_block_scoped_declarator_does_not_vouch_outer_store(self):
+        # Positional rule: a declarator inside a nested block must not
+        # vouch a store OUTSIDE its window.
+        src = _cls(
+            "    private String data;\n"
+            "    private String get(boolean flag) {\n"
+            "        if (flag) { String data = \"x\"; use(data); }\n"
+            "        data = \"safe\";\n"
+            "        return data;\n"
+            "    }\n"
+        )
+        idx = derive_tf_helpers(src)
+        assert ("get", 1) not in idx.taint_free
