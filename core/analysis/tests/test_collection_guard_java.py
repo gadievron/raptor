@@ -99,6 +99,73 @@ class TestGuardForms:
         assert collection_guard_reason(src, 6, "x", "CWE-79")
 
 
+class TestTestedIdentifierScope:
+    """The tested identifier needs local-grade (unaliasable) scope:
+    a FIELD passes the syntactic writer-interval check trivially while
+    any interleaved call can rewrite it at runtime."""
+
+    def test_field_tested_identifier_refuses(self):
+        src = ("public class T {\n"
+               "    String data;\n"
+               "    java.util.List<String> allowed = "
+               'java.util.Arrays.asList("home", "about");\n'
+               "    public void handle(Req req, "
+               "java.sql.Statement st) throws Exception {\n"
+               "        if (!allowed.contains(data)) { return; }\n"
+               "        process(req);\n"
+               "        st.executeQuery(data);\n"
+               "    }\n"
+               "    void process(Req req) { "
+               "this.data = req.getParameter(); }\n"
+               "}\n")
+        decisions: list[str] = []
+        reason = collection_guard_reason(
+            src, 7, "data", "CWE-89", decisions=decisions)
+        assert reason is None, (
+            "field tested identifier suppressed across an "
+            "interleaved-call rewrite"
+        )
+        assert any("not a declared local/param" in d for d in decisions)
+
+    def test_parameter_tested_identifier_still_binds(self):
+        # Control: a parameter is unaliasable across the interleaved
+        # call — the guard legitimately binds.
+        src = ("public class T {\n"
+               "    public void handle(String data, Req req, "
+               "java.sql.Statement st) throws Exception {\n"
+               "        java.util.List<String> allowed = "
+               'java.util.Arrays.asList("home", "about");\n'
+               "        if (!allowed.contains(data)) { return; }\n"
+               "        process(req);\n"
+               "        st.executeQuery(data);\n"
+               "    }\n"
+               "}\n")
+        reason = collection_guard_reason(src, 6, "data", "CWE-89")
+        assert reason is not None
+        assert "2 literal(s)" in reason
+
+    def test_local_declared_after_guard_refuses(self):
+        # Positional rule: a declarator BELOW the guard must not vouch
+        # the tested name at the guard.
+        src = ("public class T {\n"
+               "    String data;\n"
+               "    public void handle(java.sql.Statement st) "
+               "throws Exception {\n"
+               "        java.util.List<String> allowed = "
+               'java.util.Arrays.asList("home", "about");\n'
+               "        if (!allowed.contains(data)) { return; }\n"
+               "        st.executeQuery(data);\n"
+               '        String data = "late";\n'
+               "        use(data);\n"
+               "    }\n"
+               "}\n")
+        decisions: list[str] = []
+        reason = collection_guard_reason(
+            src, 6, "data", "CWE-89", decisions=decisions)
+        assert reason is None
+        assert any("not a declared local/param" in d for d in decisions)
+
+
 class TestCollectionResolution:
     def test_mutated_local_refuses(self):
         src = _src(_ALLOWED

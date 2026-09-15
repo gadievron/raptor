@@ -573,9 +573,21 @@ def collection_guard_reason(
     _sink_line_start, sink_line_end = _line_byte_range(
         source_text, sink_line)
 
-    from core.analysis.cfg_builder_java import _NameResolver, build_import_map
+    from core.analysis.cfg_builder_java import (
+        _declared_local_scopes,
+        _NameResolver,
+        build_import_map,
+    )
     types, statics = build_import_map(root)
     resolver = _NameResolver(types, statics)
+    # Scope oracle for the TESTED identifier. The guard's soundness
+    # premise — "no syntactic writer between guard and sink means the
+    # tested value is unchanged" — only holds for unaliasable names
+    # (declared locals and parameters). A FIELD passes the writer
+    # interval trivially while any interleaved call can rewrite it, so
+    # a non-vouched tested name must refuse (the same positional-scope
+    # rule every other name-scope consumer enforces).
+    scopes = _declared_local_scopes(method)
 
     for n in _iter_named(method):
         if n.type != "if_statement":
@@ -588,6 +600,12 @@ def collection_guard_reason(
             decisions.append(
                 f"guard at line {n.start_point[0] + 1} tests {tested!r}, "
                 f"not the sink argument")
+            continue
+        if not scopes.vouches(tested, n.start_byte):
+            decisions.append(
+                f"tested name {tested!r} is not a declared local/param "
+                f"in scope at the guard (field or outer binding an "
+                f"interleaved call can rewrite) — refused")
             continue
         consequence = n.child_by_field_name("consequence")
         guard_end_line = n.end_point[0] + 1
