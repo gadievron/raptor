@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -687,4 +688,240 @@ class TestCompositePolicy:
         assert not is_tool_evidence(
             "consistency:return-check-majority"
             "+consistency:flag-mode-majority",
+        )
+
+
+class TestProducerStampClosure:
+    """Mechanical closure of pipeline evidence_tool producers against
+    the evidence-grade firewall.
+
+    Every stamp a pipeline producer can commit on a ``finding``-status
+    outcome must satisfy ``is_tool_evidence`` — a producer outside the
+    registry fires the CRITICAL promotion alarm on legitimate runs and
+    is demoted at export (the same enumeration-boundary shape has now
+    produced firewall gaps twice). The sweep enumerates the real
+    producers from source: constructor keywords, promotion/stamp
+    helpers, and attribute assignments, resolving function-local
+    constant bindings (including paired ``status, stamp = ...`` tuple
+    assigns, so a stamp only ever committed with a non-``finding``
+    status is not a violation)."""
+
+    _AUDIT_ROOT = Path(__file__).resolve().parents[1]
+
+    # Stamps a producer deliberately commits only on demotable /
+    # non-finding outcomes. Additions require a behavioral test
+    # proving the stamp never rides a "finding" status.
+    _DELIBERATELY_DEMOTABLE: frozenset = frozenset()
+
+    @classmethod
+    def _modules(cls):
+        import ast as _ast
+
+        for path in sorted(cls._AUDIT_ROOT.rglob("*.py")):
+            parts = path.relative_to(cls._AUDIT_ROOT).parts
+            if "tests" in parts or "scripts" in parts:
+                continue
+            yield path, _ast.parse(path.read_text())
+
+    @staticmethod
+    def _scopes(tree):
+        """Yield (scope_node, body_statements) for the module and each
+        function, so constant resolution stays function-local."""
+        import ast as _ast
+
+        yield tree, tree.body
+        for node in _ast.walk(tree):
+            if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                yield node, node.body
+
+    @staticmethod
+    def _local_bindings(scope_node):
+        """name -> set of str constants assigned in this scope, plus
+        the list of paired tuple-assign bindings ({name: const|None})."""
+        import ast as _ast
+
+        consts: dict = {}
+        pairs: list = []
+        for node in _ast.walk(scope_node):
+            if isinstance(node, _ast.Assign):
+                for target in node.targets:
+                    if (
+                        isinstance(target, _ast.Tuple)
+                        and isinstance(node.value, _ast.Tuple)
+                        and len(target.elts) == len(node.value.elts)
+                        and all(isinstance(t, _ast.Name) for t in target.elts)
+                    ):
+                        pair = {}
+                        for t, v in zip(target.elts, node.value.elts):
+                            val = (
+                                v.value
+                                if isinstance(v, _ast.Constant)
+                                and isinstance(v.value, str) else None
+                            )
+                            pair[t.id] = val
+                            if val is not None:
+                                consts.setdefault(t.id, set()).add(val)
+                        pairs.append(pair)
+                    elif isinstance(target, _ast.Name) and isinstance(
+                        node.value, _ast.Constant,
+                    ) and isinstance(node.value.value, str):
+                        consts.setdefault(target.id, set()).add(
+                            node.value.value,
+                        )
+            elif isinstance(node, _ast.AnnAssign) and isinstance(
+                node.target, _ast.Name,
+            ) and isinstance(node.value, _ast.Constant) and isinstance(
+                node.value.value, str,
+            ):
+                consts.setdefault(node.target.id, set()).add(
+                    node.value.value,
+                )
+        return consts, pairs
+
+    @classmethod
+    def _finding_stamps(cls):
+        """Enumerate (location, stamp) for every constant-resolvable
+        stamp a producer can commit alongside status="finding"."""
+        import ast as _ast
+
+        found: list = []
+        call_sites = 0
+        for path, tree in cls._modules():
+            rel = path.relative_to(cls._AUDIT_ROOT)
+            for scope, _body in cls._scopes(tree):
+                consts, pairs = cls._local_bindings(scope)
+                for node in _ast.walk(scope):
+                    if not isinstance(node, _ast.Call):
+                        continue
+                    kw = {k.arg: k.value for k in node.keywords if k.arg}
+                    fn = node.func
+                    fn_name = (
+                        fn.id if isinstance(fn, _ast.Name)
+                        else fn.attr if isinstance(fn, _ast.Attribute)
+                        else ""
+                    )
+                    # Promotion / stamping helpers: the tool argument
+                    # becomes the receipt of a finding-status outcome.
+                    if fn_name in ("_promote_outcome", "_stamp_evidence"):
+                        args = list(node.args)
+                        tool = args[1] if len(args) > 1 else kw.get("tool")
+                        if isinstance(tool, _ast.Constant) and isinstance(
+                            tool.value, str,
+                        ):
+                            found.append((f"{rel}:{node.lineno}", tool.value))
+                        elif isinstance(tool, _ast.JoinedStr) and tool.values:
+                            first = tool.values[0]
+                            if isinstance(first, _ast.Constant):
+                                # A prefixed receipt: the prefix must be
+                                # a known namespace or a provenance
+                                # wrapper (judged at runtime on the
+                                # wrapped receipt).
+                                found.append((
+                                    f"{rel}:{node.lineno}",
+                                    ("prefix", str(first.value)),
+                                ))
+                        continue
+                    if "evidence_tool" not in kw or "status" not in kw:
+                        continue
+                    call_sites += 1
+                    status_node, ev_node = kw["status"], kw["evidence_tool"]
+
+                    def _resolve(n):
+                        if isinstance(n, _ast.Constant) and isinstance(
+                            n.value, str,
+                        ):
+                            return {n.value}, None
+                        if isinstance(n, _ast.Name):
+                            return set(consts.get(n.id, ())), n.id
+                        return set(), None
+
+                    status_vals, status_name = _resolve(status_node)
+                    ev_vals, ev_name = _resolve(ev_node)
+                    if "finding" not in status_vals:
+                        continue
+                    if status_name and ev_name:
+                        # Paired tuple assigns bind status and stamp
+                        # together — only stamps paired with "finding"
+                        # are commitments the firewall must accept.
+                        paired = [
+                            p for p in pairs
+                            if status_name in p and ev_name in p
+                        ]
+                        if paired:
+                            for p in paired:
+                                if p[status_name] == "finding" and p[
+                                    ev_name
+                                ] is not None:
+                                    found.append((
+                                        f"{rel}:{node.lineno}", p[ev_name],
+                                    ))
+                            continue
+                    for stamp in ev_vals:
+                        found.append((f"{rel}:{node.lineno}", stamp))
+        return found, call_sites
+
+    def test_every_finding_producer_stamp_passes_the_firewall(self):
+        from core.audit.evidence_grade import (
+            _PROVENANCE_WRAPPERS,
+            _TOOL_NAMESPACES,
+        )
+
+        found, call_sites = self._finding_stamps()
+        # Non-vacuity: the sweep must actually see the producer
+        # surface (helper literals and constructor sites both exist).
+        assert call_sites >= 3, "sweep no longer sees producer calls"
+        assert len(found) >= 2, "sweep no longer resolves any stamps"
+        violations = []
+        for loc, stamp in found:
+            if isinstance(stamp, tuple):  # ("prefix", value)
+                prefix = stamp[1]
+                ns = prefix.split(":", 1)[0]
+                if ns not in _TOOL_NAMESPACES and not any(
+                    prefix.startswith(w) or w.startswith(prefix)
+                    for w in _PROVENANCE_WRAPPERS
+                ):
+                    violations.append((loc, prefix))
+                continue
+            if stamp in self._DELIBERATELY_DEMOTABLE:
+                continue
+            if not is_tool_evidence(stamp):
+                violations.append((loc, stamp))
+        assert not violations, (
+            "finding-status producers commit stamps the evidence-grade "
+            f"firewall rejects (CRITICAL-alarm + export demotion): "
+            f"{violations}"
+        )
+
+    def test_attribute_stamp_writers_pass_the_firewall(self):
+        """Promotion paths that stamp via ``outcome.evidence_tool = X``
+        (dynamic sweep, dark-verify) — every constant they can write
+        must be firewall-known or deliberately demotable."""
+        import ast as _ast
+
+        found = []
+        for path, tree in self._modules():
+            rel = path.relative_to(self._AUDIT_ROOT)
+            for node in _ast.walk(tree):
+                if not isinstance(node, _ast.Assign):
+                    continue
+                for target in node.targets:
+                    if (
+                        isinstance(target, _ast.Attribute)
+                        and target.attr == "evidence_tool"
+                        and isinstance(node.value, _ast.Constant)
+                        and isinstance(node.value.value, str)
+                        and node.value.value
+                    ):
+                        found.append(
+                            (f"{rel}:{node.lineno}", node.value.value),
+                        )
+        assert found, "sweep no longer sees attribute stamp writers"
+        violations = [
+            (loc, stamp) for loc, stamp in found
+            if stamp not in self._DELIBERATELY_DEMOTABLE
+            and not is_tool_evidence(stamp)
+        ]
+        assert not violations, (
+            "attribute stamp writers emit firewall-rejected stamps: "
+            f"{violations}"
         )

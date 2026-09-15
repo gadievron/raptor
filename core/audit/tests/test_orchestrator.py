@@ -7261,3 +7261,135 @@ class TestPerPassWallClockPhases:
             _presweep_config(target, out), _clean_review_fn,
         )
         assert result.tier_counters["joern"].cpg_build_s == 7.5
+
+
+class TestPhase2bChainCommit:
+    """Phase-2b chain outcomes vs the tool-gated promotion firewall.
+
+    Chain composition is an LLM judgement, so a chain outcome may
+    claim ``finding`` only when both constituent bugs carry real tool
+    receipts (the joined stamp passes ``is_tool_evidence``); anything
+    less commits as ``suspicious``. The pre-fix unconditional
+    ``finding`` with the unregistered ``chain_detector`` stamp fired
+    the CRITICAL promotion alarm on every legitimate chain and was
+    silently demoted at export while already counted."""
+
+    @staticmethod
+    def _run(monkeypatch, tmp_path: Path, constituents, chain):
+        import core.audit.chain_detector as chain_mod
+        import core.audit.orchestrator as orch_mod
+        import core.audit.security_classifier as sc_mod
+
+        result = OrchestratorResult()
+        result.outcomes = list(constituents)
+        config = OrchestratorConfig(
+            target_path=tmp_path, out_dir=tmp_path,
+        )
+        monkeypatch.setattr(orch_mod, "_run_llm_client", lambda cfg: None)
+        monkeypatch.setattr(
+            orch_mod, "_make_dispatch_gate",
+            lambda cfg, stop_check=None: (lambda: False),
+        )
+        monkeypatch.setattr(
+            sc_mod, "classify_security_impact",
+            lambda *a, **k: {},
+        )
+        monkeypatch.setattr(
+            chain_mod, "find_chain_candidates",
+            lambda outcomes, out_dir, cls: [
+                (constituents[0], constituents[1]),
+            ],
+        )
+        monkeypatch.setattr(
+            chain_mod, "evaluate_chains",
+            lambda cands, client, **kw: [chain],
+        )
+        orch_mod._run_phase2(result, config)
+        return result
+
+    @staticmethod
+    def _constituents(tool_a: str, tool_b: str):
+        return [
+            ReviewOutcome(
+                file="a.c", function="f", status="finding",
+                body="b", hypothesis="h", evidence_tool=tool_a,
+            ),
+            ReviewOutcome(
+                file="b.c", function="g", status="finding",
+                body="b", hypothesis="h", evidence_tool=tool_b,
+            ),
+        ]
+
+    _CHAIN = {
+        "bug_a": "a.c:f", "bug_b": "b.c:g",
+        "chain_description": "A leaks a pointer B dereferences",
+        "primitive": "read", "confidence": "high",
+    }
+
+    def test_receipt_backed_chain_commits_as_finding(
+        self, monkeypatch, tmp_path: Path,
+    ):
+        from core.audit.evidence_grade import is_tool_evidence
+
+        result = self._run(
+            monkeypatch, tmp_path,
+            self._constituents("semgrep", "joern:flow"), dict(self._CHAIN),
+        )
+        chain_out = result.outcomes[-1]
+        assert chain_out.review_result["chain"] is True
+        assert chain_out.status == "finding"
+        assert chain_out.evidence_tool == "semgrep+joern:flow"
+        assert is_tool_evidence(chain_out.evidence_tool)
+        assert result.findings == 1
+
+    def test_unreceipted_chain_commits_as_suspicious_not_counted(
+        self, monkeypatch, tmp_path: Path,
+    ):
+        result = self._run(
+            monkeypatch, tmp_path,
+            self._constituents("", "llm-claimed:manual"), dict(self._CHAIN),
+        )
+        chain_out = result.outcomes[-1]
+        assert chain_out.review_result["chain"] is True
+        assert chain_out.status == "suspicious"
+        assert chain_out.evidence_tool == "chain_detector"
+        assert result.findings == 0
+
+    def test_half_receipted_chain_commits_as_suspicious(
+        self, monkeypatch, tmp_path: Path,
+    ):
+        # One receipt-backed constituent must not lend its receipt to
+        # the composition claim.
+        result = self._run(
+            monkeypatch, tmp_path,
+            self._constituents("semgrep", ""), dict(self._CHAIN),
+        )
+        assert result.outcomes[-1].status == "suspicious"
+        assert result.outcomes[-1].evidence_tool == "chain_detector"
+        assert result.findings == 0
+
+    def test_committed_chains_never_alarm_or_demote(
+        self, monkeypatch, tmp_path: Path,
+    ):
+        # The alarm channel is documented EMPTY on legitimate runs;
+        # both chain lanes must survive the enforcing export sweep
+        # untouched.
+        from core.audit.promotion_alarm import ALARM_FILENAME, check_outcomes
+
+        for tools, status in (
+            (("semgrep", "joern:flow"), "finding"),
+            (("", ""), "suspicious"),
+        ):
+            out_dir = tmp_path / f"run-{status}"
+            out_dir.mkdir()
+            result = self._run(
+                monkeypatch, out_dir,
+                self._constituents(*tools), dict(self._CHAIN),
+            )
+            chain_out = result.outcomes[-1]
+            check_outcomes(
+                out_dir, [chain_out], stage="findings-export",
+                enforce=True,
+            )
+            assert chain_out.status == status
+            assert not (out_dir / ALARM_FILENAME).exists()

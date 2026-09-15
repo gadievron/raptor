@@ -21982,17 +21982,48 @@ def _run_phase2(result, config) -> None:
                 should_stop=_env_gate,
             )
             if chains:
+                from .evidence_grade import is_tool_evidence
                 chains_path = config.out_dir / "bug-chains.json"
                 save_json(chains_path, chains)
+                outcome_index = {
+                    f"{o.file}:{o.function}": o for o in result.outcomes
+                }
+                confirmed = 0
                 for chain in chains:
                     bug_a_func = chain["bug_a"].rsplit(":", 1)[-1]
+                    # Chain composition is an LLM judgement
+                    # (evaluate_chains is a model call), so the chain
+                    # outcome may claim ``finding`` only when it can
+                    # carry its constituents' REAL tool receipts: both
+                    # bugs receipt-backed and the joined stamp itself
+                    # passing the evidence-grade firewall. Anything
+                    # less commits as ``suspicious`` (the designed
+                    # LLM-guess bucket) with the pure-provenance
+                    # ``chain_detector`` stamp — an unconditional
+                    # ``finding`` here fired the CRITICAL
+                    # promotion-without-tool-evidence alarm (a channel
+                    # documented EMPTY on legitimate runs) and was
+                    # demoted at export while already counted.
+                    receipts = [
+                        getattr(outcome_index.get(k), "evidence_tool", "")
+                        or ""
+                        for k in (chain["bug_a"], chain["bug_b"])
+                    ]
+                    composite = "+".join(r for r in receipts if r)
+                    if (
+                        all(is_tool_evidence(r) for r in receipts)
+                        and is_tool_evidence(composite)
+                    ):
+                        status, stamp = "finding", composite
+                    else:
+                        status, stamp = "suspicious", "chain_detector"
                     chain_outcome = ReviewOutcome(
                         file=chain["bug_a"].rsplit(":", 1)[0],
                         function=bug_a_func,
-                        status="finding",
+                        status=status,
                         body=chain.get("chain_description", ""),
                         hypothesis=chain.get("chain_description", ""),
-                        evidence_tool="chain_detector",
+                        evidence_tool=stamp,
                         review_result={
                             "chain": True,
                             "bug_a": chain["bug_a"],
@@ -22002,8 +22033,13 @@ def _run_phase2(result, config) -> None:
                         },
                     )
                     result.outcomes.append(chain_outcome)
-                    result.findings += 1
-                logger.info("Phase 2b: %d chains confirmed", len(chains))
+                    if status == "finding":
+                        result.findings += 1
+                        confirmed += 1
+                logger.info(
+                    "Phase 2b: %d chain(s) recorded (%d receipt-backed)",
+                    len(chains), confirmed,
+                )
     except Exception:
         logger.debug("Phase 2b chaining failed", exc_info=True)
 
