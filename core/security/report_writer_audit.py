@@ -112,6 +112,9 @@ _LLM_DERIVED_KEYS = frozenset({
 _SANITISERS = frozenset({
     "sanitise_string",
     "sanitise_code",
+    # Single-line-slot variant (headings / labels / table cells):
+    # newline-flattened, autofetch-stripped, control-escaped, capped.
+    "sanitise_inline",
     "sanitise_for_terminal",
     # Conventional local alias for sanitise_for_terminal
     # (`from core.security.log_sanitisation import sanitise_for_terminal
@@ -182,6 +185,7 @@ _REPORT_WRITER_FILES = (
     "core/llm/multi_model/replay.py",
     "core/progress/__init__.py",
     "core/project/cli.py",
+    "core/reporting/renderer.py",
     "core/run/provenance.py",
     "core/llm/scorecard/audit.py",
     "core/llm/scorecard/cli.py",

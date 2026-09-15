@@ -130,6 +130,33 @@ def sanitise_string(s: str, *, max_chars: int = 500) -> str:
     return s
 
 
+def sanitise_inline(s: str, *, max_chars: int = 300) -> str:
+    """Defang for SINGLE-LINE slots — headings, labels, table cells —
+    where the rendered value never begins a markdown line of its own.
+
+    Newlines/line separators are flattened to spaces (so the value
+    cannot START a line), autofetch markup is stripped (both layers —
+    ``<img>`` in a table cell still fetches), control/bidi bytes are
+    escaped, and the result is length-capped. The line-leading
+    markdown stripping of :func:`sanitise_string` is deliberately
+    omitted: the slot's own prefix (``# ``, ``| ``, ``**``) makes
+    mid-string ``#``/``*``/``-`` inert, and stripping them would eat
+    legitimate label text (a literal ``#`` column header, a ``-``
+    placeholder cell).
+    """
+    s = (str(s)
+         .replace("\r", " ").replace("\n", " ")
+         .replace("\u2028", " ").replace("\u2029", " "))
+    s = _strip_autofetch_markup(s)
+    s = _REPORT_AUTOFETCH_SUPPLEMENT_RE.sub(
+        '[REDACTED-AUTOFETCH-MARKUP]', s,
+    )
+    s = escape_nonprintable(s)
+    if len(s) > max_chars:
+        s = s[: max_chars - 1] + _ELLIPSIS
+    return s
+
+
 def sanitise_code(s: str, *, max_chars: int = 10_000) -> str:
     """Escape control chars in LLM-returned code for fenced-block rendering.
 

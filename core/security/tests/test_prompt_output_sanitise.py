@@ -248,3 +248,50 @@ def test_case_insensitive_tag_forms_stripped():
     assert "<IMAGE" not in sanitise_string(
         '<IMAGE SRC="//evil.example/Z">',
     ).upper().replace("[REDACTED-AUTOFETCH-MARKUP]".upper(), "")
+
+
+# ---------------------------------------------------------------------------
+# sanitise_inline — the single-line-slot variant
+# ---------------------------------------------------------------------------
+
+
+def test_inline_flattens_newlines():
+    from core.security.prompt_output_sanitise import sanitise_inline
+    assert sanitise_inline("a\nb\rc d e") == "a b c d e"
+
+
+def test_inline_escapes_controls_and_bidi():
+    from core.security.prompt_output_sanitise import sanitise_inline
+    out = sanitise_inline("x\x1b]0;t\x07\x9b2J‮y")
+    for raw in ("\x1b", "\x07", "\x9b", "‮"):
+        assert raw not in out
+
+
+def test_inline_strips_autofetch_both_layers():
+    from core.security.prompt_output_sanitise import (
+        sanitise_inline,
+        sanitise_string,
+    )
+    assert "//evil.example" not in sanitise_inline("<img src=//evil.example/x>")
+    # The style-attribute url() construct is broken the same way
+    # sanitise_string breaks it (the fetch syntax is redacted; the
+    # bare host may remain as inert prose) — pin parity, not more.
+    payload = '<div style="background:url(//evil.example)">x</div>'
+    assert sanitise_inline(payload) == sanitise_string(payload)
+    assert "[REDACTED-AUTOFETCH-MARKUP]" in sanitise_inline(payload)
+
+
+def test_inline_preserves_literal_label_text():
+    # Two-direction guard: the line-leading strip is deliberately
+    # omitted — a '#' column header and a '-' placeholder cell are
+    # legitimate single-line content.
+    from core.security.prompt_output_sanitise import sanitise_inline
+    assert sanitise_inline("#") == "#"
+    assert sanitise_inline("-") == "-"
+    assert sanitise_inline("*ptr") == "*ptr"
+
+
+def test_inline_caps_length():
+    from core.security.prompt_output_sanitise import sanitise_inline
+    out = sanitise_inline("a" * 10_000, max_chars=100)
+    assert len(out) == 100
