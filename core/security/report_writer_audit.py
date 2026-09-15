@@ -718,6 +718,125 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
             "interpolates the count, never a message"
         ),
     ),
+    # --- container-round-trip arm: adjudicated count/label reads ----
+    AllowlistEntry(
+        file="core/llm/scorecard/cli.py",
+        func_name="cmd_tool_evidence",
+        kind="unsanitised_llm_value",
+        detail="n",
+        audit_note=(
+            "n is the int event count the recorder returns; the taint "
+            "chains through the records argument of the same call"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-audit",
+        func_name="cmd_critique",
+        kind="unsanitised_llm_value",
+        detail="count",
+        audit_note=(
+            "per-function sweep_count int unpacked from the stats "
+            "container; the string fields on the same lines are "
+            "sanitise_for_terminal-wrapped"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-audit",
+        func_name="cmd_critique",
+        kind="unsanitised_llm_value",
+        detail="untried",
+        audit_note=(
+            "set difference against the literal tool-name set — only "
+            "constant tool names print; taint chains through the loop "
+            "over the stats container"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-study-prep",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="role_summary",
+        audit_note=(
+            "role labels are the discover_accessor_patterns closed "
+            "enum (allocator/deallocator/lock_wrapper/resource_wrapper) "
+            "joined with int counts — no target/LLM content"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-study-prep",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="api_promoted",
+        audit_note="int promotion counter; taint chains through the items container",
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-study-prep",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="pd_promoted",
+        audit_note="int promotion counter; taint chains through the items container",
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-study-prep",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="usage_counts",
+        audit_note=(
+            "int counters read at constant keys "
+            "(writer/reader/passthru) from the type-reference census"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/llm_analysis/orchestrator.py",
+        func_name="orchestrate",
+        kind="unsanitised_llm_value",
+        detail="orch",
+        audit_note=(
+            "int counters (findings_analysed/findings_failed) read at "
+            "constant keys from the in-process orchestration summary"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/llm_analysis/orchestrator.py",
+        func_name="orchestrate",
+        kind="unsanitised_llm_value",
+        detail="other_fails",
+        audit_note="int subtraction of two counters",
+    ),
+    AllowlistEntry(
+        file="packages/llm_analysis/orchestrator.py",
+        func_name="orchestrate",
+        kind="unsanitised_llm_value",
+        detail="cost_total",
+        audit_note="float cost telemetry rendered as $%.2f",
+    ),
+    AllowlistEntry(
+        file="packages/llm_analysis/orchestrator.py",
+        func_name="orchestrate",
+        kind="unsanitised_llm_value",
+        detail="model_str",
+        audit_note=(
+            "operator-configured analysis model id from the in-process "
+            "summary the same function just built"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/llm_analysis/orchestrator.py",
+        func_name="orchestrate",
+        kind="unsanitised_llm_value",
+        detail="parts",
+        audit_note=(
+            "list of count/elapsed/cost fragments built two lines up "
+            "from int counters and formatted floats"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/llm_analysis/orchestrator.py",
+        func_name="orchestrate",
+        kind="unsanitised_llm_value",
+        detail="thinking",
+        audit_note="int thinking-token counter rendered with {:,}",
+    ),
 )
 
 
@@ -768,6 +887,32 @@ def _key_expr(node: ast.AST) -> str | None:
     return None
 
 
+def _is_ascii_json_dumps(node: ast.Call) -> bool:
+    """True for ``dumps(..., ensure_ascii=True)`` calls (any module
+    alias — ``json.dumps`` / ``_json.dumps``). JSON escapes C0 always
+    and ensure_ascii escapes everything non-ASCII including C1, so the
+    output is terminal-safe by construction."""
+    if _call_name(node) != "dumps":
+        return False
+    return any(
+        kw.arg == "ensure_ascii"
+        and isinstance(kw.value, ast.Constant)
+        and kw.value.value is True
+        for kw in node.keywords
+    )
+
+
+# Builtins whose return value carries no content from their argument
+# (counts, predicates, numeric coercions). ``len(tainted)`` is an int
+# — walking into the argument minted count-line false positives on
+# every "N item(s)" summary. min/max/sorted/join are deliberately NOT
+# here: they return (or contain) their elements.
+_TAINT_NEUTRAL_CALLS = frozenset({
+    "len", "int", "float", "bool", "round", "ord", "hash",
+    "isinstance", "hasattr", "callable", "abs",
+})
+
+
 def _naked_keys(
     node: ast.AST,
     tainted: frozenset,
@@ -780,6 +925,28 @@ def _naked_keys(
     def walk(n: ast.AST) -> None:
         if isinstance(n, ast.Call) and _call_name(n) in _SANITISERS:
             return  # sanitised subtree — everything below is defanged
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id in _TAINT_NEUTRAL_CALLS):
+            return  # content-destroying builtin — nothing flows through
+        if isinstance(n, ast.Call) and _is_ascii_json_dumps(n):
+            # json.dumps(..., ensure_ascii=True): C0 escaped by JSON,
+            # C1 escaped by ensure_ascii — the blessed terminal-JSON
+            # shape (still walk keyword values other than the data,
+            # via the ensure_ascii check being on the CALL only).
+            return
+        if isinstance(n, ast.IfExp):
+            # Only the branch VALUES flow into the expression; the
+            # test picks a branch but contributes no content
+            # (``x = _sft(v) if v else None`` is fully sanitised).
+            walk(n.body)
+            walk(n.orelse)
+            return
+        if (isinstance(n, ast.FormattedValue)
+                and n.conversion == ord("r")):
+            # ``{value!r}`` renders through repr(), which escapes
+            # non-printables in strings — control-byte-safe (though
+            # unbounded; length abuse is out of this rule's scope).
+            return
         key = _key_expr(n)
         if key is not None:
             out.append((getattr(n, "lineno", 0), key))
@@ -811,6 +978,34 @@ def _target_names(target: ast.AST) -> list[str]:
             names.extend(_target_names(elt))
         return names
     return []
+
+
+def _container_base(target: ast.AST) -> str | None:
+    """Base local name of a container-store target, or None.
+
+    ``stats["k"] = v`` / ``rec.note = v`` store INTO ``stats`` /
+    ``rec`` — the container name is what later whole-container reads
+    launder taint through. Chains resolve to their root Name
+    (``self.rows[i] = v`` → ``self`` is not a local; return None for
+    non-Name roots).
+    """
+    node = target
+    while isinstance(node, (ast.Subscript, ast.Attribute)):
+        node = node.value
+    if isinstance(node, ast.Name) and node is not target:
+        return node.id
+    return None
+
+
+# Mutating container methods: ``recv.append(tainted)`` puts the value
+# INSIDE ``recv`` — the receiver's base name becomes tainted so a
+# later ``for k, v in recv: print(v)`` round-trip is visible. This is
+# taint PROPAGATION, independent of whether the receiver also matches
+# the accumulator-sink tokens.
+_CONTAINER_MUTATORS = frozenset({
+    "append", "extend", "insert", "add", "update", "setdefault",
+    "appendleft",
+})
 
 
 def _dotted_name(node: ast.AST) -> str:
@@ -878,12 +1073,56 @@ class _Scanner(ast.NodeVisitor):
             for target in node.targets:
                 for name in _target_names(target):
                     self._tainted.add(name)
+                # Container round-trip, store side: a tainted value
+                # stored INTO a container (``stats["hyp"] = e["hyp"]``,
+                # ``rec.note = f["title"]``) taints the container name
+                # — later whole-container reads (tuple-in-list, loop
+                # unpack) would otherwise launder the value.
+                base = _container_base(target)
+                if base is not None:
+                    self._tainted.add(base)
         else:
             # A sanitised (or unrelated) re-assignment clears the taint —
             # `body = _prose(body)` makes later uses of `body` safe.
+            # Container stores never clear: one clean store into a dict
+            # does not clean the tainted values already inside it.
             for target in node.targets:
+                if _container_base(target) is not None:
+                    continue
                 for name in _target_names(target):
                     self._tainted.discard(name)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        # Annotated assignment (``x: str = e["title"]``) is a distinct
+        # AST node — and the repo's standing type-annotation practice
+        # makes it the LIKELY spelling of new writer code, so skipping
+        # it made annotated writers invisible to the audit.
+        if node.value is None:
+            self.generic_visit(node)
+            return
+        if _naked_keys(node.value, frozenset(self._tainted)):
+            for name in _target_names(node.target):
+                self._tainted.add(name)
+            base = _container_base(node.target)
+            if base is not None:
+                self._tainted.add(base)
+        else:
+            if _container_base(node.target) is None:
+                for name in _target_names(node.target):
+                    self._tainted.discard(name)
+        self.generic_visit(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        # ``x = ""; x += e["title"]`` — augmented assignment taints
+        # the target when the value is foreign. It never CLEARS taint:
+        # ``x += clean`` keeps whatever was already in ``x``.
+        if _naked_keys(node.value, frozenset(self._tainted)):
+            for name in _target_names(node.target):
+                self._tainted.add(name)
+            base = _container_base(node.target)
+            if base is not None:
+                self._tainted.add(base)
         self.generic_visit(node)
 
     def visit_For(self, node: ast.For) -> None:
@@ -938,6 +1177,20 @@ class _Scanner(ast.NodeVisitor):
                         detail=key,
                         func_name=self._qualified_func_name(),
                     ))
+        # Container round-trip, mutate side: `recv.append(tainted)` /
+        # `recv.update(tainted)` puts a foreign value INSIDE recv;
+        # taint the receiver's base local name.
+        func = node.func
+        if (isinstance(func, ast.Attribute)
+                and func.attr in _CONTAINER_MUTATORS
+                and node.args):
+            tainted = frozenset(self._tainted)
+            if any(_naked_keys(a, tainted) for a in node.args):
+                base = func.value
+                while isinstance(base, (ast.Subscript, ast.Attribute)):
+                    base = base.value
+                if isinstance(base, ast.Name):
+                    self._tainted.add(base.id)
         self.generic_visit(node)
 
 

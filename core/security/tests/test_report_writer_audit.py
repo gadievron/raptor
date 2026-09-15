@@ -409,3 +409,155 @@ def test_registered_files_have_no_dumps_display_terminal_lane():
         f"dumps_display terminal lane(s) in registered writers "
         f"(use json.dumps(..., ensure_ascii=True)): {offenders}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Taint-propagation arms: annotated/augmented assignment and container
+# round-trips. Each planted writer FAILS without its arm (mutation
+# oracle for the closure claim).
+# ---------------------------------------------------------------------------
+
+
+def test_rule_catches_annassign_taint():
+    """``x: str = e["title"]`` — AnnAssign is a distinct AST node and
+    the repo's annotation practice makes it the likely spelling of new
+    writer code."""
+    src = (
+        "def render(e):\n"
+        "    x: str = e['title']\n"
+        "    print(x)\n"
+    )
+    assert any(v.detail == "x" for v in audit_source(src))
+
+
+def test_rule_catches_augassign_taint():
+    """``x = ''; x += e['title']`` — AugAssign taints its target."""
+    src = (
+        "def render(e):\n"
+        "    x = ''\n"
+        "    x += e['title']\n"
+        "    print(x)\n"
+    )
+    assert any(v.detail == "x" for v in audit_source(src))
+
+
+def test_augassign_never_clears_taint():
+    """``x += clean`` keeps whatever taint x already carried."""
+    src = (
+        "def render(e):\n"
+        "    x = e['title']\n"
+        "    x += ' suffix'\n"
+        "    print(x)\n"
+    )
+    assert any(v.detail == "x" for v in audit_source(src))
+
+
+def test_rule_catches_container_round_trip():
+    """The raptor-audit cmd_critique shape: dict-store, tuple-in-list,
+    loop-unpack print — no foreign key name visible at the sink."""
+    src = (
+        "def critique(log):\n"
+        "    gaps = []\n"
+        "    for entry in log:\n"
+        "        stats = {}\n"
+        "        stats['hyp'] = entry['hypothesis']\n"
+        "        gaps.append((entry['key'], stats))\n"
+        "    for key, st in gaps:\n"
+        "        print(f'  {key} - {st}')\n"
+    )
+    vs = audit_source(src)
+    assert any(v.detail in ("key", "st") for v in vs), vs
+
+
+def test_rule_catches_local_var_interpolation_round_trip():
+    """Mechanism-5 shape: a vocabulary read split into a local list,
+    printed one loop variable at a time — no foreign name at the
+    sink."""
+    src = (
+        "def show(res):\n"
+        "    msg = res.get('description')\n"
+        "    seg_list = msg.splitlines()\n"
+        "    for seg in seg_list:\n"
+        "        print(f'  {seg}')\n"
+    )
+    assert any(v.detail == "seg" for v in audit_source(src))
+
+
+def test_container_store_does_not_clear_on_clean_write():
+    """One clean store into a dict does not clean the tainted values
+    already inside it."""
+    src = (
+        "def render(e):\n"
+        "    d = {}\n"
+        "    d['a'] = e['title']\n"
+        "    d['b'] = 'clean'\n"
+        "    print(d)\n"
+    )
+    assert any(v.detail == "d" for v in audit_source(src))
+
+
+# ---------------------------------------------------------------------------
+# FP tunings — the negative direction (both-direction pins for the
+# churn-prone taint heuristics).
+# ---------------------------------------------------------------------------
+
+
+def test_len_of_tainted_container_is_clean():
+    """``print(f"{len(rows)} rows")`` is a count, not content —
+    len() destroys content, so the summary-count idiom stays clean."""
+    src = (
+        "def render(e):\n"
+        "    rows = [e['title']]\n"
+        "    print(f'{len(rows)} row(s)')\n"
+    )
+    assert audit_source(src) == []
+
+
+def test_ifexp_condition_does_not_taint_sanitised_value():
+    """``x = _sft(v) if v else None`` — the test picks a branch but
+    contributes no content; both branch values are safe."""
+    src = (
+        "def render(e):\n"
+        "    v = e.get('hypothesis')\n"
+        "    x = _sft(v) if v else None\n"
+        "    print(x)\n"
+    )
+    assert audit_source(src) == []
+
+
+def test_ifexp_tainted_branch_still_fires():
+    src = (
+        "def render(e):\n"
+        "    v = e.get('hypothesis')\n"
+        "    x = v if v else 'none'\n"
+        "    print(x)\n"
+    )
+    assert any(v.detail == "x" for v in audit_source(src))
+
+
+def test_repr_conversion_is_clean():
+    """``{value!r}`` renders through repr(), which escapes
+    non-printables in strings."""
+    src = (
+        "def render(e):\n"
+        "    name = e['title']\n"
+        "    print(f'bad name {name!r}')\n"
+    )
+    assert audit_source(src) == []
+
+
+def test_ascii_json_dumps_is_clean_and_nonascii_fires():
+    """json.dumps(..., ensure_ascii=True) is the blessed terminal-JSON
+    shape; without the keyword the read still fires."""
+    safe = (
+        "def render(e):\n"
+        "    import json\n"
+        "    print(json.dumps(e['details'], ensure_ascii=True))\n"
+    )
+    assert audit_source(safe) == []
+    unsafe = (
+        "def render(e):\n"
+        "    import json\n"
+        "    print(json.dumps(e['details'], ensure_ascii=False))\n"
+    )
+    assert any(v.detail == "details" for v in audit_source(unsafe))

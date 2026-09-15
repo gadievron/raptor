@@ -1633,7 +1633,9 @@ def _discover_executables(target):
             # bare "38 executables" on a source-only tree hid that
             # every one was a script / autotools helper.
             _SKIP_PRINT_CAP = 10
-            shown = ", ".join(sorted(skipped_non_binary)[:_SKIP_PRINT_CAP])
+            # target-derived file names
+            shown = _sft(", ".join(sorted(skipped_non_binary)[:_SKIP_PRINT_CAP]),
+                         max_len=300)
             extra = len(skipped_non_binary) - _SKIP_PRINT_CAP
             print(
                 f"  Skipped {len(skipped_non_binary)} exec-bit "
