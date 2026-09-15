@@ -1121,14 +1121,22 @@ def _cli_main(argv: list | None = None) -> int:
                       "the triage report failed provenance "
                       "verification; see log)", file=sys.stderr)
             elif not args.json:
+                # Deep-report free text is LLM output. The producer
+                # (triage_deep._parse_assessments) escapes and caps it
+                # today, but that is a producer-side contract this
+                # print must not depend on — a new deep-report field or
+                # a consumer reading the report from disk without
+                # re-verification would reach the terminal raw.
+                # Sanitise at the emission site like the caveat print.
                 print(f"Deep assessment ({deep['model'] or 'LLM'}) — "
                       f"advisory, rules verdict stands:")
                 for a in deep["assessments"]:
-                    print(f"  - {a['signal_type']}: {a['judgement']} "
+                    print(f"  - {sanitise_for_terminal(str(a['signal_type']), max_len=64)}: "
+                          f"{sanitise_for_terminal(str(a['judgement']), max_len=32)} "
                           f"(confidence {a['confidence']:.2f}) — "
-                          f"{a['rationale']}")
+                          f"{sanitise_for_terminal(str(a['rationale']))}")
                 if deep.get("overall_note"):
-                    print(f"  note: {deep['overall_note']}")
+                    print(f"  note: {sanitise_for_terminal(str(deep['overall_note']))}")
     # Verdict-reflecting exit codes for scripting/CI gates:
     #   0 clean (or no telemetry), 1 error, 2 usage,
     #   3 notable, 4 suspicious. --deep never changes the code — the

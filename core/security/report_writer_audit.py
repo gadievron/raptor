@@ -162,6 +162,7 @@ _REPORT_WRITER_FILES = (
     "core/audit/_util.py",
     "core/project/report.py",
     "core/reporting/findings.py",
+    "core/sandbox/triage.py",
     "packages/exploitability_validation/report.py",
     # Second validation-report.md generator (the orchestrator's
     # inline _generate_report/_render_finding_lines) — same artifact,
