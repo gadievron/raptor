@@ -227,7 +227,39 @@ class TestCompiledConfigsSafe:
     def test_codeql_name_has_no_bare_quote(self):
         specs = [TaintSpec(function='ev"il', file="a.c", role="sink")]
         out = compile_codeql_config(specs)
-        assert 'hasName("ev\\"il")' in out
+        assert 'irisCallArg(sink, "ev\\"il")' in out
+
+    def test_codeql_delegates_to_canonical_generator(self):
+        """One generator: the audit-side twin must emit exactly what
+        the canonical core.iris generator emits for equivalent specs —
+        its former duplicated body had diverged into QL that compiled
+        for no language."""
+        from core.iris.specs import TaintSpec as IrisTaintSpec
+        from core.iris.specs import (
+            compile_codeql_config as iris_compile,
+        )
+
+        audit_specs = [
+            TaintSpec(function="read_input", file="io.c", role="source"),
+            TaintSpec(function="exec_cmd", file="cmd.c", role="sink"),
+        ]
+        iris_specs = [
+            IrisTaintSpec(function="read_input", file="io.c",
+                          role="source"),
+            IrisTaintSpec(function="exec_cmd", file="cmd.c", role="sink"),
+        ]
+        for language in ("cpp", "java", "python"):
+            assert (
+                compile_codeql_config(audit_specs, language=language)
+                == iris_compile(iris_specs, language=language)
+            )
+
+    def test_codeql_unsupported_language_raises(self):
+        import pytest
+
+        specs = [TaintSpec(function="f", file="a.c", role="sink")]
+        with pytest.raises(ValueError, match="unsupported"):
+            compile_codeql_config(specs, language="swift")
 
 
 class TestSpecSerialization:
