@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core.security.log_sanitisation import sanitise_for_terminal
 from core.json import load_json, loads, save_json
 
 # Ensemble constants and algorithms imported from pipeline.py (single source
@@ -2446,9 +2447,10 @@ def _format_summary(
                          f"expected={r['expected']} got={r['actual']} "
                          f"evidence={r.get('evidence_tool', '')}")
             if r.get("error_reason"):
-                lines.append(f"    reason: {r['error_reason']}")
+                lines.append("    reason: "
+                             f"{sanitise_for_terminal(str(r['error_reason']))}")
             if hyp:
-                lines.append(f"    hypothesis: {hyp}")
+                lines.append(f"    hypothesis: {sanitise_for_terminal(str(hyp))}")
 
     gates = check_gate(aggregate, per_class, results)
     if gates:
@@ -3295,7 +3297,8 @@ def _run_phase2_classify(
         r["phase2_classification"] = result.get("classification", "quality_finding")
         r["phase2_is_security"] = result.get("is_security", False)
         r["phase2_primitive"] = result.get("primitive") or "none"
-        cls_tag = result.get("classification", "?")
+        cls_tag = sanitise_for_terminal(
+            str(result.get("classification", "?")), max_len=64)
         print(f"  {fid} -> {cls_tag}", flush=True)
 
     errored = sum(1 for r in findings if r.get("phase2_error"))

@@ -281,3 +281,23 @@ def test_sandboxed_apply_rejects_bad_patch_with_same_error_shape(
     assert "patch does not apply" in err or "error:" in err
     assert (target / "requirements.txt").read_text() \
         == "requests==2.19.0\n", "failed apply must not touch the tree"
+
+
+def test_rejected_patch_stderr_escaped_and_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+):
+    # git apply failures quote the target file's context lines —
+    # attacker bytes must not reach the operator terminal raw, and a
+    # multi-MB stderr must not flood it.
+    (tmp_path / ".git").mkdir()
+    patch = _make_patch(tmp_path)
+    hostile = "error: \x1b]0;pwned\x07\x9b2J‮ patch failed: x:1\n" * 200
+    _stub_run_untrusted(monkeypatch, returncode=1, stderr=hostile)
+    rc = apply_patch_to_target(tmp_path, patch)
+    assert rc == 1
+    err = capsys.readouterr().err
+    for raw in ("\x1b", "\x07", "\x9b", "‮"):
+        assert raw not in err
+    assert "patch failed" in err
+    assert err.count("\n") < 60  # line-capped

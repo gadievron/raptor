@@ -121,7 +121,12 @@ def apply_patch_to_target(
         print(f"{caller_label} --apply: git apply rejected the patch:",
               file=sys.stderr)
         if proc.stderr:
-            print(proc.stderr, file=sys.stderr)
+            # git apply failures quote the target file's context lines
+            # (attacker bytes) — escape + bound per line.
+            from core.security.log_sanitisation import sanitise_for_terminal
+            for ln in proc.stderr.splitlines()[:40]:
+                print(sanitise_for_terminal(ln, max_len=300),
+                      file=sys.stderr)
         return proc.returncode
 
     print(f"{caller_label} --apply: patch applied to {target}")

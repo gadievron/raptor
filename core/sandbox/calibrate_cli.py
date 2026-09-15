@@ -114,22 +114,28 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _format_human(profile, *, cached: bool) -> str:
-    """Pretty multi-line summary."""
+    """Pretty multi-line summary.
+
+    Observed paths/hosts are chosen by the PROBED binary (it decides
+    what to open/connect to) — escape them before the operator's
+    terminal like every other foreign-derived print surface.
+    """
+    from core.security.log_sanitisation import sanitise_for_terminal as _sft
     SAMPLE = 15
     lines = []
-    lines.append(f"binary: {profile.binary_path}")
+    lines.append(f"binary: {_sft(str(profile.binary_path), max_len=200)}")
     lines.append(f"  sha256:        {profile.binary_sha256[:16]}…")
     lines.append(f"  env signature: {profile.env_signature[:16]}…")
     lines.append(f"  captured at:   {profile.captured_at}")
     lines.append(f"  source:        {'cache' if cached else 'fresh probe'}")
-    lines.append(f"  probe argv:    {profile.probe_args}")
+    lines.append(f"  probe argv:    {_sft(str(profile.probe_args), max_len=200)}")
 
     def _section(label, items, sample=SAMPLE) -> None:
         lines.append(f"\n{label} ({len(items)}):")
         if not items:
             lines.append("  (empty)")
             return
-        lines.extend(f"  {x}" for x in items[:sample])
+        lines.extend(f"  {_sft(str(x), max_len=300)}" for x in items[:sample])
         if len(items) > sample:
             lines.append(f"  ... (+{len(items) - sample} more)")
 
@@ -139,7 +145,10 @@ def _format_human(profile, *, cached: bool) -> str:
     _section("proxy hosts", profile.proxy_hosts)
     if profile.connect_targets:
         lines.append(f"\nconnect targets ({len(profile.connect_targets)}):")
-        lines.extend(f"  {t.ip}:{t.port} ({t.family})" for t in profile.connect_targets[:SAMPLE])
+        lines.extend(
+            f"  {_sft(str(t.ip), max_len=64)}:{t.port} ({t.family})"
+            for t in profile.connect_targets[:SAMPLE]
+        )
         if len(profile.connect_targets) > SAMPLE:
             lines.append(
                 f"  ... (+{len(profile.connect_targets) - SAMPLE} more)"

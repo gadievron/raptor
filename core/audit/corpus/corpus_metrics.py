@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from core.security.log_sanitisation import sanitise_for_terminal
 from core.json import load_json
 
 
@@ -362,10 +363,12 @@ def check_gate(
             )
             trap_what = rationales.get(fid, "")
             if trap_what:
-                detail_lines.append(f"    trap: {trap_what}")
+                detail_lines.append(
+                    f"    trap: {sanitise_for_terminal(str(trap_what))}")
             hyp = r.get("hypothesis") or ""
             if hyp:
-                detail_lines.append(f"    hypothesis: {hyp}")
+                detail_lines.append(
+                    f"    hypothesis: {sanitise_for_terminal(str(hyp))}")
         failures.append(
             f"Trap gate FAILED: {trap.fp} deliberately-safe "
             f"function(s) flagged:\n" + "\n".join(detail_lines)
@@ -660,7 +663,8 @@ def main(argv: list[str] | None = None) -> int:
         print()
         print(f"{len(errored)} label(s) errored (excluded from P/R):")
         for r in errored:
-            reason = r.get("error_reason") or r.get("error", "")
+            reason = sanitise_for_terminal(
+                str(r.get("error_reason") or r.get("error", "")))
             suffix = f" — {reason}" if reason else ""
             print(f"  {r['function_id']}{suffix}")
 

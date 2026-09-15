@@ -824,7 +824,8 @@ def _write_report(cfg: RunConfig, result: RunResult) -> None:
     status = "Ok" if result.ok else "Failed"
     lines.append(f"**Status:** {status}")
     if result.error:
-        lines.append(f"**Error:** `{result.error}`")
+        from core.security.prompt_output_sanitise import sanitise_inline
+        lines.append(f"**Error:** `{sanitise_inline(result.error, max_chars=500)}`")
     lines.append(f"**Target:** `{cfg.target.raw}` ({cfg.target.kind})")
     if result.resolved_pid:
         lines.append(f"**PID:** {result.resolved_pid}")

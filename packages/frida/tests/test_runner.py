@@ -626,3 +626,28 @@ def test_tooling_safe_env_still_carries_ef_knobs(monkeypatch):
     monkeypatch.setenv("RAPTOR_EF_TIMEOUT_FAST", "5")
     env = RaptorConfig.get_safe_env()
     assert env.get("RAPTOR_EF_TIMEOUT_FAST") == "5"
+
+
+def test_report_error_field_defanged(tmp_path: Path):
+    # result.error can embed target-process/device text — the report
+    # .md must not carry raw controls or markdown out of the field.
+    from packages.frida.runner import (
+        RunConfig,
+        RunResult,
+        TargetSpec,
+        _write_report,
+    )
+    hostile = "attach failed \x1b]0;pwned\x07\x9b2J‮ for `proc`\n# forged"
+    cfg = RunConfig(
+        target=TargetSpec(raw="1234", pid=1234),
+        out_dir=tmp_path,
+        script_source="send(1);",
+        script_origin="template:t",
+    )
+    result = RunResult(ok=False, error=hostile)
+    _write_report(cfg, result)
+    report = (tmp_path / "frida-report.md").read_text()
+    for raw in ("\x1b", "\x07", "\x9b", "‮"):
+        assert raw not in report
+    assert "\n# forged" not in report
+    assert "attach failed" in report

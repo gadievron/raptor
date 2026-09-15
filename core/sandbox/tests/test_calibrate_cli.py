@@ -279,3 +279,24 @@ class TestE2EShim:
         assert len(payload["binary_sha256"]) == 64
         # cat /etc/hosts must have read at least the file + libc.
         assert len(payload["paths_read"]) > 0
+
+
+class TestForeignFieldsEscaped:
+    def test_hostile_observed_paths_escaped(
+        self, cache_dir, fake_binary, capsys,
+    ):
+        # Observed paths are chosen by the PROBED binary — a hostile
+        # tool that open()s an ESC-named path must not drive the
+        # operator terminal via --show.
+        hostile = "/tmp/\x1b]0;pwned\x07\x9b2J‮evil"
+        prof = _profile_for(fake_binary)
+        prof.paths_read.append(hostile)
+        fp = cal._fingerprint(prof.binary_sha256, prof.env_signature)
+        cal._save_to_cache(fp, prof)
+
+        rc = _cli_main(["--bin", str(fake_binary), "--show"])
+        out = capsys.readouterr().out
+        assert rc == 0
+        for raw in ("\x1b", "\x07", "\x9b", "‮"):
+            assert raw not in out
+        assert "pwned" in out  # escaped, not dropped

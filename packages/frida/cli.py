@@ -161,7 +161,11 @@ def main(argv: list[str] | None = None) -> int:
         # Detail already in metadata.json + frida-report.md; the CLI
         # prints a one-liner so a caller wrapping us in a shell knows
         # what happened without parsing JSON.
-        print(f"frida: run failed: {result.error}", file=sys.stderr)
+        # Frida error strings can embed target-process/device text.
+        from core.security.log_sanitisation import sanitise_for_terminal
+        print("frida: run failed: "
+              f"{sanitise_for_terminal(str(result.error), max_len=500)}",
+              file=sys.stderr)
         return 1
 
     print(f"frida: ok - {result.events_captured} events captured in "
