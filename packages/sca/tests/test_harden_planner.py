@@ -1577,3 +1577,39 @@ def test_major_crossing_clean_target_still_review_required() -> None:
     )
     assert cand.status == "review_required"
     assert "crosses a major boundary" in (cand.detail or "")
+
+
+# ---------------------------------------------------------------------------
+# --no-cache must actually bypass the OSV / KEV / EPSS disk caches
+# ---------------------------------------------------------------------------
+
+
+def test_no_cache_zeroes_lookup_ttls(tmp_path):
+    """`fix --harden --no-cache` must zero the OSV/KEV/EPSS TTLs so
+    every persisted entry is stale on read — substituting a fresh
+    JsonCache object alone left the default 24h TTLs serving day-old
+    advisory answers to the one flag whose documented purpose is
+    bypassing them (the scan / review / whatif paths already zero)."""
+    from core.json import JsonCache
+
+    from packages.sca.harden import _build_lookup_clients
+
+    class _NoHttp:
+        def get(self, *a, **k):  # pragma: no cover - never reached
+            raise AssertionError("no network in this test")
+
+    cache = JsonCache(root=tmp_path)
+    osv, kev, epss = _build_lookup_clients(
+        _NoHttp(), cache, offline=True, no_cache=True,
+    )
+    assert osv._query_ttl == 0
+    assert osv._inner._ttl == 0
+    assert kev._ttl == 0
+    assert epss._ttl == 0
+    # Cached runs keep the standard 24h freshness window.
+    osv, kev, epss = _build_lookup_clients(
+        _NoHttp(), cache, offline=True, no_cache=False,
+    )
+    assert osv._query_ttl == 24 * 3600
+    assert kev._ttl == 24 * 3600
+    assert epss._ttl == 24 * 3600

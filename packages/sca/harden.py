@@ -175,6 +175,29 @@ class HardenCandidate:
 # Public entry point
 # ---------------------------------------------------------------------------
 
+def _build_lookup_clients(
+    http, cache: JsonCache | None, *, offline: bool, no_cache: bool,
+):
+    """Construct the OSV / KEV / EPSS clients for one harden run.
+
+    The three clients need a JsonCache instance either way, so
+    ``--no-cache`` is honoured by zeroing their TTLs (the scan /
+    review / whatif shape), making every persisted entry stale on
+    read — substituting a fresh cache object alone left the default
+    24h TTLs serving day-old advisory / KEV / EPSS answers to the one
+    flag whose documented purpose is bypassing them.
+    """
+    from core.cve import EpssClient, KevClient
+    ttl = 0 if no_cache else 24 * 3600
+    osv = OsvClient(http, cache or JsonCache(root=SCA_CACHE_ROOT),
+                    offline=offline, query_ttl=ttl, vuln_ttl=ttl)
+    kev = KevClient(http, cache or JsonCache(root=SCA_CACHE_ROOT),
+                    offline=offline, ttl_seconds=ttl)
+    epss = EpssClient(http, cache or JsonCache(root=SCA_CACHE_ROOT),
+                      offline=offline, ttl_seconds=ttl)
+    return osv, kev, epss
+
+
 def main(argv: Sequence[str]) -> int:
     args = _parse_args(argv)
     _configure_logging(args.verbose)
@@ -219,11 +242,9 @@ def main(argv: Sequence[str]) -> int:
     http = default_client(offline=args.offline)
     cache = (None if args.no_cache else
              JsonCache(root=Path(args.cache_root) if args.cache_root else SCA_CACHE_ROOT))
-    osv = OsvClient(http, cache or JsonCache(root=SCA_CACHE_ROOT),
-                    offline=args.offline)
-    from core.cve import EpssClient, KevClient
-    kev = KevClient(http, cache or JsonCache(root=SCA_CACHE_ROOT), offline=args.offline)
-    epss = EpssClient(http, cache or JsonCache(root=SCA_CACHE_ROOT), offline=args.offline)
+    osv, kev, epss = _build_lookup_clients(
+        http, cache, offline=args.offline, no_cache=args.no_cache,
+    )
     registries = {
         "PyPI": PyPIClient(http, cache, offline=args.offline),
         "npm": NpmClient(http, cache, offline=args.offline),
