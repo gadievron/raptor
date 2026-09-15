@@ -122,6 +122,71 @@ summary
 _QUERIES_DIR = Path(__file__).resolve().parents[2] / "packages" / "joern" / "queries"
 
 
+# ─── Context-map ingestion validation ───────────────────────────────────────
+
+# The full consumed context-map surface of this module: every
+# collection it walks, with the string fields it reads from each
+# entry. context-map.json is LLM-produced and only the top-level dict
+# is shape-validated upstream, so EVERY level below that is hostile
+# until proven — the collection value itself (scalars arrive where
+# lists belong), each entry (strings arrive where dicts belong), and
+# each field value (lists arrive where strings belong). All reads go
+# through the one walker below instead of per-site isinstance
+# patches, so a new read site cannot re-open the hole: it fetches
+# through the walker or it never sees the data.
+_CONTEXT_MAP_STR_FIELDS: dict[str, tuple[str, ...]] = {
+    "call_edges": ("caller", "callee", "from", "to"),
+    "entry_points": ("name", "function"),
+    "sinks": ("function",),
+}
+
+
+def _context_map_entries(
+    context_map: dict[str, Any],
+    key: str,
+) -> list[dict[str, Any]]:
+    """Validated fetch of one context-map collection.
+
+    Returns entry copies in which every consumed field is either a
+    str or absent. Wrong shapes SKIP with a logged reason rather than
+    TypeError a caller that has no enclosing try (the /audit
+    post-deepen sweep calls the public gates bare). Skip granularity
+    follows the damage: a non-list collection value drops the whole
+    collection (fail-soft, same as absent), a non-dict entry drops
+    that entry, a wrong-typed field value drops just that field.
+    """
+    value = context_map.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        logger.debug(
+            "context-map %r is %s, not a list — collection skipped",
+            key, type(value).__name__,
+        )
+        return []
+    fields = _CONTEXT_MAP_STR_FIELDS[key]
+    entries: list[dict[str, Any]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            logger.debug(
+                "context-map %r entry is %s, not a dict — entry skipped",
+                key, type(entry).__name__,
+            )
+            continue
+        cleaned = dict(entry)
+        for field_name in fields:
+            field_value = cleaned.get(field_name)
+            if field_value is not None and not isinstance(field_value, str):
+                logger.debug(
+                    "context-map %r field %r is %s, not a str — "
+                    "field dropped", key, field_name,
+                    type(field_value).__name__,
+                )
+                del cleaned[field_name]
+        entries.append(cleaned)
+    return entries
+
+
 # ─── Sink reachability ───────────────────────────────────────────────────────
 
 
@@ -139,20 +204,18 @@ def build_sink_reachable_set(
     """
     if not context_map:
         return None
-    sinks_list = context_map.get("sinks")
-    edges = context_map.get("call_edges")
+    # All context-map reads go through the ingestion walker (see
+    # _context_map_entries) — entries arrive dict-shaped with every
+    # consumed field str-or-absent, so no per-site type checks below.
+    edges = _context_map_entries(context_map, "call_edges")
     if not edges:
         return None
 
-    sink_fns: set[str] = set()
-    if sinks_list:
-        # isinstance guard: a context-map that ever carries string
-        # sink entries would pass the substring test ("function" in
-        # <str>) and then explode on s["function"].
-        sink_fns = {
-            s["function"] for s in sinks_list
-            if isinstance(s, dict) and "function" in s
-        }
+    sink_fns: set[str] = {
+        s["function"]
+        for s in _context_map_entries(context_map, "sinks")
+        if "function" in s
+    }
 
     all_callees: set[str] = set()
     forward: dict[str, set[str]] = {}
@@ -208,22 +271,28 @@ def is_entry_unreachable(
     """
     if not context_map:
         return False
-    call_edges = context_map.get("call_edges")
+    # All context-map reads go through the ingestion walker (see
+    # _context_map_entries) — entries arrive dict-shaped with every
+    # consumed field str-or-absent, so no per-site type checks below.
+    call_edges = _context_map_entries(context_map, "call_edges")
     if not call_edges:
         return False
 
-    entry_points_raw = context_map.get("entry_points", [])
-    if not entry_points_raw:
+    entry_points = _context_map_entries(context_map, "entry_points")
+    if not entry_points:
         return False
 
     entry_names = {
         ep.get("name") or ep.get("function", "")
-        for ep in entry_points_raw
+        for ep in entry_points
     }
     if function_name in entry_names:
         return False
 
-    callee_set = {edge.get("callee") or edge.get("to") for edge in call_edges}
+    callee_set = {
+        edge.get("callee") or edge.get("to")
+        for edge in call_edges
+    }
     if function_name in callee_set:
         return False
 

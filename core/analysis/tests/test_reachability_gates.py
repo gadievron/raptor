@@ -1,7 +1,10 @@
 """Tests for core.analysis.reachability_gates — generic finding gates."""
 
 import json
+import re
 from typing import ClassVar
+
+import pytest
 
 import core.analysis.reachability_gates as rg
 from core.analysis.reachability_gates import (
@@ -63,6 +66,52 @@ class TestBuildSinkReachableSet:
         assert "caller_a" in reachable
         assert "isolated" not in reachable
 
+    def test_non_dict_entries_skipped_not_crashed(self):
+        # context-map.json is LLM-produced and only shape-validated at
+        # the top level; the /audit post-deepen sweep calls this with
+        # no enclosing try, so a string entry in ANY list must skip.
+        cm = {
+            "sinks": ["dangerous_handler", {"function": "sink"}],
+            "call_edges": [
+                "main -> parse",
+                {"caller": "main", "callee": "sink"},
+            ],
+        }
+        reachable = build_sink_reachable_set(cm)
+        assert "main" in reachable
+        assert "sink" in reachable
+
+    def test_list_valued_fields_dropped_not_crashed(self):
+        # Wrong-typed FIELD values are as plausible an LLM emission as
+        # wrong-typed entries: a list of callers, a list of sink
+        # names. The ingestion walker drops the field; the edge / sink
+        # entry contributes nothing instead of raising unhashable-type.
+        cm = {
+            "sinks": [{"function": ["s1", "s2"]}, {"function": "sink"}],
+            "call_edges": [
+                {"caller": ["a", "b"], "callee": "sink"},
+                {"caller": "main", "callee": "sink"},
+            ],
+        }
+        reachable = build_sink_reachable_set(cm)
+        assert "main" in reachable
+        assert "sink" in reachable
+
+    def test_non_list_collections_fail_soft(self):
+        # A scalar where a collection belongs skips the collection —
+        # same fail-soft as an absent key (gate declines, caller does
+        # not demote).
+        assert build_sink_reachable_set({"call_edges": 7}) is None
+        assert build_sink_reachable_set(
+            {"call_edges": "main->sink", "sinks": [{"function": "sink"}]},
+        ) is None
+        # Sinks scalar: edges alone can still seed from libc names.
+        cm = {
+            "sinks": 7,
+            "call_edges": [{"caller": "main", "callee": "memcpy"}],
+        }
+        assert build_sink_reachable_set(cm) == {"main", "memcpy"}
+
 
 # ─── is_entry_unreachable ────────────────────────────────────────────────────
 
@@ -101,6 +150,122 @@ class TestIsEntryUnreachable:
             "call_edges": [{"caller": "a", "callee": "b"}],
         }
         assert is_entry_unreachable("orphan_fn", cm) is False
+
+    def test_non_dict_entries_skipped_not_crashed(self):
+        # Same guard class as the sinks walk: string entries in
+        # entry_points or call_edges skip instead of raising.
+        cm = {
+            "entry_points": ["main", {"name": "main"}],
+            "call_edges": ["main -> parse",
+                           {"caller": "main", "callee": "parse"}],
+        }
+        assert is_entry_unreachable("main", cm) is False
+        assert is_entry_unreachable("parse", cm) is False
+        assert is_entry_unreachable("orphan_fn", cm) is True
+
+    def test_list_valued_name_dropped_not_crashed(self):
+        # A list where the entry-point name belongs drops the field:
+        # that entry can no longer prove entry-point status, but the
+        # sweep must not die on unhashable-type.
+        cm = {
+            "entry_points": [{"name": ["main"]}, {"name": "handler"}],
+            "call_edges": [{"caller": "handler", "callee": "parse"}],
+        }
+        assert is_entry_unreachable("handler", cm) is False
+        assert is_entry_unreachable("parse", cm) is False
+        assert is_entry_unreachable("orphan_fn", cm) is True
+
+    def test_non_list_collections_fail_soft(self):
+        # Scalar collection values read as absent — the gate declines
+        # (False = don't demote), it never raises.
+        assert is_entry_unreachable(
+            "f", {"entry_points": 42, "call_edges": 42},
+        ) is False
+        assert is_entry_unreachable(
+            "f",
+            {"entry_points": "main",
+             "call_edges": [{"caller": "a", "callee": "b"}]},
+        ) is False
+        assert is_entry_unreachable(
+            "f",
+            {"entry_points": [{"name": "main"}], "call_edges": {"a": "b"}},
+        ) is False
+
+
+# ─── Context-map ingestion walker: generative field-domain sweep ────────────
+
+
+# Wrong-shape values covering the JSON domain an LLM-written map can
+# carry at any level: null, scalars, strings, lists (nested), dicts.
+_HOSTILE_VALUES = [
+    None, 7, 3.5, True, "text", [], ["x"], [["x"]], {}, {"k": "v"},
+]
+
+
+def _valid_context_map():
+    return {
+        "entry_points": [{"name": "main"}],
+        "call_edges": [{"caller": "main", "callee": "sink"}],
+        "sinks": [{"function": "sink"}],
+    }
+
+
+class TestContextMapIngestionDomainSweep:
+    """Every (collection, level, hostile value) combination must be
+    absorbed by the ingestion walker — the public gates return their
+    fail-soft shape, never raise. Parametrizes over the module's own
+    consumed-surface schema so a new collection/field automatically
+    joins the sweep."""
+
+    @staticmethod
+    def _assert_gates_survive(cm):
+        result = build_sink_reachable_set(cm)
+        assert result is None or isinstance(result, set)
+        assert isinstance(is_entry_unreachable("orphan_fn", cm), bool)
+        assert isinstance(is_entry_unreachable("main", cm), bool)
+
+    @pytest.mark.parametrize("key", sorted(rg._CONTEXT_MAP_STR_FIELDS))
+    @pytest.mark.parametrize("bad", _HOSTILE_VALUES)
+    def test_hostile_collection_value(self, key, bad):
+        cm = _valid_context_map()
+        cm[key] = bad
+        self._assert_gates_survive(cm)
+
+    @pytest.mark.parametrize("key", sorted(rg._CONTEXT_MAP_STR_FIELDS))
+    @pytest.mark.parametrize("bad", _HOSTILE_VALUES)
+    def test_hostile_entry(self, key, bad):
+        cm = _valid_context_map()
+        cm[key] = [bad, *cm[key]]
+        self._assert_gates_survive(cm)
+
+    @pytest.mark.parametrize(
+        "key,field_name",
+        sorted(
+            (key, field_name)
+            for key, fields in rg._CONTEXT_MAP_STR_FIELDS.items()
+            for field_name in fields
+        ),
+    )
+    @pytest.mark.parametrize("bad", _HOSTILE_VALUES)
+    def test_hostile_field_value(self, key, field_name, bad):
+        cm = _valid_context_map()
+        cm[key] = [dict(cm[key][0], **{field_name: bad}), *cm[key]]
+        self._assert_gates_survive(cm)
+
+    def test_schema_covers_every_walked_collection(self):
+        # Closure pin: the walker schema names every context_map
+        # collection this module reads. A new read of an unlisted key
+        # must extend the schema (KeyError here otherwise).
+        import inspect
+
+        source = inspect.getsource(rg)
+        walked = set(re.findall(
+            r"_context_map_entries\(\s*context_map,\s*\"(\w+)\"", source,
+        ))
+        direct = set(re.findall(r"context_map\.get\(\"(\w+)\"", source))
+        assert walked == set(rg._CONTEXT_MAP_STR_FIELDS)
+        # No literal-key .get() reads outside the walker itself.
+        assert direct == set()
 
 
 # ─── is_conduit_candidate ────────────────────────────────────────────────────
