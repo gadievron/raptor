@@ -966,10 +966,32 @@ class _PythonCFGBuilder:
         body_out = self._build_stmts(stmt.body, incoming)
         handler_outs: list[PyCFGNode] = []
         for handler in stmt.handlers:
-            # Each handler's first node is reachable from every
-            # statement of body (any of them could raise).
+            # Handler ENTRY node: carries the ``except E as name``
+            # binding as a def. ``ExceptHandler.name`` is an
+            # identifier STRING (no Store-ctx Name node), so no
+            # ``_walk_symbols`` walk can ever see it — leaving it out
+            # of ``defs`` makes a handler rebind of a sanitized name
+            # invisible to reaching-defs, the same hole the match-case
+            # capture nodes and the Java leg's catch entry close.
+            # Def-only (never ``assigned_names``): refusal direction.
+            handler_defs = (
+                frozenset({handler.name}) if handler.name else frozenset()
+            )
+            entry_node = PyCFGNode(
+                kind="stmt",
+                lineno=handler.lineno,
+                label=f"except (line {handler.lineno})",
+                defs=handler_defs,
+                may_escape=bool(handler_defs & self._escape_names),
+            )
+            self._all_nodes.append(entry_node)
+            # Each handler's entry is reachable from every statement
+            # of body (any of them could raise).
+            self._link_many(
+                list(self._adjacency.keys() - {self.exit}), entry_node,
+            )
             handler_node_start = self._build_stmts(
-                handler.body, list(self._adjacency.keys() - {self.exit}),
+                handler.body, [entry_node],
             )
             # Simplification: the conservative attachment above adds
             # spurious predecessors. The right thing for the

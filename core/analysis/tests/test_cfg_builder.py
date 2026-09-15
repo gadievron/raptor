@@ -828,3 +828,54 @@ class TestLoopJoinSentinels:
         # The header still carries the loop's payload.
         header = next(n for n in cfg.nodes() if "load" in n.calls)
         assert "v" in header.defs
+
+
+class TestExceptHandlerBinding:
+    """``except E as name`` binds ``name`` via an identifier STRING —
+    invisible to every Store-ctx walk. The handler entry node must
+    carry it as a def (mirroring the Java catch entry and the
+    match-case capture nodes), or a handler rebind of a sanitized
+    name is invisible to reaching-defs."""
+
+    def test_handler_name_is_a_def(self):
+        src = (
+            "def handle(x):\n"
+            "    try:\n"
+            "        op(x)\n"
+            "    except ValueError as err:\n"
+            "        log(err)\n"
+        )
+        cfg = build_python_cfg(src, "handle")
+        assert any("err" in n.defs for n in cfg.nodes())
+
+    def test_handler_rebind_breaks_exclusivity(self):
+        from core.analysis.sanitizer_cut import evaluate_finding
+        src = (
+            "def handle(x):\n"
+            "    y = html.escape(x)\n"
+            "    try:\n"
+            "        op(x)\n"
+            "    except ValueError as y:\n"
+            "        pass\n"
+            "    render(y)\n"
+        )
+        cfg = build_python_cfg(src, "handle")
+        sink = next(n for n in cfg.nodes() if "render" in n.calls)
+        result = evaluate_finding(
+            cfg, [cfg.entry_node], sink,
+            cwe="CWE-79", language="python",
+            source_symbols=["x"], sink_arg="y",
+        )
+        assert not result.suppress
+
+    def test_bare_except_adds_no_defs(self):
+        src = (
+            "def handle(x):\n"
+            "    try:\n"
+            "        op(x)\n"
+            "    except Exception:\n"
+            "        log(x)\n"
+        )
+        cfg = build_python_cfg(src, "handle")
+        entries = [n for n in cfg.nodes() if n.label.startswith("except")]
+        assert entries and all(not n.defs for n in entries)
