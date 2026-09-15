@@ -31,6 +31,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from core.project.correlate import NEGATIVE_VERDICTS
+
 logger = logging.getLogger(__name__)
 
 # Per-run cap on dominance queries outside /audit: each is a Joern
@@ -247,7 +249,17 @@ def apply_to_findings(
             ruling_status = ruling.get("status")
         else:
             ruling_status = ruling if isinstance(ruling, str) else None
-        if ruling_status == "ruled_out":
+        # Skip on the SHARED negative-verdict vocabulary, not one
+        # literal: /agentic rules findings out as "false_positive"
+        # (and /validate as "disproven"), which never equal
+        # "ruled_out" — each such finding burned a slot of the
+        # 20-query cap on a claim already ruled out, starving live
+        # candidates. Skip-too-wide is the other failure direction
+        # (a live finding silently loses its refute/corroborate
+        # check), so only recognised NEGATIVE verdicts skip; unknown
+        # or positive rulings stay in play.
+        if (isinstance(ruling_status, str)
+                and ruling_status.strip().lower() in NEGATIVE_VERDICTS):
             continue
         if finding.get("manual_override"):
             continue
