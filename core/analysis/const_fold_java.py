@@ -15,9 +15,12 @@ Soundness posture (refusal-first, mirroring the Java CFG builder):
   boolean / char / null literals, parentheses, unary ``-`` / ``!``,
   integer ``+ - * / %`` (division and modulo refuse a zero divisor
   rather than guessing), string ``+`` concatenation, comparisons,
-  ``== !=``, ``&& ||``, and the ternary (folded only when its
-  condition folds to a boolean). Casts, method calls, field and
-  array accesses, and every other node type refuse.
+  ``== !=`` (only where Java's runtime semantics are a VALUE
+  comparison — see :func:`_eq_semantics_are_value`; String and
+  possibly-boxed operands refuse), ``&& ||``, and the ternary
+  (folded only when its condition folds to a boolean). Casts,
+  method calls, field and array accesses, and every other node
+  type refuse.
 * Identifiers resolve through the caller-supplied reaching-defs
   oracle: every reaching definition of the name at that point must
   itself fold, and all of them must fold to the SAME value —
@@ -607,7 +610,9 @@ def _fold(node: Node, resolve_name, depth: int, array_resolver=None,
             return not val
         return _REFUSE
     if t == "binary_expression":
-        left = _fold(node.child_by_field_name("left"), resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)
+        left_node = node.child_by_field_name("left")
+        right_node = node.child_by_field_name("right")
+        left = _fold(left_node, resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)
         if left is _REFUSE:
             return _REFUSE
         op_node = node.child_by_field_name("operator")
@@ -630,6 +635,9 @@ def _fold(node: Node, resolve_name, depth: int, array_resolver=None,
                     v is TAINT_FREE or isinstance(v, str)
                     for v in (left, right)):
                 return TAINT_FREE
+            return _REFUSE
+        if op in ("==", "!=") and not _eq_semantics_are_value(
+                left_node, right_node, left, right):
             return _REFUSE
         return _fold_binop(op, left, right)
     if t == "ternary_expression":
@@ -787,6 +795,77 @@ def _is_int(v: Any) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
 
 
+def _paren_unwrap(n: Node | None) -> Node | None:
+    while n is not None and n.type == "parenthesized_expression":
+        inner = [c for c in n.children if c.is_named]
+        if len(inner) != 1:
+            return n
+        n = inner[0]
+    return n
+
+
+# Expression shapes whose Java runtime type is a PRIMITIVE int (never
+# a boxed Integer): integer literals, arithmetic (binary/unary
+# numeric operators unbox their operands and yield primitives).
+_PRIMITIVE_INT_NODES = frozenset({
+    "decimal_integer_literal", "hex_integer_literal",
+    "octal_integer_literal", "binary_integer_literal",
+    "binary_expression", "unary_expression",
+})
+
+
+def _eq_semantics_are_value(left_node: Node | None, right_node: Node | None,
+                            left: Any, right: Any) -> bool:
+    """True when Java runtime ``==`` / ``!=`` on these operands is a
+    VALUE comparison, so folding by Python value is faithful.
+
+    Java ``==`` compares references for object operands. The folder's
+    values erase that distinction: ``_fold_pure_call`` yields Python
+    strs for ``substring``/``concat``/``toLowerCase``/… whose runtime
+    results are NEW (non-interned) String objects, so a by-value fold
+    of ``t == "a"`` returns True where the runtime is reference-false
+    — and a wrong truth value in branch-selection position prunes the
+    LIVE branch (the false-suppression direction the module docstring
+    forbids). Boxed ``Integer == Integer`` beyond the -128..127 cache
+    has the same hazard, and declared types are unknown here.
+
+    Value semantics are guaranteed only when at least one operand is
+    syntactically a PRIMITIVE-producing expression (the other side
+    then unboxes, JLS 15.21):
+
+    * ``null`` on either side — reference-vs-null matches the value
+      model (a folded non-null constant is never null);
+    * both booleans — folded booleans come from literals / logical
+      expressions (primitives), and autoboxing yields the canonical
+      cached ``Boolean`` objects, so even boxed-vs-boxed reference
+      comparison agrees with value comparison;
+    * a ``character_literal`` operand — the comparison is primitive
+      ``char`` (a String operand would not compile against a char);
+    * for int values, an integer-literal / arithmetic / unary operand.
+
+    Everything else refuses — notably ALL String comparisons without
+    a char-literal side (even literal-vs-literal: the interning
+    argument would be sound there, but carving it back in would make
+    the boundary depend on where every identifier's value came from;
+    the trade-off runs in the refusal direction and ``.equals`` is
+    the idiomatic spelling for value comparison anyway) and
+    identifier-vs-identifier ints (both sides could be boxed).
+    """
+    if left is None or right is None:
+        return True
+    if isinstance(left, bool) and isinstance(right, bool):
+        return True
+    ln = _paren_unwrap(left_node)
+    rn = _paren_unwrap(right_node)
+    if isinstance(left, str) or isinstance(right, str):
+        return (ln is not None and ln.type == "character_literal") or \
+            (rn is not None and rn.type == "character_literal")
+    if _is_int(left) and _is_int(right):
+        return (ln is not None and ln.type in _PRIMITIVE_INT_NODES) or \
+            (rn is not None and rn.type in _PRIMITIVE_INT_NODES)
+    return False
+
+
 def _fold_binop(op: str, left: Any, right: Any) -> Any:
     if op == "+" and isinstance(left, str) and isinstance(right, str):
         return left + right
@@ -808,6 +887,11 @@ def _fold_binop(op: str, left: Any, right: Any) -> Any:
             return {"<": left < right, "<=": left <= right,
                     ">": left > right, ">=": left >= right}[op]
     if op in ("==", "!="):
+        # By-value equality is faithful only where Java's runtime
+        # ``==`` is a value comparison — the caller (_fold) gates on
+        # _eq_semantics_are_value before reaching here (reference
+        # comparison of pure-call Strings / boxed Integers must
+        # refuse, never fold).
         if type(left) is type(right) or (left is None or right is None):
             return (left == right) if op == "==" else (left != right)
         return _REFUSE
