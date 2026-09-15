@@ -39,7 +39,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from ..kinds import BUMP_ID_PREFIX, SUPPLY_CHAIN_PREFIX
+from ..kinds import BUMP_ID_PREFIX
 from ..models import Confidence, Dependency, PinStyle, SupplyChainFinding
 
 logger = logging.getLogger(__name__)
@@ -244,7 +244,7 @@ def _platform_compat_regression_finding(
 ) -> SupplyChainFinding:
     return SupplyChainFinding(
         finding_id=(
-            f"{SUPPLY_CHAIN_PREFIX}platform_compat_regression:PyPI:{name}:"
+            f"{BUMP_ID_PREFIX}platform_compat_regression:PyPI:{name}:"
             f"{target_version}:{pair.arch}"
         ),
         kind="platform_compat_regression",
@@ -274,7 +274,7 @@ def _platform_compat_improvement_finding(
 ) -> SupplyChainFinding:
     return SupplyChainFinding(
         finding_id=(
-            f"{SUPPLY_CHAIN_PREFIX}platform_compat_improvement:PyPI:{name}:"
+            f"{BUMP_ID_PREFIX}platform_compat_improvement:PyPI:{name}:"
             f"{target_version}:{pair.arch}"
         ),
         kind="platform_compat_improvement",

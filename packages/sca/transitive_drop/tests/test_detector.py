@@ -1084,3 +1084,29 @@ def test_is_stable_two_directions() -> None:
     assert _is_stable("npm", "2.0.0-alpha") is False
     assert _is_stable("Debian", "1.0~rc1") is False
     assert _is_stable("npm", "not-a-version") is False
+
+
+def test_adapter_finding_id_uses_supplychain_id_prefix() -> None:
+    """Finding ids stay consistent within the supply-chain category
+    (kinds.py: the historical no-underscore spelling) — this adapter
+    drifted onto the vuln_type prefix, splitting suppression /
+    baseline keys from every sibling of the same category."""
+    from packages.sca.kinds import SUPPLYCHAIN_ID_PREFIX
+    from packages.sca.transitive_drop.adapter import (
+        to_supply_chain_findings,
+    )
+    from packages.sca.transitive_drop.detector import DropOnBumpFinding
+
+    drop = DropOnBumpFinding(
+        ecosystem="PyPI", transitive_name="diskcache",
+        transitive_version="5.6.3",
+        transitive_finding_severity="medium",
+        parent_name="instructor",
+        parent_current_version="1.14.5",
+        parent_latest_version="1.15.1",
+        transitive_status_in_latest="extras-gated",
+        extra_name="diskcache",
+    )
+    findings = to_supply_chain_findings([drop])
+    assert len(findings) == 1
+    assert findings[0].finding_id.startswith(SUPPLYCHAIN_ID_PREFIX)

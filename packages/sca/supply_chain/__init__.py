@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import logging
 
-from ..kinds import SUPPLY_CHAIN_PREFIX, SUPPLYCHAIN_ID_PREFIX
+from ..kinds import SUPPLYCHAIN_ID_PREFIX
 from ..findings import severity_rank
 from ..models import (
     Confidence,
@@ -150,7 +150,7 @@ def evaluate(
     out.extend(
         SupplyChainFinding(
             finding_id=(
-                f"{SUPPLY_CHAIN_PREFIX}install_hook_suspicious:Cargo:"
+                f"{SUPPLYCHAIN_ID_PREFIX}install_hook_suspicious:Cargo:"
                 f"{cbs.dependency.declared_in}"
             ),
             kind="install_hook_suspicious",
