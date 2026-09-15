@@ -764,21 +764,34 @@ class TestRunParallel:
         assert results == [1, 2, 3, 4]
 
     def test_concurrent_execution(self):
-        """Multiple items run concurrently, not serially."""
+        """Multiple items run concurrently, not serially.
+
+        Overlap is proven structurally: each worker waits at a
+        2-party barrier, so a rendezvous can only complete when two
+        items are in flight AT THE SAME TIME. The former peak-counter
+        version relied on the scheduler overlapping two 50ms sleeps —
+        on a starved runner the items could legally run one at a
+        time, peak stayed 1, and the test false-failed. A serial
+        regression now breaks the barrier (timeout) instead: zero
+        rendezvous, deterministic failure.
+        """
         from core.llm.concurrency import run_parallel
 
-        peak = [0]
-        current = [0]
+        barrier = threading.Barrier(2)
+        met = [0]
         lock = threading.Lock()
 
         def _track(x):
+            try:
+                barrier.wait(timeout=30)
+            except threading.BrokenBarrierError:
+                return x
             with lock:
-                current[0] += 1
-                peak[0] = max(peak[0], current[0])
-            time.sleep(0.05)
-            with lock:
-                current[0] -= 1
+                met[0] += 1
             return x
 
         run_parallel(list(range(6)), _track, max_workers=3, label="conc-test")
-        assert peak[0] >= 2
+        assert met[0] >= 2, (
+            "no two items were ever in flight together — run_parallel "
+            "executed serially"
+        )
