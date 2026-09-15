@@ -106,6 +106,12 @@ class TargetRecord:
     variants: int
     tp_rate: float | None
     target_profile: str = ""
+    # How many of `matches` the triage actually CLASSIFIED
+    # (variant/false_positive). `tp_rate` is a rate over this subset,
+    # so this is the record's verdict-backed evidence count — a
+    # partially-classified triage (1 verdict + 5 uncertain over 6
+    # matches) carries ONE sample of evidence, not six.
+    classified: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -114,6 +120,7 @@ class TargetRecord:
             "matches": self.matches,
             "variants": self.variants,
             "tp_rate": self.tp_rate,
+            "classified": self.classified,
         }
         if self.target_profile:
             d["target_profile"] = self.target_profile
@@ -121,13 +128,24 @@ class TargetRecord:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> TargetRecord:
+        tp_rate = d.get("tp_rate")
+        classified = d.get("classified")
+        if classified is None:
+            # Legacy manifests predate the field. A rated legacy
+            # record's true classified count is unknown; defaulting
+            # to `matches` preserves the exact pre-field evidence
+            # weight (retire/aggregate behaviour unchanged for old
+            # data), while an unrated record carried no verdicts by
+            # definition.
+            classified = d.get("matches", 0) if tp_rate is not None else 0
         return cls(
             target_hash=d["target_hash"],
             ts=d.get("ts", ""),
             matches=d.get("matches", 0),
             variants=d.get("variants", 0),
-            tp_rate=d.get("tp_rate"),
+            tp_rate=tp_rate,
             target_profile=d.get("target_profile", ""),
+            classified=classified,
         )
 
 
@@ -482,6 +500,7 @@ class RuleLibrary:
                 matches=len(result.matches),
                 variants=variant_count,
                 tp_rate=tp_rate if classified else None,
+                classified=classified,
             ))
 
         entry = LibraryEntry(
@@ -495,6 +514,14 @@ class RuleLibrary:
             seed_function=result.seed.function,
             dual_control=True,
             promoted_at=timestamp,
+            # When triage classified nothing (LLM outage stamps every
+            # match uncertain) these are 0.0/0.0 — a neutral
+            # placeholder, NOT measured 0% precision. The target
+            # record above already carries tp_rate=None for that
+            # case; retirement and auto-archive weigh only
+            # verdict-backed evidence, so the placeholder can never
+            # retire the rule, and the first rated update heals it
+            # via _recompute_aggregate.
             tp_rate=tp_rate,
             fp_rate=fp_rate,
             total_variants=variant_count,
@@ -507,8 +534,9 @@ class RuleLibrary:
         self._load().append(entry)
         self._save()
         logger.info(
-            "promoted rule %s to library (cwe=%s, engine=%s, tp=%.0f%%)",
-            rule.rule_id, result.seed.cwe, rule.engine, tp_rate * 100,
+            "promoted rule %s to library (cwe=%s, engine=%s, tp=%s)",
+            rule.rule_id, result.seed.cwe, rule.engine,
+            f"{tp_rate * 100:.0f}%" if classified else "no verdicts",
         )
         return entry
 
@@ -529,6 +557,7 @@ class RuleLibrary:
                     matches=len(result.matches),
                     variants=variant_count,
                     tp_rate=tp_rate if classified else None,
+                    classified=classified,
                 ))
         entry.total_variants += variant_count
         entry.total_matches += len(result.matches)
@@ -571,6 +600,7 @@ class RuleLibrary:
                     matches=len(matches),
                     variants=variant_count,
                     tp_rate=tp_rate if classified else None,
+                    classified=classified,
                 ))
             entry.total_variants += variant_count
             entry.total_matches += len(matches)
@@ -580,13 +610,22 @@ class RuleLibrary:
             return entry
 
     def _recompute_aggregate(self, entry: LibraryEntry) -> None:
-        # Per-target triage rates weighted by match count, blended
-        # with record_match feedback as one-verdict samples. Including
-        # the feedback counters here means a later update() no longer
-        # silently discards previously recorded feedback.
+        # Per-target triage rates weighted by CLASSIFIED count,
+        # blended with record_match feedback as one-verdict samples.
+        # tp_rate is a rate over the classified subset, so weighting
+        # by raw match count let a partially-classified target (one
+        # false_positive verdict + five uncertain over six matches)
+        # drag the aggregate with six matches' worth of weight off a
+        # single verdict. classified * tp_rate is the target's
+        # variant count — verdict-for-verdict blending, same unit as
+        # the feedback counters. (Legacy records deserialise with
+        # classified=matches when rated, so old aggregates are
+        # unchanged.) Including the feedback counters here means a
+        # later update() no longer silently discards previously
+        # recorded feedback.
         rated = [t for t in entry.targets if t.tp_rate is not None]
-        weight = sum(t.matches for t in rated)
-        weighted_tp = sum(t.tp_rate * t.matches for t in rated)
+        weight = sum(t.classified for t in rated)
+        weighted_tp = sum(t.tp_rate * t.classified for t in rated)
         denominator = weight + entry.feedback_classified
         if denominator <= 0:
             return
@@ -596,13 +635,24 @@ class RuleLibrary:
         entry.fp_rate = 1.0 - entry.tp_rate
 
     def _auto_archive(self, entry: LibraryEntry) -> None:
-        if len(entry.targets) < _MIN_TARGETS_FOR_PRUNE:
+        # Only evidence-bearing targets advance the archive counter:
+        # a zero-match target is deliberate negative evidence (the
+        # rule found nothing), and a rated target carries verdicts.
+        # An outage-shaped target (matches present, triage classified
+        # nothing → tp_rate=None) is NO evidence — counting it let a
+        # rule promoted during an LLM outage plus two more outage-time
+        # replays be archived as "0 variants across 3 targets".
+        evidential = [
+            t for t in entry.targets
+            if t.matches == 0 or t.tp_rate is not None
+        ]
+        if len(evidential) < _MIN_TARGETS_FOR_PRUNE:
             return
         if entry.total_variants == 0:
             entry.archived = True
             logger.info(
                 "archived rule %s: 0 variants across %d targets",
-                entry.rule_id, len(entry.targets),
+                entry.rule_id, len(evidential),
             )
 
     def rule_path(self, entry: LibraryEntry) -> Path:
@@ -719,17 +769,39 @@ class RuleLibrary:
     ) -> list[str]:
         """Archive rules below the precision threshold.
 
-        Only considers rules with enough evidence (total matches across
-        targets). Returns list of archived rule_ids. Locked — this is a
-        read-modify-write over shared entry state (see :meth:`update`).
+        Only considers rules with enough VERDICT-BACKED evidence:
+        each target contributes its CLASSIFIED count — the matches
+        its triage actually ruled variant/false_positive. An
+        outage-shaped target (matches present, every triage row
+        uncertain/skipped) contributes nothing — counting its matches
+        toward ``min_evidence`` let the promote-time 0.0 placeholder
+        rate retire a rule whose mechanical controls all passed, off
+        one LLM transport outage — and a PARTIAL outage (one verdict,
+        five uncertain over six matches) contributes exactly its one
+        verdict, not six. Returns list of archived rule_ids.
+        Locked — this is a read-modify-write over shared entry state
+        (see :meth:`update`).
         """
         retired: list[str] = []
         with self._lock:
             for entry in self._load():
                 if entry.archived:
                     continue
-                total_matches = sum(t.matches for t in entry.targets)
-                if total_matches < min_evidence:
+                # Verdict-coverage floor: min_evidence counts
+                # verdicts, not matches. Trade-off, both directions:
+                # counting matches lets one verdict over a mostly-
+                # uncertain triage retire a proven rule (partial-
+                # outage skew); counting verdicts means a rule whose
+                # triages are chronically partial needs more targets
+                # before genuine low precision retires it — the
+                # conservative direction for a destructive,
+                # hard-to-reverse action (retirement archives the
+                # rule; nothing un-archives it mechanically).
+                classified_evidence = sum(
+                    t.classified for t in entry.targets
+                    if t.tp_rate is not None
+                )
+                if classified_evidence < min_evidence:
                     continue
                 if entry.tp_rate < threshold:
                     entry.archived = True

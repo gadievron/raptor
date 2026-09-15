@@ -331,6 +331,75 @@ class TestRuleLibraryUpdate:
         lib = RuleLibrary(tmp_path / "lib")
         assert lib.update("nonexistent", "t1", [], []) is None
 
+
+def _promote(lib, tmp_path, result):
+    rule_file = tmp_path / "r1.yml"
+    rule_file.write_text(result.rule.body)
+    result.rule_path = rule_file
+    return lib.promote(result, target_hash="t1")
+
+
+class TestOutageIsNotEvidence:
+    """An outage-shaped triage (matches present, nothing classified)
+    is NO evidence — it must not feed retirement or auto-archive."""
+
+    def test_all_uncertain_promote_cannot_retire(self, tmp_path):
+        # Promote during an LLM outage: 6 matches, every triage row
+        # uncertain. Pre-fix the entry aggregate seeded 0.0 and the
+        # unrated target's matches met min_evidence, so the very next
+        # retire_low_precision() archived a rule whose mechanical
+        # controls all passed.
+        lib = RuleLibrary(tmp_path / "lib")
+        entry = _promote(
+            lib, tmp_path, _result(matches=6, triage_status="uncertain"),
+        )
+        assert entry is not None
+        assert lib.retire_low_precision() == []
+        assert lib.find(cwe="CWE-89", engine="semgrep")[0].archived is False
+
+    def test_rated_low_precision_still_retires(self, tmp_path):
+        # Two-direction: genuine verdict-backed 0% precision with
+        # enough rated matches still retires.
+        lib = RuleLibrary(tmp_path / "lib")
+        entry = _promote(
+            lib, tmp_path,
+            _result(matches=6, triage_status="false_positive"),
+        )
+        assert entry is not None
+        assert lib.retire_low_precision() == ["r1"]
+        assert lib.all_entries()[0].archived is True
+
+    def test_outage_targets_do_not_advance_auto_archive(self, tmp_path):
+        # A rule promoted during an outage plus two more outage-time
+        # replays: three targets, none carrying verdict evidence.
+        # Pre-fix they counted toward the archive floor and the rule
+        # was archived as "0 variants across 3 targets".
+        lib = RuleLibrary(tmp_path / "lib")
+        _promote(
+            lib, tmp_path, _result(matches=6, triage_status="uncertain"),
+        )
+        for th in ("t2", "t3"):
+            matches = [Match(file=f"{th}.py", line=1)]
+            triage = [MatchTriage(match=matches[0], status="uncertain",
+                                  reasoning="outage")]
+            entry = lib.update("r1", th, matches, triage)
+        assert entry is not None
+        assert entry.archived is False
+
+    def test_zero_match_targets_still_auto_archive(self, tmp_path):
+        # Two-direction: zero-match targets are deliberate negative
+        # evidence (the rule found nothing) and still advance the
+        # archive floor for a rule with no variants anywhere.
+        lib = RuleLibrary(tmp_path / "lib")
+        _promote(
+            lib, tmp_path,
+            _result(matches=3, triage_status="false_positive"),
+        )
+        for th in ("t2", "t3"):
+            entry = lib.update("r1", th, [], [])
+        assert entry is not None
+        assert entry.archived is True
+
     def test_update_does_not_duplicate_target(self, tmp_path):
         lib = RuleLibrary(tmp_path / "lib")
         result = _result()
@@ -345,6 +414,111 @@ class TestRuleLibraryUpdate:
 
         entry = lib.get_by_body_hash(_body_hash(result.rule.body))
         assert len(entry.targets) == 1
+
+
+def _mixed_result(*, matches: int, classified_statuses: list[str]):
+    """A result whose first len(classified_statuses) matches carry
+    those verdicts and the rest are uncertain."""
+    result = _result(matches=matches)
+    result.triage = [
+        MatchTriage(
+            match=m,
+            status=(classified_statuses[i]
+                    if i < len(classified_statuses) else "uncertain"),
+            reasoning="test",
+        )
+        for i, m in enumerate(result.matches)
+    ]
+    return result
+
+
+class TestPartialOutageIsOneVerdict:
+    """A partially-classified triage carries exactly its verdict
+    count as evidence — one false_positive + five uncertain over six
+    matches is ONE sample, not six."""
+
+    def test_single_verdict_over_six_matches_cannot_retire(self, tmp_path):
+        # Pre-fix: tp_rate=0.0 (rated) let ALL 6 matches feed
+        # min_evidence and the rule retired off a single verdict.
+        lib = RuleLibrary(tmp_path / "lib")
+        entry = _promote(
+            lib, tmp_path,
+            _mixed_result(matches=6, classified_statuses=["false_positive"]),
+        )
+        assert entry is not None
+        assert lib.retire_low_precision() == []
+        assert lib.all_entries()[0].archived is False
+
+    def test_enough_real_verdicts_still_retire(self, tmp_path):
+        # Two-direction: verdict-backed 0% precision across targets
+        # whose CLASSIFIED counts reach the floor still retires,
+        # even when each triage also carried uncertain rows.
+        lib = RuleLibrary(tmp_path / "lib")
+        _promote(
+            lib, tmp_path,
+            _mixed_result(matches=4, classified_statuses=["false_positive"] * 3),
+        )
+        matches = [Match(file=f"m{i}.py", line=i) for i in range(4)]
+        triage = [
+            MatchTriage(match=m, status="false_positive", reasoning="t")
+            for m in matches[:3]
+        ] + [MatchTriage(match=matches[3], status="uncertain", reasoning="t")]
+        lib.update("r1", "t2", matches, triage)
+        assert lib.retire_low_precision() == ["r1"]
+
+    def test_aggregate_weighs_verdicts_not_matches(self, tmp_path):
+        # Target A: 5 matches, all classified variant (tp 100%).
+        # Target B: 20 matches, ONE false_positive verdict.
+        # Verdict-weighted aggregate is 5/6 — pre-fix the match-
+        # weighted blend read 5/25 and genuine precision drowned
+        # under one partial triage's match volume.
+        lib = RuleLibrary(tmp_path / "lib")
+        _promote(
+            lib, tmp_path,
+            _mixed_result(matches=5, classified_statuses=["variant"] * 5),
+        )
+        matches = [Match(file=f"m{i}.py", line=i) for i in range(20)]
+        triage = [
+            MatchTriage(match=matches[0], status="false_positive",
+                        reasoning="t"),
+        ] + [
+            MatchTriage(match=m, status="uncertain", reasoning="t")
+            for m in matches[1:]
+        ]
+        entry = lib.update("r1", "t2", matches, triage)
+        assert entry is not None
+        assert entry.tp_rate == pytest.approx(5 / 6)
+        assert lib.retire_low_precision() == []
+
+    def test_target_record_classified_persisted(self, tmp_path):
+        lib = RuleLibrary(tmp_path / "lib")
+        entry = _promote(
+            lib, tmp_path,
+            _mixed_result(matches=6, classified_statuses=["false_positive"]),
+        )
+        assert entry is not None
+        assert entry.targets[0].matches == 6
+        assert entry.targets[0].classified == 1
+        # Round-trips through the manifest.
+        reloaded = RuleLibrary(tmp_path / "lib").all_entries()[0]
+        assert reloaded.targets[0].classified == 1
+
+    def test_legacy_rated_record_defaults_classified_to_matches(self):
+        from packages.checker_synthesis.library import TargetRecord
+        t = TargetRecord.from_dict({
+            "target_hash": "t1", "ts": "", "matches": 6,
+            "variants": 2, "tp_rate": 0.33,
+        })
+        # Pre-field evidence weight preserved for legacy manifests.
+        assert t.classified == 6
+
+    def test_legacy_unrated_record_defaults_classified_to_zero(self):
+        from packages.checker_synthesis.library import TargetRecord
+        t = TargetRecord.from_dict({
+            "target_hash": "t1", "ts": "", "matches": 6,
+            "variants": 0, "tp_rate": None,
+        })
+        assert t.classified == 0
 
 
 class TestAutoArchive:

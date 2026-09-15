@@ -89,9 +89,12 @@ class TestRetireLowPrecision:
         _add_rule(lib, rule_id="r1")
         entry = lib.all_entries()[0]
         entry.tp_rate = 0.1
+        # min_evidence counts CLASSIFIED verdicts (the matches a triage
+        # actually ruled), not raw matches — a rated record with
+        # classified=0 carries no retirement evidence.
         entry.targets = [
             TargetRecord(target_hash=f"t{i}", ts="", matches=2,
-                         variants=0, tp_rate=0.1)
+                         variants=0, tp_rate=0.1, classified=2)
             for i in range(3)
         ]
         lib._save()
@@ -108,9 +111,11 @@ class TestRetireLowPrecision:
 
         entry = lib.all_entries()[0]
         entry.tp_rate = 0.9
+        # classified meets the evidence floor so this exercises the
+        # precision threshold, not the floor short-circuit.
         entry.targets = [
             TargetRecord(target_hash=f"t{i}", ts="", matches=2,
-                         variants=1, tp_rate=0.9)
+                         variants=1, tp_rate=0.9, classified=2)
             for i in range(3)
         ]
         lib._save()
