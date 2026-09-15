@@ -1,9 +1,21 @@
 """Rank witnesses by how well they match a given finding.
 
-Stage E (and any future consumer that wants "the most relevant
-witness for this finding") needs to pick from the witness set
-discovered by :mod:`core.witness.discovery`. The matching is
-purely structural — no LLM judgment — driven by the
+PLANNED consumer: validation Stage E (or any consumer that wants
+"the most relevant witness for this finding") picking from the
+witness set discovered by :mod:`core.witness.discovery`. As of this
+writing NO production consumer is wired — Stage E's witness stage
+(``packages/exploitability_validation/witness_stage.py``) does
+dark-verify execution and does not import this module; only the
+package tests exercise the API. Whoever wires the first consumer
+must validate the join keys against REAL producer output before
+trusting the scores: the finding side reads ``finding.get("id")``
+only (no ``finding_id`` fallback, unlike provenance's
+``_finding_coords``), ``cwe_id`` string forms ("79" vs "CWE-79")
+are not normalised, and ``file_path`` may be absolute on one side
+and repo-relative on the other — none of these spellings has been
+exercised against real consumer shapes, so a silent mis-join is
+the expected failure mode of an unvalidated adoption. The matching
+is purely structural — no LLM judgment — driven by the
 ``outcome_detail`` fields the witness producers populate.
 
 Ranking (higher score → better match):
