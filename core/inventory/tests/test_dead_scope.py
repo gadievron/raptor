@@ -773,6 +773,7 @@ def test_js_line_comment_marker_inside_string_does_not_eat_close():
     # `//` inside the string used to start a "comment" that blanked
     # the dead-if's real closing brace, so _match_brace closed the
     # block inside live code — function live() read as dead.
+    _requires_lexical_grammar("javascript")
     src = (
         'if (false) { var s = "//"; }\n'
         "function live() {\n"
