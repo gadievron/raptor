@@ -616,6 +616,28 @@ class TestParseCCFreeform:
         assert "error" not in parsed
         assert parsed["content"] == "hi"
 
+    def test_envelope_error_text_is_defanged_and_redacted(self):
+        # Same envelope-error treatment as parse_cc_structured — the
+        # freeform parser once shipped the CLI/model-authored bytes
+        # verbatim while claiming symmetry.
+        secret = "sk-" + "a" * 48
+        envelope_error = f"boom \x1b[31m {secret}"
+        envelope = json.dumps(
+            {"result": "", "is_error": True, "error": envelope_error},
+        )
+        parsed = parse_cc_freeform(envelope, "")
+        assert secret not in parsed["error"]
+        assert "\x1b" not in parsed["error"]
+        assert "[REDACTED]" in parsed["error"]
+
+    def test_envelope_error_text_truncated(self):
+        # Cap matches the structured parser's 500-char envelope-error
+        # budget (sanitisation may expand escapes, never the input).
+        parsed = parse_cc_freeform(
+            json.dumps({"result": "", "error": "x" * 2000}),
+        )
+        assert len(parsed["error"]) <= 500 * 4
+
 
 class TestExtractEnvelopeMetadata:
     def test_full_envelope(self):

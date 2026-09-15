@@ -1045,6 +1045,21 @@ def _envelope_error(envelope: dict) -> Any | None:
     return None
 
 
+def _sanitise_envelope_error(env_error: Any) -> str:
+    """One shared treatment for the envelope ``error`` field.
+
+    The field is CLI/model-authored text that flows into
+    DispatchResult error strings, per-finding records, and
+    operator-visible logs: truncate, redact credentials, then defang
+    control bytes / ANSI / BIDI. Shared by both parsers so the
+    envelope-error path cannot drift between them the way the
+    freeform parser once shipped the bytes verbatim while claiming
+    symmetry with the structured one.
+    """
+    from core.security.prompt_output_sanitise import escape_nonprintable
+    return escape_nonprintable(redact_secrets(str(env_error)[:500]))
+
+
 def parse_cc_structured(
     stdout: str,
     stderr: str = "",
@@ -1089,12 +1104,9 @@ def parse_cc_structured(
             # terminal-control bytes.
             env_error = _envelope_error(result)
             if env_error is not None:
-                from core.security.prompt_output_sanitise import escape_nonprintable
                 out: dict[str, Any] = {
                     "finding_id": finding_id,
-                    "error": escape_nonprintable(
-                        redact_secrets(str(env_error)[:500])
-                    ),
+                    "error": _sanitise_envelope_error(env_error),
                 }
                 # Failed runs still cost money — keep the envelope's
                 # cost/duration/model telemetry, as parse_cc_freeform
@@ -1184,7 +1196,7 @@ def parse_cc_freeform(stdout: str, stderr: str = "") -> dict[str, Any]:
             # keep behaviour symmetric here.
             env_error = _envelope_error(envelope)
             if env_error is not None:
-                parsed["error"] = env_error
+                parsed["error"] = _sanitise_envelope_error(env_error)
             extract_envelope_metadata(envelope, parsed)
             return parsed
     except json.JSONDecodeError:
