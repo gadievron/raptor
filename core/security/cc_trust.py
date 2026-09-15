@@ -31,7 +31,19 @@ Dangerous fields (block):
                hooks.<Event>[].hooks[].command (type == "command"), plus —
                fail-closed — any hook entry with an unrecognised type
                and any hooks/matcher value of an unrecognised shape
-               env.<KEY> for KEY in _DANGEROUS_ENV_VARS (LD_PRELOAD, EDITOR, ...)
+               env.<KEY> for KEY in _DANGEROUS_ENV_VARS (LD_PRELOAD, EDITOR, ...
+               unioned with the canonical credential-env family:
+               credential material, credential/config file pointers,
+               exec-redirect names — see core/security/credential_env.py)
+               env.<KEY> of credential-redirect SHAPE (*_TOKEN / *_KEY /
+               *_SECRET / *_PASSWORD / *_CONFIG_FILE / *_ASKPASS ... —
+               repo-supplied settings env has no legitimate reason to
+               set any credential-shaped name)
+               env.<KEY> of model-traffic-redirect SHAPE
+               (ANTHROPIC_*BASE_URL* / AWS_ENDPOINT_URL* /
+               CLAUDE_CODE_SKIP_* — per-provider endpoint variants and
+               auth-mode flips, same redirect primitive as the exact
+               ANTHROPIC_BASE_URL block)
                env.<PREFIX>* for PREFIX in _DANGEROUS_ENV_PREFIXES
                (RAPTOR_* / SAGE_* forge our own control env vars or
                repoint persistent memory; CLAUDE_CODE_USE_* /
@@ -54,6 +66,11 @@ from functools import lru_cache
 from pathlib import Path
 
 from core.security.capped_read import read_capped
+from core.security.credential_env import (
+    CREDENTIAL_ENV_FAMILY,
+    is_credential_redirect_shaped,
+    is_model_traffic_redirect_shaped,
+)
 from urllib.parse import urlsplit
 
 # Plain stdlib logger — cc_trust runs at startup before
@@ -169,10 +186,9 @@ _COMPREHENSIVE_DANGEROUS_ENV_VARS = frozenset({
     # Git config redirection — an env-set GIT_CONFIG_GLOBAL points
     # git at an attacker config file with `alias = !sh`,
     # `core.editor = arbitrary binary`, `credential.helper = ...`
-    # firing on every fetch. GIT_SSH_COMMAND directly execs an
-    # attacker binary on every ssh-based git op.
+    # firing on every fetch. (GIT_SSH_COMMAND / GIT_SSH / GIT_ASKPASS /
+    # SSH_ASKPASS live in the credential-env family unioned below.)
     "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG",
-    "GIT_SSH_COMMAND", "GIT_SSH", "SSH_ASKPASS",
     # OpenSSL config — .conf files can load ENGINE .so files
     # (arbitrary code in any process that initialises OpenSSL).
     "OPENSSL_CONF",
@@ -181,18 +197,33 @@ _COMPREHENSIVE_DANGEROUS_ENV_VARS = frozenset({
     "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
     "SSL_CERT_FILE", "SSL_CERT_DIR",
     "NODE_EXTRA_CA_CERTS", "SSLKEYLOGFILE",
-    # Kubernetes — `users[].user.exec` directive runs arbitrary
-    # command for credential acquisition.
-    "KUBECONFIG",
-    # Model-traffic redirect — CC honours these directly: BASE_URL
+    # Model-traffic redirect — CC honours this directly: BASE_URL
     # repoints every API call at an attacker endpoint (prompt +
-    # source-code exfiltration, poisoned completions), AUTH_TOKEN
-    # substitutes attacker credentials, CUSTOM_HEADERS rides secrets
-    # or auth overrides onto every request. Strictly stronger
-    # primitives than the HTTP_PROXY family already blocked above.
-    "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
-    "ANTHROPIC_CUSTOM_HEADERS",
-})
+    # source-code exfiltration, poisoned completions). A strictly
+    # stronger primitive than the HTTP_PROXY family already blocked
+    # above. The exact name alone is NOT enough: the CLI reads a
+    # DIFFERENT base-URL name per provider mode (a Bedrock install
+    # ignores ANTHROPIC_BASE_URL and reads the per-cloud
+    # ANTHROPIC_*_BASE_URL variants), the JS AWS SDK honours
+    # AWS_ENDPOINT_URL[_<SERVICE>], and CLAUDE_CODE_SKIP_* flips the
+    # CLI's auth mode at whatever endpoint won — so the scan ALSO
+    # applies is_model_traffic_redirect_shaped (the vocabulary's
+    # shape rule, shared with cc_adapter's proxy strip) to every env
+    # key. (ANTHROPIC_AUTH_TOKEN / ANTHROPIC_CUSTOM_HEADERS —
+    # attacker-credential substitution and header riding — live in
+    # the credential-env family unioned below.)
+    "ANTHROPIC_BASE_URL",
+}) | CREDENTIAL_ENV_FAMILY
+# The canonical credential-env family (core/security/credential_env.py)
+# joins the settings-scan blocklist wholesale: credential material
+# (CLAUDE_CODE_OAUTH_TOKEN — attacker-credential substitution, the same
+# rationale ANTHROPIC_AUTH_TOKEN is blocked for), credential/config
+# file pointers whose pointed-to file can name an executed helper
+# (AWS_CONFIG_FILE credential_process, KUBECONFIG users[].user.exec,
+# DOCKER_CONFIG credsStore — the identical primitive this scan always
+# blocked KUBECONFIG for), and exec-redirect names (GIT_ASKPASS,
+# RUSTC_WRAPPER). A repo-supplied settings env dict has no legitimate
+# reason to set ANY member.
 
 # Env-key PREFIXES flagged wholesale (compared case-folded, like the
 # name set above). RAPTOR_*/SAGE_* forge RAPTOR's own control env or
@@ -500,9 +531,18 @@ def _scan_settings(path: Path, raw: bytes | None = None) -> FileScan | None:
                 key_upper = key_str.upper()
                 # Prefix families (RAPTOR_/SAGE_/CLAUDE_CODE_USE_/
                 # OTEL_EXPORTER_OTLP_) are flagged regardless of the
-                # specific var — see _DANGEROUS_ENV_PREFIXES.
+                # specific var — see _DANGEROUS_ENV_PREFIXES. The
+                # credential-redirect SHAPE rule is the belt over the
+                # name enumeration: a repo-supplied env key that looks
+                # like a credential / credential-config pointer
+                # (FOO_API_TOKEN, BAR_CONFIG_FILE) is credential
+                # substitution or redirect for whatever tool reads it,
+                # and settings.json env has no legitimate reason to
+                # carry one — fail closed on the shape.
                 if (key_upper in dangerous_upper
-                        or key_upper.startswith(_DANGEROUS_ENV_PREFIXES)):
+                        or key_upper.startswith(_DANGEROUS_ENV_PREFIXES)
+                        or is_credential_redirect_shaped(key_str)
+                        or is_model_traffic_redirect_shaped(key_str)):
                     k = _truncate(key_str, limit=40)
                     # keep=0: the env VALUE is the secret — the key
                     # name alone carries the triage signal.
