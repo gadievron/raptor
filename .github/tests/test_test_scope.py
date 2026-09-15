@@ -200,6 +200,52 @@ class TestTierConsistency:
                 )
 
 
+class TestCiLintTriggerClosure:
+    """Registry closure: every repo file whose CONTENT a ci_lint test
+    pins must fire the ci_lint tier, or a breaking edit to it merges
+    green and reddens the next unrelated .github PR, misattributed."""
+
+    def test_read_targets_are_covered_by_extra_triggers(self):
+        # Mechanically enumerate the `_read("<path>")` targets across
+        # the .github test suites (the convention content-pinning
+        # tests use) and assert each is claimed by an extra_triggers
+        # entry. Tests that pin content through other idioms
+        # (directory scans like test_libexec_marker_coverage) cannot
+        # be enumerated this way — their roots are covered by
+        # explicit extra_triggers entries (libexec, bin).
+        import ast as ast_mod
+
+        github_dir = Path(__file__).resolve().parents[1]
+        pinned: set[str] = set()
+        for tf in [
+            *(github_dir / "tests").glob("*.py"),
+            *(github_dir / "scripts" / "tests").glob("*.py"),
+        ]:
+            tree = ast_mod.parse(tf.read_text(encoding="utf-8"))
+            for node in ast_mod.walk(tree):
+                if (
+                    isinstance(node, ast_mod.Call)
+                    and isinstance(node.func, ast_mod.Name)
+                    and node.func.id == "_read"
+                    and node.args
+                    and isinstance(node.args[0], ast_mod.Constant)
+                    and isinstance(node.args[0].value, str)
+                ):
+                    pinned.add(node.args[0].value)
+
+        assert pinned, "no _read() pins found — enumeration broke"
+        triggers = TIERS["ci_lint"]["extra_triggers"]
+        uncovered = sorted(
+            p for p in pinned
+            if not any(p == t or p.startswith(t + "/") for t in triggers)
+        )
+        assert not uncovered, (
+            f"ci_lint tests pin the content of {uncovered} but those "
+            "paths do not fire the tier — add them to "
+            "TIERS['ci_lint']['extra_triggers'] in test_scope.py"
+        )
+
+
 def _active(result: dict) -> list[str]:
     return sorted(t for t, i in result.items()
                   if not t.startswith("_") and i["run"])
@@ -457,6 +503,15 @@ class TestOnRealRepo:
         ".github/workflows/lint.yml",
         "CLAUDE.md",
         ".claude/commands/scan.md",
+        # test_ci_controls_docs pins README's self-check section and
+        # pyproject's exact ruff select list; a breaking edit to
+        # either merged green while only these tests would redden.
+        "README.md",
+        "pyproject.toml",
+        # test_libexec_marker_coverage / test_symlink_hop_bound pin
+        # the launcher-preamble templates byte-for-byte.
+        "libexec/raptor-agentic",
+        "bin/raptor",
     ])
     def test_asserted_content_change_triggers_ci_lint(self, repo, changed):
         # .github/tests pins workflow content (test_ci_controls_docs)
@@ -466,9 +521,13 @@ class TestOnRealRepo:
         assert result["ci_lint"]["run"], f"{changed} did not fire ci_lint"
 
     def test_unrelated_root_file_does_not_trigger_ci_lint(self, repo):
-        # The extra_triggers are prefix-scoped: an unrelated root-level
-        # file must not drag the whole ci_lint tier in.
-        result = compute_tier_dispatch(["README.md"], repo)
+        # The extra_triggers are exact/prefix-scoped: a root-level file
+        # NO ci_lint test pins must not drag the whole tier in. (This
+        # used to pin README.md as non-firing — wrong direction: its
+        # content IS asserted by test_ci_controls_docs, so a README
+        # edit that broke the pin merged green. LICENSE is pinned by
+        # nothing this tier runs.)
+        result = compute_tier_dispatch(["LICENSE"], repo)
         assert not result["ci_lint"]["run"]
 
     def test_prompt_audit_trigger(self, repo):
@@ -500,8 +559,10 @@ class TestOnRealRepo:
         )
 
     def test_no_changes_returns_all_skipped_or_empty(self, repo):
+        # LICENSE, not README.md: README now fires ci_lint (its content
+        # is pinned by test_ci_controls_docs).
         result = compute_tier_dispatch(
-            ["README.md"], repo
+            ["LICENSE"], repo
         )
         active = [t for t, i in result.items()
                   if not t.startswith("_") and i["run"]]
@@ -522,7 +583,7 @@ class TestOnRealRepo:
 
     def test_python_matrix_empty_when_no_files(self, repo):
         result = compute_tier_dispatch(
-            ["README.md"], repo
+            ["LICENSE"], repo
         )
         assert result["python"]["matrix"] == []
 

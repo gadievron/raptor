@@ -137,16 +137,28 @@ TIERS: dict[str, dict] = {
     "ci_lint": {
         "test_dirs": [".github/tests", ".github/scripts/tests"],
         # .github/tests asserts workflow CONTENT (lint.yml step shapes,
-        # workflow paths) and pins CLAUDE.md / .claude/commands prose —
+        # workflow paths), pins CLAUDE.md / .claude/commands prose,
+        # ruff config in pyproject.toml, README's self-check section,
+        # and the libexec//bin launcher-preamble identity templates —
         # so edits to any of those must fire this tier too, not only
-        # .github/scripts changes; otherwise a breaking lint.yml or
-        # command-doc edit merges green and reddens the next scheduled
-        # full run, misattributed.
+        # .github/scripts changes; otherwise a breaking edit merges
+        # green and reddens the next scheduled full run, misattributed.
+        #
+        # Both directions: every entry here must be content-pinned by
+        # a test this tier runs (TestCiLintTriggerClosure derives the
+        # _read() targets mechanically); conversely, unpinned files
+        # (LICENSE, docs/...) must NOT be added — dragging the tier in
+        # for unrelated edits erodes the scoping this dispatch exists
+        # to provide.
         "extra_triggers": [
             ".github/scripts",
             ".github/workflows",
             "CLAUDE.md",
             ".claude",
+            "README.md",
+            "pyproject.toml",
+            "libexec",
+            "bin",
         ],
         "outside_graph": True,
     },
