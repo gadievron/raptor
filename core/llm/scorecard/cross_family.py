@@ -69,16 +69,27 @@ def record_cross_family_outcomes(
         # primary and one checker a dispute is an even split with no
         # ground truth, so neither side earns a correctness
         # attribution from it.
-        if "disputed" in verdict:
+        #
+        # Prefix-anchored matching against the producer's exact
+        # grammar ({"skipped — …", "disputed — conservative override",
+        # "agreed"}): a bare substring test read any future
+        # "disagreed" verdict as agreement.
+        if verdict.startswith("disputed"):
             outcome = "incorrect"
-        elif result.get("cross_family_agreed") or "agreed" in verdict:
+        elif result.get("cross_family_agreed") or verdict.startswith("agreed"):
             outcome = "correct"
         else:
             continue
 
         rule_id = str(result.get("rule_id") or "unknown")
         decision_class = f"{decision_class_prefix}:{rule_id}"
-        model_version = cf.get("checker_model")
+        # model_version is the CONCRETE served snapshot per the family
+        # convention (consensus.py) — "None when unavailable so the
+        # cell stays alias-keyed, never guessed". The check record
+        # carries no resolved_model, and stamping the checker ALIAS
+        # here made the cell lie about its snapshot and polluted
+        # cross-event model_version drift comparisons.
+        model_version = None
 
         sample = None
         if outcome == "incorrect":

@@ -51,6 +51,33 @@ class TestRecordCrossFamilyOutcomes:
         assert ec is not None
         assert ec.correct == 1
 
+    def test_model_version_never_the_checker_alias(self, tmp_path: Path):
+        """Family convention (see consensus.py): model_version is the
+        concrete served snapshot, None when unavailable so the cell
+        stays alias-keyed — the check record carries no
+        resolved_model, and stamping the alias made the cell lie
+        about its snapshot."""
+        sc = ModelScorecard(path=tmp_path / "sc.json")
+        results = {"F-001": _make_result(
+            "F-001",
+            cf_check={"checker_model": "gpt-5", "verdict": "agreed"},
+        )}
+        assert record_cross_family_outcomes(sc, results_by_id=results) == 1
+        dc = "agentic:test-rule"
+        assert sc.get_stat(dc, "gpt-5").model_version in ("", None)
+
+    def test_future_disagreed_verdict_is_not_agreement(
+            self, tmp_path: Path):
+        """Prefix-anchored grammar: a verdict string outside the
+        producer's known set must record nothing — the bare substring
+        test read a hypothetical "disagreed" as agreement."""
+        sc = ModelScorecard(path=tmp_path / "sc.json")
+        results = {"F-001": _make_result(
+            "F-001",
+            cf_check={"checker_model": "gpt-5", "verdict": "disagreed"},
+        )}
+        assert record_cross_family_outcomes(sc, results_by_id=results) == 0
+
     def test_disputed_records_incorrect(self, tmp_path: Path):
         sc = ModelScorecard(path=tmp_path / "sc.json")
         results = {"F-001": _make_result(
