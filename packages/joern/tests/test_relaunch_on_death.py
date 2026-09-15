@@ -60,6 +60,10 @@ class TestEnsureAlive:
     def test_live_process_is_noop(self):
         srv = JoernServer()
         proc = MagicMock()
+        # inert: beyond pid_max — a bare MagicMock pid renders as
+        # "pid 1" in stop() logs (MagicMock.__int__ returns 1),
+        # polluting log censuses with a plausible-looking real pid.
+        proc.pid = 2_000_000_000
         proc.poll.return_value = None
         srv._proc = proc
         with patch.object(srv, "restart") as restart:
