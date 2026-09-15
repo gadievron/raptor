@@ -560,3 +560,54 @@ class TestSharedTempdirHardening:
             out_dir=tmp_path,
         )
         assert second == first
+
+
+class TestOwnedDirFailureCleanup:
+    def test_write_failure_removes_owned_dir(self, monkeypatch,
+                                             tmp_path):
+        """out_dir=None mode creates an owned mkdtemp dir; when the
+        subsequent write fails (ENOSPC-class OSError) the caller
+        gets None and never receives a path to hand to
+        cleanup_extracted_binary — the dir must be removed on the
+        failure path, or one empty dir leaks per failed
+        extraction."""
+        import packages.sca.bump.image_binary_extract as mod
+
+        client = _StubClient()
+        binary_bytes = b"\x7fELF" + b"x" * 200
+        layer_bytes = _make_layer_tar({"usr/bin/foo": binary_bytes})
+        client.blobs["sha256:layer1"] = layer_bytes
+        client.blobs["sha256:cfg"] = _make_config_blob(
+            entrypoint=["/usr/bin/foo"],
+        )
+        client.manifests["library/test:1"] = _make_manifest_resp(
+            config_digest="sha256:cfg",
+            layers=[{
+                "digest": "sha256:layer1", "size": len(layer_bytes),
+                "mediaType":
+                    "application/vnd.docker.image.rootfs.diff.tar.gzip",
+            }],
+        )
+
+        created: list[str] = []
+        real_mkdtemp = mod.tempfile.mkdtemp
+
+        def _tracking_mkdtemp(*a, **kw):
+            d = real_mkdtemp(*a, dir=str(tmp_path), **kw)
+            created.append(d)
+            return d
+
+        def _failing_open(*a, **kw):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(mod.tempfile, "mkdtemp",
+                            _tracking_mkdtemp)
+        monkeypatch.setattr(mod.os, "open", _failing_open)
+
+        out = fetch_image_binary(
+            "docker.io/library/test:1", client=client, out_dir=None,
+        )
+        assert out is None
+        assert len(created) == 1
+        from pathlib import Path as _P
+        assert not _P(created[0]).exists()   # no leaked owned dir

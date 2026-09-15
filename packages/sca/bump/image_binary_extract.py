@@ -201,6 +201,8 @@ def fetch_image_binary(
         )
         return None
 
+    created_dir: Path | None = None
+    handed_out = False
     try:
         if out_dir is None:
             # Fresh mode-0700 directory per extraction — NEVER the
@@ -213,6 +215,7 @@ def fetch_image_binary(
             # detector. mkdtemp is owned by us and unreadable to
             # others by construction.
             out_dir = Path(tempfile.mkdtemp(prefix=_OWNED_DIR_PREFIX))
+            created_dir = out_dir
         else:
             out_dir.mkdir(parents=True, exist_ok=True)
         # Name the file by the CONTENT hash + a sanitised basename so
@@ -250,6 +253,7 @@ def fetch_image_binary(
             )
         except FileExistsError:
             if _is_reusable_extraction(out_path, final_bytes):
+                handed_out = True
                 return out_path
             logger.debug(
                 "sca.bump.image_binary_extract: refusing pre-existing "
@@ -258,6 +262,7 @@ def fetch_image_binary(
             return None
         with os.fdopen(fd, "wb") as fh:
             fh.write(final_bytes)
+        handed_out = True
         return out_path
     except OSError as e:
         logger.debug(
@@ -265,6 +270,19 @@ def fetch_image_binary(
             image_ref_str, e,
         )
         return None
+    finally:
+        if created_dir is not None and not handed_out:
+            # Failure after we created the owned dir (ENOSPC-class
+            # os.open/write errors): the caller gets None and can
+            # never route the dir to cleanup_extracted_binary, so it
+            # leaks one dir per failed extraction. Remove it — and
+            # any partial write — here.
+            try:
+                for child in created_dir.iterdir():
+                    child.unlink()
+                created_dir.rmdir()
+            except OSError:
+                pass
 
 
 # Prefix for the per-extraction directories this module owns.
