@@ -803,6 +803,48 @@ class TestLifecycle:
         finally:
             d.shutdown()
 
+    def test_child_rows_use_public_token_id_not_secret_prefix(
+            self, fake_creds, tmp_path):
+        """Every audit row a child request produces joins on the
+        minted public token_id — pre-fix the dispatch/error/provider
+        rows logged a 12-char prefix of the bearer SECRET instead, so
+        the same request appeared under two identifiers and
+        secret-derived material landed where a purpose-built public
+        id exists."""
+        upstream = _Upstream("json")
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        try:
+            token, info = d.allocate_child("cc-audit", budget_usd=1.0)
+            with _uds_client(d) as client:
+                resp = _messages_post(client, token)
+                assert resp.status_code == 200
+            # The dispatch row lands on the handler thread AFTER the
+            # response bytes flush — poll like _wait_spend does.
+            rows: list[dict] = []
+            dispatch_rows: list[dict] = []
+            deadline = time.time() + 2.0
+            while time.time() < deadline and not dispatch_rows:
+                rows = [
+                    json.loads(line)
+                    for line in
+                    (tmp_path / "audit.jsonl").read_text().splitlines()
+                ]
+                dispatch_rows = [
+                    r for r in rows
+                    if r.get("event") == "request.dispatch"
+                ]
+                if not dispatch_rows:
+                    time.sleep(0.02)
+            assert dispatch_rows
+            assert all(
+                r["token_id"] == info["token_id"] for r in dispatch_rows
+            )
+            # No row anywhere in the trail carries the secret prefix.
+            assert all(r.get("token_id") != token[:12] for r in rows)
+        finally:
+            upstream.shutdown()
+            d.shutdown()
+
     def test_audit_never_contains_token_value(self, fake_creds, tmp_path):
         upstream = _Upstream("json")
         d = _make_dispatcher(fake_creds, tmp_path, upstream)

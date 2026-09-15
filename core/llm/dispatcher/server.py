@@ -1238,7 +1238,8 @@ class LLMDispatcher:
         self._audit(AuditEvent(
             ts=now, event="token.renew",
             peer_pid=None, peer_uid=None,
-            token_id=_short(rec.value), worker_label=rec.worker_label,
+            token_id=(rec.token_id or _short(rec.value)),
+            worker_label=rec.worker_label,
             status="ok",
             extra={
                 "ttl_s": self._token_ttl_s,
@@ -2129,7 +2130,8 @@ def _make_request_handler(
                 dispatcher._audit(AuditEvent(
                     ts=time.time(), event="provider.reject",
                     peer_pid=None, peer_uid=None,
-                    token_id=_short(rec.value), worker_label=rec.worker_label,
+                    token_id=(rec.token_id or _short(rec.value)),
+                    worker_label=rec.worker_label,
                     status="reject", reason=f"unknown path: {self.path}",
                 ))
                 self._send_simple(404, "unknown provider path")
@@ -2173,7 +2175,8 @@ def _make_request_handler(
                 dispatcher._audit(AuditEvent(
                     ts=time.time(), event="provider.unconfigured",
                     peer_pid=None, peer_uid=None,
-                    token_id=_short(rec.value), worker_label=rec.worker_label,
+                    token_id=(rec.token_id or _short(rec.value)),
+                    worker_label=rec.worker_label,
                     status="reject", reason=provider_name,
                 ))
                 self._send_simple(503, f"provider not configured: {provider_name}")
@@ -2249,7 +2252,8 @@ def _make_request_handler(
                     dispatcher._audit(AuditEvent(
                         ts=time.time(), event="provider.transform_reject",
                         peer_pid=None, peer_uid=None,
-                        token_id=_short(rec.value), worker_label=rec.worker_label,
+                        token_id=(rec.token_id or _short(rec.value)),
+                        worker_label=rec.worker_label,
                         status="reject", reason=f"{provider_name}: {exc.message}",
                     ))
                     self._send_simple(exc.status, exc.message)
@@ -2269,7 +2273,8 @@ def _make_request_handler(
                     dispatcher._audit(AuditEvent(
                         ts=time.time(), event="provider.transform_error",
                         peer_pid=None, peer_uid=None,
-                        token_id=_short(rec.value), worker_label=rec.worker_label,
+                        token_id=(rec.token_id or _short(rec.value)),
+                        worker_label=rec.worker_label,
                         status="error", reason=f"{provider_name}: {type(exc).__name__}",
                     ))
                     self._send_simple(502, f"request signing failed: {type(exc).__name__}")
@@ -2428,7 +2433,8 @@ def _make_request_handler(
                 dispatcher._audit(AuditEvent(
                     ts=time.time(), event="request.dispatch",
                     peer_pid=None, peer_uid=None,
-                    token_id=_short(rec.value), worker_label=rec.worker_label,
+                    token_id=(rec.token_id or _short(rec.value)),
+                    worker_label=rec.worker_label,
                     status="ok",
                     extra={
                         "provider": provider_name, "method": method,
@@ -2454,7 +2460,8 @@ def _make_request_handler(
                 dispatcher._audit(AuditEvent(
                     ts=time.time(), event="request.error",
                     peer_pid=None, peer_uid=None,
-                    token_id=_short(rec.value), worker_label=rec.worker_label,
+                    token_id=(rec.token_id or _short(rec.value)),
+                    worker_label=rec.worker_label,
                     status="error", reason=type(exc).__name__,
                 ))
                 if not response_started:
