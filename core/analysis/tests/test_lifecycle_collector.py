@@ -62,3 +62,30 @@ class TestCollectFieldSites:
         sites = collect_field_sites_from_source(source, "test.c", "dumpable")
         assert sites["writes"] == []
         assert sites["reads"] == []
+
+
+class TestConditionLabelAuthority:
+    """The label grammar has ONE authority (cfg_conditions); the
+    collector must parse every form it does — the drifted private
+    copy missed `For` and the C builder's bare-condition labels."""
+
+    def test_for_label_parses(self):
+        from core.analysis.lifecycle_collector import (
+            _extract_condition_from_label,
+        )
+        assert _extract_condition_from_label("for x < n") == "x < n"
+        assert _extract_condition_from_label("For (i < 10)") == "i < 10"
+
+    def test_if_while_forms_still_parse(self):
+        from core.analysis.lifecycle_collector import (
+            _extract_condition_from_label,
+        )
+        assert _extract_condition_from_label("If (x != NULL)") == "x != NULL"
+        assert _extract_condition_from_label("while p != q") == "p != q"
+
+    def test_non_condition_labels_return_none(self):
+        from core.analysis.lifecycle_collector import (
+            _extract_condition_from_label,
+        )
+        assert _extract_condition_from_label("switch-join") is None
+        assert _extract_condition_from_label("x = f(y)") is None
