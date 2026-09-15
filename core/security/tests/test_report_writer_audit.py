@@ -656,3 +656,48 @@ def test_sanitised_dumps_display_is_clean():
     )
     assert not [v for v in audit_source(src)
                 if v.kind == "raw_serialiser_at_sink"]
+
+
+# ---------------------------------------------------------------------------
+# Sanitiser name-shadow arm.
+# ---------------------------------------------------------------------------
+
+
+def test_rule_catches_sanitiser_name_shadow():
+    """A same-named local helper that sanitises nothing satisfies the
+    recognised-sanitiser vocabulary — registry review alone cannot
+    hold that shut."""
+    src = (
+        "def _line(s):\n"
+        "    return s\n"
+        "\n"
+        "def render(e, lines):\n"
+        "    lines.append(_line(e['title']))\n"
+    )
+    vs = audit_source(src)
+    assert any(v.kind == "sanitiser_shadow" and v.detail == "_line"
+               for v in vs), vs
+
+
+def test_chained_local_sanitiser_is_clean():
+    """``_cell`` building on ``_line`` building on sanitise_string is
+    the sanctioned helper-chain shape."""
+    src = (
+        "def _line(s):\n"
+        "    return sanitise_string(str(s), max_chars=300)\n"
+        "\n"
+        "def _cell(s):\n"
+        "    return _line(s).replace('|', '\\\\|')\n"
+    )
+    assert not [v for v in audit_source(src)
+                if v.kind == "sanitiser_shadow"]
+
+
+def test_html_escape_based_helper_is_clean():
+    src = (
+        "import html\n"
+        "def _cell(s):\n"
+        "    return html.escape(str(s))\n"
+    )
+    assert not [v for v in audit_source(src)
+                if v.kind == "sanitiser_shadow"]

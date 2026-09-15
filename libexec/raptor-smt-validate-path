@@ -93,7 +93,11 @@ _MAX_ATTACK_PATHS_BYTES = 64 * 1024 * 1024
 
 
 def _err(msg: str) -> int:
-    print(f"raptor-smt-validate-path: {msg}", file=sys.stderr)
+    # Messages interpolate finding/trace fields — escape control
+    # bytes so the helper earns its recognised-sanitiser name.
+    from core.security.log_sanitisation import sanitise_for_terminal
+    print(f"raptor-smt-validate-path: {sanitise_for_terminal(msg, max_len=400)}",
+          file=sys.stderr)
     return 2
 
 

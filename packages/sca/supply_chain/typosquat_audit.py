@@ -219,10 +219,14 @@ def _md_escape(name: str) -> str:
     backtick-wrapped table cell in the auto-PR body.  Candidate names
     come from the popularity feeds — remote input — so they must not
     be able to inject markdown / table structure into the PR."""
-    return (name.replace("`", "\\`")
-                .replace("|", "\\|")
-                .replace("\n", " ")
-                .replace("\r", " "))
+    escaped = (name.replace("`", "\\`")
+                   .replace("|", "\\|")
+                   .replace("\n", " ")
+                   .replace("\r", " "))
+    # Remote-feed names can carry control bytes too — match the
+    # sibling _md_escape chokepoints' escape_nonprintable grade.
+    from core.security.log_sanitisation import escape_nonprintable
+    return escape_nonprintable(escaped)
 
 
 def render_markdown(results: dict[str, list[Candidate]]) -> str:

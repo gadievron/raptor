@@ -31,7 +31,7 @@ def test_tool_schema_shape(tool: Tool) -> None:
 
 
 def test_err_wraps() -> None:
-    out = json.loads(tools_mod._err("boom"))
+    out = json.loads(tools_mod._tool_err("boom"))
     assert out == {"error": "boom"}
 
 

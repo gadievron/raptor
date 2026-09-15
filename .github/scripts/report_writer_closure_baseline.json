@@ -16,6 +16,24 @@
     "core/analysis/binary_oracle_precision.py::main::unsanitised_llm_value::description": {
       "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
     },
+    "core/analysis/collection_guard_java.py::_text::sanitiser_shadow::_text": {
+      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+    },
+    "core/analysis/config_resolve_java.py::_text::sanitiser_shadow::_text": {
+      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+    },
+    "core/analysis/java_array_escape.py::_text::sanitiser_shadow::_text": {
+      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+    },
+    "core/analysis/java_collection_index.py::_text::sanitiser_shadow::_text": {
+      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+    },
+    "core/analysis/java_wrapper_summaries.py::_text::sanitiser_shadow::_text": {
+      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+    },
+    "core/analysis/java_xfile_const.py::_text::sanitiser_shadow::_text": {
+      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+    },
     "core/annotations/storage.py::_render_file::unsanitised_llm_value::body": {
       "note": "storage-format round-trip (annotation .md files) \u2014 the display surfaces (raptor-annotate, /project annotations view) are registered writers that sanitise on render"
     },
@@ -109,6 +127,9 @@
     "core/audit/evidence_grade.py::format_evidence_chain::unsanitised_llm_value::description": {
       "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
+    "core/audit/goconc.py::_text::sanitiser_shadow::_text": {
+      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+    },
     "core/audit/intra_function.py::format_intra_function_context::unsanitised_llm_value::description": {
       "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
@@ -117,6 +138,12 @@
     },
     "core/audit/postcondition_verify.py::format_postcondition_context::unsanitised_llm_value::description": {
       "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+    },
+    "core/audit/return_domain.py::_line::sanitiser_shadow::_line": {
+      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+    },
+    "core/audit/return_domain.py::_text::sanitiser_shadow::_text": {
+      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
     "core/audit/struct_accessor_index.py::format_co_accessor_context::unsanitised_llm_value::description": {
       "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
@@ -348,6 +375,12 @@
     },
     "packages/sca/harden.py::_run_self_test::unsanitised_llm_value::stdout": {
       "note": "self-test lane relays its own child's output for the operator running the self-test; the child is RAPTOR's own harden CLI"
+    },
+    "packages/sca/parsers/pom.py::_text::sanitiser_shadow::_text": {
+      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+    },
+    "packages/sca/parsers/pom_inheritance.py::_text::sanitiser_shadow::_text": {
+      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
     "packages/sca/report_html.py::_vuln_card::unsanitised_llm_value::summary": {
       "note": "HTML report lane html.escape()s at emission (helper outside the audit vocabulary)"

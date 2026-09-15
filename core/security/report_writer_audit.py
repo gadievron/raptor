@@ -1020,6 +1020,74 @@ def _raw_serialiser_calls(node: ast.AST) -> list[tuple[int, str]]:
     return out
 
 
+# Primitives a sanitiser-named local helper must (transitively, one
+# module-local level) build on. A same-named local helper that
+# references NONE of these satisfies the recognised-sanitiser
+# vocabulary while sanitising nothing — the name-shadow escape the
+# registry review alone cannot hold shut.
+_CANONICAL_SANITISER_NAMES = frozenset({
+    "sanitise_string", "sanitise_code", "sanitise_inline",
+    "sanitise_for_terminal", "escape_nonprintable",
+    "sanitize", "sanitize_id",
+}) | _SANITISERS
+
+
+# Modules whose job IS defining a canonical sanitiser from first
+# principles (regex strip / character-class rebuild) — their defs
+# legitimately reference no other sanitiser.
+_SANITISER_DEFINITION_MODULES = frozenset({
+    "core/security/log_sanitisation.py",
+    "core/security/prompt_output_sanitise.py",
+    "packages/diagram/sanitize.py",
+})
+
+
+def _sanitiser_shadow_scan(tree: ast.AST, rel: str) -> list[Violation]:
+    """Flag local function definitions that SHADOW a recognised
+    sanitiser name without building on any canonical sanitiser.
+
+    Chained helpers (``_cell`` calling ``_line``) pass via the
+    ``_SANITISERS`` union; ``html.escape`` passes via the attribute
+    check. Residuals (documented): mutually-recursive no-op pairs, and
+    aliasing a non-sanitising callable via import-as (import aliases
+    are the established convention for the real sanitisers and are
+    not distinguishable by name alone).
+    """
+    if rel in _SANITISER_DEFINITION_MODULES:
+        return []
+    out: list[Violation] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name not in _SANITISERS:
+            continue
+        ok = False
+        for n in ast.walk(node):
+            if (isinstance(n, ast.Name)
+                    and n.id in _CANONICAL_SANITISER_NAMES
+                    and n.id != node.name):
+                ok = True
+                break
+            if isinstance(n, ast.Attribute) and (
+                    n.attr in _CANONICAL_SANITISER_NAMES
+                    or (n.attr == "escape"
+                        and isinstance(n.value, ast.Name)
+                        and n.value.id in ("html", "markupsafe"))):
+                if not (n.attr == node.name and isinstance(n, ast.Attribute)
+                        and n is node):
+                    ok = True
+                    break
+        if not ok:
+            out.append(Violation(
+                file=rel,
+                line=node.lineno,
+                kind="sanitiser_shadow",
+                detail=node.name,
+                func_name=node.name,
+            ))
+    return out
+
+
 def _terminal_capable_sink(node: ast.Call) -> bool:
     """True when the sink call can reach a terminal: ``print``/
     ``echo``/``secho`` (any form), or ``.write`` on a receiver whose
@@ -1473,6 +1541,7 @@ def audit_source(source: str, rel: str = "<snippet>") -> list[Violation]:
     scanner.visit(tree)
     violations = scanner.violations
     violations.extend(_mermaid_scan(tree, rel))
+    violations.extend(_sanitiser_shadow_scan(tree, rel))
     return violations
 
 
