@@ -229,6 +229,40 @@ def _close_inherited_death_w_post_fork() -> None:
     _LIVE_DEATH_W.clear()
 
 
+# Structural closure: run the sweep in EVERY child forked by this
+# process — os.fork(), os.forkpty(), and multiprocessing's fork start
+# method all route through the at-fork hooks. Without this, the
+# contract held only at fork sites that opted in (the intermediate
+# below, plus preexec's sweeper via its wholesale fd sweep): every
+# other never-exec'ing fork — probe children, the Landlock-audit
+# lane's target/tracer children until their own sweeps, fork-context
+# pool workers for their whole lifetime — inherited registered
+# death_w copies and pinned the cohort-teardown EOF for its window,
+# and any NEW fork site silently re-opened the class. exec'ing
+# children were never affected (os.pipe fds are CLOEXEC): subprocess
+# children run these hooks too when a preexec_fn forces the Python
+# fork path — harmless there, the sweep just precedes the exec's
+# CLOEXEC clear — and plain fork_exec children skip the hooks but
+# always exec.
+#
+# Deliberately NO `before=_DEATH_W_LOCK.acquire` /
+# `after_in_*=release` pair (both directions weighed): holding the
+# lock across every fork would extend the exact-snapshot guarantee
+# to all forks, but _spawn's own intermediate fork below runs UNDER
+# _DEATH_W_LOCK — a before-hook acquiring that non-reentrant Lock on
+# the already-holding thread self-deadlocks at the fork, wedging
+# every sandboxed spawn instantly. Unlocked, the sweep is still
+# reuse-safe (close_death_w unregisters BEFORE closing and
+# open_death_pipe registers AFTER creating, both under the lock, so
+# a stale set entry can never name a reused fd); the residual is a
+# microseconds-wide window on both edges — a just-created
+# not-yet-registered death_w, and symmetrically a just-unregistered
+# not-yet-closed one inside close_death_w — that the sweep misses,
+# the transient pre-fix behaviour. _spawn's own fork below keeps
+# fork-under-lock for the exact snapshot at the cohort-owning site.
+os.register_at_fork(after_in_child=_close_inherited_death_w_post_fork)
+
+
 def _scrub_env_image_values(names: Iterable[bytes]) -> None:
     """Zero the VALUES of the named variables in this process's
     execve-time environment image (``mm->env_start..env_end``).

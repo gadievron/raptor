@@ -41,6 +41,7 @@ pytestmark = _pytest.mark.skipif(
 )
 
 import contextlib  # noqa: E402
+import fcntl  # noqa: E402
 import os  # noqa: E402
 import select  # noqa: E402
 import shutil  # noqa: E402
@@ -198,6 +199,56 @@ def test_forked_child_sweep_releases_sibling_death_w() -> None:
                 os.close(fd)
         for fd in (wa, wb):
             _spawn.close_death_w(fd)
+
+
+def test_any_fork_sweeps_death_w_without_opting_in() -> None:
+    """Structural closure: the sweep is an at-fork hook, so a fork
+    site that never heard of the registry — probe forks, fork-context
+    pool workers, whatever gets added next — still releases inherited
+    death-pipe write ends. The child here deliberately performs NO
+    explicit sweep."""
+    from core.sandbox import _spawn
+
+    ra, wa = _spawn.open_death_pipe()
+    child = 0
+    try:
+        # Plain os.fork, no lock, no opt-in — the shape of every
+        # non-_spawn fork site in the process.
+        child = os.fork()
+        if child == 0:
+            try:
+                # The at-fork hook already ran: the inherited write
+                # end must be closed and the registry cleared.
+                bad = False
+                try:
+                    fcntl.fcntl(wa, fcntl.F_GETFD)
+                    bad = True  # still open — class re-opened
+                except OSError:
+                    pass
+                if bad or _spawn._LIVE_DEATH_W:
+                    os._exit(2)
+                os._exit(0)
+            except BaseException:
+                os._exit(1)
+        _, status = os.waitpid(child, 0)
+        child = 0
+        assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, (
+            f"fork child still held a death-pipe write end or a stale "
+            f"registry (wait status {status})"
+        )
+        # The parent's copy is untouched: EOF stays governed by the
+        # owning parent alone.
+        assert _spawn.close_death_w(wa) is True
+        assert os.read(ra, 512) == b""
+    finally:
+        if child:
+            with contextlib.suppress(OSError):
+                os.kill(child, signal.SIGKILL)
+            with contextlib.suppress(OSError, ChildProcessError):
+                os.waitpid(child, 0)
+        with contextlib.suppress(OSError):
+            os.close(ra)
+        _spawn.close_death_w(wa)
 
 
 @requires_landlock
