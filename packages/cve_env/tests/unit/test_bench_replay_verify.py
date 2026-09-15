@@ -59,6 +59,8 @@ def _collect_verify_cases(
                     # error the whole session at collection time; the
                     # other, complete recordings still replay.
                     continue
+                if not isinstance(obj, dict):
+                    continue  # decodable but non-object line (e.g. a bare list)
                 if obj.get("tool_name") != "verify":
                     continue
                 tool_input = obj.get("tool_input") or {}
@@ -199,3 +201,24 @@ def test_collect_tolerates_truncated_tail_line(tmp_path: pathlib.Path) -> None:
     cases = _collect_verify_cases(tmp_path)
     assert len(cases) == 1
     assert cases[0][0].startswith("CVE-0000-0001@manual-x")
+
+
+def test_collect_verify_cases_skips_corrupt_lines(tmp_path: pathlib.Path) -> None:
+    """Corpus discovery must tolerate a truncated/corrupt JSONL line
+    (an interrupted bench run truncates its final record) and a
+    decodable non-object line — the parse error previously escaped at
+    COLLECTION time and errored the whole module on any machine
+    holding such a corpus."""
+    run_dir = tmp_path / "manual-x"
+    run_dir.mkdir()
+    good = json.dumps({
+        "tool_name": "verify", "cve_id": "CVE-2020-1", "turn": 1,
+        "tool_input": {"plan": []},
+    })
+    (run_dir / "CVE-2020-1.jsonl").write_text(
+        '{"tool_name": "verify", "truncat\n'      # torn mid-record
+        '["verify"]\n'                             # decodes to a non-dict
+        + good + "\n",
+    )
+    cases = _collect_verify_cases(tmp_path)
+    assert any(cid.startswith("CVE-2020-1@manual-x") for cid, _ in cases)
