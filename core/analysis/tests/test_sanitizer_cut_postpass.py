@@ -591,29 +591,40 @@ class TestEnforcementBoundaries:
         # A candidate_only verdict must record dropped: false even with
         # enforcement on — the enforce=True call is structurally
         # reachable only from the full-proof suppress branch.
+        #
+        # The fixture is the chained-sanitizer shape (the cleaned value
+        # passes through an unmodelled helper before the sink): the
+        # gate provably lands on candidate_only for it, and the
+        # recorded_candidate assertion below pins that. The previous
+        # fixture (b19 element-direct-read) is a shape the gate is
+        # ALLOWED to fully suppress, so every meaningful assertion sat
+        # behind `if stats["recorded_candidate"]:` — a drift that made
+        # candidate_only records enforce would have passed the test.
         src = """import javax.servlet.http.HttpServletRequest;
 import org.owasp.encoder.Encode;
 public class Test {
     void doPost(HttpServletRequest request, java.io.PrintWriter out) {
         String p = request.getParameter("q");
-        String[] arr = new String[2];
-        arr[0] = Encode.forHtml(p);
-        out.println(arr[0]);
+        String safe = wrap(Encode.forHtml(p));
+        out.println(safe);
     }
+    String wrap(String s) { return s; }
 }
 """
-        repo, _, sarif_path, out = _write(tmp_path, src, {"sink_line": 8})
+        repo, _, sarif_path, out = _write(tmp_path, src, {"sink_line": 7})
         stats = run_postpass([sarif_path], repo, out, enforce=True)
-        if stats["recorded_candidate"]:
-            import json as _json
-            recs = [
-                _json.loads(line) for line in
-                (out / "suppressions.jsonl").read_text().splitlines()
-            ]
-            assert all(r["dropped"] is False for r in recs)
-            assert all(r["enforced"] is False for r in recs)
-        assert stats["enforced_findings"] == [] or stats["enforced"] == len(
-            stats["enforced_findings"])
+        # The fixture must actually exercise the candidate_only path —
+        # unconditionally, or the property below is vacuous.
+        assert stats["recorded_candidate"] >= 1
+        recs = [
+            json.loads(line) for line in
+            (out / "suppressions.jsonl").read_text().splitlines()
+        ]
+        assert recs
+        assert all(r["dropped"] is False for r in recs)
+        assert all(r["enforced"] is False for r in recs)
+        assert stats["enforced"] == 0
+        assert stats["enforced_findings"] == []
 
     def test_filter_removes_exact_match_only(self, tmp_path):
         import json as _json
