@@ -212,6 +212,7 @@ _REPORT_WRITER_FILES = (
     "packages/llm_analysis/patch_gate.py",
     "packages/llm_analysis/tasks.py",
     "packages/static-analysis/scanner.py",
+    "raptor_agentic.py",
     "libexec/raptor-audit",
     "libexec/raptor-review",
     "libexec/raptor-study-loop",
@@ -456,6 +457,17 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
             "sanitise_for_terminal calls; the taint is the "
             "comprehension's iterable (summary keys), not the "
             "rendered values"
+        ),
+    ),
+    AllowlistEntry(
+        file="raptor_agentic.py",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="error",
+        audit_note=(
+            "scan_metrics.json findings_by_severity['error'] is an "
+            "integer severity counter written by RAPTOR's own scan "
+            "stage — the 'Critical:' line interpolates the count"
         ),
     ),
     AllowlistEntry(

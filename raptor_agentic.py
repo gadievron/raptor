@@ -4483,9 +4483,14 @@ def main() -> int:
         print(line)
     aggregation = orchestration_result.get("aggregation", {}) if orchestration_result else {}
     if aggregation:
-        summary = str(aggregation.get("summary") or "").strip()
+        # Free-text output of the aggregate model — the report leg
+        # (_build_aggregation_report_section) sanitises the same
+        # field; the terminal leg must too (escape + 120-char bound).
+        from core.security.log_sanitisation import sanitise_for_terminal
+        summary = sanitise_for_terminal(
+            str(aggregation.get("summary") or "").strip(), max_len=120)
         if summary:
-            print(f"   Aggregate synthesis: {summary[:120]}{'...' if len(summary) > 120 else ''}")
+            print(f"   Aggregate synthesis: {summary}")
     from core.reporting import (
         FINDINGS_COLUMNS,
         build_findings_rows,
