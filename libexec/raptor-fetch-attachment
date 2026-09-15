@@ -49,6 +49,7 @@ if not (os.environ.get("CLAUDECODE")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 from core.json import load_json  # noqa: E402
+from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
 
 # Byte budget for bug-report.json: it is distilled from an untrusted
 # bug tracker, so cap the read like every other libexec artifact
@@ -111,8 +112,11 @@ def main() -> int:
         return 1
 
     if url not in _attachment_urls(report):
+        # The URL comes verbatim from the untrusted bug report — the
+        # scheme/host checks below never run on this refusal path, and
+        # path bytes are unconstrained in any case.
         print(
-            f"refusing download: {url} is not recorded in "
+            f"refusing download: {_sft(url, max_len=300)} is not recorded in "
             f"{report_path.name}'s attachments list",
             file=sys.stderr,
         )
@@ -121,7 +125,7 @@ def main() -> int:
     try:
         parts = urlsplit(url)
     except ValueError as e:
-        print(f"malformed url: {e}", file=sys.stderr)
+        print(f"malformed url: {_sft(str(e), max_len=300)}", file=sys.stderr)
         return 1
     if parts.scheme.lower() != "https" or not parts.hostname:
         print("refusing download: attachment URLs must be https with a "
@@ -155,7 +159,7 @@ def main() -> int:
     try:
         body = client.get_bytes(url)
     except HttpError as e:
-        print(f"download failed: {e}", file=sys.stderr)
+        print(f"download failed: {_sft(str(e), max_len=300)}", file=sys.stderr)
         return 1
 
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -165,7 +169,7 @@ def main() -> int:
     dest.write_bytes(body)
     if str(dest) != sys.argv[3]:
         print(f"note: destination confined to {dest}", file=sys.stderr)
-    print(f"OK: {url} -> {dest} ({len(body)} bytes)")
+    print(f"OK: {_sft(url, max_len=300)} -> {dest} ({len(body)} bytes)")
     return 0
 
 

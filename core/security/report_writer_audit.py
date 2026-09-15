@@ -281,6 +281,13 @@ _REPORT_WRITER_FILES = (
     "libexec/raptor-validation-helper",
     "libexec/raptor-annotate",
     "libexec/raptor-coverage-summary",
+    # cve-diff run/localize terminal lanes: pipeline/LLM exception
+    # relays and cluster member names (functions from hostile-binary
+    # decompilation). Terminal writer — sanitise_for_terminal grade.
+    "libexec/raptor-cve-diff",
+    # Attachment fetcher: echoes the untrusted tracker URL at refusal
+    # and success. Terminal writer — sanitise_for_terminal grade.
+    "libexec/raptor-fetch-attachment",
     "libexec/raptor-llm-ask",
     # packages/sca operator-facing renderers / CLI printers: report.md
     # and terminal output interpolate manifest-, OSV-, and LLM-derived

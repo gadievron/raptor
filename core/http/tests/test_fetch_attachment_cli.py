@@ -154,3 +154,56 @@ class TestMainConfinement:
         )
         assert rc == 1
         assert not (elsewhere / "crash.bin").exists()
+
+
+class TestTerminalEscapeScrub:
+    """The tracker URL comes verbatim from the untrusted bug report —
+    scheme/host validation constrains neither path bytes nor the
+    not-in-attachments refusal path. Prints must escape."""
+
+    def test_unlisted_hostile_url_refusal_is_escaped(
+        self, cli, monkeypatch, workdir, capsys,
+    ):
+        hostile = "https://tracker.example.test/a/\x1b[2J\x9bpwn"
+        monkeypatch.setattr(
+            "sys.argv",
+            ["raptor-fetch-attachment", str(workdir / "bug-report.json"),
+             hostile, str(workdir / "attachments" / "crash.bin")],
+        )
+        rc = cli.main()
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "refusing download" in err
+        assert "\x1b" not in err
+        assert "\x9b" not in err
+
+    def test_listed_hostile_url_success_line_is_escaped(
+        self, cli, monkeypatch, tmp_path, capsys,
+    ):
+        hostile = "https://tracker.example.test/a/\x1b]0;evil\x07crash.bin"
+        report = {"attachments": [{"url": hostile,
+                                   "filename": "crash.bin"}]}
+        (tmp_path / "bug-report.json").write_text(
+            json.dumps(report), encoding="utf-8",
+        )
+
+        class _FakeClient:
+            def __init__(self, *a, **kw):
+                pass
+
+            def get_bytes(self, url):
+                return b"data"
+
+        import core.http.egress_backend as egress
+        monkeypatch.setattr(egress, "EgressClient", _FakeClient)
+        monkeypatch.setattr(
+            "sys.argv",
+            ["raptor-fetch-attachment", str(tmp_path / "bug-report.json"),
+             hostile, str(tmp_path / "attachments" / "crash.bin")],
+        )
+        rc = cli.main()
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert out.startswith("OK: ")
+        assert "\x1b" not in out
+        assert "\x07" not in out
