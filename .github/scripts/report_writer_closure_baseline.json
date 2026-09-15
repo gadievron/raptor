@@ -565,9 +565,6 @@
     "packages/exploitability_validation/scripts/measure_stage_e_empirical_influence.py::main::unsanitised_llm_value::reasoning": {
       "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
     },
-    "packages/ghidra/match_precision.py::run_measurement::unsanitised_llm_value::report": {
-      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
-    },
     "packages/joern/netns_forwarder.py::self_probe::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
     },

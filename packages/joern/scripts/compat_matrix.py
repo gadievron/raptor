@@ -77,6 +77,8 @@ from core.config import pin_raptor_dir_in_environ  # noqa: E402
 from core.json import load_json, save_json  # noqa: E402
 from core.run.scratch import scratch_dir  # noqa: E402
 
+from core.security.log_sanitisation import sanitise_for_terminal as _sft
+
 pin_raptor_dir_in_environ()
 
 _RELEASES_API = "https://api.github.com/repos/joernio/joern/releases"
@@ -374,13 +376,33 @@ def _run_e2e_subprocess(joern_dir: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _pin_line(tag: str, asset_name: str, digest: str) -> str:
+    """Pin-confirmation line; tag/asset derive from the GitHub
+    releases API — escaped here so the print site is safe by
+    construction."""
+    return (f"[{_sft(tag, max_len=32)}] pinned "
+            f"{_sft(asset_name, max_len=120)} sha256={digest}")
+
+
+def _summary_line(rows: list) -> str:
+    """Matrix summary; failure TAGS derive from the releases API."""
+    failed = [tag for tag, r in rows if not r.get("pass")]
+    return (f"\n{len(rows) - len(failed)}/{len(rows)} versions pass"
+            + (f" — FAILURES: {_sft(', '.join(failed), max_len=300)}"
+               if failed else ""))
+
+
 def _format_row(tag: str, r: dict) -> str:
+    # tag and step values derive from the GitHub releases API /
+    # downloaded artifacts — escape control bytes before the terminal.
+    from core.security.log_sanitisation import sanitise_for_terminal
     verdict = "PASS" if r.get("pass") else "FAIL"
     steps = " ".join(
-        f"{k}={v}" for k, v in r.items()
+        f"{k}={sanitise_for_terminal(str(v), max_len=120)}"
+        for k, v in r.items()
         if k not in ("pass", "joern_version")
     )
-    return f"{tag:<12} {verdict:<5} {steps}"
+    return f"{sanitise_for_terminal(tag, max_len=32):<12} {verdict:<5} {steps}"
 
 
 def main() -> int:
@@ -458,8 +480,8 @@ def main() -> int:
                 if args.update_pins:
                     pins[_pin_key(tag, asset_name)] = digest
                     _save_pins(pins)
-                    print(f"[{tag}] pinned {asset_name} "
-                          f"sha256={digest}", flush=True)
+                    print(_pin_line(tag, asset_name, digest),
+                          flush=True)
                 else:
                     print(
                         f"[{tag}] WARNING: {asset_name} is not sha256-"
@@ -488,8 +510,7 @@ def main() -> int:
     for tag, result in rows:
         print(_format_row(tag, result))
     failed = [tag for tag, r in rows if not r.get("pass")]
-    print(f"\n{len(rows) - len(failed)}/{len(rows)} versions pass"
-          + (f" — FAILURES: {', '.join(failed)}" if failed else ""))
+    print(_summary_line(rows))
     return 1 if failed else 0
 
 

@@ -1418,18 +1418,25 @@ def _terminal_capable_sink(node: ast.Call) -> bool:
 
 
 def _is_ascii_json_dumps(node: ast.Call) -> bool:
-    """True for ``dumps(..., ensure_ascii=True)`` calls (any module
-    alias — ``json.dumps`` / ``_json.dumps``). JSON escapes C0 always
-    and ensure_ascii escapes everything non-ASCII including C1, so the
-    output is terminal-safe by construction."""
+    """True for ASCII-safe ``dumps`` calls (any module alias —
+    ``json.dumps`` / ``_json.dumps``). JSON escapes C0 always and
+    ensure_ascii escapes everything non-ASCII including C1, so the
+    output is terminal-safe by construction. stdlib ``ensure_ascii``
+    DEFAULTS to True, so a bare ``json.dumps(x)`` is safe too — only
+    an explicit ``ensure_ascii=False`` (or a non-constant value, which
+    could be False at runtime) disqualifies. The repo's raw
+    serialisers have their own names (``dumps_display`` /
+    ``dumps_artifact``) and are handled by :func:`_is_raw_serialiser`.
+    """
     if _call_name(node) != "dumps":
         return False
-    return any(
-        kw.arg == "ensure_ascii"
-        and isinstance(kw.value, ast.Constant)
-        and kw.value.value is True
-        for kw in node.keywords
-    )
+    for kw in node.keywords:
+        if kw.arg == "ensure_ascii":
+            return (isinstance(kw.value, ast.Constant)
+                    and kw.value.value is True)
+        if kw.arg is None:
+            return False  # **kwargs could smuggle ensure_ascii=False
+    return True
 
 
 # Builtins whose return value carries no content from their argument

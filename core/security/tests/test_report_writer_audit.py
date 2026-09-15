@@ -868,3 +868,37 @@ def test_tool_output_raw_checksec_fires():
         "    print(info['raw_checksec'])\n"
     )
     assert any(v.detail == "raw_checksec" for v in audit_source(src))
+
+
+def test_rule_catches_comprehension_filtered_join_at_print():
+    """Release-matrix shape: names filtered out of a foreign container
+    by comprehension, joined at a print — no vocabulary name at the
+    sink."""
+    src = (
+        "def report(resp):\n"
+        "    rows = []\n"
+        "    for rel in resp:\n"
+        "        rows.append((rel['title'], rel))\n"
+        "    failed = [tag for tag, r in rows if not r.get('pass')]\n"
+        "    print(f\"FAILURES: {', '.join(failed)}\")\n"
+    )
+    vs = audit_source(src)
+    assert any(v.detail == "failed" for v in vs), vs
+
+
+def test_default_true_json_dumps_is_clean_nonconstant_fires():
+    """stdlib json.dumps defaults ensure_ascii=True — a bare
+    ``json.dumps(x)`` at a terminal sink is safe; a non-constant
+    ensure_ascii (could be False at runtime) still fires."""
+    bare = (
+        "def show(e):\n"
+        "    import json\n"
+        "    print(json.dumps(e['details']))\n"
+    )
+    assert audit_source(bare) == []
+    nonconst = (
+        "def show(e, flag):\n"
+        "    import json\n"
+        "    print(json.dumps(e['details'], ensure_ascii=flag))\n"
+    )
+    assert any(v.detail == "details" for v in audit_source(nonconst))
