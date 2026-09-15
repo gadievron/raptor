@@ -109,11 +109,33 @@ def _resolve_child(parent_file: Path, mod_name: str,
     return None
 
 
+# Per-file read budget for untrusted .rs sources (the module set's
+# bounded-read doctrine: the walk runs in the unsandboxed parent, so a
+# planted multi-GB .rs file must not be loaded whole; real crate roots
+# are orders of magnitude smaller). Truncation only costs mod decls
+# past the cap — under-detection, membership stays sound-or-unknown.
+_MAX_RS_BYTES = 2 * 1024 * 1024
+
+# Reachable-file cap: a hostile crate fanning out to an unbounded
+# module tree must not keep the parent walking forever. Past the cap
+# membership is UNKNOWN (None) — the conservative direction, no
+# module-based suppression rather than a truncated (wrong) set.
+_MAX_REACHABLE_FILES = 20_000
+
+
 def _file_mods(file: Path) -> list[tuple[str | None, str]]:
+    from core.source import read_text_capped
+
+    # Resolve first: the caller already confined the RESOLVED path,
+    # and the capped reader refuses a symlink at the final component.
     try:
-        text = _strip_comments(file.read_text(encoding="utf-8", errors="replace"))
-    except OSError:
+        file = file.resolve()
+    except (OSError, RuntimeError, ValueError):
         return []
+    got = read_text_capped(file, _MAX_RS_BYTES)
+    if got is None:
+        return []
+    text = _strip_comments(got[0])
     return [(m.group(1), m.group(2)) for m in _MOD_DECL.finditer(text)]
 
 
@@ -143,6 +165,8 @@ def extract_rust_crate_modules(target: Path) -> frozenset | None:
         if key in reachable or not rf.is_relative_to(root) or not f.is_file():
             continue
         reachable.add(key)
+        if len(reachable) > _MAX_REACHABLE_FILES:
+            return None
         for path_attr, mod_name in _file_mods(f):
             child = _resolve_child(f, mod_name, path_attr, root)
             if child is not None:

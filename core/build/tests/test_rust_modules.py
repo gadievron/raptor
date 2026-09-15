@@ -251,3 +251,40 @@ def test_nul_byte_path_attr_is_rejected_not_crash(tmp_path):
     })
     mods = extract_rust_crate_modules(crate)
     assert _r(crate, "src/real.rs") in mods
+
+
+def test_oversize_rs_file_read_capped_not_loaded_whole(tmp_path, monkeypatch):
+    # The walk runs in the unsandboxed parent over untrusted sources:
+    # a planted huge .rs must be read through the capped chokepoint.
+    # Decls before the cap survive; decls past it are dropped
+    # (under-detection — membership stays sound).
+    from core.build import rust_modules
+
+    monkeypatch.setattr(rust_modules, "_MAX_RS_BYTES", 4096)
+    (tmp_path / "Cargo.toml").write_text("[package]\nname='x'\n")
+    src = tmp_path / "src"
+    src.mkdir()
+    filler = "// pad\n" * 1024  # > 4096 bytes
+    (src / "lib.rs").write_text("mod early;\n" + filler + "mod late;\n")
+    (src / "early.rs").write_text("")
+    (src / "late.rs").write_text("")
+    result = rust_modules.extract_rust_crate_modules(tmp_path)
+    assert result is not None
+    assert str((src / "early.rs").resolve()) in result
+    assert str((src / "late.rs").resolve()) not in result
+
+
+def test_reachable_cap_degrades_to_unknown(tmp_path, monkeypatch):
+    # Past the reachable-file cap membership is UNKNOWN (None) — the
+    # conservative direction: no module-based suppression rather than
+    # a truncated (wrong) membership set.
+    from core.build import rust_modules
+
+    monkeypatch.setattr(rust_modules, "_MAX_REACHABLE_FILES", 2)
+    (tmp_path / "Cargo.toml").write_text("[package]\nname='x'\n")
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "lib.rs").write_text("mod a;\nmod b;\nmod c;\n")
+    for name in "abc":
+        (src / f"{name}.rs").write_text("")
+    assert rust_modules.extract_rust_crate_modules(tmp_path) is None
