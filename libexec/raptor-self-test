@@ -869,25 +869,27 @@ def case_audit_mechanical(ctx: Ctx) -> None:
         "    message: shell=True with concatenation\n"
         "    pattern: subprocess.call(..., shell=True)\n"
     )
-    # The sweep subcommand takes flags only (no positionals); the old
-    # positional spelling made argparse exit 2 on every run, and
-    # check=False read it green forever — the semgrep sweep runner,
-    # rule-file path, and audit-log receipt were never smoke-tested by
-    # the only case claiming to.
+    # check=True end to end: the sweep leg previously passed a CLI
+    # shape the subparser rejects (argparse exit 2) and check=False
+    # read green forever — the case never exercised what it claimed.
     ctx.run("audit-mech", [
         au, "sweep", "--tool", "semgrep", "--rule-file", str(rule),
         "--file", "app.py", "--function", "ping",
         "--target", str(ctx.fixture), "--out", str(out),
     ], env=env, timeout=300)
+    # The fixture's ping() IS the rule's shell=True match: assert the
+    # confirmed receipt (stdout echo + persisted audit-log entry), so
+    # a sweep that runs-but-finds-nothing fails the case too.
+    log_text = ctx.log_text("audit-mech")
+    assert "app.py:ping with semgrep → confirmed" in log_text, (
+        "semgrep sweep did not confirm the fixture's shell=True match"
+    )
     audit_log = out / ".audit-log.jsonl"
-    if not audit_log.is_file():
-        raise AssertionError(
-            f"sweep left no audit-log receipt at {audit_log}")
-    if '"sweep"' not in audit_log.read_text(errors="replace"):
-        raise AssertionError(
-            "audit log carries no sweep receipt entry")
+    assert audit_log.is_file() and '"outcome":"confirmed"' in (
+        audit_log.read_text()
+    ), "confirmed sweep receipt missing from .audit-log.jsonl"
     ctx.run("audit-mech", [au, "critique", "--out", str(out)],
-            env=env, timeout=60, check=False)
+            env=env, timeout=60)
 
 
 def case_binary_oracle_e2e(ctx: Ctx) -> None:
