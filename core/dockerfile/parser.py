@@ -69,16 +69,22 @@ _FROM_AS_RE = re.compile(
 # at positions _heredoc_tags has verified to be token-initial and
 # unquoted.
 _HEREDOC_TOKEN_RE = re.compile(
-    r"<<-?(?P<q>[\"']?)(?P<tag>[A-Za-z_][A-Za-z0-9_]*)(?P=q)"
+    r"<<(?P<chomp>-?)(?P<q>[\"']?)(?P<tag>[A-Za-z_][A-Za-z0-9_]*)(?P=q)"
 )
 
 # Directives whose args may open heredocs (per the Dockerfile
 # reference); scoping the scan avoids false marker hits elsewhere.
+# ``ONBUILD`` is a compound wrapper: BuildKit parses the WRAPPED
+# instruction's heredocs (``ONBUILD RUN <<EOF``), so the scan must
+# unwrap it — see the dispatch in :func:`parse_dockerfile`.
 _HEREDOC_DIRECTIVES = frozenset({"RUN", "COPY", "ADD"})
 
 
-def _heredoc_tags(args: str) -> list[str]:
-    """Heredoc tags opened by an instruction's args, in order.
+def _heredoc_tags(args: str) -> list[tuple[str, bool]]:
+    """``(tag, chomp)`` pairs for heredocs opened by an instruction's
+    args, in order — ``chomp`` is True for the ``<<-`` form (its
+    terminator may be tab-indented; the plain ``<<`` terminator must
+    match the line exactly, mirroring BuildKit).
 
     BuildKit's lexer opens a heredoc only for an UNQUOTED token that
     BEGINS with ``<<`` — a bare regex sweep over the whole args string
@@ -92,7 +98,7 @@ def _heredoc_tags(args: str) -> list[str]:
     outside single/double quotes and backslash escapes; ``<<<``
     here-strings stay excluded.
     """
-    tags: list[str] = []
+    tags: list[tuple[str, bool]] = []
     in_single = False
     in_double = False
     escaped = False
@@ -141,7 +147,7 @@ def _heredoc_tags(args: str) -> list[str]:
         ):
             m = _HEREDOC_TOKEN_RE.match(args, i)
             if m:
-                tags.append(m.group("tag"))
+                tags.append((m.group("tag"), m.group("chomp") == "-"))
                 i = m.end()
                 token_start = False
                 continue
@@ -229,19 +235,34 @@ def parse_dockerfile(text: str) -> list[Instruction]:
 
         # Consume heredoc bodies (see module docstring): every marker
         # token on the logical line (token-initial, unquoted — see
-        # _heredoc_tags) opens a body that runs to a line whose
-        # stripped content equals the tag (``<<-`` allows indented
-        # terminators; stripping accepts both forms). Body lines join
-        # ``raw`` but are never re-entered as instructions. An
-        # unterminated heredoc consumes to EOF — matching the build
-        # frontend, which would refuse such a file anyway.
-        if directive in _HEREDOC_DIRECTIVES:
-            for tag in _heredoc_tags(args):
+        # _heredoc_tags) opens a body that runs to its terminator line
+        # — BuildKit's rule: the plain ``<<`` terminator matches the
+        # line EXACTLY, ``<<-`` additionally allows tab indentation.
+        # (A blanket strip() closed ``<<`` heredocs at space-indented
+        # tag lines BuildKit treats as body — re-entering the real
+        # remainder as phantom instructions.) Body lines join ``raw``
+        # but are never re-entered as instructions. An unterminated
+        # heredoc consumes to EOF — matching the build frontend, which
+        # would refuse such a file anyway. ``ONBUILD`` is a compound
+        # wrapper whose WRAPPED instruction opens the heredocs
+        # (``ONBUILD RUN <<EOF``) — scan the unwrapped args, or the
+        # body lines parse as phantom instructions here too.
+        heredoc_directive = directive
+        heredoc_args = args
+        if directive == "ONBUILD":
+            wrapped = args.split(None, 1)
+            heredoc_directive = wrapped[0].upper() if wrapped else ""
+            heredoc_args = wrapped[1] if len(wrapped) > 1 else ""
+        if heredoc_directive in _HEREDOC_DIRECTIVES:
+            for tag, chomp in _heredoc_tags(heredoc_args):
                 while i < len(raw_lines):
                     body_line = raw_lines[i]
                     chunks.append(body_line)
                     i += 1
-                    if body_line.strip() == tag:
+                    terminator = (
+                        body_line.lstrip("\t") if chomp else body_line
+                    )
+                    if terminator == tag:
                         break
 
         raw = "\n".join(chunks)

@@ -294,6 +294,80 @@ def test_unterminated_heredoc_consumes_to_eof_without_phantoms():
     assert [i.directive for i in insts] == ["FROM", "RUN"]
 
 
+def test_onbuild_wrapped_heredoc_body_never_yields_phantoms():
+    # BuildKit treats ONBUILD as a compound directive: the WRAPPED
+    # instruction opens the heredoc, so its body must be consumed —
+    # a phantom FROM in the body previously reset stage tracking and
+    # re-attributed subsequent REAL instructions to a fake stage.
+    text = (
+        "FROM debian:11 AS runtime\n"
+        "ONBUILD RUN <<SCRIPT\n"
+        "FROM evil/image AS builder\n"
+        "RUN echo phantom\n"
+        "SCRIPT\n"
+        "RUN apt-get install -y openssl\n"
+    )
+    insts = parse_dockerfile(text)
+    assert [i.directive for i in insts] == ["FROM", "ONBUILD", "RUN"]
+    # The real install stays attributed to the real stage.
+    assert insts[2].stage_name == "runtime"
+    assert "FROM evil/image" in insts[1].raw
+
+
+def test_onbuild_wrapped_copy_heredoc_consumed():
+    text = (
+        "FROM alpine\n"
+        "ONBUILD COPY <<EOF /etc/app.conf\n"
+        "RUN echo phantom\n"
+        "EOF\n"
+        "RUN echo real\n"
+    )
+    insts = parse_dockerfile(text)
+    assert [i.directive for i in insts] == ["FROM", "ONBUILD", "RUN"]
+    assert insts[2].args == "echo real"
+
+
+def test_onbuild_without_heredoc_unaffected():
+    text = (
+        "FROM alpine\n"
+        "ONBUILD RUN echo hi\n"
+        "RUN echo after\n"
+    )
+    insts = parse_dockerfile(text)
+    assert [i.directive for i in insts] == ["FROM", "ONBUILD", "RUN"]
+
+
+def test_plain_heredoc_terminator_must_match_exactly():
+    # BuildKit closes a plain ``<<`` heredoc only on an EXACT tag line;
+    # a space-indented tag is body. The old strip()-based match closed
+    # early and re-entered the real remainder as phantom instructions.
+    text = (
+        "FROM debian:11 AS runtime\n"
+        "RUN <<EOF\n"
+        "  EOF\n"
+        "FROM evil/image AS builder\n"
+        "EOF\n"
+        "RUN apt-get install -y openssl\n"
+    )
+    insts = parse_dockerfile(text)
+    assert [i.directive for i in insts] == ["FROM", "RUN", "RUN"]
+    assert insts[2].stage_name == "runtime"
+
+
+def test_plain_heredoc_exact_terminator_still_closes():
+    # Both-directions guard for the exact-match rule.
+    text = (
+        "FROM alpine\n"
+        "RUN <<EOF\n"
+        "echo body\n"
+        "EOF\n"
+        "RUN echo after\n"
+    )
+    insts = parse_dockerfile(text)
+    assert [i.directive for i in insts] == ["FROM", "RUN", "RUN"]
+    assert insts[2].args == "echo after"
+
+
 def test_shell_shapes_do_not_false_trigger_heredoc():
     # ``<<<`` here-strings and arithmetic ``1<<2`` are not heredocs.
     text = (
