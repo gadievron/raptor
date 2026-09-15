@@ -540,6 +540,37 @@ def set_console_log_level(level: int, *, include_root: bool = False) -> None:
     root_logger.setLevel(level)
 
 
+def configure_cli_logging(
+    level: int,
+    fmt: str = "%(levelname)s %(name)s: %(message)s",
+) -> None:
+    """``logging.basicConfig`` for standalone CLIs, with the escaping
+    console formatter installed on the resulting console handler(s).
+
+    Bare ``basicConfig`` wires a PLAIN formatter to stderr, so every
+    logger-routed line in that process bypasses
+    :class:`EscapingConsoleFormatter` — a relay like
+    ``logger.error("...: %s", exc)`` then delivers raw control bytes
+    from foreign-derived exception text straight to the operator TTY.
+    Standalone CLI entry points must call this instead of
+    ``basicConfig`` so the console chokepoint holds for them too.
+
+    Idempotent in the ``basicConfig`` sense: if handlers are already
+    configured (e.g. the script was loaded in-process inside a
+    RAPTOR run whose bootstrap owns the console handlers),
+    ``basicConfig`` is a no-op and NOTHING is touched — the swap
+    applies only to handlers this call itself created, so a
+    pre-configured process keeps its own (already escaping)
+    formatters and formats.
+    """
+    root = logging.getLogger()
+    before = set(map(id, root.handlers))
+    logging.basicConfig(level=level, format=fmt)
+    for handler in root.handlers:
+        if id(handler) not in before and _is_console_handler(handler):
+            handler.setFormatter(EscapingConsoleFormatter(fmt))
+
+
 def configure_run_logging(log_level: str | None, verbose: bool) -> None:
     """Apply run-level console logging flags."""
     if log_level:

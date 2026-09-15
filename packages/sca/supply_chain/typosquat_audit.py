@@ -41,6 +41,7 @@ from typing import NamedTuple
 from core.http import HttpClient
 from core.json import load_json_bounded
 from core.http.urllib_backend import UrllibClient
+from core.logging import configure_cli_logging
 
 from ..refresh_typosquat_lists import (
     _DEFAULT_TOP_N,
@@ -497,9 +498,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument("-v", "--verbose", action="count", default=0)
     args = p.parse_args(argv if argv is not None else sys.argv[1:])
 
-    logging.basicConfig(
-        level=logging.WARNING - 10 * min(args.verbose, 2),
-        format="%(levelname)s %(name)s: %(message)s")
+    # Escaping console formatter — see core.logging.configure_cli_logging.
+    configure_cli_logging(logging.WARNING - 10 * min(args.verbose, 2))
 
     if args.reaudit:
         # Re-audit re-checks the reviewed-legit list, not the candidate feeds,

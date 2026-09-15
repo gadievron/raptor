@@ -45,6 +45,7 @@ from pathlib import Path
 
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from core.security.log_sanitisation import sanitise_for_terminal as _sft
+from core.logging import configure_cli_logging
 
 from .pipeline import run_sca
 from typing import TYPE_CHECKING
@@ -401,9 +402,13 @@ def _configure_logging(
         level = logging.INFO
     else:
         level = logging.DEBUG
-    logging.basicConfig(
-        level=min(level, logging.DEBUG) if log_dir else level,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    # configure_cli_logging (not bare basicConfig): the escaping
+    # console formatter is the chokepoint that keeps logger-relayed
+    # foreign text (resolver stderr, SBOM import errors quoting
+    # scanned-repo content) control-byte-free on the operator TTY.
+    configure_cli_logging(
+        min(level, logging.DEBUG) if log_dir else level,
+        fmt="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     if log_dir:
         root = logging.getLogger()

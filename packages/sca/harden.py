@@ -62,6 +62,7 @@ from typing import Any
 
 from core.atomic_fs import write_text_atomically
 from core.json import JsonCache, save_json
+from core.logging import configure_cli_logging
 
 from . import SCA_CACHE_ROOT, default_client
 from .discovery import find_manifests
@@ -1785,7 +1786,8 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
 
 def _configure_logging(verbose: int) -> None:
     level = logging.WARNING - 10 * min(verbose, 2)
-    logging.basicConfig(level=level, format="%(levelname)s %(name)s: %(message)s")
+    # Escaping console formatter — see core.logging.configure_cli_logging.
+    configure_cli_logging(level)
 
 
 def _default_out_dir(target: Path) -> Path:

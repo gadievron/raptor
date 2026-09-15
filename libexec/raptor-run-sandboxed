@@ -76,6 +76,7 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, raptor_dir)
 import core.startup.process_init  # noqa: E402,F401
+from core.logging import configure_cli_logging  # noqa: E402
 from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
 
 
@@ -263,7 +264,10 @@ if not os.path.isabs(cmd[0]) and os.sep in cmd[0]:
 # diagnostics (network blocked, write denied, etc.) reach stderr. Without
 # this scoping, every RAPTOR module's INFO logs would flood the child's
 # stderr — and this script is what the LLM calls as a subprocess.
-logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
+# configure_cli_logging = basicConfig (stderr) + the escaping console
+# formatter, so sandbox diagnostics quoting child output cannot carry
+# raw control bytes to the caller's terminal.
+configure_cli_logging(logging.WARNING, fmt="%(message)s")
 logging.getLogger("core.sandbox").setLevel(logging.INFO)
 
 from core.sandbox import sandbox, SandboxSetupError, SANDBOX_ENGAGE_EXIT_CODE  # noqa: E402

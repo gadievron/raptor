@@ -48,10 +48,19 @@ Mechanism — deliberately explicit and low-maintenance:
   is the blessed terminal-JSON shape.
 * **Exception-relay arm**: ``except Exception as e: print(f"{e}")``
   in a BROAD handler is flagged (shallow, handler-body sinks only —
-  scope trade-offs recorded at ``_exception_relay_scan``).
+  scope trade-offs recorded at ``_exception_relay_scan``). LOGGING
+  sinks (``log.error(f"{e}")`` and every ``logger.*`` relay) are
+  deliberately outside this arm: they are covered structurally at the
+  console chokepoint (``core.logging.EscapingConsoleFormatter``);
+  standalone CLIs wire it via ``core.logging.configure_cli_logging``,
+  enforced by the bare-``basicConfig`` closure test.
 * **Sanitiser name-shadow arm**: a local definition of a
   recognised-sanitiser name must build on a canonical sanitiser
   (``_sanitiser_shadow_scan``).
+* **Sink-model residual**: sinks are matched by NAME — an aliased
+  sink (``p = print; p(tainted)``) evades every arm. Adversarial-
+  committer shape; review remains the control for deliberate
+  evasion.
 * **Mermaid fence rule** (:data:`_MERMAID_FENCE_FILES`): in the diagram
   renderer, any f-string interpolation *inside* a ```` ```mermaid ````
   fence must be a sanitiser call (``_fence`` / ``sanitise_code``) so a
@@ -1267,10 +1276,14 @@ def _sanitiser_shadow_scan(tree: ast.AST, rel: str) -> list[Violation]:
 
     Chained helpers (``_cell`` calling ``_line``) pass via the
     ``_SANITISERS`` union; ``html.escape`` passes via the attribute
-    check. Residuals (documented): mutually-recursive no-op pairs, and
+    check. Residuals (documented): mutually-recursive no-op pairs;
     aliasing a non-sanitising callable via import-as (import aliases
     are the established convention for the real sanitisers and are
-    not distinguishable by name alone).
+    not distinguishable by name alone); and MENTION-only bodies —
+    the check is reference-based, not dataflow, so a body that names
+    a canonical sanitiser without applying it on the return path
+    passes (adversarial-committer shape; the review checkpoint at
+    registry/allowlist time is the control for deliberate evasion).
     """
     if rel in _SANITISER_DEFINITION_MODULES:
         return []
@@ -1329,7 +1342,12 @@ def _exception_relay_scan(tree: ast.AST, rel: str,
     that relays arbitrary lower layers — every unit-filed member of
     this mechanism was a broad catch. Residuals (documented): the
     one-hop ``msg = f"{e}"; print(msg)`` spelling and narrow-handler
-    relays.
+    relays. ``logging`` sinks (``log.error(f"{e}")``) are excluded
+    HERE and covered at a different layer: the console-handler
+    chokepoint (``EscapingConsoleFormatter``; standalone CLIs wire it
+    via ``core.logging.configure_cli_logging``, enforced by the
+    bare-``basicConfig`` closure test) escapes every logger-routed
+    line, so a per-site arm would double-cover with heavy noise.
     """
     out: list[Violation] = []
     for node in ast.walk(tree):

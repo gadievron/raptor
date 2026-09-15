@@ -20,6 +20,7 @@ import time
 from dataclasses import dataclass
 
 from core.json import JsonCache
+from core.logging import configure_cli_logging
 
 from . import default_client
 from .registries.crates import CratesClient
@@ -256,8 +257,8 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
 
 def _configure_logging(verbose: int) -> None:
     level = logging.WARNING - 10 * min(verbose, 2)
-    logging.basicConfig(
-        level=level, format="%(levelname)s %(name)s: %(message)s")
+    # Escaping console formatter — see core.logging.configure_cli_logging.
+    configure_cli_logging(level)
 
 
 if __name__ == "__main__":

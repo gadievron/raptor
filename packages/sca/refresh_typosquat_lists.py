@@ -63,6 +63,7 @@ from core.http import (
 )
 from core.http.urllib_backend import UrllibClient
 from core.run.retry import RetryPolicy, retry_call
+from core.logging import configure_cli_logging
 
 from .supply_chain._name_grammar import valid_feed_name
 
@@ -473,10 +474,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-v", "--verbose", action="count", default=0)
     args = p.parse_args(argv if argv is not None else sys.argv[1:])
 
-    logging.basicConfig(
-        level=logging.WARNING - 10 * min(args.verbose, 2),
-        format="%(levelname)s %(name)s: %(message)s",
-    )
+    # Escaping console formatter — see core.logging.configure_cli_logging.
+    configure_cli_logging(logging.WARNING - 10 * min(args.verbose, 2))
 
     # The refresh script doesn't go through the SCA egress-allowlisted
     # client because the popularity feeds aren't on the SCA allowlist

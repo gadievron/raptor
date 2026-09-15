@@ -22,6 +22,7 @@ from core.recall.runner import (
     run_pipeline,
     verify_pinned_clone,
 )
+from core.logging import configure_cli_logging
 from core.recall.score import (
     collect_toolchain,
     compare_reports,
@@ -310,8 +311,8 @@ def _cmd_compare(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=logging.INFO,
-                        format="[%(levelname)s] %(message)s")
+    # Escaping console formatter — see core.logging.configure_cli_logging.
+    configure_cli_logging(logging.INFO, fmt="[%(levelname)s] %(message)s")
     p = argparse.ArgumentParser(
         prog="recall-measure",
         description=("End-to-end detector-recall measurement: run a "

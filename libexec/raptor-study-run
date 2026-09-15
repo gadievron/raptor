@@ -33,6 +33,7 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
+from core.logging import configure_cli_logging  # noqa: E402
 
 from core.concepts.study import run_study  # noqa: E402
 
@@ -76,9 +77,10 @@ def main() -> int:
     ap.add_argument("-v", "--verbose", action="store_true")
     parsed = ap.parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG if parsed.verbose else logging.INFO,
-        format="%(name)s: %(message)s",
+    # Escaping console formatter — see core.logging.configure_cli_logging.
+    configure_cli_logging(
+        logging.DEBUG if parsed.verbose else logging.INFO,
+        fmt="%(name)s: %(message)s",
     )
     for _noisy in ("httpx", "httpcore", "urllib3"):
         logging.getLogger(_noisy).setLevel(logging.WARNING)
