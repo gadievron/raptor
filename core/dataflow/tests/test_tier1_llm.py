@@ -894,3 +894,58 @@ def test_transform_bound_output_reaching_sink_is_sound(tmp_path: Path):
         language="python", complete=_fake_complete(reply),
     )
     assert r.status is t1.Tier0Status.SOUND
+
+
+def test_transform_walrus_conditional_value_declines(tmp_path: Path):
+    """A walrus binding whose value is CONDITIONAL
+    (``log(safe := clean(x) if flag else x)``) binds the sanitized
+    value only on some paths — the fall-through arm sends raw ``name``
+    into the sink.  Pre-fix ``_binds_conditional_value`` walked only
+    Assign-family statements while the transform gate accepts NamedExpr
+    bindings, so the conditional value slipped through inside a call
+    argument and certified SOUND."""
+    (tmp_path / "app.py").write_text(
+        "import html\n"
+        "def f(name, flag):\n"
+        "    log(safe := (html.escape(name) if flag else name))\n"  # line 3
+        "    return render(safe)\n"                                 # line 4
+    )
+    diff = "+    log(safe := (html.escape(name) if flag else name))\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line":
+            "log(safe := (html.escape(name) if flag else name))",
+        "variable_name": "name", "charset": "", "forbidden": "",
+        "library_call": "html.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+    assert "does not dominate" in r.reasoning
+
+
+def test_transform_walrus_unconditional_value_still_sound(tmp_path: Path):
+    """Two-direction: an UNconditional walrus binding of the transform
+    result keeps certifying."""
+    (tmp_path / "app.py").write_text(
+        "import html\n"
+        "def f(name):\n"
+        "    log(safe := html.escape(name))\n"   # line 3
+        "    return render(safe)\n"              # line 4
+    )
+    diff = "+    log(safe := html.escape(name))\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "log(safe := html.escape(name))",
+        "variable_name": "name", "charset": "", "forbidden": "",
+        "library_call": "html.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.SOUND

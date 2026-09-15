@@ -871,9 +871,15 @@ def _binds_conditional_value(tree: ast.AST, line: int) -> bool:
     but the SANITIZED value is bound only on some paths — the
     fall-through arm sends the raw value into the sink. Conservative:
     any IfExp / BoolOp anywhere in the assigned value refuses (an
-    exotic-but-sound conditional value costs yield, never soundness)."""
+    exotic-but-sound conditional value costs yield, never soundness).
+    Walrus bindings (``log(safe := clean(x) if cond else x)``) are the
+    same shape spelled as an expression — the transform gate accepts
+    NamedExpr as a binding form, so this walk must see it too or the
+    conditional value slips through inside a call argument."""
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+        if not isinstance(
+            node, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr),
+        ):
             continue
         if node.lineno != line or node.value is None:
             continue
