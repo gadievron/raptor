@@ -163,7 +163,17 @@ def load_fuzz_evidence(
             },
         )
         bundle.evidence.append(record)
-        replay_entries = replay_summary.get(str(crash.input_file), [])
+        # Join on the crash-file BASENAME (unique within one crashes
+        # dir): the producer records results at replay time and this
+        # consumer re-enumerates crashes at load time, so an
+        # absolute-path key silently missed on any spelling drift
+        # (run dir moved/adopted, crashes-dir fallback resolution, a
+        # symlinked tmp component) and crashes lost their
+        # REPLAYED_CRASH tier with no note. The absolute-path lookup
+        # keeps summaries written by earlier runs joinable.
+        replay_entries = (replay_summary.get(crash.input_file.name)
+                          or replay_summary.get(str(crash.input_file))
+                          or [])
         replay_evidence_ids: list[str] = []
         enriched_replays: list[dict[str, Any]] = []
         for replay in replay_entries:

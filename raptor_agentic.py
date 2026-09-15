@@ -893,7 +893,7 @@ def _prepare_fuzz_crashes_for_validate(
         context = analyser.analyse_crash(crash_id, crash_file, signal)
         context.crash_type = analyser.classify_crash_type(context)
         context_dict = asdict(context)
-        context_dict["replay"] = replay_outputs.get(str(crash_file), [])
+        context_dict["replay"] = replay_outputs.get(crash_file.name, [])
         contexts.append(context_dict)
 
         root_key = (
@@ -1089,7 +1089,14 @@ def _replay_fuzz_crashes(*, binary_path: Path, crash_files: list[Path], out_dir:
                     "error": str(e),
                     "reproduced": False,
                 })
-        results[str(crash_file)] = entries
+        # Keyed by BASENAME (unique within one crashes dir), not the
+        # absolute path: replay-summary.json outlives this process and
+        # its consumer (fuzz_evidence) re-enumerates crash files at
+        # load time — an absolute-path key broke the join on any
+        # spelling drift (run dir moved/adopted, crashes-dir fallback
+        # resolution, a symlinked tmp component) and every
+        # REPLAYED_CRASH tier silently detached.
+        results[crash_file.name] = entries
     save_json(out_dir / "replay-summary.json", results)
     return results
 

@@ -823,3 +823,100 @@ def test_pipeline_handles_random_bytes(tmp_path):
         result = analyse_blackbox_binary(binary, out_dir=tmp_path / "out")
     assert result is not None
     assert (tmp_path / "out" / "binary-manifest.json").is_file()
+
+
+def test_fuzz_replay_join_survives_run_dir_relocation(tmp_path: Path) -> None:
+    # replay-summary.json is written at replay time and consumed by a
+    # later process that re-enumerates the crash files — the join key
+    # is the crash BASENAME so a moved/adopted run dir (any absolute
+    # spelling drift) does not silently detach the REPLAYED_CRASH tier.
+    binary = _write_binary(tmp_path / "sample", b"\x7fELF" + b"\x00" * 128)
+    out = tmp_path / "out"
+    ctx = BinaryContextMap(binary_path=binary, arch="x86", bits=64, binary_format="elf")
+    ctx.entry_points = [FunctionInfo(name="main", address=0x401000, size=64, is_entry=True)]
+    ctx.interesting_functions = list(ctx.entry_points)
+
+    with patch("packages.binary_analysis.pipeline.analyse_binary_context", return_value=ctx):
+        analyse_blackbox_binary(binary, out_dir=out)
+
+    crashes_dir = out / "afl" / "main" / "crashes"
+    crashes_dir.mkdir(parents=True)
+    crash_name = "id:000001,sig:11,src:000000,op:havoc"
+    (crashes_dir / crash_name).write_bytes(b"boom")
+    replay_binary = _write_binary(tmp_path / "sample_asan", b"\x7fELF" + b"\x00" * 128)
+    replay_dir = out / "crash_analysis" / "replay"
+    replay_dir.mkdir(parents=True)
+    # Basename key: the producer's shape. The recorded absolute path
+    # (pre-relocation) would never match the re-enumerated one.
+    (replay_dir / "replay-summary.json").write_text(json.dumps({
+        crash_name: [{
+            "binary": str(replay_binary),
+            "returncode": -11,
+            "stdout": str(replay_dir / "stdout.log"),
+            "stderr": str(replay_dir / "stderr.log"),
+            "reproduced": True,
+        }],
+    }))
+    (out / "fuzz-summary.json").write_text(json.dumps({
+        "fuzzer": "afl++",
+        "target": str(binary),
+        "crashes": 1,
+        "crashes_dir": str(crashes_dir),
+        "total_executions": 10,
+        "coverage_percent": 1.0,
+    }))
+
+    bundle = append_fuzz_evidence_to_run(binary, out_dir=out)
+
+    assert bundle is not None
+    assert len(bundle.crashes) == 1
+    assert bundle.crashes[0].replay_evidence_ids, (
+        "basename-keyed replay summary failed to join — the "
+        "REPLAYED_CRASH tier silently detached"
+    )
+    evidence = json.loads((out / "binary-evidence.json").read_text())["evidence"]
+    assert any(item["kind"] == "crash_replay" for item in evidence)
+
+
+def test_fuzz_replay_join_keeps_legacy_absolute_path_keys(tmp_path: Path) -> None:
+    # Summaries written by earlier runs keyed on absolute paths must
+    # stay joinable (fallback lookup) as long as the path spelling is
+    # unchanged — the exact shape the sibling test above relocates.
+    binary = _write_binary(tmp_path / "sample", b"\x7fELF" + b"\x00" * 128)
+    out = tmp_path / "out"
+    ctx = BinaryContextMap(binary_path=binary, arch="x86", bits=64, binary_format="elf")
+    ctx.entry_points = [FunctionInfo(name="main", address=0x401000, size=64, is_entry=True)]
+    ctx.interesting_functions = list(ctx.entry_points)
+
+    with patch("packages.binary_analysis.pipeline.analyse_binary_context", return_value=ctx):
+        analyse_blackbox_binary(binary, out_dir=out)
+
+    crashes_dir = out / "afl" / "main" / "crashes"
+    crashes_dir.mkdir(parents=True)
+    crash_path = crashes_dir / "id:000002,sig:06,src:000000,op:havoc"
+    crash_path.write_bytes(b"boom")
+    replay_binary = _write_binary(tmp_path / "sample_asan", b"\x7fELF" + b"\x00" * 128)
+    replay_dir = out / "crash_analysis" / "replay"
+    replay_dir.mkdir(parents=True)
+    (replay_dir / "replay-summary.json").write_text(json.dumps({
+        str(crash_path): [{
+            "binary": str(replay_binary),
+            "returncode": -6,
+            "stdout": str(replay_dir / "stdout.log"),
+            "stderr": str(replay_dir / "stderr.log"),
+            "reproduced": True,
+        }],
+    }))
+    (out / "fuzz-summary.json").write_text(json.dumps({
+        "fuzzer": "afl++",
+        "target": str(binary),
+        "crashes": 1,
+        "crashes_dir": str(crashes_dir),
+        "total_executions": 10,
+        "coverage_percent": 1.0,
+    }))
+
+    bundle = append_fuzz_evidence_to_run(binary, out_dir=out)
+
+    assert bundle is not None
+    assert bundle.crashes[0].replay_evidence_ids
