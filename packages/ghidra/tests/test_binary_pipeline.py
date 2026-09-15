@@ -656,3 +656,64 @@ class TestChecklistMergeRobustness:
         names = [i["name"] for i in cl["files"][0]["items"]]
         assert names == ["already_there", "merge_target"]
         assert cl["total_items"] == 2
+
+
+class TestBookmarkScrubClassParity:
+    """The three ghidra-derived-text scrubbers (raptor-ghidra's
+    _CTRL_CHARS, decomp_tree's control class, bookmarks_bridge's
+    _CTRL_CHARS) must cover the same character set — bookmark
+    comments/categories are attacker-controlled and land in
+    checklist priority_reason (analysis prompts) and attack-surface
+    bookmark summaries (operator jq → terminal)."""
+
+    HOSTILE = (
+        "note\x9dOSC\x90DCS\x80pad"      # C1 range incl. OSC/DCS introducers
+        "​zwsp‏rlm"            # zero-width / bidi marks
+        " ls ps"               # line/paragraph separators
+        "﻿bom\tta\nb"               # BOM + the baselined \t/\n drift
+    )
+
+    def test_clean_strips_full_class(self):
+        from packages.ghidra.bookmarks_bridge import _clean
+        out = _clean(self.HOSTILE)
+        for ch in ("\x9d", "\x90", "\x80", "​", "‏",
+                   " ", " ", "﻿"):
+            assert ch not in out, f"{ch!r} survived _clean"
+        assert "note" in out and "bom" in out
+
+    def test_class_parity_with_raptor_ghidra(self):
+        """Mechanical parity: every character the raptor-ghidra CLI
+        scrubber strips, the bookmarks scrubber must strip too."""
+        import re
+        from pathlib import Path
+
+        from packages.ghidra import bookmarks_bridge
+
+        script = (Path(__file__).resolve().parents[3]
+                  / "libexec" / "raptor-ghidra")
+        src = script.read_text(encoding="utf-8")
+        m = re.search(
+            r"_CTRL_CHARS = re\.compile\(\n((?:\s*r\"[^\n]*\"\n)+)\)",
+            src,
+        )
+        assert m, "raptor-ghidra _CTRL_CHARS pattern not found"
+        cli_pattern = re.compile("".join(
+            eval(line.strip())  # noqa: S307 — r"" literals from our own file
+            for line in m.group(1).strip().splitlines()
+        ))
+        # Probe the full BMP control-ish space cheaply: C0/C1, format
+        # chars, separators, bidi, BOM.
+        probe = [chr(c) for c in list(range(0x00, 0xA0))
+                 + [0x200B, 0x200C, 0x200D, 0x200E, 0x200F,
+                    0x2028, 0x2029, 0x202A, 0x202E, 0x2066, 0x2069,
+                    0xFEFF]]
+        for ch in probe:
+            if cli_pattern.match(ch) and ch not in ("\t", "\n"):
+                # \t/\n: bookmarks flattens fields to single-line
+                # prompt slots via [:limit]; the CLI class strips
+                # them, the bridge historically passes them — the
+                # baselined P4 drift, excluded here deliberately.
+                assert bookmarks_bridge._CTRL_CHARS.match(ch), (
+                    f"raptor-ghidra strips {ch!r} but "
+                    f"bookmarks_bridge._CTRL_CHARS passes it"
+                )

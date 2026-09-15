@@ -204,6 +204,10 @@ _REPORT_CONSTRUCTORS = frozenset({"ReportSection"})
 _REPORT_WRITER_FILES = (
     "core/analysis/binary_oracle.py",
     "core/analysis/binary_oracle_cli.py",
+    # Build-system detector CLI: command/working_dir/env_vars derive
+    # from the scanned repo's build files. Terminal writer —
+    # sanitise_for_terminal grade.
+    "core/build/build_detector.py",
     "core/audit/report.py",
     # The per-function review-progress stream (format_progress_line):
     # target-derived file/function names and verbatim announcement

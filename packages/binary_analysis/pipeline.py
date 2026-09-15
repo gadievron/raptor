@@ -1118,9 +1118,15 @@ def _write_report(result: BinaryAnalysisResult, out_dir: Path) -> None:
     lines = [
         "# RAPTOR Black-box Binary Understanding",
         "",
-        f"Target: `{result.manifest.binary_path}`",
-        f"SHA-256: `{result.manifest.binary_sha256}`",
-        f"Format: `{result.manifest.binary_format}`  Arch: `{result.manifest.arch}`  Bits: `{result.manifest.bits}`",
+        # The filename component of binary_path is attacker-chosen for
+        # extracted bundles/downloads; format/arch strings derive from
+        # parsing the hostile binary — same _esc chokepoint as every
+        # other name-bearing interpolation in this report.
+        f"Target: `{_esc(str(result.manifest.binary_path))}`",
+        f"SHA-256: `{_esc(str(result.manifest.binary_sha256))}`",
+        f"Format: `{_esc(str(result.manifest.binary_format))}`  "
+        f"Arch: `{_esc(str(result.manifest.arch))}`  "
+        f"Bits: `{result.manifest.bits}`",
         "",
         "## Evidence Summary",
         "",

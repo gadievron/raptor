@@ -20,7 +20,6 @@ from pathlib import Path
 from shlex import quote
 from typing import Any, ClassVar
 
-from core.json import dumps_display
 from core.logging import get_logger
 from core.sandbox import SandboxSetupError
 from core.sandbox import run as _sandbox_run
@@ -2009,7 +2008,12 @@ def main() -> None:
         if not valid:
             print("WARNING: Build command validation failed")
 
+    # command / working_dir / env_vars derive from the scanned
+    # (hostile) repo's build files — escape before the terminal, and
+    # keep the JSON lane ASCII (C1 controls pass raw otherwise).
+    from core.security.log_sanitisation import sanitise_for_terminal as _sft
     if args.json:
+        import json as _json
         output = {
             "type": build_system.type,
             "command": build_system.command,
@@ -2017,16 +2021,16 @@ def main() -> None:
             "env_vars": build_system.env_vars,
             "confidence": build_system.confidence,
         }
-        print(dumps_display(output))
+        print(_json.dumps(output, indent=2, ensure_ascii=True, default=str))
     else:
         print(f"\n{'=' * 70}")
         print(f"BUILD SYSTEM DETECTED: {build_system.type.upper()}")
         print(f"{'=' * 70}")
-        print(f"Command: {build_system.command}")
-        print(f"Working directory: {build_system.working_dir}")
+        print(f"Command: {_sft(str(build_system.command), max_len=300)}")
+        print(f"Working directory: {_sft(str(build_system.working_dir), max_len=300)}")
         print(f"Confidence: {build_system.confidence:.2f}")
         if build_system.env_vars:
-            print(f"Environment variables: {build_system.env_vars}")
+            print(f"Environment variables: {_sft(str(build_system.env_vars), max_len=300)}")
 
 
 if __name__ == "__main__":

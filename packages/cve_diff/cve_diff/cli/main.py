@@ -26,6 +26,7 @@ from typing import Annotated
 import typer
 
 from core.json import save_json
+from core.security.log_sanitisation import sanitise_for_terminal
 from cve_diff import __version__
 from cve_diff.analysis.analyzer import RootCauseAnalysisError, RootCauseAnalyzer
 from cve_diff.cli.bench import bench as _bench_cmd
@@ -425,7 +426,13 @@ def run(
     progress_cb = None
     if not quiet:
         def progress_cb(stage: str, status: str, info: dict) -> None:
-            kv = " ".join(f"{k}={v}" for k, v in info.items())
+            # info values carry exception text (which embeds remote
+            # git stderr banners) and repo-derived slugs — escape the
+            # kv string like the file's other terminal relays.
+            kv = sanitise_for_terminal(
+                " ".join(f"{k}={v}" for k, v in info.items()),
+                max_len=300,
+            )
             typer.echo(f"  · {stage:<16} {status:<8} {kv}", err=True)
 
     # Track the most-recent Pipeline so the except handlers can read

@@ -637,7 +637,7 @@ def render_investigation_report(investigation: dict[str, Any]) -> str:
     lines = [
         "# RAPTOR Binary Investigation",
         "",
-        f"Target: `{investigation['target_path']}`",
+        f"Target: `{_md_escape(str(investigation['target_path']))}`",
         f"SHA-256: `{investigation['binary_sha256']}`",
         f"Status: `{investigation['status']}`",
         "",

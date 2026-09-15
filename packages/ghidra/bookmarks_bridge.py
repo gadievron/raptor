@@ -27,8 +27,16 @@ logger = logging.getLogger(__name__)
 
 _CVE_RE = re.compile(r"CVE-\d{4}-\d+", re.IGNORECASE)
 
+# Same character class as libexec/raptor-ghidra's _CTRL_CHARS and
+# decomp_tree's scrub: full C1 range (single-byte CSI/OSC/DCS), the
+# zero-width/joiner class, line/paragraph separators, bidi embedding
+# and isolate controls, and the BOM — the three ghidra-derived-text
+# scrubbers must cover the same set (class-parity test pins this).
 _CTRL_CHARS = re.compile(
-    r"[\x00-\x08\x0b-\x1f\x7f\x9b\u202a-\u202e\u2066-\u2069]"
+    r"[\x00-\x08\x0b-\x1f\x7f\x80-\x9f"
+    r"\u200b-\u200f\u2028\u2029"
+    r"\u202a-\u202e\u2066-\u2069"
+    r"\ufeff]"
 )
 
 
