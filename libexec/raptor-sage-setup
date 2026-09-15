@@ -1000,17 +1000,43 @@ authorize_boot_payload() {
     # authorization step — never fall back to raw output. Defined
     # nested so test drivers that extract authorize_boot_payload alone
     # stay self-contained.
+    # Approval invariant: NOTHING the operator was not shown may be
+    # stamped authorized. Lines render UNBOUNDED (a length cap elided
+    # long-line tails from the display while the full raw payload was
+    # stamped — exactly the sight-unseen replace this surface
+    # refuses); a hostile server flooding the display is visible
+    # hostility, but a line-COUNT ceiling still refuses pathological
+    # payloads outright (fail closed, same lane as sanitiser failure)
+    # rather than burying one line in a hundred thousand. Every
+    # rendered payload line carries a "| " prefix so payload text can
+    # never impersonate the script's own frame/status lines.
     _render_payload_display() {
         RAPTOR_DIR="$RAPTOR_DIR" python3 -c '
 import os
 import sys
 
 sys.path.insert(0, os.environ["RAPTOR_DIR"])
-from core.security.log_sanitisation import sanitise_for_terminal
+from core.security.log_sanitisation import escape_nonprintable
 
 data = sys.stdin.buffer.read().decode("utf-8", errors="replace")
-sys.stdout.write("\n".join(
-    sanitise_for_terminal(line, max_len=2000) for line in data.split("\n")))
+lines = data.split("\n")
+if len(lines) > 4000:
+    sys.stderr.write(
+        f"payload has {len(lines)} lines — refusing to render an "
+        "approval display that large\n")
+    sys.exit(1)
+rendered = ["| " + escape_nonprintable(line) for line in lines]
+total = sum(len(r) + 1 for r in rendered)
+if total > 2_000_000:
+    # Escaping expands hostile bytes up to 4x; an unreviewably large
+    # render would scroll early payload lines out of the operator
+    # terminal. Refuse outright (never truncate-and-proceed) — same
+    # fail-closed lane as the line-count ceiling.
+    sys.stderr.write(
+        f"payload renders to {total} chars — refusing to render an "
+        "approval display that large\n")
+    sys.exit(1)
+sys.stdout.write("\n".join(rendered))
 '
     }
     local payload

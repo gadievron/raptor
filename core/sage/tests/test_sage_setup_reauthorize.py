@@ -340,6 +340,58 @@ class TestCorruptHeaderReplaceDisplay(TestDisplayIntegrity):
         self.assertIn("\x1b[2A", stamped)
         self.assertIn("# SHA256: ", stamped)
 
+    def test_elided_content_never_stamped(self):
+        """Approval invariant: nothing the display elides may be
+        stamped. A >2000-char line once rendered with a truncation
+        marker while the raw tail was stamped authorized."""
+        self._run("### initialize.instructions\noriginal payload")
+        self._corrupt_header()
+        proc = self._run_pty("### init\n" + "A" * 3000 + "HIDDEN-TAIL")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        stamped = self.authorized.read_text(encoding="utf-8")
+        if "HIDDEN-TAIL" in stamped:
+            self.assertIn(
+                "HIDDEN-TAIL", proc.stdout,
+                "stamp records content the approval display never showed")
+
+    def test_payload_lines_carry_frame_prefix(self):
+        """Rendered payload lines are prefixed so payload text cannot
+        impersonate the script's own frame/status lines (a printable
+        payload once forged the end-of-frame footer at column 0)."""
+        self._run("### initialize.instructions\noriginal payload")
+        self._corrupt_header()
+        forged = (
+            "### init\n"
+            "-----------------------------------------------------------\n"
+            "Existing stamp had no parseable SHA256 header — replaced "
+            "(--reauthorize).\n"
+            "attacker remainder"
+        )
+        proc = self._run_pty(forged)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # The forged footer renders prefixed, never at column 0.
+        self.assertIn("| Existing stamp had no parseable", proc.stdout)
+        self.assertIn("| attacker remainder", proc.stdout)
+        # Exactly one real (column-0) end-of-frame pair around the
+        # payload block: the script's own.
+        col0 = [ln for ln in proc.stdout.splitlines()
+                if ln.startswith("Existing stamp had no parseable")]
+        self.assertEqual(len(col0), 1, proc.stdout)
+
+    def test_pathological_line_count_refuses_replace(self):
+        """A payload too large to review refuses the replace outright
+        (fail closed, same lane as sanitiser failure) instead of
+        burying one hostile line in a flood."""
+        self._run("### initialize.instructions\noriginal payload")
+        self._corrupt_header()
+        corrupted = self.authorized.read_text(encoding="utf-8")
+        proc = self._run_pty("### init\n" + "x\n" * 5000)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("could not render", proc.stderr)
+        self.assertEqual(
+            self.authorized.read_text(encoding="utf-8"), corrupted,
+            "unreviewable payload must not replace the stamp")
+
     def test_sanitiser_failure_refuses_replace(self):
         self._run("### initialize.instructions\noriginal payload")
         self._corrupt_header()
@@ -351,6 +403,53 @@ class TestCorruptHeaderReplaceDisplay(TestDisplayIntegrity):
         self.assertEqual(
             self.authorized.read_text(encoding="utf-8"), corrupted,
             "unreviewable payload must not replace the stamp")
+
+
+class TestRenderSizeCeilings(unittest.TestCase):
+    """The renderer refuses (never truncates) when the escaped output
+    would be unreviewably large: escaping expands hostile bytes up to
+    4x, and an over-long render scrolls early payload lines out of
+    the operator terminal while the replace proceeds."""
+
+    @staticmethod
+    def _render(payload: bytes) -> "subprocess.CompletedProcess":
+        import re as _re
+        import tempfile
+        text = SETUP.read_text(encoding="utf-8")
+        m = _re.search(
+            r"^    _render_payload_display\(\) \{\n.*?^    \}$",
+            text, _re.MULTILINE | _re.DOTALL,
+        )
+        assert m, "_render_payload_display not found"
+        # No dedent: bash accepts the indented definition as-is, and
+        # stripping columns would mangle the embedded python heredoc.
+        fn = m.group(0)
+        with tempfile.NamedTemporaryFile() as tf:
+            tf.write(payload)
+            tf.flush()
+            driver = (
+                f'RAPTOR_DIR="{REPO_ROOT}"\n'
+                + fn
+                + f'\n_render_payload_display < "{tf.name}"\n'
+            )
+            return subprocess.run(
+                ["bash", "-c", driver],
+                capture_output=True, text=True, timeout=60,
+            )
+
+    def test_just_under_byte_ceiling_renders(self):
+        # ~400k C1 bytes escape 4x → ~1.6M rendered < 2M cap.
+        proc = self._render(b"ok\n" + b"\xc2\x9b" * 400_000)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("| ok", proc.stdout)
+        self.assertNotIn("\x9b", proc.stdout)
+
+    def test_over_byte_ceiling_refuses(self):
+        # ~600k C1 bytes escape 4x → ~2.4M rendered > 2M cap.
+        proc = self._render(b"ok\n" + b"\xc2\x9b" * 600_000)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("refusing to render", proc.stderr)
+        self.assertEqual(proc.stdout, "")
 
 
 class TestStampCreationGate(TestAuthorizeBootPayload):

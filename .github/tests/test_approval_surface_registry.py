@@ -126,9 +126,13 @@ REGISTRY: dict[str, Entry] = {
              "_render_payload_display helper (display-only, "
              "fail-closed); the review-lane diff is sanitised inside "
              "boot_payload_review.py",
+        # The render is UNBOUNDED escape_nonprintable with a "| "
+        # frame prefix and a line-count refusal: an approval display
+        # must show everything it stamps (a length cap once elided
+        # long-line tails that were stamped sight-unseen).
         wire_tokens=('"$payload_diff" | _render_payload_display',
                      '"$payload" | _render_payload_display',
-                     "sanitise_for_terminal(line, max_len=2000)"),
+                     '"| " + escape_nonprintable(line)'),
     ),
     "core/sage/boot_payload_review.py": Entry(
         lane="render", status="sanitised",
