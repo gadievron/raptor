@@ -493,6 +493,214 @@ void *alloc_obj(size_t n) {
         result = self._py_wrapper("helper.process(arg) == request.param")
         assert result.skip_llm
 
+    # ── Whole-value escape analysis (Python AST leg) ──────────────
+    # A sink value escaping through ANY binding/argument/return shape
+    # must refuse the skip; the benign twins pin the other direction.
+
+    def _py_fn(self, source: str):
+        from core.audit.prefilter import _is_trivial_wrapper
+        is_wrapper, _ = _is_trivial_wrapper(source, "python", None)
+        return is_wrapper
+
+    def test_two_hop_alias_not_skipped(self):
+        assert not self._py_fn(
+            "def f(cmd):\n    f1 = os.system\n    f2 = f1\n"
+            "    return f2(cmd)\n"
+        )
+
+    def test_tuple_unpack_alias_not_skipped(self):
+        assert not self._py_fn(
+            "def f(cmd):\n    g, h = os.system, len\n    return g(cmd)\n"
+        )
+
+    def test_chained_assign_alias_not_skipped(self):
+        assert not self._py_fn(
+            "def f(cmd):\n    g = h = os.system\n    return g(cmd)\n"
+        )
+
+    def test_annotated_assign_alias_not_skipped(self):
+        assert not self._py_fn(
+            "def f(cmd):\n    g: object = os.system\n    return g(cmd)\n"
+        )
+
+    def test_conditional_rhs_alias_not_skipped(self):
+        assert not self._py_fn(
+            "def f(cmd, x):\n    g = os.system if x else print\n"
+            "    return g(cmd)\n"
+        )
+
+    def test_spaced_dots_alias_not_skipped(self):
+        assert not self._py_fn(
+            "def f(cmd):\n    g = os . system\n    return g(cmd)\n"
+        )
+
+    def test_default_parameter_sink_not_skipped(self):
+        assert not self._py_fn(
+            "def f(cmd, g=os.system):\n    return g(cmd)\n"
+        )
+
+    def test_kwonly_default_sink_not_skipped(self):
+        assert not self._py_fn(
+            "def f(cmd, *, g=os.system):\n    return g(cmd)\n"
+        )
+
+    def test_two_hop_value_escape_not_skipped(self):
+        assert not self._py_fn(
+            "def f(cmd):\n    f1 = os.system\n    f2 = f1\n"
+            "    return pool.submit(f2, cmd)\n"
+        )
+
+    def test_tuple_unpack_value_escape_not_skipped(self):
+        assert not self._py_fn(
+            "def f(cmd):\n    g, h = os.system, len\n"
+            "    return pool.submit(g, cmd)\n"
+        )
+
+    def test_return_position_sink_escape_not_skipped(self):
+        # The sink escapes as the RETURN VALUE while the single call
+        # is benign — no binding, no argument position.
+        assert not self._py_fn(
+            "def f(x):\n    log(x)\n    return os.system\n"
+        )
+
+    def test_yield_position_sink_escape_not_skipped(self):
+        assert not self._py_fn(
+            "def f(x):\n    log(x)\n    yield os.system\n"
+        )
+
+    def test_comprehension_value_escape_not_skipped(self):
+        # A sink spelled in a comprehension's element/key/value
+        # position escapes by value exactly like a display element.
+        for body in (
+            "def f(c, y):\n    log(c)\n"
+            "    return (subprocess.run for _ in y)\n",
+            "def f(c, y):\n    log(c)\n"
+            "    return {k: os.system for k in y}\n",
+            "def f(c, y):\n    log(c)\n"
+            "    return [os.system for _ in y]\n",
+        ):
+            assert not self._py_fn(body), body
+
+    def test_comprehension_loop_var_tail_collision_still_skips(self):
+        # The other direction: a comprehension-scoped loop variable
+        # that merely tail-collides with a sink name is the
+        # construct's own binder, not a body value — the wrapper
+        # stays trivially skippable.
+        assert self._py_fn(
+            "def f(tool_call_log):\n"
+            "    return any(call in TOOLS for call in tool_call_log)\n"
+        )
+
+    def test_subscripted_display_value_escape_not_skipped(self):
+        # Subscripting a display still yields a body-spelled element.
+        for body in (
+            "def f(c):\n    log(c)\n    return {1: os.system}[1]\n",
+            "def f(c):\n    log(c)\n    return [os.system][0]\n",
+        ):
+            assert not self._py_fn(body), body
+
+    def test_opaque_value_view_carries_spelled_refs(self):
+        # The conservative arm itself must carry body-spelled
+        # references out of opaque expressions — pinned at the
+        # value-view level so the refusal never depends on an
+        # unrelated downstream text heuristic.
+        import ast as ast_mod
+
+        from core.audit.prefilter import _py_value_refs
+        for expr in (
+            "[os.system for _ in y]",
+            "(subprocess.run for _ in y)",
+            "{k: os.system for k in y}",
+            "[os.system][0]",
+            "{1: os.system}[1]",
+        ):
+            refs, resolved = _py_value_refs(
+                ast_mod.parse(expr, mode="eval").body,
+            )
+            assert not resolved, expr
+            assert refs & {"os.system", "subprocess.run"}, expr
+
+    def test_bare_decorator_reference_judged(self):
+        # A bare decorator executes the referenced callable at
+        # definition time; a benign decorator keeps the skip.
+        assert not self._py_fn(
+            "@os.system\ndef f(c):\n    return log(c)\n"
+        )
+        assert self._py_fn(
+            "@functools.lru_cache\ndef f(c):\n    return helper(c)\n"
+        )
+
+    def test_walrus_alias_not_skipped(self):
+        assert not self._py_fn(
+            "def f(cmd):\n    return (g := os.system)(cmd)\n"
+        )
+
+    def test_container_display_sink_not_skipped(self):
+        for body in (
+            "def f(cmd):\n    fns = [os.system]\n    return apply(fns, cmd)\n",
+            "def f(cmd):\n    d = {'k': os.system}\n    return apply(d, cmd)\n",
+        ):
+            assert not self._py_fn(body), body
+
+    def test_lambda_carried_sink_not_skipped(self):
+        assert not self._py_fn(
+            "def f(cmd):\n    g = lambda: os.system\n    return apply(g, cmd)\n"
+        )
+
+    def test_import_alias_sink_not_skipped(self):
+        for body in (
+            "def f(cmd):\n    import os as o\n    return o.system(cmd)\n",
+            "def f(cmd):\n    from os import system as s\n    return s(cmd)\n",
+        ):
+            assert not self._py_fn(body), body
+
+    def test_augassign_carried_sink_not_skipped(self):
+        assert not self._py_fn(
+            "def f(cmd, g):\n    g += [os.system]\n    return apply(g, cmd)\n"
+        )
+
+    def test_subscript_store_sink_not_skipped(self):
+        # Store into a container: no local name is bound, but the
+        # stored value carries the sink out of the wrapper.
+        assert not self._py_fn(
+            "def f(cmd, d):\n    d['k'] = os.system\n    return helper(cmd)\n"
+        )
+
+    def test_unresolvable_bound_callee_not_skipped(self):
+        # The delegate's value comes from a container the body never
+        # spells — an unresolvable delegate is never mechanically
+        # clean.
+        assert not self._py_fn(
+            "def f(cmd):\n    g = TABLE[0]\n    return g(cmd)\n"
+        )
+
+    def test_global_rebindable_callee_not_skipped(self):
+        assert not self._py_fn(
+            "def f(cmd):\n    global g\n    return g(cmd)\n"
+        )
+
+    def test_unparseable_python_source_not_skipped(self):
+        assert not self._py_fn(
+            "def f(cmd:\n    return helper(cmd)\n"
+        )
+
+    def test_star_import_not_skipped(self):
+        assert not self._py_fn(
+            "def f(cmd):\n    from os import *\n    return helper(cmd)\n"
+        )
+
+    def test_benign_alias_chain_still_skips(self):
+        # Both directions: benign values flowing through the same
+        # shapes keep the skip.
+        for body in (
+            "def f(a):\n    g = math.sqrt\n    return g(a)\n",
+            "def f(a, g=math.sqrt):\n    return g(a)\n",
+            "def f(a, x):\n    g = math.sqrt if x else math.floor\n"
+            "    return g(a)\n",
+            "def f(x):\n    limit = 30\n    return helper(x, limit)\n",
+        ):
+            assert self._py_fn(body), body
+
     def test_callgraph_resolved_dangerous_callee_not_skipped(self):
         # The extraction pipeline resolved the delegate to a dangerous
         # callee the body text does not spell (macro indirection) —

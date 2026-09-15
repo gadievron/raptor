@@ -15,8 +15,10 @@ tool results.
 
 from __future__ import annotations
 
+import ast
 import logging
 import re
+import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -692,6 +694,420 @@ def _strip_executor_dunders(name: str) -> str:
     return ".".join(parts)
 
 
+# ── Wrapper escape analysis ────────────────────────────────────────
+#
+# The trivial-wrapper skip is only sound if NO sink value escapes the
+# delegate body: a sink reference carried by value into a binding, an
+# argument, a return, or a yield reaches code the skip never reviews.
+# The analysis below computes, per bound name, the set of references
+# its value can carry (whole-value view over the language's real
+# binding grammar — not a per-shape pattern list), resolves alias
+# chains to a fixpoint, and judges every carried reference against the
+# dangerous-callee exclusion. Anything the grammar walk cannot account
+# for is UNRESOLVED: an unresolved value refuses the skip when it is
+# the delegate (an unresolvable delegate must never be journalled
+# mechanically clean); in data positions (arguments, returns, binding
+# values) unresolved-ness alone does not refuse — a value the body
+# never spells (parameter data, elements of externally-populated
+# containers) is introduced and reviewed at its own spelling site, and
+# judging it here would re-open the measured legitimate-corpus flip
+# the argument-position gate exists to prevent.
+
+#: A binding's value: (references carried by value, fully-resolved?).
+_WrapperValue = tuple[set[str], bool]
+
+#: ast fields that introduce or receive name bindings. The collector
+#: must explicitly handle (or deliberately no-op) every node type
+#: carrying one of these fields; an unlisted type refuses the whole
+#: analysis (conservative default), and the closure test enumerates
+#: the installed grammar against the handled set so new binder node
+#: types fail loudly instead of silently escaping.
+_PY_BINDER_FIELDS = frozenset({
+    "target", "targets", "name", "names", "optional_vars", "rest",
+})
+
+#: Node types the collector fully handles (binds, judges, or safely
+#: ignores). Everything else with a binder-shaped field refuses.
+_PY_HANDLED_BINDERS: tuple[type, ...] = (
+    ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr,
+    ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef,
+    ast.ClassDef, ast.For, ast.AsyncFor, ast.With, ast.AsyncWith,
+    ast.ExceptHandler, ast.Global, ast.Nonlocal,
+    ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
+    # Deliberate no-ops: Delete unbinds; withitem/alias/comprehension
+    # are handled through their parent statements.
+    ast.Delete, ast.withitem, ast.alias, ast.comprehension,
+)
+
+
+def _py_dotted(node: ast.expr) -> str | None:
+    """Dotted spelling of a pure Name/Attribute chain, else None."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+    return None
+
+
+def _py_all_refs(node: ast.AST) -> set[str]:
+    """Every dotted reference spelled anywhere under ``node`` —
+    the conservative carry-set for opaque callables (lambdas, nested
+    defs) whose call-time behaviour the prefilter cannot model."""
+    out: set[str] = set()
+    for n in ast.walk(node):
+        if isinstance(n, (ast.Name, ast.Attribute)):
+            d = _py_dotted(n)
+            if d is not None:
+                out.add(d)
+    return out
+
+
+def _py_value_refs(node: ast.expr | None) -> _WrapperValue:
+    """Whole-value view of an expression: the references whose VALUE
+    the expression can yield or carry. Value-preserving constructs
+    (conditionals, boolean folds, displays, starring, walrus, await)
+    are walked; value-computing constructs (arithmetic, comparisons,
+    f-strings) yield a fresh object that cannot BE a body-spelled
+    reference. Comprehensions carry their element/key/value, iterator
+    and guard references (their own loop targets excluded); call
+    results carry nothing here because the collector judges the
+    callee and every argument at the Call node itself. Remaining
+    opaque positions (subscripted elements, unknown node types)
+    conservatively CARRY every reference spelled under them,
+    unresolved — the value may not be one of them, but a body-spelled
+    sink reference must never drop out of judgment."""
+    if node is None:
+        return set(), True
+    if isinstance(node, (ast.Name, ast.Attribute)):
+        d = _py_dotted(node)
+        if d is not None:
+            return {d}, True
+        if isinstance(node, ast.Attribute):
+            refs, ok = _py_value_refs(node.value)
+            return {f"{r}.{node.attr}" for r in refs}, ok
+        return set(), False
+    if isinstance(node, (ast.Constant, ast.JoinedStr, ast.FormattedValue)):
+        return set(), True
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        refs: set[str] = set()
+        ok = True
+        for e in node.elts:
+            r, o = _py_value_refs(e)
+            refs |= r
+            ok = ok and o
+        return refs, ok
+    if isinstance(node, ast.Dict):
+        refs = set()
+        ok = True
+        for k, v in zip(node.keys, node.values):
+            if k is None:
+                ok = False  # **spread: stored values are not spelled here
+            else:
+                r, o = _py_value_refs(k)
+                refs |= r
+                ok = ok and o
+            r, o = _py_value_refs(v)
+            refs |= r
+            ok = ok and o
+        return refs, ok
+    if isinstance(node, (ast.Starred, ast.NamedExpr, ast.Await)):
+        return _py_value_refs(node.value)
+    if isinstance(node, ast.IfExp):
+        b_refs, b_ok = _py_value_refs(node.body)
+        o_refs, o_ok = _py_value_refs(node.orelse)
+        return b_refs | o_refs, b_ok and o_ok
+    if isinstance(node, ast.BoolOp):
+        refs = set()
+        ok = True
+        for v in node.values:
+            r, o = _py_value_refs(v)
+            refs |= r
+            ok = ok and o
+        return refs, ok
+    if isinstance(node, ast.Lambda):
+        return _py_all_refs(node), False
+    if isinstance(node, ast.Call):
+        # A call RESULT is a value the body does not spell. Nothing
+        # drops out of judgment here: the collector's walk judges the
+        # callee and every argument/keyword at the Call node itself,
+        # so this arm only keeps the result from re-carrying inner
+        # construct binders (a comprehension's loop variable) into
+        # the enclosing position.
+        return set(), False
+    if isinstance(
+        node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp),
+    ):
+        # A comprehension's element/key/value escapes by value like a
+        # display element; iterator and guard refs are carried too.
+        # Comprehension-scoped target names are the construct's own
+        # binders, not body values — dropping them keeps a loop
+        # variable that merely tail-collides with a sink from
+        # refusing a benign wrapper.
+        refs = set()
+        targets: set[str] = set()
+        for comp in node.generators:
+            r, _o = _py_value_refs(comp.iter)
+            refs |= r
+            for cond in comp.ifs:
+                r, _o = _py_value_refs(cond)
+                refs |= r
+            for n in ast.walk(comp.target):
+                if isinstance(n, ast.Name):
+                    targets.add(n.id)
+        parts = (
+            (node.key, node.value) if isinstance(node, ast.DictComp)
+            else (node.elt,)
+        )
+        for part in parts:
+            r, _o = _py_value_refs(part)
+            refs |= r
+        return {
+            x for x in refs if x.split(".", 1)[0] not in targets
+        }, False
+    if isinstance(node, (ast.BinOp, ast.UnaryOp, ast.Compare)):
+        return set(), True  # computed value — a fresh object
+    # Opaque/unknown expression positions (comprehension elements,
+    # subscripted displays, call results, future grammar additions):
+    # conservatively carry every reference spelled under the node,
+    # unresolved. A body-spelled sink reference is then judged
+    # wherever the value escapes; unresolvedness alone still never
+    # refuses in data positions (a value the body does not spell is
+    # reviewed at its own spelling site).
+    return _py_all_refs(node), False
+
+
+def _py_wrapper_escape(
+    source: str,
+) -> tuple[dict[str, _WrapperValue], list[_WrapperValue]] | None:
+    """Collect (bindings, judged values) for a Python wrapper body.
+
+    ``bindings`` maps every bound name to its whole-value carry set;
+    ``judged`` holds the value view of every escape position: binding
+    values (including stores into containers/attributes), signature
+    defaults, call arguments, returns, and yields.
+
+    Returns None when the analysis cannot account for the body —
+    unparseable source, star imports, or a binder construct outside
+    the handled set — and the caller refuses the skip.
+    """
+    try:
+        tree = ast.parse(textwrap.dedent(source))
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+
+    bindings: dict[str, _WrapperValue] = {}
+    judged: list[_WrapperValue] = []
+    accounted: set[str] = set()
+    outer_defs = {
+        id(n) for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    def bind(name: str, refs: set[str], ok: bool) -> None:
+        cur = bindings.get(name)
+        if cur is not None:
+            bindings[name] = (cur[0] | refs, cur[1] and ok)
+        else:
+            bindings[name] = (set(refs), ok)
+
+    def bind_target(
+        t: ast.expr, value_node: ast.expr | None,
+        refs: set[str], ok: bool,
+    ) -> None:
+        if isinstance(t, ast.Name):
+            bind(t.id, refs, ok)
+        elif isinstance(t, ast.Starred):
+            bind_target(t.value, None, refs, False)
+        elif isinstance(t, (ast.Tuple, ast.List)):
+            elts = t.elts
+            if (
+                isinstance(value_node, (ast.Tuple, ast.List))
+                and len(value_node.elts) == len(elts)
+                and not any(isinstance(e, ast.Starred) for e in elts)
+            ):
+                for te, ve in zip(elts, value_node.elts):
+                    r, o = _py_value_refs(ve)
+                    bind_target(te, ve, r, o)
+            else:
+                for te in elts:
+                    bind_target(te, None, refs, False)
+        # Attribute/Subscript targets bind no local name; the stored
+        # value's refs are judged through the assignment's entry.
+
+    def bind_defaults(a: ast.arguments) -> None:
+        pos = a.posonlyargs + a.args
+        for arg_, default in zip(pos[len(pos) - len(a.defaults):], a.defaults):
+            r, o = _py_value_refs(default)
+            judged.append((r, o))
+            bind(arg_.arg, r, o)
+        for arg_, default in zip(a.kwonlyargs, a.kw_defaults):
+            if default is not None:
+                r, o = _py_value_refs(default)
+                judged.append((r, o))
+                bind(arg_.arg, r, o)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            r, o = _py_value_refs(node.value)
+            judged.append((r, o))
+            for tgt in node.targets:
+                bind_target(tgt, node.value, r, o)
+        elif isinstance(node, ast.AnnAssign):
+            if node.value is not None:
+                r, o = _py_value_refs(node.value)
+                judged.append((r, o))
+                bind_target(node.target, node.value, r, o)
+            elif isinstance(node.target, ast.Name):
+                accounted.add(node.target.id)  # bare annotation binds nothing
+        elif isinstance(node, ast.AugAssign):
+            r, o = _py_value_refs(node.value)
+            judged.append((r, o))
+            if isinstance(node.target, ast.Name):
+                # accumulated value: prior carry judged at its own site
+                bind(node.target.id, r, False)
+        elif isinstance(node, ast.NamedExpr):
+            r, o = _py_value_refs(node.value)
+            judged.append((r, o))
+            if isinstance(node.target, ast.Name):
+                bind(node.target.id, r, o)
+        elif isinstance(node, ast.Import):
+            for al in node.names:
+                if al.asname:
+                    bind(al.asname, {al.name}, True)
+                else:
+                    root = al.name.split(".")[0]
+                    bind(root, {root}, True)
+        elif isinstance(node, ast.ImportFrom):
+            for al in node.names:
+                if al.name == "*":
+                    return None  # star import: unanalyzable binding set
+                if node.module and not node.level:
+                    bind(al.asname or al.name,
+                         {f"{node.module}.{al.name}"}, True)
+                else:
+                    bind(al.asname or al.name, set(), False)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # A decorator reference is executed at definition time —
+            # a bare `@os.system` runs the sink on the function
+            # object. Judge decorator refs like any escape position
+            # (call-shaped decorators are judged by the Call arm too).
+            for dec in node.decorator_list:
+                judged.append(_py_value_refs(dec))
+            bind_defaults(node.args)
+            if id(node) not in outer_defs:
+                bind(node.name, _py_all_refs(node), False)
+        elif isinstance(node, ast.Lambda):
+            bind_defaults(node.args)
+        elif isinstance(node, ast.ClassDef):
+            for dec in node.decorator_list:
+                judged.append(_py_value_refs(dec))
+            bind(node.name, _py_all_refs(node), False)
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            r, _o = _py_value_refs(node.iter)
+            judged.append((r, _o))
+            bind_target(node.target, None, r, False)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if item.optional_vars is not None:
+                    r, _o = _py_value_refs(item.context_expr)
+                    bind_target(item.optional_vars, None, r, False)
+        elif isinstance(node, ast.ExceptHandler):
+            if node.name:
+                bind(node.name, set(), False)
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            for n in node.names:
+                bind(n, set(), False)  # externally rebindable
+        elif isinstance(
+            node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp),
+        ):
+            for comp in node.generators:
+                r, _o = _py_value_refs(comp.iter)
+                judged.append((r, _o))
+                for n in ast.walk(comp.target):
+                    if isinstance(n, ast.Name):
+                        accounted.add(n.id)  # comprehension-scoped
+        elif isinstance(node, ast.Call):
+            for a in node.args:
+                judged.append(_py_value_refs(a))
+            for kw in node.keywords:
+                judged.append(_py_value_refs(kw.value))
+        elif isinstance(node, ast.Return):
+            judged.append(_py_value_refs(node.value))
+        elif isinstance(node, (ast.Yield, ast.YieldFrom)):
+            if node.value is not None:
+                judged.append(_py_value_refs(node.value))
+        elif isinstance(node, _PY_HANDLED_BINDERS):
+            pass  # deliberate no-op binder carriers
+        elif any(f in _PY_BINDER_FIELDS for f in getattr(node, "_fields", ())):
+            return None  # binder construct outside the handled grammar
+
+    # Completeness sweep: every stored Name must be accounted for.
+    # This is the by-construction closure — a binding construct the
+    # walk above missed (or a future grammar addition) refuses the
+    # skip instead of silently carrying a value.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            if node.id not in bindings and node.id not in accounted:
+                return None
+
+    return bindings, judged
+
+
+def _resolve_wrapper_ref(
+    ref: str, bindings: dict[str, _WrapperValue],
+) -> _WrapperValue:
+    """Fixpoint alias resolution: expand the reference's leading
+    segment through the binding map until it no longer names a
+    binding. Cycles and expansion past the bound (pathological
+    self-referential bodies) resolve to unresolved."""
+    out: set[str] = set()
+    ok = True
+    seen: set[str] = set()
+    stack = [ref]
+    steps = 0
+    while stack:
+        steps += 1
+        if steps > 256:
+            return out, False
+        r = _strip_executor_dunders(stack.pop())
+        if not r:
+            ok = False  # pure executor-dunder chain: no base to judge
+            continue
+        if r in seen:
+            ok = False  # alias cycle never grounds
+            continue
+        seen.add(r)
+        head, _, rest = r.partition(".")
+        bound = bindings.get(head)
+        if bound is None:
+            out.add(r)
+            continue
+        refs, resolved = bound
+        if not resolved:
+            ok = False
+        for base in refs:
+            stack.append(f"{base}.{rest}" if rest else base)
+    return out, ok
+
+
+def _wrapper_ref_hits_exclusion(
+    ref: str,
+    exclusion: frozenset,
+    tails: frozenset,
+    project_sinks: frozenset | None,
+) -> bool:
+    """Judge one carried reference: every dotted prefix against the
+    full dangerous entries, every segment against the bare tails."""
+    parts = ref.split(".")
+    prefixes = {".".join(parts[:i]) for i in range(1, len(parts) + 1)}
+    if prefixes & exclusion or set(parts) & tails:
+        return True
+    return bool(project_sinks and prefixes & project_sinks)
+
+
 def _is_trivial_wrapper(
     source: str,
     lang: str,
@@ -799,23 +1215,93 @@ def _is_trivial_wrapper(
     # prefilter-tier only, and the function still passes the triage,
     # Joern, and hit-scan evidence layers, which see the file's
     # surface spellings.
+    # Every language's dangerous-callee set joins the exclusion here
+    # (needed below for both the callee and the escape judgments).
+    exclusion = _WRAPPER_DANGEROUS_CALLEES | extra_dangerous
+    tails = _WRAPPER_DANGEROUS_TAILS | {
+        e.rsplit(".", 1)[-1] for e in extra_dangerous
+    }
+
+    # Whole-value escape analysis over the language's real binding
+    # grammar: bindings feed the callee/reference fixpoint resolution,
+    # and every value-escape position (binding value, signature
+    # default, call argument, return, yield) is judged against the
+    # exclusion. An unaccountable body refuses the skip.
+    py_bindings: dict[str, _WrapperValue] = {}
+    if lang == "python":
+        escape = _py_wrapper_escape(source)
+        if escape is None:
+            return False, ""
+        py_bindings, judged_values = escape
+        for refs, _resolved in judged_values:
+            for r in refs:
+                expanded, _ok = _resolve_wrapper_ref(r, py_bindings)
+                for er in expanded:
+                    if _wrapper_ref_hits_exclusion(
+                        er, exclusion, tails, project_sinks,
+                    ):
+                        return False, ""
+
     # Executor-dunder chains resolve to their base object BEFORE the
     # alias walk (`f2.__call__` must alias-resolve as `f2`), and again
     # after it (the alias target can itself carry the chain).
     callee_name = _strip_executor_dunders(callee_name)
     if not callee_name:
         return False, ""
-    for _ln in code_lines:
-        am = re.match(
-            rf"{re.escape(callee_name)}\s*(?::=|=)\s*"
-            r"((?:\w+\.)*\w+)\s*;?\s*$",
-            _ln,
-        )
-        if am:
-            callee_name = _strip_executor_dunders(am.group(1))
-            if not callee_name:
+    if lang == "python":
+        if callee_name.split(".", 1)[0] in py_bindings:
+            resolved_set, resolved_ok = _resolve_wrapper_ref(
+                callee_name, py_bindings,
+            )
+            if not resolved_ok or not resolved_set:
+                # An unresolvable delegate (or one whose value the
+                # body never names — a literal, a container element)
+                # must never be journalled mechanically clean.
                 return False, ""
-            break
+            stripped = {_strip_executor_dunders(r) for r in resolved_set}
+            if "" in stripped:
+                return False, ""
+            if len(stripped) == 1:
+                callee_name = next(iter(stripped))
+            else:
+                # Multi-valued delegate: judge every candidate; the
+                # spelled local name stays in the reason/gates.
+                multi = sorted(stripped)
+                if any(
+                    c.rsplit(".", 1)[-1] in _WRAPPER_INDIRECTION_TAILS
+                    for c in multi
+                ):
+                    return False, ""
+                if re.search(r"\)\s*[([]", body_no_sig):
+                    return False, ""
+                for name in multi:
+                    if any(
+                        seg.startswith("__") and seg.endswith("__")
+                        and seg != "__import__"
+                        for seg in name.split(".")
+                    ):
+                        return False, ""
+                    if _wrapper_ref_hits_exclusion(
+                        name, exclusion, tails, project_sinks,
+                    ):
+                        return False, ""
+                    if any(api in name.lower() for api in _CRYPTO_APIS):
+                        return False, ""
+                return _wrapper_tail_gates(
+                    lang, body_no_sig, callee_name,
+                )
+    else:
+        for _ln in code_lines:
+            am = re.match(
+                rf"{re.escape(callee_name)}\s*(?::=|=)\s*"
+                r"((?:\w+\.)*\w+)\s*;?\s*$",
+                _ln,
+            )
+            if am:
+                callee_name = _strip_executor_dunders(am.group(1))
+                if not callee_name:
+                    return False, ""
+                break
 
     candidates = [callee_name]
     _tail = callee_name.rsplit(".", 1)[-1]
@@ -872,10 +1358,6 @@ def _is_trivial_wrapper(
     # (`sp.run.retry(...)`). Over-exclusion only costs one review; a
     # missed exclusion journals a dangerous delegate mechanically
     # clean.
-    exclusion = _WRAPPER_DANGEROUS_CALLEES | extra_dangerous
-    tails = _WRAPPER_DANGEROUS_TAILS | {
-        e.rsplit(".", 1)[-1] for e in extra_dangerous
-    }
     for name in candidates:
         parts = name.split(".")
         prefixes = {
@@ -891,81 +1373,76 @@ def _is_trivial_wrapper(
     # A sink passed as an ARGUMENT to any call is non-clean: the
     # delegate never spells the target in call position
     # (`pool.submit(os.system, cmd)`, `map(os.system, args)`), so the
-    # callee checks above cannot exclude it. Judge every identifier
-    # reference in argument position (inside a call's parentheses,
-    # not itself called) against the same exclusion — dotted
-    # references over every prefix + every segment tail, bare
-    # references against the full entry names AND the bare tails
-    # (`from os import system; pool.submit(system, cmd)` escapes via
-    # the bare name exactly like the bare-callee case above). The
-    # position gate is load-bearing: a name-blind scan flags keyword
-    # spellings (`assert x == f()`) and plain data reads
-    # (`return request.param`) that share a tail with a sink but
-    # cannot escape a callable — measured at thousands of flipped
-    # legitimate rows; with the gate the flip set is callable-shaped
-    # references only. Strings and comments are cut from this view
-    # only. The crypto substring heuristic stays call-position-only:
-    # matching it against every variable NAME (`hash_val`,
-    # `signed_off`) would flip accessor-adjacent wrappers wholesale
-    # without naming a sink. Over-exclusion costs one review; the
-    # miss journals a dangerous delegate mechanically clean.
-    ref_body = " ".join(
-        _wrapper_ref_strip_noise(ln, lang) for ln in code_lines
-    )
-    if lang in ("c", "cpp"):
-        cut = ref_body.find("{")
-        if cut >= 0:
-            ref_body = ref_body[cut + 1:]
-            closing = ref_body.rfind("}")
-            if closing >= 0:
-                ref_body = ref_body[:closing]
-    elif lang == "python":
-        for i, ln in enumerate(code_lines):
-            if ln.startswith(("def ", "async def ")):
-                ref_body = " ".join(
-                    _wrapper_ref_strip_noise(x, lang)
-                    for x in code_lines[i + 1:]
-                )
-                break
-    # One-hop local aliases (`f2 = os.system` then `pool.submit(f2,
-    # cmd)`): the argument spells the LOCAL name while the sink sits
-    # surface-spelled on the assignment line, outside any argument
-    # list — resolve exactly like the callee alias walk above.
-    ref_aliases: dict[str, str] = {}
-    for _ln in code_lines:
-        am = re.match(
-            r"([A-Za-z_]\w*)\s*(?::=|=)\s*((?:\w+\.)*\w+)\s*;?\s*$",
-            _ln,
+    # callee checks above cannot exclude it. For Python the AST
+    # escape analysis above already judged every argument / return /
+    # yield / binding value; the textual scan below serves the
+    # languages without an AST leg. Judge every identifier reference
+    # in argument position (inside a call's parentheses, not itself
+    # called) against the same exclusion — dotted references over
+    # every prefix + every segment tail, bare references against the
+    # full entry names AND the bare tails (`pool.submit(system, cmd)`
+    # after a bare import escapes via the bare name exactly like the
+    # bare-callee case above). The position gate is load-bearing: a
+    # name-blind scan flags keyword spellings (`assert x == f()`) and
+    # plain data reads (`return request.param`) that share a tail
+    # with a sink but cannot escape a callable — measured at
+    # thousands of flipped legitimate rows; with the gate the flip
+    # set is callable-shaped references only. Strings and comments
+    # are cut from this view only. The crypto substring heuristic
+    # stays call-position-only: matching it against every variable
+    # NAME (`hash_val`, `signed_off`) would flip accessor-adjacent
+    # wrappers wholesale without naming a sink. Over-exclusion costs
+    # one review; the miss journals a dangerous delegate mechanically
+    # clean.
+    if lang != "python":
+        ref_body = " ".join(
+            _wrapper_ref_strip_noise(ln, lang) for ln in code_lines
         )
-        if am:
-            ref_aliases[am.group(1)] = am.group(2)
-    for rm in _WRAPPER_REF_TOKEN_RE.finditer(ref_body):
-        if ref_body[rm.end():].lstrip()[:1] == "(":
-            continue  # call position — judged by the callee checks
-        before = ref_body[:rm.start()]
-        if before.count("(") <= before.count(")"):
-            continue  # not inside any call's argument list
-        ref = _strip_executor_dunders(rm.group(1))
-        if not ref:
-            continue
-        ref = _strip_executor_dunders(ref_aliases.get(ref, ref))
-        if not ref:
-            continue
-        parts = ref.split(".")
-        if len(parts) == 1:
-            if ref in exclusion or ref in tails:
+        if lang in ("c", "cpp"):
+            cut = ref_body.find("{")
+            if cut >= 0:
+                ref_body = ref_body[cut + 1:]
+                closing = ref_body.rfind("}")
+                if closing >= 0:
+                    ref_body = ref_body[:closing]
+        # One-hop local aliases (`f2 = os.system` then `pool.submit(
+        # f2, cmd)`): the argument spells the LOCAL name while the
+        # sink sits surface-spelled on the assignment line, outside
+        # any argument list — resolve exactly like the callee alias
+        # walk above.
+        ref_aliases: dict[str, str] = {}
+        for _ln in code_lines:
+            am = re.match(
+                r"([A-Za-z_]\w*)\s*(?::=|=)\s*((?:\w+\.)*\w+)\s*;?\s*$",
+                _ln,
+            )
+            if am:
+                ref_aliases[am.group(1)] = am.group(2)
+        for rm in _WRAPPER_REF_TOKEN_RE.finditer(ref_body):
+            if ref_body[rm.end():].lstrip()[:1] == "(":
+                continue  # call position — judged by the callee checks
+            before = ref_body[:rm.start()]
+            if before.count("(") <= before.count(")"):
+                continue  # not inside any call's argument list
+            ref = _strip_executor_dunders(rm.group(1))
+            if not ref:
+                continue
+            ref = _strip_executor_dunders(ref_aliases.get(ref, ref))
+            if not ref:
+                continue
+            if _wrapper_ref_hits_exclusion(
+                ref, exclusion, tails, project_sinks,
+            ):
                 return False, ""
-            if project_sinks and ref in project_sinks:
-                return False, ""
-            continue
-        prefixes = {
-            ".".join(parts[:i]) for i in range(1, len(parts) + 1)
-        }
-        if prefixes & exclusion or set(parts) & tails:
-            return False, ""
-        if project_sinks and prefixes & project_sinks:
-            return False, ""
 
+    return _wrapper_tail_gates(lang, body_no_sig, callee_name)
+
+
+def _wrapper_tail_gates(
+    lang: str, body_no_sig: str, callee_name: str,
+) -> tuple[bool, str]:
+    """Final shape gates: a trivial delegate has at most one return
+    and, without one, at most a single statement."""
     if lang in ("c", "cpp"):
         return_count = len(re.findall(r'\breturn\b', body_no_sig))
         if return_count > 1:
