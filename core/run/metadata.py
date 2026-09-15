@@ -2029,9 +2029,17 @@ def corroborate_target_path(run_dir: Path, candidate) -> str | None:
             return None
     except OSError:
         return None
+    # The mismatch text is printed by every consumer shim (the 11
+    # enrich/normalize/cpg-cache scripts) — and ``candidate`` is the
+    # LLM-writable checklist value that fires exactly in the
+    # tamper-detected case. Escape both paths here so every consumer
+    # print is terminal-safe at the chokepoint.
+    from core.security.log_sanitisation import sanitise_for_terminal
     return (
-        f"recovered target path {candidate!s} does not match the "
-        f"target_path sealed in {RUN_METADATA_FILE} ({sealed})"
+        f"recovered target path "
+        f"{sanitise_for_terminal(str(candidate), max_len=200)} does not "
+        f"match the target_path sealed in {RUN_METADATA_FILE} "
+        f"({sanitise_for_terminal(sealed, max_len=200)})"
     )
 
 

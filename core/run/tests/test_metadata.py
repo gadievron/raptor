@@ -1155,6 +1155,24 @@ class TestCorroborateTargetPath(unittest.TestCase):
             self.assertIn(RUN_METADATA_FILE, msg)
             self.assertIn(str(target), msg)
 
+    def test_mismatch_text_escapes_hostile_candidate(self):
+        """The mismatch description is printed verbatim by every
+        consumer shim, and the candidate is the LLM-writable checklist
+        value — it fires exactly in the tamper-detected case, so the
+        text must be terminal-safe at this chokepoint."""
+        from core.run.metadata import corroborate_target_path
+        with TemporaryDirectory() as d:
+            target = Path(d) / "repo"
+            target.mkdir()
+            run_dir = Path(d) / "run"
+            start_run(run_dir, "audit", target=target)
+            msg = corroborate_target_path(
+                run_dir, f"{d}/evil\x1b[2J\x9bpath")
+            self.assertIsNotNone(msg)
+            self.assertNotIn("\x1b", msg)
+            self.assertNotIn("\x9b", msg)
+            self.assertIn("evil", msg)
+
     def test_symlinked_equivalent_ok(self):
         from core.run.metadata import corroborate_target_path
         with TemporaryDirectory() as d:

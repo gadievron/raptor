@@ -91,7 +91,10 @@ def main():
             output_file = render_and_write(out_dir, target=target)
             print(f"Diagrams: {output_file}")
     except Exception as e:
-        print(f"Diagram error: {e}", file=sys.stderr)
+        # Renderer exceptions can quote LLM-written artifact content.
+        from core.security.log_sanitisation import sanitise_for_terminal
+        print(f"Diagram error: {sanitise_for_terminal(str(e))}",
+              file=sys.stderr)
         sys.exit(1)
 
 

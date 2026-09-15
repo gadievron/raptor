@@ -49,8 +49,11 @@ def _stage_failed(stage: str, exc: Exception) -> None:
     substrate then looks like "no enrichments applied" with zero
     diagnostic, while the standalone shims print explicit skip
     reasons. Traceback detail stays on the debug channel."""
+    from core.security.log_sanitisation import sanitise_for_terminal
+    # Exception text can quote target-file/LLM-artifact bytes.
     print(f"raptor-enrich-context-map: {stage} failed: "
-          f"{exc.__class__.__name__}: {exc}", file=sys.stderr)
+          f"{exc.__class__.__name__}: {sanitise_for_terminal(str(exc))}",
+          file=sys.stderr)
     logger.debug("%s failed", stage, exc_info=True)
 
 
