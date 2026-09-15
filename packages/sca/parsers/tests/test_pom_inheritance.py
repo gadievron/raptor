@@ -1103,3 +1103,62 @@ def test_bom_missing_raw_xml_logs_debug(caplog) -> None:
         "raw_xml" in rec.getMessage() and "g:a" in rec.getMessage()
         for rec in caplog.records
     ), f"no raw_xml debug record: {[r.getMessage() for r in caplog.records]}"
+
+
+def test_phase3_child_direct_bom_import_without_parent(tmp_path: Path):
+    """Spring's documented alternative to inheriting starter-parent:
+    a pom with NO <parent> that BOM-imports spring-boot-dependencies
+    directly (mandatory whenever the project needs its own corporate
+    parent). The child's own dependencyManagement imports must be
+    absorbed — the caller only holds the import DECLARATION, not the
+    BOM's contents."""
+    boot_deps_xml = '''\
+<project>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-dependencies</artifactId>
+  <version>3.2.0</version>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>2.16.0</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>
+'''
+    client = _StubMavenClient({
+        "org.springframework.boot:spring-boot-dependencies:3.2.0":
+            boot_deps_xml,
+    })
+    app = _write(tmp_path, "pom.xml", '''\
+<project>
+  <artifactId>myapp</artifactId>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-dependencies</artifactId>
+        <version>3.2.0</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+''')
+    deps = _parse_with_resolver(app, client=client)
+    jdb = next(
+        (d for d in deps
+         if d.name == "com.fasterxml.jackson.core:jackson-databind"),
+        None,
+    )
+    assert jdb is not None
+    assert jdb.version == "2.16.0"

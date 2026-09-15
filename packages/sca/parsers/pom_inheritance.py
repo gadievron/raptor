@@ -222,9 +222,15 @@ class PomInheritanceResolver:
           * BOM-imported managed entries from any ancestor that
             ``<scope>import</scope>``s a BOM
 
-        The CHILD's own properties and managed entries are NOT
-        included — the caller already has them and applies its own
-        precedence (child wins over inherited).
+        The CHILD's own properties and DIRECTLY DECLARED managed
+        entries are NOT included — the caller already has them and
+        applies its own precedence (child wins over inherited). The
+        child's own BOM IMPORTS are absorbed, though: the caller only
+        holds the import declaration (a scope="import" coordinate
+        row), never the BOM's contents, so the "BOM import without
+        parent" layout (Spring's documented alternative to inheriting
+        starter-parent — mandatory whenever the project needs its own
+        corporate parent) would otherwise lose every managed version.
         """
         if not _AVAILABLE:
             return InheritanceView()
@@ -233,6 +239,7 @@ class PomInheritanceResolver:
         self._walk_parents(
             pom_path, root_element, view, visited, depth=0,
         )
+        self._absorb_boms(root_element, view, visited, depth=0)
         return view
 
     # ------------------------------------------------------------------
