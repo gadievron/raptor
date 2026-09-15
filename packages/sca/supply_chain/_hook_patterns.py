@@ -78,12 +78,19 @@ _DANGEROUS_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
      "eval() call"),
     (re.compile(r"\bnode\s+-e\b"),
      "node -e (inline JS execution)"),
-    (re.compile(r"\bpython\s+-c\b"),
+    # ``[0-9.]*`` covers the versioned binary names hooks actually
+    # spell — ``python3 -c`` / ``python3.12 -c`` — which the bare
+    # ``python`` word-boundary form silently missed.
+    (re.compile(r"\bpython[0-9.]*\s+-c\b"),
      "python -c (inline code execution)"),
     (re.compile(r"\bruby\s+-e\b"),
      "ruby -e (inline code execution)"),
     (re.compile(r"\bphp\s+-r\b"),
      "php -r (inline code execution)"),
+    (re.compile(r"\bperl\s+-e\b"),
+     "perl -e (inline code execution)"),
+    (re.compile(r"\bdeno\s+eval\b"),
+     "deno eval (inline code execution)"),
     (re.compile(r"base64\s+(?:-d|--decode)\s*\|"),
      "base64 piped to decoder"),
     (re.compile(r"echo\s+[A-Za-z0-9+/=]{40,}\s*\|\s*base64"),

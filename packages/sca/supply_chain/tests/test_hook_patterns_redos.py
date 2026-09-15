@@ -113,3 +113,23 @@ def test_huge_body_completes_fast() -> None:
     analyse_body(body)
     elapsed = time.monotonic() - t0
     assert elapsed < _TIME_BUDGET_SECONDS
+
+
+def test_versioned_interpreter_inline_exec_flagged() -> None:
+    """``python3 -c`` is how hook bodies actually spell the
+    interpreter on modern distros — the bare ``python -c`` pattern
+    silently missed it. Both-direction: versioned names fire,
+    tools merely PREFIXED with the interpreter name don't."""
+    for body, expect in (
+        ("python -c 'import os'", True),
+        ("python3 -c 'import os'", True),
+        ("python3.12 -c 'import os'", True),
+        ("perl -e 'system(q(id))'", True),
+        ("deno eval 'Deno.run()'", True),
+        # Prefix-named tools are not inline execution.
+        ("python-config -c", False),
+        ("pythonic -c template", False),
+    ):
+        reasons = analyse_body(body).reasons
+        fired = any("inline code execution" in r for r in reasons)
+        assert fired == expect, (body, reasons)
