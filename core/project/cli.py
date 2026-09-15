@@ -3035,6 +3035,28 @@ def _do_merge(project, merge_type, yes) -> None:
 
     groups = project.get_run_dirs_by_type()
 
+    # `command` is child-writable run metadata restored verbatim
+    # (see core/project/report.py) and it becomes both the merged
+    # directory's name prefix AND terminal output.  Enforce the same
+    # direct-child-NAME contract remove/move already carry — a
+    # separator-bearing value ("../victim", "/home/user/.config")
+    # re-anchors the Path join and lets two planted markers steer the
+    # merge (and the source-run rmtree) outside the project — and
+    # keep raw bytes off the terminal.
+    unsafe = {
+        k for k in groups
+        if not k or os.sep in k or (os.altsep and os.altsep in k)
+        or k in (".", "..")
+    }
+    for k in sorted(unsafe):
+        shown = sanitise_for_terminal(k, max_len=120)
+        print(f"  refusing to merge group with unsafe command type "
+              f"{shown!r} (run metadata is child-writable; "
+              "expected a plain name)")
+    groups = {
+        k: v for k, v in groups.items() if k not in unsafe
+    }
+
     if merge_type != "all":
         groups = {k: v for k, v in groups.items() if k == merge_type}
 
@@ -3044,7 +3066,8 @@ def _do_merge(project, merge_type, yes) -> None:
     for cmd_type, dirs in groups.items():
         rest, live = split_live_runs(dirs)
         for d in live:
-            print(f"  {cmd_type}: skipped (still running): {d.name}")
+            shown = sanitise_for_terminal(cmd_type, max_len=120)
+            print(f"  {shown}: skipped (still running): {d.name}")
         filtered[cmd_type] = rest
     groups = filtered
 
@@ -3057,7 +3080,8 @@ def _do_merge(project, merge_type, yes) -> None:
 
     # Show plan
     for cmd_type, dirs in mergeable.items():
-        print(f"  {cmd_type}: {len(dirs)} runs → 1")
+        print(f"  {sanitise_for_terminal(cmd_type, max_len=120)}: "
+              f"{len(dirs)} runs → 1")
 
     if not yes and not _confirm("\nProceed? [y/N] "):
         print("Cancelled.")
@@ -3066,6 +3090,7 @@ def _do_merge(project, merge_type, yes) -> None:
     groups = mergeable
 
     for cmd_type, dirs in groups.items():
+        shown_type = sanitise_for_terminal(cmd_type, max_len=120)
         # Collision-prevention via unique_run_suffix — see core/run/output.py.
         merged_dir = project.output_path / f"{cmd_type}-{unique_run_suffix('-')}"
 
@@ -3075,7 +3100,7 @@ def _do_merge(project, merge_type, yes) -> None:
             # newest run wins ties (the documented latest-wins contract).
             stats = merge_runs(list(reversed(dirs)), merged_dir)
         except Exception as e:  # noqa: BLE001 — abort merge, keep sources
-            print(f"  {cmd_type}: merge failed — {sanitise_for_terminal(str(e), max_len=300)}")
+            print(f"  {shown_type}: merge failed — {sanitise_for_terminal(str(e), max_len=300)}")
             print("  Source runs preserved.")
             continue
 
@@ -3110,8 +3135,8 @@ def _do_merge(project, merge_type, yes) -> None:
             # write); source dirs stay on disk (no data lost). The
             # operator sees both the warning AND a clear "source
             # runs preserved" line so they know to re-run.
-            print(f"  {cmd_type}: ERROR — metadata write failed ({sanitise_for_terminal(str(e), max_len=300)})")
-            print(f"  {cmd_type}: source runs PRESERVED (merged output left at {merged_dir})")
+            print(f"  {shown_type}: ERROR — metadata write failed ({sanitise_for_terminal(str(e), max_len=300)})")
+            print(f"  {shown_type}: source runs PRESERVED (merged output left at {merged_dir})")
             continue
 
         # Delete source runs (continue on individual failures)
@@ -3123,7 +3148,7 @@ def _do_merge(project, merge_type, yes) -> None:
                 failed_deletes.append(f"{d.name}: {e}")
         if failed_deletes:
             for msg in failed_deletes:
-                print(f"  {cmd_type}: warning — failed to delete {msg}")
+                print(f"  {shown_type}: warning — failed to delete {msg}")
 
         # Documented convention (merge.py `_finding_key`): "N findings
         # (M vulns)". Pre-fix the override relabelled the LOGICAL-vuln
@@ -3135,4 +3160,4 @@ def _do_merge(project, merge_type, yes) -> None:
             findings_label = (
                 f"{stats['unique_findings']} findings ({vuln_count} vulns)"
             )
-        print(f"  {cmd_type}: merged {stats['runs_merged']} runs ({findings_label})")
+        print(f"  {shown_type}: merged {stats['runs_merged']} runs ({findings_label})")

@@ -467,3 +467,91 @@ class TestGetActiveProject(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMergeHostileCommandType(unittest.TestCase):
+    """`command` is child-writable run metadata restored verbatim —
+    the merge join must treat it as a direct-child NAME (the same
+    contract remove/move enforce), and the plan line must not relay
+    raw bytes to the terminal."""
+
+    def _run(self, out: Path, name: str, command) -> Path:
+        d = out / name
+        d.mkdir(parents=True)
+        (d / ".raptor-run.json").write_text(json.dumps({
+            "version": 2, "command": command, "status": "completed",
+            "project": None, "project_source": "none",
+        }), encoding="utf-8")
+        (d / "findings.json").write_text("[]", encoding="utf-8")
+        return d
+
+    def _project(self, tmp: Path):
+        from core.project.project import Project
+        out = tmp / "proj-out"
+        out.mkdir(exist_ok=True)
+        return Project(name="p", target=str(tmp / "code"),
+                       output_dir=str(out)), out
+
+    def test_absolute_command_never_escapes(self):
+        from core.project.cli import _do_merge
+        with TemporaryDirectory() as td:
+            tmp = Path(td)
+            project, out = self._project(tmp)
+            victim = tmp / "victim"
+            hostile = str(victim / "cfg")
+            self._run(out, "scan-1", hostile)
+            self._run(out, "scan-2", hostile)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                _do_merge(project, "all", yes=True)
+            # Nothing may be created outside the project output dir.
+            self.assertFalse(victim.exists())
+            # Source runs preserved (the hostile group is refused, not
+            # merged-and-deleted).
+            self.assertTrue((out / "scan-1").exists())
+            self.assertTrue((out / "scan-2").exists())
+            self.assertIn("refus", buf.getvalue().lower())
+
+    def test_traversal_command_never_escapes(self):
+        from core.project.cli import _do_merge
+        with TemporaryDirectory() as td:
+            tmp = Path(td)
+            project, out = self._project(tmp)
+            (tmp / "victim").mkdir()
+            self._run(out, "scan-1", "../victim/x")
+            self._run(out, "scan-2", "../victim/x")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                _do_merge(project, "all", yes=True)
+            self.assertFalse(list((tmp / "victim").iterdir()))
+            self.assertTrue((out / "scan-1").exists())
+            self.assertTrue((out / "scan-2").exists())
+
+    def test_plan_line_sanitises_command(self):
+        from core.project.cli import _do_merge
+        with TemporaryDirectory() as td:
+            tmp = Path(td)
+            project, out = self._project(tmp)
+            hostile = "scan\x1b]0;evil\x07"
+            self._run(out, "scan-1", hostile)
+            self._run(out, "scan-2", hostile)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                _do_merge(project, "all", yes=True)
+            self.assertNotIn("\x1b", buf.getvalue())
+            self.assertNotIn("\x07", buf.getvalue())
+
+    def test_benign_merge_control(self):
+        from core.project.cli import _do_merge
+        with TemporaryDirectory() as td:
+            tmp = Path(td)
+            project, out = self._project(tmp)
+            self._run(out, "scan-1", "scan")
+            self._run(out, "scan-2", "scan")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                _do_merge(project, "all", yes=True)
+            merged = [p for p in out.iterdir()
+                      if p.is_dir() and p.name.startswith("scan-")]
+            self.assertEqual(len(merged), 1)
+            self.assertFalse((out / "scan-1").exists())
