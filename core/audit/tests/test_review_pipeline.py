@@ -701,6 +701,108 @@ void *alloc_obj(size_t n) {
         ):
             assert self._py_fn(body), body
 
+    # ── Whole-value escape analysis (C/C++ text-grammar leg) ──────
+
+    def _c_fn(self, source: str, lang: str = "c"):
+        from core.audit.prefilter import _is_trivial_wrapper
+        is_wrapper, _ = _is_trivial_wrapper(source, lang, None)
+        return is_wrapper
+
+    def test_c_typedef_fn_pointer_alias_not_skipped(self):
+        # A leading type token defeated the anchored alias regex; the
+        # declaration grammar must see through the declarator.
+        assert not self._c_fn(
+            "sighandler_t f(char *c) {\n"
+            "    sighandler_t fp = system;\n    return fp(c);\n}\n"
+        )
+
+    def test_cpp_auto_alias_not_skipped(self):
+        assert not self._c_fn(
+            "int f(char *c) {\n    auto fp = system;\n"
+            "    return fp(c);\n}\n",
+            "cpp",
+        )
+
+    def test_c_fn_pointer_declarator_alias_not_skipped(self):
+        assert not self._c_fn(
+            "int f(char *c) {\n"
+            "    int (*fp)(const char *) = system;\n"
+            "    return fp(c);\n}\n"
+        )
+
+    def test_c_brace_initializer_sink_not_skipped(self):
+        # Refusal here comes from the body-view truncation at the
+        # initializer's `}` and the tail gates — the statement
+        # splitter consumes brace groups before value classification,
+        # so no value-level judgment of brace elements is claimed
+        # (both directions pinned: aggregate and C++ brace
+        # declarator).
+        for body in (
+            "int f(char *c) {\n    handler_t t[] = {system};\n"
+            "    return helper(c);\n}\n",
+            "void f(char *c) {\n    fn_t fp{system};\n"
+            "    fp(c);\n}\n",
+        ):
+            assert not self._c_fn(body), body
+
+    def test_c_ternary_sink_not_skipped(self):
+        assert not self._c_fn(
+            "int f(char *c, int x) {\n"
+            "    fn_t fp = x ? system : safe_fn;\n"
+            "    return fp(c);\n}\n"
+        )
+
+    def test_c_chained_assign_sink_not_skipped(self):
+        assert not self._c_fn(
+            "int f(char *c) {\n    fn_t g = h = system;\n"
+            "    return g(c);\n}\n"
+        )
+
+    def test_c_compound_assign_sink_not_skipped(self):
+        assert not self._c_fn(
+            "int f(char *c) {\n    a |= (uintptr_t)system;\n"
+            "    return helper(c);\n}\n"
+        )
+
+    def test_c_member_and_array_store_sink_not_skipped(self):
+        for body in (
+            "void f(struct ops *o, char *c) {\n"
+            "    o->exec_fn = system;\n    helper(c);\n}\n",
+            "void f(fn_t *t, char *c) {\n"
+            "    t[0] = system;\n    helper(c);\n}\n",
+        ):
+            assert not self._c_fn(body), body
+
+    def test_c_return_position_cast_sink_not_skipped(self):
+        assert not self._c_fn(
+            "void *f(char *c) {\n    log_it(c);\n"
+            "    return (void *)system;\n}\n"
+        )
+
+    def test_c_subscript_bound_callee_not_skipped(self):
+        # The delegate's value comes out of a container — an
+        # unresolvable delegate is never mechanically clean.
+        assert not self._c_fn(
+            "int f(char *c) {\n    fn_t fp = handlers[0];\n"
+            "    return fp(c);\n}\n"
+        )
+
+    def test_c_benign_declarations_still_skip(self):
+        for body in (
+            "int f(int x) {\n    int limit = 30;\n"
+            "    return check_limit(x, limit);\n}\n",
+            "int f(int x, int y) {\n"
+            "    fn_t g = y ? do_a : do_b;\n    return g(x);\n}\n",
+        ):
+            assert self._c_fn(body), body
+
+    def test_cpp_benign_auto_alias_still_skips(self):
+        assert self._c_fn(
+            "int f(int x) {\n    auto g = my_helper;\n"
+            "    return g(x);\n}\n",
+            "cpp",
+        )
+
     def test_callgraph_resolved_dangerous_callee_not_skipped(self):
         # The extraction pipeline resolved the delegate to a dangerous
         # callee the body text does not spell (macro indirection) —

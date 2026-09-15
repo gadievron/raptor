@@ -1056,6 +1056,160 @@ def _py_wrapper_escape(
     return bindings, judged
 
 
+#: Function-pointer declarator: the declared name sits inside the
+#: first `(*name)` group (`int (*fp)(int) = system`).
+_C_FNPTR_TARGET_RE = re.compile(r"\(\s*\*+\s*([A-Za-z_]\w*)\s*\)")
+
+_C_LITERAL_RE = re.compile(
+    r"0[xXbB][0-9a-fA-F]+[uUlL]*|\d+(?:\.\d*)?[uUlLfF]*"
+    r"|NULL|nullptr|true|false",
+)
+
+#: A cast prefix: `(type)`, `(struct foo *)`, `(unsigned long)` — word
+#: sequences with pointer stars only, so a parenthesized EXPRESSION
+#: (operators inside) never strips.
+_C_CAST_PREFIX_RE = re.compile(
+    r"^\(\s*[A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)*[\s*]*\)\s*",
+)
+
+_C_PURE_REF_RE = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")
+
+
+def _c_value_refs(rhs: str) -> set[str]:
+    """Every identifier chain spelled in a C-family value expression
+    (`->` pre-normalised to `.` by the caller)."""
+    return {m.group(1) for m in _WRAPPER_REF_TOKEN_RE.finditer(rhs)}
+
+
+def _c_value_pure(rhs: str) -> bool:
+    """True when the value expression provably yields only what it
+    spells: a lone identifier chain or literal, possibly behind
+    unary operators / casts, or a ternary of pure arms. Everything
+    else is unresolved. Brace-initializer values never reach this
+    classifier — the caller's statement splitter consumes `{`/`}`
+    before value classification, so brace-carried references are
+    refused upstream (body-view truncation at the initializer's `}`
+    plus the multi-statement tail gates), not judged here."""
+    rhs = rhs.strip()
+    if not rhs:
+        return False
+    if "?" in rhs:
+        _cond, _, rest = rhs.partition("?")
+        a, sep, b = rest.partition(":")
+        return bool(sep) and _c_value_pure(a) and _c_value_pure(b)
+    prev = None
+    while rhs != prev:
+        prev = rhs
+        rhs = rhs.lstrip("&*+-!~ ").strip()
+        m = _C_CAST_PREFIX_RE.match(rhs)
+        if m is not None and m.end() < len(rhs):
+            rhs = rhs[m.end():].strip()
+    return bool(
+        _C_PURE_REF_RE.fullmatch(rhs) or _C_LITERAL_RE.fullmatch(rhs)
+    )
+
+
+def _c_find_assign(stmt: str) -> tuple[int, int, bool] | None:
+    """Locate the first assignment operator in a statement fragment.
+
+    Returns (lhs_end, rhs_start, is_compound), skipping comparison
+    spellings (`==`, `!=`, `<=`, `>=`); shift-compounds (`<<=`,
+    `>>=`) and single-op compounds (`+=`, `|=`, …) are assignments
+    whose stored value is computed, not spelled — compound."""
+    i = -1
+    while True:
+        i = stmt.find("=", i + 1)
+        if i < 0:
+            return None
+        nxt = stmt[i + 1] if i + 1 < len(stmt) else ""
+        if nxt == "=":
+            i += 1
+            continue
+        prev = stmt[i - 1] if i > 0 else ""
+        if prev == "=":
+            continue
+        if prev in "<>!":
+            if prev in "<>" and i >= 2 and stmt[i - 2] == prev:
+                return i - 2, i + 1, True  # <<= / >>=
+            continue  # comparison
+        if prev in "+-*/%&|^":
+            return i - 1, i + 1, True
+        if prev == ":":
+            return i - 1, i + 1, False  # := declaration-assignment
+        return i, i + 1, False
+
+
+def _text_wrapper_escape(
+    code_lines: list[str], lang: str,
+) -> tuple[dict[str, _WrapperValue], list[_WrapperValue]] | None:
+    """Whole-value binding/escape scan for the languages without an
+    AST leg. Statement-level grammar: declarations with initializers
+    (including typedef'd/`auto`/function-pointer declarators), plain,
+    chained, and compound assignments, `:=` declarations, ternary
+    values, and return-position value escapes. Splitting on `{`/`}`
+    destroys brace initializers before this scan — their refusal
+    comes from the caller's body-view truncation and tail gates, not
+    from value judgment here. An assignment whose target cannot be
+    named refuses the analysis (None — the caller refuses the
+    skip)."""
+    text = "\n".join(
+        _wrapper_ref_strip_noise(ln, lang) for ln in code_lines
+    )
+    text = text.replace("->", ".")
+    bindings: dict[str, _WrapperValue] = {}
+    judged: list[_WrapperValue] = []
+
+    def bind(name: str, refs: set[str], ok: bool) -> None:
+        cur = bindings.get(name)
+        if cur is not None:
+            bindings[name] = (cur[0] | refs, cur[1] and ok)
+        else:
+            bindings[name] = (set(refs), ok)
+
+    def process(stmt: str) -> tuple[set[str], bool] | None:
+        """Handle one fragment; returns the fragment's value view
+        (for chained assignments), or None when unaccountable."""
+        pos = _c_find_assign(stmt)
+        if pos is None:
+            return set(), True  # expression statement — no binding
+        lhs_end, rhs_start, compound = pos
+        lhs = stmt[:lhs_end].strip()
+        rhs = stmt[rhs_start:].strip()
+        if _c_find_assign(rhs) is not None:
+            value = process(rhs)  # chained: bind inner target first
+            if value is None:
+                return None
+        else:
+            value = (_c_value_refs(rhs), _c_value_pure(rhs))
+        judged.append(value)
+        if compound:
+            value = (value[0], False)  # accumulated/computed store
+        if lhs.startswith("*") or "[" in lhs or "." in lhs:
+            # Store through a pointer / into a container or member:
+            # no local name is bound; the value refs stay judged.
+            return value
+        fnptr = _C_FNPTR_TARGET_RE.search(lhs)
+        if fnptr is not None:
+            bind(fnptr.group(1), *value)
+            return value
+        idents = re.findall(r"[A-Za-z_]\w*", lhs)
+        if not idents:
+            return None  # assignment with an unnameable target
+        bind(idents[-1], *value)
+        return value
+
+    for stmt in re.split(r"[;{}\n]", text):
+        stmt = stmt.strip()
+        if not stmt:
+            continue
+        if re.match(r"return\b", stmt):
+            judged.append((_c_value_refs(stmt[6:]), True))
+            continue
+        if process(stmt) is None:
+            return None
+    return bindings, judged
+
+
 def _resolve_wrapper_ref(
     ref: str, bindings: dict[str, _WrapperValue],
 ) -> _WrapperValue:
@@ -1227,15 +1381,21 @@ def _is_trivial_wrapper(
     # and every value-escape position (binding value, signature
     # default, call argument, return, yield) is judged against the
     # exclusion. An unaccountable body refuses the skip.
-    py_bindings: dict[str, _WrapperValue] = {}
+    wrapper_bindings: dict[str, _WrapperValue] = {}
+    grammar_analyzed = False
+    escape = None
     if lang == "python":
         escape = _py_wrapper_escape(source)
+    elif lang in ("c", "cpp"):
+        escape = _text_wrapper_escape(code_lines, lang)
+    if lang in ("python", "c", "cpp"):
         if escape is None:
             return False, ""
-        py_bindings, judged_values = escape
+        grammar_analyzed = True
+        wrapper_bindings, judged_values = escape
         for refs, _resolved in judged_values:
             for r in refs:
-                expanded, _ok = _resolve_wrapper_ref(r, py_bindings)
+                expanded, _ok = _resolve_wrapper_ref(r, wrapper_bindings)
                 for er in expanded:
                     if _wrapper_ref_hits_exclusion(
                         er, exclusion, tails, project_sinks,
@@ -1248,10 +1408,10 @@ def _is_trivial_wrapper(
     callee_name = _strip_executor_dunders(callee_name)
     if not callee_name:
         return False, ""
-    if lang == "python":
-        if callee_name.split(".", 1)[0] in py_bindings:
+    if grammar_analyzed:
+        if callee_name.split(".", 1)[0] in wrapper_bindings:
             resolved_set, resolved_ok = _resolve_wrapper_ref(
-                callee_name, py_bindings,
+                callee_name, wrapper_bindings,
             )
             if not resolved_ok or not resolved_set:
                 # An unresolvable delegate (or one whose value the
@@ -1405,19 +1565,22 @@ def _is_trivial_wrapper(
                 closing = ref_body.rfind("}")
                 if closing >= 0:
                     ref_body = ref_body[:closing]
-        # One-hop local aliases (`f2 = os.system` then `pool.submit(
-        # f2, cmd)`): the argument spells the LOCAL name while the
-        # sink sits surface-spelled on the assignment line, outside
-        # any argument list — resolve exactly like the callee alias
-        # walk above.
+        # Local aliases (`f2 = os.system` then `pool.submit(f2,
+        # cmd)`): the argument spells the LOCAL name while the sink
+        # sits surface-spelled on the assignment line, outside any
+        # argument list. Grammar-analyzed languages resolve through
+        # the escape analysis' binding fixpoint; the rest keep the
+        # one-hop assignment-line resolution until their grammar leg
+        # exists.
         ref_aliases: dict[str, str] = {}
-        for _ln in code_lines:
-            am = re.match(
-                r"([A-Za-z_]\w*)\s*(?::=|=)\s*((?:\w+\.)*\w+)\s*;?\s*$",
-                _ln,
-            )
-            if am:
-                ref_aliases[am.group(1)] = am.group(2)
+        if not grammar_analyzed:
+            for _ln in code_lines:
+                am = re.match(
+                    r"([A-Za-z_]\w*)\s*(?::=|=)\s*((?:\w+\.)*\w+)\s*;?\s*$",
+                    _ln,
+                )
+                if am:
+                    ref_aliases[am.group(1)] = am.group(2)
         for rm in _WRAPPER_REF_TOKEN_RE.finditer(ref_body):
             if ref_body[rm.end():].lstrip()[:1] == "(":
                 continue  # call position — judged by the callee checks
@@ -1426,6 +1589,16 @@ def _is_trivial_wrapper(
                 continue  # not inside any call's argument list
             ref = _strip_executor_dunders(rm.group(1))
             if not ref:
+                continue
+            if grammar_analyzed:
+                expanded, _ok = _resolve_wrapper_ref(ref, wrapper_bindings)
+                if any(
+                    _wrapper_ref_hits_exclusion(
+                        er, exclusion, tails, project_sinks,
+                    )
+                    for er in expanded
+                ):
+                    return False, ""
                 continue
             ref = _strip_executor_dunders(ref_aliases.get(ref, ref))
             if not ref:
