@@ -2226,6 +2226,21 @@ def _verdict_from_template(
     return "inconclusive"
 
 
+def _same_file_component_suffix(path_a: str, path_b: str) -> bool:
+    """True when the two path spellings can denote the same file:
+    equal after normalisation, or one is a path-component suffix of
+    the other (``==`` or preceded by ``/`` — the same boundary rule as
+    `_match_needle_in_index`, which was hardened against mid-component
+    matches for the refutation path)."""
+    a = strip_file_uri(path_a or "").lstrip("/")
+    b = strip_file_uri(path_b or "").lstrip("/")
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return a.endswith("/" + b) or b.endswith("/" + a)
+
+
 def _any_match_at_finding_location(
     matches: list[dict], finding: dict,
 ) -> bool:
@@ -2245,12 +2260,19 @@ def _any_match_at_finding_location(
         # No file to location-match; assume any match supports the finding.
         return bool(matches)
 
-    target_basename = Path(target_file).name
     for m in matches:
         m_file = m.get("file") or ""
         if not m_file:
             continue
-        if Path(m_file).name != target_basename:
+        # Component-boundary path match (same rule as
+        # `_match_needle_in_index`): a bare basename comparison let a
+        # same-named file in a DIFFERENT directory (two utils.py in a
+        # monorepo) confirm the finding and grade the verdict
+        # tool_backed off an unrelated match. Differently-rooted
+        # spellings of the SAME file (project-relative vs
+        # repo-root-relative, or an engine emitting basenames) still
+        # match via the suffix rule.
+        if not _same_file_component_suffix(target_file, m_file):
             continue
         try:
             m_line = int(m.get("line") or 0)

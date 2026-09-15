@@ -882,11 +882,14 @@ class TestVerdictFromPrebuilt:
         f = {"file_path": "x.py", "start_line": 10}
         assert _verdict_from_prebuilt(ev, f) == "inconclusive"
 
-    def test_basename_match_works(self):
-        """Path comparison uses basename, so absolute-vs-relative doesn't matter."""
+    def test_absolute_vs_relative_same_file_matches(self):
+        """Absolute-vs-relative spellings of the SAME file join on the
+        component-boundary suffix rule. (A bare basename match would
+        also accept a same-named file in a different directory — see
+        TestMatchAtFindingLocation.)"""
         from packages.hypothesis_validation.adapters.base import ToolEvidence
         ev = ToolEvidence(tool="codeql", rule="r", success=True,
-                          matches=[{"file": "/abs/path/to/x.py", "line": 10}])
+                          matches=[{"file": "/abs/path/src/x.py", "line": 10}])
         f = {"file_path": "src/x.py", "start_line": 10}
         assert _verdict_from_prebuilt(ev, f) == "confirmed"
 
@@ -1525,6 +1528,29 @@ class TestMatchAtFindingLocation:
         matches = [{"file": "vuln.c", "line": 42}]
         finding = {"file_path": "vuln.c", "start_line": 0}
         assert _any_match_at_finding_location(matches, finding)
+
+    def test_same_basename_other_directory_not_at_location(self):
+        # Two utils.py in a monorepo: a hit in the WRONG directory's
+        # file must not confirm the finding (pre-fix the comparison
+        # was basename-only, laundering an unrelated match into
+        # tool_backed corroboration).
+        matches = [{"file": "pkg_b/utils.py", "line": 100}]
+        finding = {"file_path": "pkg_a/utils.py", "start_line": 100}
+        assert not _any_match_at_finding_location(matches, finding)
+
+    def test_differently_rooted_same_file_still_matches(self):
+        # Project-relative finding vs repo-root-relative match of the
+        # SAME file joins on the component-boundary suffix rule.
+        matches = [{"file": "repo/src/app/utils.py", "line": 100}]
+        finding = {"file_path": "src/app/utils.py", "start_line": 100}
+        assert _any_match_at_finding_location(matches, finding)
+
+    def test_mid_component_suffix_not_a_match(self):
+        # webapp/main.py is NOT app/main.py — the suffix rule anchors
+        # to a path-component boundary.
+        matches = [{"file": "webapp/main.py", "line": 100}]
+        finding = {"file_path": "app/main.py", "start_line": 100}
+        assert not _any_match_at_finding_location(matches, finding)
 
 
 class TestSpecializedPromptGuidance:
