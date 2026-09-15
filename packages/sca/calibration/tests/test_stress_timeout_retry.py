@@ -11,6 +11,7 @@ of one project would race on the same clone dir and caches.
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import threading
 import time
@@ -65,47 +66,51 @@ def _unregister(label: str) -> None:
         stress_mod._ACTIVE_SCANS.pop(label, None)
 
 
-def _capture_futures(monkeypatch: pytest.MonkeyPatch) -> list:
-    """Capture ``(sample, future)`` pairs from the sweep's executor.
+class _RecordingExecutor(concurrent.futures.ThreadPoolExecutor):
+    """ThreadPoolExecutor that exposes its submitted futures.
 
-    The retry pass keys off ``orphan.done()``, which flips a few
-    instructions AFTER the scan fn returns, on the worker thread —
-    so escorts must synchronise on the future itself, structurally,
-    not on a clock grace that a stalled runner can lose."""
-    import concurrent.futures as cf
+    The retry gate under test keys on ``orphan.done()`` — which flips
+    only after the executor runs set_result, an instant AFTER the
+    orphaned fn returns. The escort scan must not reach the sweep's
+    retry pass before that flip; observing the real future replaces
+    the fixed grace sleep the tests used to bridge that gap (a sleep
+    a loaded runner could outrun).
+    """
 
-    captured: list = []
-    real_executor = cf.ThreadPoolExecutor
+    submitted: "list[concurrent.futures.Future]" = []
 
-    class _Capturing(real_executor):
-        def submit(self, fn, *args, **kwargs):
-            fut = super().submit(fn, *args, **kwargs)
-            if args:
-                captured.append((args[0], fut))
-            return fut
-
-    monkeypatch.setattr(cf, "ThreadPoolExecutor", _Capturing)
-    return captured
+    def submit(self, fn, /, *args, **kwargs):
+        fut = super().submit(fn, *args, **kwargs)
+        _RecordingExecutor.submitted.append(fut)
+        return fut
 
 
-def _wait_orphan_future_done(
-    captured: list, name: str = "slow", timeout: float = 30.0,
-) -> None:
-    """Block until the FIRST-submitted future for ``name`` reports
-    ``.done()`` — the exact predicate the retry pass consults."""
-    deadline = time.monotonic() + timeout
+def _await_a_done_future(deadline_s: float = 30.0) -> None:
+    """Block until any recorded future is done (the caller runs INSIDE
+    one, so its own future cannot satisfy the wait)."""
+    deadline = time.monotonic() + deadline_s
     while time.monotonic() < deadline:
-        futs = [f for s, f in captured
-                if getattr(s, "name", None) == name]
-        if futs and futs[0].done():
+        if any(f.done() for f in _RecordingExecutor.submitted):
             return
         time.sleep(0.01)
-    raise AssertionError(f"orphan future for {name!r} never done")
+    raise AssertionError("no submitted future flipped done in time")
+
+
+@pytest.fixture
+def recording_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> "type[_RecordingExecutor]":
+    _RecordingExecutor.submitted = []
+    monkeypatch.setattr(
+        stress_mod.concurrent.futures, "ThreadPoolExecutor",
+        _RecordingExecutor,
+    )
+    return _RecordingExecutor
 
 
 def test_timeout_retry_succeeds_and_replaces_result_wholesale(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, recording_executor,
 ) -> None:
     """Timed-out scan whose orphan finished before the retry slot:
     retried exactly once, and the successful attempt replaces the
@@ -115,7 +120,6 @@ def test_timeout_retry_succeeds_and_replaces_result_wholesale(
     release = threading.Event()
     orphan_finished = threading.Event()
     sink: list[StressResult] = []
-    captured = _capture_futures(monkeypatch)
 
     def _scan(
         sample: ProjectSample, out_root: Path, *, git_clone_timeout: float,
@@ -141,9 +145,10 @@ def test_timeout_retry_succeeds_and_replaces_result_wholesale(
             time.sleep(0.01)
         release.set()
         assert orphan_finished.wait(timeout=30)
-        # Structural sync: wait for the orphan FUTURE's .done() flip
-        # (the retry pass's exact predicate), not a clock grace.
-        _wait_orphan_future_done(captured)
+        # The retry gate keys on orphan.done(), which flips only when
+        # the executor runs set_result after the orphan fn returned —
+        # observe the actual future instead of sleeping over the gap.
+        _await_a_done_future()
         return _ok_result("escort")
 
     monkeypatch.setattr(stress_mod, "_scan_one", _scan)
@@ -222,7 +227,7 @@ def test_orphan_still_running_skips_retry_and_keeps_error(
 
 def test_retry_that_also_times_out_keeps_error_no_second_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, recording_executor,
 ) -> None:
     """A retry that itself overruns the budget is abandoned like any
     other scan; the original timeout error stands and there is never
@@ -233,7 +238,6 @@ def test_retry_that_also_times_out_keeps_error_no_second_retry(
     orphan_finished = threading.Event()
     retry_release = threading.Event()
     sink: list[StressResult] = []
-    captured = _capture_futures(monkeypatch)
 
     def _scan(
         sample: ProjectSample, out_root: Path, *, git_clone_timeout: float,
@@ -256,7 +260,9 @@ def test_retry_that_also_times_out_keeps_error_no_second_retry(
             time.sleep(0.01)
         release.set()
         assert orphan_finished.wait(timeout=30)
-        _wait_orphan_future_done(captured)
+        # See the sibling test: wait for the orphan future's done()
+        # flip itself, not a fixed grace period.
+        _await_a_done_future()
         return _ok_result("escort")
 
     monkeypatch.setattr(stress_mod, "_scan_one", _scan)
