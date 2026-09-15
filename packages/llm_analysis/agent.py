@@ -41,6 +41,7 @@ from core.llm.providers import ClaudeCodeProvider
 from core.llm.task_types import TaskType
 from core.logging import get_logger
 from core.paths import confine, strip_file_uri
+from core.run.finding_status import read_verdict
 from core.source import read_text_capped
 from core.progress import HackerProgress
 from core.run.output import unique_run_suffix
@@ -1343,7 +1344,7 @@ class AutonomousSecurityAgentV2:
             vuln.analysis = analysis
 
             logger.info("✓ LLM analysis complete:")
-            logger.info("  True Positive: %s", analysis.get('is_true_positive', False))
+            logger.info("  True Positive: %s", read_verdict(analysis, "is_true_positive"))
             logger.info("  Exploitable: %s", vuln.exploitable)
             logger.info("  Exploitability Score: %.2f", vuln.exploitability_score)
             logger.info(

@@ -24,6 +24,7 @@ from core.llm.structured_call import (
 from core.llm.structured_call import (
     is_auth_error_text as _is_auth_error,
 )
+from core.run.finding_status import read_verdict
 from core.security.log_sanitisation import escape_nonprintable
 
 logger = logging.getLogger(__name__)
@@ -548,7 +549,7 @@ def _dispatch_inner(
                 # forgery) onto the terminal mid-run.
                 display = escape_nonprintable(task.get_item_display(item))
                 if "is_exploitable" in processed:
-                    exploitable = processed.get("is_exploitable", False)
+                    exploitable = read_verdict(processed, "is_exploitable")
                     score = processed.get("exploitability_score")
                     ruling = processed.get("ruling")
                     if exploitable is None:

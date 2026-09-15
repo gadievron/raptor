@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from typing import Any
 from collections.abc import Iterable
 
+from core.run.finding_status import read_verdict
+
 
 @dataclass(frozen=True)
 class VoteTally:
@@ -188,8 +190,7 @@ def correlate_results(results_by_id: dict[str, dict]) -> dict[str, Any]:
             ]
             non_exploitable_models = [
                 a.get("model", "?") for a in analyses
-                if a.get("is_exploitable") is not None
-                and not a["is_exploitable"]
+                if read_verdict(a, "is_exploitable") is False
             ]
             if tally.tie:
                 # Even split (the common 1-vs-1 two-model dispute):

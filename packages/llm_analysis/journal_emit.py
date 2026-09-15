@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any
+from core.run.finding_status import read_verdict
 
 logger = logging.getLogger(__name__)
 
@@ -246,7 +247,7 @@ def journal_orchestrated_results(
         if status is not None:
             if status not in _JOURNALABLE_STATUSES:
                 continue
-        elif not isinstance(result.get("is_true_positive"), bool):
+        elif read_verdict(result, "is_true_positive") is None:
             continue
         analysis = {
             k: result[k] for k in _ANALYSIS_KEYS if result.get(k) is not None

@@ -180,6 +180,35 @@ class TestMergeContradictionFloor:
         assert "exploit_code" not in f
 
 
+class TestMergeAbstainedExploitability:
+
+    def test_abstained_exploitability_merges_as_none(self):
+        # read_verdict at the merge: a schema-nulled OR missing
+        # is_exploitable is an abstention. It must land on the report
+        # record as None (no verdict), never be fabricated into an
+        # explicit False, and never count toward the exploitable
+        # headline.
+        prep = _prep_report([{"finding_id": "f1", "rule_id": "r"},
+                             {"finding_id": "f2", "rule_id": "r"}])
+        cc = [{"finding_id": "f1", "is_true_positive": True,
+               "is_exploitable": None},
+              {"finding_id": "f2", "is_true_positive": True}]
+        merged = _merge_results(prep, cc)
+        assert [f["is_exploitable"] for f in merged["results"]] == [None, None]
+        assert [f["exploitable"] for f in merged["results"]] == [None, None]
+        assert merged["exploitable"] == 0
+        assert all(f["has_exploit"] is False for f in merged["results"])
+
+    def test_explicit_negative_exploitability_stays_false(self):
+        # Two-direction: an explicit False is a verdict and is
+        # preserved as one.
+        prep = _prep_report([{"finding_id": "f1", "rule_id": "r"}])
+        cc = [{"finding_id": "f1", "is_true_positive": True,
+               "is_exploitable": False}]
+        merged = _merge_results(prep, cc)
+        assert merged["results"][0]["is_exploitable"] is False
+
+
 class TestCapFindings:
 
     def test_dropped_tail_stamped(self):

@@ -27,6 +27,7 @@ from typing import Any
 
 from core.llm.coerce import structured_result, to_lower_token_safe
 from core.paths import strip_file_uri
+from core.run.finding_status import read_verdict
 from core.security.prompt_envelope import neutralize_tag_forgery
 from packages.hypothesis_validation import Hypothesis
 from packages.hypothesis_validation.adapters import CodeQLAdapter
@@ -244,7 +245,10 @@ def _eligible_for_validation(finding: dict, analysis: dict) -> bool:
     """
     if "error" in analysis:
         return False
-    if not analysis.get("is_exploitable"):
+    if read_verdict(analysis, "is_exploitable") is not True:
+        # Only confirmed-exploitable findings are selected for
+        # validation; an abstained verdict has nothing to validate
+        # (and the validator must never manufacture one).
         return False
     if finding.get("has_dataflow"):
         return False
@@ -2877,9 +2881,9 @@ def reconcile_dataflow_validation(results_by_id: dict[str, dict]) -> dict[str, i
             continue
         if not v.get("recommends_downgrade"):
             continue
-        if not analysis.get("is_exploitable"):
+        if read_verdict(analysis, "is_exploitable") is not True:
             n_skipped += 1
-            continue  # already not-exploitable for some other reason
+            continue  # already not-exploitable (or abstained) — no downgrade to apply
 
         # Soft-downgrade gate: was the original verdict supported by
         # consensus or judge? Both fields default to absent — only

@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from core.reporting.formatting import format_elapsed as _format_elapsed
+from core.run.finding_status import read_verdict
 from packages.llm_analysis.cc_dispatch import invoke_cc_simple
 from packages.llm_analysis.finding_adapter import FindingAdapter
 
@@ -2426,9 +2427,11 @@ def _merge_results(
         # finding to not-exploitable at the final merge and dropping
         # its exploit/patch artifacts. Same no-vote rule as
         # ``tally_verdict_votes``: an abstained TP field casts no
-        # vote either way.
-        _is_tp = cc.get("is_true_positive", True)
-        _is_exp = cc.get("is_exploitable", False)
+        # vote either way. ``read_verdict`` is the shared tri-state
+        # read: an abstained exploitability verdict stays None on the
+        # report record rather than masquerading as an explicit False.
+        _is_tp = read_verdict(cc, "is_true_positive")
+        _is_exp = read_verdict(cc, "is_exploitable")
         if _is_tp is False and _is_exp:
             _is_exp = False
         finding["exploitable"] = _is_exp

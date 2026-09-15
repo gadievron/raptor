@@ -67,6 +67,7 @@ from core.llm.scorecard.priors import (
     BetaPrior,
     uniform_prior,
 )
+from core.run.finding_status import read_verdict
 
 
 # Flip = D–S posterior > 0.5 disagrees with recorded is_exploitable.
@@ -166,10 +167,7 @@ def _recorded_verdict_index(
                 # file's panels, so flips were computed against a
                 # different run than the one that fed the posterior.
                 continue
-            is_exploitable = finding.get("is_exploitable")
-            if not isinstance(is_exploitable, bool):
-                is_exploitable = None
-            out[fid] = is_exploitable
+            out[fid] = read_verdict(finding, "is_exploitable")
     return out
 
 

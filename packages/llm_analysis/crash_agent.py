@@ -18,6 +18,7 @@ from core.llm.methodology import load_methodology
 from core.llm.providers import ClaudeCodeProvider
 from core.llm.task_types import TaskType
 from core.logging import get_logger
+from core.run.finding_status import read_verdict
 from core.security.prompt_defense_profiles import CONSERVATIVE
 from core.security.prompt_envelope import (
     PromptBundle,
@@ -683,8 +684,8 @@ class CrashAnalysisAgent:
             crash_context.analysis = analysis
 
             logger.info("✓ LLM analysis complete:")
-            logger.info("  True Positive: %s", analysis.get('is_true_positive', False))
-            logger.info("  Exploitable: %s", analysis.get('is_exploitable', False))
+            logger.info("  True Positive: %s", read_verdict(analysis, "is_true_positive"))
+            logger.info("  Exploitable: %s", read_verdict(analysis, "is_exploitable"))
             logger.info("  Crash Type: %s", analysis.get('crash_type', 'unknown'))
             logger.info("  Severity: %s", analysis.get('severity_assessment', 'unknown'))
             logger.info(

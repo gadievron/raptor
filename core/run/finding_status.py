@@ -91,6 +91,38 @@ _SKIPPED_STATUSES = frozenset({
 })
 
 
+#: Boolean verdict fields on analysis/finding records that carry
+#: tri-state semantics (True / False / abstained). Consumed by
+#: :func:`read_verdict` callers and by the idiom closure test that keeps
+#: raw truthiness/default reads of these keys out of the codebase.
+VERDICT_KEYS = ("is_true_positive", "is_exploitable")
+
+
+def read_verdict(record: dict | None, key: str) -> bool | None:
+    """Tri-state read of a boolean verdict field (``VERDICT_KEYS``).
+
+    Returns the stored value only when it is a genuine bool. A missing
+    key, an explicit ``None`` (response validation nulls a missing or
+    malformed verdict field — an abstention, not a verdict), a non-dict
+    record, or any non-bool shape all read as ``None``. Callers state
+    polarity explicitly::
+
+        read_verdict(r, "is_exploitable") is True    # confirmed
+        read_verdict(r, "is_exploitable") is False   # explicit negative
+        read_verdict(r, "is_exploitable") is None    # abstained / no verdict
+
+    Never apply truthiness, ``not``, or a bool ``.get`` default to
+    these fields directly: that idiom reads an abstention as a NEGATIVE
+    verdict and has repeatedly demoted findings whose analysis response
+    was merely malformed. ``test_verdict_tri_state_closure`` enforces
+    that new read sites route through this accessor.
+    """
+    if not isinstance(record, dict):
+        return None
+    value = record.get(key)
+    return value if isinstance(value, bool) else None
+
+
 def derive_status(finding: dict) -> str:
     """Infer status from a finding's existing fields.
 
@@ -207,6 +239,9 @@ __all__ = [
     "SKIPPED_FILTERED",
     "SKIPPED_OVER_BUDGET",
     "SKIPPED_TOOL_ABSENT",
+    # verdict fields
+    "VERDICT_KEYS",
+    "read_verdict",
     # operations
     "derive_status",
     "get_status",

@@ -12,6 +12,7 @@ from typing import Any
 
 from core.security.prompt_defense_profiles import CONSERVATIVE
 from core.security.prompt_envelope import ModelDefenseProfile, system_with_priming
+from core.run.finding_status import read_verdict
 
 from .correlation import tally_verdict_votes
 from .dispatch import DispatchTask
@@ -509,7 +510,10 @@ class ConsensusTask(DispatchTask):
                 if not consensus_analyses:
                     continue
 
-                primary_exploitable = primary.get("is_exploitable", False)
+                # Tri-state snapshot (read_verdict): an abstained
+                # primary is recorded as None, not fabricated into an
+                # explicit False the analyst never produced.
+                primary_exploitable = read_verdict(primary, "is_exploitable")
                 # Shared abstention-aware tally (see correlation.py):
                 # missing/null is_exploitable — an errored / refused /
                 # schema-failed model — is an abstention, never a
@@ -638,7 +642,7 @@ class JudgeTask(DispatchTask):
             # that None as "false positive" and silently dropped from
             # the judge panel exactly the malformed-response findings
             # that most need a second opinion.
-            if r.get("is_true_positive") is False:
+            if read_verdict(r, "is_true_positive") is False:
                 continue
             if r.get("cross_family_agreed"):
                 continue
@@ -664,6 +668,11 @@ class JudgeTask(DispatchTask):
             "pre_consensus_is_exploitable",
             primary.get("is_exploitable", "unknown"),
         )
+        if primary_verdict is None:
+            # Abstained primary (schema-nulled verdict or a None
+            # pre-consensus snapshot): show the judge "unknown", not
+            # a Python None the model could misread as a verdict.
+            primary_verdict = "unknown"
         primary_ruling = primary.get("ruling", "unknown")
 
         extra_blocks: tuple[UntrustedBlock, ...] = (
@@ -717,7 +726,9 @@ class JudgeTask(DispatchTask):
                 if not judge_analyses:
                     continue
 
-                primary_exploitable = primary.get("is_exploitable", False)
+                # Tri-state snapshot (read_verdict) — same
+                # no-fabrication rule as the consensus stage above.
+                primary_exploitable = read_verdict(primary, "is_exploitable")
                 # Shared abstention-aware tally (see correlation.py):
                 # missing/null is_exploitable is an abstention, never
                 # a "not exploitable" vote — pre-fix a schema-failed
