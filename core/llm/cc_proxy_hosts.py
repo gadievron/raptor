@@ -47,12 +47,12 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-import subprocess
-import threading
 from pathlib import Path
 from urllib.parse import urlparse
 
-from core.json import load_json
+
+from core.config.hosts_override import load_hosts_override
+from core.sandbox import calibrated_hosts
 
 logger = logging.getLogger(__name__)
 
@@ -174,20 +174,7 @@ def _load_override_config() -> list[str] | None:
     operator deny-all, and collapsing it to None silently re-granted
     the default allow hosts the operator just denied.
     """
-    if not _OVERRIDE_CONFIG_PATH.exists():
-        return None
-    data = load_json(_OVERRIDE_CONFIG_PATH, max_bytes=1024 * 1024)
-    hosts = data.get("proxy_hosts") if isinstance(data, dict) else None
-    if not isinstance(hosts, list):
-        return None
-    # Sanitise: strip non-string entries, dedupe, preserve order
-    seen: set[str] = set()
-    result: list[str] = []
-    for h in hosts:
-        if isinstance(h, str) and h and h not in seen:
-            seen.add(h)
-            result.append(h)
-    return result
+    return load_hosts_override(_OVERRIDE_CONFIG_PATH, key="proxy_hosts")
 
 
 def _profile_config_region() -> str | None:
@@ -299,21 +286,6 @@ def _foundry_hosts() -> list[str] | None:
     ]
 
 
-# Per-process memoisation: calibration loads a cached profile (or
-# re-runs the probe on cache miss / binary mutation). For dispatch
-# patterns where cc_dispatch is called many times in a single RAPTOR
-# session — agentic_passes' /understand prepass + /validate postpass
-# fire dozens of cc_dispatch invocations — re-stat'ing the binary +
-# re-reading the cache file every call adds avoidable overhead.
-# Memoise the result per claude_bin path; invalidate by clearing
-# the dict (mostly used in tests). Production callers don't need
-# to invalidate during normal operation — sha256 verification on
-# load handles binary self-update.
-_CALIBRATED_CACHE: dict[str, object] = {}
-_CALIBRATED_CACHE_LOCK = threading.Lock()
-_MISSING = object()  # sentinel distinct from None (a valid cached result)
-
-
 def _resolve_claude_bin() -> str | None:
     """Locate the Claude Code binary on PATH. Returns None when
     not found (calibration disabled for that run; static fallback
@@ -336,69 +308,24 @@ def _calibrated_profile(claude_bin: str | None = None):
             "whatever happens to be on PATH" (which can differ on
             multi-version installs).
 
-    Memoised per-process by binary path. The memoised entry is
-    keyed on the resolved binary path; if Claude Code self-updates
-    mid-session, the resolved path bumps and the memo misses,
-    triggering a fresh load (which the calibrate cache handles
-    via sha256 self-verification).
+    The shared layer (``core.sandbox.calibrated_hosts``) memoises
+    per-process on (binary path, env keys, probe args) with
+    calibration-stampede protection — a mid-session Claude Code
+    self-update bumps the resolved path and misses the memo,
+    triggering a fresh load (which the calibrate cache handles via
+    sha256 self-verification).
     """
     if claude_bin is None:
         claude_bin = _resolve_claude_bin()
     if claude_bin is None:
         return None
-
-    # Acquire lock, check cache. On a miss, plant a sentinel Event so
-    # concurrent threads wait instead of stampeding calibration.
-    with _CALIBRATED_CACHE_LOCK:
-        cached = _CALIBRATED_CACHE.get(claude_bin, _MISSING)
-        if isinstance(cached, threading.Event):
-            # Another thread is calibrating — grab its event.
-            waiter = cached
-        elif cached is not _MISSING:
-            return cached
-        else:
-            waiter = None
-            sentinel = threading.Event()
-            _CALIBRATED_CACHE[claude_bin] = sentinel
-
-    if waiter is not None:
-        waiter.wait()
-        with _CALIBRATED_CACHE_LOCK:
-            return _CALIBRATED_CACHE.get(claude_bin)
-
-    # We own the calibration slot.
-    result = None
-    try:
-        try:
-            from core.sandbox.calibrate import load_or_calibrate
-        except ImportError:
-            return None
-
-        try:
-            probe_args = _cc_probe_args()
-            env_keys = _PROVIDER_ENV_KEYS + (
-                _NETWORK_PROBE_OPT_IN_ENV,
-            )
-            timeout = 150 if _network_probe_enabled() else 20
-            result = load_or_calibrate(
-                claude_bin,
-                probe_args=probe_args,
-                env_keys=env_keys,
-                timeout=timeout,
-            )
-        except (FileNotFoundError, RuntimeError, OSError,
-                subprocess.TimeoutExpired) as exc:
-            logger.debug(
-                "cc_proxy_hosts: calibration of %s failed (%s); "
-                "falling back to static policy",
-                claude_bin, exc,
-            )
-            result = None
-    finally:
-        with _CALIBRATED_CACHE_LOCK:
-            _CALIBRATED_CACHE[claude_bin] = result
-        sentinel.set()
-    return result
+    return calibrated_hosts.calibrated_profile(
+        claude_bin,
+        _PROVIDER_ENV_KEYS + (_NETWORK_PROBE_OPT_IN_ENV,),
+        probe_args=_cc_probe_args(),
+        timeout=150 if _network_probe_enabled() else 20,
+        tag="cc_proxy_hosts",
+    )
 
 
 def _calibrated_proxy_hosts(
@@ -409,10 +336,9 @@ def _calibrated_proxy_hosts(
     profile carries an empty proxy_hosts list (the default
     ``--version`` probe doesn't network, so this is the common
     case until a network-engaging probe variant lands)."""
-    profile = _calibrated_profile(claude_bin)
-    if profile is None or not profile.proxy_hosts:
-        return None
-    return list(profile.proxy_hosts)
+    return calibrated_hosts.hosts_from_profile(
+        _calibrated_profile(claude_bin),
+    )
 
 
 def _calibrated_readable_paths(
@@ -594,6 +520,6 @@ def readable_paths_for_cc_dispatch(
 
 
 def _reset_calibrate_cache_for_tests() -> None:
-    """Clear the per-process memo. Public so tests can isolate
-    runs without monkeypatching the dict directly."""
-    _CALIBRATED_CACHE.clear()
+    """Clear the shared per-process memo. Public so tests can
+    isolate runs without monkeypatching internals."""
+    calibrated_hosts.reset_cache_for_tests()

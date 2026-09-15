@@ -33,12 +33,13 @@ and the operator updates the override config or upgrades RAPTOR.
 
 from __future__ import annotations
 
-import json
 import logging
 import shutil
-import subprocess
-import threading
 from pathlib import Path
+
+
+from core.config.hosts_override import load_hosts_override
+from core.sandbox import calibrated_hosts
 
 
 logger = logging.getLogger(__name__)
@@ -78,12 +79,9 @@ _DEFAULT_PACK_DOWNLOAD_HOSTS: tuple[str, ...] = (
 )
 
 
-# Per-process memoisation. Pack-download is bursty (multiple
-# missing packs in a single ``codeql analyze`` run trigger several
-# back-to-back ``pack download`` invocations); re-loading the
-# calibrated profile from disk on each is wasted effort.
-_CALIBRATED_CACHE: dict[str, object] = {}
-_CALIBRATED_CACHE_LOCK = threading.Lock()
+# Deny-all encoding shared with the cc / SCA siblings: non-empty
+# allowlist for the sandbox, loopback targets refused by the proxy.
+_LOOPBACK_ONLY_HOSTS: tuple[str, ...] = ("127.0.0.1", "localhost")
 
 
 def _resolve_codeql_bin() -> str | None:
@@ -108,45 +106,18 @@ def _calibrated_profile(codeql_bin: str | None = None):
             (which can differ on multi-version setups, e.g. the
             CodeQL bundle vs `gh ext install`-ed CLI).
 
-    Memoised per-process by binary path — same shape as
-    ``cc_proxy_hosts._calibrated_profile``.
+    Memoised (with stampede protection) by the shared layer,
+    ``core.sandbox.calibrated_hosts``.
     """
     if codeql_bin is None:
         codeql_bin = _resolve_codeql_bin()
     if codeql_bin is None:
         return None
-    # Hold the lock across the entire miss path to prevent a
-    # cache stampede where N threads all see a miss and each
-    # independently run the (expensive) calibration probe.
-    with _CALIBRATED_CACHE_LOCK:
-        if codeql_bin in _CALIBRATED_CACHE:
-            return _CALIBRATED_CACHE[codeql_bin]
-
-        try:
-            from core.sandbox.calibrate import load_or_calibrate
-        except ImportError:
-            _CALIBRATED_CACHE[codeql_bin] = None
-            return None
-
-        try:
-            profile = load_or_calibrate(
-                codeql_bin,
-                probe_args=("--version",),
-                env_keys=_CODEQL_ENV_KEYS,
-                timeout=20,
-            )
-        except (FileNotFoundError, RuntimeError, OSError,
-                subprocess.TimeoutExpired) as exc:
-            logger.debug(
-                "codeql_proxy_hosts: calibration of %s failed "
-                "(%s); falling back to static policy",
-                codeql_bin, exc,
-            )
-            _CALIBRATED_CACHE[codeql_bin] = None
-            return None
-
-        _CALIBRATED_CACHE[codeql_bin] = profile
-        return profile
+    return calibrated_hosts.calibrated_profile(
+        codeql_bin,
+        _CODEQL_ENV_KEYS,
+        tag="codeql_proxy_hosts",
+    )
 
 
 def _load_override_config() -> list[str] | None:
@@ -155,40 +126,14 @@ def _load_override_config() -> list[str] | None:
     Schema mirrors cc_proxy_hosts:
         {"proxy_hosts": ["ghe.corp.example", "..."]}
 
-    Future fields can be added (commit history records schema
-    evolution). Unknown fields are tolerated.
-
-    ``None`` means UNCONFIGURED (file absent, malformed, or the key
-    missing / not a list) — the caller falls through to the next
-    resolution layer. A configured list is returned as-is, INCLUDING
-    when it sanitises to empty: ``{"proxy_hosts": []}`` is an explicit
-    operator deny-all, and collapsing it to None silently re-granted
-    the default GHCR hosts the operator just denied (the exact
-    inversion the cc_proxy_hosts sibling was fixed for).
+    Delegates to the shared ``core.config.hosts_override`` loader:
+    ``None`` means UNCONFIGURED (file absent, malformed, unreadable
+    bytes, or the key missing / not a list) — the caller falls
+    through to the next resolution layer. A configured list is
+    honoured INCLUDING when it sanitises to empty (explicit operator
+    deny-all; the public function encodes it loopback-only).
     """
-    if not _OVERRIDE_CONFIG_PATH.exists():
-        return None
-    try:
-        data = json.loads(
-            _OVERRIDE_CONFIG_PATH.read_text(encoding="utf-8"),
-        )
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        # UnicodeDecodeError: garbage bytes at the override path
-        # (operator pointed it at a binary file by mistake). The
-        # sibling loaders tolerate this; letting it raise took down
-        # every `codeql pack download` policy resolution instead of
-        # falling back to the static hosts.
-        return None
-    hosts = data.get("proxy_hosts") if isinstance(data, dict) else None
-    if not isinstance(hosts, list):
-        return None
-    seen: set[str] = set()
-    result: list[str] = []
-    for h in hosts:
-        if isinstance(h, str) and h and h not in seen:
-            seen.add(h)
-            result.append(h)
-    return result
+    return load_hosts_override(_OVERRIDE_CONFIG_PATH, key="proxy_hosts")
 
 
 def _calibrated_proxy_hosts(
@@ -199,10 +144,9 @@ def _calibrated_proxy_hosts(
     empty. Default ``codeql --version`` probe doesn't network, so
     empty is the common case until a network-engaging probe variant
     lands."""
-    profile = _calibrated_profile(codeql_bin)
-    if profile is None or not profile.proxy_hosts:
-        return None
-    return list(profile.proxy_hosts)
+    return calibrated_hosts.hosts_from_profile(
+        _calibrated_profile(codeql_bin),
+    )
 
 
 def _calibrated_readable_paths(
@@ -261,6 +205,17 @@ def proxy_hosts_for_codeql(
     """
     override = _load_override_config()
     if override is not None:
+        if not override:
+            # Explicit operator deny-all ({"proxy_hosts": []}). The
+            # sandbox rejects an empty allowlist outright, so
+            # deny-all is encoded loopback-only — the CONNECT proxy
+            # refuses loopback targets by design, leaving every
+            # remote host denied at the chokepoint (same encoding
+            # as the cc and SCA siblings). Pre-fix the raw empty
+            # list was returned and the sandbox refused to start —
+            # denial preserved, but as an opaque setup error rather
+            # than a clean per-host proxy denial.
+            return list(_LOOPBACK_ONLY_HOSTS)
         return override
 
     calibrated = _calibrated_proxy_hosts(codeql_bin)
@@ -287,6 +242,6 @@ def readable_paths_for_codeql(
 
 
 def _reset_calibrate_cache_for_tests() -> None:
-    """Clear the per-process memo. Public so tests can isolate
-    runs without monkeypatching the dict directly."""
-    _CALIBRATED_CACHE.clear()
+    """Clear the shared per-process memo. Public so tests can
+    isolate runs without monkeypatching internals."""
+    calibrated_hosts.reset_cache_for_tests()

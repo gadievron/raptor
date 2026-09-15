@@ -35,10 +35,10 @@ from __future__ import annotations
 
 import logging
 import shutil
-import subprocess
 from pathlib import Path
 
 from core.config.hosts_override import load_hosts_override
+from core.sandbox import calibrated_hosts
 
 logger = logging.getLogger(__name__)
 
@@ -72,12 +72,6 @@ _SEMGREP_ENV_KEYS: tuple[str, ...] = (
 )
 
 
-# Per-process memoisation. Calibration is sha-keyed on disk; without
-# this in-memory layer, every scanner-spawn in a /scan would stat the
-# cache file independently.
-_CALIBRATED_CACHE: dict[str, object | None] = {}
-
-
 def _load_override() -> list[str] | None:
     """Return the operator override list, or None when no override
     is configured. Tolerant: malformed JSON, non-UTF-8 bytes, or an
@@ -99,53 +93,23 @@ def _calibrated_profile():
     semgrep binary. Returns None on any failure — calibration is
     advisory; static layers carry the policy when it's unavailable.
 
-    Memoised per-process by resolved binary path.
+    Memoised (with stampede protection) by the shared layer,
+    ``core.sandbox.calibrated_hosts`` — keyed on (binary path,
+    env-key set, probe args), so this site no longer diverges from
+    its siblings' cache-key discipline.
     """
-    bin_path = _resolve_semgrep_bin()
-    if bin_path is None:
-        return None
-    if bin_path in _CALIBRATED_CACHE:
-        return _CALIBRATED_CACHE[bin_path]
-
-    try:
-        from core.sandbox.calibrate import load_or_calibrate
-    except ImportError:
-        _CALIBRATED_CACHE[bin_path] = None
-        return None
-
-    try:
-        profile = load_or_calibrate(
-            bin_path,
-            probe_args=("--version",),
-            env_keys=_SEMGREP_ENV_KEYS,
-            timeout=20,
-        )
-    except (FileNotFoundError, RuntimeError, OSError,
-            subprocess.TimeoutExpired) as exc:
-        # ptrace blocked, libseccomp absent, binary deleted between
-        # which() and probe, or `semgrep --version` exceeded 20s
-        # under sandbox. Log at debug — calibration is advisory,
-        # static fallback stays in place.
-        logger.debug(
-            "semgrep proxy_hosts: calibration of %s failed (%s); "
-            "falling back to static policy",
-            bin_path, exc,
-        )
-        _CALIBRATED_CACHE[bin_path] = None
-        return None
-
-    _CALIBRATED_CACHE[bin_path] = profile
-    return profile
+    return calibrated_hosts.calibrated_profile(
+        _resolve_semgrep_bin(),
+        _SEMGREP_ENV_KEYS,
+        tag="semgrep_proxy_hosts",
+    )
 
 
 def _calibrated_proxy_hosts() -> list[str] | None:
     """Calibrated layer — None when no profile exists OR the profile
     carries an empty ``proxy_hosts`` list (the common case for
     ``--version`` probes — they don't network)."""
-    profile = _calibrated_profile()
-    if profile is None or not getattr(profile, "proxy_hosts", None):
-        return None
-    return list(profile.proxy_hosts)
+    return calibrated_hosts.hosts_from_profile(_calibrated_profile())
 
 
 def proxy_hosts_for_semgrep() -> list[str]:
@@ -169,7 +133,7 @@ def proxy_hosts_for_semgrep() -> list[str]:
 
 
 def _reset_calibrate_cache_for_tests() -> None:
-    """Clear the per-process calibrate memo. Test-only — production
-    code never invalidates manually; the cache is sha-keyed and
-    re-loads on binary self-update via the sha mismatch check."""
-    _CALIBRATED_CACHE.clear()
+    """Clear the shared per-process calibrate memo. Test-only —
+    production never invalidates manually; the cache is sha-keyed
+    and re-loads on binary self-update via the sha mismatch check."""
+    calibrated_hosts.reset_cache_for_tests()

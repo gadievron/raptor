@@ -77,6 +77,25 @@ def test_non_utf8_degrades_to_none(tmp_path, caplog):
     assert any("static default" in r.message for r in caplog.records)
 
 
+def test_oversize_file_degrades_to_none(tmp_path, caplog):
+    # >1 MiB is not a plausible host list (a file dumped onto the
+    # config path by mistake); refused before any read, loudly.
+    cfg = _write(tmp_path, b" " * (1024 * 1024 + 1))
+    with caplog.at_level("WARNING", logger="core.config.hosts_override"):
+        assert load_hosts_override(cfg) is None
+    assert any("static default" in r.message for r in caplog.records)
+
+
+def test_large_file_within_cap_still_loads(tmp_path):
+    # Two-direction: a big-but-legitimate allowlist under the cap
+    # must keep loading (the cap exists to refuse junk, not to
+    # shrink the grammar).
+    hosts = [f"host-{i}.example" for i in range(20000)]
+    cfg = _write(tmp_path, {"hosts": hosts})
+    assert cfg.stat().st_size <= 1024 * 1024
+    assert load_hosts_override(cfg) == hosts
+
+
 def test_wrong_schema_degrades_to_none(tmp_path, caplog):
     with caplog.at_level("WARNING", logger="core.config.hosts_override"):
         assert load_hosts_override(

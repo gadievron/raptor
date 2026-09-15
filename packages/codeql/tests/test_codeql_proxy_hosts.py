@@ -233,9 +233,15 @@ class TestOverrideConfig:
         monkeypatch.setattr(mod, "_OVERRIDE_CONFIG_PATH", config_path)
         # {"proxy_hosts": []} is an explicit operator deny-all;
         # collapsing it to None silently re-granted the default GHCR
-        # hosts the operator just denied. Same semantics as the fixed
-        # cc_proxy_hosts sibling: only absent/malformed falls through.
-        assert proxy_hosts_for_codeql() == []
+        # hosts the operator just denied. Same semantics AND encoding
+        # as the cc sibling: deny-all is loopback-only (the sandbox
+        # rejects an empty allowlist; the proxy refuses loopback
+        # targets), so every remote host stays denied while the run
+        # fails at the proxy with a per-host log instead of an
+        # opaque sandbox setup error.
+        hosts = proxy_hosts_for_codeql()
+        assert hosts == ["127.0.0.1", "localhost"]
+        assert not _hostname_in(hosts, "ghcr.io")
 
     def test_all_entries_invalid_override_is_still_deny_all(
         self, isolated_env, monkeypatch, tmp_path, no_calibrate,
@@ -245,7 +251,9 @@ class TestOverrideConfig:
         config_path = tmp_path / "codeql-proxy-hosts.json"
         config_path.write_text(json.dumps({"proxy_hosts": [7, "", None]}))
         monkeypatch.setattr(mod, "_OVERRIDE_CONFIG_PATH", config_path)
-        assert proxy_hosts_for_codeql() == []
+        hosts = proxy_hosts_for_codeql()
+        assert hosts == ["127.0.0.1", "localhost"]
+        assert not _hostname_in(hosts, "ghcr.io")
 
     def test_malformed_override_falls_back(
         self, isolated_env, monkeypatch, tmp_path, no_calibrate,

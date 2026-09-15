@@ -417,11 +417,13 @@ def test_e2e_real_calibration_against_python3_binary(tmp_path,
     assert hosts == ["pypi.org", "files.pythonhosted.org"]
 
     # Memoised — second call returns same and doesn't re-spawn. Keyed
-    # on (binary path, env-key set): the on-disk profile is
-    # parameterised by env_keys, so the memo must be too.
-    memo_keys = [k for k in ph._CALIBRATED_CACHE if k[0] == real_python]
+    # on (binary path, env-key set, probe args): the on-disk profile
+    # is parameterised by env_keys, so the memo must be too. The memo
+    # lives in the shared ladder layer now.
+    from core.sandbox import calibrated_hosts as _ch
+    memo_keys = [k for k in _ch._CACHE if k[0] == real_python]
     assert memo_keys, "no memo entry for the probed binary"
-    cached = ph._CALIBRATED_CACHE[memo_keys[0]]
+    cached = _ch._CACHE[memo_keys[0]]
     if cached is not None:
         # Non-None cache means the probe succeeded. Sanity-check
         # the captured profile's shape: it has either some paths_read
