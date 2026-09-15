@@ -549,3 +549,76 @@ class TestSameFunctionSteps:
         # No call edge, no import link: anything but a confident
         # same-function confirmation.
         assert result.verdict != "confirmed" or result.confidence != "high"
+
+
+class TestReturnFlowLink:
+    """Return-flow hops: source inside a callee, next step in the
+    caller — the data comes BACK over the call's return value. The
+    reverse edge (caller → callee) is in the graph and must rescue
+    the link instead of refuting the path with high confidence."""
+
+    def test_reverse_edge_rescues_return_hop(self):
+        graph = FileCallGraph(
+            calls=[CallSite(line=6, chain=["get_input"], caller="handler")],
+        )
+        found, indirect = _check_call_link("get_input", "handler", graph)
+        assert found is True
+        assert indirect is False
+
+    def test_reverse_edge_not_used_cross_file(self):
+        # Cross-file stays inconclusive (never a confirm from a
+        # same-name edge in another file's graph).
+        graph = FileCallGraph(
+            calls=[CallSite(line=6, chain=["get_input"], caller="handler")],
+        )
+        found, _ = _check_call_link(
+            "get_input", "handler", graph, cross_file=True,
+        )
+        assert found is None
+
+    def test_no_edge_either_direction_still_refutes(self):
+        graph = FileCallGraph(
+            calls=[CallSite(line=5, chain=["other"], caller="handler")],
+        )
+        found, indirect = _check_call_link("get_input", "handler", graph)
+        assert found is False
+        assert indirect is False
+
+    def test_same_file_return_flow_not_refuted(self, tmp_path):
+        pytest.importorskip("tree_sitter")
+        pytest.importorskip("tree_sitter_python")
+        _write_py(tmp_path, "flow.py", """\
+            def get_input():
+                x = input()
+                return x
+
+
+            def handler():
+                x = get_input()
+                eval(x)
+        """)
+        path = _make_path(
+            _make_step("flow.py", 2),
+            _make_step("flow.py", 8),
+        )
+        result = validate_structurally(path, tmp_path, language="python")
+        assert result.verdict == "confirmed"
+
+    def test_forward_hop_control_still_confirms(self, tmp_path):
+        pytest.importorskip("tree_sitter")
+        pytest.importorskip("tree_sitter_python")
+        _write_py(tmp_path, "fwd.py", """\
+            def handler():
+                x = input()
+                process(x)
+
+
+            def process(x):
+                eval(x)
+        """)
+        path = _make_path(
+            _make_step("fwd.py", 2),
+            _make_step("fwd.py", 7),
+        )
+        result = validate_structurally(path, tmp_path, language="python")
+        assert result.verdict == "confirmed"

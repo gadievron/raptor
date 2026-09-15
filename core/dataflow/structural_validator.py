@@ -276,6 +276,23 @@ def _check_call_link(
             if to_name == alias or to_name in target.split("."):
                 return True, False
 
+    if not cross_file and from_func:
+        # Return-flow hop: the path's next step lives in a CALLER of
+        # this step's function (source inside a callee, data coming
+        # back over the return value — ``x = get_input(); eval(x)``).
+        # The graph holds the REVERSE edge (to_func → from_func); a
+        # forward-edge-only model refuted every such intra-file path
+        # with high confidence. Same-file only: cross-file same-name
+        # edges are too weak to confirm on.
+        from_name = from_func.split(".")[-1]
+        from_parts = from_func.split(".")
+        for call in graph.calls:
+            if call.caller != to_func or not call.chain:
+                continue
+            if (call.chain[-1] == from_name
+                    or call.chain[-len(from_parts):] == from_parts):
+                return True, False
+
     has_indirection = bool(graph.indirection)
     if has_indirection:
         return None, True
