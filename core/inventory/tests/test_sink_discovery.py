@@ -653,3 +653,60 @@ class TestJvmMobileLanguagesEnumerated:
         assert any(
             s.target == "ProcessBuilder" for s in result.direct_sinks
         ), "kotlin file contributed no sinks"
+
+
+class TestCallGraphWiringClosure:
+    """The builder's call-graph dispatch and sink discovery's extractor
+    map are two hand-maintained enumerations over the SAME producer
+    registry (core.inventory.call_graph's extract_call_graph_*
+    walkers). A walker wired in one but not the other regrows the
+    defect this closure exists to pin: files of a whole language get
+    call graphs in the inventory but contribute zero sinks/reach to
+    discovery (or vice versa). Enumerate the real producers
+    mechanically and assert both consumers cover every one."""
+
+    @staticmethod
+    def _producers() -> set[str]:
+        import core.inventory.call_graph as cg
+
+        producers = {
+            name for name in dir(cg)
+            if name.startswith("extract_call_graph_")
+            and callable(getattr(cg, name))
+        }
+        assert len(producers) >= 14, "producer enumeration broke"
+        return producers
+
+    def test_discovery_extractors_cover_every_producer(self):
+        from functools import partial
+
+        from core.inventory.sink_discovery import (
+            _get_call_graph_extractors,
+        )
+
+        wired = set()
+        for fn in _get_call_graph_extractors().values():
+            target = fn.func if isinstance(fn, partial) else fn
+            wired.add(target.__name__)
+        missing = self._producers() - wired
+        assert not missing, (
+            f"call-graph producers not wired into sink discovery: "
+            f"{sorted(missing)} — their languages contribute zero "
+            f"sinks/reach"
+        )
+
+    def test_builder_dispatch_covers_every_producer(self):
+        from pathlib import Path
+
+        import core.inventory.builder as builder_mod
+
+        source = Path(builder_mod.__file__).read_text(encoding="utf-8")
+        missing = {
+            name for name in self._producers()
+            if f"{name}(" not in source
+        }
+        assert not missing, (
+            f"call-graph producers not invoked by the builder "
+            f"dispatch: {sorted(missing)} — their languages get empty "
+            f"call_graph records"
+        )
