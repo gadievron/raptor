@@ -7205,8 +7205,27 @@ class TestPerPassWallClockPhases:
     """Prep sub-passes and post-loop passes book wall time into the
     run ledger (cost-breakdown.json's phases block)."""
 
-    def test_prep_and_postloop_phases_booked(self, tmp_path: Path):
+    def test_prep_and_postloop_phases_booked(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        import itertools
+        from types import SimpleNamespace
+
+        import core.audit.cost_tracker as ct_mod
         from core.audit.orchestrator import run_orchestrator
+
+        # Deterministic step clock for the ledger: every read
+        # advances 1ms, so each start_phase/end marker pair books a
+        # positive pass wall by construction. The sum assert below
+        # then pins that the markers were laid down AND closed
+        # (structural), instead of deriving "prep did work" from the
+        # real clock — which under a loaded runner measured the
+        # scheduler, not the booking.
+        ticks = itertools.count(1)
+        monkeypatch.setattr(
+            ct_mod, "time",
+            SimpleNamespace(monotonic=lambda: next(ticks) * 0.001),
+        )
 
         target, out = _presweep_target(tmp_path)
         result = run_orchestrator(
@@ -7232,10 +7251,10 @@ class TestPerPassWallClockPhases:
         )
         for name in expected:
             assert name in phases, f"missing phase: {name}"
-        # Prep did real work — its pass wall time is measurably
-        # nonzero (per-phase nonzero is pinned deterministically by
-        # the fake-clock ledger tests). Pass wall stays out of the
-        # per-call wall_time_s accounting.
+        # Every prep marker was opened and closed — under the step
+        # clock each pair books a positive pass wall, so a zero sum
+        # can only mean the markers stopped being laid down. Pass
+        # wall stays out of the per-call wall_time_s accounting.
         assert sum(
             phases[n].pass_wall_time_s
             for n in expected if n.startswith("prep_")
