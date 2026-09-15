@@ -433,17 +433,20 @@ def test_rust_cfg_gated_compile_error_does_not_fire():
 
 
 def test_php_top_level_die_fires():
+    _requires_lexical_grammar("php")
     r = detect_module_load_abort("php", "<?php\ndie('disabled');\nfunction f(){}\n")
     assert r is not None and r.line == 2 and r.summary == "die"
 
 
 def test_php_top_level_throw_new_fires():
+    _requires_lexical_grammar("php")
     r = detect_module_load_abort(
         "php", "<?php\nthrow new \\App\\DisabledException();\nclass C{}\n")
     assert r is not None and r.summary == "throw new DisabledException"
 
 
 def test_php_exit_after_function_fires():
+    _requires_lexical_grammar("php")
     # The function binds, then an unconditional exit aborts the rest.
     r = detect_module_load_abort("php", "<?php\nfunction g(){}\nexit;\n")
     assert r is not None and r.line == 3
@@ -702,6 +705,7 @@ def test_php_prose_outside_tags_is_output_not_code():
 
 
 def test_php_abort_in_second_region_still_detected():
+    _requires_lexical_grammar("php")
     code = (
         "<?php $x = 1; ?>\n"
         "prose with exit words;\n"
@@ -715,6 +719,7 @@ def test_php_abort_in_second_region_still_detected():
 
 
 def test_php_close_tag_inside_string_stays_in_php_mode():
+    _requires_lexical_grammar("php")
     # A `?>` inside a string does not leave PHP mode — the `die` that
     # follows in real code must still be seen.
     code = "<?php\n$s = 'not a close ?> tag';\ndie('nope');\n"
@@ -987,3 +992,75 @@ def test_ruby_grammar_absent_fails_closed(monkeypatch):
     monkeypatch.setattr(lexical_view, "_VALIDATED", {})
     src = 'raise "boom"\n'
     assert detect_module_load_abort("ruby", src) is None
+# ---------------------------------------------------------------------------
+# PHP hostile-shape fixtures: heredoc / nowdoc string data must never
+# fabricate a whole-file abort (the dead_scope sibling already modelled
+# heredocs; this detector did not). All fixtures are valid PHP.
+# ---------------------------------------------------------------------------
+
+
+def test_php_die_in_heredoc_no_fabricated_abort():
+    src = (
+        "<?php\n"
+        "$msg = <<<EOT\n"
+        "something;\n"
+        "die\n"
+        "EOT;\n"
+        "function live() { return 1; }\n"
+    )
+    assert detect_module_load_abort("php", src) is None
+
+
+def test_php_throw_in_heredoc_no_fabricated_abort():
+    src = (
+        "<?php\n"
+        "$msg = <<<EOT\n"
+        "x;\n"
+        "throw new Boom();\n"
+        "EOT;\n"
+        "function live() { return 1; }\n"
+    )
+    assert detect_module_load_abort("php", src) is None
+
+
+def test_php_exit_in_nowdoc_no_fabricated_abort():
+    src = (
+        "<?php\n"
+        "$msg = <<<'NOW'\n"
+        "usage;\n"
+        "exit\n"
+        "NOW;\n"
+        "function live() { return 1; }\n"
+    )
+    assert detect_module_load_abort("php", src) is None
+
+
+def test_php_real_die_after_heredoc_still_detected():
+    _requires_lexical_grammar("php")
+    src = (
+        "<?php\n"
+        "$msg = <<<EOT\n"
+        "die decoy\n"
+        "EOT;\n"
+        "die('real');\n"
+    )
+    result = detect_module_load_abort("php", src)
+    assert result is not None
+    assert result.line == 5
+    assert result.summary == "die"
+
+
+def test_php_parse_error_bails_whole_file():
+    src = "<?php\nfunction f( {\ndie('x');\n"
+    assert detect_module_load_abort("php", src) is None
+
+
+def test_php_grammar_absent_fails_closed(monkeypatch):
+    from core.inventory import lexical_view
+
+    monkeypatch.setattr(
+        lexical_view._ts_cache, "import_grammar", lambda name: None,
+    )
+    monkeypatch.setattr(lexical_view, "_VALIDATED", {})
+    src = "<?php\ndie('disabled');\n"
+    assert detect_module_load_abort("php", src) is None

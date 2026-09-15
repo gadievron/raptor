@@ -526,66 +526,19 @@ def _detect_rust(content: str) -> ModuleLoadAbort | None:
 # tracking (mirrors the JS detector) + a statement-initial gate so a
 # CONDITIONAL abort (``if (x) die();`` — the abort follows ``)``) is
 # never flagged (a false positive would wrongly hard-suppress live code).
+#
+# Scanned over the tokenizer-grade blanked view: comments, strings,
+# heredocs/nowdocs, backtick shell strings and the HTML text outside
+# the PHP tags are spaced out first, so ``die`` in prose or string
+# data can never fabricate the whole-file abort gate. Only the
+# ``<?php`` open tags remain for this detector to blank (so the first
+# statement after a tag is statement-initial). No grammar / parse
+# errors → bail, toward no suppression.
 # ---------------------------------------------------------------------------
 
 
-_PHP_LINE_COMMENT = re.compile(r"(//|#)[^\n]*")
-_PHP_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 _PHP_TAG = re.compile(r"<\?php|<\?=|<\?|\?>")
 
-
-def _php_blank_outside_php(content: str) -> str:
-    """Blank everything OUTSIDE ``<?php … ?>`` regions to spaces,
-    preserving newlines. Text outside the tags is template OUTPUT the
-    interpreter echoes, not code — the word ``die`` in HTML prose used
-    to match _PHP_ABORT and fabricate a whole-file abort gate on a
-    fully live file.
-
-    In-region scanning is quote/comment-aware when looking for the
-    closing ``?>``: a ``?>`` inside a string or ``/* */`` block
-    comment does not leave PHP mode, while one inside a ``//`` / ``#``
-    line comment DOES (matching the real interpreter). Heredocs are
-    not modelled — a ``?>`` inside a heredoc mis-reads as region end
-    and blanks the remainder as HTML, which only under-detects (the
-    module-wide cheap failure direction)."""
-    out = list(content)
-    n = len(out)
-    i = 0
-    in_php = False
-    while i < n:
-        if not in_php:
-            if content.startswith("<?", i):
-                in_php = True
-                i += 2
-                continue
-            if out[i] != "\n":
-                out[i] = " "
-            i += 1
-            continue
-        c = content[i]
-        if content.startswith("?>", i):
-            in_php = False
-            i += 2
-            continue
-        if c == "/" and i + 1 < n and content[i + 1] == "*":
-            end = content.find("*/", i + 2)
-            i = n if end == -1 else end + 2
-            continue
-        if (c == "#" or (c == "/" and i + 1 < n and content[i + 1] == "/")):
-            # Line comment: ends at newline OR at a closing tag.
-            while i < n and content[i] != "\n":
-                if content.startswith("?>", i):
-                    break
-                i += 1
-            continue
-        if c in "\"'":
-            j = _js_skip_string(content, i)
-            if j is None:
-                break  # unterminated string — rest is string data
-            i = j
-            continue
-        i += 1
-    return "".join(out)
 _PHP_ABORT = re.compile(r"throw\s+new\s+([A-Za-z_\\][\w\\]*)|die\b|exit\b")
 # A statement-initial abort is preceded (ignoring whitespace) by one of
 # these — i.e. it begins a statement, so it is not a branch/modifier body.
@@ -595,17 +548,24 @@ _PHP_STMT_BOUNDARY = frozenset({";", "{", "}"})
 
 
 def _detect_php(content: str) -> ModuleLoadAbort | None:
+    from core.inventory.lexical_view import LexicalRefusal, blank_noncode
+
+    try:
+        stripped = blank_noncode("php", content)
+    except LexicalRefusal:
+        # Parse errors: recovered token boundaries are guesses; a
+        # partial view could fabricate a whole-file abort. Bail —
+        # toward no suppression.
+        return None
+    if stripped is None:
+        # Grammar unavailable — cannot vouch a code view; no witness.
+        return None
+
     def _spaces(m: re.Match[str]) -> str:
         return re.sub(r"[^\n]", " ", m.group(0))
-    # HTML/text outside the PHP tags is output, not code — blank it
-    # before any matching so prose containing ``die`` / ``exit`` can
-    # never fabricate the whole-file abort gate.
-    stripped = _php_blank_outside_php(content)
-    stripped = _PHP_BLOCK_COMMENT.sub(_spaces, stripped)
-    stripped = _PHP_LINE_COMMENT.sub(_spaces, stripped)
-    # Blank the PHP open/close tags so the first statement after ``<?php``
-    # is statement-initial and ``->`` / ``?>`` ``>`` chars never read as a
-    # boundary.
+    # Blank the PHP open tags so the first statement after ``<?php``
+    # is statement-initial and the tag chars never read as a boundary
+    # (the close tags and surrounding HTML are already blanked).
     stripped = _PHP_TAG.sub(_spaces, stripped)
     depth = 0
     last_significant = None  # last non-whitespace char seen

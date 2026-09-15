@@ -529,11 +529,13 @@ def test_c_never_closing_params_bounded():
 
 
 def test_php_if_false_block_detected():
+    _requires_lexical_grammar("php")
     src = "<?php\nif (false) {\n  function dead() {}\n}\n"
     assert (2, 4) in detect_dead_scopes("php", src)
 
 
 def test_php_if_zero_and_null_detected():
+    _requires_lexical_grammar("php")
     assert detect_dead_scopes("php", "<?php\nif (0) {\n  x();\n}\n") == [(2, 4)]
     assert detect_dead_scopes("php", "<?php\nif (null) {\n  x();\n}\n") == [(2, 4)]
 
@@ -615,6 +617,7 @@ def test_php_dead_if_inside_nowdoc_not_detected():
 
 
 def test_php_real_dead_if_still_detected():
+    _requires_lexical_grammar("php")
     src = (
         "<?php\n"
         "if (false) {\n"
@@ -629,6 +632,7 @@ def test_php_real_dead_if_still_detected():
 
 
 def test_php_hash_in_string_does_not_truncate_dead_block():
+    _requires_lexical_grammar("php")
     # Under the old two-phase stripping, the '#' inside the string ate
     # the closing quote and the block's real closing brace was swallowed
     # by the mispaired string skip — the dead block went undetected.
@@ -645,6 +649,7 @@ def test_php_hash_in_string_does_not_truncate_dead_block():
 
 
 def test_php_dead_if_after_heredoc_still_detected():
+    _requires_lexical_grammar("php")
     # Heredoc blanking must resume normal parsing after the closer.
     src = (
         "<?php\n"
@@ -1074,3 +1079,23 @@ def test_ruby_grammar_absent_fails_closed(monkeypatch):
     monkeypatch.setattr(lexical_view, "_VALIDATED", {})
     src = "if false\n  dead\nend\n"
     assert detect_dead_scopes("ruby", src) == []
+def test_php_dead_if_in_html_text_no_false_range():
+    # `if (false) {` in the HTML around the PHP tags is output, not
+    # code — it must never open a dead range.
+    src = (
+        "<pre>if (false) {</pre>\n"
+        "<?php\n"
+        "function live() { return 1; }\n"
+    )
+    assert detect_dead_scopes("php", src) == []
+
+
+def test_php_grammar_absent_fails_closed(monkeypatch):
+    from core.inventory import lexical_view
+
+    monkeypatch.setattr(
+        lexical_view._ts_cache, "import_grammar", lambda name: None,
+    )
+    monkeypatch.setattr(lexical_view, "_VALIDATED", {})
+    src = "<?php\nif (false) {\n  dead();\n}\n"
+    assert detect_dead_scopes("php", src) == []

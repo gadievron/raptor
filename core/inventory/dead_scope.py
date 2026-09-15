@@ -504,146 +504,31 @@ def _skip_string(source: str, start: int) -> int | None:
 
 # ---------------------------------------------------------------------------
 # PHP — ``if (false) {…}`` / ``if (0)`` / ``if (null)`` blocks. Same brace
-# shape as JS, so the JS block-matching is reused; PHP adds ``#`` line
-# comments. Conservative: only literal always-false constants (NOT
-# ``if ($flag)`` — a runtime name). Mutually-recursive functions inside the
-# block otherwise read CALLED, masking that the whole block is dead.
+# shape as JS, so the JS block-matching is reused. Conservative: only
+# literal always-false constants (NOT ``if ($flag)`` — a runtime name).
+# Mutually-recursive functions inside the block otherwise read CALLED,
+# masking that the whole block is dead. Matched over the tokenizer-grade
+# blanked view: comments, strings, heredocs/nowdocs and the HTML text
+# outside the PHP tags are spaced out first, so string data can never
+# open a dead range over live code. No grammar / parse errors → bail.
 # ---------------------------------------------------------------------------
 
 
 _PHP_DEAD_IF = re.compile(r"\bif\s*\(\s*(?:false|0|null)\s*\)\s*\{")
 
 
-def _php_strip_comments_and_strings(content: str) -> str:
-    """Strip PHP comments (``/* */``, ``//``, ``#``) AND string literals
-    (``'…'`` / ``"…"`` / heredoc / nowdoc) in one pass, preserving
-    newlines so line numbers stay valid.
-
-    Single-pass matters twice over: a ``#`` or ``//`` inside a string
-    (``"color: #fff"``) must not truncate the line, and an
-    ``if (false) {`` inside a string literal must never reach the
-    matcher — string content is untrusted target-repo text, and a match
-    starting mid-string yields garbage dead ranges that hard-suppress
-    real findings in live code (the expensive failure mode, per the
-    module header).
-    """
-    out = list(content)
-    i = 0
-    n = len(out)
-    while i < n:
-        c = out[i]
-        if c == "/" and i + 1 < n and out[i + 1] == "/":
-            while i < n and out[i] != "\n":
-                out[i] = " "
-                i += 1
-            continue
-        if c == "#":
-            while i < n and out[i] != "\n":
-                out[i] = " "
-                i += 1
-            continue
-        if c == "/" and i + 1 < n and out[i + 1] == "*":
-            out[i] = " "
-            out[i + 1] = " "
-            i += 2
-            while i < n:
-                if out[i] == "*" and i + 1 < n and out[i + 1] == "/":
-                    out[i] = " "
-                    out[i + 1] = " "
-                    i += 2
-                    break
-                if out[i] != "\n":
-                    out[i] = " "
-                i += 1
-            continue
-        if c == "<" and content.startswith("<<<", i):
-            j = _php_blank_heredoc(out, content, i)
-            if j is not None:
-                i = j
-            else:
-                i += 3
-            continue
-        if c in "\"'":
-            quote = c
-            out[i] = " "
-            i += 1
-            while i < n:
-                if out[i] == "\\" and i + 1 < n:
-                    out[i] = " "
-                    if out[i + 1] != "\n":
-                        out[i + 1] = " "
-                    i += 2
-                    continue
-                if out[i] == quote:
-                    out[i] = " "
-                    i += 1
-                    break
-                if out[i] != "\n":
-                    out[i] = " "
-                i += 1
-            continue
-        i += 1
-    return "".join(out)
-
-
-def _php_blank_heredoc(
-    out: list[str], content: str, start: int,
-) -> int | None:
-    """Blank a heredoc/nowdoc starting at ``start`` (the ``<<<``).
-    Returns the index just past the closing identifier, or ``None``
-    when ``<<<`` isn't followed by a valid opener (caller skips it).
-    Positions >= ``start`` in ``out`` are still pristine, so
-    ``content`` can be used for lookahead. Unterminated heredocs blank
-    to EOF — the remainder is string data, not code."""
-    n = len(content)
-    j = start + 3
-    quote = None
-    if j < n and content[j] in "\"'":
-        quote = content[j]
-        j += 1
-    ident_start = j
-    while j < n and (content[j].isalnum() or content[j] == "_"):
-        j += 1
-    ident = content[ident_start:j]
-    if not ident or ident[0].isdigit():
-        return None
-    if quote is not None:
-        if j >= n or content[j] != quote:
-            return None
-        j += 1
-    eol = content.find("\n", j)
-    if eol == -1 or content[j:eol].strip():
-        return None
-    # Body runs until a line whose first token (PHP 7.3 allows indented
-    # closers) is the identifier followed by a non-identifier char.
-    k = eol
-    end = n
-    while k < n:
-        line_start = k + 1
-        line_end = content.find("\n", line_start)
-        if line_end == -1:
-            line_end = n
-        line = content[line_start:line_end]
-        candidate = line.lstrip(" \t")
-        if candidate.startswith(ident):
-            rest = candidate[len(ident):]
-            if not rest or not (rest[0].isalnum() or rest[0] == "_"):
-                indent = len(line) - len(candidate)
-                end = line_start + indent + len(ident)
-                break
-        k = line_end
-    for p in range(start, end):
-        if out[p] != "\n":
-            out[p] = " "
-    return end
-
-
 def _detect_php(content: str) -> list[DeadRange]:
-    # Strip comments AND string literals in a single pass (the JS
-    # detector's two-phase regex approach would let a comment marker
-    # inside a string eat the closing quote) so neither a keyword in a
-    # comment nor an ``if (false) {`` in a string misleads the matcher.
-    stripped = _php_strip_comments_and_strings(content)
+    from core.inventory.lexical_view import LexicalRefusal, blank_noncode
+
+    try:
+        stripped = blank_noncode("php", content)
+    except LexicalRefusal:
+        # Parse errors: recovered token boundaries are guesses; bail
+        # on the whole file — toward no suppression.
+        return []
+    if stripped is None:
+        # Grammar unavailable — cannot vouch a code view; no witness.
+        return []
     ranges: list[DeadRange] = []
     for m in _PHP_DEAD_IF.finditer(stripped):
         close = _match_brace(stripped, m.end() - 1)
